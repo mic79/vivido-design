@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+  <meta charset="UTF-8">
+  <title>Dotmination</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, minimal-ui, viewport-fit=cover">
+  <meta name="theme-color" content="#ECEFF1">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="#ECEFF1">
+  <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+  <link rel="icon" href="images/favicon.png">
+
+  <meta name="title" content="Dotmination">
+  <meta name="description" content="Play endlessly for Dotmination!">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://dotmination.vivido-design.com/">
+  <meta property="og:title" content="Dotmination">
+  <meta property="og:description" content="Play endlessly for Dotmination!">
+  <meta property="og:image" content="https://dotmination.vivido-design.com/images/feature2.png">
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://dotmination.vivido-design.com/">
+  <meta property="twitter:title" content="Dotmination">
+  <meta property="twitter:description" content="Play endlessly for Dotmination!">
+  <meta property="twitter:image" content="https://dotmination.vivido-design.com/images/feature2.png">
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/5.0.0/normalize.min.css">
+  <link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Roboto+Condensed:200,400,700|Aaux+Next:300,400'>
+  <link rel='stylesheet' href='https:///use.fontawesome.com/releases/v5.2.0/css/all.css'>
+  <link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/4.4.1/css/bootstrap.min.css'>
+
+  <style>
+    @font-face {
+      font-family: 'vvdo-icons';
+      src: url("https://s3-us-west-2.amazonaws.com/s.cdpn.io/101090/vvdo-icons.eot?69810064");
+      src: url("https://s3-us-west-2.amazonaws.com/s.cdpn.io/101090/vvdo-icons.eot?69810064#iefix") format("embedded-opentype"), url("https://s3-us-west-2.amazonaws.com/s.cdpn.io/101090/vvdo-icons.woff2?69810064") format("woff2"), url("https://s3-us-west-2.amazonaws.com/s.cdpn.io/101090/vvdo-icons.woff?69810064") format("woff"), url("https://s3-us-west-2.amazonaws.com/s.cdpn.io/101090/vvdo-icons.ttf?69810064") format("truetype"), url("https://s3-us-west-2.amazonaws.com/s.cdpn.io/101090/vvdo-icons.svg?69810064#vvdo-icons") format("svg");
+      font-weight: normal;
+      font-style: normal;
+    }
+    [class^="icon-"]:before, [class*=" icon-"]:before {
+      font-family: "vvdo-icons";
+      font-style: normal;
+      font-weight: normal;
+      speak: none;
+      display: inline-block;
+      text-decoration: inherit;
+      width: 1em;
+      margin-right: .2em;
+      text-align: center;
+      font-variant: normal;
+      text-transform: none;
+      line-height: 1em;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .icon-iconsoundfilleddefault:before {
+      content: '\e800';
+    }
+
+    /* '' */
+    .icon-iconsoundfilledmute:before {
+      content: '\e801';
+    }
+
+    html, body {
+      height: 100%;
+    }
+    body {
+      background: #f2f2f2;
+      color: #2D2B2F;
+      font-family: 'Roboto Condensed', sans-serif;
+      font-size: 14px;
+      font-weight: 400;
+    }
+    .fullheight {
+      height: 100vh;
+    }
+    .section {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    iframe.game {
+      height: 520px;
+      width: 320px;
+      border: 0;
+      border-radius: 14px;
+      box-shadow: 0 0 32px rgba(0,0,0,0.05), 2px 2px 12px rgba(0,0,0,0.15);
+      outline: 0;
+    }
+    .icon-scrolldown {
+      position: absolute;
+      height: 50px;
+      width: 50px;
+      left: 50%;
+      margin-left: -25px;
+      bottom: 20px;
+      z-index: 9;
+    }
+
+    .icon-scrolldown:before {
+      content: '';
+      position: absolute;
+      height: 24px;
+      width: 14px;
+      top: 12px;
+      left: 17px;
+      border: 1px solid #333;
+      border-radius: 7px;
+      box-sizing: content-box;
+    }
+
+    .icon-scrolldown:after {
+      content: '';
+      position: absolute;
+      height: 4px;
+      width: 2px;
+      top: 16px;
+      left: 24px;
+      background-color: #333;
+      -webkit-animation: scrolldown 1.5s infinite linear;
+      animation: scrolldown 1.5s infinite linear;
+    }
+
+    @-webkit-keyframes scrolldown {
+      0%, to {
+        -webkit-transform: scaleY(0.5) translateY(0);
+        transform: scaleY(0.5) translateY(0);
+      }
+      20% {
+        -webkit-transform: scaleY(1) translateY(0);
+        transform: scaleY(1) translateY(0);
+      }
+      60% {
+        -webkit-transform: scaleY(0.5) translateY(6px);
+        transform: scaleY(0.5) translateY(6px);
+      }
+    }
+
+    @keyframes scrolldown {
+      0%, to {
+        -webkit-transform: scaleY(0.5) translateY(0);
+        transform: scaleY(0.5) translateY(0);
+      }
+      20% {
+        -webkit-transform: scaleY(1) translateY(0);
+        transform: scaleY(1) translateY(0);
+      }
+      60% {
+        -webkit-transform: scaleY(0.5) translateY(6px);
+        transform: scaleY(0.5) translateY(6px);
+      }
+    }
+
+    .btn-video-mute {
+      position: absolute;
+      height: 40px;
+      width: 40px;
+      right: 2.275em;
+      bottom: 1em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 4;
+    }
+    .btn-video-mute:before {
+      content: '\e800';
+      font-family: 'vvdo-icons';
+      font-size: 20px;
+    }
+    .btn-video-mute.is-muted:before {
+      content: '\e801';
+      color: #aaaaaa;
+    }
+
+    .video-container {
+      //position: absolute;
+      //height: 100%;
+      width: 100%;
+      top: 0;
+      left: 0;
+      right: 0;
+      overflow: hidden;
+    }
+
+    video {
+      height: 100%;
+      width: 100%;
+      -o-object-fit: cover;
+      object-fit: cover;
+      -o-object-position: center;
+      object-position: center;
+    }
+
+    /* HIDE DOWNLOAD BUTTON */
+    video::-internal-media-controls-download-button {
+      display: none;
+    }
+    video::-webkit-media-controls-enclosure {
+      overflow: hidden;
+    }
+    video::-webkit-media-controls-panel {
+      width: calc(100% + 30px);
+      /* Adjust as needed */
+    }
+    /* END HIDE DOWNLOAD BUTTON */
+  </style>
+
+  <!-- Global site tag (gtag.js) - Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-ELYB3143RL"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-ELYB3143RL');
+  </script>
+</head>
+<body>
+<div class="section fullheight">
+  <iframe class="game" src="https://dotmination.vivido-design.com/game/"></iframe>
+  <div class="icon-scrolldown"></div>
+</div>
+
+<div class="section fullheightX">
+  <div class="btn-video-mute is-muted"></div>
+  <div class="video-container noselect">
+    <!-- Add "muted" for Autoplay to work on Desktop and Mobile -->
+    <video id="demo" autoplay="" muted="" loop="" poster="">
+      <source src="https://dotmination.vivido-design.com/dotmination-intro.mp4" type="video/mp4; codecs=avc1.42E01E,mp4a.40.2">
+      <!--<source src="https://vivido-design.com/demo/vvdo-demo-reel-short_v0-5.webm" type="video/webm; codecs=vp8,vorbis">-->
+    </video>
+  </div>
+</div>
+
+<div class="section my-5 py-5">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-6 m-auto text-center">
+        <p>A joyfully colourful puzzle game where you win by overtaking the entire field creating chain-reactions. Featuring two modes: one to progress level by level and a "Random mode" which generates an infinite amount of challenges.</p><p>The "Level mode" can get your heart pumping, stimulating you to outsmart your opponent as quickly as possible. Be aware that the game can turn the odds at any time, try to keep your focus!</p>
+        <a href="https://play.google.com/store/apps/details?id=com.dotmination" rel="noreferrer" title="https://play.google.com/store/apps/details?id=com.dotmination"><img class="my-3" alt="https://play.google.com/store/apps/details?id=com.dotmination" src="images/button_googleplay.svg"></a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src='https://code.jquery.com/jquery-2.2.4.min.js'></script>
+<script>
+  $(document).on('scroll', function() {
+    $('.icon-scrolldown').remove();
+  });
+  function videoMuteToggle(val) {
+    var video = $('#demo')[0];
+    $('.btn-video-mute').removeClass('is-muted');
+    if (video.muted && val == undefined) {
+      video.muted = false;
+    } else {
+      video.muted = true;
+      $('.btn-video-mute').addClass('is-muted');
+    }
+  }
+  videoMuteToggle('muted');
+
+  $('.btn-video-mute').on('click', function() {
+    videoMuteToggle();
+  });
+</script>
+</body>
+</html>
+

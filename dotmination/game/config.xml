@@ -1,0 +1,20 @@
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="com.dotmination" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+    <name>Dotmination</name>
+    <description>
+        Dotmination the game.
+    </description>
+    <author email="mail@vivido-design.com" href="https://vivido-design.com">
+        Vivido Design / Ateliex
+    </author>
+    <icon src="src/images/favicon.png" />
+    <content src="index.html" />
+    <access origin="*" />
+    <allow-intent href="http://*/*" />
+    <allow-intent href="https://*/*" />
+    <allow-intent href="tel:*" />
+    <allow-intent href="sms:*" />
+    <allow-intent href="mailto:*" />
+    <allow-intent href="geo:*" />
+    <preference name="Fullscreen" value="true" />
+</widget>
