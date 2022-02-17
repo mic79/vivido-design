@@ -1,3 +1,3 @@
 RewriteEngine On
 RewriteCond %{HTTP_HOST} ^dotmination\.vivido-design\.com$   [NC]
-RewriteRule ^ https://vivido-design.com/dotmination  [L,R]
+RewriteRule ^ https://vivido-design.com/dotmination/$1  [L,R]
