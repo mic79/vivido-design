@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="google-signin-client_id" content="134925702519-3s9nqpij04vebq0rk519svrtrmp5ghtn.apps.googleusercontent.com">
+    <meta name="google-signin-cookiepolicy" content="single_host_origin">
+    <meta name="google-signin-scope" content="profile email">
+    <!--<base href="https://vivido-design.com/insights/">-->
+    <title>Vivido Insights v0.1</title>
+
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="icon" sizes="48x48" href="images/icon-48.png">
+    <link rel="icon" sizes="192x192" href="images/icon-192.png">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/4.1.1/normalize.min.css">
+    <link rel="stylesheet prefetch" href="https://cdnjs.cloudflare.com/ajax/libs/pizza/0.2.1/css/pizza.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jquery-confirm/2.5.1/jquery-confirm.min.css">
+    <link rel="stylesheet" href="style.css">
+    
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/prefixfree/1.0.7/prefixfree.min.js"></script>
+    <script src="https://cdn.rawgit.com/visionmedia/page.js/master/page.js"></script>
+    <script src="https://apis.google.com/js/platform.js" async defer></script>
+    <script src="https://www.gstatic.com/firebasejs/live/3.0/firebase.js"></script>
+  </head>
+  <body>
+    <div id="all">
+      <div id="login">
+        <div class="vivido-insights"></div>
+        <!-- [START google_button] -->
+        <div class="g-signin2" data-onsuccess="onSignIn"></div>
+        <!-- [END google_button] -->
+        <!-- <button disabled class="" id="signout" name="signout">Sign Out</button> -->
+
+        <div class="quickstart-user-details-container" style="display:none;">
+          Firebase sign-in status: <span id="quickstart-sign-in-status">Unknown</span>
+          <div>Firebase auth <code>currentUser</code> object value:</div>
+          <pre><code id="quickstart-account-details">null</code></pre>
+        </div>
+      </div> <!-- END #login -->
+      
+      <div id="btn-menu" class="noselect"><i class="material-icons">menu</i></div>
+      <div id="menu" class="noselect">
+        <div id="menu-list">
+          <div id="menu-list-header">
+            <button disabled class="" id="signout" name="signout">Sign Out</button>
+            <div id="menu-list-logo"></div>
+            <div id="menu-list-username"></div>
+            <div id="menu-list-useremail"></div>
+            <div id="menu-list-userphoto"></div>
+          </div>
+          <ul id="">
+            <li><i class="material-icons">donut_large</i><a href="/profile">Perfil</a></li>
+            <li><i class="material-icons">timeline</i><a href="/proposal-history">Histórico propostas</a></li>
+            <li><i class="material-icons">list</i><a href="/todo">To-do list</a></li>
+          </ul>
+        </div>
+        <div class="menu-bg"></div>
+      </div> <!-- END #menu -->
+      <div id="menu-right" class="noselect">
+        <div id="menu-chart-list">
+          <ul id="chart-listall">
+            <!--<h1>Atividades</h1>
+            <h2>Gerais</h2>
+            <li>Atendimento<small>10 hrs</small></li>
+            <li>Planejamento</li>
+            <li>Financeiro</li>
+            <h2>Design Gráfico</h2>
+            <li>Design de marca</li>
+            <li>Ilustração/Infográfico</li>
+            <li>Design de embalagem</li>
+            <li>Design de editorial</li>
+            <h2>Design de Produto</h2>
+            <li>Design mobiliária</li>
+            <h2>Design Digital</h2>
+            <li>Criação de texto</li>
+            <li>Design website</li>
+            <li>Programação website</li>-->
+          </ul>
+        </div>
+        <div class="menu-bg"></div>
+      </div> <!-- END #menu-right -->
+      <div id="btn-edit" class="noselect"><i class="material-icons">mode_edit</i></div>
+      <div id="btn-listall" class="noselect"><i class="material-icons">format_list_bulleted</i></div>
+      <div id="profile">
+        <ul data-pie-id="my-chart" id="chart-list" class="noselect">
+          <!--<li data-value="36">Design de marca</li>
+          <li data-value="21">Ilustração</li>
+          <li data-value="8">Conceituação</li>
+          <li data-value="15">Planejamento</li>
+          <li data-value="20">Design de editorial</li>-->
+        </ul>
+        <div id="my-chart-container">
+          <div id="my-chart-overlay" class="noselect">
+            <div id="chart-logo"></div>
+            <div id="chart-title"></div>
+            <div id="chart-value"></div>
+            <div id="btn-del"><i class="material-icons">delete</i></div>
+            <div id="my-chart-control"><input type="text" class="dial"></div>
+          </div>
+          <div id="my-chart" class="noselect"></div>
+        </div>
+      </div> <!-- END #profile -->
+      <div id="proposal-history">
+        <h1>Histórico propostas</h1>
+        <h2>Em breve</h2>
+      </div> <!-- END #proposal-history -->
+      <div id="todo">
+        <h1>To-do list</h1>
+        <h2>Em breve</h2>
+      </div> <!-- END #todo -->
+    </div> <!-- END #all -->
+    
+    <script src='https://code.jquery.com/jquery-2.2.4.min.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/snap.svg/0.4.1/snap.svg-min.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/pizza/0.2.1/js/pizza.min.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/modernizr/2.8.3/modernizr.min.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/gsap/1.18.4/TweenMax.min.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/gsap/latest/plugins/TextPlugin.min.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/jQuery-Knob/1.2.13/jquery.knob.min.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/jquery.nicescroll/3.6.0/jquery.nicescroll.min.js'></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery-confirm/2.5.1/jquery-confirm.min.js"></script>
+    <script type="text/javascript" src="script.js"></script>
+    
+  </body>
+</html>
