@@ -1,0 +1,68 @@
+﻿<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+	<head>
+		<title>Itium Dynamic 2D profile sketch test</title>
+
+		<!-- Made by Michiel Huiskens Nogueira -->
+		<!-- http://www.vivido-design.com -->
+
+		<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+		<meta name="description" content="" />
+		<meta name="keywords" content="Florianopolis, Santa Catarina, Brazil, Brasil" />
+		<meta name="author" content="Michiel Huiskens Nogueira" />
+
+		<link rel="shortcut icon" href="ICON.jpg" />
+
+        	<script type="text/javascript" src="swfobject/swfobject.js"></script>
+		<script type="text/javascript" src="other/noMenu.js"></script>
+		<style type="text/css">
+			/* hide from ie on mac \*/
+			html {
+				height: 100%;
+				overflow: hidden;
+			}
+			#flashcontent {
+				height: 100%;
+			}
+			img {
+				border-width: 0;
+			}
+			/* end hide */
+			body {
+				height: 100%;
+				margin: 0;
+				padding: 0;
+				background: #FFFFFF;
+			}
+
+		</style>
+	</head>
+	<body>
+		<div id="flashcontent">
+			<table width="100%">
+			   <tr>
+			      <td align="center" valign="middle">
+				<img src="noFlash-br.jpg" alt="" usemap="#link" />
+				<map name="link" id="link">
+				<area shape="rect" coords="27,257,236,327" href="mailto:mail@vivido-design.com" alt="" />
+				<area shape="rect" coords="247,257,453,327" href="http://www.adobe.com/shockwave/download/download.cgi?P1_Prod_Version=ShockwaveFlash" alt="" />
+				<area shape="rect" coords="434,349,451,369" href="/nl/" alt="NL" />
+				<area shape="rect" coords="454,349,471,369" href="/br/" alt="PT-BR" />
+				</map>
+			      </td>
+		      </tr>
+			</table>
+		</div>
+		<script type="text/javascript">
+		// <![CDATA[
+			var so = new SWFObject("test.swf", "site", "100%", "100%", "9");
+			so.useExpressInstall('swfobject/expressinstall.swf');
+			so.addVariable("location", "home");
+			so.addVariable("siteLang", "br");
+			so.addParam("scale", "noscale");
+			so.addParam("allowFullScreen", "true");
+			so.write("flashcontent");
+		// ]]>
+		</script>
+	</body>
+</html>
