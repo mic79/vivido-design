@@ -41,6 +41,7 @@
     let gapiInited = false;
     let gisInited = false;
     let pickerInited = false;
+    let fileId;
 
     document.getElementById("addtest_button").style.visibility = "hidden";
     document.getElementById("authorize_button").style.visibility = "hidden";
@@ -135,7 +136,7 @@
       } else {
         // Skip display of account chooser and consent dialog for an existing session.
         //tokenClient.requestAccessToken({prompt: ''});
-        listMajors("113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ");
+        listMajors(fileId);
       }
     }
 
@@ -146,6 +147,7 @@
       const token = gapi.client.getToken();
       if (token !== null) {
         accessToken = null;
+        fileId = null;
         google.accounts.oauth2.revoke(token.access_token);
         gapi.client.setToken("");
         document.getElementById("content").innerText = "";
@@ -182,7 +184,7 @@
       if (data.action === google.picker.Action.PICKED) {
         let text = `Picker response: \n${JSON.stringify(data, null, 2)}\n`;
         const document = data[google.picker.Response.DOCUMENTS][0];
-        const fileId = document[google.picker.Document.ID];
+        fileId = document[google.picker.Document.ID];
         console.log(fileId);
         /*const res = await gapi.client.drive.files.get({
           fileId: fileId,
@@ -203,7 +205,7 @@
      */
     function handleAddtestClick() {
       appendValues(
-        "113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ",
+        fileId,
         "Sheet1!A1:E1",
         "USER_ENTERED"
       );
