@@ -90,7 +90,8 @@
           document.getElementById('signout_button').style.visibility = 'visible';
           document.getElementById('authorize_button').innerText = 'Refresh';
           //await listMajors();
-          await createSheet('GSheetTest');
+          //await createSheet('GSheetTest');
+          await listMajors('1MJbeglY52kJD1fIkz85mw7JmWn61nl_UjC4yn1UYqss');
         };
 
         if (gapi.client.getToken() === null) {
