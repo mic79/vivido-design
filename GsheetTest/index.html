@@ -126,7 +126,7 @@
        *  Add test fields upon button click.
        */
        function handleAddtestClick() {
-        appendValues('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ', 'Sheet1', 'USER_ENTERED');
+        appendValues('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ', 'Sheet1!A1:E1', 'USER_ENTERED');
        }
 
       /* Create new Google Sheet */
@@ -155,7 +155,9 @@
             ],
             // Additional rows ...
         ];
-        values = _values;
+        if(_values) {
+            values = _values;
+        }
         const body = {
             values: values,
         };
