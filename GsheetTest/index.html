@@ -151,6 +151,7 @@
           });*/
           response = await gapi.client.sheets.spreadsheets.values.get({
             spreadsheetId: newspreadsheetId,
+            range: 'Class Data!A2:E',
           });
         } catch (err) {
           document.getElementById('content').innerText = err.message;
