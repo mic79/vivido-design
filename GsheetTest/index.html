@@ -8,6 +8,7 @@
     <p>Sheets API Quickstart</p>
 
     <!--Add buttons to initiate auth sequence and sign out-->
+    <button id="addtest_button" onclick="handleAddtestClick()">Add test</button>
     <button id="authorize_button" onclick="handleAuthClick()">Authorize</button>
     <button id="signout_button" onclick="handleSignoutClick()">Sign Out</button>
 
@@ -34,6 +35,7 @@
       let gapiInited = false;
       let gisInited = false;
 
+      document.getElementById('addtest_button').style.visibility = 'hidden';
       document.getElementById('authorize_button').style.visibility = 'hidden';
       document.getElementById('signout_button').style.visibility = 'hidden';
 
@@ -87,11 +89,12 @@
           if (resp.error !== undefined) {
             throw (resp);
           }
+          document.getElementById('addtest_button').style.visibility = 'visible';
           document.getElementById('signout_button').style.visibility = 'visible';
           document.getElementById('authorize_button').innerText = 'Refresh';
           //await listMajors();
           //await createSheet('GSheetTest');
-          await listMajors('1MJbeglY52kJD1fIkz85mw7JmWn61nl_UjC4yn1UYqss');
+          await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
         };
 
         if (gapi.client.getToken() === null) {
@@ -113,9 +116,17 @@
           google.accounts.oauth2.revoke(token.access_token);
           gapi.client.setToken('');
           document.getElementById('content').innerText = '';
+          document.getElementById('addtest_button').style.visibility = 'hidden';
           document.getElementById('authorize_button').innerText = 'Authorize';
           document.getElementById('signout_button').style.visibility = 'hidden';
         }
+      }
+
+      /**
+       *  Add test fields upon button click.
+       */
+       function handleAddtestClick() {
+        
       }
 
       /* Create new Google Sheet */
@@ -151,7 +162,7 @@
           });*/
           response = await gapi.client.sheets.spreadsheets.values.get({
             spreadsheetId: newspreadsheetId,
-            range: 'Class Data!A2:E',
+            range: 'Sheet1!A2:E',
           });
         } catch (err) {
           document.getElementById('content').innerText = err.message;
