@@ -89,7 +89,8 @@
           }
           document.getElementById('signout_button').style.visibility = 'visible';
           document.getElementById('authorize_button').innerText = 'Refresh';
-          await listMajors();
+          //await listMajors();
+          await createSheet('GSheetTest');
         };
 
         if (gapi.client.getToken() === null) {
@@ -116,17 +117,39 @@
         }
       }
 
+      /* Create new Google Sheet */
+      async function createSheet(title, callback) {
+        try {
+            gapi.client.sheets.spreadsheets.create({
+            properties: {
+                title: title,
+            },
+            }).then((response) => {
+            if (callback) callback(response);
+                console.log('Spreadsheet ID: ' + response.result.spreadsheetId);
+                listMajors(response.result.spreadsheetId);
+            });
+        } catch (err) {
+            document.getElementById('content').innerText = err.message;
+            return;
+        }
+      }
+
+
       /**
        * Print the names and majors of students in a sample spreadsheet:
        * https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit
        */
-      async function listMajors() {
+      async function listMajors(newspreadsheetId) {
         let response;
         try {
           // Fetch first 10 files
-          response = await gapi.client.sheets.spreadsheets.values.get({
+          /*response = await gapi.client.sheets.spreadsheets.values.get({
             spreadsheetId: '1YEM_Vm2_BSbg3JJQZQgprVsiaxdZxXOUYMKIK2v2uRo',
             range: 'Class Data!A2:E',
+          });*/
+          response = await gapi.client.sheets.spreadsheets.values.get({
+            spreadsheetId: newspreadsheetId,
           });
         } catch (err) {
           document.getElementById('content').innerText = err.message;
