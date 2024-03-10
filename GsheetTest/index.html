@@ -3,7 +3,7 @@
   <head>
     <title>Sheets API Quickstart</title>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
   </head>
   <body>
     <p>Sheets API Quickstart</p>
@@ -13,7 +13,7 @@
     <button id="authorize_button" onclick="handleAuthClick()">Authorize</button>
     <button id="signout_button" onclick="handleSignoutClick()">Sign Out</button>
 
-    <pre id="content" style="white-space: pre-wrap;"></pre>
+    <pre id="content" style="white-space: pre-wrap"></pre>
 
     <script type="text/javascript">
       /* exported gapiLoaded */
@@ -22,16 +22,18 @@
       /* exported handleSignoutClick */
 
       // TODO(developer): Set to client ID and API key from the Developer Console
-      const CLIENT_ID = '577984121120-ep9eli0hgkign6ptb4ntf2hk490r0dgg.apps.googleusercontent.com';
-      const API_KEY = 'AIzaSyDHltCOaMs-972eToaVmKYVr9LVj7ugpC0';
-      const APP_ID = '577984121120';
+      const CLIENT_ID =
+        "577984121120-ep9eli0hgkign6ptb4ntf2hk490r0dgg.apps.googleusercontent.com";
+      const API_KEY = "AIzaSyDHltCOaMs-972eToaVmKYVr9LVj7ugpC0";
+      const APP_ID = "577984121120";
 
       // Discovery doc URL for APIs used by the quickstart
-      const DISCOVERY_DOC = 'https://sheets.googleapis.com/$discovery/rest?version=v4';
+      const DISCOVERY_DOC =
+        "https://sheets.googleapis.com/$discovery/rest?version=v4";
 
       // Authorization scopes required by the API; multiple scopes can be
       // included, separated by spaces.
-      const SCOPES = 'https://www.googleapis.com/auth/drive.file'; //'https://www.googleapis.com/auth/drive.metadata.readonly';// https://www.googleapis.com/auth/drive.file'; //'https://www.googleapis.com/auth/spreadsheets.readonly';
+      const SCOPES = "https://www.googleapis.com/auth/drive.file"; //'https://www.googleapis.com/auth/drive.metadata.readonly';// https://www.googleapis.com/auth/drive.file'; //'https://www.googleapis.com/auth/spreadsheets.readonly';
 
       let tokenClient;
       let accessToken = null;
@@ -39,16 +41,16 @@
       let gisInited = false;
       let pickerInited = false;
 
-      document.getElementById('addtest_button').style.visibility = 'hidden';
-      document.getElementById('authorize_button').style.visibility = 'hidden';
-      document.getElementById('signout_button').style.visibility = 'hidden';
+      document.getElementById("addtest_button").style.visibility = "hidden";
+      document.getElementById("authorize_button").style.visibility = "hidden";
+      document.getElementById("signout_button").style.visibility = "hidden";
 
       /**
        * Callback after api.js is loaded.
        */
       function gapiLoaded() {
         //gapi.load('client', initializeGapiClient);
-        gapi.load('client:picker', initializePicker);
+        gapi.load("client:picker", initializePicker);
       }
 
       /**
@@ -71,21 +73,23 @@
         tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: CLIENT_ID,
           scope: SCOPES,
-          callback: '', // defined later
+          callback: "", // defined later
         });
         gisInited = true;
         maybeEnableButtons();
       }
 
       /**
-         * Callback after the API client is loaded. Loads the
-         * discovery doc to initialize the API.
-         */
-        async function initializePicker() {
-            await gapi.client.load('https://www.googleapis.com/discovery/v1/apis/drive/v3/rest');
-            pickerInited = true;
-            maybeEnableButtons();
-        }
+       * Callback after the API client is loaded. Loads the
+       * discovery doc to initialize the API.
+       */
+      async function initializePicker() {
+        await gapi.client.load(
+          "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"
+        );
+        pickerInited = true;
+        maybeEnableButtons();
+      }
 
       /**
        * Enables user interaction after all libraries are loaded.
@@ -93,7 +97,8 @@
       function maybeEnableButtons() {
         //if (gapiInited && gisInited && pickerInited) {
         if (gisInited && pickerInited) {
-          document.getElementById('authorize_button').style.visibility = 'visible';
+          document.getElementById("authorize_button").style.visibility =
+            "visible";
         }
       }
 
@@ -103,27 +108,33 @@
       function handleAuthClick() {
         tokenClient.callback = async (resp) => {
           if (resp.error !== undefined) {
-            throw (resp);
+            throw resp;
           }
           accessToken = resp.access_token;
-          document.getElementById('addtest_button').style.visibility = 'visible';
-          document.getElementById('signout_button').style.visibility = 'visible';
-          document.getElementById('authorize_button').innerText = 'Refresh';
+          document.getElementById("addtest_button").style.visibility =
+            "visible";
+          document.getElementById("signout_button").style.visibility =
+            "visible";
+          document.getElementById("authorize_button").innerText = "Refresh";
           //await listMajors();
           //await createSheet('GSheetTest');
           //await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
           await createPicker();
         };
 
-        console.log('>>', gapi.client.getToken(), gapi.client.getToken() === null);
+        console.log(
+          ">>",
+          gapi.client.getToken(),
+          gapi.client.getToken() === null
+        );
         if (gapi.client.getToken() === null) {
           // Prompt the user to select a Google Account and ask for consent to share their data
           // when establishing a new session.
-          tokenClient.requestAccessToken({prompt: 'consent'});
+          tokenClient.requestAccessToken({ prompt: "consent" });
         } else {
           // Skip display of account chooser and consent dialog for an existing session.
           //tokenClient.requestAccessToken({prompt: ''});
-          listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
+          listMajors("113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ");
         }
       }
 
@@ -133,109 +144,127 @@
       function handleSignoutClick() {
         const token = gapi.client.getToken();
         if (token !== null) {
-            accessToken = null;
+          accessToken = null;
           google.accounts.oauth2.revoke(token.access_token);
-          gapi.client.setToken('');
-          document.getElementById('content').innerText = '';
-          document.getElementById('addtest_button').style.visibility = 'hidden';
-          document.getElementById('authorize_button').innerText = 'Authorize';
-          document.getElementById('signout_button').style.visibility = 'hidden';
+          gapi.client.setToken("");
+          document.getElementById("content").innerText = "";
+          document.getElementById("addtest_button").style.visibility = "hidden";
+          document.getElementById("authorize_button").innerText = "Authorize";
+          document.getElementById("signout_button").style.visibility = "hidden";
         }
       }
 
       /**
-         *  Create and render a Picker object for searching images.
-         */
-        function createPicker() {
-            const view = new google.picker.View(google.picker.ViewId.DOCS);
-            view.setMimeTypes('application/vnd.google-apps.spreadsheet');
-            const picker = new google.picker.PickerBuilder()
-                .enableFeature(google.picker.Feature.NAV_HIDDEN)
-                .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
-                .setDeveloperKey(API_KEY)
-                .setAppId(APP_ID)
-                .setOAuthToken(accessToken)
-                .addView(view)
-                .addView(new google.picker.DocsUploadView())
-                .setCallback(pickerCallback)
-                .build();
-            picker.setVisible(true);
-        }
+       *  Create and render a Picker object for searching images.
+       */
+      function createPicker() {
+        const view = new google.picker.View(google.picker.ViewId.DOCS);
+        view.setMimeTypes("application/vnd.google-apps.spreadsheet");
+        const picker = new google.picker.PickerBuilder()
+          .enableFeature(google.picker.Feature.NAV_HIDDEN)
+          .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+          .setDeveloperKey(API_KEY)
+          .setAppId(APP_ID)
+          .setOAuthToken(accessToken)
+          .addView(view)
+          .addView(new google.picker.DocsUploadView())
+          .setCallback(pickerCallback)
+          .build();
+        picker.setVisible(true);
+      }
 
-        /**
-         * Displays the file details of the user's selection.
-         * @param {object} data - Containers the user selection from the picker
-         */
-        async function pickerCallback(data) {
-            if (data.action === google.picker.Action.PICKED) {
-            let text = `Picker response: \n${JSON.stringify(data, null, 2)}\n`;
-            const document = data[google.picker.Response.DOCUMENTS][0];
-            const fileId = document[google.picker.Document.ID];
-            console.log(fileId);
-            const res = await gapi.client.drive.files.get({
-                'fileId': fileId,
-                'fields': '*',
-            });
-            text += `Drive API response for first document: \n${JSON.stringify(res.result, null, 2)}\n`;
-            window.document.getElementById('content').innerText = text;
-            }
+      /**
+       * Displays the file details of the user's selection.
+       * @param {object} data - Containers the user selection from the picker
+       */
+      async function pickerCallback(data) {
+        if (data.action === google.picker.Action.PICKED) {
+          let text = `Picker response: \n${JSON.stringify(data, null, 2)}\n`;
+          const document = data[google.picker.Response.DOCUMENTS][0];
+          const fileId = document[google.picker.Document.ID];
+          console.log(fileId);
+          /*const res = await gapi.client.drive.files.get({
+            fileId: fileId,
+            fields: "*",
+          });
+          text += `Drive API response for first document: \n${JSON.stringify(
+            res.result,
+            null,
+            2
+          )}\n`;
+          window.document.getElementById("content").innerText = text;*/
+          await listMajors(fileId);
         }
+      }
 
       /**
        *  Add test fields upon button click.
        */
-       function handleAddtestClick() {
-        appendValues('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ', 'Sheet1!A1:E1', 'USER_ENTERED');
-       }
+      function handleAddtestClick() {
+        appendValues(
+          "113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ",
+          "Sheet1!A1:E1",
+          "USER_ENTERED"
+        );
+      }
 
       /* Create new Google Sheet */
       async function createSheet(title, callback) {
         try {
-            gapi.client.sheets.spreadsheets.create({
-            properties: {
+          gapi.client.sheets.spreadsheets
+            .create({
+              properties: {
                 title: title,
-            },
-            }).then((response) => {
-            if (callback) callback(response);
-                console.log('Spreadsheet ID: ' + response.result.spreadsheetId);
-                listMajors(response.result.spreadsheetId);
+              },
+            })
+            .then((response) => {
+              if (callback) callback(response);
+              console.log("Spreadsheet ID: " + response.result.spreadsheetId);
+              listMajors(response.result.spreadsheetId);
             });
         } catch (err) {
-            document.getElementById('content').innerText = err.message;
-            return;
+          document.getElementById("content").innerText = err.message;
+          return;
         }
       }
 
       /* Append test values */
-      function appendValues(spreadsheetId, range, valueInputOption, _values, callback) {
+      function appendValues(
+        spreadsheetId,
+        range,
+        valueInputOption,
+        _values,
+        callback
+      ) {
         let values = [
-            ["Test", "", "", "", "Testing", ""],
-            // Additional rows ...
+          ["Test", "", "", "", "Testing", ""],
+          // Additional rows ...
         ];
-        if(_values) {
-            values = _values;
+        if (_values) {
+          values = _values;
         }
         const body = {
-            values: values,
-            majorDimension: "ROWS",
+          values: values,
+          majorDimension: "ROWS",
         };
         try {
-            gapi.client.sheets.spreadsheets.values.append({
-            spreadsheetId: spreadsheetId,
-            range: range,
-            valueInputOption: valueInputOption,
-            resource: body,
-            }).then((response) => {
-            const result = response.result;
-            console.log(`${result.updates.updatedCells} cells appended.`);
-            if (callback) callback(response);
+          gapi.client.sheets.spreadsheets.values
+            .append({
+              spreadsheetId: spreadsheetId,
+              range: range,
+              valueInputOption: valueInputOption,
+              resource: body,
+            })
+            .then((response) => {
+              const result = response.result;
+              console.log(`${result.updates.updatedCells} cells appended.`);
+              if (callback) callback(response);
             });
         } catch (err) {
-            document.getElementById('content').innerText = err.message;
-            return;
+          document.getElementById("content").innerText = err.message;
+          return;
         }
       }
-
 
       /**
        * Print the names and majors of students in a sample spreadsheet:
@@ -251,25 +280,36 @@
           });*/
           response = await gapi.client.sheets.spreadsheets.values.get({
             spreadsheetId: newspreadsheetId,
-            range: 'Sheet1!A1:E',
+            range: "Sheet1!A1:E",
           });
         } catch (err) {
-          document.getElementById('content').innerText = err.message;
+          document.getElementById("content").innerText = err.message;
           return;
         }
         const range = response.result;
         if (!range || !range.values || range.values.length == 0) {
-          document.getElementById('content').innerText = 'No values found.';
+          document.getElementById("content").innerText = "No values found.";
           return;
         }
         // Flatten to string to display
         const output = range.values.reduce(
-            (str, row) => `${str}${row[0]}, ${row[4]}\n`,
-            'Name, Major:\n');
-        document.getElementById('content').innerText = output;
+          (str, row) => `${str}${row[0]}, ${row[4]}\n`,
+          "Name, Major:\n"
+        );
+        document.getElementById("content").innerText = output;
       }
     </script>
-    <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
-    <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+    <script
+      async
+      defer
+      src="https://apis.google.com/js/api.js"
+      onload="gapiLoaded()"
+    ></script>
+    <script
+      async
+      defer
+      src="https://accounts.google.com/gsi/client"
+      onload="gisLoaded()"
+    ></script>
   </body>
 </html>
