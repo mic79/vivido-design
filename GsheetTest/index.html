@@ -30,7 +30,7 @@
 
       // Authorization scopes required by the API; multiple scopes can be
       // included, separated by spaces.
-      const SCOPES = 'https://www.googleapis.com/auth/drive.metadata.readonly https://www.googleapis.com/auth/drive.file'; //'https://www.googleapis.com/auth/spreadsheets.readonly';
+      const SCOPES = 'https://www.googleapis.com/auth/drive.metadata.readonly';// https://www.googleapis.com/auth/drive.file'; //'https://www.googleapis.com/auth/spreadsheets.readonly';
 
       let tokenClient;
       let accessToken = null;
@@ -46,7 +46,7 @@
        * Callback after api.js is loaded.
        */
       function gapiLoaded() {
-        gapi.load('client', initializeGapiClient);
+        //gapi.load('client', initializeGapiClient);
         gapi.load('client:picker', initializePicker);
       }
 
@@ -90,7 +90,8 @@
        * Enables user interaction after all libraries are loaded.
        */
       function maybeEnableButtons() {
-        if (gapiInited && gisInited && pickerInited) {
+        //if (gapiInited && gisInited && pickerInited) {
+        if (gisInited && pickerInited) {
           document.getElementById('authorize_button').style.visibility = 'visible';
         }
       }
