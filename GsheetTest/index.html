@@ -104,6 +104,7 @@
           if (resp.error !== undefined) {
             throw (resp);
           }
+          accessToken = resp.access_token;
           document.getElementById('addtest_button').style.visibility = 'visible';
           document.getElementById('signout_button').style.visibility = 'visible';
           document.getElementById('authorize_button').innerText = 'Refresh';
