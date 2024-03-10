@@ -160,12 +160,12 @@
         }
         const body = {
             values: values,
+            majorDimension: "ROWS",
         };
         try {
             gapi.client.sheets.spreadsheets.values.append({
             spreadsheetId: spreadsheetId,
             range: range,
-            majorDimension: "ROWS",
             valueInputOption: valueInputOption,
             resource: body,
             }).then((response) => {
