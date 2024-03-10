@@ -97,7 +97,7 @@
           await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
         };
 
-        console.log('>>', gapi.client.getToken());
+        console.log('>>', gapi.client.getToken(), gapi.client.getToken() === null);
         if (gapi.client.getToken() === null) {
           // Prompt the user to select a Google Account and ask for consent to share their data
           // when establishing a new session.
