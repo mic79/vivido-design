@@ -164,7 +164,7 @@
     function createPicker() {
       const view = new google.picker.View(google.picker.ViewId.SPREADSHEETS);
       view.setMimeTypes("application/vnd.google-apps.spreadsheet");
-      view.setQuery('GSheet');
+      view.setQuery('title:GSheet');
       const picker = new google.picker.PickerBuilder()
         .enableFeature(google.picker.Feature.NAV_HIDDEN)
         //.enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
