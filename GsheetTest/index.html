@@ -421,7 +421,7 @@
 
     // Function to list relevant app files using Drive API
     function listAppFiles(callback) {
-      authorizeDrive(userId => {
+      //authorizeDrive(userId => {
         const queryParams = {
           'q': 'title:GSheet*',  // Replace with your filter criteria
           'fields': 'files(id, webViewLink, title)'
@@ -431,7 +431,7 @@
         }, function (err) {
           console.error("Error listing files:", err);
         });
-      });
+      //});
     }
 
     // Example usage - Replace with your UI logic to display and handle file selection
