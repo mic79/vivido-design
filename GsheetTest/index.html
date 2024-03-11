@@ -422,7 +422,7 @@
     // Function to list relevant app files using Drive API
     function listAppFiles(callback) {
       //authorizeDrive(userId => {
-        const queryParams = {}; /*{
+        const queryParams = { "q": "name contains 'GSheet' and mimeType='application/vnd.google-apps.spreadsheet'"}; /*{
           'q': '', //'title:GSheet*',  // Replace with your filter criteria
           'fields': 'files(id, webViewLink, title)'
         };*/
