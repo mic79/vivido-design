@@ -122,7 +122,8 @@
         //await listMajors();
         //await createSheet('GSheetTest');
         //await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
-        await createPicker();
+        //await createPicker();
+        await displayAppFiles();
       };
 
       console.log(
@@ -375,6 +376,43 @@
           console.log("Response", response);
         },
           function (err) { console.error("Execute error", err); });
+    }
+
+    // Function to authorize the Google Drive API
+    function authorizeDrive(callback) {
+      gapi.auth2.getAuthInstance().isSignedIn.listen(isSignedIn => {
+        if (isSignedIn) {
+          callback(gapi.auth2.getAuthInstance().currentUser.get().getId());
+        } else {
+          gapi.auth2.getAuthInstance().signIn();
+        }
+      });
+    }
+
+    // Function to list relevant app files using Drive API
+    function listAppFiles(callback) {
+      authorizeDrive(userId => {
+        const queryParams = {
+          'q': 'title:GSheet*',  // Replace with your filter criteria
+          'fields': 'files(id, webViewLink, title)'
+        };
+        gapi.client.drive.files.list(queryParams).then(function (response) {
+          callback(response.result.files);
+        }, function (err) {
+          console.error("Error listing files:", err);
+        });
+      });
+    }
+
+    // Example usage - Replace with your UI logic to display and handle file selection
+    function displayAppFiles() {
+      listAppFiles(files => {
+        console.log('Your app\'s relevant files:');
+        files.forEach(file => {
+          console.log(file.title, file.webViewLink);
+          // Add these files to your app's UI for selection (replace with your UI code)
+        });
+      });
     }
   </script>
   <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
