@@ -314,7 +314,7 @@
     /* TEST: Initiate files.watch */
     async function execute() {
       //await getSheetDetails();
-      const driveId = await getSheetDetails().id; //gapi.client.drive.data.id;
+      const driveId = await getSheetDetails(fileId).id; //gapi.client.drive.data.id;
       console.log('driveId', driveId);
       const startPageTokenRes = gapi.client.drive.changes.getStartPageToken({
         driveId: driveId,
