@@ -11,10 +11,10 @@
   <p>Sheets API Quickstart</p>
 
   <!--Add buttons to initiate auth sequence and sign out-->
-  <button id="addtest_button" onclick="handleAddtestClick()">Add test</button>
+  <button id="addtest_button" onclick="handleAddtestClick()">Add Test</button>
   <button id="authorize_button" onclick="handleAuthClick()">Authorize</button>
   <button id="signout_button" onclick="handleSignoutClick()">Sign Out</button>
-  <button onclick="execute()">execute</button>
+  <button onclick="execute()">Check Changes</button>
 
   <pre id="content" style="white-space: pre-wrap"></pre>
 
@@ -290,10 +290,31 @@
         }
       };
     }
+    
+    async function getSheetDetails(fileId) {
+      const url = `https://www.googleapis.com/drive/v3/files/${fileId}`;
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${accessToken}` // Replace with your access token
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const driveId = data.id;
+        console.log("Drive ID:", driveId);
+        // Use the driveId for further actions
+      } else {
+        console.error("Error fetching file details:", response.statusText);
+      }
+    }
+
+
 
     /* TEST: Initiate files.watch */
-    function execute() {
-      const driveId = gapi.client.drive.data.id;
+    async function execute() {
+      //await getSheetDetails();
+      const driveId = await getSheetDetails().id; //gapi.client.drive.data.id;
       console.log('driveId', driveId);
       const startPageTokenRes = gapi.client.drive.changes.getStartPageToken({
         driveId: driveId,
@@ -357,7 +378,9 @@
   </script>
   <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
   <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js" integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
+    integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </body>
 
 </html>
