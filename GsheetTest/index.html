@@ -341,7 +341,7 @@
 
     /* TEST: Initiate files.watch */
     function execute() {
-      let uuid = uuid4();
+      let uuid = JSON.stringify(uuid4());
       console.log('execute', uuid);
       return gapi.client.drive.files.watch({
         "fileId": fileId,
