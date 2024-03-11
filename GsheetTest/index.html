@@ -66,28 +66,20 @@
         discoveryDocs: [DISCOVERY_DOC],
       });
       gapiInited = true;
-      gisLoaded();
-      //maybeEnableButtons();
+      maybeEnableButtons();
     }
 
     /**
      * Callback after Google Identity Services are loaded.
      */
     function gisLoaded() {
-      tokenClient = gapi.auth2.initTokenClient({
+      tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
         scope: SCOPES,
         callback: "", // defined later
-      })
-        .then(client => {
-          tokenClient = client;
-          gisInited = true;
-          maybeEnableButtons();
-        })
-        .catch(error => {
-          console.error("Error initializing token client:", error);
-          // Handle the error, maybe disable buttons or show an error message
-        });
+      });
+      gisInited = true;
+      maybeEnableButtons();
     }
 
     /**
@@ -131,7 +123,7 @@
         //await createSheet('GSheetTest');
         //await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
         //await createPicker();
-        await displayAppFiles();
+        displayAppFiles();
       };
 
       console.log(
@@ -158,7 +150,7 @@
       if (token !== null) {
         accessToken = null;
         fileId = null;
-        gapi.auth2.revoke(token.access_token);
+        google.accounts.oauth2.revoke(token.access_token);
         gapi.client.setToken("");
         document.getElementById("content").innerText = "";
         document.getElementById("addtest_button").style.visibility = "hidden";
@@ -387,23 +379,7 @@
     }
 
     // Function to authorize the Google Drive API
-    function authorizeDrive() {
-      return new Promise((resolve, reject) => {
-        gapi.auth2.getAuthInstance().isSignedIn.listen(isSignedIn => {
-          if (isSignedIn) {
-            gapi.auth2.getAuthInstance().initTokenClient().then(tokenClient => {
-              resolve(tokenClient); // Resolve the promise with the token client
-            }).catch(error => {
-              reject(error); // Reject the promise with any errors
-            });
-          } else {
-            // User is not signed in, handle the situation (e.g., prompt to sign in)
-            reject(new Error('User is not signed in'));
-          }
-        });
-      });
-    }
-    /*function authorizeDrive(callback) {
+    function authorizeDrive(callback) {
       gapi.auth2.getAuthInstance().isSignedIn.listen(isSignedIn => {
         if (isSignedIn) {
           callback(gapi.auth2.getAuthInstance().currentUser.get().getId());
@@ -411,28 +387,11 @@
           gapi.auth2.getAuthInstance().signIn();
         }
       });
-    }*/
+    }
 
     // Function to list relevant app files using Drive API
     function listAppFiles(callback) {
-      authorizeDrive()
-        .then(tokenClient => {
-          console.log('Token client obtained:', tokenClient);
-          // Use the token client for your API calls
-          const queryParams = {
-            'q': 'title:GSheet*',  // Replace with your filter criteria
-            'fields': 'files(id, webViewLink, title)'
-          };
-          gapi.client.drive.files.list(queryParams).then(function (response) {
-            callback(response.result.files);
-          }, function (err) {
-            console.error("Error listing files:", err);
-          });
-        })
-        .catch(error => {
-          console.error('Authorization error:', error);
-        });
-      /*authorizeDrive(userId => {
+      authorizeDrive(userId => {
         const queryParams = {
           'q': 'title:GSheet*',  // Replace with your filter criteria
           'fields': 'files(id, webViewLink, title)'
@@ -442,7 +401,7 @@
         }, function (err) {
           console.error("Error listing files:", err);
         });
-      });*/
+      });
     }
 
     // Example usage - Replace with your UI logic to display and handle file selection
@@ -457,7 +416,7 @@
     }
   </script>
   <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
-  <script async defer src="https://accounts.google.com/gsi/client" onloadX="gisLoaded()"></script>
+  <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
 </body>
 
 </html>
