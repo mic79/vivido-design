@@ -41,6 +41,7 @@
     let accessToken = null;
     let gapiInited = false;
     let gisInited = false;
+    let pickerInited = false;
     let fileId;
 
     document.getElementById("addtest_button").style.visibility = "hidden";
@@ -52,6 +53,7 @@
      */
     function gapiLoaded() {
       gapi.load('client', initializeGapiClient);
+      gapi.load("client:picker", initializePicker);
     }
 
     /**
@@ -81,10 +83,23 @@
     }
 
     /**
+     * Callback after the API client is loaded. Loads the
+     * discovery doc to initialize the API.
+     */
+    async function initializePicker() {
+      await gapi.client.load(
+        "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"
+      );
+      pickerInited = true;
+      maybeEnableButtons();
+    }
+
+    /**
      * Enables user interaction after all libraries are loaded.
      */
     function maybeEnableButtons() {
-      if (gapiInited && gisInited) {
+      //if (gapiInited && gisInited && pickerInited) {
+      if (gisInited && pickerInited) {
         document.getElementById("authorize_button").style.visibility =
           "visible";
       }
@@ -107,7 +122,7 @@
         //await listMajors();
         //await createSheet('GSheetTest');
         //await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
-        displayAppFiles();
+        await createPicker();
       };
 
       console.log(
@@ -140,6 +155,50 @@
         document.getElementById("addtest_button").style.visibility = "hidden";
         document.getElementById("authorize_button").innerText = "Authorize";
         document.getElementById("signout_button").style.visibility = "hidden";
+      }
+    }
+
+    /**
+     *  Create and render a Picker object for searching images.
+     */
+    function createPicker() {
+      const view = new google.picker.View(google.picker.ViewId.SPREADSHEETS);
+      view.setMimeTypes("application/vnd.google-apps.spreadsheet");
+      view.setQuery('title:GSheet');
+      const picker = new google.picker.PickerBuilder()
+        .enableFeature(google.picker.Feature.NAV_HIDDEN)
+        //.enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .setDeveloperKey(API_KEY)
+        .setAppId(APP_ID)
+        .setOAuthToken(accessToken)
+        .addView(view)
+        .addView(new google.picker.DocsUploadView())
+        .setCallback(pickerCallback)
+        .build();
+      picker.setVisible(true);
+    }
+
+    /**
+     * Displays the file details of the user's selection.
+     * @param {object} data - Containers the user selection from the picker
+     */
+    async function pickerCallback(data) {
+      if (data.action === google.picker.Action.PICKED) {
+        let text = `Picker response: \n${JSON.stringify(data, null, 2)}\n`;
+        const document = data[google.picker.Response.DOCUMENTS][0];
+        fileId = document[google.picker.Document.ID];
+        console.log(fileId);
+        /*const res = await gapi.client.drive.files.get({
+          fileId: fileId,
+          fields: "*",
+        });
+        text += `Drive API response for first document: \n${JSON.stringify(
+          res.result,
+          null,
+          2
+        )}\n`;
+        window.document.getElementById("content").innerText = text;*/
+        await listMajors(fileId);
       }
     }
 
@@ -319,7 +378,7 @@
     }
 
     // Function to authorize the Google Drive API
-    /*function authorizeDrive(callback) {
+    function authorizeDrive(callback) {
       gapi.auth2.getAuthInstance().isSignedIn.listen(isSignedIn => {
         if (isSignedIn) {
           callback(gapi.auth2.getAuthInstance().currentUser.get().getId());
@@ -327,30 +386,6 @@
           gapi.auth2.getAuthInstance().signIn();
         }
       });
-    }*/
-    async function authorizeDrive() {
-      try {
-        // Create a new GoogleAuth instance
-        const auth2 = await google.accounts.oauth2.initAuthInstance({
-          client_id: CLIENT_ID,
-          scope: SCOPES
-        });
-
-        // Check if user is signed in
-        const isSignedIn = await auth2.isSignedIn.get();
-
-        if (isSignedIn) {
-          // User is signed in, return the token client
-          return auth2.currentUser.get().getToken();
-        } else {
-          // User is not signed in, prompt to sign in
-          await auth2.signIn();
-          return await auth2.currentUser.get().getToken();
-        }
-      } catch (error) {
-        console.error("Error authorizing Drive:", error);
-        throw error; // Re-throw the error for handling in other parts of your code
-      }
     }
 
     // Function to list relevant app files using Drive API
@@ -378,11 +413,9 @@
         });
       });
     }
-
-    window.addEventListener("load", gisLoaded);
   </script>
   <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
-  <script async defer src="https://accounts.google.com/gsi/client" onloadX="gisLoaded()"></script>
+  <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
 </body>
 
 </html>
