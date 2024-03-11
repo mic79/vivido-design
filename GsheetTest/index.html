@@ -379,7 +379,23 @@
     }
 
     // Function to authorize the Google Drive API
-    function authorizeDrive(callback) {
+    function authorizeDrive() {
+      return new Promise((resolve, reject) => {
+        gapi.auth2.getAuthInstance().isSignedIn.listen(isSignedIn => {
+          if (isSignedIn) {
+            gapi.auth2.getAuthInstance().initTokenClient().then(tokenClient => {
+              resolve(tokenClient); // Resolve the promise with the token client
+            }).catch(error => {
+              reject(error); // Reject the promise with any errors
+            });
+          } else {
+            // User is not signed in, handle the situation (e.g., prompt to sign in)
+            reject(new Error('User is not signed in'));
+          }
+        });
+      });
+    }
+    /*function authorizeDrive(callback) {
       gapi.auth2.getAuthInstance().isSignedIn.listen(isSignedIn => {
         if (isSignedIn) {
           callback(gapi.auth2.getAuthInstance().currentUser.get().getId());
@@ -387,11 +403,28 @@
           gapi.auth2.getAuthInstance().signIn();
         }
       });
-    }
+    }*/
 
     // Function to list relevant app files using Drive API
     function listAppFiles(callback) {
-      authorizeDrive(userId => {
+      authorizeDrive()
+        .then(tokenClient => {
+          console.log('Token client obtained:', tokenClient);
+          // Use the token client for your API calls
+          const queryParams = {
+            'q': 'title:GSheet*',  // Replace with your filter criteria
+            'fields': 'files(id, webViewLink, title)'
+          };
+          gapi.client.drive.files.list(queryParams).then(function (response) {
+            callback(response.result.files);
+          }, function (err) {
+            console.error("Error listing files:", err);
+          });
+        })
+        .catch(error => {
+          console.error('Authorization error:', error);
+        });
+      /*authorizeDrive(userId => {
         const queryParams = {
           'q': 'title:GSheet*',  // Replace with your filter criteria
           'fields': 'files(id, webViewLink, title)'
@@ -401,7 +434,7 @@
         }, function (err) {
           console.error("Error listing files:", err);
         });
-      });
+      });*/
     }
 
     // Example usage - Replace with your UI logic to display and handle file selection
