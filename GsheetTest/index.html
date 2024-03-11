@@ -107,7 +107,12 @@
         //await listMajors();
         //await createSheet('GSheetTest');
         //await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
-        displayAppFiles(accessToken);
+        try {
+          displayAppFiles(accessToken);
+        } catch (error) {
+          console.error("Error during authorization:", error);
+          // Handle errors appropriately, e.g., display an error message to the user
+        }
       };
 
       console.log(
@@ -320,12 +325,12 @@
 
     // Function to list relevant app files using Drive API
     function listAppFiles(callback) {
-        const queryParams = { "q": "name contains 'GSheet' and mimeType='application/vnd.google-apps.spreadsheet'"};
-        gapi.client.drive.files.list(queryParams).then(function (response) {
-          callback(response.result.files);
-        }, function (err) {
-          console.error("Error listing files:", err);
-        });
+      const queryParams = { "q": "name contains 'GSheet' and mimeType='application/vnd.google-apps.spreadsheet'" };
+      gapi.client.drive.files.list(queryParams).then(function (response) {
+        callback(response.result.files);
+      }, function (err) {
+        console.error("Error listing files:", err);
+      });
     }
 
     // Example usage - Replace with your UI logic to display and handle file selection
