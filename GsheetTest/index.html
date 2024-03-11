@@ -306,26 +306,6 @@
       document.getElementById("content").innerText = output;
     }
 
-    /* TEST: Initiate files.watch */
-    function execute() {
-      console.log('execute');
-      return gapi.client.drive.files.watch({
-        "fileId": fileId,
-        "resource": {
-          "id": uuid4(), // Your channel ID.
-          "type": "web_hook",
-          "address": "https://vivido-design.com/GSheetTest/notifications", // Your receiving URL.
-          //"token": gapi.client.getToken(), // (Optional) Your files channel token.
-          //"expiration": 1426325213000 // (Optional) Your requested channel expiration date and time.
-        }
-      })
-        .then(function (response) {
-          // Handle the results here (response.result has the parsed body).
-          console.log("Response", response);
-        },
-          function (err) { console.error("Execute error", err); });
-    }
-
     /*!
     * JavaScript UUID Generator, v0.0.1
     *
@@ -333,6 +313,7 @@
     * Dual licensed under the MIT and the GNU GPL licenses.
     */
     function uuid4() {
+      console.log('uuid4');
       var uuid = (function () {
         var i,
           c = "89ab",
@@ -355,6 +336,26 @@
           return uuid;
         }
       };
+    }
+
+    /* TEST: Initiate files.watch */
+    function execute() {
+      console.log('execute');
+      return gapi.client.drive.files.watch({
+        "fileId": fileId,
+        "resource": {
+          "id": uuid4(), // Your channel ID.
+          "type": "web_hook",
+          "address": "https://vivido-design.com/GSheetTest/notifications", // Your receiving URL.
+          //"token": gapi.client.getToken(), // (Optional) Your files channel token.
+          //"expiration": 1426325213000 // (Optional) Your requested channel expiration date and time.
+        }
+      })
+        .then(function (response) {
+          // Handle the results here (response.result has the parsed body).
+          console.log("Response", response);
+        },
+          function (err) { console.error("Execute error", err); });
     }
   </script>
   <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
