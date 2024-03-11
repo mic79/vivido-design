@@ -311,6 +311,13 @@
       console.log('execute');
       return gapi.client.drive.files.watch({
         "fileId": fileId,
+        "resource": {
+          "id": "01234567-89ab-cdef-0123456789ab", // Your channel ID.
+          "type": "web_hook",
+          "address": "https://vivido-design.com/GSheetTest/notifications", // Your receiving URL.
+          //"token": gapi.client.getToken(), // (Optional) Your files channel token.
+          //"expiration": 1426325213000 // (Optional) Your requested channel expiration date and time.
+        }
       })
         .then(function (response) {
           // Handle the results here (response.result has the parsed body).
