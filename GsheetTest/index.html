@@ -14,6 +14,7 @@
   <button id="addtest_button" onclick="handleAddtestClick()">Add test</button>
   <button id="authorize_button" onclick="handleAuthClick()">Authorize</button>
   <button id="signout_button" onclick="handleSignoutClick()">Sign Out</button>
+  <button onclick="execute()">execute</button>
 
   <pre id="content" style="white-space: pre-wrap"></pre>
 
@@ -303,6 +304,19 @@
         "Name, Major:\n"
       );
       document.getElementById("content").innerText = output;
+    }
+
+    /* TEST: Initiate files.watch */
+    function execute() {
+      console.log('execute');
+      return gapi.client.drive.files.watch({
+        "fileId": fileId,
+      })
+        .then(function (response) {
+          // Handle the results here (response.result has the parsed body).
+          console.log("Response", response);
+        },
+          function (err) { console.error("Execute error", err); });
     }
   </script>
   <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
