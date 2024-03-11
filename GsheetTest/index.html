@@ -77,9 +77,16 @@
         client_id: CLIENT_ID,
         scope: SCOPES,
         callback: "", // defined later
-      });
-      gisInited = true;
-      maybeEnableButtons();
+      })
+        .then(client => {
+          tokenClient = client;
+          gisInited = true;
+          maybeEnableButtons();
+        })
+        .catch(error => {
+          console.error("Error initializing token client:", error);
+          // Handle the error, maybe disable buttons or show an error message
+        });
     }
 
     /**
