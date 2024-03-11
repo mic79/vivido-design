@@ -303,7 +303,7 @@
         const data = await response.json();
         const driveId = data.id;
         console.log("Drive ID:", driveId);
-        // Use the driveId for further actions
+        return data;
       } else {
         console.error("Error fetching file details:", response.statusText);
       }
