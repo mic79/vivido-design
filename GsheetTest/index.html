@@ -346,11 +346,12 @@
         return u.join("");
       })();
       return {
-        console.log('uuid4', uuid);
         toString: function () {
+          console.log('uuid4', uuid);
           return uuid;
         },
         valueOf: function () {
+          console.log('uuid4', uuid);
           return uuid;
         }
       };
