@@ -349,7 +349,7 @@
         console.log('Your app\'s relevant files:');
         files.forEach(file => {
           console.log(file.name, 'https://docs.google.com/spreadsheets/d/' + file.id + '/edit#gid=0');
-          $('#content').append('<button onclick="listMajors(' + file.id + ')">' + file.name + '</button>');
+          $('#content').append('<button onclick="listMajors(\'' + file.id + '\')">' + file.name + '</button>');
         });
       });
     }
