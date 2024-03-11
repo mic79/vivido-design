@@ -344,7 +344,7 @@
 
     // Example usage - Replace with your UI logic to display and handle file selection
     function displayAppFiles() {
-      $('#content').innerText('');
+      $('#content').html('');
       listAppFiles(files => {
         console.log('Your app\'s relevant files:');
         files.forEach(file => {
