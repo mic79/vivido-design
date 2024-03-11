@@ -313,7 +313,6 @@
     * Dual licensed under the MIT and the GNU GPL licenses.
     */
     function uuid4() {
-      console.log('uuid4');
       var uuid = (function () {
         var i,
           c = "89ab",
@@ -326,14 +325,11 @@
         u[19] = c.charAt(Math.random() * 4 | 0);
         return u.join("");
       })();
-      console.log('uuid4', uuid);
       return {
         toString: function () {
-          console.log('uuid4', uuid);
           return uuid;
         },
         valueOf: function () {
-          console.log('uuid4', uuid);
           return uuid;
         }
       };
@@ -342,8 +338,7 @@
     /* TEST: Initiate files.watch */
     function execute() {
       let uuid = uuid4().toString();
-      console.log('execute', uuid);
-      return gapi.client.drive.files.watch({
+      return gapi.client.drive.changes.watch({
         "fileId": fileId,
         "resource": {
           "id": uuid, // Your channel ID.
