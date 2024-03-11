@@ -378,7 +378,31 @@
     }
 
     // Function to authorize the Google Drive API
-    function authorizeDrive(callback) {
+    async function authorizeDrive() {
+      try {
+        // Create a new GoogleAuth instance
+        const auth2 = await google.accounts.oauth2.initAuthInstance({
+          client_id: CLIENT_ID,
+          scope: SCOPES
+        });
+
+        // Check if user is signed in
+        const isSignedIn = await auth2.isSignedIn.get();
+
+        if (isSignedIn) {
+          // User is signed in, return the token client
+          return auth2.currentUser.get().getToken();
+        } else {
+          // User is not signed in, prompt to sign in
+          await auth2.signIn();
+          return await auth2.currentUser.get().getToken();
+        }
+      } catch (error) {
+        console.error("Error authorizing Drive:", error);
+        throw error; // Re-throw the error for handling in other parts of your code
+      }
+    }
+    /*function authorizeDrive(callback) {
       gapi.auth2.getAuthInstance().isSignedIn.listen(isSignedIn => {
         if (isSignedIn) {
           callback(gapi.auth2.getAuthInstance().currentUser.get().getId());
@@ -386,7 +410,7 @@
           gapi.auth2.getAuthInstance().signIn();
         }
       });
-    }
+    }*/
 
     // Function to list relevant app files using Drive API
     function listAppFiles(callback) {
