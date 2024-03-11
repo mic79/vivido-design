@@ -35,7 +35,7 @@
 
     // Authorization scopes required by the API; multiple scopes can be
     // included, separated by spaces.
-    const SCOPES = "https://www.googleapis.com/auth/drive.file"; //"https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets.readonly https://www.googleapis.com/auth/drive.metadata.readonly"; //'https://www.googleapis.com/auth/drive.metadata.readonly';// https://www.googleapis.com/auth/drive.file'; //'https://www.googleapis.com/auth/spreadsheets.readonly';
+    const SCOPES = "https://www.googleapis.com/auth/drive.file";
 
     let tokenClient;
     let accessToken = null;
@@ -98,7 +98,6 @@
      * Enables user interaction after all libraries are loaded.
      */
     function maybeEnableButtons() {
-      //if (gapiInited && gisInited && pickerInited) {
       if (gisInited && pickerInited) {
         document.getElementById("authorize_button").style.visibility =
           "visible";
@@ -123,20 +122,13 @@
         //await createSheet('GSheetTest');
         //await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
         try {
-          //const accessToken = await authorizeDrive();
-          displayAppFiles(accessToken); // Call the function to display files
+          displayAppFiles(accessToken);
         } catch (error) {
           console.error("Error during authorization:", error);
           // Handle errors appropriately, e.g., display an error message to the user
         }
-        //await createPicker();
       };
 
-      console.log(
-        ">>",
-        gapi.client.getToken(),
-        gapi.client.getToken() === null
-      );
       if (gapi.client.getToken() === null) {
         // Prompt the user to select a Google Account and ask for consent to share their data
         // when establishing a new session.
@@ -162,50 +154,6 @@
         document.getElementById("addtest_button").style.visibility = "hidden";
         document.getElementById("authorize_button").innerText = "Authorize";
         document.getElementById("signout_button").style.visibility = "hidden";
-      }
-    }
-
-    /**
-     *  Create and render a Picker object for searching images.
-     */
-    function createPicker() {
-      const view = new google.picker.View(google.picker.ViewId.SPREADSHEETS);
-      view.setMimeTypes("application/vnd.google-apps.spreadsheet");
-      view.setQuery('title:GSheet');
-      const picker = new google.picker.PickerBuilder()
-        .enableFeature(google.picker.Feature.NAV_HIDDEN)
-        //.enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
-        .setDeveloperKey(API_KEY)
-        .setAppId(APP_ID)
-        .setOAuthToken(accessToken)
-        .addView(view)
-        .addView(new google.picker.DocsUploadView())
-        .setCallback(pickerCallback)
-        .build();
-      picker.setVisible(true);
-    }
-
-    /**
-     * Displays the file details of the user's selection.
-     * @param {object} data - Containers the user selection from the picker
-     */
-    async function pickerCallback(data) {
-      if (data.action === google.picker.Action.PICKED) {
-        let text = `Picker response: \n${JSON.stringify(data, null, 2)}\n`;
-        const document = data[google.picker.Response.DOCUMENTS][0];
-        fileId = document[google.picker.Document.ID];
-        console.log(fileId);
-        /*const res = await gapi.client.drive.files.get({
-          fileId: fileId,
-          fields: "*",
-        });
-        text += `Drive API response for first document: \n${JSON.stringify(
-          res.result,
-          null,
-          2
-        )}\n`;
-        window.document.getElementById("content").innerText = text;*/
-        await listMajors(fileId);
       }
     }
 
@@ -384,63 +332,24 @@
           function (err) { console.error("Execute error", err); });
     }
 
-    // Function to authorize the Google Drive API
-    async function authorizeDrive() {
-      try {
-        // Create a new GoogleAuth instance
-        const auth2 = await google.accounts.oauth2.initAuthInstance({
-          client_id: CLIENT_ID,
-          scope: SCOPES
-        });
-
-        // Check if user is signed in
-        const isSignedIn = await auth2.isSignedIn.get();
-
-        if (isSignedIn) {
-          // User is signed in, return the token client
-          return auth2.currentUser.get().getToken();
-        } else {
-          // User is not signed in, prompt to sign in
-          await auth2.signIn();
-          return await auth2.currentUser.get().getToken();
-        }
-      } catch (error) {
-        console.error("Error authorizing Drive:", error);
-        throw error; // Re-throw the error for handling in other parts of your code
-      }
-    }
-    /*function authorizeDrive(callback) {
-      gapi.auth2.getAuthInstance().isSignedIn.listen(isSignedIn => {
-        if (isSignedIn) {
-          callback(gapi.auth2.getAuthInstance().currentUser.get().getId());
-        } else {
-          gapi.auth2.getAuthInstance().signIn();
-        }
-      });
-    }*/
-
     // Function to list relevant app files using Drive API
     function listAppFiles(callback) {
-      //authorizeDrive(userId => {
-        const queryParams = { "q": "name contains 'GSheet' and mimeType='application/vnd.google-apps.spreadsheet'"}; /*{
-          'q': '', //'title:GSheet*',  // Replace with your filter criteria
-          'fields': 'files(id, webViewLink, title)'
-        };*/
-        gapi.client.drive.files.list(queryParams).then(function (response) {
-          callback(response.result.files);
-        }, function (err) {
-          console.error("Error listing files:", err);
-        });
-      //});
+      const queryParams = { "q": "name contains 'GSheet' and mimeType='application/vnd.google-apps.spreadsheet'" };
+      gapi.client.drive.files.list(queryParams).then(function (response) {
+        callback(response.result.files);
+      }, function (err) {
+        console.error("Error listing files:", err);
+      });
     }
 
     // Example usage - Replace with your UI logic to display and handle file selection
     function displayAppFiles() {
+      $('#content').innerText('');
       listAppFiles(files => {
         console.log('Your app\'s relevant files:');
         files.forEach(file => {
           console.log(file.name, 'https://docs.google.com/spreadsheets/d/' + file.id + '/edit#gid=0');
-          // Add these files to your app's UI for selection (replace with your UI code)
+          $('#content').append('<button onclick="listMajors(' + file.id + ')">' + file.name + '</button>');
         });
       });
     }
