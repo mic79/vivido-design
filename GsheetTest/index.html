@@ -336,18 +336,19 @@
     }
 
     /* TEST: Initiate files.watch */
-    const driveId = gapi.client.drive.data.id;
-    console.log('driveId', driveId);
-    const startPageTokenRes = gapi.client.drive.changes.getStartPageToken({
-      driveId: driveId,
-      supportsAllDrives: true,
-      supportsTeamDrives: true, // This seems to be necessary even though it's deprecated. If not provided explicitly, it seems to be set as `false` under the hood. NodeJS lib's bug?
-    });
-    const startPageToken = startPageTokenRes.data.startPageToken;
-    if (startPageToken == null) {
-      throw new Error("startPageToken is unexpectedly null");
-    }
     function execute() {
+      const driveId = gapi.client.drive.data.id;
+      console.log('driveId', driveId);
+      const startPageTokenRes = gapi.client.drive.changes.getStartPageToken({
+        driveId: driveId,
+        supportsAllDrives: true,
+        supportsTeamDrives: true, // This seems to be necessary even though it's deprecated. If not provided explicitly, it seems to be set as `false` under the hood. NodeJS lib's bug?
+      });
+      const startPageToken = startPageTokenRes.data.startPageToken;
+      if (startPageToken == null) {
+        throw new Error("startPageToken is unexpectedly null");
+      }
+
       let uuid = uuid4().toString();
       return gapi.client.drive.changes.watch({
         supportsAllDrives: true,
