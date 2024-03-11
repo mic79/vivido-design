@@ -341,11 +341,12 @@
 
     /* TEST: Initiate files.watch */
     function execute() {
-      console.log('execute');
+      let uuid = uuid4();
+      console.log('execute', uuid);
       return gapi.client.drive.files.watch({
         "fileId": fileId,
         "resource": {
-          "id": uuid4(), // Your channel ID.
+          "id": uuid, // Your channel ID.
           "type": "web_hook",
           "address": "https://vivido-design.com/GSheetTest/notifications", // Your receiving URL.
           //"token": gapi.client.getToken(), // (Optional) Your files channel token.
