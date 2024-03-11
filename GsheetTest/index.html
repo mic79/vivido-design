@@ -122,7 +122,13 @@
         //await listMajors();
         //await createSheet('GSheetTest');
         //await listMajors('113AkoHNRxoqvJ3uSxRADr8QtA26w2lGZzsHgVolwtTQ');
-        displayAppFiles(accessToken);
+        try {
+          const accessToken = await authorizeDrive();
+          displayAppFiles(accessToken); // Call the function to display files
+        } catch (error) {
+          console.error("Error during authorization:", error);
+          // Handle errors appropriately, e.g., display an error message to the user
+        }
         //await createPicker();
       };
 
