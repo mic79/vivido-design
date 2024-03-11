@@ -338,7 +338,7 @@
     /* TEST: Initiate files.watch */
     const driveId = gapi.client.drive.data.id;
     console.log('driveId', driveId);
-    const startPageTokenRes = await gapi.client.drive.changes.getStartPageToken({
+    const startPageTokenRes = gapi.client.drive.changes.getStartPageToken({
       driveId: driveId,
       supportsAllDrives: true,
       supportsTeamDrives: true, // This seems to be necessary even though it's deprecated. If not provided explicitly, it seems to be set as `false` under the hood. NodeJS lib's bug?
