@@ -73,7 +73,7 @@
      * Callback after Google Identity Services are loaded.
      */
     function gisLoaded() {
-      tokenClient = google.accounts.oauth2.initTokenClient({
+      tokenClient = gapi.auth2.initTokenClient({
         client_id: CLIENT_ID,
         scope: SCOPES,
         callback: "", // defined later
@@ -150,7 +150,7 @@
       if (token !== null) {
         accessToken = null;
         fileId = null;
-        google.accounts.oauth2.revoke(token.access_token);
+        gapi.auth2.revoke(token.access_token);
         gapi.client.setToken("");
         document.getElementById("content").innerText = "";
         document.getElementById("addtest_button").style.visibility = "hidden";
