@@ -423,7 +423,7 @@
     function listAppFiles(callback) {
       //authorizeDrive(userId => {
         const queryParams = {
-          'q': 'title:GSheet*',  // Replace with your filter criteria
+          'q': '', //'title:GSheet*',  // Replace with your filter criteria
           'fields': 'files(id, webViewLink, title)'
         };
         gapi.client.drive.files.list(queryParams).then(function (response) {
