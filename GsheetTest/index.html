@@ -197,8 +197,11 @@
       callback
     ) {
       const datetime = Date.now();
+      console.log('datetime', datetime);
+      const datetimeStr = datetime.toLocaleString('en-GB', { timeZone: 'UTC' })
+      console.log('datetimeStr', datetimeStr);
       let values = [
-        ["Test", "", "", "", "Testing", datetime.toLocaleString('en-GB', { timeZone: 'UTC' })],
+        ["Test", "", "", "", "Testing", datetimeStr],
         // Additional rows ...
       ];
       if (_values) {
