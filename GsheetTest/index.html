@@ -196,7 +196,7 @@
       _values,
       callback
     ) {
-      const datetime = Date.now();
+      const datetime = new Date();
       console.log('datetime', datetime);
       const datetimeStr = datetime.toLocaleString('en-GB', { timeZone: 'UTC' });
       console.log('datetimeStr', datetimeStr);
