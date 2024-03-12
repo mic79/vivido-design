@@ -196,8 +196,9 @@
       _values,
       callback
     ) {
+      const datetime = Date.now();
       let values = [
-        ["Test", "", "", "", "Testing", ""],
+        ["Test", "", "", "", "Testing", datetime.toLocaleString('en-GB', { timeZone: 'UTC' })],
         // Additional rows ...
       ];
       if (_values) {
@@ -313,7 +314,6 @@
 
     /* TEST: Initiate files.watch */
     async function execute() {
-      //await getSheetDetails();
       const driveId = await getSheetDetails(fileId).id; //gapi.client.drive.data.id;
       console.log('driveId', driveId);
       const startPageTokenRes = gapi.client.drive.changes.getStartPageToken({
