@@ -158,10 +158,12 @@
                         <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
                         <button @click="exportToCSV">Export to CSV</button>
                         <input type="file" @change="importFromCSV" accept=".csv">
+                        <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
                     </div>
                     <table>
                         <thead>
                             <tr>
+                                <th><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
                                 <th v-for="column in columns" :key="column" @click="sort(column)">
                                     {{ column }}
                                     <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
@@ -170,6 +172,7 @@
                         </thead>
                         <tbody>
                             <tr v-for="location in paginatedLocations" :key="location.id">
+                                <td><input type="checkbox" v-model="location.selected"></td>
                                 <td v-for="column in columns" :key="column">
                                     <input v-if="column !== 'hidden'" v-model="location[column]" @input="debounceUpdate(location)">
                                     <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
@@ -196,6 +199,7 @@
                 const columns = ['title', 'city', 'country', 'hidden'];
                 const loading = ref(false);
                 const error = ref(null);
+                const selectAll = ref(false);
 
                 const filteredLocations = computed(() => {
                     return locations.value.filter(location =>
@@ -219,6 +223,10 @@
                 });
 
                 const totalPages = computed(() => Math.ceil(sortedLocations.value.length / itemsPerPage));
+
+                const selectedLocations = computed(() => 
+                    locations.value.filter(location => location.selected)
+                );
 
                 function sort(column) {
                     if (sortColumn.value === column) {
@@ -384,6 +392,63 @@
                     }
                 }
 
+                function toggleSelectAll() {
+                    locations.value.forEach(location => location.selected = selectAll.value);
+                }
+
+                async function deleteSelected() {
+                    if (selectedLocations.value.length === 0) return;
+                    if (confirm(`Are you sure you want to delete ${selectedLocations.value.length} location(s)?`)) {
+                        loading.value = true;
+                        error.value = null;
+                        try {
+                            // First, get the sheet ID for the "Locations" sheet
+                            const sheetsResponse = await gapi.client.sheets.spreadsheets.get({
+                                spreadsheetId: props.sheetId
+                            });
+                            const locationsSheet = sheetsResponse.result.sheets.find(sheet => sheet.properties.title === "Locations");
+                            if (!locationsSheet) {
+                                throw new Error("Locations sheet not found");
+                            }
+                            const locationsSheetId = locationsSheet.properties.sheetId;
+
+                            // Get the indices of selected locations
+                            const indicesToDelete = locations.value
+                                .map((loc, index) => loc.selected ? index + 2 : -1) // +2 because sheet is 1-indexed and has a header row
+                                .filter(index => index !== -1)
+                                .sort((a, b) => b - a); // Sort in descending order
+
+                            // Remove from Google Sheet
+                            await gapi.client.sheets.spreadsheets.batchUpdate({
+                                spreadsheetId: props.sheetId,
+                                resource: {
+                                    requests: indicesToDelete.map(index => ({
+                                        deleteDimension: {
+                                            range: {
+                                                sheetId: locationsSheetId,
+                                                dimension: 'ROWS',
+                                                startIndex: index - 1,
+                                                endIndex: index
+                                            }
+                                        }
+                                    }))
+                                }
+                            });
+
+                            // Remove from local array
+                            locations.value = locations.value.filter(location => !location.selected);
+                            selectAll.value = false;
+
+                            console.log('Locations deleted successfully');
+                        } catch (err) {
+                            console.error('Error deleting locations:', err);
+                            error.value = 'Failed to delete locations. Please try again.';
+                        } finally {
+                            loading.value = false;
+                        }
+                    }
+                }
+
                 onMounted(fetchLocations);
 
                 watch(globalSearch, debounceSearch);
@@ -407,7 +472,11 @@
                     addNewLocation,
                     exportToCSV,
                     importFromCSV,
-                    fetchLocations
+                    fetchLocations,
+                    selectAll,
+                    selectedLocations,
+                    toggleSelectAll,
+                    deleteSelected
                 };
             }
         };
