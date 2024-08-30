@@ -151,7 +151,24 @@
         }
       };
 
+      // Check if the user is already signed in
       if (gapi.client.getToken() === null) {
+        // Prompt the user to sign in
+        tokenClient.requestAccessToken({prompt: ''});
+      } else {
+        // Check if the access token has expired
+        const token = gapi.client.getToken();
+        if (token.expires_at < Date.now()) {
+          // Refresh the access token
+          tokenClient.refreshAccessToken(token.refresh_token).then((response) => {
+            // Update the access token
+            gapi.client.setToken(response.access_token);
+            listMajors(fileId);
+          });
+        }
+      }
+
+      /*if (gapi.client.getToken() === null) {
         // Prompt the user to select a Google Account and ask for consent to share their data
         // when establishing a new session.
         //tokenClient.requestAccessToken({ prompt: "consent" });
@@ -160,7 +177,7 @@
         // Skip display of account chooser and consent dialog for an existing session.
         //tokenClient.requestAccessToken({prompt: ''});
         listMajors(fileId);
-      }
+      }*/
     }
 
     /**
