@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Groceries</title>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.2.47/dist/vue.global.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+    <style>
+        .nav-menu {
+            display: flex;
+            justify-content: space-around;
+            padding: 10px;
+            background-color: #f0f0f0;
+        }
+        .nav-menu a {
+            text-decoration: none;
+            color: #333;
+            padding: 5px 10px;
+        }
+        .nav-menu a.active {
+            font-weight: bold;
+            background-color: #ddd;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .filter-input {
+            width: 100%;
+            padding: 5px;
+            margin-top: 5px;
+        }
+        .sticky-button {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .sticky-button:hover {
+            background-color: #45a049;
+        }
+        .error {
+            color: red;
+            margin-bottom: 10px;
+        }
+        .loading {
+            margin-top: 10px;
+        }
+        .controls {
+            margin-bottom: 10px;
+        }
+        @media (max-width: 768px) {
+            table, thead, tbody, th, td, tr {
+                display: block;
+            }
+            
+            thead tr {
+                position: absolute;
+                top: -9999px;
+                left: -9999px;
+            }
+            
+            tr { border: 1px solid #ccc; }
+            
+            td {
+                border: none;
+                position: relative;
+                padding-left: 50%;
+            }
+            
+            td:before {
+                position: absolute;
+                top: 6px;
+                left: 6px;
+                width: 45%;
+                padding-right: 10px;
+                white-space: nowrap;
+                content: attr(data-label);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div v-if="!isSignedIn">
+            <div id="g_id_onload"
+                 data-client_id="778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com"
+                 data-context="use"
+                 data-ux_mode="popup"
+                 data-callback="handleCredentialResponse"
+                 data-auto_prompt="false">
+            </div>
+            <div class="g_id_signin" data-type="standard"></div>
+        </div>
+        <div v-else>
+            <p>Welcome, {{ user.name }}!</p>
+            <nav class="nav-menu">
+                <a :class="{ active: currentPage === 'groceries' }" @click="currentPage = 'groceries'" href="#">Groceries</a>
+                <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'" href="#">Locations</a>
+            </nav>
+            <p v-if="sheetId">Current Sheet ID: {{ sheetId }} (Share this ID with others to collaborate)</p>
+            <div v-if="!sheetId">
+                <button @click="createNewSheet">Create New Sheet</button>
+                <input v-model="inputSheetId" placeholder="Enter existing sheet ID">
+                <button @click="openSheet(inputSheetId)">Open Sheet</button>
+            </div>
+            <button @click="signOut">Sign Out</button>
+            <component v-if="sheetId" :is="currentPageComponent" :sheet-id="sheetId"></component>
+        </div>
+    </div>
+
+    <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    const GroceriesPage = {
+        template: '<div><h2>Groceries</h2><p>Groceries content goes here</p></div>'
+    };
+
+    const LocationsPage = {
+        props: ['sheetId'],
+        template: `
+            <div>
+                <h2>Locations</h2>
+                <div v-if="error" class="error">{{ error }}</div>
+                <div class="controls">
+                    <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
+                    <button @click="exportToCSV">Export to CSV</button>
+                    <input type="file" @change="importFromCSV" accept=".csv">
+                </div>
+                <div v-if="selectedLocations.length > 0">
+                    {{ selectedLocations.length }} item(s) selected
+                    <button @click="deleteSelectedLocations">Delete Selected</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" @change="toggleAllLocations" v-model="allSelected"></th>
+                            <th v-for="column in columns" :key="column" @click="sort(column)">
+                                {{ column }}
+                                <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="location in paginatedLocations" :key="location.id">
+                            <td><input type="checkbox" v-model="location.selected"></td>
+                            <td v-for="column in columns" :key="column">
+                                <input v-if="column !== 'hidden'" v-model="location[column]" @input="debounceUpdate(location)">
+                                <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="pagination">
+                    <button @click="prevPage" :disabled="currentPage === 1">Previous</button>
+                    <span>Page {{ currentPage }} of {{ totalPages }}</span>
+                    <button @click="nextPage" :disabled="currentPage === totalPages">Next</button>
+                </div>
+                <button class="sticky-button" @click="addNewLocation">Add New Location</button>
+                <div v-if="loading" class="loading">Loading...</div>
+            </div>
+        `,
+        setup(props) {
+            const locations = ref([]);
+            const globalSearch = ref('');
+            const sortColumn = ref('title');
+            const sortDirection = ref('asc');
+            const currentPage = ref(1);
+            const itemsPerPage = 10;
+            const columns = ['title', 'city', 'country', 'hidden'];
+            const allSelected = ref(false);
+            const loading = ref(false);
+            const error = ref(null);
+
+            const filteredLocations = computed(() => {
+                return locations.value.filter(location =>
+                    Object.values(location).some(value =>
+                        String(value).toLowerCase().includes(globalSearch.value.toLowerCase())
+                    )
+                );
+            });
+
+            const sortedLocations = computed(() => {
+                return [...filteredLocations.value].sort((a, b) => {
+                    if (a[sortColumn.value] < b[sortColumn.value]) return sortDirection.value === 'asc' ? -1 : 1;
+                    if (a[sortColumn.value] > b[sortColumn.value]) return sortDirection.value === 'asc' ? 1 : -1;
+                    return 0;
+                });
+            });
+
+            const paginatedLocations = computed(() => {
+                const start = (currentPage.value - 1) * itemsPerPage;
+                return sortedLocations.value.slice(start, start + itemsPerPage);
+            });
+
+            const totalPages = computed(() => Math.ceil(sortedLocations.value.length / itemsPerPage));
+
+            const selectedLocations = computed(() => {
+                return locations.value.filter(location => location.selected);
+            });
+
+            function sort(column) {
+                if (sortColumn.value === column) {
+                    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
+                } else {
+                    sortColumn.value = column;
+                    sortDirection.value = 'asc';
+                }
+            }
+
+            function prevPage() {
+                if (currentPage.value > 1) currentPage.value--;
+            }
+
+            function nextPage() {
+                if (currentPage.value < totalPages.value) currentPage.value++;
+            }
+
+            const debounceUpdate = _.debounce(updateLocation, 500);
+
+            function debounceSearch() {
+                currentPage.value = 1;
+            }
+
+            function toggleAllLocations() {
+                locations.value.forEach(location => location.selected = allSelected.value);
+            }
+
+            async function fetchLocations() {
+                loading.value = true;
+                error.value = null;
+                try {
+                    const response = await gapi.client.sheets.spreadsheets.values.get({
+                        spreadsheetId: props.sheetId,
+                        range: 'Locations!A2:F'
+                    });
+                    
+                    locations.value = response.result.values.map((row, index) => ({
+                        id: row[2] || `loc_${index}`,
+                        title: row[0] || '',
+                        order: row[1] || '',
+                        city: row[4] || '',
+                        country: row[5] || '',
+                        hidden: row[3] === 'true',
+                        selected: false
+                    }));
+                } catch (err) {
+                    console.error('Error fetching locations:', err);
+                    error.value = 'Failed to fetch locations. Please try again.';
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            async function updateLocation(location) {
+                loading.value = true;
+                error.value = null;
+                try {
+                    await gapi.client.sheets.spreadsheets.values.update({
+                        spreadsheetId: props.sheetId,
+                        range: `Locations!A${locations.value.indexOf(location) + 2}:F${locations.value.indexOf(location) + 2}`,
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: [[location.title, location.order, location.id, location.hidden.toString(), location.city, location.country]]
+                        }
+                    });
+                } catch (err) {
+                    console.error('Error updating location:', err);
+                    error.value = 'Failed to update location. Please try again.';
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            async function deleteSelectedLocations() {
+                if (!confirm('Are you sure you want to delete the selected locations?')) return;
+
+                loading.value = true;
+                error.value = null;
+                const selectedIds = selectedLocations.value.map(loc => loc.id);
+                locations.value = locations.value.filter(loc => !selectedIds.includes(loc.id));
+                
+                try {
+                    await updateAllLocations();
+                } catch (err) {
+                    console.error('Error deleting locations:', err);
+                    error.value = 'Failed to delete locations. Please try again.';
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            async function addNewLocation() {
+                loading.value = true;
+                error.value = null;
+                const newLocation = {
+                    id: `loc_${Date.now()}`,
+                    title: 'New Location',
+                    order: (locations.value.length + 1).toString(),
+                    city: '',
+                    country: '',
+                    hidden: false,
+                    selected: false
+                };
+
+                locations.value.push(newLocation);
+
+                try {
+                    await gapi.client.sheets.spreadsheets.values.append({
+                        spreadsheetId: props.sheetId,
+                        range: 'Locations!A:F',
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city, newLocation.country]]
+                        }
+                    });
+                } catch (err) {
+                    console.error('Error adding new location:', err);
+                    locations.value.pop(); // Remove the new location if there was an error
+                    error.value = 'Failed to add new location. Please try again.';
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            function exportToCSV() {
+                const csv = [
+                    columns.join(','),
+                    ...locations.value.map(location => columns.map(column => location[column]).join(','))
+                ].join('\n');
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                if (link.download !== undefined) {
+                    const url = URL.createObjectURL(blob);
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', 'locations.csv');
+                    link.style.visibility = 'hidden';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+            }
+
+            async function importFromCSV(event) {
+                loading.value = true;
+                error.value = null;
+                const file = event.target.files[0];
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const csv = e.target.result;
+                        const lines = csv.split('\n');
+                        const headers = lines[0].split(',');
+                        const newLocations = lines.slice(1).map(line => {
+                            const values = line.split(',');
+                            const location = {};
+                            headers.forEach((header, index) => {
+                                location[header] = values[index];
+                            });
+                            return location;
+                        });
+                        locations.value = newLocations;
+                        await updateAllLocations();
+                    } catch (err) {
+                        console.error('Error importing CSV:', err);
+                        error.value = 'Failed to import CSV. Please try again.';
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+                reader.readAsText(file);
+            }
+
+            async function updateAllLocations() {
+                try {
+                    await gapi.client.sheets.spreadsheets.values.update({
+                        spreadsheetId: props.sheetId,
+                        range: 'Locations!A2:F',
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: locations.value.map(loc => [loc.title, loc.order, loc.id, loc.hidden.toString(), loc.city, loc.country])
+                        }
+                    });
+                } catch (err) {
+                    console.error('Error updating all locations:', err);
+                    error.value = 'Failed to update all locations. Please try again.';
+                }
+            }
+
+            onMounted(fetchLocations);
+
+            watch(globalSearch, debounceSearch);
+
+            return {
+                locations,
+                globalSearch,
+                columns,
+                sortColumn,
+                sortDirection,
+                currentPage,
+                totalPages,
+                paginatedLocations,
+                selectedLocations,
+                allSelected,
+                loading,
+                error,
+                sort,
+                prevPage,
+                nextPage,
+                toggleAllLocations,
+                updateLocation,
+                debounceUpdate,
+                deleteSelectedLocations,
+                addNewLocation,
+                exportToCSV,
+                importFromCSV
+            };
+        }
+    };
+
+    const app = createApp({
+        components: {
+            GroceriesPage,
+            LocationsPage
+        },
+        setup() {
+            const isSignedIn = ref(false);
+            const user = ref(null);
+            const sheetId = ref(null);
+            const tokenClient = ref(null);
+            const currentPage = ref('groceries');
+            const inputSheetId = ref('');
+
+            const CLIENT_ID = '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com';
+            const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+
+            const currentPageComponent = computed(() => {
+                return currentPage.value === 'groceries' ? GroceriesPage : LocationsPage;
+            });
+
+            function initializeGapiClient() {
+                gapi.client.init({
+                    discoveryDocs: [
+                        'https://sheets.googleapis.com/$discovery/rest?version=v4',
+                        'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
+                    ],
+                }).then(() => {
+                    tokenClient.value = google.accounts.oauth2.initTokenClient({
+                        client_id: CLIENT_ID,
+                        scope: SCOPES,
+                        callback: handleTokenResponse,
+                        error_callback: (err) => {
+                            console.error("Error during token client initialization:", err);
+                        }
+                    });
+                }).catch((error) => {
+                    console.error("Error initializing gapi client:", error);
+                });
+            }
+
+            function handleCredentialResponse(response) {
+                user.value = parseJwt(response.credential);
+                isSignedIn.value = true;
+                console.log("Signed in as: " + user.value.name);
+                tokenClient.value.requestAccessToken({prompt: 'consent'});
+            }
+
+            function handleTokenResponse(tokenResponse) {
+                if (tokenResponse && tokenResponse.access_token) {
+                    gapi.client.setToken(tokenResponse);
+                    checkForStoredSheet();
+                } else if (tokenResponse.error) {
+                    console.error("Error during token response:", tokenResponse.error);
+                }
+            }
+
+            function parseJwt(token) {
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                }).join(''));
+                return JSON.parse(jsonPayload);
+            }
+
+            function checkForStoredSheet() {
+                const storedSheetId = localStorage.getItem('lastUsedSheetId');
+                if (storedSheetId) {
+                    openSheet(storedSheetId);
+                } else {
+                    // User will need to create a new sheet or enter a sheet ID
+                }
+            }
+
+            async function openSheet(sheetId) {
+                try {
+                    // Attempt to access the sheet
+                    const response = await gapi.client.sheets.spreadsheets.get({
+                        spreadsheetId: sheetId
+                    });
+                    
+                    // If successful, store the sheet ID and use it
+                    localStorage.setItem('lastUsedSheetId', sheetId);
+                    sheetId.value = sheetId;
+                    // Proceed with loading data from the sheet
+                } catch (error) {
+                    console.error('Error opening sheet:', error);
+                    // Handle errors (e.g., user doesn't have access)
+                }
+            }
+
+            async function createNewSheet() {
+                try {
+                    const response = await gapi.client.sheets.spreadsheets.create({
+                        properties: {
+                            title: 'GroceriesApp'
+                        },
+                        sheets: [
+                            {
+                                properties: {
+                                    title: 'Groceries'
+                                }
+                            },
+                            {
+                                properties: {
+                                    title: 'Locations'
+                                }
+                            }
+                        ]
+                    });
+                    sheetId.value = response.result.spreadsheetId;
+                    localStorage.setItem('lastUsedSheetId', sheetId.value);
+                    console.log('New sheet created:', sheetId.value);
+                    await initializeNewSheet();
+                } catch (err) {
+                    console.error('Error creating new sheet:', err);
+                }
+            }
+
+            async function initializeNewSheet() {
+                try {
+                    await gapi.client.sheets.spreadsheets.values.update({
+                        spreadsheetId: sheetId.value,
+                        range: 'Groceries!A1:H1',
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: [['id', 'title', 'amount', 'price', 'order', 'location', 'date_checked', 'date']]
+                        }
+                    });
+                    await gapi.client.sheets.spreadsheets.values.update({
+                        spreadsheetId: sheetId.value,
+                        range: 'Locations!A1:F1',
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: [['title', 'order', 'id', 'hide_in_groceries', 'city', 'country']]
+                        }
+                    });
+                    console.log('New sheet initialized');
+                } catch (err) {
+                    console.error('Error initializing new sheet:', err);
+                }
+            }
+
+            function signOut() {
+                const token = gapi.client.getToken();
+                if (token !== null) {
+                    google.accounts.oauth2.revoke(token.access_token);
+                    gapi.client.setToken('');
+                }
+                isSignedIn.value = false;
+                user.value = null;
+                sheetId.value = null;
+                localStorage.removeItem('lastUsedSheetId');
+            }
+
+            // Load and init the gapi client
+            gapi.load('client', initializeGapiClient);
+
+            // Expose handleCredentialResponse to the global scope
+            window.handleCredentialResponse = handleCredentialResponse;
+
+            return {
+                isSignedIn,
+                user,
+                sheetId,
+                inputSheetId,
+                signOut,
+                currentPage,
+                currentPageComponent,
+                createNewSheet,
+                openSheet
+            };
+        }
+    });
+
+    app.mount('#app');
+    </script>
+</body>
+</html>
