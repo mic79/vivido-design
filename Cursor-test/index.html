@@ -24,6 +24,10 @@
             font-weight: bold;
             background-color: #ddd;
         }
+        .responsive {
+            max-width: 100%;
+            overflow-x: auto;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -67,7 +71,7 @@
             margin-bottom: 10px;
         }
         @media (max-width: 768px) {
-            table, thead, tbody, th, td, tr {
+            /* table, thead, tbody, th, td, tr {
                 display: block;
             }
             
@@ -75,17 +79,17 @@
                 position: absolute;
                 top: -9999px;
                 left: -9999px;
-            }
+            } */
             
             tr { border: 1px solid #ccc; }
             
             td {
                 border: none;
                 position: relative;
-                padding-left: 50%;
+                /* padding-left: 50%; */
             }
             
-            td:before {
+            /* td:before {
                 position: absolute;
                 top: 6px;
                 left: 6px;
@@ -93,7 +97,7 @@
                 padding-right: 10px;
                 white-space: nowrap;
                 content: attr(data-label);
-            }
+            } */
         }
     </style>
 </head>
@@ -466,26 +470,28 @@
                         <input type="file" @change="importFromCSV" accept=".csv">-->
                         <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
                     </div>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
-                                <th v-for="column in columns" :key="column" @click="sort(column)">
-                                    {{ column }}
-                                    <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr v-for="location in paginatedLocations" :key="location.id">
-                                <td><input type="checkbox" v-model="location.selected"></td>
-                                <td v-for="column in columns" :key="column">
-                                    <input v-if="column !== 'hidden'" v-model="location[column]" @input="debounceUpdate(location)">
-                                    <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div class="responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
+                                    <th v-for="column in columns" :key="column" @click="sort(column)">
+                                        {{ column }}
+                                        <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="location in paginatedLocations" :key="location.id">
+                                    <td><input type="checkbox" v-model="location.selected"></td>
+                                    <td v-for="column in columns" :key="column">
+                                        <input v-if="column !== 'hidden'" v-model="location[column]" @input="debounceUpdate(location)">
+                                        <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                     <div class="pagination">
                         <button @click="currentPage > 1 && currentPage--" :disabled="currentPage === 1">Previous</button>
                         <span>Page {{ currentPage }} of {{ totalPages }}</span>
