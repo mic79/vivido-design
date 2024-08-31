@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Groceries</title>
-    <script src="https://accounts.google.com/gsi/client" async defer onload="initializeGoogleSignIn()"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer onloadX="initializeGoogleSignIn()"></script>
     <script src="https://apis.google.com/js/api.js"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
@@ -98,7 +98,7 @@
     </style>
 </head>
 <body>
-    <div id="app">
+    <div id="app" style="display: none;">
         <div v-if="!isSignedIn">
             <div id="googleSignInButton"></div>
         </div>
@@ -119,14 +119,28 @@
 
     <script>
     function initializeGoogleSignIn() {
+        console.log('Attempting to initialize Google Sign-In');
+        if (typeof google === 'undefined' || typeof google.accounts === 'undefined') {
+            console.error('Google API not loaded');
+            return;
+        }
         google.accounts.id.initialize({
             client_id: '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com',
             callback: handleCredentialResponse
         });
-        google.accounts.id.renderButton(
-            document.getElementById("googleSignInButton"),
-            { theme: "outline", size: "large" }  // customization attributes
-        );
+        Vue.nextTick(() => {
+            const buttonElement = document.getElementById("googleSignInButton");
+            if (buttonElement) {
+                google.accounts.id.renderButton(
+                    buttonElement,
+                    { theme: "outline", size: "large" }
+                );
+                console.log('Button rendered');
+                document.getElementById('app').style.display = 'block'; // Show the app after initialization
+            } else {
+                console.error('Google Sign-In button element not found');
+            }
+        });
     }
 
     (function() {
@@ -655,6 +669,7 @@
                 ],
             }).then(() => {
                 app.mount('#app');
+                initializeGoogleSignIn();
             });
         });
     })();
