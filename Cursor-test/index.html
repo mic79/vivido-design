@@ -103,7 +103,7 @@
             <div id="googleSignInButton"></div>
         </div>
         <div v-if="isSignedIn">
-            <p>Welcome, {{ user.name }}!</p>
+            <p>{{ user.email }} <button @click="signOut">Sign Out</button></p>
             <nav class="nav-menu">
                 <a :class="{ active: currentPage === 'groceries' }" @click="currentPage = 'groceries'" href="#">Groceries</a>
                 <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'" href="#">Locations</a>
@@ -113,7 +113,6 @@
                 <button @click="createNewSheet">Create New Sheet</button>
                 <button @click="showPicker">Select GroceriesApp Sheet</button>
             </div>
-            <button @click="signOut">Sign Out</button>
             <component v-if="sheetId" :is="currentPageComponent" :sheet-id="sheetId" ref="locationPageRef"></component>
         </div>
     </div>
@@ -459,14 +458,13 @@
             },
             template: `
                 <div>
-                    <h2>Locations</h2>
+                    <h2>Locations <button @click="fetchLocations">Reload Locations</button></h2>
                     <div v-if="error" class="error">{{ error }}</div>
                     <div class="controls">
                         <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
-                        <button @click="exportToCSV">Export to CSV</button>
-                        <input type="file" @change="importFromCSV" accept=".csv">
+                        <!--<button @click="exportToCSV">Export to CSV</button>
+                        <input type="file" @change="importFromCSV" accept=".csv">-->
                         <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
-                        <button @click="fetchLocations">Reload Locations</button>
                     </div>
                     <table>
                         <thead>
