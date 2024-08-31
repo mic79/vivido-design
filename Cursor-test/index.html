@@ -164,53 +164,13 @@
 
         const LocationsPage = {
             props: ['sheetId'],
-            template: `
-                <div>
-                    <h2>Locations</h2>
-                    <div v-if="error" class="error">{{ error }}</div>
-                    <div class="controls">
-                        <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
-                        <button @click="exportToCSV">Export to CSV</button>
-                        <input type="file" @change="importFromCSV" accept=".csv">
-                        <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
-                        <button @click="fetchLocations">Reload Locations</button>
-                    </div>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
-                                <th v-for="column in columns" :key="column" @click="sort(column)">
-                                    {{ column }}
-                                    <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr v-for="location in paginatedLocations" :key="location.id">
-                                <td><input type="checkbox" v-model="location.selected"></td>
-                                <td v-for="column in columns" :key="column">
-                                    <input v-if="column !== 'hidden'" v-model="location[column]" @input="debounceUpdate(location)">
-                                    <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                    <div class="pagination">
-                        <button @click="prevPage" :disabled="currentPage === 1">Previous</button>
-                        <span>Page {{ currentPage }} of {{ totalPages }}</span>
-                        <button @click="nextPage" :disabled="currentPage === totalPages">Next</button>
-                    </div>
-                    <button class="sticky-button" @click="addNewLocation">Add New Location</button>
-                    <div v-if="loading" class="loading">Loading...</div>
-                </div>
-            `,
             setup(props) {
                 const locations = ref([]);
                 const globalSearch = ref('');
                 const sortColumn = ref('title');
                 const sortDirection = ref('asc');
                 const currentPage = ref(1);
-                const itemsPerPage = 10;
+                const itemsPerPage = ref(10);
                 const columns = ['title', 'city', 'country', 'hidden'];
                 const loading = ref(false);
                 const error = ref(null);
@@ -233,11 +193,11 @@
                 });
 
                 const paginatedLocations = computed(() => {
-                    const start = (currentPage.value - 1) * itemsPerPage;
-                    return sortedLocations.value.slice(start, start + itemsPerPage);
+                    const startIndex = (currentPage.value - 1) * itemsPerPage.value;
+                    return sortedLocations.value.slice(startIndex, startIndex + itemsPerPage.value);
                 });
 
-                const totalPages = computed(() => Math.ceil(sortedLocations.value.length / itemsPerPage));
+                const totalPages = computed(() => Math.ceil(sortedLocations.value.length / itemsPerPage.value));
 
                 const selectedLocations = computed(() => 
                     locations.value.filter(location => location.selected)
@@ -252,12 +212,8 @@
                     }
                 }
 
-                function prevPage() {
-                    if (currentPage.value > 1) currentPage.value--;
-                }
-
-                function nextPage() {
-                    if (currentPage.value < totalPages.value) currentPage.value++;
+                function changePage(page) {
+                    currentPage.value = page;
                 }
 
                 const debounceUpdate = _.debounce(updateLocation, 500);
@@ -480,8 +436,7 @@
                     loading,
                     error,
                     sort,
-                    prevPage,
-                    nextPage,
+                    changePage,
                     updateLocation,
                     debounceUpdate,
                     addNewLocation,
@@ -493,7 +448,47 @@
                     toggleSelectAll,
                     deleteSelected
                 };
-            }
+            },
+            template: `
+                <div>
+                    <h2>Locations</h2>
+                    <div v-if="error" class="error">{{ error }}</div>
+                    <div class="controls">
+                        <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
+                        <button @click="exportToCSV">Export to CSV</button>
+                        <input type="file" @change="importFromCSV" accept=".csv">
+                        <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
+                        <button @click="fetchLocations">Reload Locations</button>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
+                                <th v-for="column in columns" :key="column" @click="sort(column)">
+                                    {{ column }}
+                                    <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="location in paginatedLocations" :key="location.id">
+                                <td><input type="checkbox" v-model="location.selected"></td>
+                                <td v-for="column in columns" :key="column">
+                                    <input v-if="column !== 'hidden'" v-model="location[column]" @input="debounceUpdate(location)">
+                                    <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="pagination">
+                        <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1">Previous</button>
+                        <span>Page {{ currentPage }} of {{ totalPages }}</span>
+                        <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages">Next</button>
+                    </div>
+                    <button class="sticky-button" @click="addNewLocation">Add New Location</button>
+                    <div v-if="loading" class="loading">Loading...</div>
+                </div>
+            `
         };
 
         app = createApp({
