@@ -173,6 +173,7 @@
                         <button @click="exportToCSV">Export to CSV</button>
                         <input type="file" @change="importFromCSV" accept=".csv">
                         <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
+                        <button @click="fetchLocations">Reload Locations</button>
                     </div>
                     <table>
                         <thead>
