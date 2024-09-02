@@ -381,9 +381,8 @@
                         error.value = null;
                         try {
                             // First, get the sheet ID for the "Locations" sheet
-                            const sheetsResponse = await gapi.client.drive.files.get({
-                                fileId: props.sheetId,
-                                fields: 'sheets.properties.sheetId,sheets.properties.title'
+                            const sheetsResponse = await gapi.client.sheets.spreadsheets.get({
+                                spreadsheetId: props.sheetId
                             });
                             const locationsSheet = sheetsResponse.result.sheets.find(sheet => sheet.properties.title === "Locations");
                             if (!locationsSheet) {
