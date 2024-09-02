@@ -217,10 +217,12 @@
                 }
 
                 function changePage(page) {
+                    stopChangeDetection();
+                    
                     currentPage.value = page;
                 }
 
-                const debounceUpdate = _.debounce(updateLocation, 500);
+                const debounceUpdate = _.debounce(updateLocation, 1500);
 
                 const debounceSearch = _.debounce(() => {
                     currentPage.value = 1;
@@ -379,8 +381,9 @@
                         error.value = null;
                         try {
                             // First, get the sheet ID for the "Locations" sheet
-                            const sheetsResponse = await gapi.client.sheets.spreadsheets.get({
-                                spreadsheetId: props.sheetId
+                            const sheetsResponse = await gapi.client.drive.files.get({
+                                fileId: props.sheetId,
+                                fields: 'sheets.properties.sheetId,sheets.properties.title'
                             });
                             const locationsSheet = sheetsResponse.result.sheets.find(sheet => sheet.properties.title === "Locations");
                             if (!locationsSheet) {
@@ -429,7 +432,50 @@
                     currentPage.value = 1;
                 }
 
-                onMounted(fetchLocations);
+                let currentModifiedTime = null,
+                changeDetectionInterval = null;
+
+                function setupChangeDetection() {
+                    // Stop any existing interval
+                    stopChangeDetection();
+
+                    // Initial fetch
+                    fetchLocations();
+                    
+                    // Start polling for changes
+                    changeDetectionInterval = setInterval(checkForChanges, 5000); // Check every 30 seconds
+                }
+
+                function stopChangeDetection() {
+                    if (changeDetectionInterval) {
+                        clearInterval(changeDetectionInterval);
+                        changeDetectionInterval = null;
+                    }
+                }
+
+                async function checkForChanges() {
+                    try {
+                        const response = await gapi.client.drive.files.get({
+                            fileId: props.sheetId,
+                            fields: 'modifiedTime'
+                        });
+                        const newModifiedTime = response.result.modifiedTime;
+                        if (newModifiedTime !== currentModifiedTime) {
+                            currentModifiedTime = newModifiedTime;
+                            console.log('Sheet updated, refreshing data...');
+                            await fetchLocations();
+                        } else {
+                            console.log('Sheet still up to date.');
+                        }
+                    } catch (error) {
+                        console.error('Error checking for updates:', error);
+                    }
+                }
+
+                onMounted(async () => {
+                    await fetchLocations();
+                    setupChangeDetection();
+                });
 
                 watch(globalSearch, debounceSearch);
 
@@ -457,7 +503,9 @@
                     toggleSelectAll,
                     deleteSelected,
                     debounceSearch,
-                    resetPagination
+                    resetPagination,
+                    setupChangeDetection,
+                    stopChangeDetection
                 };
             },
             template: `
@@ -527,10 +575,13 @@
 
                 function initializeGapiClient() {
                     gapi.client.init({
+                        //apiKey: 'AIzaSyDjwvPH2It7i1feQRPTmQyY_yhNSG-1BmE',
+                        //clientId: CLIENT_ID,
                         discoveryDocs: [
                             'https://sheets.googleapis.com/$discovery/rest?version=v4',
                             'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
                         ],
+                        scope: SCOPES
                     }).then(() => {
                         tokenClient.value = google.accounts.oauth2.initTokenClient({
                             client_id: CLIENT_ID,
@@ -580,9 +631,10 @@
                     const storedSheetId = localStorage.getItem('lastUsedSheetId');
                     if (storedSheetId) {
                         sheetId.value = storedSheetId;
+                        setupChangeDetection();
                         // Proceed with loading data from the sheet
                     } else {
-                        // User will need to create a new sheet
+                        // User will need to create a new sheet or select one
                     }
                 }
 
@@ -648,6 +700,7 @@
                     user.value = null;
                     sheetId.value = null;
                     localStorage.removeItem('lastUsedSheetId');
+                    stopChangeDetection();
                 }
 
                 function loadPickerApi() {
@@ -706,6 +759,7 @@
                         if (currentPageComponent.value === LocationsPage && locationPageRef.value) {
                             try {
                                 await locationPageRef.value.fetchLocations();
+                                setupChangeDetection();
                             } catch (error) {
                                 console.error('Error fetching locations:', error);
                             }
