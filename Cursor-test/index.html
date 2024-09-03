@@ -442,7 +442,7 @@
                     fetchLocations();
                     
                     // Start polling for changes
-                    changeDetectionInterval = setInterval(checkForChanges, 5000); // Check every 30 seconds
+                    changeDetectionInterval = setInterval(checkForChanges, 30000); // Check every 30 seconds
                 }
 
                 function stopChangeDetection() {
@@ -509,7 +509,7 @@
             },
             template: `
                 <div>
-                    <h2>Locations <button @click="fetchLocations">Reload Locations</button></h2>
+                    <h2>Locations <button @click="fetchLocations">Reload Locations</button> <small v-if="loading" class="loading">Loading...</small></h2>
                     <div v-if="error" class="error">{{ error }}</div>
                     <div class="controls">
                         <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
@@ -545,7 +545,6 @@
                         <button @click="currentPage < totalPages && currentPage++" :disabled="currentPage === totalPages">Next</button>
                     </div>
                     <button class="sticky-button" @click="addNewLocation">Add New Location</button>
-                    <div v-if="loading" class="loading">Loading...</div>
                 </div>
             `
         };
