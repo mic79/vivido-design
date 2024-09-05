@@ -367,75 +367,33 @@
                         checked: false
                     };
 
-                    try {
-                        loading.value = true;
-                        // Add the new item to the Google Sheet
-                        await gapi.client.sheets.spreadsheets.values.append({
-                            spreadsheetId: props.sheetId,
-                            range: 'Groceries!A:H',
-                            valueInputOption: 'RAW',
-                            insertDataOption: 'INSERT_ROWS',
-                            resource: {
-                                values: [[
-                                    newItem.id,
-                                    newItem.title,
-                                    newItem.amount,
-                                    newItem.price,
-                                    newItem.order,
-                                    newItem.location,
-                                    newItem.dateChecked,
-                                    newItem.date
-                                ]]
-                            }
-                        });
-
-                        // Add the new item to the local array
-                        groceryItems.value.push(newItem);
-                        updateLocationStats();
-                    } catch (err) {
-                        console.error('Error adding new grocery item:', err);
-                        error.value = 'Failed to add new item. Please try again.';
-                    } finally {
-                        loading.value = false;
-                    }
+                    groceryItems.value.push(newItem);
+                    await updateItemInSheet(newItem);
+                    updateLocationStats();
                 }
 
                 async function updateItemInSheet(item) {
-                    try {
-                        loading.value = true;
-                        const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
-                        if (itemIndex === -1) {
-                            throw new Error('Item not found in local array');
+                    const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
+                    if (itemIndex === -1) return;
+
+                    const range = `Groceries!A${itemIndex + 2}:H${itemIndex + 2}`;
+                    await gapi.client.sheets.spreadsheets.values.update({
+                        spreadsheetId: props.sheetId,
+                        range,
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: [[
+                                item.id,
+                                item.title,
+                                item.amount.toString(),
+                                formatPrice(item.price),
+                                item.order.toString(),
+                                item.location,
+                                item.dateChecked ? item.dateChecked.toString() : '',
+                                item.date
+                            ]]
                         }
-
-                        const range = `Groceries!A${itemIndex + 2}:H${itemIndex + 2}`;
-                        await gapi.client.sheets.spreadsheets.values.update({
-                            spreadsheetId: props.sheetId,
-                            range: range,
-                            valueInputOption: 'RAW',
-                            resource: {
-                                values: [[
-                                    item.id,
-                                    item.title,
-                                    item.amount,
-                                    item.price,
-                                    item.order,
-                                    item.location,
-                                    item.dateChecked,
-                                    item.date
-                                ]]
-                            }
-                        });
-
-                        // Update the item in the local array
-                        groceryItems.value[itemIndex] = { ...item };
-                        updateLocationStats();
-                    } catch (err) {
-                        console.error('Error updating item in sheet:', err);
-                        error.value = 'Failed to update item. Please try again.';
-                    } finally {
-                        loading.value = false;
-                    }
+                    });
                 }
 
                 function selectLocation(locationId) {
@@ -475,8 +433,8 @@
 
                             const itemsToDelete = groceryItems.value.filter(item => selectedItems.value.includes(item.id));
                             const indicesToDelete = itemsToDelete
-                                .map(item => groceryItems.value.indexOf(item) + 2) // +2 for 1-indexed and header row
-                                .sort((a, b) => b - a); // Sort in descending order
+                                .map(item => groceryItems.value.indexOf(item) + 2)
+                                .sort((a, b) => b - a);
 
                             // Remove from Google Sheet
                             await gapi.client.sheets.spreadsheets.batchUpdate({
@@ -883,13 +841,15 @@
                         loading.value = true;
                         error.value = null;
                         try {
-                            const selectedLocations = locations.value.filter(location => location.selected);
-                            const indicesToDelete = selectedLocations.map(location => locations.value.indexOf(location) + 2); // +2 for 1-indexed and header row
-
-                            const sheetId = await getSheetId('Locations'); // Fetch the sheet ID for the "Locations" sheet
+                            const sheetId = await getSheetId('Locations');
                             if (!sheetId) {
-                                throw new Error('Sheet ID not found');
+                                throw new Error('Locations sheet ID not found');
                             }
+
+                            const locationsToDelete = locations.value.filter(location => location.selected);
+                            const indicesToDelete = locationsToDelete
+                                .map(location => locations.value.indexOf(location) + 2)
+                                .sort((a, b) => b - a);
 
                             // Remove from Google Sheet
                             await gapi.client.sheets.spreadsheets.batchUpdate({
