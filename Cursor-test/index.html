@@ -258,8 +258,49 @@
                 const selectedItems = ref([]);
                 const selectAll = ref(false);
 
-                function toggleSelectAll() {
-                    selectedItems.value = selectAll.value ? groceryItems.value.map(item => item.id) : [];
+                function toggleSelectAll(items) {
+                    if (selectedItems.value.length === items.length) {
+                        selectedItems.value = [];
+                    } else {
+                        selectedItems.value = items.map(item => item.id);
+                    }
+                }
+
+                async function performSelectedAction(action) {
+                    if (selectedItems.value.length === 0) return;
+
+                    switch (action) {
+                        case 'delete':
+                        if (confirm(`Are you sure you want to delete ${selectedItems.value.length} item(s)?`)) {
+                            // Implement delete logic
+                            console.log('Deleting items:', selectedItems.value);
+                        }
+                        break;
+                        case 'changeLocation':
+                        // Implement change location logic
+                        console.log('Changing location for items:', selectedItems.value);
+                        break;
+                        case 'changeDate':
+                        const newDate = prompt("Enter new date (YYYY-MM-DD) or leave empty to remove date:");
+                        for (const itemId of selectedItems.value) {
+                            const item = groceryItems.value.find(i => i.id === itemId);
+                            if (item) {
+                            if (newDate) {
+                                item.dateChecked = new Date(newDate).getTime();
+                                item.date = new Date(newDate).toLocaleDateString();
+                            } else {
+                                item.dateChecked = null;
+                                item.date = '';
+                            }
+                            await updateItemInSheet(item);
+                            }
+                        }
+                        updateRecentlyCheckedOff();
+                        updateLocationStats();
+                        break;
+                    }
+
+                    selectedItems.value = []; // Clear selections after action
                 }
 
                 // Fetch locations and grocery items
@@ -423,8 +464,27 @@
                     });
                 }
 
+                function updateRecentlyCheckedOff() {
+                    const checkedItems = groceryItems.value.filter(item => 
+                        item.dateChecked && item.location === selectedLocation.value
+                    );
+                    const groupedItems = _.groupBy(checkedItems, item => new Date(item.dateChecked).toLocaleDateString());
+                    
+                    recentlyCheckedOff.value = Object.entries(groupedItems).map(([date, items]) => ({
+                        date,
+                        items,
+                        total: items.reduce((sum, item) => {
+                        let price = typeof item.price === 'string' ? parseFloat(item.price.replace(',', '.')) : item.price;
+                        return sum + (price * (item.amount || 1));
+                        }, 0),
+                        collapsed: true
+                    }));
+                }
+
                 function selectLocation(locationId) {
                     selectedLocation.value = locationId;
+                    updateRecentlyCheckedOff();
+                    selectedItems.value = []; // Clear selections
                 }
 
                 function formatPrice(price) {
@@ -540,9 +600,15 @@
                 }
 
                 async function changeDateForSelected(newDate) {
+                    console.log('changeDateForSelected', newDate);
                     loading.value = true;
                     try {
-                        const timestamp = new Date(newDate).getTime();
+                        let timestamp;
+                        if(newDate === '' || newDate === null){
+                            timestamp = '';
+                        } else {
+                            timestamp = new Date(newDate).getTime();
+                        }
                         for (const itemId of selectedItems.value) {
                             const item = groceryItems.value.find(i => i.id === itemId);
                             if (item) {
@@ -597,7 +663,13 @@
                     }
                 }
 
-                onMounted(fetchData);
+                onMounted(() => {
+                    fetchData().then(() => {
+                        if (locations.value.length > 0) {
+                        selectLocation(locations.value[0].id);
+                        }
+                    });
+                });
 
                 return {
                     locations,
@@ -619,7 +691,9 @@
                     updateLocationStats,
                     handlePriceInput,
                     selectAll,
-                    toggleSelectAll
+                    toggleSelectAll,
+                    performSelectedAction,
+                    updateRecentlyCheckedOff
                 };
             },
             template: `
@@ -680,16 +754,29 @@
 
                     <!-- Recently checked off items -->
                     <div class="recently-checked-off">
+                        <h3>Recently Checked Off Items</h3>
                         <div v-for="group in recentlyCheckedOff" :key="group.date">
-                            <h3 @click="group.collapsed = !group.collapsed">
-                                {{ group.date }} - Total: {{ formatPrice(group.total) }}
-                            </h3>
-                            <ul v-if="!group.collapsed">
-                                <li v-for="item in group.items" :key="item.id">
-                                    <input type="checkbox" :checked="true" @change="toggleItemCheck(item)">
-                                    {{ item.title }} - {{ item.amount }} - {{ formatPrice(item.price) }}
-                                </li>
-                            </ul>
+                        <h4 @click="group.collapsed = !group.collapsed">
+                            {{ group.date }} - Total: {{ formatPrice(group.total) }}
+                        </h4>
+                        <table v-if="!group.collapsed">
+                            <thead>
+                            <tr>
+                                <th><input type="checkbox" :checked="selectedItems.length === group.items.length" @change="toggleSelectAll(group.items)"></th>
+                                <th>Item</th>
+                                <th>Quantity</th>
+                                <th>Price</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <tr v-for="item in group.items" :key="item.id">
+                                <td><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
+                                <td><input v-model="item.title" @change="updateItemInSheet(item)"></td>
+                                <td><input type="number" v-model.number="item.amount" @change="updateItemInSheet(item)"></td>
+                                <td><input v-model="item.price" @input="handlePriceInput(item, $event)"></td>
+                            </tr>
+                            </tbody>
+                        </table>
                         </div>
                     </div>
 
