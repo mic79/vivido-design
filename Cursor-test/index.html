@@ -256,6 +256,11 @@
                 const error = ref(null);
                 const selectedLocation = ref(null);
                 const selectedItems = ref([]);
+                const selectAll = ref(false);
+
+                function toggleSelectAll() {
+                    selectedItems.value = selectAll.value ? groceryItems.value.map(item => item.id) : [];
+                }
 
                 // Fetch locations and grocery items
                 async function fetchData() {
@@ -317,10 +322,30 @@
                 }
 
                 function updateLocationStats() {
+                    console.log("Updating location stats");
+                    const locationTotals = {};
+                    groceryItems.value.forEach(item => {
+                        if (!item.dateChecked) {  // Only consider unchecked items
+                            if (!locationTotals[item.location]) {
+                                locationTotals[item.location] = {
+                                    itemCount: 0,
+                                    totalPrice: 0
+                                };
+                            }
+                            locationTotals[item.location].itemCount++;
+                            
+                            let price = typeof item.price === 'string' ? parseFloat(item.price.replace(',', '.')) : item.price;
+                            if (!isNaN(price)) {
+                                locationTotals[item.location].totalPrice += price;
+                            }
+                        }
+                    });
+
                     locations.value.forEach(location => {
-                        const locationItems = groceryItems.value.filter(item => item.location === location.id && !item.dateChecked);
-                        location.itemCount = locationItems.length;
-                        location.totalPrice = locationItems.reduce((total, item) => total + item.price * item.amount, 0);
+                        const stats = locationTotals[location.id] || { itemCount: 0, totalPrice: 0 };
+                        location.itemCount = stats.itemCount;
+                        location.totalPrice = stats.totalPrice;
+                        console.log(`Location: ${location.title}, Count: ${location.itemCount}, Total: ${location.totalPrice}`);
                     });
                 }
 
@@ -374,22 +399,24 @@
 
                 async function updateItemInSheet(item) {
                     const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
-                    if (itemIndex === -1) return;
+                    if (itemIndex === -1) {
+                        throw new Error('Item not found in local array');
+                    }
 
                     const range = `Groceries!A${itemIndex + 2}:H${itemIndex + 2}`;
                     await gapi.client.sheets.spreadsheets.values.update({
                         spreadsheetId: props.sheetId,
-                        range,
+                        range: range,
                         valueInputOption: 'RAW',
                         resource: {
                             values: [[
                                 item.id,
                                 item.title,
-                                item.amount.toString(),
-                                formatPrice(item.price),
-                                item.order.toString(),
+                                item.amount,
+                                item.price, // Send the price as is, without formatting
+                                item.order,
                                 item.location,
-                                item.dateChecked ? item.dateChecked.toString() : '',
+                                item.dateChecked,
                                 item.date
                             ]]
                         }
@@ -483,7 +510,11 @@
                 }
 
                 async function changeLocationForSelected(newLocationId) {
+                    if (selectedItems.value.length === 0 || !newLocationId) return;
+                    
                     loading.value = true;
+                    error.value = null;
+                    
                     try {
                         for (const itemId of selectedItems.value) {
                             const item = groceryItems.value.find(i => i.id === itemId);
@@ -492,10 +523,17 @@
                                 await updateItemInSheet(item);
                             }
                         }
+                        
+                        // Clear selection after changing location
+                        selectedItems.value = [];
+                        
+                        // Update location stats after changing locations
                         updateLocationStats();
+                        
+                        console.log('Location changed successfully for selected items');
                     } catch (err) {
-                        console.error('Error changing location:', err);
-                        error.value = 'Failed to change location. Please try again.';
+                        console.error('Error changing location for items:', err);
+                        error.value = 'Failed to change location for items. Please try again.';
                     } finally {
                         loading.value = false;
                     }
@@ -528,6 +566,37 @@
                         .sort((a, b) => a.order - b.order);
                 });
 
+                async function handlePriceInput(item, event) {
+                    let value = event.target.value;
+                    
+                    // Replace dot with comma
+                    value = value.replace('.', ',');
+                    
+                    // Remove any characters that are not digits or comma
+                    value = value.replace(/[^\d,]/g, '');
+                    
+                    // Ensure only one comma
+                    const parts = value.split(',');
+                    if (parts.length > 2) {
+                        value = parts[0] + ',' + parts.slice(1).join('');
+                    }
+                    
+                    // Update the item's price
+                    item.price = value;
+                    
+                    try {
+                        // Update the item in the sheet
+                        await updateItemInSheet(item);
+                        console.log(`Price updated for item ${item.id}: ${item.price}`);
+                        
+                        // Update location stats
+                        updateLocationStats();
+                    } catch (err) {
+                        console.error('Error updating item price:', err);
+                        error.value = 'Failed to update item price. Please try again.';
+                    }
+                }
+
                 onMounted(fetchData);
 
                 return {
@@ -546,7 +615,11 @@
                     formatPrice,
                     deleteSelectedItems,
                     changeLocationForSelected,
-                    changeDateForSelected
+                    changeDateForSelected,
+                    updateLocationStats,
+                    handlePriceInput,
+                    selectAll,
+                    toggleSelectAll
                 };
             },
             template: `
@@ -587,7 +660,7 @@
                                     </td>
                                     <td><input v-model="item.title" @change="updateItemField(item, 'title', $event.target.value)"></td>
                                     <td><input type="number" v-model.number="item.amount" @change="updateItemField(item, 'amount', $event.target.value)"></td>
-                                    <td><input v-model="item.price" @input="updateItemField(item, 'price', $event.target.value)" @keypress="e => e.key === '.' && e.preventDefault()"></td>
+                                    <td><input v-model="item.price" @input="handlePriceInput(item, $event)"></td>
                                 </tr>
                             </tbody>
                         </table>
