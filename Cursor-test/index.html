@@ -252,7 +252,8 @@
         .location-tabs {
             padding: 0 1rem;
             display: flex;
-            overflow: hidden;
+            overflow-x: auto;
+            scrollbar-width: none;
         }
 
         .location-tab {
@@ -826,7 +827,7 @@
                             selectLocation(locations.value[0].id);
                         }
 
-                        /*function force_scroll_sideways(element) {
+                        function force_scroll_sideways(element) {
                             element.addEventListener("wheel", (event) => {
                                 event.preventDefault();
 
@@ -847,7 +848,7 @@
                         }
                         
                         const element = document.querySelector(".location-tabs");
-                        force_scroll_sideways(element);*/
+                        force_scroll_sideways(element);
                     });
                 });
 
