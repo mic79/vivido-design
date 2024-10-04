@@ -107,6 +107,15 @@
                 padding-bottom: 120px;
             }
         }
+        .page-content:after {
+            content: '';
+            position: absolute;
+            height: 100px;
+            width: 100%;
+            bottom: 0;
+            background: linear-gradient(0deg, white 50%, transparent);
+            z-index: 2;
+        }
         .header {
             position: sticky;
             top: 0;
@@ -173,21 +182,6 @@
             width: 100%;
             padding: 5px;
             margin-top: 5px;
-        }
-        .sticky-button {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            padding: 10px 20px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        .sticky-button:hover {
-            background-color: #45a049;
         }
         .error {
             color: red;
@@ -297,15 +291,22 @@
             border-bottom: 1px solid #ccc;
         }
 
-        .add-grocery-button {
+        .add-grocery-button,
+        .add-location-button {
             position: fixed;
+            height: 48px;
+            width: 100%;
+            max-width: 400px;
             bottom: 20px;
-            right: 20px;
-            padding: 10px 20px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
+            left: 50%;
+            padding: 0 8px;
+            border-radius: 48px;
+            font-size: 14px;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+            transform: translateX(-50%);
             cursor: pointer;
+            z-index: 99;
         }
 
         .handle {
@@ -1331,7 +1332,7 @@
                         <span>Page {{ currentPage }} of {{ totalPages }}</span>
                         <button @click="currentPage < totalPages && currentPage++" :disabled="currentPage === totalPages">Next</button>
                     </div>
-                    <button class="sticky-button" @click="addNewLocation">Add New Location</button>
+                    <button class="add-location-button" @click="addNewLocation">Add Location</button>
                 </div>
             `
         };
