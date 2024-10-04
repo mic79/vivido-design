@@ -125,6 +125,8 @@
         }
         h2, .h2 {
             display: inline-block;
+            font-size: 20px;
+            font-weight: 500;
         }
         table {
             width: 100%;
@@ -151,6 +153,22 @@
             border: 0 !important;
             outline: none;
             font-size: inherit;
+        }
+        button {
+            height: 24px;
+            padding: 4px 12px;
+            background: transparent;
+            border: 2px solid #729c9c;
+            border-radius: 12px;
+            color: #729c9c;
+            font-size: 12px;
+            font-weight: 400;
+            line-height: 1;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #729c9c;
+            color: #fff;
         }
         .filter-input {
             width: 100%;
@@ -220,20 +238,22 @@
 
         .location-tab {
             cursor: pointer;
-            padding: 10px;
-            border: 1px solid #ccc;
+            padding: 8px 10px;
+            border-bottom: 2px solid transparent;
             margin-right: 5px;
+            color: rgba(0, 0, 0, .54);
+            font-size: 14px;
+            font-weight: 400;
+            text-align: center;
             white-space: nowrap;
         }
 
         .location-tab.active {
-            background-color: #e0e0e0;
-            font-weight: bold;
+            border-bottom: 2px solid #4f4f4f;
         }
 
         .location-total {
-            font-size: 0.8em;
-            color: #666;
+            font-weight: 600;
         }
 
         .grocery-list table {
@@ -313,10 +333,10 @@
                     <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'; toggleSidenav()" href="#">Locations</a>
                 </nav>
                 <div class="sheet-info">
-                    <p v-if="sheetId">Current Sheet ID: {{ sheetId }} (Share this ID with others to collaborate)</p>
+                    <p v-if="sheetId"><strong>Current Sheet ID</strong><br>{{ sheetId }}</p>
                     <div>
-                        <button @click="createNewSheet">Create New Sheet</button>
-                        <button @click="showPicker">Select GroceriesApp Sheet</button>
+                        <button @click="createNewSheet">New Sheet</button>
+                        <button @click="showPicker">Load Sheet</button>
                     </div>
                 </div>
             </div>
