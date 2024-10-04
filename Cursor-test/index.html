@@ -95,6 +95,15 @@
         .locations-page, .groceries-page {
             padding-bottom: 80px;
         }
+        .header {
+            position: sticky;
+            top: 0;
+            padding: 1rem;
+            padding-bottom: 0;
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
         .responsive {
             max-width: 100%;
             overflow-x: auto;
@@ -177,7 +186,6 @@
         .location-tabs {
             display: flex;
             overflow-x: auto;
-            margin-bottom: 20px;
         }
 
         .location-tab {
@@ -772,25 +780,26 @@
             },
             template: `
                 <div class="groceries-page page-content">
-                    <span class="hamburger-menu" @click="toggleSidenav">☰</span>
-                    <h2>Groceries <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
-                    <div v-if="error" class="error">{{ error }}</div>
-                    <div v-if="loading" class="loading">Loading...</div>
-                    
-                    <!-- Location tabs -->
-                    <div class="location-tabs">
-                        <div 
-                            v-for="location in locations" 
-                            :key="location.id" 
-                            class="location-tab"
-                            :class="{ 'active': location.id === selectedLocation }"
-                            @click="selectLocation(location.id)"
-                        >
-                            {{ location.title }} ({{ location.itemCount }})
-                            <div class="location-total">{{ formatPrice(location.totalPrice) }}</div>
+                    <div class="header">
+                        <span class="hamburger-menu" @click="toggleSidenav">☰</span>
+                        <h2>Groceries <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
+                        <div v-if="error" class="error">{{ error }}</div>
+                        <div v-if="loading" class="loading">Loading...</div>
+                        
+                        <!-- Location tabs -->
+                        <div class="location-tabs">
+                            <div 
+                                v-for="location in locations" 
+                                :key="location.id" 
+                                class="location-tab"
+                                :class="{ 'active': location.id === selectedLocation }"
+                                @click="selectLocation(location.id)"
+                            >
+                                {{ location.title }} ({{ location.itemCount }})
+                                <div class="location-total">{{ formatPrice(location.totalPrice) }}</div>
+                            </div>
                         </div>
                     </div>
-
                     <!-- Grocery items to purchase -->
                     <div class="grocery-list">
                         <table>
@@ -1212,14 +1221,16 @@
             },
             template: `
                 <div class="locations-page page-content">
-                    <span class="hamburger-menu" @click="toggleSidenav">☰</span>
-                    <h2>Locations <button @click="fetchLocations">Reload data</button> <small v-if="loading" class="loading">Loading...</small></h2>
-                    <div v-if="error" class="error">{{ error }}</div>
-                    <div class="controls">
-                        <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
-                        <!--<button @click="exportToCSV">Export to CSV</button>
-                        <input type="file" @change="importFromCSV" accept=".csv">-->
-                        <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
+                    <div class="header">
+                        <span class="hamburger-menu" @click="toggleSidenav">☰</span>
+                        <h2>Locations <button @click="fetchLocations">Reload data</button> <small v-if="loading" class="loading">Loading...</small></h2>
+                        <div v-if="error" class="error">{{ error }}</div>
+                        <div class="controls">
+                            <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
+                            <!--<button @click="exportToCSV">Export to CSV</button>
+                            <input type="file" @change="importFromCSV" accept=".csv">-->
+                            <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
+                        </div>
                     </div>
                     <div class="locations-list responsive">
                         <table>
