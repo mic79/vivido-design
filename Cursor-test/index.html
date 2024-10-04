@@ -108,6 +108,9 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             z-index: 10;
         }
+        .header-title {
+            padding: 0 1rem;
+        }
         .responsive {
             max-width: 100%;
             overflow-x: auto;
@@ -120,12 +123,26 @@
             border-collapse: collapse;
         }
         th, td {
-            border: 1px solid #ddd;
+            border-bottom: 1px solid #f2f2f2;
             padding: 8px;
             text-align: left;
         }
         th {
             background-color: #f2f2f2;
+            color: rgba(0, 0, 0, .54);
+            font-size: 14px;
+            font-weight: 400;
+        }
+        td {
+            color: #212121;
+            font-size: 16px;
+        }
+        td input {
+            height: 30px;
+            padding: 0;
+            border: 0 !important;
+            outline: none;
+            font-size: inherit;
         }
         .filter-input {
             width: 100%;
@@ -152,7 +169,7 @@
             margin-bottom: 10px;
         }
         .loading {
-            margin-top: 10px;
+            font-size: 12px;
         }
         .controls {
             margin-bottom: 10px;
@@ -188,6 +205,7 @@
         }
 
         .location-tabs {
+            padding: 0 1rem;
             display: flex;
             overflow: hidden;
         }
@@ -215,12 +233,6 @@
             border-collapse: collapse;
         }
 
-        .grocery-list th, .grocery-list td {
-            border: 1px solid #ccc;
-            padding: 8px;
-            text-align: left;
-        }
-
         .grocery-list input[type="text"],
         .grocery-list input[type="number"],
         .recently-checked-off input[type="text"],
@@ -237,12 +249,13 @@
         }
 
         .recently-checked-off h3 {
-            background-color: #f0f0f0;
-            padding: 10px;
             margin: 0;
+            padding: 10px 1rem;
+            background-color: #f0f0f0;
         }
 
         .recently-checked-off h4 {
+            padding: 0 1rem;
             cursor: pointer;
         }
 
@@ -812,7 +825,6 @@
                             <span class="hamburger-menu" @click="toggleSidenav">☰</span>
                             <h2>Groceries <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
                             <div v-if="error" class="error">{{ error }}</div>
-                            <div v-if="loading" class="loading">Loading...</div>
                         </div>
                         
                         <!-- Location tabs -->
@@ -842,12 +854,12 @@
                             </thead>
                             <tbody>
                                 <tr v-for="item in filteredGroceryItems" :key="item.id">
-                                    <td>
+                                    <td width="30">
                                         <input type="checkbox" v-model="selectedItems" :value="item.id">
                                     </td>
                                     <td><input type="text" v-model="item.title" @change="updateItemField(item, 'title', $event.target.value)"></td>
-                                    <td><input type="number" v-model.number="item.amount" @change="updateItemField(item, 'amount', $event.target.value)"></td>
-                                    <td><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)"></td>
+                                    <td width="60"><input type="number" v-model.number="item.amount" @change="updateItemField(item, 'amount', $event.target.value)"></td>
+                                    <td width="60"><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)" enterkeyhint="done"></td>
                                 </tr>
                             </tbody>
                         </table>
@@ -875,10 +887,10 @@
                         <table v-if="!group.collapsed">
                             <thead>
                             <tr>
-                                <th><input type="checkbox" :checked="selectedItems.length === group.items.length" @change="toggleSelectAll(group.items)"></th>
+                                <th width="30"><input type="checkbox" :checked="selectedItems.length === group.items.length" @change="toggleSelectAll(group.items)"></th>
                                 <th>Item</th>
-                                <th>Quantity</th>
-                                <th>Price</th>
+                                <th width="60">Quantity</th>
+                                <th width="60">Price</th>
                             </tr>
                             </thead>
                             <tbody>
@@ -886,7 +898,7 @@
                                 <td><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
                                 <td><input type="text" v-model="item.title" @change="updateItemInSheet(item)"></td>
                                 <td><input type="number" v-model.number="item.amount" @change="updateItemInSheet(item)"></td>
-                                <td><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)"></td>
+                                <td><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)" enterkeyhint="done"></td>
                             </tr>
                             </tbody>
                         </table>
@@ -1267,7 +1279,7 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
+                                    <th width="30"><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
                                     <th v-for="column in columns" :key="column" @click="sort(column)">
                                         {{ column }}
                                         <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
