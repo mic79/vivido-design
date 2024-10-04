@@ -10,6 +10,20 @@
     <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <style>
+        * {
+            -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+        }
+        .noselect {
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+        :focus {
+            outline: 0;
+        }
         html, body {
             height: 100%;
             min-height: 100%;
@@ -186,6 +200,9 @@
         button:hover {
             background: #729c9c;
             color: #fff;
+        }
+        button:disabled {
+            visibility: hidden;
         }
         .filter-input {
             width: 100%;
