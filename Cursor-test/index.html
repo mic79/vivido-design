@@ -8,11 +8,74 @@
     <script src="https://apis.google.com/js/api.js"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <style>
+        html, body {
+            height: 100%;
+            min-height: 100%;
+            margin: 0;
+        }
+        html {
+            font-family: 'Lato', sans-serif;
+        }
+        .main-content {
+            display: flex;
+            height: 100vh;
+        }
+        
+        .sidenav {
+            position: fixed;
+            width: 300px;
+            top: 0;
+            bottom: 0;
+            left: -300px;
+            padding: 20px;
+            background-color: #f4f4f4;
+            box-sizing: border-box;
+            overflow-y: auto;
+            transition: left 0.3s ease-in-out;
+            z-index: 1000;
+        }
+        @media (min-width: 768px) {
+            .sidenav {
+                position: relative;
+                left: 0;
+            }
+        }
+        @media (max-width: 767.98px) {
+            .sidenav.open {
+                left: 0;
+            }
+        }
+
+        .close-sidenav {
+            display: block;
+        }
+        @media (min-width: 768px) {
+            .close-sidenav {
+                display: none;
+                position: absolute;
+                top: 0.5rem;
+                right: 0.5rem;
+                font-size: 1.5rem;
+                cursor: pointer;
+            }
+        }
+        .hamburger-menu {
+            display: inline-block;
+            font-size: 1.5rem;
+            cursor: pointer;
+            margin-right: 1rem;
+        }
+        @media (min-width: 768px) {
+            .hamburger-menu {
+                display: none;
+            }
+        }
         .nav-menu {
             display: flex;
-            justify-content: space-around;
-            padding: 10px;
+            flex-direction: column;
+            padding: 10px 0;
             background-color: #f0f0f0;
         }
         .nav-menu a {
@@ -24,9 +87,19 @@
             font-weight: bold;
             background-color: #ddd;
         }
+        .page-content {
+            width: 100%;
+            overflow-y: auto;
+        }
+        .locations-page, .groceries-page {
+            padding-bottom: 80px;
+        }
         .responsive {
             max-width: 100%;
             overflow-x: auto;
+        }
+        h2, .h2 {
+            display: inline-block;
         }
         table {
             width: 100%;
@@ -136,7 +209,11 @@
         }
 
         .grocery-list input[type="text"],
-        .grocery-list input[type="number"] {
+        .grocery-list input[type="number"],
+        .recently-checked-off input[type="text"],
+        .recently-checked-off input[type="number"],
+        .locations-list input[type="text"],
+        .locations-list input[type="number"] {
             width: 100%;
             box-sizing: border-box;
         }
@@ -147,10 +224,13 @@
         }
 
         .recently-checked-off h3 {
-            cursor: pointer;
             background-color: #f0f0f0;
             padding: 10px;
             margin: 0;
+        }
+
+        .recently-checked-off h4 {
+            cursor: pointer;
         }
 
         .recently-checked-off ul {
@@ -190,18 +270,21 @@
         <div v-if="!isSignedIn">
             <div id="googleSignInButton"></div>
         </div>
-        <div v-if="isSignedIn">
-            <p>{{ user.email }} <button @click="signOut">Sign Out</button></p>
-            <nav class="nav-menu">
-                <a :class="{ active: currentPage === 'groceries' }" @click="currentPage = 'groceries'" href="#">Groceries</a>
-                <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'" href="#">Locations</a>
-            </nav>
-            <p v-if="sheetId">Current Sheet ID: {{ sheetId }} (Share this ID with others to collaborate)</p>
-            <div>
-                <button @click="createNewSheet">Create New Sheet</button>
-                <button @click="showPicker">Select GroceriesApp Sheet</button>
+        <div v-if="isSignedIn" class="main-content">
+            <div class="sidenav" :class="{ 'open': isSidenavOpen }">
+                <span class="close-sidenav" @click="toggleSidenav">&times;</span>
+                <p>{{ user.email }} <button @click="signOut">Sign Out</button></p>
+                <nav class="nav-menu">
+                    <a :class="{ active: currentPage === 'groceries' }" @click="currentPage = 'groceries'; toggleSidenav()" href="#">Groceries</a>
+                    <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'; toggleSidenav()" href="#">Locations</a>
+                </nav>
+                <p v-if="sheetId">Current Sheet ID: {{ sheetId }} (Share this ID with others to collaborate)</p>
+                <div>
+                    <button @click="createNewSheet">Create New Sheet</button>
+                    <button @click="showPicker">Select GroceriesApp Sheet</button>
+                </div>
             </div>
-            <component v-if="sheetId" :is="currentPageComponent" :sheet-id="sheetId" ref="locationPageRef"></component>
+            <component v-if="sheetId" :is="currentPageComponent" :sheet-id="sheetId" ref="locationPageRef" :toggle-sidenav="toggleSidenav"></component>
         </div>
     </div>
 
@@ -247,7 +330,7 @@
         };
 
         const GroceriesPage = {
-            props: ['sheetId'],
+            props: ['sheetId', 'toggleSidenav'],
             setup(props) {
                 const locations = ref([]);
                 const groceryItems = ref([]);
@@ -311,7 +394,7 @@
                         // Fetch locations
                         const locationsResponse = await gapi.client.sheets.spreadsheets.values.get({
                             spreadsheetId: props.sheetId,
-                            range: 'Locations!A2:F'
+                            range: 'Locations!A2:E'
                         });
                         
                         locations.value = locationsResponse.result.values
@@ -697,8 +780,9 @@
                 };
             },
             template: `
-                <div>
-                    <h2>Locations <button @click="fetchLocations">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
+                <div class="groceries-page page-content">
+                    <span class="hamburger-menu" @click="toggleSidenav">☰</span>
+                    <h2>Groceries <button @click="fetchLocations">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
                     <div v-if="error" class="error">{{ error }}</div>
                     <div v-if="loading" class="loading">Loading...</div>
                     
@@ -732,9 +816,9 @@
                                     <td>
                                         <input type="checkbox" v-model="selectedItems" :value="item.id">
                                     </td>
-                                    <td><input v-model="item.title" @change="updateItemField(item, 'title', $event.target.value)"></td>
+                                    <td><input type="text" v-model="item.title" @change="updateItemField(item, 'title', $event.target.value)"></td>
                                     <td><input type="number" v-model.number="item.amount" @change="updateItemField(item, 'amount', $event.target.value)"></td>
-                                    <td><input v-model="item.price" @input="handlePriceInput(item, $event)"></td>
+                                    <td><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)"></td>
                                 </tr>
                             </tbody>
                         </table>
@@ -771,9 +855,9 @@
                             <tbody>
                             <tr v-for="item in group.items" :key="item.id">
                                 <td><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
-                                <td><input v-model="item.title" @change="updateItemInSheet(item)"></td>
+                                <td><input type="text" v-model="item.title" @change="updateItemInSheet(item)"></td>
                                 <td><input type="number" v-model.number="item.amount" @change="updateItemInSheet(item)"></td>
-                                <td><input v-model="item.price" @input="handlePriceInput(item, $event)"></td>
+                                <td><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)"></td>
                             </tr>
                             </tbody>
                         </table>
@@ -786,7 +870,7 @@
         };
 
         const LocationsPage = {
-            props: ['sheetId'],
+            props: ['sheetId', 'toggleSidenav'],
             setup(props) {
                 const locations = ref([]);
                 const globalSearch = ref('');
@@ -794,7 +878,7 @@
                 const sortDirection = ref('asc');
                 const currentPage = ref(1);
                 const itemsPerPage = ref(10);
-                const columns = ['title', 'city', 'country', 'hidden'];
+                const columns = ['title', 'city', 'hidden'];
                 const loading = ref(false);
                 const error = ref(null);
                 const selectAll = ref(false);
@@ -853,7 +937,7 @@
                     try {
                         const response = await gapi.client.sheets.spreadsheets.values.get({
                             spreadsheetId: props.sheetId,
-                            range: 'Locations!A2:F'
+                            range: 'Locations!A2:E'
                         });
                         
                         locations.value = response.result.values.map((row, index) => ({
@@ -861,7 +945,6 @@
                             title: row[0] || '',
                             order: row[1] || '',
                             city: row[4] || '',
-                            country: row[5] || '',
                             hidden: row[3] === 'true',
                             selected: false // Add selected property for checkboxes
                         }));
@@ -883,7 +966,7 @@
                             range: `Locations!A${locations.value.indexOf(location) + 2}:F${locations.value.indexOf(location) + 2}`,
                             valueInputOption: 'RAW',
                             resource: {
-                                values: [[location.title, location.order, location.id, location.hidden.toString(), location.city, location.country]]
+                                values: [[location.title, location.order, location.id, location.hidden.toString(), location.city]]
                             }
                         });
                     } catch (err) {
@@ -902,7 +985,6 @@
                         title: 'New Location',
                         order: (locations.value.length + 1).toString(),
                         city: '',
-                        country: '',
                         hidden: false,
                         selected: false
                     };
@@ -915,7 +997,7 @@
                             range: 'Locations!A:F',
                             valueInputOption: 'RAW',
                             resource: {
-                                values: [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city, newLocation.country]]
+                                values: [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]]
                             }
                         });
                     } catch (err) {
@@ -979,10 +1061,10 @@
                     try {
                         await gapi.client.sheets.spreadsheets.values.update({
                             spreadsheetId: props.sheetId,
-                            range: 'Locations!A2:F',
+                            range: 'Locations!A2:E',
                             valueInputOption: 'RAW',
                             resource: {
-                                values: locations.value.map(loc => [loc.title, loc.order, loc.id, loc.hidden.toString(), loc.city, loc.country])
+                                values: locations.value.map(loc => [loc.title, loc.order, loc.id, loc.hidden.toString(), loc.city])
                             }
                         });
                     } catch (err) {
@@ -1137,8 +1219,9 @@
                 };
             },
             template: `
-                <div>
-                    <h2>Locations <button @click="fetchLocations">Reload Locations</button> <small v-if="loading" class="loading">Loading...</small></h2>
+                <div class="locations-page page-content">
+                    <span class="hamburger-menu" @click="toggleSidenav">☰</span>
+                    <h2>Locations <button @click="fetchLocations">Reload data</button> <small v-if="loading" class="loading">Loading...</small></h2>
                     <div v-if="error" class="error">{{ error }}</div>
                     <div class="controls">
                         <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
@@ -1146,7 +1229,7 @@
                         <input type="file" @change="importFromCSV" accept=".csv">-->
                         <button @click="deleteSelected" :disabled="selectedLocations.length === 0">Delete Selected</button>
                     </div>
-                    <div class="responsive">
+                    <div class="locations-list responsive">
                         <table>
                             <thead>
                                 <tr>
@@ -1161,7 +1244,7 @@
                                 <tr v-for="location in paginatedLocations" :key="location.id">
                                     <td><input type="checkbox" v-model="location.selected"></td>
                                     <td v-for="column in columns" :key="column">
-                                        <input v-if="column !== 'hidden'" v-model="location[column]" @input="debounceUpdate(location)">
+                                        <input v-if="column !== 'hidden'" type="text" v-model="location[column]" @input="debounceUpdate(location)">
                                         <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
                                     </td>
                                 </tr>
@@ -1308,7 +1391,7 @@
                             range: 'Locations!A1:F1',
                             valueInputOption: 'RAW',
                             resource: {
-                                values: [['title', 'order', 'id', 'hide_in_groceries', 'city', 'country']]
+                                values: [['title', 'order', 'id', 'hide_in_groceries', 'city']]
                             }
                         });
                         console.log('New sheet initialized');
@@ -1394,6 +1477,12 @@
                     }
                 }
 
+                function toggleSidenav() {
+                    console.log('toggleSidenav');
+                    //this.isSidenavOpen = !this.isSidenavOpen;
+                    $('.sidenav').toggleClass('open');
+                }
+
                 // Load and init the gapi client
                 gapi.load('client', initializeGapiClient);
 
@@ -1402,6 +1491,8 @@
                     user,
                     sheetId,
                     signOut,
+                    isSidenavOpen: false,
+                    toggleSidenav,
                     currentPage,
                     currentPageComponent,
                     createNewSheet,
