@@ -31,6 +31,8 @@
             bottom: 0;
             left: -300px;
             padding: 20px;
+            display: flex;
+            flex-direction: column;
             background-color: #f4f4f4;
             box-sizing: border-box;
             overflow-y: auto;
@@ -62,6 +64,12 @@
                 cursor: pointer;
             }
         }
+        .user-info {
+            font-size: 12px;
+        }
+        .sheet-info {
+            font-size: 12px;
+        }
         .hamburger-menu {
             display: inline-block;
             font-size: 1.5rem;
@@ -77,7 +85,7 @@
             display: flex;
             flex-direction: column;
             padding: 10px 0;
-            background-color: #f0f0f0;
+            flex: 1;
         }
         .nav-menu a {
             text-decoration: none;
@@ -299,15 +307,17 @@
         <div v-if="isSignedIn" class="main-content">
             <div class="sidenav" :class="{ 'open': isSidenavOpen }">
                 <span class="close-sidenav" @click="toggleSidenav">&times;</span>
-                <p>{{ user.email }} <button @click="signOut">Sign Out</button></p>
+                <p class="user-info">{{ user.email }} <button @click="signOut">Sign Out</button></p>
                 <nav class="nav-menu">
                     <a :class="{ active: currentPage === 'groceries' }" @click="currentPage = 'groceries'; toggleSidenav()" href="#">Groceries</a>
                     <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'; toggleSidenav()" href="#">Locations</a>
                 </nav>
-                <p v-if="sheetId">Current Sheet ID: {{ sheetId }} (Share this ID with others to collaborate)</p>
-                <div>
-                    <button @click="createNewSheet">Create New Sheet</button>
-                    <button @click="showPicker">Select GroceriesApp Sheet</button>
+                <div class="sheet-info">
+                    <p v-if="sheetId">Current Sheet ID: {{ sheetId }} (Share this ID with others to collaborate)</p>
+                    <div>
+                        <button @click="createNewSheet">Create New Sheet</button>
+                        <button @click="showPicker">Select GroceriesApp Sheet</button>
+                    </div>
                 </div>
             </div>
             <component v-if="sheetId" :is="currentPageComponent" :sheet-id="sheetId" ref="locationPageRef" :toggle-sidenav="toggleSidenav"></component>
