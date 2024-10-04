@@ -103,8 +103,7 @@
         .header {
             position: sticky;
             top: 0;
-            padding: 1rem;
-            padding-bottom: 0;
+            padding: 0;
             background-color: #fff;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             z-index: 10;
@@ -190,7 +189,7 @@
 
         .location-tabs {
             display: flex;
-            overflow-x: auto;
+            overflow: hidden;
         }
 
         .location-tab {
@@ -754,6 +753,29 @@
                         if (locations.value.length > 0) {
                             selectLocation(locations.value[0].id);
                         }
+
+                        function force_scroll_sideways(element) {
+                            element.addEventListener("wheel", (event) => {
+                                event.preventDefault();
+
+                                let [x, y] = [event.deltaX, event.deltaY];
+                                let magnitude;
+
+                                if (x === 0) {
+                                magnitude = y > 0 ? 30 : -30;
+                                } else {
+                                magnitude = x;
+                                }
+
+                                //console.log({ x, y, magnitude });
+                                element.scrollBy({
+                                left: magnitude
+                                });
+                            });
+                        }
+                        
+                        const element = document.querySelector(".location-tabs");
+                        force_scroll_sideways(element);
                     });
                 });
 
@@ -786,10 +808,12 @@
             template: `
                 <div class="groceries-page page-content">
                     <div class="header">
-                        <span class="hamburger-menu" @click="toggleSidenav">☰</span>
-                        <h2>Groceries <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
-                        <div v-if="error" class="error">{{ error }}</div>
-                        <div v-if="loading" class="loading">Loading...</div>
+                        <div class="header-title">
+                            <span class="hamburger-menu" @click="toggleSidenav">☰</span>
+                            <h2>Groceries <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
+                            <div v-if="error" class="error">{{ error }}</div>
+                            <div v-if="loading" class="loading">Loading...</div>
+                        </div>
                         
                         <!-- Location tabs -->
                         <div class="location-tabs">
@@ -1227,9 +1251,11 @@
             template: `
                 <div class="locations-page page-content">
                     <div class="header">
-                        <span class="hamburger-menu" @click="toggleSidenav">☰</span>
-                        <h2>Locations <button @click="fetchLocations">Reload data</button> <small v-if="loading" class="loading">Loading...</small></h2>
-                        <div v-if="error" class="error">{{ error }}</div>
+                        <div class="header-title">
+                            <span class="hamburger-menu" @click="toggleSidenav">☰</span>
+                            <h2>Locations <button @click="fetchLocations">Reload data</button> <small v-if="loading" class="loading">Loading...</small></h2>
+                            <div v-if="error" class="error">{{ error }}</div>
+                        </div>
                         <div class="controls">
                             <input v-model="globalSearch" placeholder="Search locations..." @input="debounceSearch">
                             <!--<button @click="exportToCSV">Export to CSV</button>
@@ -1319,6 +1345,7 @@
                     user.value = parseJwt(response.credential);
                     isSignedIn.value = true;
                     console.log("Signed in as: " + user.value.name);
+
                     if (tokenClient.value) {
                         tokenClient.value.requestAccessToken({prompt: 'consent'});
                     } else {
