@@ -388,6 +388,7 @@
 
                 // Fetch locations and grocery items
                 async function fetchData() {
+                    console.log('fetchData');
                     loading.value = true;
                     error.value = null;
                     try {
@@ -435,7 +436,7 @@
                         }
 
                         // Process recently checked off items
-                        processRecentlyCheckedOff();
+                        updateRecentlyCheckedOff();
 
                     } catch (err) {
                         console.error('Error fetching data:', err);
@@ -473,14 +474,19 @@
                     });
                 }
 
-                function processRecentlyCheckedOff() {
-                    const checkedItems = groceryItems.value.filter(item => item.dateChecked);
+                function updateRecentlyCheckedOff() {
+                    const checkedItems = groceryItems.value.filter(item => 
+                        item.dateChecked && item.location === selectedLocation.value
+                    );
                     const groupedItems = _.groupBy(checkedItems, item => new Date(item.dateChecked).toLocaleDateString());
                     
                     recentlyCheckedOff.value = Object.entries(groupedItems).map(([date, items]) => ({
                         date,
                         items,
-                        total: items.reduce((sum, item) => sum + item.price * item.amount, 0),
+                        total: items.reduce((sum, item) => {
+                            let price = typeof item.price === 'string' ? parseFloat(item.price.replace(',', '.')) : item.price;
+                            return sum + (price * (item.amount || 1));
+                        }, 0),
                         collapsed: true
                     }));
                 }
@@ -494,7 +500,7 @@
 
                         await updateItemInSheet(item);
                         updateLocationStats();
-                        processRecentlyCheckedOff();
+                        updateRecentlyCheckedOff();
                     } catch (err) {
                         console.error('Error toggling item check:', err);
                         error.value = 'Failed to update item. Please try again.';
@@ -545,23 +551,6 @@
                             ]]
                         }
                     });
-                }
-
-                function updateRecentlyCheckedOff() {
-                    const checkedItems = groceryItems.value.filter(item => 
-                        item.dateChecked && item.location === selectedLocation.value
-                    );
-                    const groupedItems = _.groupBy(checkedItems, item => new Date(item.dateChecked).toLocaleDateString());
-                    
-                    recentlyCheckedOff.value = Object.entries(groupedItems).map(([date, items]) => ({
-                        date,
-                        items,
-                        total: items.reduce((sum, item) => {
-                        let price = typeof item.price === 'string' ? parseFloat(item.price.replace(',', '.')) : item.price;
-                        return sum + (price * (item.amount || 1));
-                        }, 0),
-                        collapsed: true
-                    }));
                 }
 
                 function selectLocation(locationId) {
@@ -700,7 +689,7 @@
                                 await updateItemInSheet(item);
                             }
                         }
-                        processRecentlyCheckedOff();
+                        updateRecentlyCheckedOff();
                     } catch (err) {
                         console.error('Error changing date:', err);
                         error.value = 'Failed to change date. Please try again.';
@@ -749,7 +738,7 @@
                 onMounted(() => {
                     fetchData().then(() => {
                         if (locations.value.length > 0) {
-                        selectLocation(locations.value[0].id);
+                            selectLocation(locations.value[0].id);
                         }
                     });
                 });
@@ -760,6 +749,7 @@
                     recentlyCheckedOff,
                     loading,
                     error,
+                    fetchData,
                     selectedLocation,
                     selectedItems,
                     filteredGroceryItems,
@@ -782,7 +772,7 @@
             template: `
                 <div class="groceries-page page-content">
                     <span class="hamburger-menu" @click="toggleSidenav">☰</span>
-                    <h2>Groceries <button @click="fetchLocations">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
+                    <h2>Groceries <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
                     <div v-if="error" class="error">{{ error }}</div>
                     <div v-if="loading" class="loading">Loading...</div>
                     
@@ -932,6 +922,7 @@
                 }, 300);
 
                 async function fetchLocations() {
+                    console.log('fetchLocations');
                     loading.value = true;
                     error.value = null;
                     try {
