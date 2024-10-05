@@ -750,13 +750,18 @@
                 }
 
                 async function updateItemField(item, field, value) {
-                    if (field === 'price') {
-                        item[field] = parsePrice(value);
-                    } else if (field === 'amount') {
-                        item[field] = parseInt(value);
-                    } else {
-                        item[field] = value;
+                    if (typeof value === 'string') {
+                        // For text inputs: capitalize first letter and remove trailing spaces
+                        value = value.charAt(0).toUpperCase() + value.slice(1).trimEnd();
                     }
+
+                    if (field === 'price') {
+                        value = parsePrice(value);
+                    } else if (field === 'amount') {
+                        value = parseInt(value) || null;  // Convert to integer or null if invalid
+                    }
+
+                    item[field] = value;
                     await updateItemInSheet(item);
                     updateLocationStats();
                 }
@@ -919,6 +924,20 @@
                     inputValues.value[item.id] = inputValue;
                 }
 
+                function handleAmountFocus(item, event) {
+                    if (event.target.value === '' || event.target.value === '0') {
+                        event.target.value = '';
+                        item.amount = null;  // or '' if you prefer
+                    }
+                }
+
+                function handlePriceFocus(item, event) {
+                    if (event.target.value === '' || event.target.value === '0' || event.target.value === '0,00') {
+                        event.target.value = '';
+                        inputValues.value[item.id] = '';
+                    }
+                }
+
                 async function handlePriceBlur(item, event) {
                     //console.log('handlePriceBlur', item, event);
                     // Get the stored input value or use the current item price
@@ -1005,12 +1024,14 @@
                     changeLocationForSelected,
                     changeDateForSelected,
                     updateLocationStats,
-                    handlePriceInput,
                     selectAll,
                     toggleSelectAll,
                     performSelectedAction,
                     updateRecentlyCheckedOff,
+                    handlePriceInput,
                     handlePriceBlur,
+                    handlePriceFocus,
+                    handleAmountFocus,
                     inputValues,
                     handleKeyPress
                 };
@@ -1055,11 +1076,12 @@
                                         <input type="checkbox" v-model="selectedItems" :value="item.id">
                                     </td>
                                     <td class="item-title"><input type="text" v-model="item.title" :data-item-id="item.id" @change="updateItemField(item, 'title', $event.target.value)"></td>
-                                    <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" :data-item-id="item.id" @change="updateItemField(item, 'amount', $event.target.value)"></td>
+                                    <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" :data-item-id="item.id" @focus="handleAmountFocus(item, $event)" @change="updateItemField(item, 'amount', $event.target.value)"></td>
                                     <td class="item-price" width="60">
                                         <input 
                                             :value="formatPriceForDisplay(item, $event)"
                                             @input="handlePriceInput(item, $event)"
+                                            @focus="handlePriceFocus(item, $event)"
                                             @blur="handlePriceBlur(item, $event)"
                                             @keypress="handleKeyPress"
                                             inputmode="decimal"
@@ -1103,7 +1125,7 @@
                             <tr v-for="item in group.items" :key="item.id">
                                 <td class="select-checkbox" width="30"><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
                                 <td class="item-title"><input type="text" v-model="item.title" @change="updateItemInSheet(item)"></td>
-                                <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @change="updateItemInSheet(item)"></td>
+                                <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @focus="handleAmountFocus(item, $event)" @change="updateItemInSheet(item)"></td>
                                 <td class="item-price" width="60">
                                     <input  
                                             :value="formatPriceForDisplay(item, $event)"
