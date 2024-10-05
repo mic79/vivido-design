@@ -238,6 +238,7 @@
             color: rgba(33,33,33,0.4);
         }
         .item-amount input, .item-price input {
+            width: inherit;
             text-align: right;
         }
         .item-price {
@@ -413,6 +414,34 @@
     </div>
 
     <script>
+    // Add this before your Vue app definition
+    window.setupChangeDetection = function(sheetId) {
+      console.log('Setting up change detection for sheet:', sheetId);
+      if (window.changeDetectionInterval) {
+        clearInterval(window.changeDetectionInterval);
+      }
+
+      async function checkForChanges() {
+        try {
+          const response = await gapi.client.drive.files.get({
+            fileId: sheetId,
+            fields: 'modifiedTime'
+          });
+          const newModifiedTime = response.result.modifiedTime;
+          if (newModifiedTime !== window.currentModifiedTime) {
+            window.currentModifiedTime = newModifiedTime;
+            console.log('Sheet updated, refreshing data...');
+            // Call your data refresh function here, e.g.:
+            // if (window.app) window.app.config.globalProperties.$refreshData();
+          }
+        } catch (error) {
+          console.error('Error checking for updates:', error);
+        }
+      }
+
+      window.changeDetectionInterval = setInterval(checkForChanges, 30000); // Check every 30 seconds
+    };
+
     function initializeGoogleSignIn() {
         console.log('Attempting to initialize Google Sign-In');
         if (typeof google === 'undefined' || typeof google.accounts === 'undefined') {
@@ -464,6 +493,7 @@
                 const selectedLocation = ref(null);
                 const selectedItems = ref([]);
                 const selectAll = ref(false);
+                const inputValues = ref({});
 
                 function toggleSelectAll(items) {
                     if (selectedItems.value.length === items.length) {
@@ -604,14 +634,19 @@
                     );
                     const groupedItems = _.groupBy(checkedItems, item => new Date(item.dateChecked).toLocaleDateString());
                     
+                    // Create a map of existing groups with their collapsed state
+                    const existingGroupsMap = new Map(
+                        recentlyCheckedOff.value.map(group => [group.date, group.collapsed])
+                    );
+
                     recentlyCheckedOff.value = Object.entries(groupedItems).map(([date, items]) => ({
                         date,
                         items,
                         total: items.reduce((sum, item) => {
                             let price = typeof item.price === 'string' ? parseFloat(item.price.replace(',', '.')) : item.price;
-                            return sum + (price * (item.amount || 1));
+                            return sum + (price);
                         }, 0),
-                        collapsed: true
+                        collapsed: existingGroupsMap.has(date) ? existingGroupsMap.get(date) : true // Preserve collapsed state or default to true
                     }));
                 }
 
@@ -652,10 +687,13 @@
                 }
 
                 async function updateItemInSheet(item) {
+                    console.log('updateItemInSheet', item);
                     const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
                     if (itemIndex === -1) {
                         throw new Error('Item not found in local array');
                     }
+
+                    const formattedPrice = formatPrice(item.price);
 
                     const range = `Groceries!A${itemIndex + 2}:H${itemIndex + 2}`;
                     await gapi.client.sheets.spreadsheets.values.update({
@@ -667,7 +705,7 @@
                                 item.id,
                                 item.title,
                                 item.amount,
-                                item.price, // Send the price as is, without formatting
+                                formattedPrice, // Use the formatted price here
                                 item.order,
                                 item.location,
                                 item.dateChecked,
@@ -683,12 +721,24 @@
                     selectedItems.value = []; // Clear selections
                 }
 
+                function formatPriceForDisplay(item, event) {
+                    //console.log('formatPriceForDisplay', item, event);
+                    if(event) {
+                        return item.price;
+                    } else {
+                        // Ensure the price is treated as a number and has two decimal places
+                        return (Number(item.price).toFixed(2)).replace('.', ',');
+                    }
+                }
+
                 function formatPrice(price) {
-                    return price.toFixed(2).replace('.', ',');
+                    console.log('formatPrice', price);
+                    //return (parseFloat(price) || 0).toFixed(2).replace('.', ',');
+                    return (Number(price).toFixed(2)).replace('.', ',');
                 }
 
                 function parsePrice(priceString) {
-                    return parseFloat(priceString.replace(',', '.'));
+                    return parseFloat(priceString.replace(',', '.')) || 0;
                 }
 
                 async function updateItemField(item, field, value) {
@@ -828,34 +878,71 @@
                         .sort((a, b) => a.order - b.order);
                 });
 
-                async function handlePriceInput(item, event) {
-                    let value = event.target.value;
+                function handlePriceInput(item, event) {
+                    console.log('handlePriceInput', item, event);
+                    let inputValue = event.target.value;
                     
                     // Replace dot with comma
-                    value = value.replace('.', ',');
+  inputValue = inputValue.replace('.', ',');
                     
-                    // Remove any characters that are not digits or comma
-                    value = value.replace(/[^\d,]/g, '');
+                    // Allow only digits and at most one comma
+                    inputValue = inputValue.replace(/[^\d,]/g, '');
                     
                     // Ensure only one comma
-                    const parts = value.split(',');
-                    if (parts.length > 2) {
-                        value = parts[0] + ',' + parts.slice(1).join('');
+                    const commaIndex = inputValue.indexOf(',');
+                    if (commaIndex !== -1) {
+                        inputValue = inputValue.slice(0, commaIndex + 1) + inputValue.slice(commaIndex + 1).replace(',', '');
                     }
                     
-                    // Update the item's price
-                    item.price = value;
+                    // Limit to two decimal places if comma is present
+                    /*const parts = inputValue.split(',');
+                    if (parts.length > 1) {
+                        parts[1] = parts[1].slice(0, 2);
+                        inputValue = parts.join(',');
+                    }*/
                     
-                    try {
-                        // Update the item in the sheet
-                        await updateItemInSheet(item);
-                        console.log(`Price updated for item ${item.id}: ${item.price}`);
-                        
-                        // Update location stats
-                        updateLocationStats();
-                    } catch (err) {
-                        console.error('Error updating item price:', err);
-                        error.value = 'Failed to update item price. Please try again.';
+                    // Update the input value without full formatting
+                    event.target.value = inputValue;
+                    
+                    // Update the item price
+                    //item.price = parsePrice(inputValue);
+
+                    // Store the input value temporarily
+                    inputValues.value[item.id] = inputValue;
+                }
+
+                async function handlePriceBlur(item, event) {
+                    console.log('handlePriceBlur', item, event);
+                    // Get the stored input value or use the current item price
+                    const inputValue = inputValues.value[item.id] || formatPrice(item.price);
+                    
+                    // Parse and format the price
+                    const newPrice = parsePrice(inputValue);
+                    const formattedPrice = formatPrice(newPrice);
+                    
+                    // Update the item price and input value
+                    item.price = newPrice;
+                    event.target.value = formattedPrice;
+                    
+                    // Clear the temporary input value
+                    delete inputValues.value[item.id];
+                    
+                    await updateItemInSheet(item);
+                    updateLocationStats();
+                    updateRecentlyCheckedOff();
+
+                    /*// Format the price when the input loses focus
+                    const formattedPrice = formatPrice(item.price);
+                    event.target.value = formattedPrice;
+                    item.price = parsePrice(formattedPrice);
+                    await updateItemInSheet(item);*/
+                }
+
+                function handleKeyPress(event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        // Perform your "done" action here, e.g., blur the input
+                        event.target.blur();
                     }
                 }
 
@@ -904,6 +991,7 @@
                     addGroceryItem,
                     selectLocation,
                     updateItemField,
+                    formatPriceForDisplay,
                     formatPrice,
                     deleteSelectedItems,
                     changeLocationForSelected,
@@ -913,7 +1001,10 @@
                     selectAll,
                     toggleSelectAll,
                     performSelectedAction,
-                    updateRecentlyCheckedOff
+                    updateRecentlyCheckedOff,
+                    handlePriceBlur,
+                    inputValues,
+                    handleKeyPress
                 };
             },
             template: `
@@ -944,10 +1035,10 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
+                                    <th width="30"><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
                                     <th>Item</th>
-                                    <th>Quantity</th>
-                                    <th>Price</th>
+                                    <th width="60">Quantity</th>
+                                    <th width="60">Price</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -957,7 +1048,16 @@
                                     </td>
                                     <td class="item-title"><input type="text" v-model="item.title" @change="updateItemField(item, 'title', $event.target.value)"></td>
                                     <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @change="updateItemField(item, 'amount', $event.target.value)"></td>
-                                    <td class="item-price" width="60"><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)" enterkeyhint="done"></td>
+                                    <td class="item-price" width="60">
+                                        <input 
+                                            :value="formatPriceForDisplay(item, $event)"
+                                            @input="handlePriceInput(item, $event)"
+                                            @blur="handlePriceBlur(item, $event)"
+                                            @keypress="handleKeyPress"
+                                            inputmode="decimal"
+                                            enterkeyhint="done"
+                                        >
+                                    </td>
                                 </tr>
                             </tbody>
                         </table>
@@ -978,7 +1078,7 @@
                     <!-- Recently checked off items -->
                     <div class="recently-checked-off">
                         <h3>Recently Checked Off Items</h3>
-                        <div v-for="group in recentlyCheckedOff" :key="group.date">
+                        <div v-for="group in recentlyCheckedOff" :key="group.date" class="recently-checked-off-group">
                         <h4 @click="group.collapsed = !group.collapsed">
                             {{ group.date }}<span style="margin-left: auto;">{{ formatPrice(group.total) }}</span>
                         </h4>
@@ -996,7 +1096,16 @@
                                 <td class="select-checkbox" width="30"><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
                                 <td class="item-title"><input type="text" v-model="item.title" @change="updateItemInSheet(item)"></td>
                                 <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @change="updateItemInSheet(item)"></td>
-                                <td class="item-price" width="60"><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)" enterkeyhint="done"></td>
+                                <td class="item-price" width="60">
+                                    <input  
+                                            :value="formatPriceForDisplay(item, $event)"
+                                            @input="handlePriceInput(item, $event)"
+                                            @blur="handlePriceBlur(item, $event)"
+                                            @keypress="handleKeyPress"
+                                            inputmode="decimal"
+                                            enterkeyhint="done"
+                                        >
+                                </td>
                             </tr>
                             </tbody>
                         </table>
@@ -1282,10 +1391,10 @@
                     currentPage.value = 1;
                 }
 
-                let currentModifiedTime = null,
-                changeDetectionInterval = null;
+                let currentModifiedTime = null;
+                let changeDetectionInterval = null;
 
-                function setupChangeDetection() {
+                function setupChangeDetection(sheetId) {
                     // Stop any existing interval
                     stopChangeDetection();
 
@@ -1321,6 +1430,8 @@
                         console.error('Error checking for updates:', error);
                     }
                 }
+
+                window.setupChangeDetection = setupChangeDetection;
 
                 onMounted(async () => {
                     await fetchLocations();
@@ -1461,6 +1572,11 @@
                     } else {
                         console.error('Token client not initialized');
                     }
+
+                    if (sheetId.value) {
+                        window.setupChangeDetection(sheetId.value);
+                    }
+
                     checkForStoredSheet();
                 }
 
@@ -1483,10 +1599,19 @@
                 }
 
                 function checkForStoredSheet() {
+                    console.log('Checking for stored sheet');
                     const storedSheetId = localStorage.getItem('lastUsedSheetId');
                     if (storedSheetId) {
+                        console.log('Found stored sheet ID:', storedSheetId);
+
                         sheetId.value = storedSheetId;
-                        setupChangeDetection();
+                        //setupChangeDetection();
+                        if (typeof window.setupChangeDetection === 'function') {
+                            console.log('Calling setupChangeDetection');
+                            window.setupChangeDetection(storedSheetId);
+                        } else {
+                            console.error('setupChangeDetection is not a function');
+                        }
                         // Proceed with loading data from the sheet
                     } else {
                         // User will need to create a new sheet or select one
