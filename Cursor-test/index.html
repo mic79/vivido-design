@@ -48,6 +48,7 @@
             display: flex;
             flex-direction: column;
             background-color: #f4f4f4;
+            box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
             box-sizing: border-box;
             overflow-y: auto;
             transition: left 0.3s ease-in-out;
@@ -82,7 +83,12 @@
         }
         .user-info {
             margin-bottom: 51px;
+            display: flex;
+            align-items: center;
             font-size: 12px;
+        }
+        .user-info button {
+            margin-left: auto;
         }
         .sheet-info {
             font-size: 12px;
@@ -308,7 +314,7 @@
         .recently-checked-off h3 {
             margin: 0;
             padding: 10px 1rem;
-            background-color: #f0f0f0;
+            background-color: #e9e9e9;
             color: #4f4f4f;
             font-size: 16px;
             font-weight: 400;
@@ -976,7 +982,7 @@
                             </thead>
                             <tbody>
                             <tr v-for="item in group.items" :key="item.id">
-                                <td class="select-checkbox"><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
+                                <td class="select-checkbox" width="30"><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
                                 <td class="item-title"><input type="text" v-model="item.title" @change="updateItemInSheet(item)"></td>
                                 <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @change="updateItemInSheet(item)"></td>
                                 <td class="item-price" width="60"><input type="text" v-model="item.price" @input="handlePriceInput(item, $event)" enterkeyhint="done"></td>
