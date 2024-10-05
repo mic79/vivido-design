@@ -224,6 +224,12 @@
         .item-amount input {
             color: rgba(33,33,33,0.4);
         }
+        .item-amount input, .item-price input {
+            text-align: right;
+        }
+        .item-price {
+            padding-right: 16px;
+        }
         .filter-input {
             width: 100%;
             padding: 5px;
@@ -303,15 +309,22 @@
             margin: 0;
             padding: 10px 1rem;
             background-color: #f0f0f0;
+            color: #4f4f4f;
+            font-size: 16px;
+            font-weight: 400;
         }
 
         .recently-checked-off h4 {
-            margin: 0;
-            padding: 1rem;
-            cursor: pointer;
             position: sticky;
             top: 112px;
+            margin: 0;
+            padding: 1rem;
+            display: flex;
             background: #f2f2f2;
+            color: rgba(0, 0, 0, .54);
+            font-size: 14px;
+            font-weight: 400;
+            cursor: pointer;
         }
 
         .recently-checked-off ul {
@@ -950,7 +963,7 @@
                         <h3>Recently Checked Off Items</h3>
                         <div v-for="group in recentlyCheckedOff" :key="group.date">
                         <h4 @click="group.collapsed = !group.collapsed">
-                            {{ group.date }} - Total: {{ formatPrice(group.total) }}
+                            {{ group.date }}<span style="margin-left: auto;">{{ formatPrice(group.total) }}</span>
                         </h4>
                         <table v-if="!group.collapsed">
                             <thead>
