@@ -542,7 +542,7 @@
 
                 // Fetch locations and grocery items
                 async function fetchData() {
-                    console.log('fetchData');
+                    //console.log('fetchData');
                     loading.value = true;
                     error.value = null;
                     try {
@@ -601,7 +601,7 @@
                 }
 
                 function updateLocationStats() {
-                    console.log("Updating location stats");
+                    //console.log("Updating location stats");
                     const locationTotals = {};
                     groceryItems.value.forEach(item => {
                         if (!item.dateChecked) {  // Only consider unchecked items
@@ -624,7 +624,7 @@
                         const stats = locationTotals[location.id] || { itemCount: 0, totalPrice: 0 };
                         location.itemCount = stats.itemCount;
                         location.totalPrice = stats.totalPrice;
-                        console.log(`Location: ${location.title}, Count: ${location.itemCount}, Total: ${location.totalPrice}`);
+                        //console.log(`Location: ${location.title}, Count: ${location.itemCount}, Total: ${location.totalPrice}`);
                     });
                 }
 
@@ -672,7 +672,7 @@
                     const newItem = {
                         id: `item_${Date.now()}`,
                         title: '',
-                        amount: 1,
+                        amount: 0,
                         price: 0,
                         order: groceryItems.value.length,
                         location: selectedLocation.value,
@@ -684,10 +684,18 @@
                     groceryItems.value.push(newItem);
                     await updateItemInSheet(newItem);
                     updateLocationStats();
+
+                    // Use nextTick to ensure the DOM has updated before trying to focus
+                    Vue.nextTick(() => {
+                        const newItemInput = document.querySelector(`input[data-item-id="${newItem.id}"]`);
+                        if (newItemInput) {
+                            newItemInput.focus();
+                        }
+                    });
                 }
 
                 async function updateItemInSheet(item) {
-                    console.log('updateItemInSheet', item);
+                    //console.log('updateItemInSheet', item);
                     const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
                     if (itemIndex === -1) {
                         throw new Error('Item not found in local array');
@@ -732,7 +740,7 @@
                 }
 
                 function formatPrice(price) {
-                    console.log('formatPrice', price);
+                    //console.log('formatPrice', price);
                     //return (parseFloat(price) || 0).toFixed(2).replace('.', ',');
                     return (Number(price).toFixed(2)).replace('.', ',');
                 }
@@ -879,7 +887,7 @@
                 });
 
                 function handlePriceInput(item, event) {
-                    console.log('handlePriceInput', item, event);
+                    //console.log('handlePriceInput', item, event);
                     let inputValue = event.target.value;
                     
                     // Replace dot with comma
@@ -912,7 +920,7 @@
                 }
 
                 async function handlePriceBlur(item, event) {
-                    console.log('handlePriceBlur', item, event);
+                    //console.log('handlePriceBlur', item, event);
                     // Get the stored input value or use the current item price
                     const inputValue = inputValues.value[item.id] || formatPrice(item.price);
                     
@@ -1046,8 +1054,8 @@
                                     <td class="select-checkbox" width="30">
                                         <input type="checkbox" v-model="selectedItems" :value="item.id">
                                     </td>
-                                    <td class="item-title"><input type="text" v-model="item.title" @change="updateItemField(item, 'title', $event.target.value)"></td>
-                                    <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @change="updateItemField(item, 'amount', $event.target.value)"></td>
+                                    <td class="item-title"><input type="text" v-model="item.title" :data-item-id="item.id" @change="updateItemField(item, 'title', $event.target.value)"></td>
+                                    <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" :data-item-id="item.id" @change="updateItemField(item, 'amount', $event.target.value)"></td>
                                     <td class="item-price" width="60">
                                         <input 
                                             :value="formatPriceForDisplay(item, $event)"
@@ -1247,6 +1255,14 @@
                             valueInputOption: 'RAW',
                             resource: {
                                 values: [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]]
+                            }
+                        });
+
+                        // Use nextTick to ensure the DOM has updated before trying to focus
+                        Vue.nextTick(() => {
+                            const newLocationInput = document.querySelector(`input[data-location-id="${newLocation.id}"]`);
+                            if (newLocationInput) {
+                                newLocationInput.focus();
                             }
                         });
                     } catch (err) {
