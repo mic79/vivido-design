@@ -386,6 +386,11 @@
         .pagination {
             margin: 10px;
         }
+        .pagination button:disabled {
+            opacity: 0.35;
+            pointer-events: none;
+            visibility: visible;
+        }
     </style>
 </head>
 <body>
@@ -1151,63 +1156,101 @@
             props: ['sheetId', 'toggleSidenav'],
             setup(props) {
                 const locations = ref([]);
+                const stableLocations = ref([]);
                 const globalSearch = ref('');
                 const sortColumn = ref('title');
                 const sortDirection = ref('asc');
-                const currentPage = ref(1);
+                const currentLocationsPage = ref(1);
                 const itemsPerPage = ref(10);
                 const columns = ['title', 'city', 'hidden'];
                 const loading = ref(false);
                 const error = ref(null);
                 const selectAll = ref(false);
+                const editingLocationId = ref(null);
+                const focusNextId = ref(null);
 
-                const filteredLocations = computed(() => {
+                function applySort() {
+                    console.log('applySort', sortColumn.value, sortDirection.value);
+                    stableLocations.value = [...stableLocations.value].sort((a, b) => {
+                        if (a[sortColumn.value] < b[sortColumn.value]) return sortDirection.value === 'asc' ? -1 : 1;
+                        if (a[sortColumn.value] > b[sortColumn.value]) return sortDirection.value === 'asc' ? 1 : -1;
+                        // If values are equal, maintain current order
+                        return stableLocations.value.indexOf(a) - stableLocations.value.indexOf(b);
+                    });
+                }
+
+                /*const filteredLocations = computed(() => {
                     return locations.value.filter(location =>
                         Object.values(location).some(value =>
-                            String(value).toLowerCase().includes(globalSearch.value.toLowerCase())
+                        String(value).toLowerCase().includes(globalSearch.value.toLowerCase())
                         )
                     );
                 });
 
-                const sortedLocations = computed(() => {
+                watch(filteredLocations, (newValue) => {
+                    stableLocations.value = newValue;
+                    applySort();
+                }, { immediate: true });*/
+
+                /*const sortedLocations = computed(() => {
+                    console.log('sortedLocations', filteredLocations.value);
                     return [...filteredLocations.value].sort((a, b) => {
                         if (a[sortColumn.value] < b[sortColumn.value]) return sortDirection.value === 'asc' ? -1 : 1;
                         if (a[sortColumn.value] > b[sortColumn.value]) return sortDirection.value === 'asc' ? 1 : -1;
                         return 0;
                     });
-                });
+                });*/
 
                 const paginatedLocations = computed(() => {
-                    const startIndex = (currentPage.value - 1) * itemsPerPage.value;
-                    return sortedLocations.value.slice(startIndex, startIndex + itemsPerPage.value);
+                    const startIndex = (currentLocationsPage.value - 1) * itemsPerPage.value;
+                    return stableLocations.value.slice(startIndex, startIndex + itemsPerPage.value);
                 });
 
-                const totalPages = computed(() => Math.ceil(sortedLocations.value.length / itemsPerPage.value));
+                const totalPages = computed(() => Math.ceil(stableLocations.value.length / itemsPerPage.value));
 
                 const selectedLocations = computed(() => 
                     locations.value.filter(location => location.selected)
                 );
 
                 function sort(column) {
+                    console.log('sort', column);
                     if (sortColumn.value === column) {
                         sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
                     } else {
                         sortColumn.value = column;
                         sortDirection.value = 'asc';
                     }
+                    applyFilterAndSort();
+                }
+
+                function applyFilterAndSort() {
+                    const filtered = locations.value.filter(location =>
+                        Object.values(location).some(value =>
+                        String(value).toLowerCase().includes(globalSearch.value.toLowerCase())
+                        )
+                    );
+
+                    stableLocations.value = filtered.sort((a, b) => {
+                        if (a[sortColumn.value] < b[sortColumn.value]) return sortDirection.value === 'asc' ? -1 : 1;
+                        if (a[sortColumn.value] > b[sortColumn.value]) return sortDirection.value === 'asc' ? 1 : -1;
+                        return 0;
+                    });
                 }
 
                 function changePage(page) {
                     stopChangeDetection();
                     
-                    currentPage.value = page;
+                    currentLocationsPage.value = page;
                 }
 
                 const debounceUpdate = _.debounce(updateLocation, 1500);
 
                 const debounceSearch = _.debounce(() => {
-                    currentPage.value = 1;
+                    currentLocationsPage.value = 1;
+                    applyFilterAndSort();
                 }, 300);
+
+                watch(globalSearch, debounceSearch);
 
                 async function fetchLocations() {
                     console.log('fetchLocations');
@@ -1227,18 +1270,36 @@
                             hidden: row[3] === 'true',
                             selected: false // Add selected property for checkboxes
                         }));
-                        resetPagination();
+                        //resetPagination();
                     } catch (err) {
-                        console.error('Error fetching locations:', err);
-                        error.value = 'Failed to fetch locations. Please try again.';
+                        console.error('Error fetching data:', err);
+                        error.value = 'Failed to fetch data. Please try again.';
                     } finally {
                         loading.value = false;
+                        applyFilterAndSort();
                     }
                 }
 
+                function formatCapitalizeFirst(value) {
+                    return value.charAt(0).toUpperCase() + value.slice(1);
+                }
+                function formatTextInput(value) {
+                    return value.charAt(0).toUpperCase() + value.slice(1).trimEnd();
+                }
+
                 async function updateLocation(location) {
+                    console.log('updateLocation', location);
                     loading.value = true;
                     error.value = null;
+
+                    // Apply formatting to title and city
+                    if (typeof location.title === 'string') {
+                        location.title = formatTextInput(location.title);
+                    }
+                    if (typeof location.city === 'string') {
+                        location.city = formatTextInput(location.city);
+                    }
+
                     try {
                         await gapi.client.sheets.spreadsheets.values.update({
                             spreadsheetId: props.sheetId,
@@ -1253,15 +1314,85 @@
                         error.value = 'Failed to update location. Please try again.';
                     } finally {
                         loading.value = false;
+                        if (editingLocationId.value !== location.id) {
+                            applyFilterAndSort();
+                        }
                     }
                 }
+
+                function handleLocationInput(location, field, event) {
+                    editingLocationId.value = location.id;
+                    if (field === 'title' || field === 'city') {
+                        location[field] = formatCapitalizeFirst(event.target.value);
+                    } else {
+                        location[field] = event.target.value;
+                    }
+                }
+                function handleLocationBlur(location) {
+                    updateLocation(location);
+                    editingLocationId.value = null;
+                }
+
+                function handleKeyDown(location, field, event) {
+                    if (event.key === 'Tab') {
+                        console.log('handleKeyDown', location, field, event);
+                        //event.preventDefault(); // Prevent default tab behavior
+                        const currentIndex = stableLocations.value.findIndex(loc => loc.id === location.id);
+                        //const currentLocationsPage = Math.floor(currentIndex / itemsPerPage.value) + 1;
+                        
+                        let nextField, nextLocation;
+                        if (field === 'title') {
+                            nextField = 'city';
+                            nextLocation = location;
+                        } else if (field === 'city') {
+                            const nextIndex = currentIndex + 1;
+                            nextLocation = stableLocations.value[nextIndex];
+                            nextField = nextLocation ? 'title' : null;
+                        }
+
+                        setTimeout(function() {
+                            if (nextLocation) {
+                                const nextIndex = stableLocations.value.findIndex(loc => loc.id === nextLocation.id);
+                                const nextPage = Math.floor(nextIndex / itemsPerPage.value) + 1;
+
+                                console.log('nextIndex', nextIndex);
+                                console.log('nextPage', nextPage);
+                                console.log('currentLocationsPage', currentLocationsPage.value);
+                                if (nextPage !== currentLocationsPage.value) {
+                                    // We need to change pages
+                                    currentLocationsPage.value = nextPage;
+                                    focusNextId.value = `${nextLocation.id}-${nextField}`;
+                                } else {
+                                    // Focus the next field immediately
+                                    Vue.nextTick(() => {
+                                        const nextInput = document.querySelector(`input[data-location-id="${nextLocation.id}"][data-field="${nextField}"]`);
+                                        console.log('nextInput', nextInput);
+                                        if (nextInput) nextInput.focus();
+                                    });
+                                }
+                            }
+                        }, 300);
+                    }
+                }
+
+                watch(currentLocationsPage, () => {
+                    console.log('Watch currentLocationsPage', currentLocationsPage.value);
+                    if (focusNextId.value) {
+                        Vue.nextTick(() => {
+                            const [locationId, field] = focusNextId.value.split('-');
+                            const nextInput = document.querySelector(`input[data-location-id="${locationId}"][data-field="${field}"]`);
+                            if (nextInput) nextInput.focus();
+                            focusNextId.value = null;
+                        });
+                    }
+                });
 
                 async function addNewLocation() {
                     loading.value = true;
                     error.value = null;
                     const newLocation = {
                         id: `loc_${Date.now()}`,
-                        title: 'New Location',
+                        title: '',
                         order: (locations.value.length + 1).toString(),
                         city: '',
                         hidden: false,
@@ -1279,6 +1410,16 @@
                                 values: [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]]
                             }
                         });
+
+                        applyFilterAndSort();
+
+                        // Calculate which page the new location is on
+                        const newLocationIndex = stableLocations.value.findIndex(loc => loc.id === newLocation.id);
+                        console.log('newLocationIndex', newLocationIndex);
+                        if (newLocationIndex !== -1) {
+                            const newPage = Math.floor(newLocationIndex / itemsPerPage.value) + 1;
+                            currentLocationsPage.value = newPage;
+                        }
 
                         // Use nextTick to ensure the DOM has updated before trying to focus
                         Vue.nextTick(() => {
@@ -1399,9 +1540,13 @@
 
                             // Remove from local array
                             locations.value = locations.value.filter(location => !location.selected);
+                            // Update stableLocations
+                            stableLocations.value = stableLocations.value.filter(location => !location.selected);
                             selectAll.value = false;
 
                             console.log('Locations deleted successfully');
+                            // Reapply filter and sort
+                            applyFilterAndSort();
                         } catch (err) {
                             console.error('Error deleting locations:', err);
                             error.value = 'Failed to delete locations. Please try again.';
@@ -1426,7 +1571,7 @@
                 }
 
                 function resetPagination() {
-                    currentPage.value = 1;
+                    currentLocationsPage.value = 1;
                 }
 
                 let currentModifiedTime = null;
@@ -1469,6 +1614,10 @@
                     }
                 }
 
+                function getLocationColumnClass(column) {
+                    return `location-${column.toLowerCase()}`;
+                }
+
                 window.setupChangeDetection = setupChangeDetection;
 
                 onMounted(async () => {
@@ -1484,7 +1633,7 @@
                     columns,
                     sortColumn,
                     sortDirection,
-                    currentPage,
+                    currentLocationsPage,
                     totalPages,
                     paginatedLocations,
                     loading,
@@ -1504,7 +1653,11 @@
                     debounceSearch,
                     resetPagination,
                     setupChangeDetection,
-                    stopChangeDetection
+                    stopChangeDetection,
+                    getLocationColumnClass,
+                    handleLocationInput,
+                    handleLocationBlur,
+                    handleKeyDown
                 };
             },
             template: `
@@ -1526,8 +1679,8 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th width="30"><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
-                                    <th v-for="column in columns" :key="column" @click="sort(column)">
+                                    <th width="30" class="location-checkbox"><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
+                                    <th v-for="column in columns" :key="column" @click="sort(column)" :class="getLocationColumnClass(column)">
                                         {{ column }}
                                         <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
                                     </th>
@@ -1536,8 +1689,8 @@
                             <tbody>
                                 <tr v-for="location in paginatedLocations" :key="location.id">
                                     <td><input type="checkbox" v-model="location.selected"></td>
-                                    <td v-for="column in columns" :key="column">
-                                        <input v-if="column !== 'hidden'" type="text" v-model="location[column]" @input="debounceUpdate(location)">
+                                    <td v-for="column in columns" :key="column" :class="getLocationColumnClass(column)">
+                                        <input v-if="column !== 'hidden'" type="text" v-model="location[column]" :data-location-id="location.id" :data-field="column" @input="handleLocationInput(location, column, $event)" @blur="handleLocationBlur(location)" @keydown="handleKeyDown(location, column, $event)">
                                         <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
                                     </td>
                                 </tr>
@@ -1545,9 +1698,9 @@
                         </table>
                     </div>
                     <div class="pagination">
-                        <button @click="currentPage > 1 && currentPage--" :disabled="currentPage === 1">Previous</button>
-                        <span>Page {{ currentPage }} of {{ totalPages }}</span>
-                        <button @click="currentPage < totalPages && currentPage++" :disabled="currentPage === totalPages">Next</button>
+                        <button @click="currentLocationsPage > 1 && currentLocationsPage--" :disabled="currentLocationsPage === 1">Previous</button>
+                        <span>Page {{ currentLocationsPage }} of {{ totalPages }}</span>
+                        <button @click="currentLocationsPage < totalPages && currentLocationsPage++" :disabled="currentLocationsPage === totalPages">Next</button>
                     </div>
                     <button class="add-location-button" @click="addNewLocation">Add Location</button>
                 </div>
