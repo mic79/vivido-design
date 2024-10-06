@@ -1847,29 +1847,29 @@
                             <div v-if="error" class="error">{{ error }}</div>
                         </div>
                     </div>
-                    <div v-else class="history-list responsive">
+                    <div v-else class="history-list">
                         <table>
-                        <thead>
-                            <tr>
-                            <th v-for="column in columns" :key="column">
-                                {{ column.charAt(0).toUpperCase() + column.slice(1) }}
-                                <input 
-                                :placeholder="'Filter ' + column"
-                                v-model="filters[column]"
-                                @input="filters = {...filters}"
-                                >
-                            </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr v-for="item in filteredItems" :key="item.id">
-                            <td>{{ item.title }}</td>
-                            <td>{{ item.amount }}</td>
-                            <td>{{ item.price.toFixed(2).replace('.', ',') }}</td>
-                            <td>{{ item.date }}</td>
-                            <td>{{ item.location }}</td>
-                            </tr>
-                        </tbody>
+                            <thead style="position:sticky; top:112px;">
+                                <tr>
+                                    <th v-for="column in columns" :key="column">
+                                        {{ column.charAt(0).toUpperCase() + column.slice(1) }}
+                                        <input 
+                                        :placeholder="'Filter ' + column"
+                                        v-model="filters[column]"
+                                        @input="filters = {...filters}"
+                                        >
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="item in filteredItems" :key="item.id">
+                                    <td>{{ item.title }}</td>
+                                    <td>{{ item.amount }}</td>
+                                    <td>{{ item.price.toFixed(2).replace('.', ',') }}</td>
+                                    <td>{{ item.date }}</td>
+                                    <td>{{ item.location }}</td>
+                                </tr>
+                            </tbody>
                         </table>
                     </div>
                 </div>
