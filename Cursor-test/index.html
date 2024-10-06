@@ -1162,7 +1162,7 @@
                 const sortDirection = ref('asc');
                 const currentLocationsPage = ref(1);
                 const itemsPerPage = ref(10);
-                const columns = ['title', 'city', 'hidden'];
+                const columns = ['title', 'city', 'order', 'hidden'];
                 const loading = ref(false);
                 const error = ref(null);
                 const selectAll = ref(false);
@@ -1324,6 +1324,9 @@
                     editingLocationId.value = location.id;
                     if (field === 'title' || field === 'city') {
                         location[field] = formatCapitalizeFirst(event.target.value);
+                    } else if (field === 'order') {
+                        // Ensure order is always a number
+                        location[field] = event.target.value ? parseInt(event.target.value, 10) : 0;
                     } else {
                         location[field] = event.target.value;
                     }
