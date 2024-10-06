@@ -400,6 +400,12 @@
             pointer-events: none;
             visibility: visible;
         }
+
+        .history-list {
+            height: calc(100vh - 112px);
+            width: 100%;
+            overflow: auto;
+        }
     </style>
 </head>
 <body>
@@ -1849,7 +1855,7 @@
                     </div>
                     <div v-else class="history-list">
                         <table>
-                            <thead style="position:sticky; top:112px;">
+                            <thead style="position:sticky; top:0; z-index:2;">
                                 <tr>
                                     <th v-for="column in columns" :key="column">
                                         {{ column.charAt(0).toUpperCase() + column.slice(1) }}
