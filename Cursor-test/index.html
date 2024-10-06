@@ -302,6 +302,13 @@
             font-weight: 600;
         }
 
+        .location-order, .location-hidden {
+            width: 60px;
+        }
+        td.location-order input {
+            text-align: right;
+        }
+
         .grocery-list table {
             width: 100%;
             border-collapse: collapse;
@@ -734,24 +741,58 @@
                     selectedItems.value = []; // Clear selections
                 }
 
-                function formatPriceForDisplay(item, event) {
-                    //console.log('formatPriceForDisplay', item, event);
-                    if(event) {
-                        return item.price;
-                    } else {
-                        // Ensure the price is treated as a number and has two decimal places
-                        return (Number(item.price).toFixed(2)).replace('.', ',');
-                    }
+                function parsePrice(value) {
+                    if (typeof value === 'number') return value;
+                    if (!value) return 0;
+                    
+                    // Remove any non-digit, non-comma, non-minus characters
+                    value = value.replace(/[^\d,-]/g, '');
+                    
+                    // Replace comma with dot for parsing
+                    value = value.replace(',', '.');
+                    
+                    // Parse the value, ensuring it's a number with two decimal places
+                    return parseFloat(parseFloat(value).toFixed(2));
                 }
 
                 function formatPrice(price) {
-                    //console.log('formatPrice', price);
-                    //return (parseFloat(price) || 0).toFixed(2).replace('.', ',');
-                    return (Number(price).toFixed(2)).replace('.', ',');
+                    if (price === null || price === undefined || isNaN(price)) return '0,00';
+                    
+                    // Convert to string, replace dot with comma, and ensure two decimal places
+                    let formattedPrice = Math.abs(price).toFixed(2).replace('.', ',');
+                    
+                    // Add minus sign if negative
+                    if (price < 0) formattedPrice = '-' + formattedPrice;
+                    
+                    return formattedPrice;
                 }
 
-                function parsePrice(priceString) {
-                    return parseFloat(priceString.replace(',', '.')) || 0;
+                function formatPriceForDisplay(item) {
+                    const storedInput = inputValues.value[item.id];
+                    if (storedInput !== undefined) {
+                        return storedInput;
+                    }
+                    return formatPrice(item.price);
+                }
+
+                async function handlePriceBlur(item, event) {
+                    // Get the stored input value or use the current item price
+                    const inputValue = inputValues.value[item.id] || formatPrice(item.price);
+                    
+                    // Parse and format the price
+                    const newPrice = parsePrice(inputValue);
+                    const formattedPrice = formatPrice(newPrice);
+                    
+                    // Update the item price and input value
+                    item.price = newPrice;
+                    event.target.value = formattedPrice;
+                    
+                    // Clear the temporary input value
+                    delete inputValues.value[item.id];
+                    
+                    await updateItemInSheet(item);
+                    updateLocationStats();
+                    updateRecentlyCheckedOff();
                 }
 
                 async function updateItemField(item, field, value) {
@@ -900,11 +941,13 @@
                     //console.log('handlePriceInput', item, event);
                     let inputValue = event.target.value;
                     
-                    // Replace dot with comma
-                    inputValue = inputValue.replace('.', ',');
+                    // Allow minus sign, digits, and at most one comma
+                    inputValue = inputValue.replace(/[^-\d,]/g, '');
                     
-                    // Allow only digits and at most one comma
-                    inputValue = inputValue.replace(/[^\d,]/g, '');
+                    // Ensure only one minus sign at the start
+                    if (inputValue.startsWith('-')) {
+                        inputValue = '-' + inputValue.substring(1).replace(/-/g, '');
+                    }
                     
                     // Ensure only one comma
                     const commaIndex = inputValue.indexOf(',');
