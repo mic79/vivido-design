@@ -1170,7 +1170,7 @@
                 const focusNextId = ref(null);
 
                 function applySort() {
-                    console.log('applySort', sortColumn.value, sortDirection.value);
+                    //console.log('applySort', sortColumn.value, sortDirection.value);
                     stableLocations.value = [...stableLocations.value].sort((a, b) => {
                         if (a[sortColumn.value] < b[sortColumn.value]) return sortDirection.value === 'asc' ? -1 : 1;
                         if (a[sortColumn.value] > b[sortColumn.value]) return sortDirection.value === 'asc' ? 1 : -1;
@@ -1213,7 +1213,7 @@
                 );
 
                 function sort(column) {
-                    console.log('sort', column);
+                    //console.log('sort', column);
                     if (sortColumn.value === column) {
                         sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
                     } else {
@@ -1253,7 +1253,7 @@
                 watch(globalSearch, debounceSearch);
 
                 async function fetchLocations() {
-                    console.log('fetchLocations');
+                    //console.log('fetchLocations');
                     loading.value = true;
                     error.value = null;
                     try {
@@ -1288,7 +1288,7 @@
                 }
 
                 async function updateLocation(location) {
-                    console.log('updateLocation', location);
+                    //console.log('updateLocation', location);
                     loading.value = true;
                     error.value = null;
 
@@ -1335,7 +1335,7 @@
 
                 function handleKeyDown(location, field, event) {
                     if (event.key === 'Tab') {
-                        console.log('handleKeyDown', location, field, event);
+                        //console.log('handleKeyDown', location, field, event);
                         //event.preventDefault(); // Prevent default tab behavior
                         const currentIndex = stableLocations.value.findIndex(loc => loc.id === location.id);
                         //const currentLocationsPage = Math.floor(currentIndex / itemsPerPage.value) + 1;
@@ -1355,9 +1355,9 @@
                                 const nextIndex = stableLocations.value.findIndex(loc => loc.id === nextLocation.id);
                                 const nextPage = Math.floor(nextIndex / itemsPerPage.value) + 1;
 
-                                console.log('nextIndex', nextIndex);
-                                console.log('nextPage', nextPage);
-                                console.log('currentLocationsPage', currentLocationsPage.value);
+                                //console.log('nextIndex', nextIndex);
+                                //console.log('nextPage', nextPage);
+                                //console.log('currentLocationsPage', currentLocationsPage.value);
                                 if (nextPage !== currentLocationsPage.value) {
                                     // We need to change pages
                                     currentLocationsPage.value = nextPage;
@@ -1366,7 +1366,7 @@
                                     // Focus the next field immediately
                                     Vue.nextTick(() => {
                                         const nextInput = document.querySelector(`input[data-location-id="${nextLocation.id}"][data-field="${nextField}"]`);
-                                        console.log('nextInput', nextInput);
+                                        //console.log('nextInput', nextInput);
                                         if (nextInput) nextInput.focus();
                                     });
                                 }
@@ -1376,7 +1376,7 @@
                 }
 
                 watch(currentLocationsPage, () => {
-                    console.log('Watch currentLocationsPage', currentLocationsPage.value);
+                    //console.log('Watch currentLocationsPage', currentLocationsPage.value);
                     if (focusNextId.value) {
                         Vue.nextTick(() => {
                             const [locationId, field] = focusNextId.value.split('-');
@@ -1415,7 +1415,7 @@
 
                         // Calculate which page the new location is on
                         const newLocationIndex = stableLocations.value.findIndex(loc => loc.id === newLocation.id);
-                        console.log('newLocationIndex', newLocationIndex);
+                        //console.log('newLocationIndex', newLocationIndex);
                         if (newLocationIndex !== -1) {
                             const newPage = Math.floor(newLocationIndex / itemsPerPage.value) + 1;
                             currentLocationsPage.value = newPage;
@@ -1939,7 +1939,7 @@
                 }
 
                 function toggleSidenav() {
-                    console.log('toggleSidenav');
+                    //console.log('toggleSidenav');
                     //this.isSidenavOpen = !this.isSidenavOpen;
                     $('.sidenav').toggleClass('open');
                 }
