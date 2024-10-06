@@ -136,7 +136,7 @@
                 padding-bottom: 160px;
             }
         }
-        .page-content:after {
+        .groceries-page:after, .locations-page:after {
             content: '';
             position: absolute;
             height: 100px;
@@ -153,7 +153,7 @@
             padding: 0;
             display: flex;
             flex-direction: column;
-            background-color: #fff;
+            background-color: #f7f7f8;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             z-index: 10;
         }
@@ -414,6 +414,7 @@
                 <nav class="nav-menu">
                     <a :class="{ active: currentPage === 'groceries' }" @click="currentPage = 'groceries'; toggleSidenav()" href="#">Groceries</a>
                     <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'; toggleSidenav()" href="#">Locations</a>
+                    <a :class="{ active: currentPage === 'history' }" @click="currentPage = 'history'; toggleSidenav()" href="#">History</a>
                 </nav>
                 <div class="sheet-info">
                     <p v-if="sheetId"><strong>Current Sheet ID</strong><br>{{ sheetId }}</p>
@@ -1758,10 +1759,128 @@
             `
         };
 
+        const HistoryPage = {
+            props: ['sheetId', 'toggleSidenav'],
+            setup(props) {
+                const historyItems = ref([]);
+                const locations = ref([]);
+                const loading = ref(false);
+                const error = ref(null);
+
+                const filters = ref({
+                title: '',
+                amount: '',
+                price: '',
+                date: '',
+                location: ''
+                });
+
+                const columns = ['title', 'amount', 'price', 'date', 'location'];
+
+                async function fetchData() {
+                    loading.value = true;
+                    error.value = null;
+                    try {
+                        // Fetch locations
+                        const locationsResponse = await gapi.client.sheets.spreadsheets.values.get({
+                            spreadsheetId: props.sheetId,
+                            range: 'Locations!A2:C'
+                        });
+                        
+                        locations.value = locationsResponse.result.values.reduce((acc, [title, , id]) => {
+                            acc[id] = title;
+                            return acc;
+                        }, {});
+
+                        // Fetch grocery items
+                        const itemsResponse = await gapi.client.sheets.spreadsheets.values.get({
+                            spreadsheetId: props.sheetId,
+                            range: 'Groceries!A2:H'
+                        });
+
+                        historyItems.value = itemsResponse.result.values
+                        .map(row => ({
+                            id: row[0],
+                            title: row[1],
+                            amount: parseInt(row[2]),
+                            price: parseFloat(row[3].replace(',', '.')),
+                            location: locations.value[row[5]] || row[5],
+                            date: row[7] ? new Date(parseInt(row[6])).toISOString().split('T')[0] : '',
+                        }))
+                        .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                    } catch (err) {
+                        console.error('Error fetching data:', err);
+                        error.value = 'Failed to fetch data. Please try again.';
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+
+                const filteredItems = computed(() => {
+                    return historyItems.value.filter(item => 
+                        columns.every(column => 
+                            !filters.value[column] || 
+                            String(item[column]).toLowerCase().includes(filters.value[column].toLowerCase())
+                        )
+                    );
+                });
+
+                onMounted(fetchData);
+
+                return {
+                    historyItems,
+                    loading,
+                    error,
+                    filters,
+                    columns,
+                    filteredItems,
+                    fetchData
+                };
+            },
+            template: `
+                <div class="history-page page-content">
+                    <div class="header">
+                        <div class="header-title">
+                            <span class="hamburger-menu" @click="toggleSidenav">☰</span>
+                            <h2>History <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
+                            <div v-if="error" class="error">{{ error }}</div>
+                        </div>
+                    </div>
+                    <div v-else class="history-list responsive">
+                        <table>
+                        <thead>
+                            <tr>
+                            <th v-for="column in columns" :key="column">
+                                {{ column.charAt(0).toUpperCase() + column.slice(1) }}
+                                <input 
+                                :placeholder="'Filter ' + column"
+                                v-model="filters[column]"
+                                @input="filters = {...filters}"
+                                >
+                            </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="item in filteredItems" :key="item.id">
+                            <td>{{ item.title }}</td>
+                            <td>{{ item.amount }}</td>
+                            <td>{{ item.price.toFixed(2).replace('.', ',') }}</td>
+                            <td>{{ item.date }}</td>
+                            <td>{{ item.location }}</td>
+                            </tr>
+                        </tbody>
+                        </table>
+                    </div>
+                </div>
+            `
+        };
+
         app = createApp({
             components: {
                 GroceriesPage,
-                LocationsPage
+                LocationsPage,
+                HistoryPage
             },
             setup() {
                 const isSignedIn = ref(false);
@@ -1777,7 +1896,16 @@
                 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
                 const currentPageComponent = computed(() => {
-                    return currentPage.value === 'groceries' ? GroceriesPage : LocationsPage;
+                    switch (currentPage.value) {
+                        case 'groceries':
+                            return GroceriesPage;
+                        case 'locations':
+                            return LocationsPage;
+                        case 'history':
+                            return HistoryPage;
+                        default:
+                            return null;
+                    }
                 });
 
                 function initializeGapiClient() {
