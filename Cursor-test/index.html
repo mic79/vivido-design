@@ -545,14 +545,20 @@
                         for (const itemId of selectedItems.value) {
                             const item = groceryItems.value.find(i => i.id === itemId);
                             if (item) {
-                            if (newDate) {
-                                item.dateChecked = new Date(newDate).getTime();
-                                item.date = new Date(newDate).toLocaleDateString();
-                            } else {
-                                item.dateChecked = null;
-                                item.date = '';
-                            }
-                            await updateItemInSheet(item);
+                                if (newDate) {
+                                    item.dateChecked = new Date(newDate).getTime();
+                                    item.date = new Date(newDate).toLocaleDateString();
+                                } else {
+                                    item.dateChecked = null;
+                                    item.date = '';
+                                }
+                                try {
+                                    await updateItemInSheet(item);
+                                    // Handle successful update
+                                } catch (err) {
+                                    console.error('Failed to update item:', err);
+                                    error.value = 'Failed to update item. Please try again.';
+                                }
                             }
                         }
                         updateRecentlyCheckedOff();
@@ -680,9 +686,15 @@
                         item.dateChecked = item.checked ? now : null;
                         item.date = item.checked ? new Date(now).toLocaleDateString() : '';
 
-                        await updateItemInSheet(item);
-                        updateLocationStats();
-                        updateRecentlyCheckedOff();
+                        try {
+                            await updateItemInSheet(item);
+                            // Handle successful update
+                            updateLocationStats();
+                            updateRecentlyCheckedOff();
+                        } catch (err) {
+                            console.error('Failed to update item:', err);
+                            error.value = 'Failed to update item. Please try again.';
+                        }
                     } catch (err) {
                         console.error('Error toggling item check:', err);
                         error.value = 'Failed to update item. Please try again.';
@@ -705,20 +717,26 @@
                     };
 
                     groceryItems.value.push(newItem);
-                    await updateItemInSheet(newItem);
-                    updateLocationStats();
+                    try {
+                        await updateItemInSheet(newItem);
+                        // Handle successful update
+                        updateLocationStats();
 
-                    // Use nextTick to ensure the DOM has updated before trying to focus
-                    Vue.nextTick(() => {
-                        const newItemInput = document.querySelector(`input[data-item-id="${newItem.id}"]`);
-                        if (newItemInput) {
-                            newItemInput.focus();
-                        }
-                    });
+                        // Use nextTick to ensure the DOM has updated before trying to focus
+                        Vue.nextTick(() => {
+                            const newItemInput = document.querySelector(`input[data-item-id="${newItem.id}"]`);
+                            if (newItemInput) {
+                                newItemInput.focus();
+                            }
+                        });
+                    } catch (err) {
+                        console.error('Failed to update item:', err);
+                        error.value = 'Failed to update item. Please try again.';
+                    }
                 }
 
                 async function updateItemInSheet(item) {
-                    //console.log('updateItemInSheet', item);
+                    console.log('updateItemInSheet', item);
                     const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
                     if (itemIndex === -1) {
                         throw new Error('Item not found in local array');
@@ -726,24 +744,68 @@
 
                     const formattedPrice = formatPrice(item.price);
 
-                    const range = `Groceries!A${itemIndex + 2}:H${itemIndex + 2}`;
-                    await gapi.client.sheets.spreadsheets.values.update({
-                        spreadsheetId: props.sheetId,
-                        range: range,
-                        valueInputOption: 'RAW',
-                        resource: {
-                            values: [[
-                                item.id,
-                                item.title,
-                                item.amount,
-                                formattedPrice, // Use the formatted price here
-                                item.order,
-                                item.location,
-                                item.dateChecked,
-                                item.date
-                            ]]
+                    try {
+                        // Get the sheet ID and current row count
+                        const sheetsResponse = await gapi.client.sheets.spreadsheets.get({
+                        spreadsheetId: props.sheetId
+                        });
+                        const groceriesSheet = sheetsResponse.result.sheets.find(s => s.properties.title === 'Groceries');
+                        const sheetId = groceriesSheet.properties.sheetId;
+                        const currentRowCount = groceriesSheet.properties.gridProperties.rowCount;
+
+                        let rowIndex = itemIndex + 2; // +2 because sheet is 1-indexed and has a header row
+
+                        console.log(`Attempting to update/insert row at index ${rowIndex}`);
+
+                        const requests = [];
+
+                        // If we're beyond the last row, append to the end instead
+                        if (rowIndex >= currentRowCount) {
+                        rowIndex = currentRowCount;
+                        requests.push({
+                            appendDimension: {
+                            sheetId: sheetId,
+                            dimension: 'ROWS',
+                            length: 1
+                            }
+                        });
                         }
-                    });
+
+                        // Update the cells
+                        requests.push({
+                        updateCells: {
+                            rows: [{
+                            values: [
+                                { userEnteredValue: { stringValue: item.id } },
+                                { userEnteredValue: { stringValue: item.title } },
+                                { userEnteredValue: { numberValue: item.amount } },
+                                { userEnteredValue: { stringValue: formattedPrice } },
+                                { userEnteredValue: { numberValue: item.order } },
+                                { userEnteredValue: { stringValue: item.location } },
+                                { userEnteredValue: { numberValue: item.dateChecked || null } },
+                                { userEnteredValue: { stringValue: item.date } },
+                                { userEnteredValue: { formulaValue: `=INDEX(Locations!A:A; MATCH(F${rowIndex}; Locations!C:C; 0))` } }
+                            ]
+                            }],
+                            fields: 'userEnteredValue',
+                            start: {
+                            sheetId: sheetId,
+                            rowIndex: rowIndex - 1,
+                            columnIndex: 0
+                            }
+                        }
+                        });
+
+                        await gapi.client.sheets.spreadsheets.batchUpdate({
+                        spreadsheetId: props.sheetId,
+                        resource: { requests }
+                        });
+
+                        console.log('Item updated successfully in sheet');
+                    } catch (err) {
+                        console.error('Error updating item in sheet:', err);
+                        throw err;
+                    }
                 }
 
                 function selectLocation(locationId) {
@@ -801,9 +863,15 @@
                     // Clear the temporary input value
                     delete inputValues.value[item.id];
                     
-                    await updateItemInSheet(item);
-                    updateLocationStats();
-                    updateRecentlyCheckedOff();
+                    try {
+                        await updateItemInSheet(item);
+                        // Handle successful update
+                        updateLocationStats();
+                        updateRecentlyCheckedOff();
+                    } catch (err) {
+                        console.error('Failed to update item:', err);
+                        error.value = 'Failed to update item. Please try again.';
+                    }
                 }
 
                 async function updateItemField(item, field, value) {
@@ -819,8 +887,14 @@
                     }
 
                     item[field] = value;
-                    await updateItemInSheet(item);
-                    updateLocationStats();
+                    try {
+                        await updateItemInSheet(item);
+                        // Handle successful update
+                        updateLocationStats();
+                    } catch (err) {
+                        console.error('Failed to update item:', err);
+                        error.value = 'Failed to update item. Please try again.';
+                    }
                 }
 
                 async function deleteSelectedItems() {
@@ -896,7 +970,13 @@
                             const item = groceryItems.value.find(i => i.id === itemId);
                             if (item) {
                                 item.location = newLocationId;
-                                await updateItemInSheet(item);
+                                try {
+                                    await updateItemInSheet(item);
+                                    // Handle successful update
+                                } catch (err) {
+                                    console.error('Failed to update item:', err);
+                                    error.value = 'Failed to update item. Please try again.';
+                                }
                             }
                         }
                         
@@ -930,7 +1010,13 @@
                             if (item) {
                                 item.dateChecked = timestamp;
                                 item.date = newDate;
-                                await updateItemInSheet(item);
+                                try {
+                                    await updateItemInSheet(item);
+                                    // Handle successful update
+                                } catch (err) {
+                                    console.error('Failed to update item:', err);
+                                    error.value = 'Failed to update item. Please try again.';
+                                }
                             }
                         }
                         updateRecentlyCheckedOff();
@@ -1013,15 +1099,15 @@
                     // Clear the temporary input value
                     delete inputValues.value[item.id];
                     
-                    await updateItemInSheet(item);
-                    updateLocationStats();
-                    updateRecentlyCheckedOff();
-
-                    /*// Format the price when the input loses focus
-                    const formattedPrice = formatPrice(item.price);
-                    event.target.value = formattedPrice;
-                    item.price = parsePrice(formattedPrice);
-                    await updateItemInSheet(item);*/
+                    try {
+                        await updateItemInSheet(item);
+                        // Handle successful update
+                        updateLocationStats();
+                        updateRecentlyCheckedOff();
+                    } catch (err) {
+                        console.error('Failed to update item:', err);
+                        error.value = 'Failed to update item. Please try again.';
+                    }
                 }
 
                 function handleKeyPress(event) {
@@ -1123,7 +1209,7 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th width="30"><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
+                                    <th width="30"><input type="checkbox" :checked="selectedItems.length === filteredGroceryItems.length" @change="toggleSelectAll(filteredGroceryItems)"></th>
                                     <th>Item</th>
                                     <th width="60">Quantity</th>
                                     <th width="60">Price</th>
