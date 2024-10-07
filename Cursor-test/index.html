@@ -557,28 +557,40 @@
                 const selectAll = ref(false);
                 const inputValues = ref({});
                 const groceryListRef = ref(null);
+                const sortingEnabled = ref(false);
+                let sortableInstance = null;
 
                 function initSortable() {
                     if (groceryListRef.value) {
-                        new Sortable(groceryListRef.value, {
-                            animation: 150,
-                            ghostClass: 'sortable-ghost',
-                            onEnd: async ({ oldIndex, newIndex }) => {
-                                const item = filteredGroceryItems.value.splice(oldIndex, 1)[0];
-                                filteredGroceryItems.value.splice(newIndex, 0, item);
-                                
-                                // Update the order of items
-                                filteredGroceryItems.value.forEach((item, index) => {
-                                    item.order = index;
-                                });
+                        if (sortableInstance) {
+                            sortableInstance.destroy();
+                        }
+                        if (sortingEnabled.value) {
+                            sortableInstance = new Sortable(groceryListRef.value, {
+                                animation: 150,
+                                ghostClass: 'sortable-ghost',
+                                onEnd: async ({ oldIndex, newIndex }) => {
+                                    const item = filteredGroceryItems.value.splice(oldIndex, 1)[0];
+                                    filteredGroceryItems.value.splice(newIndex, 0, item);
+                                    
+                                    // Update the order of items
+                                    filteredGroceryItems.value.forEach((item, index) => {
+                                        item.order = index;
+                                    });
 
-                                // Update the items in the sheet
-                                for (const item of filteredGroceryItems.value) {
-                                    await updateItemInSheet(item);
+                                    // Update the items in the sheet
+                                    for (const item of filteredGroceryItems.value) {
+                                        await updateItemInSheet(item);
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
+                }
+
+                function toggleSorting() {
+                    sortingEnabled.value = !sortingEnabled.value;
+                    initSortable();
                 }
 
                 function toggleSelectAll(items) {
@@ -1284,7 +1296,9 @@
                     inputValues,
                     handleKeyPress,
                     groceryListRef,
-                    initSortable
+                    initSortable,
+                    toggleSorting,
+                    sortingEnabled
                 };
             },
             template: `
@@ -1294,6 +1308,9 @@
                             <span class="hamburger-menu" @click="toggleSidenav">☰</span>
                             <h2>Groceries <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
                             <div v-if="error" class="error">{{ error }}</div>
+                            <button @click="toggleSorting" class="sort-button">
+                                {{ sortingEnabled ? 'Disable Sorting' : 'Enable Sorting' }}
+                            </button>
                         </div>
                         
                         <!-- Location tabs -->
@@ -2372,7 +2389,7 @@
         });
     })();
     </script>
-    
+
     <script>
         if ('serviceWorker' in navigator) {
           window.addEventListener('load', () => {
