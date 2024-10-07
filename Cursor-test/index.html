@@ -168,6 +168,7 @@
         .header-title {
             padding: 0 1rem;
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
         }
         .header-title button {
@@ -1333,11 +1334,12 @@
                     <div class="header">
                         <div class="header-title">
                             <span class="hamburger-menu" @click="toggleSidenav">☰</span>
-                            <h2>Groceries <button @click="fetchData">Reload Data</button> <small v-if="loading" class="loading">Loading...</small></h2>
-                            <div v-if="error" class="error">{{ error }}</div>
+                            <h2>Groceries <button @click="fetchData">Reload Data</button></h2>
                             <button @click="toggleSorting" class="sort-button">
                                 {{ sortingEnabled ? 'Disable Sorting' : 'Enable Sorting' }}
                             </button>
+                            <small v-if="loading" class="loading">Loading...</small>
+                            <div v-if="error" class="error">{{ error }}</div>
                         </div>
                         
                         <!-- Location tabs -->
