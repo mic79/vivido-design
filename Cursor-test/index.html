@@ -565,11 +565,13 @@
 
                 function initSortable() {
                     if (groceryListRef.value) {
-                        if (sortableInstance) {
-                            sortableInstance.destroy();
+                        // Safely destroy existing instance if it exists
+                        if (groceryListRef.value._sortable && typeof groceryListRef.value._sortable.destroy === 'function') {
+                            groceryListRef.value._sortable.destroy();
                         }
+                        
                         if (sortingEnabled.value) {
-                            sortableInstance = new Sortable(groceryListRef.value, {
+                            groceryListRef.value._sortable = new Sortable(groceryListRef.value, {
                                 animation: 150,
                                 ghostClass: 'sortable-ghost',
                                 onEnd: async ({ oldIndex, newIndex }) => {
@@ -587,13 +589,18 @@
                                     }
                                 }
                             });
+                        } else {
+                            // If sorting is disabled, ensure we remove the _sortable property
+                            delete groceryListRef.value._sortable;
                         }
                     }
                 }
 
                 function toggleSorting() {
                     sortingEnabled.value = !sortingEnabled.value;
-                    initSortable();
+                    Vue.nextTick(() => {
+                        initSortable();
+                    });
                 }
 
                 function toggleSelectAll(items) {
@@ -1388,13 +1395,13 @@
                             <h2>{{ selectedItems.length }} Selected</h2>
                         </div>
                         <div class="wrapper">
-                            <select @change="changeLocationForSelected($event.target.value)">
+                            <select style="width: 100px;" @change="changeLocationForSelected($event.target.value)">
                                 <option value="">Location</option>
                                 <option v-for="location in locations" :key="location.id" :value="location.id">
                                     {{ location.title }}
                                 </option>
                             </select>
-                            <input type="date" @change="changeDateForSelected($event.target.value)">
+                            <input type="date" style="width: 100px;" @change="changeDateForSelected($event.target.value)">
                             <button @click="duplicateSelectedItems">Duplicate</button>
                             <button class="alert" @click="deleteSelectedItems">Delete</button>
                         </div>
