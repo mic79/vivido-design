@@ -743,7 +743,11 @@
                     const checkedItems = groceryItems.value.filter(item => 
                         item.dateChecked && item.location === selectedLocation.value
                     );
-                    const groupedItems = _.groupBy(checkedItems, item => new Date(item.dateChecked).toLocaleDateString());
+                    const groupedItems = _.groupBy(checkedItems, item => {
+                        // Ensure we're using the date in the local timezone
+                        const date = new Date(item.dateChecked);
+                        return date.toISOString().split('T')[0]; // YYYY-MM-DD format
+                    });
                     
                     // Create a map of existing groups with their collapsed state
                     const existingGroupsMap = new Map(
@@ -752,21 +756,34 @@
 
                     recentlyCheckedOff.value = Object.entries(groupedItems).map(([date, items]) => ({
                         date,
-                        items,
+                        items: items.sort((a, b) => a.order - b.order), // Sort items within each group by order
                         total: items.reduce((sum, item) => {
                             let price = typeof item.price === 'string' ? parseFloat(item.price.replace(',', '.')) : item.price;
                             return sum + (price);
                         }, 0),
                         collapsed: existingGroupsMap.has(date) ? existingGroupsMap.get(date) : true // Preserve collapsed state or default to true
-                    }));
+                    }))
+                    .sort((a, b) => new Date(b.date) - new Date(a.date)); // Sort groups by date, latest first
                 }
 
                 async function toggleItemCheck(item) {
                     loading.value = true;
                     try {
                         const now = Date.now();
-                        item.dateChecked = item.checked ? now : null;
-                        item.date = item.checked ? new Date(now).toLocaleDateString() : '';
+                        if (!item.checked) {
+                            // Item is being checked off
+                            item.dateChecked = now;
+                            item.date = new Date(now).toLocaleDateString();
+                            // Assign the highest order number + 1 to put it at the end of the list
+                            const maxOrder = Math.max(...groceryItems.value.map(i => i.order), 0);
+                            item.order = maxOrder + 1;
+                        } else {
+                            // Item is being unchecked
+                            item.dateChecked = null;
+                            item.date = '';
+                            // You might want to reset the order or keep it as is
+                        }
+                        item.checked = !item.checked;
 
                         try {
                             await updateItemInSheet(item);
@@ -1400,7 +1417,7 @@
                             </tr>
                             </thead>
                             <tbody>
-                            <tr v-for="item in group.items" :key="item.id">
+                            <tr v-for="item in group.items" :key="item.id" :data-id="item.id">
                                 <td class="select-checkbox" width="30"><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
                                 <td class="item-title"><input type="text" v-model="item.title" @change="updateItemInSheet(item)"></td>
                                 <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @focus="handleAmountFocus(item, $event)" @change="updateItemInSheet(item)"></td>
