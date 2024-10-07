@@ -11,6 +11,7 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
         * {
             -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
@@ -163,6 +164,10 @@
             display: flex;
             align-items: center;
         }
+        .header-title button {
+            margin-top: 0;
+            margin-bottom: 0;
+        }
         .responsive {
             max-width: 100%;
             overflow-x: auto;
@@ -236,6 +241,14 @@
         }
         button:disabled {
             visibility: hidden;
+        }
+        button.alert {
+            border-color: indianred;
+            color: indianred;
+        }
+        button.alert:hover {
+            background: indianred;
+            color: #fff;
         }
         .item-amount input {
             color: rgba(33,33,33,0.4);
@@ -328,8 +341,24 @@
         }
 
         .selected-actions {
-            margin-top: 20px;
-            margin-bottom: 20px;
+            position: fixed;
+            height: 112px;
+            width: 100%;
+            top: 0;
+            background-color: #f7f7f8;
+            box-sizing: border-box;
+            z-index: 11;
+        }
+        .selected-actions .icon {
+            margin-right: 1rem;
+            color: #729c9c;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+        .selected-actions .wrapper {
+            padding: 0.5rem 1rem;
+            display: flex;
+            align-items: center;
         }
 
         .recently-checked-off h3 {
@@ -524,6 +553,10 @@
                     } else {
                         selectedItems.value = items.map(item => item.id);
                     }
+                }
+
+                function deselectAll() {
+                    selectedItems.value = [];
                 }
 
                 async function performSelectedAction(action) {
@@ -897,6 +930,37 @@
                     }
                 }
 
+                async function duplicateSelectedItems() {
+                    for (const itemId of selectedItems.value) {
+                        const originalItem = groceryItems.value.find(item => item.id === itemId);
+                        if (originalItem) {
+                        const newItem = {
+                            id: `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                            title: originalItem.title,
+                            amount: originalItem.amount,
+                            price: originalItem.price,
+                            order: groceryItems.value.length,
+                            location: originalItem.location,
+                            dateChecked: null,
+                            date: '',
+                            checked: false
+                        };
+
+                        groceryItems.value.push(newItem);
+                        try {
+                            await updateItemInSheet(newItem);
+                            // Handle successful update
+                            updateLocationStats();
+                        } catch (err) {
+                            console.error('Failed to duplicate item:', err);
+                            error.value = 'Failed to duplicate item. Please try again.';
+                        }
+                        }
+                    }
+                    // Clear selections after duplication
+                    selectedItems.value = [];
+                }
+
                 async function deleteSelectedItems() {
                     if (selectedItems.value.length === 0) return;
                     if (confirm(`Are you sure you want to delete ${selectedItems.value.length} item(s)?`)) {
@@ -1165,12 +1229,14 @@
                     updateItemField,
                     formatPriceForDisplay,
                     formatPrice,
+                    duplicateSelectedItems,
                     deleteSelectedItems,
                     changeLocationForSelected,
                     changeDateForSelected,
                     updateLocationStats,
                     selectAll,
                     toggleSelectAll,
+                    deselectAll,
                     performSelectedAction,
                     updateRecentlyCheckedOff,
                     handlePriceInput,
@@ -1240,14 +1306,21 @@
 
                     <!-- Actions for selected items -->
                     <div v-if="selectedItems.length > 0" class="selected-actions">
-                        <button @click="deleteSelectedItems">Delete Selected</button>
-                        <select @change="changeLocationForSelected($event.target.value)">
-                            <option value="">Change Location</option>
-                            <option v-for="location in locations" :key="location.id" :value="location.id">
-                                {{ location.title }}
-                            </option>
-                        </select>
-                        <input type="date" @change="changeDateForSelected($event.target.value)">
+                        <div class="header-title">
+                            <i class="icon material-icons" @click="deselectAll">arrow_back</i>
+                            <h2>{{ selectedItems.length }} Selected</h2>
+                        </div>
+                        <div class="wrapper">
+                            <select @change="changeLocationForSelected($event.target.value)">
+                                <option value="">Change Location</option>
+                                <option v-for="location in locations" :key="location.id" :value="location.id">
+                                    {{ location.title }}
+                                </option>
+                            </select>
+                            <input type="date" @change="changeDateForSelected($event.target.value)">
+                            <button @click="duplicateSelectedItems">Duplicate</button>
+                            <button class="alert" @click="deleteSelectedItems">Delete</button>
+                        </div>
                     </div>
 
                     <!-- Recently checked off items -->
