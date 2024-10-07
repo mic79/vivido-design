@@ -2199,7 +2199,8 @@
                     console.log("Signed in as: " + user.value.name);
 
                     if (tokenClient.value) {
-                        tokenClient.value.requestAccessToken({prompt: 'consent'});
+                        tokenClient.value.requestAccessToken();
+                        //tokenClient.value.requestAccessToken({prompt: 'consent'});
                     } else {
                         console.error('Token client not initialized');
                     }
