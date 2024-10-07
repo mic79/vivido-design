@@ -11,6 +11,7 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
         * {
@@ -213,6 +214,7 @@
         td input {
             height: 30px;
             padding: 0;
+            background: transparent;
             border: 0 !important;
             outline: none;
             font-size: inherit;
@@ -420,11 +422,11 @@
         .handle {
             cursor: move;
         }
-
         .sortable-ghost {
             opacity: 0.5;
-            background: #c8ebfb;
+            background: #729c9c;
         }
+
         .pagination {
             margin: 10px;
         }
@@ -549,6 +551,30 @@
                 const selectedItems = ref([]);
                 const selectAll = ref(false);
                 const inputValues = ref({});
+                const groceryListRef = ref(null);
+
+                function initSortable() {
+                    if (groceryListRef.value) {
+                        new Sortable(groceryListRef.value, {
+                            animation: 150,
+                            ghostClass: 'sortable-ghost',
+                            onEnd: async ({ oldIndex, newIndex }) => {
+                                const item = filteredGroceryItems.value.splice(oldIndex, 1)[0];
+                                filteredGroceryItems.value.splice(newIndex, 0, item);
+                                
+                                // Update the order of items
+                                filteredGroceryItems.value.forEach((item, index) => {
+                                    item.order = index;
+                                });
+
+                                // Update the items in the sheet
+                                for (const item of filteredGroceryItems.value) {
+                                    await updateItemInSheet(item);
+                                }
+                            }
+                        });
+                    }
+                }
 
                 function toggleSelectAll(items) {
                     if (selectedItems.value.length === items.length) {
@@ -1213,6 +1239,10 @@
                         
                         const element = document.querySelector(".location-tabs");
                         force_scroll_sideways(element);
+
+                        Vue.nextTick(() => {
+                            initSortable();
+                        });
                     });
                 });
 
@@ -1247,7 +1277,9 @@
                     handlePriceFocus,
                     handleAmountFocus,
                     inputValues,
-                    handleKeyPress
+                    handleKeyPress,
+                    groceryListRef,
+                    initSortable
                 };
             },
             template: `
@@ -1284,7 +1316,7 @@
                                     <th width="60">Price</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody ref="groceryListRef">
                                 <tr v-for="item in filteredGroceryItems" :key="item.id">
                                     <td class="select-checkbox" width="30">
                                         <input type="checkbox" v-model="selectedItems" :value="item.id">
