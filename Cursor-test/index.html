@@ -3,8 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#729c9c">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-title" content="Groceries">
     <title>Groceries</title>
     <script src="https://accounts.google.com/gsi/client" async defer onloadX="initializeGoogleSignIn()"></script>
     <script src="https://apis.google.com/js/api.js"></script>
@@ -13,6 +16,8 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="apple-touch-icon" href="/icon-192x192.png">
+    <link rel="manifest" href="/manifest.json">
     <style>
         * {
             -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
@@ -2367,5 +2372,19 @@
         });
     })();
     </script>
+    
+    <script>
+        if ('serviceWorker' in navigator) {
+          window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/service-worker.js')
+              .then((registration) => {
+                console.log('Service Worker registered:', registration);
+              })
+              .catch((error) => {
+                console.log('Service Worker registration failed:', error);
+              });
+          });
+        }
+      </script>
 </body>
 </html>
