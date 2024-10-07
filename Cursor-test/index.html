@@ -1372,7 +1372,7 @@
                         </div>
                         <div class="wrapper">
                             <select @change="changeLocationForSelected($event.target.value)">
-                                <option value="">Change Location</option>
+                                <option value="">Location</option>
                                 <option v-for="location in locations" :key="location.id" :value="location.id">
                                     {{ location.title }}
                                 </option>
