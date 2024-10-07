@@ -354,6 +354,12 @@
             box-sizing: border-box;
         }
 
+        .grocery-list td.select-checkbox,
+        .recently-checked-off td.select-checkbox {
+            display: flex;
+            justify-content: center;
+        }
+
         .selected-actions {
             position: fixed;
             height: 112px;
@@ -566,7 +572,6 @@
 
                 function initSortable() {
                     if (groceryListRef.value) {
-                        // Safely destroy existing instance if it exists
                         if (groceryListRef.value._sortable && typeof groceryListRef.value._sortable.destroy === 'function') {
                             groceryListRef.value._sortable.destroy();
                         }
@@ -575,6 +580,7 @@
                             groceryListRef.value._sortable = new Sortable(groceryListRef.value, {
                                 animation: 150,
                                 ghostClass: 'sortable-ghost',
+                                handle: '.drag-handle', // Use the drag handle for sorting
                                 onEnd: async ({ oldIndex, newIndex }) => {
                                     const item = filteredGroceryItems.value.splice(oldIndex, 1)[0];
                                     filteredGroceryItems.value.splice(newIndex, 0, item);
@@ -591,7 +597,6 @@
                                 }
                             });
                         } else {
-                            // If sorting is disabled, ensure we remove the _sortable property
                             delete groceryListRef.value._sortable;
                         }
                     }
@@ -599,6 +604,7 @@
 
                 function toggleSorting() {
                     sortingEnabled.value = !sortingEnabled.value;
+                    selectedItems.value = []; // Clear selections when toggling sort
                     Vue.nextTick(() => {
                         initSortable();
                     });
@@ -1358,7 +1364,7 @@
                     </div>
                     <!-- Grocery items to purchase -->
                     <div class="grocery-list">
-                        <table>
+                        <table v-if="filteredGroceryItems.length > 0">
                             <thead>
                                 <tr>
                                     <th width="30"><input type="checkbox" :checked="selectedItems.length === filteredGroceryItems.length" @change="toggleSelectAll(filteredGroceryItems)"></th>
@@ -1370,7 +1376,8 @@
                             <tbody ref="groceryListRef">
                                 <tr v-for="item in filteredGroceryItems" :key="item.id">
                                     <td class="select-checkbox" width="30">
-                                        <input type="checkbox" v-model="selectedItems" :value="item.id">
+                                        <input v-if="!sortingEnabled" type="checkbox" v-model="selectedItems" :value="item.id">
+                                        <span v-else class="drag-handle">☰</span>
                                     </td>
                                     <td class="item-title"><input type="text" v-model="item.title" :data-item-id="item.id" @change="updateItemField(item, 'title', $event.target.value)"></td>
                                     <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" :data-item-id="item.id" @focus="handleAmountFocus(item, $event)" @change="updateItemField(item, 'amount', $event.target.value)"></td>
@@ -1388,6 +1395,7 @@
                                 </tr>
                             </tbody>
                         </table>
+                        <p v-else class="no-items-message"></p>
                     </div>
 
                     <!-- Actions for selected items -->
