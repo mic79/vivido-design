@@ -49,6 +49,7 @@
         
         .sidenav {
             position: fixed;
+            height: 100dvh;
             width: 300px;
             top: 0;
             bottom: 0;
@@ -90,11 +91,16 @@
                 cursor: pointer;
             }
         }
-        .user-info {
+        .user-info-wrapper {
             margin-bottom: 51px;
             display: flex;
             align-items: center;
+            justify-content: space-between;
+        }
+        .user-info {
             font-size: 12px;
+            text-overflow: ellipsis;
+            overflow: hidden;
         }
         .user-info button {
             margin-left: auto;
@@ -241,6 +247,7 @@
             font-size: 12px;
             font-weight: 400;
             line-height: 1;
+            white-space: nowrap;
             cursor: pointer;
         }
         input[type="date"] {
@@ -467,7 +474,7 @@
         <div v-if="isSignedIn" class="main-content">
             <div class="sidenav" :class="{ 'open': isSidenavOpen }">
                 <span class="close-sidenav" @click="toggleSidenav">&times;</span>
-                <p class="user-info">{{ user.email }} <button @click="signOut">Sign Out</button></p>
+                <div class="user-info-wrapper"><p class="user-info">{{ user.email }} </p><button @click="signOut">Sign Out</button></div>
                 <nav class="nav-menu">
                     <a :class="{ active: currentPage === 'groceries' }" @click="currentPage = 'groceries'; toggleSidenav()" href="#">Groceries</a>
                     <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'; toggleSidenav()" href="#">Locations</a>
@@ -480,6 +487,10 @@
                         <button @click="showPicker">Load Sheet</button>
                     </div>
                 </div>
+            </div>
+            <div v-if="!sheetId">
+                <button @click="createNewSheet">New Sheet</button>
+                <button @click="showPicker">Load Sheet</button>
             </div>
             <component v-if="sheetId" :is="currentPageComponent" :sheet-id="sheetId" ref="locationPageRef" :toggle-sidenav="toggleSidenav"></component>
         </div>
@@ -2137,6 +2148,8 @@
             `
         };
 
+        console.log("Starting Vue app initialization");
+
         app = createApp({
             components: {
                 GroceriesPage,
@@ -2144,6 +2157,8 @@
                 HistoryPage
             },
             setup() {
+                console.log("Vue setup function called");
+
                 const isSignedIn = ref(false);
                 const user = ref(null);
                 const sheetId = ref(null);
@@ -2170,6 +2185,7 @@
                 });
 
                 function initializeGapiClient() {
+                    console.log("Initializing GAPI client");
                     gapi.client.init({
                         //apiKey: 'AIzaSyDjwvPH2It7i1feQRPTmQyY_yhNSG-1BmE',
                         //clientId: CLIENT_ID,
@@ -2179,6 +2195,7 @@
                         ],
                         scope: SCOPES
                     }).then(() => {
+                        console.log("GAPI client initialized successfully");
                         tokenClient.value = google.accounts.oauth2.initTokenClient({
                             client_id: CLIENT_ID,
                             scope: SCOPES,
@@ -2199,6 +2216,7 @@
                     console.log("Signed in as: " + user.value.name);
 
                     if (tokenClient.value) {
+                        console.log("Requesting access token");
                         tokenClient.value.requestAccessToken();
                         //tokenClient.value.requestAccessToken({prompt: 'consent'});
                     } else {
@@ -2206,6 +2224,7 @@
                     }
 
                     if (sheetId.value) {
+                        console.log("Setting up change detection for sheet ID:", sheetId.value);
                         window.setupChangeDetection(sheetId.value);
                     }
 
@@ -2222,6 +2241,7 @@
                 }
 
                 function parseJwt(token) {
+                    console.log("Parsing JWT token");
                     const base64Url = token.split('.')[1];
                     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
                     const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
@@ -2279,6 +2299,7 @@
                 }
 
                 async function initializeNewSheet() {
+                    console.log("Initializing new sheet");
                     try {
                         await gapi.client.sheets.spreadsheets.values.update({
                             spreadsheetId: sheetId.value,
@@ -2303,9 +2324,12 @@
                 }
 
                 function signOut() {
+                    console.log("Signing out");
                     const token = gapi.client.getToken();
                     if (token !== null) {
-                        google.accounts.oauth2.revoke(token.access_token);
+                        google.accounts.oauth2.revoke(token.access_token, () => {
+                            console.log("Access token revoked");
+                        });
                         gapi.client.setToken('');
                     }
                     isSignedIn.value = false;
@@ -2316,14 +2340,17 @@
                 }
 
                 function loadPickerApi() {
+                    console.log("Loading Picker API");
                     gapi.load('picker', { callback: onPickerApiLoad });
                 }
 
                 function onPickerApiLoad() {
+                    console.log("Picker API loaded");
                     pickerApiLoaded.value = true;
                 }
 
                 async function showPicker() {
+                    console.log("Showing Google Picker");
                     if (!pickerApiLoaded.value) {
                         await new Promise((resolve) => {
                             loadPickerApi();
@@ -2359,15 +2386,16 @@
                 }
 
                 async function pickerCallback(data) {
+                    console.log("Picker callback invoked with data:", data);
                     if (data.action === google.picker.Action.PICKED) {
                         const fileId = data.docs[0].id;
                         console.log('The user selected: ' + fileId);
-                        
+
                         sheetId.value = fileId;
                         localStorage.setItem('lastUsedSheetId', fileId);
-                        
+
                         await new Promise(resolve => setTimeout(resolve, 100));
-                        
+
                         if (currentPageComponent.value === LocationsPage && locationPageRef.value) {
                             try {
                                 await locationPageRef.value.fetchLocations();
@@ -2385,8 +2413,15 @@
                     $('.sidenav').toggleClass('open');
                 }
 
+                // Initialize Google Sign-In after the app is mounted
+                onMounted(() => {
+                    console.log("Vue app mounted");
+                    initializeGapiClient();
+                    initializeGoogleSignIn();
+                });
+
                 // Load and init the gapi client
-                gapi.load('client', initializeGapiClient);
+                //gapi.load('client', initializeGapiClient);
 
                 return {
                     isSignedIn,
@@ -2422,6 +2457,7 @@
                 ],
             }).then(() => {
                 app.mount('#app');
+                console.log("Mounting Vue app after GAPI client initialization");
                 initializeGoogleSignIn();
             });
         });
@@ -2430,16 +2466,16 @@
 
     <script>
         if ('serviceWorker' in navigator) {
-          window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/service-worker.js')
-              .then((registration) => {
-                console.log('Service Worker registered:', registration);
-              })
-              .catch((error) => {
-                console.log('Service Worker registration failed:', error);
-              });
-          });
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then((registration) => {
+                        console.log('Service Worker registered:', registration);
+                    })
+                    .catch((error) => {
+                        console.log('Service Worker registration failed:', error);
+                    });
+            });
         }
-      </script>
+    </script>
 </body>
 </html>
