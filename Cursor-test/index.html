@@ -469,7 +469,7 @@
 <body>
     <div id="app" style="display: none;">
         <div v-if="!isSignedIn">
-            <div id="googleSignInButton"></div>
+            <div id="googleSignInButton" style="display: flex; align-items: center; justify-content: center; height: 100dvh; width: 100%;"></div>
         </div>
         <div v-if="isSignedIn" class="main-content">
             <div class="sidenav" :class="{ 'open': isSidenavOpen }">
@@ -488,7 +488,7 @@
                     </div>
                 </div>
             </div>
-            <div v-if="!sheetId">
+            <div v-if="!sheetId" style="display: flex; align-items: center; justify-content: center; width: 100%;">
                 <button @click="createNewSheet">New Sheet</button>
                 <button @click="showPicker">Load Sheet</button>
             </div>
