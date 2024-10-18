@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="https://accounts.google.com/gsi/client" onload="initClient()" async defer></script>
+  </head>
+  <body>
+    <script>
+      var client;
+      var access_token;
+
+      function initClient() {
+        client = google.accounts.oauth2.initTokenClient({
+          client_id: '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com',
+          scope: 'https://www.googleapis.com/auth/drive.file',
+          callback: (tokenResponse) => {
+            access_token = tokenResponse.access_token;
+          },
+        });
+      }
+
+      function getToken() {
+        client.requestAccessToken();
+      }
+
+      function revokeToken() {
+        google.accounts.oauth2.revoke(access_token, () => {console.log('access token revoked')});
+      }
+
+      // Updated function to load Google Sheets data
+      function loadSheetData() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', 'https://sheets.googleapis.com/v4/spreadsheets/14Yd_n1uiF9aWbPdjVLxw5zaEA4vCKG6NQfTwo8vf0jw/values/Groceries');
+        xhr.setRequestHeader('Authorization', 'Bearer ' + access_token);
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            var response = JSON.parse(xhr.responseText);
+            console.log('Sheet data:', response);
+          } else {
+            console.error('Error loading sheet data:', xhr.status, xhr.statusText);
+          }
+        };
+        xhr.onerror = function() {
+          console.error('Network error when trying to load sheet data.');
+        };
+        xhr.send();
+      }
+    </script>
+    <h1>Google Identity Services Authorization Token model</h1>
+    <button onclick="getToken();">Get access token</button><br><br>
+    <button onclick="loadSheetData();">Load Sheet Data</button><br><br>
+    <button onclick="revokeToken();">Revoke token</button>
+  </body>
+</html>
