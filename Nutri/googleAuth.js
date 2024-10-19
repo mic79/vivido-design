@@ -30,6 +30,7 @@ export function initGoogleAuth() {
           cancel_on_tap_outside: false
         });
         
+        window.googleAuthInitialized = true; // Add this line
         resolve({ idClient, tokenClient });
       }
     }, 100);
@@ -199,13 +200,16 @@ export function getAccessToken(tokenClient) {
     } else if (tokenClient) {
       tokenClient.callback = (resp) => {
         if (resp.error !== undefined) {
-          reject(resp);
+          console.error('Error getting access token:', resp.error);
+          reject(new Error(`Failed to get access token: ${resp.error}`));
+        } else {
+          accessToken = resp.access_token;
+          resolve(accessToken);
         }
-        accessToken = resp.access_token;
-        resolve(accessToken);
       };
       tokenClient.requestAccessToken({prompt: ''});
     } else {
+      console.error('Token client not initialized');
       reject(new Error('Token client not initialized'));
     }
   });
@@ -307,9 +311,14 @@ export async function getSheetMetadata(sheetId) {
 
 export function checkExistingSession() {
   return new Promise((resolve) => {
+    const checkTimeout = setTimeout(() => {
+      resolve(false);
+    }, 1000);
+
     google.accounts.id.initialize({
       client_id: CLIENT_ID,
       callback: (response) => {
+        clearTimeout(checkTimeout);
         if (window.handleCredentialResponse) {
           window.handleCredentialResponse(response);
           resolve(true);
@@ -323,13 +332,16 @@ export function checkExistingSession() {
       cancel_on_tap_outside: false
     });
 
-    // Instead of using prompt, we'll use a timeout
-    setTimeout(() => {
-      resolve(false);
-    }, 1000); // Adjust this timeout as needed
-
-    google.accounts.id.prompt();
+    google.accounts.id.prompt((notification) => {
+      clearTimeout(checkTimeout);
+      // If we reach this point, it means the prompt was shown
+      // We don't need to do anything here, just clear the timeout
+    });
   });
+}
+
+export function isGoogleAuthInitialized() {
+  return window.googleAuthInitialized === true;
 }
 
 const GoogleAuth = {
@@ -350,6 +362,7 @@ const GoogleAuth = {
   handleAuthError,
   getSheetMetadata,
   checkExistingSession,
+  isGoogleAuthInitialized,
 };
 
 export default GoogleAuth;
