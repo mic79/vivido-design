@@ -1895,6 +1895,12 @@
                             sheetId.value = null;
                             localStorage.removeItem('gsi_session');
                             localStorage.removeItem('lastUsedSheetId');
+
+                            google.accounts.id.renderButton(
+                                document.getElementById('googleSignInButton'), 
+                                { theme: 'outline', size: 'large' }
+                            );
+                            google.accounts.id.prompt();
                             stopChangeDetection();
                         }
 
@@ -1992,23 +1998,23 @@
                                 console.log("Google Auth initialized");
                                 
                                 google.accounts.id.initialize({
-                                client_id: CLIENT_ID,  // Now this should work
-                                callback: handleCredentialResponse,
-                                auto_select: false,
-                                cancel_on_tap_outside: false
+                                    client_id: CLIENT_ID,  // Now this should work
+                                    callback: handleCredentialResponse,
+                                    auto_select: false,
+                                    cancel_on_tap_outside: false
                                 });
 
                                 const savedSession = localStorage.getItem('gsi_session');
                                 if (savedSession) {
-                                console.log("Saved session found");
-                                handleCredentialResponse({ credential: savedSession });
+                                    console.log("Saved session found");
+                                    handleCredentialResponse({ credential: savedSession });
                                 } else {
-                                console.log("No saved session, rendering sign-in button");
-                                google.accounts.id.renderButton(
-                                    document.getElementById('googleSignInButton'), 
-                                    { theme: 'outline', size: 'large' }
-                                );
-                                google.accounts.id.prompt();
+                                    console.log("No saved session, rendering sign-in button");
+                                    google.accounts.id.renderButton(
+                                        document.getElementById('googleSignInButton'), 
+                                        { theme: 'outline', size: 'large' }
+                                    );
+                                    google.accounts.id.prompt();
                                 }
                                 
                                 setupTokenCheck();
