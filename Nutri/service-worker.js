@@ -1,11 +1,11 @@
 const CACHE_NAME = 'groceries-app-v1';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/icon-192x192.png',
-  '/icon-512x512.png'
+  '',
+  'index.html',
+  'styles.css',
+  'app.js',
+  'icon-192x192.png',
+  'icon-512x512.png'
 ];
 
 self.addEventListener('install', (event) => {

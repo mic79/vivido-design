@@ -2,7 +2,7 @@
     "name": "Nutri",
     "short_name": "Nutri",
     "description": "A simple groceries management app",
-    "start_url": "/index.html",
+    "start_url": "index.html",
     "display": "standalone",
     "background_color": "#ffffff",
     "theme_color": "#729c9c",
