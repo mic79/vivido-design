@@ -10,6 +10,12 @@ export function initGoogleAuth() {
       if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
         clearInterval(checkGoogleLoaded);
         idClient = google.accounts.id;
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID,
+          scope: SCOPES,
+          callback: '', // defined later
+        });
+        
         idClient.initialize({
           client_id: CLIENT_ID,
           callback: (response) => {
@@ -23,11 +29,7 @@ export function initGoogleAuth() {
           auto_select: true,
           cancel_on_tap_outside: false
         });
-        tokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: CLIENT_ID,
-          scope: SCOPES,
-          callback: '', // defined later
-        });
+        
         resolve({ idClient, tokenClient });
       }
     }, 100);
