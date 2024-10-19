@@ -566,6 +566,7 @@ td.location-order input {
     box-sizing: border-box;
     white-space: nowrap;
     overflow: hidden;
+    overflow-x: auto;
 }
 @media (max-width: 767.98px) {
     .history-list td {
