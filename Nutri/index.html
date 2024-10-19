@@ -55,7 +55,7 @@
 
         let app;
         (async function() {
-            const { createApp, ref, computed, onMounted, watch, defineComponent } = Vue;
+            const { createApp, ref, computed, onMounted, onBeforeUnmount, watch, defineComponent } = Vue;
 
             const GroceriesPage = {
                 props: ['sheetId', 'toggleSidenav', 'startEditing', 'stopEditing'],
@@ -761,6 +761,157 @@
                         }
                     }
 
+                    const suggestions = ref([]);
+                    const currentEditingItem = ref(null);
+
+                    function processHistoricalData() {
+                        const now = Date.now();
+                        const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000; // 30 days ago
+                        
+                        return groceryItems.value.reduce((acc, item) => {
+                            // Skip items without a checked_date
+                            if (!item.dateChecked) return acc;
+
+                            if (!acc[item.title]) {
+                                acc[item.title] = {
+                                    id: item.id, // Add this line to store the item ID
+                                    count: 0,
+                                    lastPurchase: 0,
+                                    score: 0,
+                                    locations: {},
+                                    mostRecent: null
+                                };
+                            }
+                            
+                            acc[item.title].count++;
+                            
+                            if (!acc[item.title].locations[item.location]) {
+                                acc[item.title].locations[item.location] = {
+                                    lastPurchases: []
+                                };
+                            }
+                            
+                            // Add current purchase to the location's lastPurchases
+                            acc[item.title].locations[item.location].lastPurchases.push({
+                                date: item.dateChecked,
+                                quantity: item.amount,
+                                price: item.price
+                            });
+                            
+                            // Sort lastPurchases by date (most recent first) and keep only the last 5
+                            acc[item.title].locations[item.location].lastPurchases.sort((a, b) => b.date - a.date);
+                            acc[item.title].locations[item.location].lastPurchases = acc[item.title].locations[item.location].lastPurchases.slice(0, 5);
+                            
+                            if (item.dateChecked > acc[item.title].lastPurchase) {
+                                acc[item.title].lastPurchase = item.dateChecked;
+                                acc[item.title].mostRecent = {
+                                    quantity: item.amount,
+                                    price: item.price,
+                                    location: item.location
+                                };
+                            }
+                            
+                            // Calculate score: higher for more frequent and recent purchases
+                            const recencyScore = item.dateChecked > oneMonthAgo ? 2 : 1;
+                            acc[item.title].score = acc[item.title].count * recencyScore;
+                            
+                            return acc;
+                        }, {});
+                    }
+
+                    function filterSuggestions(input, itemId) {
+                        if (!input) {
+                            suggestions.value = [];
+                            return;
+                        }
+                        currentEditingItem.value = itemId;
+                        const currentItem = groceryItems.value.find(item => item.id === itemId);
+                        const currentLocation = currentItem ? currentItem.location : null;
+                        
+                        console.log('Current item:', currentItem);
+                        console.log('Current location:', currentLocation);
+
+                        const historicalData = processHistoricalData();
+                        console.log('Historical data:', historicalData);
+
+                        const matches = Object.keys(historicalData)
+                            .filter(title => {
+                                const matchesInput = title.toLowerCase().includes(input.toLowerCase());
+                                const itemData = historicalData[title];
+                                const matchesLocation = itemData.locations[currentLocation] !== undefined;
+                                const isNotCurrentItem = itemId !== itemData.id; // Compare by ID instead of title
+                                console.log(`Title: ${title}, Matches input: ${matchesInput}, Matches location: ${matchesLocation}, Is not current item: ${isNotCurrentItem}`);
+                                return matchesInput && matchesLocation && isNotCurrentItem;
+                            })
+                            .sort((a, b) => {
+                                // Prioritize exact matches
+                                if (a.toLowerCase() === input.toLowerCase()) return -1;
+                                if (b.toLowerCase() === input.toLowerCase()) return 1;
+                                // Then sort by score
+                                return historicalData[b].score - historicalData[a].score;
+                            });
+                        
+                        console.log('Matches:', matches);
+
+                        if (matches.length === 1) {
+                            const title = matches[0];
+                            const data = historicalData[title];
+                            const lastPurchases = data.locations[currentLocation].lastPurchases;
+                            
+                            suggestions.value = lastPurchases.map(purchase => ({
+                                title,
+                                lastPurchase: new Date(purchase.date).toLocaleDateString(),
+                                quantity: purchase.quantity,
+                                price: purchase.price,
+                                location: currentLocation
+                            }));
+                        } else {
+                            suggestions.value = matches.slice(0, 5).map(title => {
+                                const data = historicalData[title];
+                                const lastPurchase = data.locations[currentLocation].lastPurchases[0];
+                                return {
+                                    title,
+                                    lastPurchase: new Date(lastPurchase.date).toLocaleDateString(),
+                                    quantity: lastPurchase.quantity,
+                                    price: lastPurchase.price,
+                                    location: currentLocation
+                                };
+                            });
+                        }
+
+                        console.log('Suggestions:', suggestions.value);
+                    }
+
+                    function selectSuggestion(suggestion) {
+                        const item = groceryItems.value.find(item => item.id === currentEditingItem.value);
+                        if (item) {
+                            console.log('Selected suggestion:', suggestion);
+                            console.log('Current item before update:', { ...item });
+                            
+                            if (item.location !== suggestion.location) {
+                                console.warn('Location mismatch:', item.location, suggestion.location);
+                                // You might want to add some user feedback here
+                            }
+
+                            item.title = suggestion.title;
+                            item.amount = suggestion.quantity;
+                            item.price = suggestion.price;
+                            
+                            console.log('Current item after update:', { ...item });
+                            
+                            updateItemField(item, 'title', suggestion.title);
+                            updateItemField(item, 'amount', suggestion.quantity);
+                            updateItemField(item, 'price', suggestion.price);
+                        }
+                        suggestions.value = [];
+                        currentEditingItem.value = null;
+                    }
+
+                    onBeforeUnmount(() => {
+                        suggestions.value = [];
+                        currentEditingItem.value = null;
+                    });
+
                     onMounted(() => {
                         fetchData().then(() => {
                             if (locations.value.length > 0) {
@@ -832,7 +983,11 @@
                         initSortable,
                         toggleSorting,
                         sortingEnabled,
-                        inputDateForSelected
+                        inputDateForSelected,
+                        suggestions,
+                        currentEditingItem,
+                        filterSuggestions,
+                        selectSuggestion
                     };
                 },
                 template: `
@@ -880,7 +1035,26 @@
                                                 <input v-if="!sortingEnabled" type="checkbox" v-model="selectedItems" :value="item.id">
                                                 <span v-else class="drag-handle">☰</span>
                                             </td>
-                                            <td class="item-title"><input type="text" v-model="item.title" :data-item-id="item.id" @focus="startEditing" @blur="stopEditing" @change="updateItemField(item, 'title', $event.target.value)"></td>
+                                            <td class="item-title">
+                                                <input 
+                                                    type="text" 
+                                                    v-model="item.title" 
+                                                    :data-item-id="item.id" 
+                                                    @focus="startEditing" 
+                                                    @blur="stopEditing" 
+                                                    @input="filterSuggestions(item.title, item.id)"
+                                                    @change="updateItemField(item, 'title', $event.target.value)"
+                                                >
+                                                <ul v-if="suggestions && suggestions.length > 0 && currentEditingItem === item.id" class="suggestions">
+                                                    <li v-for="suggestion in suggestions" :key="suggestion.title + suggestion.lastPurchase" @mousedown.prevent="selectSuggestion(suggestion)">
+                                                        {{ suggestion.title }}
+                                                        <br>
+                                                        Last purchase: {{ suggestion.lastPurchase }}
+                                                        <br>
+                                                        Quantity: {{ suggestion.quantity }}, Price: {{ formatPrice(suggestion.price) }}
+                                                    </li>
+                                                </ul>
+                                            </td>
                                             <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" :data-item-id="item.id" @focus="($event) => { handleAmountFocus(item, $event); startEditing(); }" @blur="stopEditing" @change="updateItemField(item, 'amount', $event.target.value)"></td>
                                             <td class="item-price" width="60">
                                                 <input 
