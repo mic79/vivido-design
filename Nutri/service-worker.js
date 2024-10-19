@@ -1,4 +1,4 @@
-const CACHE_NAME = 'groceries-app-v1';
+const CACHE_NAME = 'groceries-app-v2';
 const urlsToCache = [
   '',
   'index.html',
@@ -15,9 +15,26 @@ self.addEventListener('install', (event) => {
   );
 });
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener('activate', function(event) {
+  event.waitUntil(
+    caches.keys().then(function(cacheNames) {
+      return Promise.all(
+        cacheNames.filter(function(cacheName) {
+          // Return true if you want to remove this cache,
+          // but remember that caches are shared across
+          // the whole origin
+        }).map(function(cacheName) {
+          return caches.delete(cacheName);
+        })
+      );
+    })
+  );
+});
+
+self.addEventListener('fetch', function(event) {
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => response || fetch(event.request))
+    fetch(event.request).catch(function() {
+      return caches.match(event.request);
+    })
   );
 });

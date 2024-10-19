@@ -1937,6 +1937,16 @@
                             }, 60000);  // Check every minute
                         }
 
+                        function checkForUpdates() {
+                            if ('serviceWorker' in navigator) {
+                                navigator.serviceWorker.getRegistration().then(function(registration) {
+                                if (registration) {
+                                    registration.update();
+                                }
+                                });
+                            }
+                        }
+
                         const fetchGroceriesData = async () => {
                             if (currentPageComponent.value === GroceriesPage) {
                                 await currentPageRef.value.fetchData();
@@ -1994,6 +2004,7 @@
 
                         onMounted(() => {
                             console.log("Vue app mounted");
+                            checkForUpdates();
                             GoogleAuth.initGoogleAuth().then(({ idClient, tokenClient }) => {
                                 console.log("Google Auth initialized");
                                 

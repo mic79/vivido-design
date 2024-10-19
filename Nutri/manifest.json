@@ -2,6 +2,8 @@
     "name": "Nutri",
     "short_name": "Nutri",
     "description": "A simple groceries management app",
+    "version": "1.1.0",
+    "last_updated": "2024-10-19",
     "start_url": "index.html",
     "display": "standalone",
     "background_color": "#ffffff",
