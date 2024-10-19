@@ -174,7 +174,8 @@
                         error.value = null;
                         const currentSelectedLocationId = selectedLocation.value;
                         try {
-                            const values = await GoogleAuth.loadSheetData(props.sheetId, 'Groceries!A2:H');
+                            const groceriesResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Groceries!A2:H');
+                            const values = groceriesResponse.values || [];
                             groceryItems.value = values.map(row => ({
                                 id: row[0],
                                 title: row[1],
@@ -187,7 +188,8 @@
                                 checked: !!row[6]
                             }));
 
-                            const locationsValues = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:E');
+                            const locationsResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:E');
+                            const locationsValues = locationsResponse.values || [];
                             locations.value = locationsValues
                                 .filter(row => row[3] !== 'true') // Filter out hidden locations
                                 .map(row => ({
@@ -1043,21 +1045,21 @@
                         loading.value = true;
                         error.value = null;
                         try {
-                            const values = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:E');
-                            locations.value = values.map((row, index) => ({
-                                id: row[2] || `loc_${index}`,
-                                title: row[0] || '',
-                                order: row[1] || '',
-                                city: row[4] || '',
+                            const response = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:F');
+                            const values = response.values || [];
+                            locations.value = values.map(row => ({
+                                title: row[0],
+                                order: parseInt(row[1]) || 0,
+                                id: row[2],
                                 hidden: row[3] === 'true',
-                                selected: false
+                                city: row[4] || ''
                             }));
+                            applyFilterAndSort();
                         } catch (err) {
-                            console.error('Error fetching data:', err);
-                            error.value = 'Failed to fetch data. Please try again.';
+                            console.error('Error fetching locations:', err);
+                            error.value = 'Failed to fetch locations. Please try again.';
                         } finally {
                             loading.value = false;
-                            applyFilterAndSort();
                         }
                     }
 
@@ -1451,17 +1453,18 @@
                         error.value = null;
                         try {
                             // Fetch locations
-                            const locationsValues = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:C');
+                            const locationsResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:C');
+                            const locationsValues = locationsResponse.values || [];
                             const locations = locationsValues.reduce((acc, [title, , id]) => {
                                 acc[id] = title;
                                 return acc;
                             }, {});
 
                             // Fetch grocery items
-                            const values = await GoogleAuth.loadSheetData(props.sheetId, 'Groceries!A2:H');
+                            const groceriesResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Groceries!A2:H');
+                            const values = groceriesResponse.values || [];
 
-                            historyItems.value = values
-                            .map(row => ({
+                            historyItems.value = values.map(row => ({
                                 id: row[0],
                                 title: row[1],
                                 amount: parseInt(row[2]),
@@ -1624,18 +1627,28 @@
                                 user.value = parseJwt(response.credential);
                                 isSignedIn.value = true;
                                 console.log("Signed in as:", user.value.name);
-                                console.log("Authentication method:", response.select_by);
 
-                                GoogleAuth.getAccessToken().then(() => {
-                                    if (sheetId.value) {
-                                        console.log("Setting up change detection for sheet ID:", sheetId.value);
-                                        setupChangeDetection(sheetId.value);
-                                    }
-                                    checkForStoredSheet();
-                                });
+                                // Save the session
+                                localStorage.setItem('gsi_session', response.credential);
+
+                                const tokenClient = GoogleAuth.getTokenClient();
+                                if (tokenClient) {
+                                handleExistingSession(tokenClient);
+                                } else {
+                                console.error("Token client not properly initialized");
+                                }
                             } else {
                                 console.error("No credential in response");
                             }
+                        }
+
+                        function checkSavedSession() {
+                            const savedSession = localStorage.getItem('gsi_session');
+                            if (savedSession) {
+                                handleCredentialResponse({ credential: savedSession });
+                                return true;
+                            }
+                            return false;
                         }
 
                         function parseJwt(token) {
@@ -1653,15 +1666,15 @@
                             const storedSheetId = localStorage.getItem('lastUsedSheetId');
                             if (storedSheetId) {
                                 console.log('Found stored sheet ID:', storedSheetId);
-
                                 sheetId.value = storedSheetId;
-                                if (typeof window.setupChangeDetection === 'function') {
-                                    console.log('Calling setupChangeDetection');
-                                    window.setupChangeDetection(storedSheetId);
+                                if (typeof setupChangeDetection === 'function') {
+                                console.log('Calling setupChangeDetection');
+                                setupChangeDetection(storedSheetId);
                                 } else {
-                                    console.error('setupChangeDetection is not a function');
+                                console.error('setupChangeDetection is not a function');
                                 }
                             } else {
+                                console.log('No stored sheet ID found');
                                 // User will need to create a new sheet or select one
                             }
                         }
@@ -1694,6 +1707,7 @@
                             isSignedIn.value = false;
                             user.value = null;
                             sheetId.value = null;
+                            localStorage.removeItem('gsi_session');
                             localStorage.removeItem('lastUsedSheetId');
                             stopChangeDetection();
                         }
@@ -1780,17 +1794,37 @@
                             }
                         });
 
+                        let googleAuth = null;
+
                         onMounted(() => {
                             console.log("Vue app mounted");
-                            initializeGoogleAuth().then(() => {
-                                console.log("Google Auth initialized with FedCM support");
-                                GoogleAuth.renderSignInButton();
-                                /*GoogleAuth.checkExistingCredential().then(() => {
-                                    // FedCM will handle the display of authentication options
-                                });*/
+                            GoogleAuth.initGoogleAuth().then(({ idClient, tokenClient }) => {
+                                console.log("Google Auth initialized");
+                                if (!checkSavedSession()) {
+                                GoogleAuth.checkExistingSession(idClient).then((sessionExists) => {
+                                    if (!sessionExists) {
+                                    console.log("No existing session, rendering sign-in button");
+                                    GoogleAuth.renderSignInButton(idClient);
+                                    } else {
+                                    console.log("Existing session found");
+                                    handleExistingSession(tokenClient);
+                                    }
+                                });
+                                } else {
+                                handleExistingSession(tokenClient);
+                                }
                                 setupTokenCheck();
                             });
                         });
+
+                        function handleExistingSession(tokenClient) {
+                            GoogleAuth.getAccessToken(tokenClient).then(() => {
+                                checkForStoredSheet();
+                            }).catch(error => {
+                                console.error("Error getting access token:", error);
+                                // Handle the error appropriately, e.g., prompt the user to sign in again
+                            });
+                        }
 
                         const currentModifiedTime = ref(null);
                         let changeDetectionInterval = null;
@@ -1801,24 +1835,31 @@
                             
                             async function checkForChanges() {
                                 if (isEditing.value) {
-                                    console.log("User is editing, skipping change check");
-                                    return;
+                                console.log("User is editing, skipping change check");
+                                return;
                                 }
                                 
                                 console.log("Checking for changes in sheet:", sheetId);
                                 try {
-                                    const modifiedTime = await GoogleAuth.checkForChanges(sheetId);
-                                    console.log("Current modified time:", currentModifiedTime.value);
-                                    console.log("New modified time:", modifiedTime);
-                                    if (modifiedTime !== currentModifiedTime.value) {
-                                        currentModifiedTime.value = modifiedTime;
-                                        console.log('Sheet updated, refreshing data...');
-                                        await fetchLocations();
-                                    } else {
-                                        console.log('Sheet still up to date.');
-                                    }
+                                const modifiedTime = await GoogleAuth.checkForChanges(sheetId);
+                                console.log("Current modified time:", currentModifiedTime.value);
+                                console.log("New modified time:", modifiedTime);
+                                if (modifiedTime !== currentModifiedTime.value) {
+                                    currentModifiedTime.value = modifiedTime;
+                                    console.log('Sheet updated, refreshing data...');
+                                    await fetchLocations();
+                                } else {
+                                    console.log('Sheet still up to date.');
+                                }
                                 } catch (error) {
-                                    console.error('Error checking for updates:', error);
+                                console.error('Error checking for updates:', error);
+                                if (error.message.includes('Authentication failed')) {
+                                    // Handle authentication failure
+                                    if (window.handleAuthFailure) {
+                                    window.handleAuthFailure();
+                                    }
+                                }
+                                // Don't throw the error here, just log it and continue
                                 }
                             }
 

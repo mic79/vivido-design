@@ -1,4 +1,5 @@
-let tokenClient;
+let idClient = null;
+let tokenClient = null;
 let accessToken = null;
 const CLIENT_ID = '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
@@ -8,7 +9,8 @@ export function initGoogleAuth() {
     const checkGoogleLoaded = setInterval(() => {
       if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
         clearInterval(checkGoogleLoaded);
-        google.accounts.id.initialize({
+        idClient = google.accounts.id;
+        idClient.initialize({
           client_id: CLIENT_ID,
           callback: (response) => {
             if (window.handleCredentialResponse) {
@@ -18,7 +20,7 @@ export function initGoogleAuth() {
             }
           },
           use_fedcm_for_prompt: true,
-          auto_select: false,
+          auto_select: true,
           cancel_on_tap_outside: false
         });
         tokenClient = google.accounts.oauth2.initTokenClient({
@@ -26,15 +28,20 @@ export function initGoogleAuth() {
           scope: SCOPES,
           callback: '', // defined later
         });
-        // Add this line to render the sign-in button
-        renderSignInButton();
-        resolve();
+        resolve({ idClient, tokenClient });
       }
     }, 100);
   });
 }
 
-// Make sure this function is defined
+export function getIdClient() {
+  return idClient;
+}
+
+export function getTokenClient() {
+  return tokenClient;
+}
+
 export function renderSignInButton() {
   const buttonElement = document.getElementById('googleSignInButton');
   if (buttonElement) {
@@ -44,68 +51,57 @@ export function renderSignInButton() {
   }
 }
 
-export async function loadSheetData(sheetId, range) {
-  try {
-    const token = await getAccessToken();
-    const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}`, {
+export function loadSheetData(sheetId, range) {
+  return getAccessToken(tokenClient).then(token => {
+    return fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}`, {
       headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!response.ok) {
-      if (response.status === 401) {
-        await handleAuthError();
-        return null;
+    }).then(response => {
+      if (!response.ok) {
+        if (response.status === 401) {
+          return handleAuthError();
+        }
+        throw new Error('Failed to load sheet data');
       }
-      throw new Error('Failed to load sheet data');
-    }
-    const data = await response.json();
-    return data.values;
-  } catch (err) {
-    console.error('Error loading sheet data:', err);
-    throw err;
-  }
+      return response.json();
+    });
+  });
 }
 
-export async function updateSheetData(sheetId, range, values) {
-  const token = await getAccessToken();
-  try {
+export function updateSheetData(sheetId, range, values) {
+  return getAccessToken(tokenClient).then(token => {
     // First, try to update the specified range
-    const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?valueInputOption=RAW`, {
+    return fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?valueInputOption=RAW`, {
       method: 'PUT',
       headers: { 
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ values: values })
-    });
-
-    // If the response is not OK, check if it's a 400 error
-    if (!response.ok) {
-      if (response.status === 400) {
-        // If the row does not exist, use the append method
-        console.warn(`Row does not exist. Appending data to ${range}.`);
-        const appendResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}:append?valueInputOption=RAW`, {
-          method: 'POST',
-          headers: { 
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ values: values })
-        });
-
-        if (!appendResponse.ok) {
-          const errorData = await appendResponse.json();
-          throw new Error(`Failed to append sheet data: ${errorData.error.message}`);
+    }).then(response => {
+      // If the response is not OK, check if it's a 400 error
+      if (!response.ok) {
+        if (response.status === 400) {
+          // If the row does not exist, use the append method
+          console.warn(`Row does not exist. Appending data to ${range}.`);
+          return fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}:append?valueInputOption=RAW`, {
+            method: 'POST',
+            headers: { 
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: values })
+          });
         }
-        return await appendResponse.json();
+        return response.json().then(errorData => {
+          throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
+        });
       }
-      const errorData = await response.json();
-      throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
-    }
-    return await response.json();
-  } catch (err) {
+      return response.json();
+    });
+  }).catch(err => {
     console.error('Error updating sheet data:', err);
     throw err;
-  }
+  });
 }
 
 export async function createNewSheet(title) {
@@ -172,35 +168,44 @@ export async function initGooglePicker(callback) {
 }
 
 export async function checkForChanges(sheetId) {
-  const token = await getAccessToken();
   try {
+    const token = await getAccessToken(tokenClient);
     const response = await fetch(`https://www.googleapis.com/drive/v3/files/${sheetId}?fields=modifiedTime`, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    if (!response.ok) throw new Error('Failed to check for changes');
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorData.error.message}`);
+    }
     const data = await response.json();
     return data.modifiedTime;
-  } catch (err) {
-    console.error('Error checking for changes:', err);
-    throw err;
+  } catch (error) {
+    console.error('Error in checkForChanges:', error);
+    if (error.message.includes('401')) {
+      // Token might be expired, try to refresh it
+      accessToken = null;
+      return checkForChanges(sheetId);
+    }
+    throw new Error(`Failed to check for changes: ${error.message}`);
   }
 }
 
-export async function getAccessToken() {
-  if (accessToken && await isTokenValid()) {
-    return accessToken;
-  }
-
+export function getAccessToken(tokenClient) {
   return new Promise((resolve, reject) => {
-    tokenClient.callback = (resp) => {
-      if (resp.error !== undefined) {
-        reject(resp);
-      }
-      accessToken = resp.access_token;
+    if (accessToken) {
       resolve(accessToken);
-    };
-    
-    tokenClient.requestAccessToken({prompt: ''});
+    } else if (tokenClient) {
+      tokenClient.callback = (resp) => {
+        if (resp.error !== undefined) {
+          reject(resp);
+        }
+        accessToken = resp.access_token;
+        resolve(accessToken);
+      };
+      tokenClient.requestAccessToken({prompt: ''});
+    } else {
+      reject(new Error('Token client not initialized'));
+    }
   });
 }
 
@@ -277,6 +282,7 @@ export async function handleAuthError() {
   } else {
     console.error('handleAuthFailure not defined in main app');
   }
+  return Promise.reject(new Error('Authentication failed'));
 }
 
 export async function getSheetMetadata(sheetId) {
@@ -297,6 +303,33 @@ export async function getSheetMetadata(sheetId) {
   }
 }
 
+export function checkExistingSession() {
+  return new Promise((resolve) => {
+    google.accounts.id.initialize({
+      client_id: CLIENT_ID,
+      callback: (response) => {
+        if (window.handleCredentialResponse) {
+          window.handleCredentialResponse(response);
+          resolve(true);
+        } else {
+          console.error('handleCredentialResponse not defined in main app');
+          resolve(false);
+        }
+      },
+      use_fedcm_for_prompt: true,
+      auto_select: true,
+      cancel_on_tap_outside: false
+    });
+
+    // Instead of using prompt, we'll use a timeout
+    setTimeout(() => {
+      resolve(false);
+    }, 1000); // Adjust this timeout as needed
+
+    google.accounts.id.prompt();
+  });
+}
+
 const GoogleAuth = {
   initGoogleAuth,
   renderSignInButton,
@@ -314,6 +347,7 @@ const GoogleAuth = {
   isTokenValid,
   handleAuthError,
   getSheetMetadata,
+  checkExistingSession,
 };
 
 export default GoogleAuth;
