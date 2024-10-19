@@ -562,10 +562,15 @@ td.location-order input {
     overflow: auto;
 }
 .history-list td {
-    height: 46px;
+    height: 30px;
     box-sizing: border-box;
     white-space: nowrap;
     overflow: hidden;
+}
+@media (max-width: 767.98px) {
+    .history-list td {
+        max-width: 200px;
+    }
 }
 .history-list td[width="100"] {
     max-width: 100px;
