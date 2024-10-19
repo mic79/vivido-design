@@ -17,20 +17,24 @@ export function initGoogleAuth() {
               console.error('handleCredentialResponse not defined in main app');
             }
           },
-          auto_select: true, // Enable automatic sign-in
-          prompt_parent_id: 'googleSignInButton' // Specify where to render the One Tap UI
+          use_fedcm_for_prompt: true,
+          auto_select: false,
+          cancel_on_tap_outside: false
         });
         tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: CLIENT_ID,
           scope: SCOPES,
           callback: '', // defined later
         });
+        // Add this line to render the sign-in button
+        renderSignInButton();
         resolve();
       }
     }, 100);
   });
 }
 
+// Make sure this function is defined
 export function renderSignInButton() {
   const buttonElement = document.getElementById('googleSignInButton');
   if (buttonElement) {
@@ -195,6 +199,7 @@ export async function getAccessToken() {
       accessToken = resp.access_token;
       resolve(accessToken);
     };
+    
     tokenClient.requestAccessToken({prompt: ''});
   });
 }
@@ -209,36 +214,18 @@ export function signOut() {
 }
 
 export function promptForSignIn() {
-  google.accounts.id.prompt((notification) => {
-    if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-      // If One Tap is not displayed or skipped, render the normal sign-in button
-      renderSignInButton();
-    }
-  });
+  //google.accounts.id.prompt();
 }
 
 export function checkExistingCredential() {
-  return new Promise((resolve) => {
-    google.accounts.id.initialize({
-      client_id: CLIENT_ID,
-      callback: (response) => {
-        if (window.handleCredentialResponse) {
-          window.handleCredentialResponse(response);
-        } else {
-          console.error('handleCredentialResponse not defined in main app');
-        }
-        resolve(true);
-      },
-      auto_select: true,
-    });
-
+  return Promise.resolve();
+  /*return new Promise((resolve) => {
+    google.accounts.id.cancel(); // Cancel any existing prompt
     google.accounts.id.prompt((notification) => {
-      if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-        console.log('No credential available');
-        resolve(false);
-      }
+      // We're not using any status methods here, just resolving the promise
+      resolve();
     });
-  });
+  });*/
 }
 
 export async function batchUpdateSpreadsheet(spreadsheetId, requests) {

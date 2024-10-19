@@ -8,6 +8,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
     <meta name="apple-mobile-web-app-title" content="Groceries">
+    <meta name="google-signin-client_id" content="778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com">
     <title>Groceries</title>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
@@ -955,8 +956,9 @@
                         </div>
 
                         <button @click="addGroceryItem" class="add-grocery-button">Add Grocery</button>
-                    </div>
-                `
+                        </div>
+                    `
+                    
             };
 
             const LocationsPage = {
@@ -1610,8 +1612,7 @@
                         async function initializeGoogleAuth() {
                             try {
                                 await GoogleAuth.initGoogleAuth();
-                                GoogleAuth.renderSignInButton();
-                                console.log("Google Auth initialized and button rendered");
+                                console.log("Google Auth initialized");
                             } catch (error) {
                                 console.error("Error initializing Google Auth:", error);
                             }
@@ -1623,6 +1624,7 @@
                                 user.value = parseJwt(response.credential);
                                 isSignedIn.value = true;
                                 console.log("Signed in as:", user.value.name);
+                                console.log("Authentication method:", response.select_by);
 
                                 GoogleAuth.getAccessToken().then(() => {
                                     if (sheetId.value) {
@@ -1781,11 +1783,11 @@
                         onMounted(() => {
                             console.log("Vue app mounted");
                             initializeGoogleAuth().then(() => {
-                                GoogleAuth.checkExistingCredential().then((credentialAvailable) => {
-                                    if (!credentialAvailable) {
-                                        GoogleAuth.renderSignInButton();
-                                    }
-                                });
+                                console.log("Google Auth initialized with FedCM support");
+                                GoogleAuth.renderSignInButton();
+                                /*GoogleAuth.checkExistingCredential().then(() => {
+                                    // FedCM will handle the display of authentication options
+                                });*/
                                 setupTokenCheck();
                             });
                         });
@@ -1913,6 +1915,21 @@
                     });
             });
         }
+    </script>
+
+    <script>
+      // Function to add the allow attribute to any iframes created by Google Sign-In
+      function addAllowAttributeToGoogleIframes() {
+        const iframes = document.querySelectorAll('iframe[src^="https://accounts.google.com"]');
+        iframes.forEach(iframe => {
+          if (!iframe.getAttribute('allow')) {
+            iframe.setAttribute('allow', 'identity-credentials-get');
+          }
+        });
+      }
+
+      // Run the function periodically
+      setInterval(addAllowAttributeToGoogleIframes, 1000);
     </script>
 </body>
 </html>
