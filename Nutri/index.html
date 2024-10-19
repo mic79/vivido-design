@@ -1334,16 +1334,21 @@
                         const newLocation = {
                             id: `loc_${Date.now()}`,
                             title: '',
-                            order: (locations.value.length + 1).toString(),
+                            order: locations.value.length.toString(),
                             city: '',
                             hidden: false,
                             selected: false
                         };
 
-                        locations.value.push(newLocation);
-
                         try {
-                            await GoogleAuth.updateSheetData(props.sheetId, 'Locations!A:F', [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]]);
+                            // Get the current number of rows in the Locations sheet
+                            const response = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A:A');
+                            const currentRowCount = response.values ? response.values.length : 0;
+
+                            // Append the new location to the end of the sheet
+                            await GoogleAuth.updateSheetData(props.sheetId, `Locations!A${currentRowCount + 1}:F${currentRowCount + 1}`, [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]]);
+
+                            locations.value.push(newLocation);
 
                             applyFilterAndSort();
 
