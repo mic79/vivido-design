@@ -9,6 +9,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
     <meta name="apple-mobile-web-app-title" content="Groceries">
     <meta name="google-signin-client_id" content="778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com">
+    <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin-allow-popups">
     <title>Groceries</title>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
@@ -51,7 +52,7 @@
     </div>
 
     <script type="module">
-        import * as GoogleAuth from './googleAuth.js';
+        import GoogleAuth, { CLIENT_ID } from './googleAuth.js?v=1';
 
         let app;
         (async function() {
@@ -1801,18 +1802,25 @@
                         }
 
                         function handleCredentialResponse(response) {
-                            console.log("handleCredentialResponse called with response:", response);
                             if (response.credential) {
-                                user.value = parseJwt(response.credential);
+                                const decodedToken = parseJwt(response.credential);
+                                user.value = {
+                                email: decodedToken.email,
+                                name: decodedToken.name,
+                                picture: decodedToken.picture
+                                };
                                 isSignedIn.value = true;
-                                console.log("Signed in as:", user.value.name);
-
-                                // Save the session
                                 localStorage.setItem('gsi_session', response.credential);
-
+                                
                                 const tokenClient = GoogleAuth.getTokenClient();
                                 if (tokenClient) {
-                                handleExistingSession(tokenClient);
+                                tokenClient.callback = async (resp) => {
+                                    if (resp.error !== undefined) {
+                                    throw(resp);
+                                    }
+                                    await checkForStoredSheet();
+                                };
+                                tokenClient.requestAccessToken({prompt: ''});
                                 } else {
                                 console.error("Token client not properly initialized");
                                 }
@@ -1831,7 +1839,6 @@
                         }
 
                         function parseJwt(token) {
-                            console.log("Parsing JWT token");
                             const base64Url = token.split('.')[1];
                             const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
                             const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
@@ -1891,21 +1898,25 @@
                             stopChangeDetection();
                         }
 
-                        function showPicker() {
+                        async function showPicker() {
                             console.log("Showing Google Picker");
-                            GoogleAuth.initGooglePicker((fileId) => {
-                                console.log('The user selected: ' + fileId);
-                                sheetId.value = fileId;
-                                localStorage.setItem('lastUsedSheetId', fileId);
+                            try {
+                                await GoogleAuth.initGooglePicker((fileId) => {
+                                    console.log('The user selected: ' + fileId);
+                                    sheetId.value = fileId;
+                                    localStorage.setItem('lastUsedSheetId', fileId);
 
-                                // Reset the last checked time for this sheet
-                                delete sheetLastChecked[fileId];
+                                    // Reset the last checked time for this sheet
+                                    delete sheetLastChecked[fileId];
 
-                                // Fetch data and set up change detection for the new sheet
-                                fetchCurrentPageData().then(() => {
-                                    setupChangeDetection(fileId, fetchCurrentPageData);
+                                    // Fetch data and set up change detection for the new sheet
+                                    fetchCurrentPageData().then(() => {
+                                        setupChangeDetection(fileId, fetchCurrentPageData);
+                                    });
                                 });
-                            });
+                            } catch (error) {
+                                console.error('Error showing Google Picker:', error);
+                            }
                         }
 
                         function toggleSidenav() {
@@ -1979,19 +1990,27 @@
                             console.log("Vue app mounted");
                             GoogleAuth.initGoogleAuth().then(({ idClient, tokenClient }) => {
                                 console.log("Google Auth initialized");
-                                if (!checkSavedSession()) {
-                                GoogleAuth.checkExistingSession(idClient).then((sessionExists) => {
-                                    if (!sessionExists) {
-                                    console.log("No existing session, rendering sign-in button");
-                                    GoogleAuth.renderSignInButton(idClient);
-                                    } else {
-                                    console.log("Existing session found");
-                                    handleExistingSession(tokenClient);
-                                    }
+                                
+                                google.accounts.id.initialize({
+                                client_id: CLIENT_ID,  // Now this should work
+                                callback: handleCredentialResponse,
+                                auto_select: false,
+                                cancel_on_tap_outside: false
                                 });
+
+                                const savedSession = localStorage.getItem('gsi_session');
+                                if (savedSession) {
+                                console.log("Saved session found");
+                                handleCredentialResponse({ credential: savedSession });
                                 } else {
-                                handleExistingSession(tokenClient);
+                                console.log("No saved session, rendering sign-in button");
+                                google.accounts.id.renderButton(
+                                    document.getElementById('googleSignInButton'), 
+                                    { theme: 'outline', size: 'large' }
+                                );
+                                google.accounts.id.prompt();
                                 }
+                                
                                 setupTokenCheck();
                             });
                         });
@@ -2090,11 +2109,13 @@
                     }
                 });
 
+                let pendingCredentialResponse = null;
+
                 window.handleCredentialResponse = function(response) {
                     if (app && app._instance) {
                         app._instance.proxy.handleCredentialResponse(response);
                     } else {
-                        console.error('App not initialized when trying to handle credential response');
+                        pendingCredentialResponse = response;
                     }
                 };
 

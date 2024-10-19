@@ -1,7 +1,7 @@
 let idClient = null;
 let tokenClient = null;
 let accessToken = null;
-const CLIENT_ID = '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com';
+export const CLIENT_ID = '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
 export function initGoogleAuth() {
@@ -16,21 +16,6 @@ export function initGoogleAuth() {
           callback: '', // defined later
         });
         
-        idClient.initialize({
-          client_id: CLIENT_ID,
-          callback: (response) => {
-            if (window.handleCredentialResponse) {
-              window.handleCredentialResponse(response);
-            } else {
-              console.error('handleCredentialResponse not defined in main app');
-            }
-          },
-          use_fedcm_for_prompt: true,
-          auto_select: true,
-          cancel_on_tap_outside: false
-        });
-        
-        window.googleAuthInitialized = true; // Add this line
         resolve({ idClient, tokenClient });
       }
     }, 100);
@@ -43,15 +28,6 @@ export function getIdClient() {
 
 export function getTokenClient() {
   return tokenClient;
-}
-
-export function renderSignInButton() {
-  const buttonElement = document.getElementById('googleSignInButton');
-  if (buttonElement) {
-    google.accounts.id.renderButton(buttonElement, { theme: 'outline', size: 'large' });
-  } else {
-    console.error('Google Sign-In button element not found');
-  }
 }
 
 export function loadSheetData(sheetId, range) {
@@ -134,40 +110,47 @@ export async function createNewSheet(title) {
 }
 
 export async function initGooglePicker(callback) {
-  const token = await getAccessToken();
-  
-  if (typeof gapi === 'undefined') {
-    await new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://apis.google.com/js/api.js';
-      script.onload = resolve;
-      script.onerror = reject;
-      document.body.appendChild(script);
-    });
+  try {
+    if (!tokenClient) {
+      await initGoogleAuth();
+    }
+    const token = await getAccessToken();
+    
+    if (typeof gapi === 'undefined') {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://apis.google.com/js/api.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.body.appendChild(script);
+      });
+    }
+    
+    await new Promise((resolve) => gapi.load('picker', { callback: resolve }));
+
+    const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
+      .setIncludeFolders(true)
+      .setMimeTypes("application/vnd.google-apps.spreadsheet")
+      .setQuery("GroceriesApp");
+
+    const picker = new google.picker.PickerBuilder()
+      .enableFeature(google.picker.Feature.NAV_HIDDEN)
+      .setAppId(CLIENT_ID)
+      .setOAuthToken(token)
+      .addView(view)
+      .setCallback((data) => {
+        if (data.action === google.picker.Action.PICKED) {
+          callback(data.docs[0].id);
+        } else if (data.action === google.picker.Action.CANCEL) {
+          console.log('Picker was cancelled');
+        }
+      })
+      .build();
+
+    picker.setVisible(true);
+  } catch (error) {
+    console.error('Error initializing Google Picker:', error);
   }
-  
-  await new Promise((resolve) => gapi.load('picker', { callback: resolve }));
-
-  const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
-    .setIncludeFolders(true)
-    .setMimeTypes("application/vnd.google-apps.spreadsheet")
-    .setQuery("GroceriesApp");
-
-  const picker = new google.picker.PickerBuilder()
-    .enableFeature(google.picker.Feature.NAV_HIDDEN)
-    .setAppId(CLIENT_ID)
-    .setOAuthToken(token)
-    .addView(view)
-    .setCallback((data) => {
-      if (data.action === google.picker.Action.PICKED) {
-        callback(data.docs[0].id);
-      } else if (data.action === google.picker.Action.CANCEL) {
-        console.log('Picker was cancelled');
-      }
-    })
-    .build();
-
-  picker.setVisible(true);
 }
 
 export async function checkForChanges(sheetId) {
@@ -193,23 +176,20 @@ export async function checkForChanges(sheetId) {
   }
 }
 
-export function getAccessToken(tokenClient) {
+export function getAccessToken() {
   return new Promise((resolve, reject) => {
     if (accessToken) {
       resolve(accessToken);
     } else if (tokenClient) {
       tokenClient.callback = (resp) => {
         if (resp.error !== undefined) {
-          console.error('Error getting access token:', resp.error);
-          reject(new Error(`Failed to get access token: ${resp.error}`));
-        } else {
-          accessToken = resp.access_token;
-          resolve(accessToken);
+          reject(resp);
         }
+        accessToken = resp.access_token;
+        resolve(accessToken);
       };
       tokenClient.requestAccessToken({prompt: ''});
     } else {
-      console.error('Token client not initialized');
       reject(new Error('Token client not initialized'));
     }
   });
@@ -311,14 +291,9 @@ export async function getSheetMetadata(sheetId) {
 
 export function checkExistingSession() {
   return new Promise((resolve) => {
-    const checkTimeout = setTimeout(() => {
-      resolve(false);
-    }, 1000);
-
     google.accounts.id.initialize({
       client_id: CLIENT_ID,
       callback: (response) => {
-        clearTimeout(checkTimeout);
         if (window.handleCredentialResponse) {
           window.handleCredentialResponse(response);
           resolve(true);
@@ -332,21 +307,17 @@ export function checkExistingSession() {
       cancel_on_tap_outside: false
     });
 
-    google.accounts.id.prompt((notification) => {
-      clearTimeout(checkTimeout);
-      // If we reach this point, it means the prompt was shown
-      // We don't need to do anything here, just clear the timeout
-    });
-  });
-}
+    // Instead of using prompt, we'll use a timeout
+    setTimeout(() => {
+      resolve(false);
+    }, 1000); // Adjust this timeout as needed
 
-export function isGoogleAuthInitialized() {
-  return window.googleAuthInitialized === true;
+    google.accounts.id.prompt();
+  });
 }
 
 const GoogleAuth = {
   initGoogleAuth,
-  renderSignInButton,
   loadSheetData,
   updateSheetData,
   createNewSheet,
@@ -362,7 +333,8 @@ const GoogleAuth = {
   handleAuthError,
   getSheetMetadata,
   checkExistingSession,
-  isGoogleAuthInitialized,
+  getTokenClient,
+  getIdClient,
 };
 
 export default GoogleAuth;
