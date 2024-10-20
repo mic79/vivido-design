@@ -95,10 +95,10 @@ html {
 }
 @media (min-width: 768px) {
     .close-sidenav {
-        display: none;
         position: absolute;
         top: 0.5rem;
         right: 0.5rem;
+        display: none;
         font-size: 1.5rem;
         cursor: pointer;
     }
@@ -144,9 +144,9 @@ html {
     border-bottom: 1px solid #ccc;
 }
 .nav-menu a {
+    padding: 10px 0;
     text-decoration: none;
     color: #333;
-    padding: 10px 0;
 }
 .nav-menu a.active {
     font-weight: bold;
@@ -154,24 +154,7 @@ html {
 .page-content {
     width: 100%;
 }
-/*.locations-page, .groceries-page {
-    padding-bottom: 100px;
-}
-@media (max-width: 767.98px) {
-    .locations-page, .groceries-page {
-        padding-bottom: 160px;
-    }
-}
-.groceries-page:after, .locations-page:after {
-    content: '';
-    position: absolute;
-    height: 100px;
-    width: 100%;
-    bottom: 0;
-    background: linear-gradient(0deg, white 50%, transparent);
-    pointer-events: none;
-    z-index: 2;
-}*/
+
 .header {
     position: sticky;
     height: 110px;
@@ -232,7 +215,6 @@ td {
     td {
         border: none;
         position: relative;
-        /* padding-left: 50%; */
     }
 }
 td input {
@@ -312,7 +294,6 @@ input[type="date"]:after {
     cursor: pointer;
 }
 ::-webkit-calendar-picker-indicator {
-    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="15" viewBox="0 0 24 24"><path fill="%23fff" d="M20 3h-1V1h-2v2H7V1H5v2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 18H4V8h16v13z"/></svg>');
     position: absolute;
     height: auto;
     width: auto;
@@ -398,15 +379,15 @@ button.alert {
 }
 
 .location-tab {
-    cursor: pointer;
     padding: 10px;
-    border-bottom: 2px solid transparent;
     margin-right: 5px;
+    border-bottom: 2px solid transparent;
     color: rgba(0, 0, 0, .54);
     font-size: 14px;
     font-weight: 400;
     text-align: center;
     white-space: nowrap;
+    cursor: pointer;
 }
 
 .location-tab.active {
@@ -490,9 +471,9 @@ td.location-order input {
 }
 
 .recently-checked-off ul {
-    list-style-type: none;
-    padding: 0;
     margin: 0;
+    padding: 0;
+    list-style-type: none;
 }
 
 .recently-checked-off li {
@@ -505,16 +486,16 @@ td.location-order input {
 }
 .suggestions {
     position: absolute;
+    max-height: 200px;
     top: 100%;
     left: 0;
-    z-index: 1000;
-    list-style-type: none;
-    padding: 0;
     margin: 0;
+    padding: 0;
     background-color: white;
     border: 1px solid #ccc;
-    max-height: 200px;
+    list-style-type: none;
     overflow-y: auto;
+    z-index: 1000;
 }
 .suggestions li {
     padding: 5px 10px;
@@ -572,8 +553,8 @@ td.location-order input {
 }
 .pagination button:disabled {
     opacity: 0.35;
-    pointer-events: none;
     visibility: visible;
+    pointer-events: none;
 }
 
 .groceries-page:after {
@@ -595,7 +576,7 @@ td.location-order input {
 
 @media (max-width: 767.98px) {
     .history-page .controls input[type="search"] {
-        max-width: 120px;
+        max-width: 28vw;
     }
 }
 
@@ -627,4 +608,119 @@ td.location-order input {
 
 .no-items-message {
     display: none;
+}
+
+.dashboard-content {
+    height: calc(100dvh - 110px);
+    width: 100%;
+    padding: 1rem;
+    box-sizing: border-box;
+    overflow: auto;
+}
+
+.chart {
+    background-color: #f4f4f4;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.chart h3 {
+    margin-top: 0;
+    color: #729c9c;
+}
+
+.monthly-costs .chart-container {
+    max-width: 600px;
+    padding-bottom: 10px;
+    display: flex;
+    flex-direction: column-reverse;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+.monthly-costs .bar-container {
+    position: relative;
+    min-width: 300px;
+    margin-bottom: 10px;
+}
+
+.monthly-costs .bar {
+    position: relative;
+    height: 20px;
+    min-width: 1px;
+    margin-right: 10px;
+    background-color: #729c9c;
+    transition: width 0.3s ease;
+    z-index: 2;
+}
+
+.monthly-costs .bar-label {
+    position: absolute;
+    top: 3px;
+    left: 1rem;
+    color: white;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.bar-container {
+    position: relative;
+}
+.bar {
+    background-color: #3498db;
+    height: 20px;
+}
+.bar.estimated {
+    position: absolute;
+    top: 0;
+    left: 0;
+    background-color: #729c9c50;
+    z-index: 1;
+}
+
+.bar {
+    cursor: pointer;
+}
+
+.expanded-details {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-radius: 5px;
+    overflow-x: auto;
+}
+.expanded-details table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.expanded-details th, 
+.expanded-details td {
+    padding: 8px;
+    font-size: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+@media (max-width: 767.98px) {
+    .expanded-details th,
+    .expanded-details td {
+        max-width: 100px;
+        overflow-x: auto;
+    }
+}
+.expanded-details th {
+    background-color: #e0e0e0;
+    font-weight: bold;
+}
+.expanded-details td:nth-child(3) {
+    text-align: right;
+}
+.expanded-details tr:last-child td {
+    border-bottom: none;
+}
+.expanded-details tr:nth-child(even) {
+    background-color: #f8f8f8;
 }

@@ -34,6 +34,7 @@
                     <a :class="{ active: currentPage === 'groceries' }" @click="currentPage = 'groceries'; toggleSidenav()" href="#">Groceries</a>
                     <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'; toggleSidenav()" href="#">Locations</a>
                     <a :class="{ active: currentPage === 'history' }" @click="currentPage = 'history'; toggleSidenav()" href="#">History</a>
+                    <a :class="{ active: currentPage === 'dashboard' }" @click="currentPage = 'dashboard'; toggleSidenav()" href="#">Dashboard</a>
                 </nav>
                 <div class="sheet-info">
                     <p v-if="sheetId"><strong>Current Sheet ID</strong><br>{{ sheetId }}</p>
@@ -53,6 +54,7 @@
 
     <script type="module">
         import GoogleAuth, { CLIENT_ID } from './googleAuth.js?v=1';
+        import { DashboardPage } from './DashboardPage.js';
 
         let app;
         (async function() {
@@ -1712,9 +1714,9 @@
                                 <div v-if="error" class="error">{{ error }}</div>
                             </div>
                             <div class="controls">
-                                <input type="search" v-model="filters.title" placeholder="Filter by title" @input="applyFilters">
-                                <input type="search" v-model="filters.location" placeholder="Filter by location" @input="applyFilters">
-                                <input type="search" v-model="filters.date" placeholder="Filter by date" @input="applyFilters">
+                                <input type="search" v-model="filters.title" placeholder="Filter Title" @input="applyFilters">
+                                <input type="search" v-model="filters.location" placeholder="Filter Location" @input="applyFilters">
+                                <input type="search" v-model="filters.date" placeholder="Filter Date" @input="applyFilters">
                             </div>
                         </div>
                         <div class="history-list">
@@ -1777,7 +1779,8 @@
                     components: {
                         GroceriesPage,
                         LocationsPage,
-                        HistoryPage
+                        HistoryPage,
+                        DashboardPage
                     },
                     setup() {
                         console.log("Vue setup function called");
@@ -1810,6 +1813,8 @@
                                     return LocationsPage;
                                 case 'history':
                                     return HistoryPage;
+                                case 'dashboard':
+                                    return DashboardPage;
                                 default:
                                     return null;
                             }
@@ -2144,7 +2149,8 @@
                             sheetLastChecked,
                             isEditing,
                             startEditing,
-                            stopEditing
+                            stopEditing,
+                            DashboardPage
                         };
                     }
                 });
