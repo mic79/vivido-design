@@ -171,11 +171,23 @@
 
                     // Fetch locations and grocery items
                     async function fetchData() {
+                        console.log('Starting fetchData');
                         loading.value = true;
                         error.value = null;
                         const currentSelectedLocationId = selectedLocation.value;
                         try {
+                            // Check token validity
+                            const isValid = await GoogleAuth.isTokenValid();
+                            if (!isValid) {
+                                console.log('Token is not valid, refreshing...');
+                                await GoogleAuth.getAccessToken(); // This should refresh the token
+                                console.log('Token is now valid');
+                            }
+
+                            console.log('Fetching groceries data');
                             const groceriesResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Groceries!A2:H');
+                            console.log('Groceries data received:', groceriesResponse);
+
                             const values = groceriesResponse.values || [];
                             groceryItems.value = values.map(row => ({
                                 id: row[0],
@@ -189,7 +201,10 @@
                                 checked: !!row[6]
                             }));
 
+                            console.log('Fetching locations data');
                             const locationsResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:E');
+                            console.log('Locations data received:', locationsResponse);
+
                             const locationsValues = locationsResponse.values || [];
                             locations.value = locationsValues
                                 .filter(row => row[3] !== 'true') // Filter out hidden locations
@@ -202,7 +217,7 @@
                                 }))
                                 .sort((a, b) => a.order - b.order); // Sort locations by order
 
-                            // Update location item counts and total prices
+                            console.log('Updating location stats');
                             updateLocationStats();
 
                             // Restore the previously selected location, or default to the first one if it no longer exists
@@ -212,14 +227,22 @@
                                 selectedLocation.value = locations.value[0].id;
                             }
 
-                            // Process recently checked off items
+                            console.log('Updating recently checked off items');
                             updateRecentlyCheckedOff();
 
                         } catch (err) {
                             console.error('Error fetching data:', err);
-                            error.value = 'Failed to fetch data. Please try again.';
+                            if (err.message.includes('Authentication failed')) {
+                                error.value = 'Authentication failed. Please sign in again.';
+                                // Trigger sign out or re-authentication process
+                                await GoogleAuth.signOut();
+                                // You might want to redirect to a sign-in page or show a sign-in prompt here
+                            } else {
+                                error.value = 'Failed to fetch data. Please try again.';
+                            }
                         } finally {
                             loading.value = false;
+                            console.log('fetchData completed');
                         }
                     }
 
@@ -913,39 +936,39 @@
                         currentEditingItem.value = null;
                     });
 
-                    onMounted(() => {
-                        fetchData().then(() => {
+                    function force_scroll_sideways(element) {
+                        if (!element) return;
+                        element.addEventListener("wheel", (event) => {
+                            event.preventDefault();
+                            let magnitude = event.deltaX === 0 ? (event.deltaY > 0 ? 30 : -30) : event.deltaX;
+                            element.scrollBy({ left: magnitude });
+                        });
+                    }
+
+                    onMounted(async () => {
+                        console.log('Component mounted');
+                        try {
+                            console.log('Waiting for Google Auth to initialize...');
+                            await GoogleAuth.initGoogleAuth();
+                            console.log('Google Auth initialized');
+
+                            console.log('Calling fetchData...');
+                            await fetchData();
+
                             if (locations.value.length > 0) {
+                                console.log('Selecting first location');
                                 selectLocation(locations.value[0].id);
                             }
 
-                            function force_scroll_sideways(element) {
-                                element.addEventListener("wheel", (event) => {
-                                    event.preventDefault();
-
-                                    let [x, y] = [event.deltaX, event.deltaY];
-                                    let magnitude;
-
-                                    if (x === 0) {
-                                    magnitude = y > 0 ? 30 : -30;
-                                    } else {
-                                    magnitude = x;
-                                    }
-
-                                    //console.log({ x, y, magnitude });
-                                    element.scrollBy({
-                                    left: magnitude
-                                    });
-                                });
-                            }
-                            
                             const element = document.querySelector(".location-tabs");
                             force_scroll_sideways(element);
 
-                            Vue.nextTick(() => {
-                                initSortable();
-                            });
-                        });
+                            await Vue.nextTick();
+                            initSortable();
+                        } catch (error) {
+                            console.error("Error during component mount:", error);
+                            // Handle the error appropriately
+                        }
                     });
 
                     return {
@@ -1087,7 +1110,7 @@
                                             {{ location.title }}
                                         </option>
                                     </select>
-                                    <input type="date" style="width: 100px;" @change="changeDateForSelected($event.target.value)" @input="inputDateForSelected($event)">
+                                    <input type="date" placeholder="yyyy-mm-dd" style="width: 100px;" @change="changeDateForSelected($event.target.value)" @input="inputDateForSelected($event)">
                                     <button @click="duplicateSelectedItems">Duplicate</button>
                                     <button class="alert" @click="deleteSelectedItems">Delete</button>
                                 </div>

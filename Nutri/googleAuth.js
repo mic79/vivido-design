@@ -176,22 +176,26 @@ export async function checkForChanges(sheetId) {
   }
 }
 
-export function getAccessToken() {
+export async function getAccessToken() {
+  if (accessToken && await isTokenValid()) {
+    return accessToken;
+  }
+
   return new Promise((resolve, reject) => {
-    if (accessToken) {
-      resolve(accessToken);
-    } else if (tokenClient) {
-      tokenClient.callback = (resp) => {
-        if (resp.error !== undefined) {
-          reject(resp);
-        }
-        accessToken = resp.access_token;
-        resolve(accessToken);
-      };
-      tokenClient.requestAccessToken({prompt: ''});
-    } else {
+    if (!tokenClient) {
       reject(new Error('Token client not initialized'));
+      return;
     }
+
+    tokenClient.callback = (resp) => {
+      if (resp.error !== undefined) {
+        reject(resp);
+      }
+      accessToken = resp.access_token;
+      resolve(accessToken);
+    };
+
+    tokenClient.requestAccessToken({ prompt: '' });
   });
 }
 
