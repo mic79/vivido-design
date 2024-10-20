@@ -1110,7 +1110,7 @@
                                             {{ location.title }}
                                         </option>
                                     </select>
-                                    <input type="date" placeholder="yyyy-mm-dd" style="width: 100px;" @change="changeDateForSelected($event.target.value)" @input="inputDateForSelected($event)">
+                                    <input type="date" @change="changeDateForSelected($event.target.value)" @input="inputDateForSelected($event)">
                                     <button @click="duplicateSelectedItems">Duplicate</button>
                                     <button class="alert" @click="deleteSelectedItems">Delete</button>
                                 </div>

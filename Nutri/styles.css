@@ -269,6 +269,7 @@ button, select, input[type="date"] {
     border: 2px solid #729c9c;
     border-radius: 12px;
     color: white;
+    font-family: inherit;
     font-size: 12px;
     font-weight: 400;
     line-height: 1;
@@ -276,10 +277,52 @@ button, select, input[type="date"] {
     cursor: pointer;
 }
 input[type="date"] {
+    position: relative;
     height: 13px;
+    width: 60px;
+}
+input[type="date"]:before {
+    content: 'Date';
+    position: absolute;
+    height: 100%;
+    width: 100%;
+    top: 0;
+    left: 0;
+    padding: 4px 12px;
+    background: #729c9c;
+    border: 2px solid #729c9c;
+    border-radius: 12px;
+    box-sizing: border-box;
+    color: white;
+    font-size: 12px;
+    font-weight: 400;
+}
+input[type="date"]:after {
+    content: '';
+    position: absolute;
+    height: 100%;
+    width: 40px;
+    top: 0;
+    right: 0;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="15" viewBox="0 0 24 24"><path fill="%23fff" d="M20 3h-1V1h-2v2H7V1H5v2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 18H4V8h16v13z"/></svg>');
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 14px;
+    pointer-events: none;
+    cursor: pointer;
 }
 ::-webkit-calendar-picker-indicator {
     background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="15" viewBox="0 0 24 24"><path fill="%23fff" d="M20 3h-1V1h-2v2H7V1H5v2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 18H4V8h16v13z"/></svg>');
+    position: absolute;
+    height: auto;
+    width: auto;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: transparent;
+    color: transparent;
+    cursor: pointer;
 }
 button {
     transition: background 0.3s ease-in-out, color 0.3s ease-in-out;
