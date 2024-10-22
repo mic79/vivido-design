@@ -51,36 +51,24 @@ export const DashboardPage = {
             const currentYear = new Date().getFullYear();
 
             groceryItems.value.forEach(item => {
-                console.log('Processing item:', item);
-                if (item.lastPurchase && item.location) {  // Using 'location' for price
-                    let date;
-                    if (item.lastPurchase.includes('-')) {
-                        // Handle "16-10-2024 0:00:00" format
-                        const [datePart] = item.lastPurchase.split(' ');
-                        let [day, month, year] = datePart.split('-');
-                        year = adjustYear(year, currentYear);
-                        date = new Date(year, month - 1, day);
-                    } else if (item.lastPurchase.includes('/')) {
-                        // Handle "10/17/2024" format (MM/DD/YYYY)
-                        let [month, day, year] = item.lastPurchase.split('/');
-                        year = adjustYear(year, currentYear);
-                        date = new Date(year, month - 1, day);
-                    }
+                if (item.date_checked && item.price) {  // Ensure date_checked and price are defined
+                    // Convert EPOCH date to JavaScript Date object
+                    const epochTime = parseInt(item.date_checked, 10); // Ensure it's an integer
+                    const date = new Date(epochTime);
 
-                    if (date && !isNaN(date.getTime())) {
+                    if (!isNaN(date.getTime())) {
                         const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-                        const itemCost = parsePrice(item.location);  // Parse price from 'location' field
+                        const itemCost = parsePrice(item.price);  // Use 'price' instead of 'location'
                         if (!isNaN(itemCost)) {
                             costs[monthYear] = (costs[monthYear] || 0) + itemCost;
-                            console.log(`Added ${itemCost} to ${monthYear}. New total: ${costs[monthYear]}`);
                         } else {
-                            console.log('Invalid item cost:', item.location);
+                            console.log('Invalid item cost:', item.price);
                         }
                     } else {
-                        console.log('Invalid date:', item.lastPurchase);
+                        console.log('Invalid date:', item.date_checked);
                     }
                 } else {
-                    console.log('Missing lastPurchase or location (price):', item);
+                    console.log('Missing date_checked or price:', item);
                 }
             });
 
@@ -89,12 +77,8 @@ export const DashboardPage = {
             // Sort the entries by date (most recent first)
             const sortedEntries = Object.entries(costs).sort((a, b) => b[0].localeCompare(a[0]));
 
-            console.log('Sorted entries:', sortedEntries);
-
             // Take the last 12 months (or all if less than 12)
             const last12Months = sortedEntries.slice(0, 12);
-
-            console.log('Last 12 months:', last12Months);
 
             const today = new Date();
             const currentMonthYear = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
@@ -102,9 +86,11 @@ export const DashboardPage = {
 
             let result = last12Months.reverse().map(([month, cost]) => {
                 const itemsForMonth = groceryItems.value.filter(item => {
-                    const itemDate = new Date(item.lastPurchase);
-                    return `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}` === month;
+                    const itemDate = new Date(parseInt(item.date_checked, 10)); // Convert EPOCH to Date
+                    const itemMonthYear = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}`;
+                    return itemMonthYear === month;
                 });
+
                 return {
                     month: month,
                     cost: Number(cost.toFixed(2)),
@@ -167,14 +153,15 @@ export const DashboardPage = {
                 const locationsResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:F');
                 
                 groceryItems.value = groceriesResponse.values.map(row => ({
-                    title: row[0],
-                    amount: row[1],
-                    price: row[2],
-                    location: row[3],
-                    date: row[4],
-                    id: row[5],
-                    checked: row[6] === 'true',
-                    lastPurchase: row[7]
+                    id: row[0],
+                    title: row[1],
+                    amount: row[2],
+                    price: row[3],
+                    order: row[4],
+                    location: row[5],
+                    date_checked: row[6],
+                    date: row[7],
+                    locationTitle: row[8]
                 }));
 
                 locations.value = locationsResponse.values.map(row => ({
@@ -198,6 +185,42 @@ export const DashboardPage = {
             expandedMonth.value = expandedMonth.value === month ? null : month;
         }
 
+        // New method to calculate location totals
+        function getLocationTotals(items) {
+            const totals = {};
+            
+            // Create a map of locations for quick access
+            const locationMap = {};
+            locations.value.forEach(location => {
+                locationMap[location.id] = location.title; // Map location.id to location.title
+            });
+
+            console.log('Location Map:', locationMap); // Debugging log
+
+            items.forEach(item => {
+                const locationId = item.location; // This is the location.id
+                const price = parsePrice(item.price); // Use the price from the item
+
+                console.log('Processing item:', item); // Debugging log
+                console.log('Location ID:', locationId); // Debugging log
+                console.log('Parsed Price:', price); // Debugging log
+
+                if (locationMap[locationId]) { // Check if the location exists in the map
+                    const locationTitle = locationMap[locationId];
+                    if (totals[locationTitle]) {
+                        totals[locationTitle] += price;
+                    } else {
+                        totals[locationTitle] = price;
+                    }
+                } else {
+                    console.log('Location ID not found in locations:', locationId);
+                }
+            });
+
+            console.log('Totals:', totals); // Debugging log
+            return totals;
+        }
+
         return {
             loading,
             error,
@@ -209,7 +232,9 @@ export const DashboardPage = {
             formatPrice,
             formatDate,
             expandedMonth,
-            toggleExpand
+            toggleExpand,
+            getLocationTotals,
+            fetchData
         };
     },
     template: `
@@ -217,7 +242,7 @@ export const DashboardPage = {
             <div class="header">
                 <div class="header-title">
                     <span class="hamburger-menu" @click="toggleSidenav">☰</span>
-                    <h2>Dashboard</h2>
+                    <h2>Dashboard <button @click="fetchData"><i class="icon material-icons" style="font-size: 14px;">refresh</i></button></h2>
                     <small v-if="loading" class="loading">Loading...</small>
                     <div v-else-if="error" class="error">{{ error }}</div>
                 </div>
@@ -245,16 +270,14 @@ export const DashboardPage = {
                                 <table>
                                     <thead>
                                         <tr>
-                                            <th>Date</th>
-                                            <th>Item</th>
-                                            <th>Price</th>
+                                            <th>Location</th>
+                                            <th>Total Price</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr v-for="groceryItem in item.items" :key="groceryItem.id">
-                                            <td>{{ formatDate(groceryItem.lastPurchase) }}</td>
-                                            <td>{{ groceryItem.amount }}</td>
-                                            <td>{{ formatPrice(groceryItem.location) }}</td>
+                                        <tr v-for="(total, location) in getLocationTotals(item.items)" :key="location">
+                                            <td>{{ location }}</td>
+                                            <td>{{ formatPrice(total) }}</td>
                                         </tr>
                                     </tbody>
                                 </table>
