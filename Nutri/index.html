@@ -1842,7 +1842,7 @@
                                             picture: decodedToken.picture
                                         };
                                         isSignedIn.value = true;
-                                        console.log("User signed in, isSignedIn set to:", isSignedIn.value);
+                                        console.log("User signed in:", isSignedIn.value);
                                         localStorage.setItem('gsi_session', response.credential);
                                         
                                         const tokenClient = GoogleAuth.getTokenClient();
@@ -2073,10 +2073,8 @@
                         async function initializeApp() {
                             console.log("Initializing app");
                             await GoogleAuth.initGoogleAuth();
-                            const sessionExists = await GoogleAuth.checkExistingSession();
-                            console.log("Session exists:", sessionExists);
-                            if (!sessionExists || !isSignedIn.value) {
-                                console.log("No valid session, user needs to sign in");
+                            if (!checkSavedSession()) {
+                                console.log("No saved session, initializing Google Sign-In");
                                 initializeGoogleSignIn();
                             }
                         }

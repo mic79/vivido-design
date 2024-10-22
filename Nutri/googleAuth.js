@@ -294,7 +294,7 @@ export async function getSheetMetadata(sheetId) {
   }
 }
 
-export function checkExistingSession() {
+/*export function checkExistingSession() {
   return new Promise((resolve) => {
     const savedSession = localStorage.getItem('gsi_session');
     if (savedSession) {
@@ -306,7 +306,7 @@ export function checkExistingSession() {
       resolve(false);
     }
   });
-}
+}*/
 
 export function handleCredentialResponse(response) {
   console.log("Handling credential response in googleAuth.js");
@@ -330,7 +330,7 @@ const GoogleAuth = {
   isTokenValid,
   handleAuthError,
   getSheetMetadata,
-  checkExistingSession,
+  //checkExistingSession,
   getTokenClient,
   getIdClient,
 };
