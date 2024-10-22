@@ -192,6 +192,7 @@ export async function getAccessToken() {
         reject(resp);
       }
       accessToken = resp.access_token;
+      localStorage.setItem('gsi_session', resp.access_token); // Save the new token
       resolve(accessToken);
     };
 
@@ -295,29 +296,22 @@ export async function getSheetMetadata(sheetId) {
 
 export function checkExistingSession() {
   return new Promise((resolve) => {
-    google.accounts.id.initialize({
-      client_id: CLIENT_ID,
-      callback: (response) => {
-        if (window.handleCredentialResponse) {
-          window.handleCredentialResponse(response);
-          resolve(true);
-        } else {
-          console.error('handleCredentialResponse not defined in main app');
-          resolve(false);
-        }
-      },
-      use_fedcm_for_prompt: true,
-      auto_select: true,
-      cancel_on_tap_outside: false
-    });
-
-    // Instead of using prompt, we'll use a timeout
-    setTimeout(() => {
+    const savedSession = localStorage.getItem('gsi_session');
+    if (savedSession) {
+      console.log("Found saved session, attempting to use it");
+      window.handleCredentialResponse({ credential: savedSession });
+      resolve(true);
+    } else {
+      console.log("No saved session found");
       resolve(false);
-    }, 1000); // Adjust this timeout as needed
-
-    google.accounts.id.prompt();
+    }
   });
+}
+
+export function handleCredentialResponse(response) {
+  console.log("Handling credential response in googleAuth.js");
+  // Call the global handleCredentialResponse function
+  window.handleCredentialResponse(response);
 }
 
 const GoogleAuth = {

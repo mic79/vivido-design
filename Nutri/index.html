@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div id="app" styleX="display: none;">
+    <div id="app" style="display: none;">
         <div v-if="!isSignedIn">
             <div id="googleSignInButton" style="display: flex; align-items: center; justify-content: center; height: 100dvh; width: 100%;"></div>
         </div>
@@ -1785,6 +1785,7 @@
                     setup() {
                         console.log("Vue setup function called");
 
+                        const CLIENT_ID = '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com';
                         const isSignedIn = ref(false);
                         const user = ref(null);
                         const sheetId = ref(null);
@@ -1830,32 +1831,52 @@
                         }
 
                         function handleCredentialResponse(response) {
+                            console.log("Handling credential response in index.html");
                             if (response.credential) {
-                                const decodedToken = parseJwt(response.credential);
-                                user.value = {
-                                email: decodedToken.email,
-                                name: decodedToken.name,
-                                picture: decodedToken.picture
-                                };
-                                isSignedIn.value = true;
-                                localStorage.setItem('gsi_session', response.credential);
-                                
-                                const tokenClient = GoogleAuth.getTokenClient();
-                                if (tokenClient) {
-                                tokenClient.callback = async (resp) => {
-                                    if (resp.error !== undefined) {
-                                    throw(resp);
+                                try {
+                                    const decodedToken = parseJwt(response.credential);
+                                    if (decodedToken && decodedToken.email) {
+                                        user.value = {
+                                            email: decodedToken.email,
+                                            name: decodedToken.name,
+                                            picture: decodedToken.picture
+                                        };
+                                        isSignedIn.value = true;
+                                        console.log("User signed in, isSignedIn set to:", isSignedIn.value);
+                                        localStorage.setItem('gsi_session', response.credential);
+                                        
+                                        const tokenClient = GoogleAuth.getTokenClient();
+                                        if (tokenClient) {
+                                            tokenClient.callback = async (resp) => {
+                                                if (resp.error !== undefined) {
+                                                    throw(resp);
+                                                }
+                                                await checkForStoredSheet();
+                                            };
+                                            tokenClient.requestAccessToken({prompt: ''});
+                                        } else {
+                                            console.error("Token client not properly initialized");
+                                        }
+                                    } else {
+                                        throw new Error("Invalid token structure");
                                     }
-                                    await checkForStoredSheet();
-                                };
-                                tokenClient.requestAccessToken({prompt: ''});
-                                } else {
-                                console.error("Token client not properly initialized");
+                                } catch (error) {
+                                    console.error("Error parsing JWT token:", error);
+                                    isSignedIn.value = false;
+                                    user.value = null;
+                                    localStorage.removeItem('gsi_session');
+                                    initializeGoogleSignIn();
                                 }
                             } else {
                                 console.error("No credential in response");
+                                isSignedIn.value = false;
+                                user.value = null;
+                                initializeGoogleSignIn();
                             }
                         }
+
+                        // Make sure this function is defined in the global scope
+                        window.handleCredentialResponse = handleCredentialResponse;
 
                         function checkSavedSession() {
                             const savedSession = localStorage.getItem('gsi_session');
@@ -1867,12 +1888,31 @@
                         }
 
                         function parseJwt(token) {
-                            const base64Url = token.split('.')[1];
-                            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-                            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-                                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-                            }).join(''));
-                            return JSON.parse(jsonPayload);
+                            try {
+                                const base64Url = token.split('.')[1];
+                                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                                const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+                                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                                }).join(''));
+                                return JSON.parse(jsonPayload);
+                            } catch (error) {
+                                console.error("Error parsing JWT:", error);
+                                return null;
+                            }
+                        }
+
+                        function initializeGoogleSignIn() {
+                            google.accounts.id.initialize({
+                                client_id: CLIENT_ID,
+                                callback: handleCredentialResponse,
+                                auto_select: true,
+                                cancel_on_tap_outside: false
+                            });
+                            google.accounts.id.renderButton(
+                                document.getElementById('googleSignInButton'), 
+                                { theme: 'outline', size: 'large' }
+                            );
+                            google.accounts.id.prompt();
                         }
 
                         function checkForStoredSheet() {
@@ -2030,44 +2070,22 @@
 
                         let googleAuth = null;
 
-                        onMounted(() => {
-                            console.log("Vue app mounted");
-                            checkForUpdates();
-                            GoogleAuth.initGoogleAuth().then(({ idClient, tokenClient }) => {
-                                console.log("Google Auth initialized");
-                                
-                                google.accounts.id.initialize({
-                                    client_id: CLIENT_ID,  // Now this should work
-                                    callback: handleCredentialResponse,
-                                    auto_select: false,
-                                    cancel_on_tap_outside: false
-                                });
-
-                                const savedSession = localStorage.getItem('gsi_session');
-                                if (savedSession) {
-                                    console.log("Saved session found");
-                                    handleCredentialResponse({ credential: savedSession });
-                                } else {
-                                    console.log("No saved session, rendering sign-in button");
-                                    google.accounts.id.renderButton(
-                                        document.getElementById('googleSignInButton'), 
-                                        { theme: 'outline', size: 'large' }
-                                    );
-                                    google.accounts.id.prompt();
-                                }
-                                
-                                setupTokenCheck();
-                            });
-                        });
-
-                        function handleExistingSession(tokenClient) {
-                            GoogleAuth.getAccessToken(tokenClient).then(() => {
-                                checkForStoredSheet();
-                            }).catch(error => {
-                                console.error("Error getting access token:", error);
-                                // Handle the error appropriately, e.g., prompt the user to sign in again
-                            });
+                        async function initializeApp() {
+                            console.log("Initializing app");
+                            await GoogleAuth.initGoogleAuth();
+                            const sessionExists = await GoogleAuth.checkExistingSession();
+                            console.log("Session exists:", sessionExists);
+                            if (!sessionExists || !isSignedIn.value) {
+                                console.log("No valid session, user needs to sign in");
+                                initializeGoogleSignIn();
+                            }
                         }
+
+                        onMounted(() => {
+                            console.log("App mounted hook called");
+                            checkForUpdates();
+                            initializeApp();
+                        });
 
                         const currentModifiedTime = ref(null);
                         let changeDetectionInterval = null;
@@ -2182,7 +2200,8 @@
                 app.mount('#app');
                 console.log("Vue app mounted successfully");
 
-                
+                // Make the app visible after mounting
+                document.getElementById('app').style.display = 'block';
             }).catch((error) => {
                 console.error("Error loading scripts:", error);
             });
