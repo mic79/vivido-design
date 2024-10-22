@@ -715,7 +715,10 @@ td.location-order input {
     background-color: #e0e0e0;
     font-weight: bold;
 }
-.expanded-details td:nth-child(3) {
+.expanded-details td:nth-child(1) {
+    width: 100%;
+}
+.expanded-details td:nth-child(2) {
     text-align: right;
 }
 .expanded-details tr:last-child td {
