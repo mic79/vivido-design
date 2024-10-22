@@ -12,6 +12,8 @@
     <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin-allow-popups">
     <title>Groceries</title>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://apis.google.com/js/picker.js"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
@@ -1786,6 +1788,7 @@
                         console.log("Vue setup function called");
 
                         const CLIENT_ID = '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com';
+                        const API_KEY = 'AIzaSyDjwvPH2It7i1feQRPTmQyY_yhNSG-1BmE';
                         const isSignedIn = ref(false);
                         const user = ref(null);
                         const sheetId = ref(null);
@@ -1972,22 +1975,46 @@
                             stopChangeDetection();
                         }
 
+                        function loadPickerApi() {
+                            return new Promise((resolve, reject) => {
+                                gapi.load('picker', { callback: resolve, onerror: reject });
+                            });
+                        }
+
+                        function pickerCallback(data) {
+                            if (data.action === google.picker.Action.PICKED) {
+                                const fileId = data.docs[0].id;
+                                console.log('The user selected: ' + fileId);
+                                sheetId.value = fileId;
+                                localStorage.setItem('lastUsedSheetId', fileId);
+
+                                // Reset the last checked time for this sheet
+                                delete sheetLastChecked[fileId];
+
+                                // Fetch data and set up change detection for the new sheet
+                                fetchCurrentPageData().then(() => {
+                                    setupChangeDetection(fileId, fetchCurrentPageData);
+                                });
+                            }
+                        }
+
                         async function showPicker() {
                             console.log("Showing Google Picker");
                             try {
-                                await GoogleAuth.initGooglePicker((fileId) => {
-                                    console.log('The user selected: ' + fileId);
-                                    sheetId.value = fileId;
-                                    localStorage.setItem('lastUsedSheetId', fileId);
-
-                                    // Reset the last checked time for this sheet
-                                    delete sheetLastChecked[fileId];
-
-                                    // Fetch data and set up change detection for the new sheet
-                                    fetchCurrentPageData().then(() => {
-                                        setupChangeDetection(fileId, fetchCurrentPageData);
-                                    });
-                                });
+                                await loadPickerApi();
+                                const accessToken = await GoogleAuth.getAccessToken();
+                                
+                                const view = new google.picker.View(google.picker.ViewId.SPREADSHEETS);
+                                const picker = new google.picker.PickerBuilder()
+                                    .enableFeature(google.picker.Feature.NAV_HIDDEN)
+                                    .setAppId(CLIENT_ID)
+                                    .setOAuthToken(accessToken)
+                                    .addView(view)
+                                    .addView(new google.picker.DocsUploadView())
+                                    .setDeveloperKey(API_KEY)
+                                    .setCallback(pickerCallback)
+                                    .build();
+                                picker.setVisible(true);
                             } catch (error) {
                                 console.error('Error showing Google Picker:', error);
                             }
@@ -2073,6 +2100,7 @@
                         async function initializeApp() {
                             console.log("Initializing app");
                             await GoogleAuth.initGoogleAuth();
+                            await loadPickerApi();
                             if (!checkSavedSession()) {
                                 console.log("No saved session, initializing Google Sign-In");
                                 initializeGoogleSignIn();
