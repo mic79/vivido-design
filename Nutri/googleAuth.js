@@ -46,41 +46,56 @@ export function loadSheetData(sheetId, range) {
   });
 }
 
-export function updateSheetData(sheetId, range, values) {
-  return getAccessToken(tokenClient).then(token => {
-    // First, try to update the specified range
-    return fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?valueInputOption=RAW`, {
-      method: 'PUT',
-      headers: { 
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ values: values })
-    }).then(response => {
-      // If the response is not OK, check if it's a 400 error
-      if (!response.ok) {
-        if (response.status === 400) {
-          // If the row does not exist, use the append method
-          console.warn(`Row does not exist. Appending data to ${range}.`);
-          return fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}:append?valueInputOption=RAW`, {
-            method: 'POST',
-            headers: { 
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ values: values })
-          });
-        }
-        return response.json().then(errorData => {
-          throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
-        });
-      }
-      return response.json();
-    });
-  }).catch(err => {
-    console.error('Error updating sheet data:', err);
-    throw err;
+export async function updateSheetData(sheetId, range, values) {
+  const token = await getAccessToken(tokenClient);
+  
+  // Use only the sheet name and column range, not the specific row
+  const sheetRange = range.split('!')[0];  // This will give us "Groceries!A:I"
+
+  // First, fetch all data to find the correct row
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}`, {
+    headers: { Authorization: `Bearer ${token}` }
   });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(`Failed to fetch sheet data: ${errorData.error.message}`);
+  }
+
+  const sheetData = await response.json();
+  const rows = sheetData.values || [];
+
+  // Find the row with the matching ID (assuming ID is in the first column)
+  const rowIndex = rows.findIndex(row => row[0] === values[0][0]);
+
+  let updateUrl;
+  let method;
+
+  if (rowIndex !== -1) {
+    // Item found, update the existing row
+    updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}!A${rowIndex + 1}?valueInputOption=USER_ENTERED`;
+    method = 'PUT';
+  } else {
+    // Item not found, append a new row
+    updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}:append?valueInputOption=USER_ENTERED`;
+    method = 'POST';
+  }
+
+  const updateResponse = await fetch(updateUrl, {
+    method: method,
+    headers: { 
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ values: values })
+  });
+
+  if (!updateResponse.ok) {
+    const errorData = await updateResponse.json();
+    throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
+  }
+
+  return await updateResponse.json();
 }
 
 export async function createNewSheet(title) {

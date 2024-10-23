@@ -375,61 +375,24 @@
 
                     async function updateItemInSheet(item) {
                         console.log('updateItemInSheet', item);
-                        const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
-                        if (itemIndex === -1) {
-                            throw new Error('Item not found in local array');
-                        }
 
                         try {
-                            const rowIndex = itemIndex + 2; // +2 because sheet is 1-indexed and has a header row
-                            const locationTitleFormula = `=IF(ISBLANK(F${rowIndex});"";INDEX(Locations!A:A; MATCH(F${rowIndex}; Locations!C:C; 0)))`;
-                            const dateFormula = `=IF(ISBLANK(G${rowIndex});"";EPOCHTODATE(G${rowIndex};2))`;
-
                             const cellValues = [
-                                { userEnteredValue: { stringValue: item.id } },
-                                { userEnteredValue: { stringValue: item.title } },
-                                { userEnteredValue: { numberValue: item.amount } },
-                                { userEnteredValue: { stringValue: formatPrice(item.price) } },
-                                { userEnteredValue: { numberValue: item.order } },
-                                { userEnteredValue: { stringValue: item.location } },
-                                { userEnteredValue: { numberValue: item.dateChecked ? Number(item.dateChecked) : null } },
-                                { userEnteredValue: { formulaValue: dateFormula } },
-                                { userEnteredValue: { formulaValue: locationTitleFormula } }
+                                [
+                                    item.id,
+                                    item.title,
+                                    item.amount.toString(),
+                                    formatPrice(item.price),
+                                    item.order.toString(),
+                                    item.location,
+                                    item.dateChecked ? item.dateChecked.toString() : '',
+                                    item.date,
+                                ]
                             ];
 
-                            // Check if the row exists
-                            const range = `Groceries!A${rowIndex}:A${rowIndex}`;
-                            const response = await GoogleAuth.getValues(props.sheetId, range);
+                            await GoogleAuth.updateSheetData(props.sheetId, 'Groceries!A:I', cellValues);
 
-                            let requests;
-                            if (response.values && response.values.length > 0) {
-                                // Row exists, use updateCells
-                                requests = [{
-                                    updateCells: {
-                                        rows: [{ values: cellValues }],
-                                        fields: '*',
-                                        start: {
-                                            sheetId: await getSheetId(props.sheetId, 'Groceries'),
-                                            rowIndex: rowIndex - 1,
-                                            columnIndex: 0
-                                        }
-                                    }
-                                }];
-                            } else {
-                                // Row doesn't exist, use appendCells
-                                requests = [{
-                                    appendCells: {
-                                        sheetId: await getSheetId(props.sheetId, 'Groceries'),
-                                        rows: [{ values: cellValues }],
-                                        fields: '*'
-                                    }
-                                }];
-                            }
-
-                            console.log('Batch Update Requests:', JSON.stringify(requests, null, 2));
-
-                            await GoogleAuth.batchUpdateSpreadsheet(props.sheetId, requests);
-                            console.log('Item updated successfully in sheet');
+                            console.log('Item updated successfully');
                         } catch (err) {
                             console.error('Error updating item in sheet:', err);
                             throw err;
@@ -722,13 +685,6 @@
                         if (commaIndex !== -1) {
                             inputValue = inputValue.slice(0, commaIndex + 1) + inputValue.slice(commaIndex + 1).replace(',', '');
                         }
-                        
-                        // Limit to two decimal places if comma is present
-                        /*const parts = inputValue.split(',');
-                        if (parts.length > 1) {
-                            parts[1] = parts[1].slice(0, 2);
-                            inputValue = parts.join(',');
-                        }*/
                         
                         // Update the input value without full formatting
                         event.target.value = inputValue;
@@ -1374,7 +1330,12 @@
                             const currentRowCount = response.values ? response.values.length : 0;
 
                             // Append the new location to the end of the sheet
-                            await GoogleAuth.updateSheetData(props.sheetId, `Locations!A${currentRowCount + 1}:F${currentRowCount + 1}`, [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]]);
+                            await GoogleAuth.updateSheetData(
+                                props.sheetId, 
+                                `Locations!A${currentRowCount + 1}:F${currentRowCount + 1}`, 
+                                [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]],
+                                true  // isNewRow = true
+                            );
 
                             locations.value.push(newLocation);
 
