@@ -191,33 +191,26 @@ export const DashboardPage = {
             // Create a map of locations for quick access
             const locationMap = {};
             locations.value.forEach(location => {
-                locationMap[location.id] = location.title; // Map location.id to location.title
+                locationMap[location.id] = location.title;
             });
 
-            console.log('Location Map:', locationMap); // Debugging log
-
             items.forEach(item => {
-                const locationId = item.location; // This is the location.id
-                const price = parsePrice(item.price); // Use the price from the item
+                const locationId = item.location;
+                const price = parsePrice(item.price);
 
-                console.log('Processing item:', item); // Debugging log
-                console.log('Location ID:', locationId); // Debugging log
-                console.log('Parsed Price:', price); // Debugging log
-
-                if (locationMap[locationId]) { // Check if the location exists in the map
+                if (locationMap[locationId]) {
                     const locationTitle = locationMap[locationId];
-                    if (totals[locationTitle]) {
-                        totals[locationTitle] += price;
-                    } else {
-                        totals[locationTitle] = price;
-                    }
+                    totals[locationTitle] = (totals[locationTitle] || 0) + price;
                 } else {
                     console.log('Location ID not found in locations:', locationId);
                 }
             });
 
-            console.log('Totals:', totals); // Debugging log
-            return totals;
+            // Convert the totals object to an array of [location, total] pairs
+            const sortedTotals = Object.entries(totals)
+                .sort((a, b) => b[1] - a[1]); // Sort by total price in descending order
+
+            return sortedTotals;
         }
 
         return {
@@ -274,7 +267,7 @@ export const DashboardPage = {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr v-for="(total, location) in getLocationTotals(item.items)" :key="location">
+                                        <tr v-for="[location, total] in getLocationTotals(item.items)" :key="location">
                                             <td>{{ location }}</td>
                                             <td>{{ formatPrice(total) }}</td>
                                         </tr>
