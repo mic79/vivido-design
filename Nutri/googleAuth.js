@@ -329,6 +329,43 @@ export function handleCredentialResponse(response) {
   window.handleCredentialResponse(response);
 }
 
+export async function batchUpdateSheetData(sheetId, sheetName, items) {
+  const token = await getAccessToken(tokenClient);
+  
+  const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetName}:append?valueInputOption=USER_ENTERED`;
+
+  const updateResponse = await fetch(updateUrl, {
+    method: 'POST',
+    headers: { 
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ values: items })
+  });
+
+  if (!updateResponse.ok) {
+    const errorData = await updateResponse.json();
+    throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
+  }
+
+  return await updateResponse.json();
+}
+
+export async function batchDuplicateGroceryItems(sheetId, items) {
+  const newItems = items.map(item => [
+    `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // Generate a new unique ID
+    item.title,
+    item.amount.toString(),
+    item.price.toString(),
+    (parseInt(item.order) + items.length).toString(), // Increment order to place at the end
+    item.location,
+    '', // dateChecked should be empty for new items
+    '', // date should be empty for new items
+  ]);
+
+  return batchUpdateSheetData(sheetId, 'Groceries', newItems);
+}
+
 const GoogleAuth = {
   initGoogleAuth,
   loadSheetData,
@@ -348,6 +385,8 @@ const GoogleAuth = {
   //checkExistingSession,
   getTokenClient,
   getIdClient,
+  batchUpdateSheetData,
+  batchDuplicateGroceryItems,
 };
 
 export default GoogleAuth;

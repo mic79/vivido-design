@@ -55,7 +55,7 @@
     </div>
 
     <script type="module">
-        import GoogleAuth, { CLIENT_ID } from './googleAuth.js?v=1';
+        import GoogleAuth, { CLIENT_ID, batchDuplicateGroceryItems } from './googleAuth.js?v=1';
         import { DashboardPage } from './DashboardPage.js';
 
         let app;
@@ -118,12 +118,13 @@
                         });
                     }
 
-                    function toggleSelectAll(items) {
-                        if (selectedItems.value.length === items.length) {
-                            selectedItems.value = [];
-                        } else {
-                            selectedItems.value = items.map(item => item.id);
-                        }
+                    function toggleSelectAll() {
+                        const allSelected = areAllLocationsSelected.value;
+                        sortedAndFilteredHistory.value.forEach(location => {
+                            location.selected = !allSelected;
+                        });
+                        // Force reactivity update
+                        locations.value = [...locations.value];
                     }
 
                     function deselectAll() {
@@ -488,35 +489,66 @@
                         }
                     }
 
-                    async function duplicateSelectedItems() {
-                        for (const itemId of selectedItems.value) {
-                            const originalItem = groceryItems.value.find(item => item.id === itemId);
-                            if (originalItem) {
-                            const newItem = {
-                                id: `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                                title: originalItem.title,
-                                amount: originalItem.amount,
-                                price: originalItem.price,
-                                order: groceryItems.value.length,
-                                location: originalItem.location,
-                                dateChecked: null,
-                                date: '',
-                                checked: false
-                            };
+                    function toggleSelectAll() {
+                        const allSelected = selectedItems.value.length === filteredGroceryItems.value.length;
+                        filteredGroceryItems.value.forEach(item => item.selected = !allSelected);
+                        updateSelectedItems();
+                        // Force reactivity update
+                        groceryItems.value = [...groceryItems.value];
+                    }
 
-                            groceryItems.value.push(newItem);
-                            try {
-                                await updateItemInSheet(newItem);
-                                // Handle successful update
-                                updateLocationStats();
-                            } catch (err) {
-                                console.error('Failed to duplicate item:', err);
-                                error.value = 'Failed to duplicate item. Please try again.';
-                            }
-                            }
+                    function toggleItemSelection(item) {
+                        item.selected = !item.selected;
+                        updateSelectedItems();
+                    }
+
+                    function updateSelectedItems() {
+                        selectedItems.value = filteredGroceryItems.value
+                            .filter(item => item.selected)
+                            .map(item => item.id);
+                        console.log('Updated selected items:', selectedItems.value);
+                    }
+                    
+                    function toggleSelectAllInGroup(items) {
+                        const allSelected = items.every(item => selectedItems.value.includes(item.id));
+                        if (allSelected) {
+                            selectedItems.value = selectedItems.value.filter(id => !items.some(item => item.id === id));
+                        } else {
+                            selectedItems.value = [...new Set([...selectedItems.value, ...items.map(item => item.id)])];
                         }
-                        // Clear selections after duplication
-                        selectedItems.value = [];
+                    }
+
+                    function toggleItemSelection(item) {
+                        const index = selectedItems.value.indexOf(item.id);
+                        if (index > -1) {
+                            selectedItems.value.splice(index, 1);
+                        } else {
+                            selectedItems.value.push(item.id);
+                        }
+                    }
+
+                    async function duplicateSelectedItems() {
+                        if (selectedItems.value.length === 0) {
+                            console.log('No items selected');
+                            return;
+                        }
+
+                        loading.value = true;
+                        error.value = null;
+
+                        try {
+                            const allItems = [...filteredGroceryItems.value, ...recentlyCheckedOff.value.flatMap(group => group.items)];
+                            const itemsToDuplicate = allItems.filter(item => selectedItems.value.includes(item.id));
+                            
+                            await GoogleAuth.batchDuplicateGroceryItems(props.sheetId, itemsToDuplicate);
+                            await fetchData(); // Refresh all data
+                            console.log('Items duplicated successfully');
+                        } catch (err) {
+                            console.error('Error duplicating items:', err);
+                            error.value = 'Failed to duplicate items. Please try again.';
+                        } finally {
+                            loading.value = false;
+                        }
                     }
 
                     async function deleteSelectedItems() {
@@ -971,7 +1003,11 @@
                         suggestions,
                         currentEditingItem,
                         filterSuggestions,
-                        selectSuggestion
+                        selectSuggestion,
+                        toggleItemSelection,
+                        updateSelectedItems,
+                        toggleSelectAllInGroup,
+                        toggleItemSelection
                     };
                 },
                 template: `
@@ -1007,7 +1043,11 @@
                                 <table v-if="filteredGroceryItems.length > 0">
                                     <thead>
                                         <tr>
-                                            <th width="30"><input type="checkbox" :checked="selectedItems.length === filteredGroceryItems.length" @change="toggleSelectAll(filteredGroceryItems)"></th>
+                                            <th width="30">
+                                                <input type="checkbox" 
+                                                    :checked="selectedItems.length === filteredGroceryItems.length && filteredGroceryItems.length > 0" 
+                                                    @change="toggleSelectAll(filteredGroceryItems)">
+                                            </th>
                                             <th>Item</th>
                                             <th width="60">Quantity</th>
                                             <th width="60">Price</th>
@@ -1016,7 +1056,10 @@
                                     <tbody ref="groceryListRef">
                                         <tr v-for="item in filteredGroceryItems" :key="item.id">
                                             <td class="select-checkbox" width="30">
-                                                <input v-if="!sortingEnabled" type="checkbox" v-model="selectedItems" :value="item.id">
+                                                <input v-if="!sortingEnabled" 
+                                                    type="checkbox" 
+                                                    v-model="item.selected"
+                                                    @change="updateSelectedItems">
                                                 <span v-else class="drag-handle">☰</span>
                                             </td>
                                             <td class="item-title">
@@ -1071,7 +1114,7 @@
                                         </option>
                                     </select>
                                     <input type="date" @change="changeDateForSelected($event.target.value)" @input="inputDateForSelected($event)">
-                                    <button @click="duplicateSelectedItems">Duplicate</button>
+                                    <button @click="duplicateSelectedItems" :disabled="selectedItems.length === 0">Duplicate</button>
                                     <button class="alert" @click="deleteSelectedItems">Delete</button>
                                 </div>
                             </div>
@@ -1086,7 +1129,11 @@
                                 <table v-if="!group.collapsed">
                                     <thead>
                                     <tr>
-                                        <th width="30"><input type="checkbox" :checked="selectedItems.length === group.items.length" @change="toggleSelectAll(group.items)"></th>
+                                        <th width="30">
+                                            <input type="checkbox" 
+                                                :checked="group.items.length > 0 && group.items.every(item => selectedItems.includes(item.id))" 
+                                                @change="toggleSelectAllInGroup(group.items)">
+                                        </th>
                                         <th>Item</th>
                                         <th width="60">Quantity</th>
                                         <th width="60">Price</th>
@@ -1094,7 +1141,11 @@
                                     </thead>
                                     <tbody>
                                     <tr v-for="item in group.items" :key="item.id" :data-id="item.id">
-                                        <td class="select-checkbox" width="30"><input type="checkbox" v-model="selectedItems" :value="item.id"></td>
+                                        <td class="select-checkbox" width="30">
+                                            <input type="checkbox" 
+                                                :checked="selectedItems.includes(item.id)"
+                                                @change="toggleItemSelection(item)">
+                                        </td>
                                         <td class="item-title"><input type="text" v-model="item.title" @focus="startEditing" @blur="stopEditing" @change="updateItemInSheet(item)"></td>
                                         <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @focus="($event) => { handleAmountFocus(item, $event); startEditing(); }" @blur="stopEditing" @change="updateItemInSheet(item)"></td>
                                         <td class="item-price" width="60">
@@ -1148,10 +1199,10 @@
 
                     const paginatedLocations = computed(() => {
                         const startIndex = (currentLocationsPage.value - 1) * itemsPerPage.value;
-                        return stableLocations.value.slice(startIndex, startIndex + itemsPerPage.value);
+                        return filteredAndSortedLocations.value.slice(startIndex, startIndex + itemsPerPage.value);
                     });
 
-                    const totalPages = computed(() => Math.ceil(stableLocations.value.length / itemsPerPage.value));
+                    const totalPages = computed(() => Math.ceil(filteredAndSortedLocations.value.length / itemsPerPage.value));
 
                     const selectedLocations = computed(() => 
                         locations.value.filter(location => location.selected)
@@ -1210,7 +1261,8 @@
                                 order: parseInt(row[1]) || 0,
                                 id: row[2],
                                 hidden: row[3] === 'true',
-                                city: row[4] || ''
+                                city: row[4] || '',
+                                selected: false
                             }));
                             applyFilterAndSort();
                         } catch (err) {
@@ -1301,6 +1353,34 @@
                         }
                     }
 
+                    const areAllLocationsSelected = computed(() => {
+                        return filteredAndSortedLocations.value.length > 0 && 
+                            filteredAndSortedLocations.value.every(location => location.selected);
+                    });
+
+                    function toggleSelectAll() {
+                        const allSelected = areAllLocationsSelected.value;
+                        locations.value.forEach(location => {
+                            location.selected = !allSelected;
+                        });
+                    }
+
+                    function toggleLocationSelection(location) {
+                        location.selected = !location.selected;
+                    }
+
+                    function toggleItemSelection(item) {
+                        item.selected = !item.selected;
+                        updateSelectedItems();
+                    }
+
+                    function updateSelectedItems() {
+                        selectedItems.value = selectedLocations.value
+                            .filter(item => item.selected)
+                            .map(item => item.id);
+                        console.log('Updated selected items:', selectedItems.value);
+                    }
+
                     watch(currentLocationsPage, () => {
                         if (focusNextId.value) {
                             Vue.nextTick(() => {
@@ -1360,10 +1440,6 @@
                         } finally {
                             loading.value = false;
                         }
-                    }
-
-                    function toggleSelectAll() {
-                        locations.value.forEach(location => location.selected = selectAll.value);
                     }
 
                     async function deleteSelected() {
@@ -1462,6 +1538,41 @@
                         return `location-${column.toLowerCase()}`;
                     }
 
+                    const filteredLocations = computed(() => {
+                        return locations.value.filter(location =>
+                            Object.values(location).some(value =>
+                                String(value).toLowerCase().includes(globalSearch.value.toLowerCase())
+                            )
+                        );
+                    });
+
+                    const paginatedFilteredLocations = computed(() => {
+                        const startIndex = (currentPage.value - 1) * itemsPerPage.value;
+                        return filteredLocations.value.slice(startIndex, startIndex + itemsPerPage.value);
+                    });
+
+                    const filteredAndSortedLocations = computed(() => {
+                        let result = locations.value;
+                        
+                        // Apply global search filter
+                        if (globalSearch.value) {
+                            result = result.filter(location =>
+                                Object.values(location).some(value =>
+                                    String(value).toLowerCase().includes(globalSearch.value.toLowerCase())
+                                )
+                            );
+                        }
+                        
+                        // Apply sorting
+                        result.sort((a, b) => {
+                            if (a[sortColumn.value] < b[sortColumn.value]) return sortDirection.value === 'asc' ? -1 : 1;
+                            if (a[sortColumn.value] > b[sortColumn.value]) return sortDirection.value === 'asc' ? 1 : -1;
+                            return 0;
+                        });
+                        
+                        return result;
+                    });
+
                     onMounted(() => {
                         fetchLocations();
                         if (props.setupChangeDetection) {
@@ -1490,6 +1601,8 @@
                         fetchLocations,
                         selectAll,
                         selectedLocations,
+                        areAllLocationsSelected,
+                        toggleLocationSelection,
                         toggleSelectAll,
                         deleteSelected,
                         debounceSearch,
@@ -1501,6 +1614,10 @@
                         handleLocationBlur,
                         handleKeyDown,
                         focusNextId,
+                        toggleItemSelection,
+                        updateSelectedItems,
+                        filteredLocations,
+                        filteredAndSortedLocations
                     };
                 },
                 template: `
@@ -1520,7 +1637,11 @@
                             <table>
                                 <thead>
                                     <tr>
-                                        <th width="30" class="location-checkbox"><input type="checkbox" v-model="selectAll" @change="toggleSelectAll"></th>
+                                        <th width="30">
+                                            <input type="checkbox" 
+                                                :checked="areAllLocationsSelected"
+                                                @change="toggleSelectAll">
+                                        </th>
                                         <th v-for="column in columns" :key="column" @click="sort(column)" :class="getLocationColumnClass(column)">
                                             {{ column }}
                                             <span v-if="sortColumn === column">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
@@ -1529,7 +1650,11 @@
                                 </thead>
                                 <tbody>
                                     <tr v-for="location in paginatedLocations" :key="location.id">
-                                        <td><input type="checkbox" v-model="location.selected"></td>
+                                        <td class="select-checkbox" width="30">
+                                            <input type="checkbox" 
+                                                :checked="location.selected"
+                                                @change="toggleLocationSelection(location)">
+                                        </td>
                                         <td v-for="column in columns" :key="column" :class="getLocationColumnClass(column)">
                                             <input v-if="column !== 'hidden'" type="text" v-model="location[column]" :data-location-id="location.id" :data-field="column" @input="handleLocationInput(location, column, $event)" @focus="startEditing" @blur="($event) => { handleLocationBlur(location, $event); stopEditing(); }" @keydown="handleKeyDown(location, column, $event)">
                                             <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
