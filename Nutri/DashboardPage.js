@@ -51,24 +51,23 @@ export const DashboardPage = {
             const currentYear = new Date().getFullYear();
 
             groceryItems.value.forEach(item => {
-                if (item.date_checked && item.price) {  // Ensure date_checked and price are defined
-                    // Convert EPOCH date to JavaScript Date object
-                    const epochTime = parseInt(item.date_checked, 10); // Ensure it's an integer
-                    const date = new Date(epochTime);
-
+                if (item.dateChecked && item.price) {
+                    // Convert the timestamp to a Date object
+                    const date = new Date(parseInt(item.dateChecked));
                     if (!isNaN(date.getTime())) {
-                        const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-                        const itemCost = parsePrice(item.price);  // Use 'price' instead of 'location'
+                        // Use UTC date to match Groceries page behavior
+                        const monthYear = date.toISOString().split('T')[0].slice(0, 7); // YYYY-MM format
+                        const itemCost = parsePrice(item.price);
                         if (!isNaN(itemCost)) {
                             costs[monthYear] = (costs[monthYear] || 0) + itemCost;
                         } else {
                             console.log('Invalid item cost:', item.price);
                         }
                     } else {
-                        console.log('Invalid date:', item.date_checked);
+                        console.log('Invalid date:', item.dateChecked);
                     }
                 } else {
-                    console.log('Missing date_checked or price:', item);
+                    console.log('Missing dateChecked or price:', item);
                 }
             });
 
@@ -86,7 +85,7 @@ export const DashboardPage = {
 
             let result = last12Months.reverse().map(([month, cost]) => {
                 const itemsForMonth = groceryItems.value.filter(item => {
-                    const itemDate = new Date(parseInt(item.date_checked, 10)); // Convert EPOCH to Date
+                    const itemDate = new Date(parseInt(item.dateChecked, 10)); // Convert EPOCH to Date
                     const itemMonthYear = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}`;
                     return itemMonthYear === month;
                 });
@@ -159,7 +158,7 @@ export const DashboardPage = {
                     price: row[3],
                     order: row[4],
                     location: row[5],
-                    date_checked: row[6],
+                    dateChecked: row[6], // Changed from date_checked to dateChecked
                     date: row[7],
                     locationTitle: row[8]
                 }));
