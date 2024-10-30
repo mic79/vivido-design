@@ -46,58 +46,6 @@ export function loadSheetData(sheetId, range) {
   });
 }
 
-/*export async function updateSheetData(sheetId, range, values) {
-  const token = await getAccessToken(tokenClient);
-  
-  // Use only the sheet name and column range, not the specific row
-  const sheetRange = range.split('!')[0];  // This will give us "Groceries!A:I"
-
-  // First, fetch all data to find the correct row
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(`Failed to fetch sheet data: ${errorData.error.message}`);
-  }
-
-  const sheetData = await response.json();
-  const rows = sheetData.values || [];
-
-  // Find the row with the matching ID (assuming ID is in the first column)
-  const rowIndex = rows.findIndex(row => row[0] === values[0][0]);
-
-  let updateUrl;
-  let method;
-
-  if (rowIndex !== -1) {
-    // Item found, update the existing row
-    updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}!A${rowIndex + 1}?valueInputOption=USER_ENTERED`;
-    method = 'PUT';
-  } else {
-    // Item not found, append a new row
-    updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}:append?valueInputOption=USER_ENTERED`;
-    method = 'POST';
-  }
-
-  const updateResponse = await fetch(updateUrl, {
-    method: method,
-    headers: { 
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ values: values })
-  });
-
-  if (!updateResponse.ok) {
-    const errorData = await updateResponse.json();
-    throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
-  }
-
-  return await updateResponse.json();
-}*/
-
 export async function createNewSheet(title) {
   const token = await getAccessToken();
   try {
@@ -326,20 +274,6 @@ export async function getSheetMetadata(sheetId) {
   }
 }
 
-/*export function checkExistingSession() {
-  return new Promise((resolve) => {
-    const savedSession = localStorage.getItem('gsi_session');
-    if (savedSession) {
-      console.log("Found saved session, attempting to use it");
-      window.handleCredentialResponse({ credential: savedSession });
-      resolve(true);
-    } else {
-      console.log("No saved session found");
-      resolve(false);
-    }
-  });
-}*/
-
 export function handleCredentialResponse(response) {
   console.log("Handling credential response in googleAuth.js");
   // Call the global handleCredentialResponse function
@@ -386,7 +320,6 @@ export async function batchDuplicateGroceryItems(sheetId, items) {
 const GoogleAuth = {
   initGoogleAuth,
   loadSheetData,
-  //updateSheetData,
   createNewSheet,
   initGooglePicker,
   checkForChanges,
@@ -399,7 +332,6 @@ const GoogleAuth = {
   isTokenValid,
   handleAuthError,
   getSheetMetadata,
-  //checkExistingSession,
   getTokenClient,
   getIdClient,
   batchUpdateSheetData,
