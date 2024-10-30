@@ -264,8 +264,8 @@
                         async function initializeNewSheet() {
                             console.log("Initializing new sheet");
                             try {
-                                await GoogleAuth.updateSheetData(sheetId.value, 'Groceries!A1:H1', [['id', 'title', 'amount', 'price', 'order', 'location', 'date_checked', 'date']]);
-                                await GoogleAuth.updateSheetData(sheetId.value, 'Locations!A1:F1', [['title', 'order', 'id', 'hide_in_groceries', 'city']]);
+                                await GoogleAuth.batchUpdateSheetData(sheetId.value, 'Groceries!A1:H1', [['id', 'title', 'amount', 'price', 'order', 'location', 'date_checked', 'date']]);
+                                await GoogleAuth.batchUpdateSheetData(sheetId.value, 'Locations!A1:F1', [['title', 'order', 'id', 'hide_in_groceries', 'city']]);
                                 console.log('New sheet initialized');
                             } catch (err) {
                                 console.error('Error initializing new sheet:', err);

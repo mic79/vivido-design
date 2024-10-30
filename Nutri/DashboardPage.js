@@ -133,16 +133,6 @@ export const DashboardPage = {
             return date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
         }
 
-        async function initializeGoogleAuth() {
-            try {
-                await GoogleAuth.initGoogleAuth();
-                console.log('Google Auth initialized in DashboardPage');
-            } catch (err) {
-                console.error('Failed to initialize Google Auth:', err);
-                error.value = 'Failed to initialize Google Auth. Please try refreshing the page.';
-            }
-        }
-
         async function fetchData() {
             loading.value = true;
             error.value = null;

@@ -331,7 +331,7 @@ export const GroceriesPage = {
                     ]
                 ];
 
-                await GoogleAuth.updateSheetData(props.sheetId, 'Groceries!A:I', cellValues);
+                await GoogleAuth.batchUpdateSheetData(props.sheetId, 'Groceries!A:I', cellValues);
 
                 console.log('Item updated successfully');
             } catch (err) {

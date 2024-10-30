@@ -129,7 +129,7 @@ export const LocationsPage = {
             }
 
             try {
-                await GoogleAuth.updateSheetData(props.sheetId, `Locations!A${locations.value.indexOf(location) + 2}:F${locations.value.indexOf(location) + 2}`, [[location.title, location.order, location.id, location.hidden.toString(), location.city]]);
+                await GoogleAuth.batchUpdateSheetData(props.sheetId, `Locations!A${locations.value.indexOf(location) + 2}:F${locations.value.indexOf(location) + 2}`, [[location.title, location.order, location.id, location.hidden.toString(), location.city]]);
             } catch (err) {
                 console.error('Error updating location:', err);
                 error.value = 'Failed to update location. Please try again.';
@@ -247,7 +247,7 @@ export const LocationsPage = {
                 const currentRowCount = response.values ? response.values.length : 0;
 
                 // Append the new location to the end of the sheet
-                await GoogleAuth.updateSheetData(
+                await GoogleAuth.batchUpdateSheetData(
                     props.sheetId, 
                     `Locations!A${currentRowCount + 1}:F${currentRowCount + 1}`, 
                     [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]],
@@ -292,7 +292,7 @@ export const LocationsPage = {
 
                     // Remove from Google Sheet
                     for (let index of indicesToDelete) {
-                        await GoogleAuth.updateSheetData(props.sheetId, `Locations!A${index}:E${index}`, [['', '', '', '', '']]);
+                        await GoogleAuth.batchUpdateSheetData(props.sheetId, `Locations!A${index}:E${index}`, [['', '', '', '', '']]);
                     }
 
                     // Remove from local array
