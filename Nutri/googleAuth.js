@@ -192,7 +192,9 @@ export async function checkForChanges(sheetId) {
 }
 
 export async function getAccessToken() {
+  console.log('getAccessToken called. Current token:', accessToken ? 'exists' : 'null');
   if (accessToken && await isTokenValid()) {
+    console.log('Existing token is valid, returning it');
     return accessToken;
   }
 
@@ -208,6 +210,7 @@ export async function getAccessToken() {
       }
       accessToken = resp.access_token;
       localStorage.setItem('gsi_session', resp.access_token); // Save the new token
+      console.log('New token obtained and saved');
       resolve(accessToken);
     };
 
@@ -270,10 +273,24 @@ export async function getValues(spreadsheetId, range) {
 }
 
 export async function isTokenValid() {
-  if (!accessToken) return false;
+  console.log('Checking token validity. Current token:', accessToken ? 'exists' : 'null');
+  if (!accessToken) {
+    // Try to retrieve from localStorage as fallback
+    const savedToken = localStorage.getItem('gsi_session');
+    if (savedToken) {
+      console.log('Retrieved token from localStorage');
+      accessToken = savedToken;
+    } else {
+      console.log('No token found in localStorage');
+      return false;
+    }
+  }
+
   try {
     const response = await fetch('https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=' + accessToken);
-    return response.ok;
+    const isValid = response.ok;
+    console.log('Token validity check result:', isValid);
+    return isValid;
   } catch (error) {
     console.error('Error checking token validity:', error);
     return false;
