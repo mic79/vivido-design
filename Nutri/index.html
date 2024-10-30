@@ -543,6 +543,7 @@
                             await GoogleAuth.batchDuplicateGroceryItems(props.sheetId, itemsToDuplicate);
                             await fetchData(); // Refresh all data
                             console.log('Items duplicated successfully');
+                            deselectAll();
                         } catch (err) {
                             console.error('Error duplicating items:', err);
                             error.value = 'Failed to duplicate items. Please try again.';
