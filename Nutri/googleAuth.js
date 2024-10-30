@@ -46,7 +46,7 @@ export function loadSheetData(sheetId, range) {
   });
 }
 
-export async function updateSheetData(sheetId, range, values) {
+/*export async function updateSheetData(sheetId, range, values) {
   const token = await getAccessToken(tokenClient);
   
   // Use only the sheet name and column range, not the specific row
@@ -96,7 +96,7 @@ export async function updateSheetData(sheetId, range, values) {
   }
 
   return await updateResponse.json();
-}
+}*/
 
 export async function createNewSheet(title) {
   const token = await getAccessToken();
@@ -386,7 +386,7 @@ export async function batchDuplicateGroceryItems(sheetId, items) {
 const GoogleAuth = {
   initGoogleAuth,
   loadSheetData,
-  updateSheetData,
+  //updateSheetData,
   createNewSheet,
   initGooglePicker,
   checkForChanges,
