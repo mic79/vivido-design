@@ -350,7 +350,8 @@ button.alert {
     font-size: 12px;
     line-height: 1;
 }
-.loading {
+.loading,
+.feedback {
     font-size: 12px;
 }
 .controls {

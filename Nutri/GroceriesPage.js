@@ -17,6 +17,7 @@ export const GroceriesPage = {
         const groceryListRef = ref(null);
         const sortingEnabled = ref(false);
         let sortableInstance = null;
+        const feedback = ref(null);
 
         function initSortable() {
             if (groceryListRef.value) {
@@ -283,57 +284,66 @@ export const GroceriesPage = {
         }
 
         async function addGroceryItem() {
-            const newItem = {
-                id: `item_${Date.now()}`,
-                title: '',
-                amount: 0,
-                price: 0,
-                order: groceryItems.value.length,
-                location: selectedLocation.value,
-                dateChecked: null,
-                date: '',
-                checked: false
-            };
-
-            groceryItems.value.push(newItem);
+            loading.value = true;
             try {
-                await updateItemInSheet(newItem);
-                // Handle successful update
+                const newItem = {
+                    id: `item_${Date.now()}`,
+                    title: '',
+                    amount: '',
+                    price: '',
+                    order: groceryItems.value.length.toString(),
+                    location: selectedLocation.value,
+                    dateChecked: '',
+                    date: ''
+                };
+
+                await updateItemInSheet(newItem, true);
+                groceryItems.value.push(newItem);
                 updateLocationStats();
 
-                // Use nextTick to ensure the DOM has updated before trying to focus
-                Vue.nextTick(() => {
-                    const newItemInput = document.querySelector(`input[data-item-id="${newItem.id}"]`);
-                    if (newItemInput) {
-                        newItemInput.focus();
-                    }
-                });
+                // Add focus logic
+                await nextTick();
+                const titleInput = document.querySelector(`input[data-item-id="${newItem.id}"][data-field="title"]`);
+                if (titleInput) {
+                    titleInput.focus();
+                }
             } catch (err) {
-                console.error('Failed to update item:', err);
-                error.value = 'Failed to update item. Please try again.';
+                console.error('Failed to add item:', err);
+                error.value = 'Failed to add item. Please try again.';
+            } finally {
+                loading.value = false;
             }
         }
 
-        async function updateItemInSheet(item) {
-            console.log('updateItemInSheet', item);
-
+        async function updateItemInSheet(item, isNewRow = false) {
+            console.log('Updating item with dateChecked:', item.dateChecked);
             try {
-                const cellValues = [
-                    [
+                const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
+                if (itemIndex === -1) {
+                    throw new Error('Item not found in local array');
+                }
+                const rowIndex = itemIndex + 2; // +2 because sheet is 1-indexed and has a header row
+
+                // Create the formulas
+                const dateFormula = `=IF(ISBLANK(G${rowIndex});"";EPOCHTODATE(G${rowIndex};2))`;
+                const locationTitleFormula = `=IF(ISBLANK(F${rowIndex});"";INDEX(Locations!A:A; MATCH(F${rowIndex}; Locations!C:C; 0)))`;
+
+                await GoogleAuth.batchUpdateSheetData(
+                    props.sheetId,
+                    'Groceries!A:I',
+                    [[
                         item.id,
                         item.title,
                         item.amount.toString(),
-                        formatPrice(item.price),
+                        item.price.toString(),
                         item.order.toString(),
                         item.location,
-                        item.dateChecked ? item.dateChecked.toString() : '',
-                        item.date,
-                    ]
-                ];
-
-                await GoogleAuth.batchUpdateSheetData(props.sheetId, 'Groceries!A:I', cellValues);
-
-                console.log('Item updated successfully');
+                        item.dateChecked || '',
+                        dateFormula,
+                        locationTitleFormula
+                    ]],
+                    isNewRow
+                );
             } catch (err) {
                 console.error('Error updating item in sheet:', err);
                 throw err;
@@ -406,26 +416,42 @@ export const GroceriesPage = {
             }
         }
 
+        function showFeedback(message, duration = 3000) {
+            feedback.value = message;
+            setTimeout(() => {
+                feedback.value = null;
+            }, duration);
+        }
+
         async function updateItemField(item, field, value) {
-            if (typeof value === 'string') {
-                // For text inputs: capitalize first letter and remove trailing spaces
-                value = value.charAt(0).toUpperCase() + value.slice(1).trimEnd();
-            }
-
-            if (field === 'price') {
-                value = parsePrice(value);
-            } else if (field === 'amount') {
-                value = parseInt(value) || null;  // Convert to integer or null if invalid
-            }
-
-            item[field] = value;
             try {
+                loading.value = true;
+                if (typeof value === 'string') {
+                    value = value.charAt(0).toUpperCase() + value.slice(1).trimEnd();
+                }
+
+                if (field === 'price') {
+                    value = parsePrice(value);
+                } else if (field === 'amount') {
+                    value = parseInt(value) || null;
+                }
+
+                item[field] = value;
                 await updateItemInSheet(item);
-                // Handle successful update
+                
+                // Update stats and show success feedback
                 updateLocationStats();
+                updateRecentlyCheckedOff();
+                error.value = null; // Clear any existing error
+                showFeedback('Item updated successfully'); // Will auto-clear after 3 seconds
             } catch (err) {
                 console.error('Failed to update item:', err);
                 error.value = 'Failed to update item. Please try again.';
+                feedback.value = null;
+                // Revert the change in the UI
+                await fetchData();
+            } finally {
+                loading.value = false;
             }
         }
 
@@ -468,27 +494,16 @@ export const GroceriesPage = {
         }
 
         async function duplicateSelectedItems() {
-            if (selectedItems.value.length === 0) {
-                console.log('No items selected');
-                return;
-            }
-
-            loading.value = true;
-            error.value = null;
-
             try {
-                const allItems = [...filteredGroceryItems.value, ...recentlyCheckedOff.value.flatMap(group => group.items)];
-                const itemsToDuplicate = allItems.filter(item => selectedItems.value.includes(item.id));
-                
+                const itemsToDuplicate = groceryItems.value.filter(item => item.selected);
+                if (itemsToDuplicate.length === 0) return;
+
                 await GoogleAuth.batchDuplicateGroceryItems(props.sheetId, itemsToDuplicate);
-                await fetchData(); // Refresh all data
-                console.log('Items duplicated successfully');
-                deselectAll();
+                await fetchData();  // Refresh the data
+                deselectAll();     // Clear selections after successful duplication
             } catch (err) {
                 console.error('Error duplicating items:', err);
                 error.value = 'Failed to duplicate items. Please try again.';
-            } finally {
-                loading.value = false;
             }
         }
 
@@ -904,12 +919,21 @@ export const GroceriesPage = {
             }
         });
 
+        window.handleSheetModified = async () => {
+            console.log('Refreshing data due to external changes');
+            await fetchData();  // Refresh the data
+            // Optionally show a notification to the user
+            // that the sheet was modified by another user
+        };
+
         return {
             locations,
             groceryItems,
             recentlyCheckedOff,
             loading,
             error,
+            feedback,
+            showFeedback,
             fetchData,
             selectedLocation,
             selectedItems,
@@ -930,6 +954,7 @@ export const GroceriesPage = {
             deselectAll,
             performSelectedAction,
             updateRecentlyCheckedOff,
+            updateItemInSheet,
             handlePriceInput,
             handlePriceBlur,
             handlePriceFocus,
@@ -962,6 +987,7 @@ export const GroceriesPage = {
                     </button>
                     <small v-if="loading" class="loading">Loading...</small>
                     <div v-if="error" class="error">{{ error }}</div>
+                    <div v-if="feedback" class="feedback">{{ feedback }}</div>
                 </div>
                 
                 <!-- Location tabs -->
@@ -1007,11 +1033,12 @@ export const GroceriesPage = {
                                     <input 
                                         type="text" 
                                         v-model="item.title" 
-                                        :data-item-id="item.id" 
-                                        @focus="startEditing" 
-                                        @blur="stopEditing" 
-                                        @input="filterSuggestions(item.title, item.id)"
+                                        :data-item-id="item.id"
+                                        data-field="title"
+                                        @input="updateItemField(item, 'title', $event.target.value)"
                                         @change="updateItemField(item, 'title', $event.target.value)"
+                                        @focus="startEditing"
+                                        @blur="stopEditing"
                                     >
                                     <ul v-if="suggestions && suggestions.length > 0 && currentEditingItem === item.id" class="suggestions">
                                         <li v-for="suggestion in suggestions" :key="suggestion.title + suggestion.lastPurchase" @mousedown.prevent="selectSuggestion(suggestion)">

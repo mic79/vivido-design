@@ -431,36 +431,38 @@
                         let changeDetectionInterval = null;
 
                         const setupChangeDetection = (sheetId, fetchLocations) => {
+                            console.log("Disabled change detection");
+                            return;
                             //The same function name is used for the app.
                             console.log("Setting up change detection for sheet:", sheetId);
                             
                             async function checkForChanges() {
                                 if (isEditing.value) {
-                                console.log("User is editing, skipping change check");
-                                return;
+                                    console.log("User is editing, skipping change check");
+                                    return;
                                 }
                                 
                                 console.log("Checking for changes in sheet:", sheetId);
                                 try {
-                                const modifiedTime = await GoogleAuth.checkForChanges(sheetId);
-                                console.log("Current modified time:", currentModifiedTime.value);
-                                console.log("New modified time:", modifiedTime);
-                                if (modifiedTime !== currentModifiedTime.value) {
-                                    currentModifiedTime.value = modifiedTime;
-                                    console.log('Sheet updated, refreshing data...');
-                                    await fetchLocations();
-                                } else {
-                                    console.log('Sheet still up to date.');
-                                }
-                                } catch (error) {
-                                console.error('Error checking for updates:', error);
-                                if (error.message.includes('Authentication failed')) {
-                                    // Handle authentication failure
-                                    if (window.handleAuthFailure) {
-                                    window.handleAuthFailure();
+                                    const modifiedTime = await GoogleAuth.checkForChanges(sheetId);
+                                    console.log("Current modified time:", currentModifiedTime.value);
+                                    console.log("New modified time:", modifiedTime);
+                                    if (modifiedTime !== currentModifiedTime.value) {
+                                        currentModifiedTime.value = modifiedTime;
+                                        console.log('Sheet updated, refreshing data...');
+                                        await fetchLocations();
+                                    } else {
+                                        console.log('Sheet still up to date.');
                                     }
-                                }
-                                // Don't throw the error here, just log it and continue
+                                } catch (error) {
+                                    console.error('Error checking for updates:', error);
+                                    if (error.message.includes('Authentication failed')) {
+                                        // Handle authentication failure
+                                        if (window.handleAuthFailure) {
+                                            window.handleAuthFailure();
+                                        }
+                                    }
+                                    // Don't throw the error here, just log it and continue
                                 }
                             }
 

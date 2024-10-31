@@ -280,41 +280,172 @@ export function handleCredentialResponse(response) {
   window.handleCredentialResponse(response);
 }
 
-export async function batchUpdateSheetData(sheetId, sheetName, items) {
-  const token = await getAccessToken(tokenClient);
-  
-  const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetName}:append?valueInputOption=USER_ENTERED`;
+export async function batchUpdateSheetData(sheetId, sheetName, items, isNewRow = false) {
+    console.log('batchUpdateSheetData called with:', {
+        sheetId,
+        sheetName,
+        items,
+        isNewRow,
+        stackTrace: new Error().stack
+    });
 
-  const updateResponse = await fetch(updateUrl, {
-    method: 'POST',
-    headers: { 
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ values: items })
-  });
+    const token = await getAccessToken(tokenClient);
+    
+    // If it's a new row, go straight to append
+    if (isNewRow) {
+        console.log('Adding new row');
+        const baseSheetName = sheetName.split('!')[0];
+        const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${baseSheetName}:append?valueInputOption=USER_ENTERED`;
+        const appendResponse = await fetch(appendUrl, {
+            method: 'POST',
+            headers: { 
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: items })
+        });
 
-  if (!updateResponse.ok) {
-    const errorData = await updateResponse.json();
-    throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
-  }
+        if (!appendResponse.ok) {
+            const errorData = await appendResponse.json();
+            console.error('Append failed:', errorData);
+            throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
+        }
 
-  return await updateResponse.json();
+        const result = await appendResponse.json();
+        console.log('Append successful:', result);
+        return result;
+    }
+    
+    // For updates, we need to find the specific row
+    const baseSheetName = sheetName.split('!')[0];
+    
+    // First, get the current data to find the row
+    const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${baseSheetName}!A2:Z`,
+        { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data = await response.json();
+    const values = data.values || [];
+    
+    // Find the row index where the ID matches
+    // For Locations sheet, ID is in column C (index 2)
+    // For Groceries sheet, ID is in column A (index 0)
+    const idColumnIndex = baseSheetName === 'Locations' ? 2 : 0;
+    const itemId = baseSheetName === 'Locations' ? items[0][2] : items[0][0];
+    
+    console.log('Looking for item with ID:', itemId, 'in column:', idColumnIndex);
+    const rowIndex = values.findIndex(row => row[idColumnIndex] === itemId);
+    
+    if (rowIndex === -1) {
+        console.error('Row not found for ID:', itemId);
+        throw new Error('Row not found');
+    }
+    
+    const actualRowIndex = rowIndex + 2; // Add 2 to account for 0-based index and header row
+    console.log('Found row index:', rowIndex, 'Actual row index:', actualRowIndex);
+    
+    // Use the actual row index in the update URL
+    const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${baseSheetName}!A${actualRowIndex}:Z${actualRowIndex}?valueInputOption=USER_ENTERED`;
+    
+    const updateResponse = await fetch(updateUrl, {
+        method: 'PUT',
+        headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ values: items })
+    });
+
+    if (!updateResponse.ok) {
+        const errorData = await updateResponse.json();
+        console.error('Update failed:', errorData);
+        throw new Error(`Failed to update sheet data: ${errorData.error.message}`);
+    }
+
+    const result = await updateResponse.json();
+    console.log('Update successful:', result);
+    return result;
 }
 
 export async function batchDuplicateGroceryItems(sheetId, items) {
-  const newItems = items.map(item => [
-    `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // Generate a new unique ID
-    item.title,
-    item.amount.toString(),
-    item.price.toString(),
-    (parseInt(item.order) + items.length).toString(), // Increment order to place at the end
-    item.location,
-    '', // dateChecked should be empty for new items
-    '', // date should be empty for new items
-  ]);
+    const newItems = items.map(item => [
+        `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        item.title,
+        item.amount.toString(),
+        item.price.toString(),
+        (parseInt(item.order) + items.length).toString(),
+        item.location,
+        '',
+        ''
+    ]);
 
-  return batchUpdateSheetData(sheetId, 'Groceries', newItems);
+    return batchUpdateSheetData(sheetId, 'Groceries!A:H', newItems, true);
+}
+
+export async function deleteSheetRow(sheetId, sheetName, rowId, isLocationSheet = false) {
+    const token = await getAccessToken(tokenClient);
+    const baseSheetName = sheetName.split('!')[0];
+    
+    // Get current data and spreadsheet info
+    const [dataResponse, sheetResponse] = await Promise.all([
+        fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${baseSheetName}!A2:Z`,
+            { headers: { Authorization: `Bearer ${token}` } }
+        ),
+        fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+        )
+    ]);
+
+    const data = await dataResponse.json();
+    const sheetInfo = await sheetResponse.json();
+    const values = data.values || [];
+    
+    // Find the row index where the ID matches (column C for Locations, column A for Groceries)
+    const idColumnIndex = isLocationSheet ? 2 : 0;
+    const rowIndex = values.findIndex(row => row[idColumnIndex] === rowId);
+    
+    if (rowIndex === -1) {
+        throw new Error('Row not found');
+    }
+    
+    const actualRowIndex = rowIndex + 2; // Add 2 for header and 0-based index
+
+    // Find the sheet ID
+    const sheet = sheetInfo.sheets.find(s => s.properties.title === baseSheetName);
+    if (!sheet) {
+        throw new Error('Sheet not found');
+    }
+
+    // Delete the row using batchUpdate
+    const deleteUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`;
+    const deleteResponse = await fetch(deleteUrl, {
+        method: 'POST',
+        headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            requests: [{
+                deleteDimension: {
+                    range: {
+                        sheetId: sheet.properties.sheetId,
+                        dimension: 'ROWS',
+                        startIndex: actualRowIndex - 1,  // 0-based index
+                        endIndex: actualRowIndex  // exclusive end index
+                    }
+                }
+            }]
+        })
+    });
+
+    if (!deleteResponse.ok) {
+        const errorData = await deleteResponse.json();
+        throw new Error(`Failed to delete row: ${errorData.error.message}`);
+    }
+
+    return deleteResponse.json();
 }
 
 const GoogleAuth = {
@@ -336,6 +467,7 @@ const GoogleAuth = {
   getIdClient,
   batchUpdateSheetData,
   batchDuplicateGroceryItems,
+  deleteSheetRow,
 };
 
 export default GoogleAuth;

@@ -18,6 +18,7 @@ export const LocationsPage = {
         const selectAll = ref(false);
         const editingLocationId = ref(null);
         const focusNextId = ref(null);
+        const isEditing = ref(false);
 
         function applySort() {
             stableLocations.value = [...stableLocations.value].sort((a, b) => {
@@ -49,9 +50,16 @@ export const LocationsPage = {
         }
 
         function applyFilterAndSort() {
+            if (isEditing.value || editingLocationId.value) {
+                console.log('Skipping sort during edit');
+                return;  // Don't sort while editing
+            }
+            
+            if (locations.value.length === 0) return;
+
             const filtered = locations.value.filter(location =>
                 Object.values(location).some(value =>
-                String(value).toLowerCase().includes(globalSearch.value.toLowerCase())
+                    String(value).toLowerCase().includes(globalSearch.value.toLowerCase())
                 )
             );
 
@@ -75,7 +83,9 @@ export const LocationsPage = {
 
         const debounceSearch = _.debounce(() => {
             currentLocationsPage.value = 1;
-            applyFilterAndSort();
+            if (!isEditing.value) {  // Only apply full sort if not editing
+                applyFilterAndSort();
+            }
         }, 300);
 
         watch(globalSearch, debounceSearch);
@@ -84,13 +94,6 @@ export const LocationsPage = {
             loading.value = true;
             error.value = null;
             try {
-                // Check token validity
-                const isValid = await GoogleAuth.isTokenValid();
-                if (!isValid) {
-                    console.log('Token is not valid, refreshing...');
-                    await GoogleAuth.getAccessToken(); // This should refresh the token
-                    console.log('Token is now valid');
-                }
                 const response = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:F');
                 const values = response.values || [];
                 locations.value = values.map(row => ({
@@ -114,46 +117,88 @@ export const LocationsPage = {
             return value.charAt(0).toUpperCase() + value.slice(1);
         }
         function formatTextInput(value) {
-            return value.charAt(0).toUpperCase() + value.slice(1).trimEnd();
+            return value.charAt(0).toUpperCase() + value.slice(1);
         }
 
-        async function updateLocation(location) {
-            loading.value = true;
-            error.value = null;
-
-            if (typeof location.title === 'string') {
-                location.title = formatTextInput(location.title);
-            }
-            if (typeof location.city === 'string') {
-                location.city = formatTextInput(location.city);
-            }
-
+        async function updateLocation(location, isNewRow = false) {
+            console.log('Updating location:', { 
+                id: location.id,
+                title: location.title,
+                hidden: location.hidden,
+                isNewRow 
+            });
             try {
-                await GoogleAuth.batchUpdateSheetData(props.sheetId, `Locations!A${locations.value.indexOf(location) + 2}:F${locations.value.indexOf(location) + 2}`, [[location.title, location.order, location.id, location.hidden.toString(), location.city]]);
+                await GoogleAuth.batchUpdateSheetData(
+                    props.sheetId,
+                    'Locations!A:E',
+                    [[
+                        location.title,
+                        location.order,
+                        location.id,
+                        location.hidden ? "'true" : "'false",
+                        location.city
+                    ]],
+                    isNewRow
+                );
             } catch (err) {
                 console.error('Error updating location:', err);
-                error.value = 'Failed to update location. Please try again.';
-            } finally {
-                loading.value = false;
-                if (editingLocationId.value !== location.id) {
-                    applyFilterAndSort();
-                }
+                throw err;
             }
         }
 
-        function handleLocationInput(location, field, event) {
-            editingLocationId.value = location.id;
+        async function handleLocationInput(location, field, event) {
+            isEditing.value = true;
             if (field === 'title' || field === 'city') {
-                location[field] = formatCapitalizeFirst(event.target.value);
+                const newValue = formatTextInput(event.target.value);
+                location[field] = newValue;
+
+                // Get the sorted list and find position
+                const sortedList = [...filteredAndSortedLocations.value].sort((a, b) => {  // Use filtered list
+                    if (a.title < b.title) return sortDirection.value === 'asc' ? -1 : 1;
+                    if (a.title > b.title) return sortDirection.value === 'asc' ? 1 : -1;
+                    return 0;
+                });
+
+                const newIndex = sortedList.findIndex(loc => loc.id === location.id);
+                const newPage = Math.ceil((newIndex + 1) / itemsPerPage.value);
+
+                console.log('Location moved:', {
+                    id: location.id,
+                    title: location.title,
+                    newIndex,
+                    itemsPerPage: itemsPerPage.value,
+                    calculatedPage: newPage,
+                    currentPage: currentLocationsPage.value
+                });
+
+                if (newPage !== currentLocationsPage.value) {
+                    currentLocationsPage.value = newPage;
+                    focusNextId.value = `${location.id}-${field}`;
+                }
             } else if (field === 'order') {
                 location[field] = event.target.value ? parseInt(event.target.value, 10) : 0;
             } else {
                 location[field] = event.target.value;
             }
         }
-        function handleLocationBlur(location) {
-            updateLocation(location);
-            editingLocationId.value = null;
+
+        async function handleLocationBlur(location) {
+            // Trim any trailing spaces when the field loses focus
+            if (location.title) {
+                location.title = location.title.trimEnd();
+            }
+            if (location.city) {
+                location.city = location.city.trimEnd();
+            }
+            
+            try {
+                await updateLocation(location, false);
+                editingLocationId.value = null;
+                applyFilterAndSort();
+            } catch (err) {
+                console.error('Error in handleLocationBlur:', err);
+                error.value = 'Failed to update location. Please try again.';
+            }
         }
 
         function handleKeyDown(location, field, event) {
@@ -197,8 +242,11 @@ export const LocationsPage = {
 
         function toggleSelectAll() {
             const allSelected = areAllLocationsSelected.value;
+            const filteredIds = filteredAndSortedLocations.value.map(loc => loc.id);
             locations.value.forEach(location => {
-                location.selected = !allSelected;
+                if (filteredIds.includes(location.id)) {
+                    location.selected = !allSelected;
+                }
             });
         }
 
@@ -220,10 +268,15 @@ export const LocationsPage = {
 
         watch(currentLocationsPage, () => {
             if (focusNextId.value) {
-                Vue.nextTick(() => {
+                nextTick(() => {
                     const [locationId, field] = focusNextId.value.split('-');
                     const nextInput = document.querySelector(`input[data-location-id="${locationId}"][data-field="${field}"]`);
-                    if (nextInput) nextInput.focus();
+                    if (nextInput) {
+                        nextInput.focus();
+                        // Move cursor to end of input
+                        const len = nextInput.value.length;
+                        nextInput.setSelectionRange(len, len);
+                    }
                     focusNextId.value = null;
                 });
             }
@@ -232,77 +285,79 @@ export const LocationsPage = {
         async function addNewLocation() {
             loading.value = true;
             error.value = null;
+            
+            // Clear the filter
+            globalSearch.value = '';
+            
             const newLocation = {
                 id: `loc_${Date.now()}`,
                 title: '',
                 order: locations.value.length.toString(),
-                city: '',
                 hidden: false,
+                city: '',
                 selected: false
             };
 
             try {
-                // Get the current number of rows in the Locations sheet
-                const response = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A:A');
-                const currentRowCount = response.values ? response.values.length : 0;
-
-                // Append the new location to the end of the sheet
-                await GoogleAuth.batchUpdateSheetData(
-                    props.sheetId, 
-                    `Locations!A${currentRowCount + 1}:F${currentRowCount + 1}`, 
-                    [[newLocation.title, newLocation.order, newLocation.id, newLocation.hidden.toString(), newLocation.city]],
-                    true  // isNewRow = true
-                );
-
+                await updateLocation(newLocation, true);
                 locations.value.push(newLocation);
-
                 applyFilterAndSort();
 
-                const newLocationIndex = stableLocations.value.findIndex(loc => loc.id === newLocation.id);
-                if (newLocationIndex !== -1) {
-                    const newPage = Math.floor(newLocationIndex / itemsPerPage.value) + 1;
-                    currentLocationsPage.value = newPage;
-                }
+                // Empty title will be first in ascending sort
+                const newPage = 1;
+                currentLocationsPage.value = newPage;
 
-                Vue.nextTick(() => {
-                    const newLocationInput = document.querySelector(`input[data-location-id="${newLocation.id}"]`);
-                    if (newLocationInput) {
-                        newLocationInput.focus();
-                    }
-                });
+                // Focus the new location's title field
+                await nextTick();
+                const titleInput = document.querySelector(`input[data-location-id="${newLocation.id}"][data-field="title"]`);
+                if (titleInput) {
+                    titleInput.focus();
+                }
             } catch (err) {
-                console.error('Error adding new location:', err);
-                locations.value.pop();
-                error.value = 'Failed to add new location. Please try again.';
+                console.error('Failed to add location:', err);
+                error.value = 'Failed to add location. Please try again.';
             } finally {
                 loading.value = false;
             }
         }
 
         async function deleteSelected() {
-            if (selectedLocations.value.length === 0) return;
-            if (confirm(`Are you sure you want to delete ${selectedLocations.value.length} location(s)?`)) {
+            const selectedCount = selectedLocations.value.length;
+            if (selectedCount === 0) return;
+            
+            // Get the filtered selection count
+            const filteredSelectedCount = filteredAndSortedLocations.value.filter(loc => loc.selected).length;
+            
+            if (confirm(`Are you sure you want to delete ${filteredSelectedCount} location(s)?`)) {
                 loading.value = true;
                 error.value = null;
                 try {
-                    const locationsToDelete = locations.value.filter(location => location.selected);
-                    const indicesToDelete = locationsToDelete
-                        .map(location => locations.value.indexOf(location) + 2)
-                        .sort((a, b) => b - a);
-
-                    // Remove from Google Sheet
-                    for (let index of indicesToDelete) {
-                        await GoogleAuth.batchUpdateSheetData(props.sheetId, `Locations!A${index}:E${index}`, [['', '', '', '', '']]);
+                    // Only delete locations that are both selected AND in the filtered list
+                    const filteredIds = filteredAndSortedLocations.value.map(loc => loc.id);
+                    const locationsToDelete = locations.value.filter(location => 
+                        location.selected && filteredIds.includes(location.id)
+                    );
+                    
+                    // Delete each location
+                    for (const location of locationsToDelete) {
+                        await GoogleAuth.deleteSheetRow(
+                            props.sheetId,
+                            'Locations!A:E',
+                            location.id,
+                            true  // isLocationSheet = true
+                        );
                     }
 
                     // Remove from local array
-                    locations.value = locations.value.filter(location => !location.selected);
-                    // Update stableLocations
-                    stableLocations.value = stableLocations.value.filter(location => !location.selected);
+                    locations.value = locations.value.filter(location => 
+                        !(location.selected && filteredIds.includes(location.id))
+                    );
+                    stableLocations.value = stableLocations.value.filter(location => 
+                        !(location.selected && filteredIds.includes(location.id))
+                    );
                     selectAll.value = false;
 
                     console.log('Locations deleted successfully');
-                    // Reapply filter and sort
                     applyFilterAndSort();
                 } catch (err) {
                     console.error('Error deleting locations:', err);
@@ -401,12 +456,13 @@ export const LocationsPage = {
             }
             
             // Apply sorting
-            result.sort((a, b) => {
+            result = result.sort((a, b) => {
                 if (a[sortColumn.value] < b[sortColumn.value]) return sortDirection.value === 'asc' ? -1 : 1;
                 if (a[sortColumn.value] > b[sortColumn.value]) return sortDirection.value === 'asc' ? 1 : -1;
                 return 0;
             });
             
+            stableLocations.value = result;  // Update stable locations
             return result;
         });
 
@@ -493,8 +549,21 @@ export const LocationsPage = {
                                     @change="toggleLocationSelection(location)">
                             </td>
                             <td v-for="column in columns" :key="column" :class="getLocationColumnClass(column)">
-                                <input v-if="column !== 'hidden'" type="text" v-model="location[column]" :data-location-id="location.id" :data-field="column" @input="handleLocationInput(location, column, $event)" @focus="startEditing" @blur="($event) => { handleLocationBlur(location, $event); stopEditing(); }" @keydown="handleKeyDown(location, column, $event)">
-                                <input v-else type="checkbox" v-model="location.hidden" @change="updateLocation(location)">
+                                <input v-if="column !== 'hidden'" 
+                                    type="text" 
+                                    v-model="location[column]" 
+                                    :data-location-id="location.id" 
+                                    :data-field="column" 
+                                    @input="handleLocationInput(location, column, $event)"
+                                    @focus="startEditing" 
+                                    @blur="($event) => { handleLocationBlur(location); stopEditing(); }"
+                                    @keydown="handleKeyDown(location, column, $event)"
+                                >
+                                <input v-else 
+                                    type="checkbox" 
+                                    v-model="location.hidden"
+                                    @change="updateLocation(location)"
+                                >
                             </td>
                         </tr>
                     </tbody>
