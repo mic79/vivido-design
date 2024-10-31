@@ -318,11 +318,18 @@ export const GroceriesPage = {
         async function updateItemInSheet(item, isNewRow = false) {
             console.log('Updating item with dateChecked:', item.dateChecked);
             try {
-                const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
-                if (itemIndex === -1) {
-                    throw new Error('Item not found in local array');
+                let rowIndex;
+                if (isNewRow) {
+                    // For new items, get the next available row
+                    rowIndex = groceryItems.value.length + 2;
+                } else {
+                    // For existing items, find their index
+                    const itemIndex = groceryItems.value.findIndex(i => i.id === item.id);
+                    if (itemIndex === -1) {
+                        throw new Error('Item not found in local array');
+                    }
+                    rowIndex = itemIndex + 2;
                 }
-                const rowIndex = itemIndex + 2; // +2 because sheet is 1-indexed and has a header row
 
                 // Create the formulas
                 const dateFormula = `=IF(ISBLANK(G${rowIndex});"";EPOCHTODATE(G${rowIndex};2))`;
