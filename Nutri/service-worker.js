@@ -1,4 +1,4 @@
-const CACHE_NAME = 'groceries-app-v2';
+const CACHE_NAME = 'groceries-app-v3';
 const urlsToCache = [
   '',
   'index.html',
