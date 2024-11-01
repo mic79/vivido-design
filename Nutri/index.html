@@ -318,7 +318,10 @@
                                 await loadPickerApi();
                                 const accessToken = await GoogleAuth.getAccessToken();
                                 
-                                const view = new google.picker.View(google.picker.ViewId.SPREADSHEETS);
+                                const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
+                                    .setIncludeFolders(true)
+                                    .setMimeTypes("application/vnd.google-apps.spreadsheet")
+                                    .setQuery("GroceriesApp");
                                 const picker = new google.picker.PickerBuilder()
                                     .enableFeature(google.picker.Feature.NAV_HIDDEN)
                                     .setAppId(CLIENT_ID)
