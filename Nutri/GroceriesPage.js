@@ -909,7 +909,17 @@ export const GroceriesPage = {
                 item.title = suggestion.title;
                 item.amount = suggestion.quantity;
                 item.price = suggestion.price;
-                updateItemInSheet(item);
+                
+                // Find and blur the currently focused input
+                const activeElement = document.activeElement;
+                if (activeElement && activeElement.tagName === 'INPUT') {
+                    activeElement.blur();
+                }
+                
+                // Ensure the update is processed
+                nextTick(() => {
+                    updateItemInSheet(item);
+                });
             }
             suggestions.value = [];
             currentEditingItem.value = null;
@@ -1163,7 +1173,25 @@ export const GroceriesPage = {
                                     @change="toggleItemSelection(item)">
                                 <span v-else class="drag-handle">☰</span>
                             </td>
-                            <td class="item-title"><input type="text" v-model="item.title" @focus="startEditing" @blur="stopEditing" @change="updateItemInSheet(item)"></td>
+                            <td class="item-title">
+                                <input 
+                                    type="text" 
+                                    v-model="item.title" 
+                                    @input="($event) => { updateItemField(item, 'title', $event.target.value); filterSuggestions($event.target.value, item.id); }"
+                                    @change="updateItemInSheet(item)"
+                                    @focus="startEditing"
+                                    @blur="stopEditing"
+                                >
+                                <ul v-if="suggestions && suggestions.length > 0 && currentEditingItem === item.id" class="suggestions">
+                                    <li v-for="suggestion in suggestions" :key="suggestion.title + suggestion.lastPurchase" @mousedown.prevent="selectSuggestion(suggestion)">
+                                        {{ suggestion.title }}
+                                        <br>
+                                        Last purchase: {{ suggestion.lastPurchase }}
+                                        <br>
+                                        Quantity: {{ suggestion.quantity }}, Price: {{ formatPrice(suggestion.price) }}
+                                    </li>
+                                </ul>
+                            </td>
                             <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @focus="($event) => { handleAmountFocus(item, $event); startEditing(); }" @blur="stopEditing" @change="updateItemInSheet(item)"></td>
                             <td class="item-price" width="60">
                                 <input  
