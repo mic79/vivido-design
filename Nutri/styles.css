@@ -668,6 +668,13 @@ td.location-order input {
     z-index: 3;
 }
 
+.monthly-costs .bar-label .material-symbols-outlined {
+    margin-left: -0.5rem;
+    font-size: 16px;
+    line-height: 0;
+    vertical-align: middle;
+}
+
 .bar-container {
     position: relative;
 }

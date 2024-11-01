@@ -236,16 +236,20 @@ export const DashboardPage = {
                 <div class="chart monthly-costs">
                     <h3>Monthly Grocery Costs</h3>
                     <div class="chart-container">
-                        <div v-for="item in monthlyCosts" :key="item.month" class="bar-container">
-                            <div class="bar" 
-                                :style="{ width: (item.cost / maxMonthlyCost * 100) + '%' }"
-                                @click="toggleExpand(item.month)">
-                            </div>
+                        <div v-for="item in monthlyCosts" 
+                            :key="item.month" 
+                            class="bar-container" 
+                            :class="{ 'expanded': expandedMonth === item.month }"
+                            @click="toggleExpand(item.month)">
+                            <div class="bar" :style="{ width: (item.cost / maxMonthlyCost * 100) + '%' }"></div>
                             <div v-if="item.isCurrentMonth && item.estimatedCost" 
                                 class="bar estimated" 
                                 :style="{ width: (item.estimatedCost / maxMonthlyCost * 100) + '%' }">
                             </div>
                             <span class="bar-label">
+                                <span class="material-symbols-outlined">
+                                    {{ expandedMonth === item.month ? 'arrow_drop_up' : 'arrow_drop_down' }}
+                                </span>
                                 {{ item.month }}&nbsp;&nbsp;&nbsp;&nbsp;<strong>{{ formatPrice(item.cost) }}</strong>&nbsp;&nbsp;&nbsp;&nbsp;
                                 <span v-if="item.isCurrentMonth && item.estimatedCost">
                                     (Est. {{ formatPrice(item.estimatedCost) }})
