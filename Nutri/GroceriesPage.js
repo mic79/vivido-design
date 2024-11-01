@@ -463,8 +463,12 @@ export const GroceriesPage = {
         }
 
         function toggleItemSelection(item) {
-            item.selected = !item.selected;
-            updateSelectedItems();
+            if (selectedItems.value.includes(item.id)) {
+                selectedItems.value = selectedItems.value.filter(id => id !== item.id);
+            } else {
+                selectedItems.value.push(item.id);
+            }
+            console.log('Updated selected items:', selectedItems.value);
         }
 
         function updateSelectedItems() {
@@ -477,24 +481,23 @@ export const GroceriesPage = {
         function toggleSelectAllInGroup(items) {
             const allSelected = items.every(item => selectedItems.value.includes(item.id));
             if (allSelected) {
-                selectedItems.value = selectedItems.value.filter(id => !items.some(item => item.id === id));
+                // Deselect all items in the group
+                selectedItems.value = selectedItems.value.filter(id => 
+                    !items.some(item => item.id === id)
+                );
             } else {
-                selectedItems.value = [...new Set([...selectedItems.value, ...items.map(item => item.id)])];
+                // Select all items in the group
+                const newIds = items.map(item => item.id);
+                selectedItems.value = [...new Set([...selectedItems.value, ...newIds])];
             }
-        }
-
-        function toggleItemSelection(item) {
-            const index = selectedItems.value.indexOf(item.id);
-            if (index > -1) {
-                selectedItems.value.splice(index, 1);
-            } else {
-                selectedItems.value.push(item.id);
-            }
+            console.log('Updated selected items after group toggle:', selectedItems.value);
         }
 
         async function duplicateSelectedItems() {
             try {
-                const itemsToDuplicate = groceryItems.value.filter(item => item.selected);
+                const itemsToDuplicate = groceryItems.value.filter(item => 
+                    selectedItems.value.includes(item.id)
+                );
                 if (itemsToDuplicate.length === 0) return;
 
                 await GoogleAuth.batchDuplicateGroceryItems(props.sheetId, itemsToDuplicate);
@@ -745,7 +748,7 @@ export const GroceriesPage = {
 
                 if (!acc[item.title]) {
                     acc[item.title] = {
-                        id: item.id, // Add this line to store the item ID
+                        id: item.id,
                         count: 0,
                         lastPurchase: 0,
                         score: 0,
@@ -810,7 +813,7 @@ export const GroceriesPage = {
                     const matchesInput = title.toLowerCase().includes(input.toLowerCase());
                     const itemData = historicalData[title];
                     const matchesLocation = itemData.locations[currentLocation] !== undefined;
-                    const isNotCurrentItem = itemId !== itemData.id; // Compare by ID instead of title
+                    const isNotCurrentItem = itemId !== itemData.id;
                     console.log(`Title: ${title}, Matches input: ${matchesInput}, Matches location: ${matchesLocation}, Is not current item: ${isNotCurrentItem}`);
                     return matchesInput && matchesLocation && isNotCurrentItem;
                 })
@@ -849,30 +852,15 @@ export const GroceriesPage = {
                     };
                 });
             }
-
-            console.log('Suggestions:', suggestions.value);
         }
 
         function selectSuggestion(suggestion) {
             const item = groceryItems.value.find(item => item.id === currentEditingItem.value);
             if (item) {
-                console.log('Selected suggestion:', suggestion);
-                console.log('Current item before update:', { ...item });
-                
-                if (item.location !== suggestion.location) {
-                    console.warn('Location mismatch:', item.location, suggestion.location);
-                    // You might want to add some user feedback here
-                }
-
                 item.title = suggestion.title;
                 item.amount = suggestion.quantity;
                 item.price = suggestion.price;
-                
-                console.log('Current item after update:', { ...item });
-                
-                updateItemField(item, 'title', suggestion.title);
-                updateItemField(item, 'amount', suggestion.quantity);
-                updateItemField(item, 'price', suggestion.price);
+                updateItemInSheet(item);
             }
             suggestions.value = [];
             currentEditingItem.value = null;
@@ -1034,7 +1022,7 @@ export const GroceriesPage = {
                                         v-model="item.title" 
                                         :data-item-id="item.id"
                                         data-field="title"
-                                        @input="updateItemField(item, 'title', $event.target.value)"
+                                        @input="($event) => { updateItemField(item, 'title', $event.target.value); filterSuggestions($event.target.value, item.id); }"
                                         @change="updateItemField(item, 'title', $event.target.value)"
                                         @focus="startEditing"
                                         @blur="stopEditing"
