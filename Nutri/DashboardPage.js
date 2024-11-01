@@ -137,13 +137,6 @@ export const DashboardPage = {
             loading.value = true;
             error.value = null;
             try {
-                // Check token validity
-                const isValid = await GoogleAuth.isTokenValid();
-                if (!isValid) {
-                    console.log('Token is not valid, refreshing...');
-                    await GoogleAuth.getAccessToken(); // This should refresh the token
-                    console.log('Token is now valid');
-                }
                 const groceriesResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Groceries!A2:H');
                 const locationsResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Locations!A2:F');
                 

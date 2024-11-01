@@ -3,6 +3,22 @@ let tokenClient = null;
 let accessToken = null;
 export const CLIENT_ID = '778093944102-hs9c9949mulivlrd17nh9vnbveblgc9v.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+let user = null;
+let isSignedIn = false;
+
+function parseJwt(token) {
+    try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+        return JSON.parse(jsonPayload);
+    } catch (error) {
+        console.error("Error parsing JWT:", error);
+        return null;
+    }
+}
 
 export function initGoogleAuth() {
   return new Promise((resolve) => {
@@ -72,7 +88,7 @@ export async function createNewSheet(title) {
   }
 }
 
-export async function initGooglePicker(callback) {
+/*export async function initGooglePicker(callback) {
   try {
     if (!tokenClient) {
       await initGoogleAuth();
@@ -114,7 +130,7 @@ export async function initGooglePicker(callback) {
   } catch (error) {
     console.error('Error initializing Google Picker:', error);
   }
-}
+}*/
 
 export async function checkForChanges(sheetId) {
   try {
@@ -139,31 +155,31 @@ export async function checkForChanges(sheetId) {
   }
 }
 
-export async function getAccessToken() {
-  console.log('getAccessToken called. Current token:', accessToken ? 'exists' : 'null');
-  if (accessToken && await isTokenValid()) {
-    console.log('Existing token is valid, returning it');
-    return accessToken;
-  }
+export function getAccessToken() {
+    return new Promise((resolve, reject) => {
+        if (!tokenClient) {
+            reject(new Error('Token client not initialized'));
+            return;
+        }
 
-  return new Promise((resolve, reject) => {
-    if (!tokenClient) {
-      reject(new Error('Token client not initialized'));
-      return;
-    }
+        // If we already have a valid token, return it
+        if (accessToken && isTokenValid()) {
+            resolve(accessToken);
+            return;
+        }
 
-    tokenClient.callback = (resp) => {
-      if (resp.error !== undefined) {
-        reject(resp);
-      }
-      accessToken = resp.access_token;
-      localStorage.setItem('gsi_session', resp.access_token); // Save the new token
-      console.log('New token obtained and saved');
-      resolve(accessToken);
-    };
+        tokenClient.callback = (resp) => {
+            if (resp.error !== undefined) {
+                reject(resp);
+                return;
+            }
+            accessToken = resp.access_token;
+            localStorage.setItem('gsi_session', resp.access_token);
+            resolve(accessToken);
+        };
 
-    tokenClient.requestAccessToken({ prompt: '' });
-  });
+        tokenClient.requestAccessToken({ prompt: '' });
+    });
 }
 
 export function signOut() {
@@ -275,9 +291,37 @@ export async function getSheetMetadata(sheetId) {
 }
 
 export function handleCredentialResponse(response) {
-  console.log("Handling credential response in googleAuth.js");
-  // Call the global handleCredentialResponse function
-  window.handleCredentialResponse(response);
+    console.log("Handling credential response in googleAuth.js");
+    if (response.credential) {
+        try {
+            const decodedToken = parseJwt(response.credential);
+            if (decodedToken && decodedToken.email) {
+                const user = {
+                    email: decodedToken.email,
+                    name: decodedToken.name,
+                    picture: decodedToken.picture
+                };
+                localStorage.setItem('gsi_session', response.credential);
+                
+                // Use the vueApp global reference instead
+                if (window.vueApp && window.vueApp.proxy) {
+                    console.log("Updating auth state with user:", user);
+                    window.vueApp.proxy.updateAuthState({
+                        user: user,
+                        isSignedIn: true
+                    });
+                    return true;
+                } else {
+                    console.error("Vue app instance not found");
+                }
+            }
+        } catch (error) {
+            console.error("Error parsing JWT token:", error);
+            localStorage.removeItem('gsi_session');
+            return false;
+        }
+    }
+    return false;
 }
 
 export async function batchUpdateSheetData(sheetId, sheetName, items, isNewRow = false) {
@@ -452,7 +496,7 @@ const GoogleAuth = {
   initGoogleAuth,
   loadSheetData,
   createNewSheet,
-  initGooglePicker,
+  //initGooglePicker,
   checkForChanges,
   getAccessToken,
   signOut,
@@ -468,6 +512,8 @@ const GoogleAuth = {
   batchUpdateSheetData,
   batchDuplicateGroceryItems,
   deleteSheetRow,
+  handleCredentialResponse,
+  parseJwt
 };
 
 export default GoogleAuth;

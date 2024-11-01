@@ -122,14 +122,6 @@ export const GroceriesPage = {
             error.value = null;
             const currentSelectedLocationId = selectedLocation.value;
             try {
-                // Check token validity
-                const isValid = await GoogleAuth.isTokenValid();
-                if (!isValid) {
-                    console.log('Token is not valid, refreshing...');
-                    await GoogleAuth.getAccessToken(); // This should refresh the token
-                    console.log('Token is now valid');
-                }
-
                 console.log('Fetching groceries data');
                 const groceriesResponse = await GoogleAuth.loadSheetData(props.sheetId, 'Groceries!A2:H');
                 console.log('Groceries data received:', groceriesResponse);
