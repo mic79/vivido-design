@@ -906,21 +906,34 @@ export const GroceriesPage = {
         function selectSuggestion(suggestion) {
             const item = groceryItems.value.find(item => item.id === currentEditingItem.value);
             if (item) {
+                // Find the active input element
+                const activeElement = document.activeElement;
+                if (activeElement && activeElement.tagName === 'INPUT') {
+                    // Force update the input value directly
+                    activeElement.value = suggestion.title;
+                    // Trigger an input event to ensure v-model updates
+                    activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+                    // Remove focus
+                    activeElement.blur();
+                }
+
+                // Update the item properties
                 item.title = suggestion.title;
                 item.amount = suggestion.quantity;
                 item.price = suggestion.price;
                 
-                // Find and blur the currently focused input
-                const activeElement = document.activeElement;
-                if (activeElement && activeElement.tagName === 'INPUT') {
-                    activeElement.blur();
-                }
-                
                 // Ensure the update is processed
-                nextTick(() => {
-                    updateItemInSheet(item);
+                nextTick(async () => {
+                    await updateItemInSheet(item);
+                    // Double-check the title update
+                    if (item.title !== suggestion.title) {
+                        item.title = suggestion.title;
+                        await updateItemInSheet(item);
+                    }
                 });
             }
+            
+            // Clear suggestions and current editing state
             suggestions.value = [];
             currentEditingItem.value = null;
         }
