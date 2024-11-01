@@ -69,7 +69,15 @@ export const GroceriesPage = {
         }
 
         function deselectAll() {
+            // Clear the selectedItems array
             selectedItems.value = [];
+
+            // Also clear any selected state on the grocery items
+            groceryItems.value.forEach(item => {
+                item.selected = false;
+            });
+
+            console.log('Deselected all items:', selectedItems.value);
         }
 
         async function performSelectedAction(action) {
@@ -351,6 +359,12 @@ export const GroceriesPage = {
 
         function selectLocation(locationId) {
             selectedLocation.value = locationId;
+            
+            // Reset all groups to collapsed state when switching locations
+            recentlyCheckedOff.value.forEach(group => {
+                group.collapsed = true;
+            });
+            
             updateRecentlyCheckedOff();
             selectedItems.value = []; // Clear selections
         }
@@ -999,8 +1013,9 @@ export const GroceriesPage = {
                             <tr>
                                 <th width="30">
                                     <input type="checkbox" 
-                                        :checked="selectedItems.length === filteredGroceryItems.length && filteredGroceryItems.length > 0" 
-                                        @change="toggleSelectAll(filteredGroceryItems)">
+                                        :checked="selectedItems.length === filteredGroceryItems.length && 
+                                                 selectedItems.every(id => filteredGroceryItems.some(item => item.id === id))"
+                                        @change="toggleSelectAll">
                                 </th>
                                 <th>Item</th>
                                 <th width="60">Quantity</th>

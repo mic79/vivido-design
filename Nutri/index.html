@@ -246,49 +246,31 @@
                             stopChangeDetection();
                         }
 
-                        function loadPickerApi() {
-                            return new Promise((resolve, reject) => {
-                                gapi.load('picker', { callback: resolve, onerror: reject });
-                            });
-                        }
-
-                        function pickerCallback(data) {
-                            if (data.action === google.picker.Action.PICKED) {
-                                const fileId = data.docs[0].id;
-                                console.log('The user selected: ' + fileId);
-                                sheetId.value = fileId;
-                                localStorage.setItem('lastUsedSheetId', fileId);
-
-                                // Reset the last checked time for this sheet
-                                delete sheetLastChecked[fileId];
-
-                                // Fetch data and set up change detection for the new sheet
-                                fetchCurrentPageData().then(() => {
-                                    setupChangeDetection(fileId, fetchCurrentPageData);
-                                });
-                            }
-                        }
-
                         async function showPicker() {
                             console.log("Showing Google Picker");
                             try {
-                                await loadPickerApi();
-                                const accessToken = await GoogleAuth.getAccessToken();
+                                const tokenClient = GoogleAuth.getTokenClient();
+                                if (!tokenClient) {
+                                    throw new Error('Please sign in first');
+                                }
                                 
+                                const token = await GoogleAuth.getAccessToken();
                                 const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
                                     .setIncludeFolders(true)
                                     .setMimeTypes("application/vnd.google-apps.spreadsheet")
                                     .setQuery("GroceriesApp");
-                                const picker = new google.picker.PickerBuilder()
-                                    .enableFeature(google.picker.Feature.NAV_HIDDEN)
-                                    .setAppId(CLIENT_ID)
-                                    .setOAuthToken(accessToken)
+                                    
+                                new google.picker.PickerBuilder()
                                     .addView(view)
-                                    .addView(new google.picker.DocsUploadView())
-                                    .setDeveloperKey(API_KEY)
-                                    .setCallback(pickerCallback)
-                                    .build();
-                                picker.setVisible(true);
+                                    .setOAuthToken(token)
+                                    .setCallback((data) => {
+                                        if (data.action === google.picker.Action.PICKED) {
+                                            sheetId.value = data.docs[0].id;
+                                            localStorage.setItem('lastUsedSheetId', data.docs[0].id);
+                                        }
+                                    })
+                                    .build()
+                                    .setVisible(true);
                             } catch (error) {
                                 console.error('Error showing Google Picker:', error);
                             }
@@ -373,13 +355,18 @@
 
                         async function initializeApp() {
                             console.log("Initializing app");
-                            if (checkSavedSession()) {
-                                console.log("Restored saved session");
-                            } else {
-                                console.log("No saved session, initializing Google Sign-In");
-                                initializeGoogleSignIn();
-                                // Try auto sign-in
-                                google.accounts.id.prompt();
+                            try {
+                                await GoogleAuth.initGoogleAuth();
+                                console.log("Google Auth initialized");
+                                if (checkSavedSession()) {
+                                    console.log("Restored saved session");
+                                } else {
+                                    console.log("No saved session, initializing Google Sign-In");
+                                    initializeGoogleSignIn();
+                                    google.accounts.id.prompt();
+                                }
+                            } catch (error) {
+                                console.error("Error initializing:", error);
                             }
                         }
 

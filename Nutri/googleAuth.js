@@ -21,21 +21,22 @@ function parseJwt(token) {
 }
 
 export function initGoogleAuth() {
-  return new Promise((resolve) => {
-    const checkGoogleLoaded = setInterval(() => {
-      if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
-        clearInterval(checkGoogleLoaded);
-        idClient = google.accounts.id;
-        tokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: CLIENT_ID,
-          scope: SCOPES,
-          callback: '', // defined later
-        });
-        
-        resolve({ idClient, tokenClient });
-      }
-    }, 100);
-  });
+    console.log('initGoogleAuth called');
+    return new Promise((resolve) => {
+        const checkGoogleLoaded = setInterval(() => {
+            if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+                clearInterval(checkGoogleLoaded);
+                console.log('Creating new tokenClient');
+                tokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: CLIENT_ID,
+                    scope: SCOPES,
+                    callback: handleCredentialResponse
+                });
+                console.log('tokenClient created:', tokenClient);
+                resolve(tokenClient);
+            }
+        }, 100);
+    });
 }
 
 export function getIdClient() {
@@ -43,7 +44,8 @@ export function getIdClient() {
 }
 
 export function getTokenClient() {
-  return tokenClient;
+    console.log('getTokenClient called, tokenClient is:', tokenClient);
+    return tokenClient;
 }
 
 export function loadSheetData(sheetId, range) {
@@ -292,6 +294,7 @@ export async function getSheetMetadata(sheetId) {
 
 export function handleCredentialResponse(response) {
     console.log("Handling credential response in googleAuth.js");
+    console.log('tokenClient during handleCredentialResponse:', tokenClient);
     if (response.credential) {
         try {
             const decodedToken = parseJwt(response.credential);
