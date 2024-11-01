@@ -29,7 +29,7 @@ export const GroceriesPage = {
                     groceryListRef.value._sortable = new Sortable(groceryListRef.value, {
                         animation: 150,
                         ghostClass: 'sortable-ghost',
-                        handle: '.drag-handle', // Use the drag handle for sorting
+                        handle: '.drag-handle',
                         onEnd: async ({ oldIndex, newIndex }) => {
                             const item = filteredGroceryItems.value.splice(oldIndex, 1)[0];
                             filteredGroceryItems.value.splice(newIndex, 0, item);
@@ -49,6 +49,41 @@ export const GroceriesPage = {
                     delete groceryListRef.value._sortable;
                 }
             }
+
+            document.querySelectorAll('.recently-checked-off-group tbody').forEach((tbody) => {
+                if (tbody._sortable && typeof tbody._sortable.destroy === 'function') {
+                    tbody._sortable.destroy();
+                }
+
+                if (sortingEnabled.value) {
+                    tbody._sortable = new Sortable(tbody, {
+                        animation: 150,
+                        ghostClass: 'sortable-ghost',
+                        handle: '.drag-handle',
+                        onEnd: async ({ oldIndex, newIndex }) => {
+                            const groupDate = tbody.closest('.recently-checked-off-group').dataset.date;
+                            const group = recentlyCheckedOff.value.find(g => g.date === groupDate);
+                            
+                            if (group) {
+                                const item = group.items.splice(oldIndex, 1)[0];
+                                group.items.splice(newIndex, 0, item);
+                                
+                                // Update the order of items
+                                group.items.forEach((item, index) => {
+                                    item.order = index;
+                                });
+
+                                // Update the items in the sheet
+                                for (const item of group.items) {
+                                    await updateItemInSheet(item);
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    delete tbody._sortable;
+                }
+            });
         }
 
         function toggleSorting() {
@@ -927,6 +962,13 @@ export const GroceriesPage = {
             // that the sheet was modified by another user
         };
 
+        // Add this watch to reinitialize sorting when groups are expanded/collapsed
+        watch(() => recentlyCheckedOff.value.map(g => g.collapsed), () => {
+            nextTick(() => {
+                initSortable();
+            });
+        }, { deep: true });
+
         return {
             locations,
             groceryItems,
@@ -1092,7 +1134,7 @@ export const GroceriesPage = {
                 <!-- Recently checked off items -->
                 <div class="recently-checked-off">
                     <h3>Recently Checked Off Items</h3>
-                    <div v-for="group in recentlyCheckedOff" :key="group.date" class="recently-checked-off-group">
+                    <div v-for="group in recentlyCheckedOff" :key="group.date" class="recently-checked-off-group" :data-date="group.date">
                     <h4 @click="group.collapsed = !group.collapsed">
                         <span class="material-symbols-outlined">
                             {{ group.collapsed ? 'arrow_drop_down' : 'arrow_drop_up' }}
@@ -1115,9 +1157,11 @@ export const GroceriesPage = {
                         <tbody>
                         <tr v-for="item in group.items" :key="item.id" :data-id="item.id">
                             <td class="select-checkbox" width="30">
-                                <input type="checkbox" 
+                                <input v-if="!sortingEnabled" 
+                                    type="checkbox" 
                                     :checked="selectedItems.includes(item.id)"
                                     @change="toggleItemSelection(item)">
+                                <span v-else class="drag-handle">☰</span>
                             </td>
                             <td class="item-title"><input type="text" v-model="item.title" @focus="startEditing" @blur="stopEditing" @change="updateItemInSheet(item)"></td>
                             <td class="item-amount" width="60"><input type="number" v-model.number="item.amount" @focus="($event) => { handleAmountFocus(item, $event); startEditing(); }" @blur="stopEditing" @change="updateItemInSheet(item)"></td>

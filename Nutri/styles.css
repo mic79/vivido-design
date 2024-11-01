@@ -371,6 +371,9 @@ button.alert {
     font-size: 14px;
     border-bottom: 1px solid rgba(0, 0, 0, .12);
 }
+.drag-handle {
+    cursor: move;
+}
 
 .location-tabs {
     padding: 0 1rem;
