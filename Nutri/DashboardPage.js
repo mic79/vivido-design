@@ -174,7 +174,7 @@ export const DashboardPage = {
         }
 
         // New method to calculate location totals
-        function getLocationTotals(items) {
+        function getLocationTotals(monthYear) {
             const totals = {};
             
             // Create a map of locations for quick access
@@ -183,23 +183,27 @@ export const DashboardPage = {
                 locationMap[location.id] = location.title;
             });
 
-            items.forEach(item => {
-                const locationId = item.location;
-                const price = parsePrice(item.price);
-
-                if (locationMap[locationId]) {
-                    const locationTitle = locationMap[locationId];
-                    totals[locationTitle] = (totals[locationTitle] || 0) + price;
-                } else {
-                    console.log('Location ID not found in locations:', locationId);
+            // Filter items for the given month using the same logic as monthlyCosts
+            groceryItems.value.forEach(item => {
+                if (item.dateChecked && item.price) {
+                    const date = new Date(parseInt(item.dateChecked));
+                    if (!isNaN(date.getTime())) {
+                        const itemMonthYear = date.toISOString().split('T')[0].slice(0, 7); // YYYY-MM format
+                        if (itemMonthYear === monthYear) {
+                            const locationId = item.location;
+                            const price = parsePrice(item.price);
+                            if (!isNaN(price) && locationMap[locationId]) {
+                                const locationTitle = locationMap[locationId];
+                                totals[locationTitle] = (totals[locationTitle] || 0) + price;
+                            }
+                        }
+                    }
                 }
             });
 
-            // Convert the totals object to an array of [location, total] pairs
-            const sortedTotals = Object.entries(totals)
-                .sort((a, b) => b[1] - a[1]); // Sort by total price in descending order
-
-            return sortedTotals;
+            return Object.entries(totals)
+                .sort((a, b) => b[1] - a[1])
+                .map(([location, total]) => [location, Number(total.toFixed(2))]);
         }
 
         return {
@@ -256,7 +260,7 @@ export const DashboardPage = {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr v-for="[location, total] in getLocationTotals(item.items)" :key="location">
+                                        <tr v-for="[location, total] in getLocationTotals(item.month)" :key="location">
                                             <td>{{ location }}</td>
                                             <td>{{ formatPrice(total) }}</td>
                                         </tr>
