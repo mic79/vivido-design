@@ -470,6 +470,11 @@ td.location-order input {
     cursor: pointer;
     z-index: 2;
 }
+.recently-checked-off h4 .material-symbols-outlined {
+    margin-right: 0.5rem;
+    font-size: 18px;
+    vertical-align: middle;
+}
 
 .recently-checked-off ul {
     margin: 0;

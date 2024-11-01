@@ -1094,6 +1094,9 @@ export const GroceriesPage = {
                     <h3>Recently Checked Off Items</h3>
                     <div v-for="group in recentlyCheckedOff" :key="group.date" class="recently-checked-off-group">
                     <h4 @click="group.collapsed = !group.collapsed">
+                        <span class="material-symbols-outlined">
+                            {{ group.collapsed ? 'arrow_drop_down' : 'arrow_drop_up' }}
+                        </span>
                         {{ group.date }}<span style="margin-left: auto;">{{ formatPrice(group.total) }}</span>
                     </h4>
                     <table v-if="!group.collapsed">
