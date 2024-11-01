@@ -27,11 +27,24 @@ export function initGoogleAuth() {
             if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
                 clearInterval(checkGoogleLoaded);
                 console.log('Creating new tokenClient');
+                
+                // Configure Google Identity Services
+                google.accounts.id.initialize({
+                    client_id: CLIENT_ID,
+                    callback: handleCredentialResponse,
+                    auto_select: true,
+                    prompt_parent_id: 'googleSignInButton',
+                    context: 'signin',
+                    itp_support: true // Enable Intelligent Tracking Prevention support
+                });
+
                 tokenClient = google.accounts.oauth2.initTokenClient({
                     client_id: CLIENT_ID,
                     scope: SCOPES,
-                    callback: handleCredentialResponse
+                    callback: handleCredentialResponse,
+                    prompt: ''  // Reduces prompts
                 });
+                
                 console.log('tokenClient created:', tokenClient);
                 resolve(tokenClient);
             }

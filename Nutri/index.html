@@ -182,12 +182,27 @@
                                 client_id: CLIENT_ID,
                                 callback: GoogleAuth.handleCredentialResponse,
                                 auto_select: true,
-                                cancel_on_tap_outside: false
+                                prompt_parent_id: 'googleSignInButton',
+                                context: 'signin',
+                                itp_support: true
                             });
+                            
+                            // Render the button with specific configuration
                             google.accounts.id.renderButton(
                                 document.getElementById('googleSignInButton'), 
-                                { theme: 'outline', size: 'large' }
+                                { 
+                                    theme: 'outline', 
+                                    size: 'large',
+                                    type: 'standard',
+                                    shape: 'rectangular',
+                                    text: 'continue_with'  // Shows "Continue with Google"
+                                }
                             );
+
+                            // Automatically prompt for sign-in if we have a stored session
+                            if (localStorage.getItem('gsi_session')) {
+                                google.accounts.id.prompt();
+                            }
                         }
 
                         function checkForStoredSheet() {
