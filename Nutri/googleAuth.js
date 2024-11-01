@@ -164,11 +164,15 @@ export function getAccessToken() {
             return;
         }
 
-        // If we already have a valid token, return it
         if (accessToken && isTokenValid()) {
             resolve(accessToken);
             return;
         }
+
+        tokenClient.requestAccessToken({
+            prompt: '',
+            hint: localStorage.getItem('gsi_session')
+        });
 
         tokenClient.callback = (resp) => {
             if (resp.error !== undefined) {
@@ -176,11 +180,8 @@ export function getAccessToken() {
                 return;
             }
             accessToken = resp.access_token;
-            localStorage.setItem('gsi_session', resp.access_token);
             resolve(accessToken);
         };
-
-        tokenClient.requestAccessToken({ prompt: '' });
     });
 }
 
@@ -294,7 +295,6 @@ export async function getSheetMetadata(sheetId) {
 
 export function handleCredentialResponse(response) {
     console.log("Handling credential response in googleAuth.js");
-    console.log('tokenClient during handleCredentialResponse:', tokenClient);
     if (response.credential) {
         try {
             const decodedToken = parseJwt(response.credential);
@@ -306,7 +306,16 @@ export function handleCredentialResponse(response) {
                 };
                 localStorage.setItem('gsi_session', response.credential);
                 
-                // Use the vueApp global reference instead
+                if (!tokenClient) {
+                    tokenClient = google.accounts.oauth2.initTokenClient({
+                        client_id: CLIENT_ID,
+                        scope: SCOPES,
+                        callback: (resp) => {
+                            accessToken = resp.access_token;
+                        }
+                    });
+                }
+                
                 if (window.vueApp && window.vueApp.proxy) {
                     console.log("Updating auth state with user:", user);
                     window.vueApp.proxy.updateAuthState({
@@ -314,8 +323,6 @@ export function handleCredentialResponse(response) {
                         isSignedIn: true
                     });
                     return true;
-                } else {
-                    console.error("Vue app instance not found");
                 }
             }
         } catch (error) {
