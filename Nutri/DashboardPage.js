@@ -247,7 +247,7 @@ export const DashboardPage = {
                                 :style="{ width: (item.estimatedCost / maxMonthlyCost * 100) + '%' }">
                             </div>
                             <span class="bar-label">
-                                <span class="material-symbols-outlined">
+                                <span class="material-icons">
                                     {{ expandedMonth === item.month ? 'arrow_drop_up' : 'arrow_drop_down' }}
                                 </span>
                                 {{ item.month }}&nbsp;&nbsp;&nbsp;&nbsp;<strong>{{ formatPrice(item.cost) }}</strong>&nbsp;&nbsp;&nbsp;&nbsp;

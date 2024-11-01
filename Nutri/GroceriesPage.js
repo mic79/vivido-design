@@ -1136,7 +1136,7 @@ export const GroceriesPage = {
                     <h3>Recently Checked Off Items</h3>
                     <div v-for="group in recentlyCheckedOff" :key="group.date" class="recently-checked-off-group" :data-date="group.date">
                     <h4 @click="group.collapsed = !group.collapsed">
-                        <span class="material-symbols-outlined">
+                        <span class="material-icons">
                             {{ group.collapsed ? 'arrow_drop_down' : 'arrow_drop_up' }}
                         </span>
                         {{ group.date }}<span style="margin-left: auto;">{{ formatPrice(group.total) }}</span>
