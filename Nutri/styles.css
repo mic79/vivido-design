@@ -743,3 +743,197 @@ td.location-order input {
 .expanded-details tr:nth-child(even) {
     background-color: #f8f8f8;
 }
+
+.nutrition-insights {
+    margin-top: 2rem;
+}
+
+.nutrition-content {
+    padding: 1rem;
+}
+
+.nutrition-stats {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 1rem;
+}
+
+.stat {
+    display: flex;
+    flex-direction: column;
+}
+
+.stat .label {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.stat .value {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #729c9c;
+}
+
+.macros-breakdown, .category-breakdown {
+    margin-top: 1.5rem;
+}
+
+.category-breakdown .chart-container {
+    max-width: 600px;
+    padding-bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.category-breakdown .bar-container {
+    position: relative;
+    width: 100%;
+    background-color: #729c9c;
+}
+
+.category-breakdown .bar {
+    position: relative;
+    height: 20px;
+    min-width: 1px;
+    background-color: hsl(180 18% 33% / 1);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.category-breakdown .bar-label {
+    position: absolute;
+    top: 3px;
+    left: 1rem;
+    color: white;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.matched-items {
+    margin-top: 2rem;
+}
+
+.matched-items table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+
+.matched-items th,
+.matched-items td {
+    padding: 0.5rem;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.matched-items th {
+    font-weight: 600;
+    color: #666;
+}
+
+.matched-items td:nth-child(2),
+.matched-items td:nth-child(3) {
+    text-align: right;
+}
+
+.matched-items tr:hover {
+    background-color: #f9f9f9;
+}
+
+.unmatched-items {
+    border-top: 1px solid #eee;
+}
+
+.unmatched-items .help-text {
+    color: #666;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.unmatched-items table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+
+.unmatched-items th,
+.unmatched-items td {
+    padding: 0.5rem;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.unmatched-items th {
+    font-weight: 600;
+    color: #666;
+}
+
+.unmatched-items td:nth-child(2),
+.unmatched-items td:nth-child(3) {
+    text-align: right;
+}
+
+.unmatched-items tr:hover {
+    background-color: #f9f9f9;
+}
+
+.matched-items h4,
+.unmatched-items h4 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.matched-items h4:hover,
+.unmatched-items h4:hover {
+    color: #729c9c;
+}
+
+.matched-items h4 .material-icons,
+.unmatched-items h4 .material-icons {
+    font-size: 1.2rem;
+}
+
+/* Macronutrient ratio styles */
+.macro-bars {
+    display: flex;
+    height: 30px;
+    border-radius: 15px;
+    overflow: hidden;
+}
+
+.macro-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    color: white;
+    font-size: 0.9rem;
+    transition: width 0.3s ease;
+}
+
+.macro-bar.protein { background-color: #729c9c; }
+.macro-bar.carbs { background-color: #9c7272; }
+.macro-bar.fat { background-color: #729c72; }
+
+/* Food Categories styles */
+.category-breakdown {
+    margin-top: 1.5rem;
+}
+
+.category-breakdown .chart-container {
+    max-width: 600px;
+    padding-bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.category-breakdown .bar-container {
+    position: relative;
+    width: 100%;
+}

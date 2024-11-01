@@ -10,6 +10,9 @@ export const DashboardPage = {
         const groceryItems = ref([]);
         const locations = ref([]);
         const expandedMonth = ref(null);
+        const nutritionData = ref({});
+        const matchedItemsExpanded = ref(false);
+        const unmatchedItemsExpanded = ref(false);
 
         function adjustYear(year, currentYear) {
             year = parseInt(year);
@@ -133,6 +136,47 @@ export const DashboardPage = {
             return date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
         }
 
+        async function fetchNutritionData() {
+            try {
+                // Fetch from Nutrition sheet (now including unit and gramsPerUnit)
+                const response = await GoogleAuth.loadSheetData(props.sheetId, 'Nutrition!A2:H');
+                const values = response.values || [];
+                
+                // Create a map of food items to their nutrition data
+                return values.reduce((acc, [name, calories, protein, carbs, fat, category, unit, gramsPerUnit]) => {
+                    acc[name.toLowerCase()] = {
+                        calories: parseFloat(calories),
+                        protein: parseFloat(protein),
+                        carbs: parseFloat(carbs),
+                        fat: parseFloat(fat),
+                        category,
+                        unit: unit || 'g',
+                        gramsPerUnit: parseFloat(gramsPerUnit) || 1
+                    };
+                    return acc;
+                }, {});
+            } catch (err) {
+                console.error('Error fetching nutrition data:', err);
+                return {};
+            }
+        }
+
+        // Helper function to calculate amount in grams
+        function calculateGrams(amount, nutrition) {
+            if (!amount) return 0;
+            amount = parseInt(amount);
+            
+            switch (nutrition.unit) {
+                case 'piece':
+                case 'unit':
+                    return amount * nutrition.gramsPerUnit;
+                case 'ml':
+                    return amount; // Assume 1ml = 1g for simplicity
+                default:
+                    return amount;
+            }
+        }
+
         async function fetchData() {
             loading.value = true;
             error.value = null;
@@ -159,6 +203,8 @@ export const DashboardPage = {
                     hidden: row[3] === 'true',
                     city: row[4] || ''
                 }));
+
+                nutritionData.value = await fetchNutritionData();
             } catch (err) {
                 console.error('Error fetching data:', err);
                 error.value = 'Failed to fetch data. Please try again.';
@@ -206,6 +252,128 @@ export const DashboardPage = {
                 .map(([location, total]) => [location, Number(total.toFixed(2))]);
         }
 
+        const nutritionInsights = computed(() => {
+            const lastMonth = new Date();
+            lastMonth.setMonth(lastMonth.getMonth() - 1);
+            
+            const recentItems = groceryItems.value.filter(item => {
+                const itemDate = new Date(parseInt(item.dateChecked));
+                return itemDate > lastMonth;
+            });
+
+            const insights = {
+                totalCalories: 0,
+                proteinRatio: 0,
+                carbsRatio: 0,
+                fatRatio: 0,
+                categoryBreakdown: {},
+                matchedItems: 0,
+                totalItems: recentItems.length
+            };
+
+            recentItems.forEach(item => {
+                const itemName = item.title.toLowerCase();
+                const nutrition = nutritionData.value[itemName];
+                
+                if (nutrition) {
+                    insights.matchedItems++;
+                    const gramsAmount = calculateGrams(item.amount, nutrition);
+                    const amountRatio = gramsAmount / 100;
+                    
+                    insights.totalCalories += nutrition.calories * amountRatio;
+                    insights.proteinRatio += nutrition.protein * amountRatio;
+                    insights.carbsRatio += nutrition.carbs * amountRatio;
+                    insights.fatRatio += nutrition.fat * amountRatio;
+                    
+                    insights.categoryBreakdown[nutrition.category] = 
+                        (insights.categoryBreakdown[nutrition.category] || 0) + 1;
+                }
+            });
+
+            return insights;
+        });
+
+        const matchedItemsList = computed(() => {
+            const lastMonth = new Date();
+            lastMonth.setMonth(lastMonth.getMonth() - 1);
+            
+            // First, group items by title
+            const groupedItems = groceryItems.value
+                .filter(item => {
+                    const itemDate = new Date(parseInt(item.dateChecked));
+                    return itemDate > lastMonth;
+                })
+                .reduce((acc, item) => {
+                    const itemName = item.title.toLowerCase();
+                    const nutrition = nutritionData.value[itemName];
+                    
+                    if (nutrition) {
+                        if (!acc[itemName]) {
+                            acc[itemName] = {
+                                title: item.title,
+                                amount: 0,
+                                totalCalories: 0,
+                                unit: nutrition.unit
+                            };
+                        }
+                        // Sum up amounts
+                        const amount = parseInt(item.amount) || 0;
+                        acc[itemName].amount += amount;
+                        
+                        // Calculate calories based on actual grams
+                        const gramsAmount = calculateGrams(amount, nutrition);
+                        acc[itemName].totalCalories += Math.round(nutrition.calories * (gramsAmount / 100));
+                    }
+                    return acc;
+                }, {});
+
+            // Convert to array and sort by calories
+            return Object.values(groupedItems)
+                .sort((a, b) => b.totalCalories - a.totalCalories)
+                .map(item => ({
+                    ...item,
+                    // Format amount with appropriate unit
+                    amount: `${item.amount}${item.unit}`
+                }));
+        });
+
+        const unmatchedItemsList = computed(() => {
+            const lastMonth = new Date();
+            lastMonth.setMonth(lastMonth.getMonth() - 1);
+            
+            // Group unmatched items by title
+            const groupedItems = groceryItems.value
+                .filter(item => {
+                    const itemDate = new Date(parseInt(item.dateChecked));
+                    return itemDate > lastMonth;
+                })
+                .reduce((acc, item) => {
+                    const itemName = item.title.toLowerCase();
+                    
+                    // Only process items that don't have nutrition data
+                    if (!nutritionData.value[itemName]) {
+                        if (!acc[itemName]) {
+                            acc[itemName] = {
+                                title: item.title,
+                                amount: 0,
+                                count: 0
+                            };
+                        }
+                        acc[itemName].amount += parseInt(item.amount) || 0;
+                        acc[itemName].count++;
+                    }
+                    return acc;
+                }, {});
+
+            // Convert to array and sort by frequency
+            return Object.values(groupedItems)
+                .sort((a, b) => b.count - a.count)
+                .map(item => ({
+                    ...item,
+                    amount: `${item.amount}g` // Assuming grams as default unit
+                }));
+        });
+
         return {
             loading,
             error,
@@ -219,7 +387,12 @@ export const DashboardPage = {
             expandedMonth,
             toggleExpand,
             getLocationTotals,
-            fetchData
+            fetchData,
+            nutritionInsights,
+            matchedItemsList,
+            unmatchedItemsList,
+            matchedItemsExpanded,
+            unmatchedItemsExpanded
         };
     },
     template: `
@@ -272,6 +445,111 @@ export const DashboardPage = {
                                 </table>
                             </div>
                         </div>
+                    </div>
+                </div>
+                <div class="chart nutrition-insights">
+                    <h3>Nutritional Insights (Last 30 Days)</h3>
+                    <div v-if="nutritionInsights.matchedItems > 0" class="nutrition-content">
+                        <div class="nutrition-stats">
+                            <div class="stat">
+                                <span class="label">Matched Items</span>
+                                <span class="value">{{ nutritionInsights.matchedItems }}/{{ nutritionInsights.totalItems }}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">Avg. Daily Calories</span>
+                                <span class="value">{{ Math.round(nutritionInsights.totalCalories / 30) }}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="macros-breakdown">
+                            <h4>Macronutrient Ratio</h4>
+                            <div class="macro-bars">
+                                <div class="macro-bar protein" 
+                                     :style="{ width: (nutritionInsights.proteinRatio * 100 / (nutritionInsights.proteinRatio + nutritionInsights.carbsRatio + nutritionInsights.fatRatio)) + '%' }">
+                                    Protein {{ Math.round(nutritionInsights.proteinRatio * 100 / (nutritionInsights.proteinRatio + nutritionInsights.carbsRatio + nutritionInsights.fatRatio)) }}%
+                                </div>
+                                <div class="macro-bar carbs"
+                                     :style="{ width: (nutritionInsights.carbsRatio * 100 / (nutritionInsights.proteinRatio + nutritionInsights.carbsRatio + nutritionInsights.fatRatio)) + '%' }">
+                                    Carbs {{ Math.round(nutritionInsights.carbsRatio * 100 / (nutritionInsights.proteinRatio + nutritionInsights.carbsRatio + nutritionInsights.fatRatio)) }}%
+                                </div>
+                                <div class="macro-bar fat"
+                                     :style="{ width: (nutritionInsights.fatRatio * 100 / (nutritionInsights.proteinRatio + nutritionInsights.carbsRatio + nutritionInsights.fatRatio)) + '%' }">
+                                    Fat {{ Math.round(nutritionInsights.fatRatio * 100 / (nutritionInsights.proteinRatio + nutritionInsights.carbsRatio + nutritionInsights.fatRatio)) }}%
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="category-breakdown">
+                            <h4>Food Categories</h4>
+                            <div class="chart-container">
+                                <div v-for="(count, category) in nutritionInsights.categoryBreakdown" 
+                                     :key="category" 
+                                     class="bar-container">
+                                    <div class="bar"
+                                         :style="{ width: (count * 100 / nutritionInsights.matchedItems) + '%' }">
+                                        <span class="bar-label">
+                                            {{ category }}: {{ Math.round(count * 100 / nutritionInsights.matchedItems) }}%
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="matched-items">
+                            <h4 @click="matchedItemsExpanded = !matchedItemsExpanded" style="cursor: pointer;">
+                                <span class="material-icons">
+                                    {{ matchedItemsExpanded ? 'arrow_drop_up' : 'arrow_drop_down' }}
+                                </span>
+                                Matched Items Details
+                            </h4>
+                            <table v-if="matchedItemsExpanded">
+                                <thead>
+                                    <tr>
+                                        <th>Item</th>
+                                        <th>Amount</th>
+                                        <th>Total Calories</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="item in matchedItemsList" :key="item.id">
+                                        <td>{{ item.title }}</td>
+                                        <td>{{ item.amount }}</td>
+                                        <td>{{ item.totalCalories }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div v-if="unmatchedItemsList.length > 0" class="unmatched-items">
+                            <h4 @click="unmatchedItemsExpanded = !unmatchedItemsExpanded" style="cursor: pointer;">
+                                <span class="material-icons">
+                                    {{ unmatchedItemsExpanded ? 'arrow_drop_up' : 'arrow_drop_down' }}
+                                </span>
+                                Unmatched Items
+                            </h4>
+                            <div v-show="unmatchedItemsExpanded">
+                                <p class="help-text">These items don't have nutrition data yet. Consider adding them to the Nutrition sheet.</p>
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Item</th>
+                                            <th>Amount</th>
+                                            <th>Frequency</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="item in unmatchedItemsList" :key="item.title">
+                                            <td>{{ item.title }}</td>
+                                            <td>{{ item.amount }}</td>
+                                            <td>{{ item.count }}x</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else class="no-data">
+                        No nutrition data available. Please ensure you have a "Nutrition" sheet with food data.
                     </div>
                 </div>
             </div>
