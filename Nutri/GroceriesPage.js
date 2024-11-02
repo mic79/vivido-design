@@ -851,19 +851,14 @@ export const GroceriesPage = {
             const currentItem = groceryItems.value.find(item => item.id === itemId);
             const currentLocation = currentItem ? currentItem.location : null;
             
-            console.log('Current item:', currentItem);
-            console.log('Current location:', currentLocation);
-
             const historicalData = processHistoricalData();
-            console.log('Historical data:', historicalData);
 
             const matches = Object.keys(historicalData)
                 .filter(title => {
-                    const matchesInput = title.toLowerCase().includes(input.toLowerCase());
+                    const matchesInput = title.toLowerCase().includes(input.toLowerCase().trim());
                     const itemData = historicalData[title];
                     const matchesLocation = itemData.locations[currentLocation] !== undefined;
                     const isNotCurrentItem = itemId !== itemData.id;
-                    console.log(`Title: ${title}, Matches input: ${matchesInput}, Matches location: ${matchesLocation}, Is not current item: ${isNotCurrentItem}`);
                     return matchesInput && matchesLocation && isNotCurrentItem;
                 })
                 .sort((a, b) => {
@@ -1099,10 +1094,11 @@ export const GroceriesPage = {
                                 <td class="item-title">
                                     <input 
                                         type="text" 
-                                        v-model="item.title" 
-                                        :data-item-id="item.id"
-                                        data-field="title"
-                                        @input="($event) => { updateItemField(item, 'title', $event.target.value); filterSuggestions($event.target.value, item.id); }"
+                                        :value="item.title"
+                                        @input="($event) => { 
+                                            item.title = $event.target.value;  // Update directly
+                                            filterSuggestions($event.target.value, item.id); 
+                                        }"
                                         @change="updateItemField(item, 'title', $event.target.value)"
                                         @focus="startEditing"
                                         @blur="stopEditing"
@@ -1189,9 +1185,12 @@ export const GroceriesPage = {
                             <td class="item-title">
                                 <input 
                                     type="text" 
-                                    v-model="item.title" 
-                                    @input="($event) => { updateItemField(item, 'title', $event.target.value); filterSuggestions($event.target.value, item.id); }"
-                                    @change="updateItemInSheet(item)"
+                                    :value="item.title"
+                                    @input="($event) => { 
+                                        item.title = $event.target.value;  // Update directly
+                                        filterSuggestions($event.target.value, item.id); 
+                                    }"
+                                    @change="updateItemField(item, 'title', $event.target.value)"
                                     @focus="startEditing"
                                     @blur="stopEditing"
                                 >
