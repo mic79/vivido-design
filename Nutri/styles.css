@@ -951,34 +951,88 @@ td.location-order input {
 
 .monthly-calories .bar-container {
     position: relative;
-    height: 30px;
-    margin: 5px 0;
-    display: flex;
-    align-items: center;
-    overflow: hidden;
+    min-width: 300px;
+    margin-bottom: 10px;
+}
+
+.monthly-calories .bar-container:hover {
+    background-color: rgba(0, 0, 0, 0.02);
 }
 
 .monthly-calories .bar {
-    position: absolute;
+    position: relative;
     height: 20px;
     min-width: 1px;
+    margin-right: 10px;
     background-color: #729c9c;
-    border-radius: 2px;
     transition: width 0.3s ease;
-}
-.monthly-calories .bar-container:first-child .bar:after {
-    content: '';
-    position: absolute;
-    height: 100%;
-    width: 100vw;
-    background: #729c9c50;
+    z-index: 2;
 }
 
 .monthly-calories .bar-label {
-    position: relative;
-    z-index: 1;
-    padding-left: 1rem;
+    position: absolute;
+    top: 3px;
+    left: 1rem;
     color: white;
     font-size: 12px;
     white-space: nowrap;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.monthly-calories .material-icons {
+    margin-left: -0.5rem;
+    font-size: 16px;
+    line-height: 0;
+    vertical-align: middle;
+}
+
+.monthly-calories .matched-count {
+    margin-left: 0.5rem;
+    color: white;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.monthly-calories .bar {
+    cursor: pointer;
+}
+
+.monthly-calories .expanded-details {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-radius: 5px;
+    overflow-x: auto;
+}
+
+.monthly-calories .expanded-details table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.monthly-calories .expanded-details th, 
+.monthly-calories .expanded-details td {
+    padding: 8px;
+    font-size: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+.monthly-calories .expanded-details th {
+    background-color: #e0e0e0;
+    font-weight: bold;
+}
+
+.monthly-calories .expanded-details td:nth-child(2),
+.monthly-calories .expanded-details td:nth-child(3) {
+    text-align: right;
+}
+
+.monthly-calories .expanded-details tr:last-child td {
+    border-bottom: none;
+}
+
+.monthly-calories .expanded-details tr:nth-child(even) {
+    background-color: #f8f8f8;
 }
