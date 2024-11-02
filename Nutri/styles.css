@@ -955,6 +955,7 @@ td.location-order input {
     margin: 5px 0;
     display: flex;
     align-items: center;
+    overflow: hidden;
 }
 
 .monthly-calories .bar {
@@ -964,6 +965,13 @@ td.location-order input {
     background-color: #729c9c;
     border-radius: 2px;
     transition: width 0.3s ease;
+}
+.monthly-calories .bar-container:first-child .bar:after {
+    content: '';
+    position: absolute;
+    height: 100%;
+    width: 100vw;
+    background: #729c9c50;
 }
 
 .monthly-calories .bar-label {
