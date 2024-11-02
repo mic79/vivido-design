@@ -913,6 +913,7 @@ td.location-order input {
     padding: 0 10px;
     color: white;
     font-size: 12px;
+    font-weight: bold;
     transition: width 0.3s ease;
 }
 
