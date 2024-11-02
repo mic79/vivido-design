@@ -297,9 +297,9 @@ export const DashboardPage = {
             const lastMonth = new Date();
             lastMonth.setMonth(lastMonth.getMonth() - 1);
             
-            // First, group items by title
             const groupedItems = groceryItems.value
                 .filter(item => {
+                    // Only include items from the last 30 days
                     const itemDate = new Date(parseInt(item.dateChecked));
                     return itemDate > lastMonth;
                 })
@@ -313,12 +313,14 @@ export const DashboardPage = {
                                 title: item.title,
                                 amount: 0,
                                 totalCalories: 0,
-                                unit: nutrition.unit
+                                count: 0,
+                                unit: nutrition.unit || 'g'
                             };
                         }
-                        // Sum up amounts
-                        const amount = parseInt(item.amount) || 0;
+                        
+                        const amount = parseFloat(item.amount) || 0;
                         acc[itemName].amount += amount;
+                        acc[itemName].count += 1;
                         
                         // Calculate calories based on actual grams
                         const gramsAmount = calculateGrams(amount, nutrition);
@@ -327,12 +329,10 @@ export const DashboardPage = {
                     return acc;
                 }, {});
 
-            // Convert to array and sort by calories
             return Object.values(groupedItems)
                 .sort((a, b) => b.totalCalories - a.totalCalories)
                 .map(item => ({
                     ...item,
-                    // Format amount with appropriate unit
                     amount: `${item.amount}${item.unit}`
                 }));
         });
@@ -508,6 +508,7 @@ export const DashboardPage = {
                                         <th>Item</th>
                                         <th>Amount</th>
                                         <th>Total Calories</th>
+                                        <th>Frequency</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -515,6 +516,7 @@ export const DashboardPage = {
                                         <td>{{ item.title }}</td>
                                         <td>{{ item.amount }}</td>
                                         <td>{{ item.totalCalories }}</td>
+                                        <td>{{ item.count }}x</td>
                                     </tr>
                                 </tbody>
                             </table>
