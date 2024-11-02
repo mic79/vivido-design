@@ -954,11 +954,18 @@ td.location-order input {
     min-width: 300px;
     margin-bottom: 10px;
 }
-
-.monthly-calories .bar-container:hover {
-    background-color: rgba(0, 0, 0, 0.02);
+.monthly-calories .bar-container:after {
+    content: '';
+    position: absolute;
+    width: 100%;
+    height: 20px;
+    top: 0;
+    left: 0;
+    background-color: #729c9c50;
 }
-
+.monthly-calories .bar-container:hover:after {
+    background-color: #729c9c70;
+}
 .monthly-calories .bar {
     position: relative;
     height: 20px;
