@@ -914,6 +914,8 @@ td.location-order input {
     color: white;
     font-size: 12px;
     font-weight: bold;
+    line-height: 1;
+    text-align: center;
     transition: width 0.3s ease;
 }
 
