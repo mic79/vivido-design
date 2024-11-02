@@ -277,17 +277,21 @@ export const DashboardPage = {
                 const nutrition = nutritionData.value[itemName];
                 
                 if (nutrition) {
-                    insights.matchedItems++;
-                    const gramsAmount = calculateGrams(item.amount, nutrition);
-                    const amountRatio = gramsAmount / 100;
+                    insights.matchedItems++; // Count all matched items including Non-food
                     
-                    insights.totalCalories += nutrition.calories * amountRatio;
-                    insights.proteinRatio += nutrition.protein * amountRatio;
-                    insights.carbsRatio += nutrition.carbs * amountRatio;
-                    insights.fatRatio += nutrition.fat * amountRatio;
-                    
-                    insights.categoryBreakdown[nutrition.category] = 
-                        (insights.categoryBreakdown[nutrition.category] || 0) + 1;
+                    // Only process nutritional data for food items
+                    if (nutrition.category !== 'Non-food') {
+                        const gramsAmount = calculateGrams(item.amount, nutrition);
+                        const amountRatio = gramsAmount / 100;
+                        
+                        insights.totalCalories += nutrition.calories * amountRatio;
+                        insights.proteinRatio += nutrition.protein * amountRatio;
+                        insights.carbsRatio += nutrition.carbs * amountRatio;
+                        insights.fatRatio += nutrition.fat * amountRatio;
+                        
+                        insights.categoryBreakdown[nutrition.category] = 
+                            (insights.categoryBreakdown[nutrition.category] || 0) + 1;
+                    }
                 }
             });
 
