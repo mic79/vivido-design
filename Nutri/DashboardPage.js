@@ -170,6 +170,7 @@ export const DashboardPage = {
             switch (nutrition.unit) {
                 case 'piece':
                 case 'unit':
+                case 'pcs':
                     return amount * nutrition.gramsPerUnit;
                 case 'ml':
                     return amount; // Assume 1ml = 1g for simplicity
