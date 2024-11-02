@@ -374,6 +374,52 @@ export const DashboardPage = {
                 }));
         });
 
+        const monthlyCalories = computed(() => {
+            const months = {};
+            const today = new Date();
+            
+            // Initialize last 12 months
+            for (let i = 11; i >= 0; i--) {  // Start from 11 to get oldest first
+                const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
+                const monthKey = date.toISOString().slice(0, 7); // YYYY-MM format
+                months[monthKey] = {
+                    totalCalories: 0,
+                    daysInMonth: new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
+                };
+            }
+
+            groceryItems.value.forEach(item => {
+                if (!item.dateChecked) return;
+                
+                const itemDate = new Date(parseInt(item.dateChecked));
+                const monthKey = itemDate.toISOString().slice(0, 7);
+                
+                if (months[monthKey]) {
+                    const itemName = item.title.toLowerCase();
+                    const nutrition = nutritionData.value[itemName];
+                    
+                    if (nutrition) {
+                        const amount = parseFloat(item.amount) || 0;
+                        const gramsAmount = calculateGrams(amount, nutrition);
+                        const calories = Math.round(nutrition.calories * (gramsAmount / 100));
+                        months[monthKey].totalCalories += calories;
+                    }
+                }
+            });
+
+            // Convert to array and calculate daily averages
+            return Object.entries(months)
+                .map(([month, data]) => ({
+                    month,
+                    avgDailyCalories: Math.round(data.totalCalories / data.daysInMonth)
+                }))
+                .sort((a, b) => b.month.localeCompare(a.month)); // Sort newest to oldest
+        });
+
+        const maxDailyCalories = computed(() => {
+            return Math.max(...monthlyCalories.value.map(m => m.avgDailyCalories));
+        });
+
         return {
             loading,
             error,
@@ -392,7 +438,9 @@ export const DashboardPage = {
             matchedItemsList,
             unmatchedItemsList,
             matchedItemsExpanded,
-            unmatchedItemsExpanded
+            unmatchedItemsExpanded,
+            monthlyCalories,
+            maxDailyCalories
         };
     },
     template: `
@@ -552,6 +600,22 @@ export const DashboardPage = {
                     </div>
                     <div v-else class="no-data">
                         No nutrition data available. Please ensure you have a "Nutrition" sheet with food data.
+                    </div>
+                </div>
+                <div class="chart monthly-calories">
+                    <h4>Average Daily Calories by Month</h4>
+                    <div class="chart-container">
+                        <div v-for="item in monthlyCalories" 
+                             :key="item.month" 
+                             class="bar-container">
+                            <div class="bar" 
+                                 :style="{ width: (item.avgDailyCalories / maxDailyCalories * 100) + '%' }">
+                            </div>
+                            <span class="bar-label">
+                                {{ item.month }}&nbsp;&nbsp;&nbsp;&nbsp;
+                                <strong>{{ item.avgDailyCalories }}</strong>
+                            </span>
+                        </div>
                     </div>
                 </div>
             </div>

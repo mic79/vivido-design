@@ -937,3 +937,40 @@ td.location-order input {
     position: relative;
     width: 100%;
 }
+
+.monthly-calories {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #eee;
+}
+
+.monthly-calories .chart-container {
+    max-width: 600px;
+    padding-bottom: 10px;
+}
+
+.monthly-calories .bar-container {
+    position: relative;
+    height: 30px;
+    margin: 5px 0;
+    display: flex;
+    align-items: center;
+}
+
+.monthly-calories .bar {
+    position: absolute;
+    height: 20px;
+    min-width: 1px;
+    background-color: #729c9c;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.monthly-calories .bar-label {
+    position: relative;
+    z-index: 1;
+    padding-left: 1rem;
+    color: white;
+    font-size: 12px;
+    white-space: nowrap;
+}
