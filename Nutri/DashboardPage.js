@@ -619,7 +619,7 @@ export const DashboardPage = {
                                                 <tr v-for="product in nutritionInsights.categoryProducts[category]" 
                                                     :key="product.title">
                                                     <td>{{ product.title }}</td>
-                                                    <td>{{ product.amount }}g</td>
+                                                    <td>{{ product.amount }}</td>
                                                     <td>{{ product.count }}x</td>
                                                 </tr>
                                             </tbody>
