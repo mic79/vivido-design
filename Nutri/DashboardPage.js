@@ -705,8 +705,8 @@ export const DashboardPage = {
                                 </span>
                                 {{ item.month }}&nbsp;&nbsp;&nbsp;&nbsp;
                                 <strong>{{ item.avgDailyCalories }}</strong>
-                                <span class="matched-count">
-                                    &nbsp;&nbsp;&nbsp;&nbsp;(Matched Items {{ item.matchedItems }}/{{ item.totalItems }})
+                                <span class="matched-count" v-if="item.totalItems - item.matchedItems > 0">
+                                    &nbsp;&nbsp;&nbsp;&nbsp;(Missing items {{ item.totalItems - item.matchedItems }}/{{ item.totalItems }})
                                 </span>
                             </span>
                             
