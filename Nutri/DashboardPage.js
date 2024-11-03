@@ -325,6 +325,19 @@ export const DashboardPage = {
                     .sort((a, b) => b.count - a.count); // Sort by frequency
             });
 
+            // After populating categoryBreakdown and matchedItems, sort by percentage
+            insights.categoryBreakdown = Object.entries(insights.categoryBreakdown)
+                .sort((a, b) => {
+                    // Calculate percentages (count / total matched items)
+                    const percentA = (a[1] * 100 / insights.matchedItems);
+                    const percentB = (b[1] * 100 / insights.matchedItems);
+                    return percentB - percentA; // Sort descending
+                })
+                .reduce((obj, [key, value]) => {
+                    obj[key] = value;
+                    return obj;
+                }, {});
+
             return insights;
         });
 
