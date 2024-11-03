@@ -868,6 +868,7 @@ td.location-order input {
 
 .matched-items h4,
 .unmatched-items h4 {
+    margin: 0;
     display: flex;
     align-items: center;
     gap: 0.5rem;
