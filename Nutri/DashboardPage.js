@@ -724,7 +724,7 @@ export const DashboardPage = {
                                     <tbody>
                                         <tr v-for="unmatched in item.unmatchedItems" :key="unmatched.title">
                                             <td>{{ unmatched.title }}</td>
-                                            <td>{{ unmatched.amount }}g</td>
+                                            <td>{{ unmatched.amount }}</td>
                                             <td>{{ unmatched.count }}x</td>
                                         </tr>
                                     </tbody>
