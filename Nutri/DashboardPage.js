@@ -288,7 +288,8 @@ export const DashboardPage = {
                     insights.matchedItems++;
                     
                     if (nutrition.category !== 'Non-food') {
-                        const gramsAmount = calculateGrams(item.amount, nutrition);
+                        //const gramsAmount = calculateGrams(item.amount, nutrition);
+                        const gramsAmount = calculateGrams(parseFloat(item.amount) || 0, nutrition);
                         const amountRatio = gramsAmount / 100;
                         
                         insights.totalCalories += nutrition.calories * amountRatio;
@@ -306,11 +307,14 @@ export const DashboardPage = {
                             insights.categoryProducts[nutrition.category][item.title] = {
                                 title: item.title,
                                 amount: 0,
-                                count: 0
+                                count: 0,
+                                totalCalories: 0
                             };
                         }
+                        
                         insights.categoryProducts[nutrition.category][item.title].amount += parseFloat(item.amount) || 0;
                         insights.categoryProducts[nutrition.category][item.title].count++;
+                        insights.categoryProducts[nutrition.category][item.title].totalCalories += Math.round(nutrition.calories * (gramsAmount / 100));
                     }
                 }
             });
@@ -605,13 +609,13 @@ export const DashboardPage = {
                                     </span>
                                     
                                     <!-- Expanded details -->
-                                    <div v-if="expandedCategory === category && nutritionInsights.categoryProducts[category].length > 0" 
-                                         class="expanded-details">
+                                    <div v-if="expandedCategory === category" class="expanded-details">
                                         <table>
                                             <thead>
                                                 <tr>
                                                     <th>Item</th>
                                                     <th>Amount</th>
+                                                    <th>Calories</th>
                                                     <th>Frequency</th>
                                                 </tr>
                                             </thead>
@@ -620,6 +624,7 @@ export const DashboardPage = {
                                                     :key="product.title">
                                                     <td>{{ product.title }}</td>
                                                     <td>{{ product.amount }}</td>
+                                                    <td>{{ product.totalCalories }}</td>
                                                     <td>{{ product.count }}x</td>
                                                 </tr>
                                             </tbody>
