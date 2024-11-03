@@ -14,6 +14,7 @@ export const DashboardPage = {
         const matchedItemsExpanded = ref(false);
         const unmatchedItemsExpanded = ref(false);
         const monthlyCaloriesExpanded = ref(null);
+        const expandedCategory = ref(null);
 
         function adjustYear(year, currentYear) {
             year = parseInt(year);
@@ -254,6 +255,11 @@ export const DashboardPage = {
                 .map(([location, total]) => [location, Number(total.toFixed(2))]);
         }
 
+        function toggleCategory(category) {
+            console.log('Toggling category:', category);
+            expandedCategory.value = expandedCategory.value === category ? null : category;
+        }
+
         const nutritionInsights = computed(() => {
             const lastMonth = new Date();
             lastMonth.setMonth(lastMonth.getMonth() - 1);
@@ -270,7 +276,8 @@ export const DashboardPage = {
                 fatRatio: 0,
                 categoryBreakdown: {},
                 matchedItems: 0,
-                totalItems: recentItems.length
+                totalItems: recentItems.length,
+                categoryProducts: {}
             };
 
             recentItems.forEach(item => {
@@ -278,9 +285,8 @@ export const DashboardPage = {
                 const nutrition = nutritionData.value[itemName];
                 
                 if (nutrition) {
-                    insights.matchedItems++; // Count all matched items including Non-food
+                    insights.matchedItems++;
                     
-                    // Only process nutritional data for food items
                     if (nutrition.category !== 'Non-food') {
                         const gramsAmount = calculateGrams(item.amount, nutrition);
                         const amountRatio = gramsAmount / 100;
@@ -292,8 +298,27 @@ export const DashboardPage = {
                         
                         insights.categoryBreakdown[nutrition.category] = 
                             (insights.categoryBreakdown[nutrition.category] || 0) + 1;
+                        
+                        if (!insights.categoryProducts[nutrition.category]) {
+                            insights.categoryProducts[nutrition.category] = {};
+                        }
+                        if (!insights.categoryProducts[nutrition.category][item.title]) {
+                            insights.categoryProducts[nutrition.category][item.title] = {
+                                title: item.title,
+                                amount: 0,
+                                count: 0
+                            };
+                        }
+                        insights.categoryProducts[nutrition.category][item.title].amount += parseFloat(item.amount) || 0;
+                        insights.categoryProducts[nutrition.category][item.title].count++;
                     }
                 }
+            });
+
+            // Convert the objects to sorted arrays
+            Object.keys(insights.categoryProducts).forEach(category => {
+                insights.categoryProducts[category] = Object.values(insights.categoryProducts[category])
+                    .sort((a, b) => b.count - a.count); // Sort by frequency
             });
 
             return insights;
@@ -473,7 +498,9 @@ export const DashboardPage = {
             monthlyCalories,
             maxDailyCalories,
             monthlyCaloriesExpanded,
-            toggleMonthlyCalories
+            toggleMonthlyCalories,
+            expandedCategory,
+            toggleCategory
         };
     },
     template: `
@@ -565,12 +592,38 @@ export const DashboardPage = {
                             <div class="chart-container">
                                 <div v-for="(count, category) in nutritionInsights.categoryBreakdown" 
                                      :key="category" 
-                                     class="bar-container">
+                                     class="bar-container"
+                                     @click="toggleCategory(category)">
                                     <div class="bar"
                                          :style="{ width: (count * 100 / nutritionInsights.matchedItems) + '%' }">
-                                        <span class="bar-label">
-                                            {{ category }}: {{ Math.round(count * 100 / nutritionInsights.matchedItems) }}%
+                                    </div>
+                                    <span class="bar-label">
+                                        <span class="material-icons">
+                                            {{ expandedCategory === category ? 'arrow_drop_up' : 'arrow_drop_down' }}
                                         </span>
+                                        {{ category }}: {{ Math.round(count * 100 / nutritionInsights.matchedItems) }}%
+                                    </span>
+                                    
+                                    <!-- Expanded details -->
+                                    <div v-if="expandedCategory === category && nutritionInsights.categoryProducts[category].length > 0" 
+                                         class="expanded-details">
+                                        <table>
+                                            <thead>
+                                                <tr>
+                                                    <th>Item</th>
+                                                    <th>Amount</th>
+                                                    <th>Frequency</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="product in nutritionInsights.categoryProducts[category]" 
+                                                    :key="product.title">
+                                                    <td>{{ product.title }}</td>
+                                                    <td>{{ product.amount }}g</td>
+                                                    <td>{{ product.count }}x</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
                                     </div>
                                 </div>
                             </div>
@@ -640,14 +693,14 @@ export const DashboardPage = {
                     <div class="chart-container">
                         <div v-for="item in monthlyCalories" 
                              :key="item.month" 
-                             class="bar-container"
+                             class="bar-container chart-bar-container"
                              @click="toggleMonthlyCalories(item.month)"
                              :class="{ 'expanded': monthlyCaloriesExpanded === item.month }">
-                            <div class="bar" 
+                            <div class="bar chart-bar" 
                                  :style="{ width: (item.avgDailyCalories / maxDailyCalories * 100) + '%' }">
                             </div>
-                            <span class="bar-label">
-                                <span class="material-icons">
+                            <span class="bar-label chart-bar-label">
+                                <span class="material-icons chart-icon">
                                     {{ monthlyCaloriesExpanded === item.month ? 'arrow_drop_up' : 'arrow_drop_down' }}
                                 </span>
                                 {{ item.month }}&nbsp;&nbsp;&nbsp;&nbsp;
@@ -659,8 +712,8 @@ export const DashboardPage = {
                             
                             <!-- Expanded details -->
                             <div v-if="monthlyCaloriesExpanded === item.month && item.unmatchedItems.length > 0" 
-                                 class="expanded-details">
-                                <table>
+                                 class="expanded-details chart-expanded-details">
+                                <table class="chart-expanded-table">
                                     <thead>
                                         <tr>
                                             <th>Missing Item</th>

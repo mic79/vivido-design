@@ -1,3 +1,4 @@
+/* GENERAL */
 * {
     -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
 }
@@ -374,6 +375,27 @@ button.alert {
 .drag-handle {
     cursor: move;
 }
+.handle {
+    cursor: move;
+}
+.sortable-ghost {
+    opacity: 0.5;
+    background: #729c9c;
+}
+
+.pagination {
+    margin: 10px;
+    text-align: center;
+}
+.pagination button:disabled {
+    opacity: 0.35;
+    visibility: visible;
+    pointer-events: none;
+}
+
+/* END GENERAL */
+
+/* LOCATIONS */
 
 .location-tabs {
     padding: 0 1rem;
@@ -408,6 +430,10 @@ button.alert {
 td.location-order input {
     text-align: right;
 }
+
+/* END LOCATIONS */
+
+/* GROCERIES */
 
 .grocery-list table {
     width: 100%;
@@ -548,24 +574,6 @@ td.location-order input {
     }
 }
 
-.handle {
-    cursor: move;
-}
-.sortable-ghost {
-    opacity: 0.5;
-    background: #729c9c;
-}
-
-.pagination {
-    margin: 10px;
-    text-align: center;
-}
-.pagination button:disabled {
-    opacity: 0.35;
-    visibility: visible;
-    pointer-events: none;
-}
-
 .groceries-page:after {
     content: '';
     position: absolute;
@@ -582,6 +590,10 @@ td.location-order input {
     box-sizing: border-box;
     overflow-y: auto;
 }
+
+/* END GROCERIES */
+
+/* HISTORY */
 
 @media (max-width: 767.98px) {
     .history-page .controls input[type="search"] {
@@ -619,6 +631,10 @@ td.location-order input {
     display: none;
 }
 
+/* END HISTORY */
+
+/* DASHBOARD */
+
 .dashboard-content {
     height: calc(100dvh - 110px);
     width: 100%;
@@ -640,32 +656,66 @@ td.location-order input {
     color: #729c9c;
 }
 
-.monthly-costs .chart-container {
+.chart-container {
     max-width: 600px;
     padding-bottom: 10px;
     display: flex;
-    flex-direction: column-reverse;
+    flex-direction: column;
+    gap: 10px;
     overflow-x: auto;
     white-space: nowrap;
 }
 
-.monthly-costs .bar-container {
-    position: relative;
-    min-width: 300px;
-    margin-bottom: 10px;
+.monthly-costs .chart-container {
+    flex-direction: column-reverse;
 }
 
-.monthly-costs .bar {
+.bar-container {
+    position: relative;
+    min-width: 300px;
+    cursor: pointer;
+}
+
+.bar-container:after {
+    content: '';
+    position: absolute;
+    width: 100%;
+    height: 20px;
+    top: 0;
+    left: 0;
+    background-color: #729c9c50;
+}
+.monthly-costs .bar-container:after {
+    background-color: #729c9c20;
+}
+
+.bar-container:hover:after {
+    background-color: #729c9c70;
+}
+
+.bar {
     position: relative;
     height: 20px;
     min-width: 1px;
     margin-right: 10px;
     background-color: #729c9c;
     transition: width 0.3s ease;
+    z-index: 3;
+}
+.monthly-costs .bar {
+    background-color: hsl(180deg 18% 33%);
+}
+.bar.estimated {
+    position: absolute;
+    top: 0;
+    left: 0;
     z-index: 2;
 }
+.monthly-costs .bar.estimated {
+    background-color: #729c9c;
+}
 
-.monthly-costs .bar-label {
+.bar-label {
     position: absolute;
     top: 3px;
     left: 1rem;
@@ -676,71 +726,69 @@ td.location-order input {
     z-index: 3;
 }
 
-.monthly-costs .bar-label .material-icons {
+.bar-label .material-icons {
     margin-left: -0.5rem;
     font-size: 16px;
     line-height: 0;
     vertical-align: middle;
 }
 
-.bar-container {
-    position: relative;
-}
-.bar {
-    background-color: #3498db;
-    height: 20px;
-}
-.bar.estimated {
-    position: absolute;
-    top: 0;
-    left: 0;
-    background-color: #729c9c50;
-    z-index: 1;
-}
-
-.bar {
-    cursor: pointer;
-}
-
 .expanded-details {
-    margin-top: 10px;
     padding: 10px;
     background-color: #f0f0f0;
     border-radius: 5px;
     overflow-x: auto;
 }
-.expanded-details table {
+
+.expanded-details table,
+.matched-items table,
+.unmatched-items table {
     width: 100%;
     border-collapse: collapse;
 }
-.expanded-details th, 
-.expanded-details td {
+
+.expanded-details th,
+.expanded-details td,
+.matched-items th,
+.matched-items td,
+.unmatched-items th,
+.unmatched-items td {
     padding: 8px;
-    font-size: 12px;
     text-align: left;
     border-bottom: 1px solid #ddd;
+    font-size: 14px;
 }
-@media (max-width: 767.98px) {
-    .expanded-details th,
-    .expanded-details td {
-        max-width: 100px;
-        overflow-x: auto;
-    }
-}
-.expanded-details th {
+
+.expanded-details th,
+.matched-items th,
+.unmatched-items th {
     background-color: #e0e0e0;
     font-weight: bold;
+    color: #666;
 }
-.expanded-details td:nth-child(1) {
-    width: 100%;
-}
-.expanded-details td:nth-child(2) {
+
+.expanded-details th:nth-child(2),
+.expanded-details th:nth-child(3),
+.expanded-details td:nth-child(2),
+.expanded-details td:nth-child(3),
+.matched-items th:nth-child(2),
+.matched-items th:nth-child(3),
+.matched-items td:nth-child(2),
+.matched-items td:nth-child(3),
+.unmatched-items th:nth-child(2),
+.unmatched-items th:nth-child(3),
+.unmatched-items td:nth-child(2),
+.unmatched-items td:nth-child(3) {
     text-align: right;
 }
+
 .expanded-details tr:last-child td {
     border-bottom: none;
 }
-.expanded-details tr:nth-child(even) {
+
+.expanded-details tr:nth-child(even),
+.matched-items tr:hover,
+.unmatched-items tr:hover {
     background-color: #f8f8f8;
 }
 
@@ -774,131 +822,11 @@ td.location-order input {
     color: #729c9c;
 }
 
-.macros-breakdown, .category-breakdown {
+.macros-breakdown, 
+.category-breakdown {
     margin-top: 1.5rem;
 }
 
-.category-breakdown .chart-container {
-    max-width: 600px;
-    padding-bottom: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.category-breakdown .bar-container {
-    position: relative;
-    width: 100%;
-    background-color: #729c9c;
-}
-
-.category-breakdown .bar {
-    position: relative;
-    height: 20px;
-    min-width: 1px;
-    background-color: hsl(180 18% 33% / 1);
-    border-radius: 2px;
-    transition: width 0.3s ease;
-}
-
-.category-breakdown .bar-label {
-    position: absolute;
-    top: 3px;
-    left: 1rem;
-    color: white;
-    font-size: 12px;
-    white-space: nowrap;
-    pointer-events: none;
-}
-
-.matched-items {
-    margin-top: 2rem;
-}
-
-.matched-items table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 1rem;
-}
-
-.matched-items th,
-.matched-items td {
-    padding: 0.5rem;
-    text-align: left;
-    border-bottom: 1px solid #eee;
-}
-
-.matched-items th {
-    font-weight: 600;
-    color: #666;
-}
-
-.matched-items td:nth-child(2),
-.matched-items td:nth-child(3) {
-    text-align: right;
-}
-
-.matched-items tr:hover {
-    background-color: #f9f9f9;
-}
-
-.unmatched-items {
-    border-top: 1px solid #eee;
-}
-
-.unmatched-items .help-text {
-    color: #666;
-    font-size: 0.9rem;
-    margin-bottom: 1rem;
-}
-
-.unmatched-items table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 1rem;
-}
-
-.unmatched-items th,
-.unmatched-items td {
-    padding: 0.5rem;
-    text-align: left;
-    border-bottom: 1px solid #eee;
-}
-
-.unmatched-items th {
-    font-weight: 600;
-    color: #666;
-}
-
-.unmatched-items td:nth-child(2),
-.unmatched-items td:nth-child(3) {
-    text-align: right;
-}
-
-.unmatched-items tr:hover {
-    background-color: #f9f9f9;
-}
-
-.matched-items h4,
-.unmatched-items h4 {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    cursor: pointer;
-    user-select: none;
-}
-
-.matched-items h4:hover,
-.unmatched-items h4:hover {
-    color: #729c9c;
-}
-
-.matched-items h4 .material-icons,
-.unmatched-items h4 .material-icons {
-    font-size: 1.2rem;
-}
-
-/* Macronutrient ratio styles */
 .macro-bars {
     display: flex;
     height: 30px;
@@ -923,126 +851,36 @@ td.location-order input {
 .macro-bar.carbs { background-color: #9c7272; }
 .macro-bar.fat { background-color: #729c72; }
 
-/* Food Categories styles */
-.category-breakdown {
-    margin-top: 1.5rem;
-}
-
-.category-breakdown .chart-container {
-    max-width: 600px;
-    padding-bottom: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.category-breakdown .bar-container {
-    position: relative;
-    width: 100%;
-}
-
-.monthly-calories {
+.matched-items,
+.unmatched-items {
     margin-top: 2rem;
-    padding-top: 1rem;
+}
+
+.unmatched-items {
     border-top: 1px solid #eee;
 }
 
-.monthly-calories .chart-container {
-    max-width: 600px;
-    padding-bottom: 10px;
+.unmatched-items .help-text {
+    color: #666;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
 }
 
-.monthly-calories .bar-container {
-    position: relative;
-    min-width: 300px;
-    margin-bottom: 10px;
-}
-.monthly-calories .bar-container:after {
-    content: '';
-    position: absolute;
-    width: 100%;
-    height: 20px;
-    top: 0;
-    left: 0;
-    background-color: #729c9c50;
-}
-.monthly-calories .bar-container:hover:after {
-    background-color: #729c9c70;
-}
-.monthly-calories .bar {
-    position: relative;
-    height: 20px;
-    min-width: 1px;
-    margin-right: 10px;
-    background-color: #729c9c;
-    transition: width 0.3s ease;
-    z-index: 2;
-}
-
-.monthly-calories .bar-label {
-    position: absolute;
-    top: 3px;
-    left: 1rem;
-    color: white;
-    font-size: 12px;
-    white-space: nowrap;
-    pointer-events: none;
-    z-index: 3;
-}
-
-.monthly-calories .material-icons {
-    margin-left: -0.5rem;
-    font-size: 16px;
-    line-height: 0;
-    vertical-align: middle;
-}
-
-.monthly-calories .matched-count {
-    margin-left: 0.5rem;
-    color: white;
-    font-size: 12px;
-    white-space: nowrap;
-}
-
-.monthly-calories .bar {
+.matched-items h4,
+.unmatched-items h4 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     cursor: pointer;
+    user-select: none;
 }
 
-.monthly-calories .expanded-details {
-    margin-top: 10px;
-    padding: 10px;
-    background-color: #f0f0f0;
-    border-radius: 5px;
-    overflow-x: auto;
+.matched-items h4:hover,
+.unmatched-items h4:hover {
+    color: #729c9c;
 }
 
-.monthly-calories .expanded-details table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.monthly-calories .expanded-details th, 
-.monthly-calories .expanded-details td {
-    padding: 8px;
-    font-size: 12px;
-    text-align: left;
-    border-bottom: 1px solid #ddd;
-}
-
-.monthly-calories .expanded-details th {
-    background-color: #e0e0e0;
-    font-weight: bold;
-}
-
-.monthly-calories .expanded-details td:nth-child(2),
-.monthly-calories .expanded-details td:nth-child(3) {
-    text-align: right;
-}
-
-.monthly-calories .expanded-details tr:last-child td {
-    border-bottom: none;
-}
-
-.monthly-calories .expanded-details tr:nth-child(even) {
-    background-color: #f8f8f8;
+.matched-items h4 .material-icons,
+.unmatched-items h4 .material-icons {
+    font-size: 1.2rem;
 }
