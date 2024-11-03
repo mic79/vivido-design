@@ -706,7 +706,7 @@ export const DashboardPage = {
                                 {{ item.month }}&nbsp;&nbsp;&nbsp;&nbsp;
                                 <strong>{{ item.avgDailyCalories }}</strong>
                                 <span class="matched-count">
-                                    (Matched Items {{ item.matchedItems }}/{{ item.totalItems }})
+                                    &nbsp;&nbsp;&nbsp;&nbsp;(Matched Items {{ item.matchedItems }}/{{ item.totalItems }})
                                 </span>
                             </span>
                             
