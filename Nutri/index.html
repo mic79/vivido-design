@@ -37,6 +37,7 @@
                     <a :class="{ active: currentPage === 'locations' }" @click="currentPage = 'locations'; toggleSidenav()" href="#">Locations</a>
                     <a :class="{ active: currentPage === 'history' }" @click="currentPage = 'history'; toggleSidenav()" href="#">History</a>
                     <a :class="{ active: currentPage === 'dashboard' }" @click="currentPage = 'dashboard'; toggleSidenav()" href="#">Dashboard</a>
+                    <a :class="{ active: currentPage === 'nutrition' }" @click="currentPage = 'nutrition'; toggleSidenav()" href="#">Nutrition</a>
                 </nav>
                 <div class="sheet-info">
                     <p v-if="sheetId"><strong>Current Sheet ID</strong><br>{{ sheetId }}</p>
@@ -60,6 +61,7 @@
         import { LocationsPage } from './LocationsPage.js';
         import { HistoryPage } from './HistoryPage.js';
         import { DashboardPage } from './DashboardPage.js';
+        import { NutritionPage } from './NutritionPage.js';
 
         let app;
         (async function() {
@@ -96,7 +98,8 @@
                         GroceriesPage,
                         LocationsPage,
                         HistoryPage,
-                        DashboardPage
+                        DashboardPage,
+                        NutritionPage
                     },
                     setup() {
                         console.log("Vue setup function called");
@@ -135,6 +138,8 @@
                                     return HistoryPage;
                                 case 'dashboard':
                                     return DashboardPage;
+                                case 'nutrition':
+                                    return NutritionPage;
                                 default:
                                     return null;
                             }
