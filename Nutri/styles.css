@@ -702,7 +702,8 @@ td.location-order input {
     transition: width 0.3s ease;
     z-index: 3;
 }
-.monthly-costs .bar {
+.monthly-costs .bar,
+.monthly-calories .bar {
     background-color: hsl(180deg 18% 33%);
 }
 .bar.estimated {
@@ -711,7 +712,8 @@ td.location-order input {
     left: 0;
     z-index: 2;
 }
-.monthly-costs .bar.estimated {
+.monthly-costs .bar.estimated,
+.monthly-calories .bar.estimated {
     background-color: #729c9c;
 }
 

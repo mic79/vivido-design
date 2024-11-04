@@ -251,6 +251,7 @@ export const NutritionPage = {
         const monthlyCalories = computed(() => {
             const months = {};
             const today = new Date();
+            const currentMonthYear = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
             
             // Initialize last 12 months
             for (let i = 11; i >= 0; i--) {
@@ -261,11 +262,12 @@ export const NutritionPage = {
                     daysInMonth: new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate(),
                     matchedItems: 0,
                     totalItems: 0,
-                    unmatchedItems: {}, // Track unmatched items and their frequencies
-                    expanded: false // Track expanded state
+                    unmatchedItems: {},
+                    expanded: false
                 };
             }
 
+            // Calculate actual calories for all months
             groceryItems.value.forEach(item => {
                 if (!item.dateChecked) return;
                 
@@ -285,7 +287,6 @@ export const NutritionPage = {
                         const calories = Math.round(nutrition.calories * (gramsAmount / 100));
                         months[monthKey].totalCalories += calories;
                     } else {
-                        // Track unmatched items with their amounts and frequency
                         if (!months[monthKey].unmatchedItems[itemName]) {
                             months[monthKey].unmatchedItems[itemName] = {
                                 title: item.title,
@@ -299,15 +300,37 @@ export const NutritionPage = {
                 }
             });
 
+            // Calculate average daily calories from last 3 months
+            const sortedMonths = Object.entries(months)
+                .sort((a, b) => b[0].localeCompare(a[0]));
+            
+            const last3MonthsAvg = sortedMonths
+                .slice(1, 4) // Skip current month, take next 3
+                .reduce((total, [_, data]) => {
+                    return total + (data.totalCalories / data.daysInMonth);
+                }, 0) / 3; // Divide by 3 to get daily average
+
             return Object.entries(months)
-                .map(([month, data]) => ({
-                    month,
-                    avgDailyCalories: Math.round(data.totalCalories / data.daysInMonth),
-                    matchedItems: data.matchedItems,
-                    totalItems: data.totalItems,
-                    unmatchedItems: Object.values(data.unmatchedItems),
-                    expanded: data.expanded
-                }))
+                .map(([month, data]) => {
+                    const result = {
+                        month,
+                        avgDailyCalories: Math.round(data.totalCalories / data.daysInMonth),
+                        matchedItems: data.matchedItems,
+                        totalItems: data.totalItems,
+                        unmatchedItems: Object.values(data.unmatchedItems),
+                        expanded: data.expanded
+                    };
+
+                    // Add estimation for current month
+                    if (month === currentMonthYear) {
+                        const currentDay = today.getDate();
+                        const remainingDays = data.daysInMonth - currentDay;
+                        const estimatedTotalCalories = data.totalCalories + (last3MonthsAvg * remainingDays);
+                        result.estimatedDailyCalories = Math.round(estimatedTotalCalories / data.daysInMonth);
+                    }
+
+                    return result;
+                })
                 .sort((a, b) => b.month.localeCompare(a.month));
         });
 
@@ -492,8 +515,14 @@ export const NutritionPage = {
                              class="bar-container chart-bar-container"
                              @click="toggleMonthlyCalories(item.month)"
                              :class="{ 'expanded': monthlyCaloriesExpanded === item.month }">
+                            <!-- Actual calories bar -->
                             <div class="bar chart-bar" 
                                  :style="{ width: (item.avgDailyCalories / maxDailyCalories * 100) + '%' }">
+                            </div>
+                            <!-- Estimated calories bar (only shown for current month) -->
+                            <div v-if="item.estimatedDailyCalories" 
+                                 class="bar estimated" 
+                                 :style="{ width: (item.estimatedDailyCalories / maxDailyCalories * 100) + '%' }">
                             </div>
                             <span class="bar-label chart-bar-label">
                                 <span class="material-icons chart-icon">
@@ -501,6 +530,9 @@ export const NutritionPage = {
                                 </span>
                                 {{ item.month }}&nbsp;&nbsp;&nbsp;&nbsp;
                                 <strong>{{ item.avgDailyCalories }}</strong>
+                                <span v-if="item.estimatedDailyCalories">
+                                    &nbsp;&nbsp;&nbsp;&nbsp;(Est. {{ item.estimatedDailyCalories }})
+                                </span>
                                 <span class="matched-count" v-if="item.totalItems - item.matchedItems > 0">
                                     &nbsp;&nbsp;&nbsp;&nbsp;(Missing items {{ item.totalItems - item.matchedItems }}/{{ item.totalItems }})
                                 </span>
