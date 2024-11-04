@@ -822,6 +822,7 @@ td.location-order input {
 
 .macros-breakdown, 
 .category-breakdown {
+    max-width: 600px;
     margin-top: 1.5rem;
 }
 
