@@ -45,74 +45,68 @@ export const DashboardPage = {
 
         const monthlyCosts = computed(() => {
             console.log('Starting monthlyCosts calculation');
-            console.log('Number of grocery items:', groceryItems.value.length);
-
+            
             const costs = {};
-            const currentYear = new Date().getFullYear();
-
+            const today = new Date();
+            const currentMonthYear = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+            
+            // First pass: Calculate actual costs for all months
             groceryItems.value.forEach(item => {
                 if (item.dateChecked && item.price) {
-                    // Convert the timestamp to a Date object
                     const date = new Date(parseInt(item.dateChecked));
                     if (!isNaN(date.getTime())) {
-                        // Use UTC date to match Groceries page behavior
-                        const monthYear = date.toISOString().split('T')[0].slice(0, 7); // YYYY-MM format
+                        const monthYear = date.toISOString().split('T')[0].slice(0, 7);
                         const itemCost = parsePrice(item.price);
                         if (!isNaN(itemCost)) {
                             costs[monthYear] = (costs[monthYear] || 0) + itemCost;
-                        } else {
-                            console.log('Invalid item cost:', item.price);
                         }
-                    } else {
-                        console.log('Invalid date:', item.dateChecked);
                     }
-                } else {
-                    console.log('Missing dateChecked or price:', item);
                 }
             });
 
-            console.log('Final costs object:', costs);
+            // Sort and get last 4 months (3 for pattern + current)
+            const sortedEntries = Object.entries(costs)
+                .sort((a, b) => b[0].localeCompare(a[0]))
+                .slice(0, 4);
 
-            // Sort the entries by date (most recent first)
-            const sortedEntries = Object.entries(costs).sort((a, b) => b[0].localeCompare(a[0]));
+            // Calculate average daily spending from last 3 months
+            const dailyAverage = sortedEntries
+                .slice(1, 4) // Skip current month, take next 3
+                .reduce((total, [monthYear, cost]) => {
+                    const [year, month] = monthYear.split('-');
+                    const daysInMonth = new Date(year, month, 0).getDate();
+                    return total + (cost / daysInMonth);
+                }, 0) / 3; // Divide by 3 to get average
 
-            // Take the last 12 months (or all if less than 12)
-            const last12Months = sortedEntries.slice(0, 12);
-
-            const today = new Date();
-            const currentMonthYear = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-            const currentMonthEntry = last12Months.find(([month]) => month === currentMonthYear);
-
-            let result = last12Months.reverse().map(([month, cost]) => {
-                const itemsForMonth = groceryItems.value.filter(item => {
-                    const itemDate = new Date(parseInt(item.dateChecked, 10)); // Convert EPOCH to Date
-                    const itemMonthYear = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}`;
-                    return itemMonthYear === month;
-                });
-
-                return {
-                    month: month,
+            // Take last 12 months for display
+            const last12Months = Object.entries(costs)
+                .sort((a, b) => b[0].localeCompare(a[0]))
+                .slice(0, 12)
+                .reverse()
+                .map(([month, cost]) => ({
+                    month,
                     cost: Number(cost.toFixed(2)),
-                    isCurrentMonth: month === currentMonthYear,
-                    items: itemsForMonth
-                };
-            });
+                    isCurrentMonth: month === currentMonthYear
+                }));
 
-            if (currentMonthEntry) {
-                const [currentMonth, currentCost] = currentMonthEntry;
-                const dayOfMonth = today.getDate();
-                const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-                const estimatedMonthTotal = (currentCost / dayOfMonth) * daysInMonth;
+            // Calculate estimated cost for current month
+            if (last12Months.find(item => item.isCurrentMonth)) {
+                const currentDayOfMonth = today.getDate();
+                const daysInCurrentMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+                const currentMonthData = last12Months.find(item => item.isCurrentMonth);
+                
+                // Calculate remaining days' estimated spending
+                const remainingDays = daysInCurrentMonth - currentDayOfMonth;
+                const estimatedTotal = currentMonthData.cost + (dailyAverage * remainingDays);
 
-                result = result.map(item => 
-                    item.isCurrentMonth 
-                        ? { ...item, estimatedCost: Number(estimatedMonthTotal.toFixed(2)) }
-                        : item
-                );
+                last12Months.forEach(item => {
+                    if (item.isCurrentMonth) {
+                        item.estimatedCost = Number(estimatedTotal.toFixed(2));
+                    }
+                });
             }
 
-            console.log('Final result with estimate:', result);
-            return result;
+            return last12Months;
         });
 
         const maxMonthlyCost = computed(() => {
