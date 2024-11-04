@@ -103,9 +103,11 @@ export const NutritionPage = {
                 categoryBreakdown: {},
                 matchedItems: 0,
                 totalItems: recentItems.length,
-                categoryProducts: {}
+                categoryProducts: {},
+                totalCategorizedItems: 0
             };
 
+            // First pass: Calculate total calories and category calories
             recentItems.forEach(item => {
                 const itemName = item.title.toLowerCase();
                 const nutrition = nutritionData.value[itemName];
@@ -113,19 +115,29 @@ export const NutritionPage = {
                 if (nutrition) {
                     insights.matchedItems++;
                     
-                    if (nutrition.category !== 'Non-food') {
-                        //const gramsAmount = calculateGrams(item.amount, nutrition);
+                    if (nutrition.category && nutrition.category !== 'Non-food') {
+                        insights.totalCategorizedItems++;
+                        
                         const gramsAmount = calculateGrams(parseFloat(item.amount) || 0, nutrition);
                         const amountRatio = gramsAmount / 100;
+                        const itemCalories = nutrition.calories * amountRatio;
                         
-                        insights.totalCalories += nutrition.calories * amountRatio;
+                        insights.totalCalories += itemCalories;
                         insights.proteinRatio += nutrition.protein * amountRatio;
                         insights.carbsRatio += nutrition.carbs * amountRatio;
                         insights.fatRatio += nutrition.fat * amountRatio;
                         
-                        insights.categoryBreakdown[nutrition.category] = 
-                            (insights.categoryBreakdown[nutrition.category] || 0) + 1;
+                        // Track calories by category
+                        if (!insights.categoryBreakdown[nutrition.category]) {
+                            insights.categoryBreakdown[nutrition.category] = {
+                                calories: 0,
+                                count: 0
+                            };
+                        }
+                        insights.categoryBreakdown[nutrition.category].calories += itemCalories;
+                        insights.categoryBreakdown[nutrition.category].count++;
                         
+                        // Track product details
                         if (!insights.categoryProducts[nutrition.category]) {
                             insights.categoryProducts[nutrition.category] = {};
                         }
@@ -140,29 +152,46 @@ export const NutritionPage = {
                         
                         insights.categoryProducts[nutrition.category][item.title].amount += parseFloat(item.amount) || 0;
                         insights.categoryProducts[nutrition.category][item.title].count++;
-                        insights.categoryProducts[nutrition.category][item.title].totalCalories += Math.round(nutrition.calories * (gramsAmount / 100));
+                        insights.categoryProducts[nutrition.category][item.title].totalCalories += Math.round(itemCalories);
                     }
                 }
             });
 
-            // Convert the objects to sorted arrays
-            Object.keys(insights.categoryProducts).forEach(category => {
-                insights.categoryProducts[category] = Object.values(insights.categoryProducts[category])
-                    .sort((a, b) => b.count - a.count); // Sort by frequency
+            // Calculate and adjust percentages based on calories
+            const categoryPercentages = Object.entries(insights.categoryBreakdown)
+                .sort((a, b) => b[1].calories - a[1].calories) // Sort by calories descending
+                .map(([category, data]) => ({
+                    category,
+                    ...data,
+                    percentage: (data.calories * 100 / insights.totalCalories)
+                }));
+
+            // Round percentages while maintaining 100% total
+            let remainingPercent = 100;
+            const adjustedPercentages = categoryPercentages.map((item, index, array) => {
+                if (index === array.length - 1) {
+                    return {
+                        ...item,
+                        roundedPercentage: remainingPercent
+                    };
+                }
+                const roundedPercent = Math.round(item.percentage);
+                remainingPercent -= roundedPercent;
+                return {
+                    ...item,
+                    roundedPercentage: roundedPercent
+                };
             });
 
-            // After populating categoryBreakdown and matchedItems, sort by percentage
-            insights.categoryBreakdown = Object.entries(insights.categoryBreakdown)
-                .sort((a, b) => {
-                    // Calculate percentages (count / total matched items)
-                    const percentA = (a[1] * 100 / insights.matchedItems);
-                    const percentB = (b[1] * 100 / insights.matchedItems);
-                    return percentB - percentA; // Sort descending
-                })
-                .reduce((obj, [key, value]) => {
-                    obj[key] = value;
-                    return obj;
-                }, {});
+            // Convert back to object format
+            insights.categoryBreakdown = adjustedPercentages.reduce((obj, item) => {
+                obj[item.category] = {
+                    calories: item.calories,
+                    count: item.count,
+                    percentage: item.roundedPercentage
+                };
+                return obj;
+            }, {});
 
             return insights;
         });
@@ -407,18 +436,18 @@ export const NutritionPage = {
                         <div class="category-breakdown">
                             <h4>Food Categories</h4>
                             <div class="chart-container">
-                                <div v-for="(count, category) in nutritionInsights.categoryBreakdown" 
+                                <div v-for="(data, category) in nutritionInsights.categoryBreakdown" 
                                      :key="category" 
                                      class="bar-container"
                                      @click="toggleCategory(category)">
                                     <div class="bar"
-                                         :style="{ width: (count * 100 / nutritionInsights.matchedItems) + '%' }">
+                                         :style="{ width: data.percentage + '%' }">
                                     </div>
                                     <span class="bar-label">
                                         <span class="material-icons">
                                             {{ expandedCategory === category ? 'arrow_drop_up' : 'arrow_drop_down' }}
                                         </span>
-                                        {{ category }}: {{ Math.round(count * 100 / nutritionInsights.matchedItems) }}%
+                                        {{ category }}: {{ data.percentage }}%
                                     </span>
                                     
                                     <!-- Expanded details -->
