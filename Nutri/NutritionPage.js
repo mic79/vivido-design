@@ -170,12 +170,17 @@ export const NutritionPage = {
             let remainingPercent = 100;
             const adjustedPercentages = categoryPercentages.map((item, index, array) => {
                 if (index === array.length - 1) {
+                    // Ensure last item doesn't go negative
                     return {
                         ...item,
-                        roundedPercentage: remainingPercent
+                        roundedPercentage: Math.max(1, remainingPercent) // Minimum 1%
                     };
                 }
-                const roundedPercent = Math.round(item.percentage);
+                // For other items, ensure we don't take more than remaining
+                const roundedPercent = Math.min(
+                    Math.round(item.percentage),
+                    remainingPercent - (array.length - index - 1) // Leave room for remaining items
+                );
                 remainingPercent -= roundedPercent;
                 return {
                     ...item,
