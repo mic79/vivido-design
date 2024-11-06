@@ -106,11 +106,46 @@ export async function createNewSheet(title) {
       body: JSON.stringify({
         properties: { title: title },
         sheets: [
-          { properties: { title: 'Groceries' } },
-          { properties: { title: 'Locations' } }
+          {
+            properties: { title: 'Groceries' },
+            data: [{
+              startRow: 0,
+              startColumn: 0,
+              rowData: [{
+                values: [
+                  { userEnteredValue: { stringValue: 'ID' } },
+                  { userEnteredValue: { stringValue: 'Title' } },
+                  { userEnteredValue: { stringValue: 'Amount' } },
+                  { userEnteredValue: { stringValue: 'Price' } },
+                  { userEnteredValue: { stringValue: 'Order' } },
+                  { userEnteredValue: { stringValue: 'Location' } },
+                  { userEnteredValue: { stringValue: 'DateChecked' } },
+                  { userEnteredValue: { stringValue: 'Date' } },
+                  { userEnteredValue: { stringValue: 'Location Title' } }
+                ]
+              }]
+            }]
+          },
+          {
+            properties: { title: 'Locations' },
+            data: [{
+              startRow: 0,
+              startColumn: 0,
+              rowData: [{
+                values: [
+                  { userEnteredValue: { stringValue: 'Title' } },
+                  { userEnteredValue: { stringValue: 'Order' } },
+                  { userEnteredValue: { stringValue: 'ID' } },
+                  { userEnteredValue: { stringValue: 'Hidden' } },
+                  { userEnteredValue: { stringValue: 'City' } }
+                ]
+              }]
+            }]
+          }
         ]
       })
     });
+
     if (!response.ok) throw new Error('Failed to create new sheet');
     const data = await response.json();
     return data.spreadsheetId;
