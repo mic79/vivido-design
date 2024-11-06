@@ -19,6 +19,12 @@ export const GroceriesPage = {
         let sortableInstance = null;
         const feedback = ref(null);
 
+        // Make error ref accessible globally for testing
+        if (!window.pageRefs) {
+            window.pageRefs = {};
+        }
+        window.pageRefs.groceries = { error };
+
         function initSortable() {
             if (groceryListRef.value) {
                 if (groceryListRef.value._sortable && typeof groceryListRef.value._sortable.destroy === 'function') {
@@ -219,7 +225,8 @@ export const GroceriesPage = {
                     await GoogleAuth.signOut();
                     // You might want to redirect to a sign-in page or show a sign-in prompt here
                 } else {
-                    error.value = 'Failed to fetch data. Please try again.';
+                    error.value = err.isRateLimit ? err.message : 'Failed to fetch data. Please try again.';
+
                 }
             } finally {
                 loading.value = false;

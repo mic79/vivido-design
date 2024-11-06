@@ -20,6 +20,12 @@ export const LocationsPage = {
         const focusNextId = ref(null);
         const isEditing = ref(false);
 
+        // Make error ref accessible globally for testing
+        if (!window.pageRefs) {
+            window.pageRefs = {};
+        }
+        window.pageRefs.groceries = { error };
+
         function applySort() {
             stableLocations.value = [...stableLocations.value].sort((a, b) => {
                 if (a[sortColumn.value] < b[sortColumn.value]) return sortDirection.value === 'asc' ? -1 : 1;
@@ -107,7 +113,7 @@ export const LocationsPage = {
                 applyFilterAndSort();
             } catch (err) {
                 console.error('Error fetching locations:', err);
-                error.value = 'Failed to fetch locations. Please try again.';
+                error.value = err.isRateLimit ? err.message : 'Failed to fetch data. Please try again.';
             } finally {
                 loading.value = false;
             }

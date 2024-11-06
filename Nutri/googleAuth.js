@@ -61,20 +61,37 @@ export function getTokenClient() {
     return tokenClient;
 }
 
-export function loadSheetData(sheetId, range) {
-  return getAccessToken(tokenClient).then(token => {
-    return fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}`, {
+export async function loadSheetData(sheetId, range) {
+  try {
+    const token = await getAccessToken();
+    const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}`, {
       headers: { Authorization: `Bearer ${token}` }
-    }).then(response => {
-      if (!response.ok) {
-        if (response.status === 401) {
-          return handleAuthError();
-        }
-        throw new Error('Failed to load sheet data');
-      }
-      return response.json();
     });
-  });
+
+    if (!response.ok) {
+      if (response.status === 429) {  // Too Many Requests
+        const retryAfter = response.headers.get('Retry-After');
+        const error = new Error('Failed to fetch data. Please try again.');
+        error.originalMessage = `Rate limit exceeded. Please wait ${retryAfter || 'a few'} seconds before trying again.`;
+        error.isRateLimit = true;  // Add a flag to identify rate limit errors
+        throw error;
+      }
+      if (response.status === 401) {
+        return handleAuthError();
+      }
+      throw new Error('Failed to load sheet data');
+    }
+    return response.json();
+  } catch (err) {
+    // If it's our rate limit error, preserve its properties
+    if (err.isRateLimit) {
+      const error = new Error(err.originalMessage);
+      error.isRateLimit = true;
+      throw error;
+    }
+    console.error('API Error:', err);
+    throw err;
+  }
 }
 
 export async function createNewSheet(title) {

@@ -63,6 +63,8 @@
         import { DashboardPage } from './DashboardPage.js';
         import { NutritionPage } from './NutritionPage.js';
 
+        window.GoogleAuth = GoogleAuth;
+
         let app;
         (async function() {
             const { createApp, ref, computed, onMounted, onBeforeUnmount, watch, defineComponent, getCurrentInstance } = Vue;

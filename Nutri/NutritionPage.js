@@ -14,6 +14,12 @@ export const NutritionPage = {
         const expandedCategory = ref(null);
         const monthlyCaloriesExpanded = ref(null);
 
+        // Make error ref accessible globally for testing
+        if (!window.pageRefs) {
+            window.pageRefs = {};
+        }
+        window.pageRefs.groceries = { error };
+
         // Helper function to calculate amount in grams
         function calculateGrams(amount, nutrition) {
             if (!amount) return 0;
@@ -75,7 +81,7 @@ export const NutritionPage = {
                 nutritionData.value = await fetchNutritionData();
             } catch (err) {
                 console.error('Error fetching data:', err);
-                error.value = 'Failed to fetch data. Please try again.';
+                error.value = err.isRateLimit ? err.message : 'Failed to fetch data. Please try again.';
             } finally {
                 loading.value = false;
             }

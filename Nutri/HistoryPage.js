@@ -15,6 +15,12 @@ export const HistoryPage = {
         const currentPage = ref(1);
         const itemsPerPage = ref(50);
 
+        // Make error ref accessible globally for testing
+        if (!window.pageRefs) {
+            window.pageRefs = {};
+        }
+        window.pageRefs.groceries = { error };
+
         const sortedAndFilteredHistory = computed(() => {
             let result = historyItems.value;
 
@@ -97,7 +103,7 @@ export const HistoryPage = {
 
             } catch (err) {
                 console.error('Error fetching data:', err);
-                error.value = 'Failed to fetch data. Please try again.';
+                error.value = err.isRateLimit ? err.message : 'Failed to fetch data. Please try again.';
             } finally {
                 loading.value = false;
             }

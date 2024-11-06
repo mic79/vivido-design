@@ -11,6 +11,12 @@ export const DashboardPage = {
         const locations = ref([]);
         const expandedMonth = ref(null);
 
+        // Make error ref accessible globally for testing
+        if (!window.pageRefs) {
+            window.pageRefs = {};
+        }
+        window.pageRefs.groceries = { error };
+
         function adjustYear(year, currentYear) {
             year = parseInt(year);
             if (year > currentYear + 1) {
@@ -155,7 +161,7 @@ export const DashboardPage = {
                 }));
             } catch (err) {
                 console.error('Error fetching data:', err);
-                error.value = 'Failed to fetch data. Please try again.';
+                error.value = err.isRateLimit ? err.message : 'Failed to fetch data. Please try again.';
             } finally {
                 loading.value = false;
             }
