@@ -141,6 +141,25 @@ export async function createNewSheet(title) {
                 ]
               }]
             }]
+          },
+          {
+            properties: { title: 'Nutrition' },
+            data: [{
+              startRow: 0,
+              startColumn: 0,
+              rowData: [{
+                values: [
+                  { userEnteredValue: { stringValue: 'Name' } },
+                  { userEnteredValue: { stringValue: 'Calories' } },
+                  { userEnteredValue: { stringValue: 'Protein (g)' } },
+                  { userEnteredValue: { stringValue: 'Carbs (g)' } },
+                  { userEnteredValue: { stringValue: 'Fat (g)' } },
+                  { userEnteredValue: { stringValue: 'Category' } },
+                  { userEnteredValue: { stringValue: 'Unit' } },
+                  { userEnteredValue: { stringValue: 'GramsPerUnit' } }
+                ]
+              }]
+            }]
           }
         ]
       })
