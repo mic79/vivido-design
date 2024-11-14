@@ -940,6 +940,12 @@ export const GroceriesPage = {
             currentEditingItem.value = null;
         }
 
+        // Add this method to the component
+        function clearSuggestions() {
+            suggestions.value = [];
+            currentEditingItem.value = null;
+        }
+
         onBeforeUnmount(() => {
             suggestions.value = [];
             currentEditingItem.value = null;
@@ -1041,7 +1047,8 @@ export const GroceriesPage = {
             toggleItemSelection,
             updateSelectedItems,
             toggleSelectAllInGroup,
-            toggleItemSelection
+            toggleItemSelection,
+            clearSuggestions
         };
     },
     template: `
@@ -1108,7 +1115,10 @@ export const GroceriesPage = {
                                         }"
                                         @change="updateItemField(item, 'title', $event.target.value)"
                                         @focus="startEditing"
-                                        @blur="stopEditing"
+                                        @blur="($event) => { 
+                                            stopEditing();
+                                            clearSuggestions();
+                                        }"
                                     >
                                     <ul v-if="suggestions && suggestions.length > 0 && currentEditingItem === item.id" class="suggestions">
                                         <li v-for="suggestion in suggestions" :key="suggestion.title + suggestion.lastPurchase" @mousedown.prevent="selectSuggestion(suggestion)">
@@ -1199,7 +1209,10 @@ export const GroceriesPage = {
                                     }"
                                     @change="updateItemField(item, 'title', $event.target.value)"
                                     @focus="startEditing"
-                                    @blur="stopEditing"
+                                    @blur="($event) => { 
+                                        stopEditing();
+                                        clearSuggestions();
+                                    }"
                                 >
                                 <ul v-if="suggestions && suggestions.length > 0 && currentEditingItem === item.id" class="suggestions">
                                     <li v-for="suggestion in suggestions" :key="suggestion.title + suggestion.lastPurchase" @mousedown.prevent="selectSuggestion(suggestion)">
