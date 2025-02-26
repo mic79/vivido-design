@@ -1,4 +1,4 @@
-// v0.0.1
+// v0.0.2
 
 // Dark Mode
 function screenTest(e) {
@@ -1195,26 +1195,60 @@ $('#create-game').on('click', function(e) {
 });
 
 // Join an existing game
-$('#join-game').on('click', function() {
+$('#join-game').on('click', function(e) {
+  // Prevent any default behavior
+  e.preventDefault();
+  e.stopPropagation();
+  
+  console.log("Join game clicked");
+  
+  // Set state
   isHost = false;
   isMultiplayer = true;
-  initPeer();
+  gameMode = 'multiplayer';
+  
+  // Update body class
+  $('body')
+    .removeClass('mode-random mode-regular')
+    .addClass('mode-multiplayer');
+  
+  // Force the URL to be multiplayer mode
+  var newUrl = window.location.pathname + '?mode=multiplayer';
+  window.history.replaceState({}, document.title, newUrl);
+  
+  // Update UI - show the input field
   $('.multiplayer-options').hide();
   $('.game-id-input').show();
+  
+  // Initialize PeerJS
+  initPeer();
+  
+  // Prevent the modal from closing
+  return false;
 });
 
 // Connect to a game
-$('.btn-connect').on('click', function() {
+$('.btn-connect').on('click', function(e) {
+  // Prevent any default behavior
+  e.preventDefault();
+  e.stopPropagation();
+  
   const gameId = $('#join-id').val().trim();
   if (gameId) {
-    connectToPeer(gameId);
-    $('.game-id-input').hide();
-    $('body').removeClass('modal-open');
-    startMultiplayerGame();
+    console.log("Connecting to game:", gameId);
     
-    // Update URL with the game ID
+    // Force the URL to be multiplayer mode with the correct ID
     var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
     window.history.replaceState({}, document.title, newUrl);
+    
+    // Connect to the peer
+    connectToPeer(gameId);
+    
+    // Close the modal
+    $('body').removeClass('modal-open');
+    
+    // Start the multiplayer game
+    startMultiplayerGame();
   }
 });
 
@@ -1349,6 +1383,8 @@ function setupConnection() {
 
 // Fix the startMultiplayerGame function to ensure the correct URL
 function startMultiplayerGame() {
+  console.log("Starting multiplayer game");
+  
   gameMode = 'multiplayer';
   
   // Force the URL to be correct for multiplayer
@@ -1374,12 +1410,12 @@ function startMultiplayerGame() {
   
   // Update UI
   $('body')
-    .removeClass('mode-random mode-regular')
+    .removeClass('mode-random mode-regular modal-open')
     .addClass('mode-multiplayer');
   
   // Set up the game
   if (isHost) {
-    // Host generates the map - but with empty cells for multiplayer
+    // Host generates the map - with empty cells for multiplayer
     startMultiplayerAnim();
     
     // Disable bot moves
@@ -1422,23 +1458,42 @@ function startMultiplayerGame() {
         var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
         window.history.replaceState({}, document.title, correctUrl);
       }
+    } else {
+      var joinId = $('#join-id').val();
+      if (joinId) {
+        var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + joinId;
+        window.history.replaceState({}, document.title, correctUrl);
+      }
     }
   }, 500);
 }
 
-// Also modify the startMultiplayerAnim function to prevent random map URL generation
+// Create a completely new startMultiplayerAnim function that ensures empty cells
 function startMultiplayerAnim() {
-  // Save the current URL before we start
+  console.log("Starting multiplayer game with empty field");
+  
+  // Save the current URL
   var currentUrl = window.location.href;
   
+  // Reset game state
   moveAmount = 0;
-  randomNumber = Math.floor(Math.random() * playerArray.length);
   currentPlayer = "player--1"; // Always start with player 1
-  setDots();
+  
+  // Clear the field
   $(".end").remove();
   $(".dot").removeClass(playerClassClear);
   
-  // For multiplayer, we want to start with an empty field
+  // Remove all stage classes from dots
+  $(".dot").removeClass(function(index, className) {
+    return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
+  });
+  
+  // Remove all player classes from dots
+  $(".dot").removeClass(function(index, className) {
+    return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
+  });
+  
+  // Set up the empty field
   TweenMax.staggerTo(
     $(".dot"),
     0.1,
@@ -1450,46 +1505,86 @@ function startMultiplayerAnim() {
     },
     0.01,
     function() {
+      // Initialize the dots
       dots = $(".dot");
-      gsap.delayedCall(1, nextPlayer);
-      show();
-      reset();
-      start();
       
-      // Restore the URL after animation completes
-      window.history.replaceState({}, document.title, currentUrl);
+      // Set up the field
+      gsap.delayedCall(0.5, function() {
+        // Set the current player
+        $(".field").addClass(currentPlayer);
+        
+        // Set the color
+        TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+        
+        // Show the field
+        show();
+        reset();
+        start();
+        
+        // Restore the URL
+        window.history.replaceState({}, document.title, currentUrl);
+      });
     }
   );
 }
 
-// Add a fix to the share button click handler for multiplayer
-$(document).on('click', '.share-map.multiplayer', function() {
-  // Get the game ID directly
-  var gameId = $('#game-id').text();
+// Add a function to show a waiting overlay
+function showWaitingOverlay() {
+  // Remove any existing overlay
+  $('.waiting-overlay').remove();
   
-  // Create the correct URL
-  var shareUrl = window.location.origin + window.location.pathname + '?mode=multiplayer&id=' + gameId;
+  // Create the overlay
+  $('body').append(`
+    <div class="waiting-overlay">
+      <div class="waiting-card">
+        <h2>Waiting for opponent...</h2>
+        <p>Share the game link with your opponent to join.</p>
+        <div class="game-id-container">
+          <p>Game ID: <span class="game-id-display">${$('#game-id').text()}</span></p>
+          <button class="copy-id-btn">Copy ID</button>
+        </div>
+        <button class="cancel-waiting-btn">Cancel</button>
+      </div>
+    </div>
+  `);
   
-  // Try to use the Web Share API if available
-  if (navigator.share) {
-    navigator.share({
-      title: 'Dotmination Multiplayer',
-      text: 'Join my Dotmination game!',
-      url: shareUrl
-    }).catch(console.error);
-  } else {
-    // Fallback: copy to clipboard
-    var tempInput = document.createElement('input');
-    tempInput.value = shareUrl;
+  // Add click handler for the copy button
+  $('.copy-id-btn').on('click', function() {
+    const gameId = $('.game-id-display').text();
+    const tempInput = document.createElement('input');
+    tempInput.value = gameId;
     document.body.appendChild(tempInput);
     tempInput.select();
     document.execCommand('copy');
     document.body.removeChild(tempInput);
     
-    // Show a notification
-    alert('Game URL copied to clipboard! Share it with your opponent.');
-  }
-});
+    // Show feedback
+    $(this).text('Copied!');
+    setTimeout(() => {
+      $(this).text('Copy ID');
+    }, 2000);
+  });
+  
+  // Add click handler for the cancel button
+  $('.cancel-waiting-btn').on('click', function() {
+    if (confirm('Are you sure you want to cancel waiting for an opponent?')) {
+      resetMultiplayer();
+      
+      // Reset the game mode to regular
+      gameMode = 'regular';
+      $('body')
+        .removeClass('mode-multiplayer')
+        .addClass('mode-regular');
+      
+      // Update URL
+      var newUrl = window.location.pathname + '?mode=regular';
+      window.history.replaceState({}, document.title, newUrl);
+      
+      // Start a new single player game
+      startAnim();
+    }
+  });
+}
 
 // Add CSS for the multiplayer icon
 var multiplayerIconStyle = `
@@ -1586,149 +1681,6 @@ $(document).on('click', '.disconnect-multiplayer', function() {
       window.location.reload();
     }
   }
-});
-
-// Add a function to show a waiting overlay
-function showWaitingOverlay() {
-  // Remove any existing overlay
-  $('.waiting-overlay').remove();
-  
-  // Create the overlay
-  $('body').append(`
-    <div class="waiting-overlay">
-      <div class="waiting-card">
-        <h2>Waiting for opponent...</h2>
-        <p>Share the game link with your opponent to join.</p>
-        <div class="game-id-container">
-          <p>Game ID: <span class="game-id-display">${$('#game-id').text()}</span></p>
-          <button class="copy-id-btn">Copy ID</button>
-        </div>
-        <button class="cancel-waiting-btn">Cancel</button>
-      </div>
-    </div>
-  `);
-  
-  // Add click handler for the copy button
-  $('.copy-id-btn').on('click', function() {
-    const gameId = $('.game-id-display').text();
-    const tempInput = document.createElement('input');
-    tempInput.value = gameId;
-    document.body.appendChild(tempInput);
-    tempInput.select();
-    document.execCommand('copy');
-    document.body.removeChild(tempInput);
-    
-    // Show feedback
-    $(this).text('Copied!');
-    setTimeout(() => {
-      $(this).text('Copy ID');
-    }, 2000);
-  });
-  
-  // Add click handler for the cancel button
-  $('.cancel-waiting-btn').on('click', function() {
-    if (confirm('Are you sure you want to cancel waiting for an opponent?')) {
-      resetMultiplayer();
-      
-      // Reset the game mode to regular
-      gameMode = 'regular';
-      $('body')
-        .removeClass('mode-multiplayer')
-        .addClass('mode-regular');
-      
-      // Update URL
-      var newUrl = window.location.pathname + '?mode=regular';
-      window.history.replaceState({}, document.title, newUrl);
-      
-      // Start a new single player game
-      startAnim();
-    }
-  });
-}
-
-// Add CSS for the disconnect button and waiting overlay
-var multiplayerDisconnectStyle = `
-.disconnect-multiplayer {
-  display: none;
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  cursor: pointer;
-  color: var(--color-2);
-  font-size: 24px;
-}
-
-.mode-multiplayer .disconnect-multiplayer {
-  display: block;
-}
-
-.waiting-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-}
-
-.waiting-card {
-  background: white;
-  padding: 20px;
-  border-radius: 10px;
-  text-align: center;
-  max-width: 90%;
-  width: 400px;
-}
-
-.dark-mode .waiting-card {
-  background: darkslategrey;
-  color: white;
-}
-
-.game-id-container {
-  margin: 20px 0;
-  padding: 10px;
-  background: #f5f5f5;
-  border-radius: 5px;
-}
-
-.dark-mode .game-id-container {
-  background: #2a3f3f;
-}
-
-.copy-id-btn, .cancel-waiting-btn {
-  margin-top: 10px;
-  padding: 8px 16px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.copy-id-btn {
-  background: var(--color-1);
-  color: white;
-}
-
-.cancel-waiting-btn {
-  background: var(--color-2);
-  color: white;
-}
-`;
-
-// Add the style to the document
-function addMultiplayerDisconnectStyle() {
-  var styleElement = document.createElement('style');
-  styleElement.textContent = multiplayerDisconnectStyle;
-  document.head.appendChild(styleElement);
-}
-
-// Initialize the disconnect button
-$(document).ready(function() {
-  addMultiplayerDisconnectStyle();
 });
 
 // Add a window unload handler to disconnect when navigating away
