@@ -1,3 +1,5 @@
+// v0.0.1
+
 // Dark Mode
 function screenTest(e) {
   if (e.matches) {
@@ -1159,13 +1161,37 @@ $('.mode-modal .wrapper').on('click', '.card[data-mode="multiplayer"]', function
   $('.game-id-display, .game-id-input').hide();
 });
 
-// Create a new game
-$('#create-game').on('click', function() {
+// Create a new game - completely rewrite this handler
+$('#create-game').on('click', function(e) {
+  // Prevent any default behavior
+  e.preventDefault();
+  e.stopPropagation();
+  
+  console.log("Create game clicked");
+  
+  // Set state
   isHost = true;
   isMultiplayer = true;
+  gameMode = 'multiplayer';
+  
+  // Update body class
+  $('body')
+    .removeClass('mode-random mode-regular')
+    .addClass('mode-multiplayer');
+  
+  // Force the URL to be multiplayer mode
+  var newUrl = window.location.pathname + '?mode=multiplayer';
+  window.history.replaceState({}, document.title, newUrl);
+  
+  // Initialize PeerJS
   initPeer();
+  
+  // Update UI
   $('.multiplayer-options').hide();
   $('.game-id-display').show();
+  
+  // Prevent the modal from closing
+  return false;
 });
 
 // Join an existing game
@@ -1195,6 +1221,11 @@ $('.btn-connect').on('click', function() {
 // Initialize PeerJS
 function initPeer() {
   console.log("Initializing PeerJS connection");
+  
+  // Force the game mode to be multiplayer
+  gameMode = 'multiplayer';
+  
+  // Create the peer
   peer = new Peer({
     debug: 3 // Set debug level to maximum for testing
   });
@@ -1203,11 +1234,14 @@ function initPeer() {
     console.log('PeerJS connection opened with ID:', id);
     $('#game-id').text(id);
     
-    // Update URL with the game ID if we're the host
-    if (isHost) {
-      var newUrl = window.location.pathname + '?mode=multiplayer&id=' + id;
-      window.history.replaceState({}, document.title, newUrl);
-    }
+    // Force the URL to be correct for multiplayer
+    var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + id;
+    window.history.replaceState({}, document.title, correctUrl);
+    
+    // Make sure the body class is correct
+    $('body')
+      .removeClass('mode-random mode-regular')
+      .addClass('mode-multiplayer');
   });
   
   peer.on('connection', function(connection) {
@@ -1313,9 +1347,30 @@ function setupConnection() {
   });
 }
 
-// Start a multiplayer game
+// Fix the startMultiplayerGame function to ensure the correct URL
 function startMultiplayerGame() {
   gameMode = 'multiplayer';
+  
+  // Force the URL to be correct for multiplayer
+  if (isHost) {
+    var gameId = $('#game-id').text();
+    if (gameId) {
+      var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
+      window.history.replaceState({}, document.title, correctUrl);
+    } else {
+      var correctUrl = window.location.pathname + '?mode=multiplayer';
+      window.history.replaceState({}, document.title, correctUrl);
+    }
+  } else {
+    var joinId = $('#join-id').val();
+    if (joinId) {
+      var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + joinId;
+      window.history.replaceState({}, document.title, correctUrl);
+    } else {
+      var correctUrl = window.location.pathname + '?mode=multiplayer';
+      window.history.replaceState({}, document.title, correctUrl);
+    }
+  }
   
   // Update UI
   $('body')
@@ -1354,179 +1409,28 @@ function startMultiplayerGame() {
   if ($('.share-map.multiplayer').length === 0) {
     $('footer').append('<div class="share-map multiplayer"><i class="fas fa-share-alt"></i></div>');
   }
-}
-
-// Send the current game state to the other player
-function sendGameState() {
-  if (!conn || !isMultiplayer) return;
   
-  const state = {
-    mapString: generateMapString(),
-    currentPlayer: currentPlayer
-  };
+  // Make sure the multiplayer icon is visible and others are hidden
+  $('.multiplayer-icon').show();
+  $('.random, .level').hide();
   
-  conn.send({
-    type: 'gameState',
-    state: state
-  });
-}
-
-// Apply a received game state
-function applyGameState(state) {
-  buildMapFromString(state.mapString);
-  currentPlayer = state.currentPlayer;
-  
-  // Update UI
-  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-  
-  // Set color
-  if (currentPlayer == "player--1") {
-    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-  } else {
-    TweenMax.to("html", 0, {"--color-current": 'var(--color-2)'});
-  }
-  
-  dots = $(".dot");
-}
-
-// Handle an opponent's move
-function handleOpponentMove(dotIndex) {
-  // Find the dot and click it
-  const dot = $(".dot").eq(dotIndex);
-  
-  // Store the move data
-  lastMoveData = {
-    dotIndex: dotIndex
-  };
-  
-  // Simulate a click on the dot
-  if (dot.length) {
-    waitingForMove = false;
-    dot.click();
-  }
-}
-
-// Modify the dot click handler for multiplayer
-$(".field").on("click", ".dot", function() {
-  if (isMultiplayer && waitingForMove) {
-    // Not this player's turn
-    return;
-  }
-  
-  if (
-    !$(this).closest(".field").hasClass("animating") &&
-    ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))
-  ) {
-    // In multiplayer, send the move to the other player
-    if (isMultiplayer) {
-      const dotIndex = $(this).index();
-      
-      conn.send({
-        type: 'move',
-        dotIndex: dotIndex
-      });
-      
-      waitingForMove = true;
+  // Prevent random map generation from overriding our URL
+  window.setTimeout(function() {
+    if (isHost) {
+      var gameId = $('#game-id').text();
+      if (gameId) {
+        var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
+        window.history.replaceState({}, document.title, correctUrl);
+      }
     }
-    
-    $(this).closest(".field").addClass("animating");
-    $(this)
-      .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
-      .addClass("increment");
-    incrementDotStage($(this));
-  }
-});
-
-// Reset multiplayer state
-function resetMultiplayer() {
-  console.log("Resetting multiplayer completely");
-  isMultiplayer = false;
-  isHost = false;
-  waitingForMove = false;
-  
-  // Close and destroy the connection
-  if (conn) {
-    try {
-      conn.close();
-    } catch (e) {
-      console.error("Error closing connection:", e);
-    }
-    conn = null;
-  }
-  
-  // Close and destroy the peer
-  if (peer) {
-    try {
-      peer.destroy();
-    } catch (e) {
-      console.error("Error destroying peer:", e);
-    }
-    peer = null;
-  }
-  
-  // Reset UI
-  $('.player.player--1 i').removeClass('fa-user').addClass('fa-robot');
-  $('.player.player--2 i').removeClass('fa-user').addClass('fa-user-secret');
-  
-  // Hide multiplayer UI
-  $('.multiplayer-options, .game-id-display, .game-id-input').hide();
-  
-  // Remove multiplayer-specific elements
-  $('.multiplayer-icon, .share-map.multiplayer, .disconnect-multiplayer, .waiting-overlay').remove();
-  
-  // Clear any stored game data
-  lastMoveData = null;
-  
-  console.log("Multiplayer reset complete");
+  }, 500);
 }
 
-// Add CSS for multiplayer mode
-var multiplayerStyle = `
-.mode-multiplayer .player.player--1,
-.mode-multiplayer .player.player--2 {
-  cursor: default;
-}
-
-.btn-connect {
-  margin-top: 10px;
-  padding: 8px 16px;
-  background: var(--color-current);
-  border: none;
-  border-radius: 4px;
-  color: white;
-  cursor: pointer;
-}
-
-#join-id {
-  width: 100%;
-  padding: 8px;
-  margin-top: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-
-.waiting-indicator {
-  margin-top: 10px;
-  color: var(--color-current);
-  font-style: italic;
-}
-`;
-
-// Add the style to the document
-function addMultiplayerStyle() {
-  var styleElement = document.createElement('style');
-  styleElement.textContent = multiplayerStyle;
-  document.head.appendChild(styleElement);
-}
-
-// Initialize multiplayer on document ready
-$(document).ready(function() {
-  // Add the multiplayer style
-  addMultiplayerStyle();
-});
-
-// Add a new function to start a multiplayer game with an empty field
+// Also modify the startMultiplayerAnim function to prevent random map URL generation
 function startMultiplayerAnim() {
+  // Save the current URL before we start
+  var currentUrl = window.location.href;
+  
   moveAmount = 0;
   randomNumber = Math.floor(Math.random() * playerArray.length);
   currentPlayer = "player--1"; // Always start with player 1
@@ -1551,9 +1455,41 @@ function startMultiplayerAnim() {
       show();
       reset();
       start();
+      
+      // Restore the URL after animation completes
+      window.history.replaceState({}, document.title, currentUrl);
     }
   );
 }
+
+// Add a fix to the share button click handler for multiplayer
+$(document).on('click', '.share-map.multiplayer', function() {
+  // Get the game ID directly
+  var gameId = $('#game-id').text();
+  
+  // Create the correct URL
+  var shareUrl = window.location.origin + window.location.pathname + '?mode=multiplayer&id=' + gameId;
+  
+  // Try to use the Web Share API if available
+  if (navigator.share) {
+    navigator.share({
+      title: 'Dotmination Multiplayer',
+      text: 'Join my Dotmination game!',
+      url: shareUrl
+    }).catch(console.error);
+  } else {
+    // Fallback: copy to clipboard
+    var tempInput = document.createElement('input');
+    tempInput.value = shareUrl;
+    document.body.appendChild(tempInput);
+    tempInput.select();
+    document.execCommand('copy');
+    document.body.removeChild(tempInput);
+    
+    // Show a notification
+    alert('Game URL copied to clipboard! Share it with your opponent.');
+  }
+});
 
 // Add CSS for the multiplayer icon
 var multiplayerIconStyle = `
@@ -1866,3 +1802,82 @@ $(document).ready(function() {
     }
   });
 });
+
+// Update the CSS for the multiplayer icon to ensure it's visible
+var updatedMultiplayerIconStyle = `
+.multiplayer-icon {
+  display: none;
+  cursor: pointer;
+}
+
+.mode-multiplayer .multiplayer-icon {
+  display: block !important;
+}
+
+.mode-multiplayer .random,
+.mode-multiplayer .level {
+  display: none !important;
+}
+`;
+
+// Replace the existing style
+function updateMultiplayerIconStyle() {
+  // Remove any existing style
+  $('style:contains(".multiplayer-icon")').remove();
+  
+  // Add the updated style
+  var styleElement = document.createElement('style');
+  styleElement.textContent = updatedMultiplayerIconStyle;
+  document.head.appendChild(styleElement);
+}
+
+// Call this function on document ready
+$(document).ready(function() {
+  updateMultiplayerIconStyle();
+});
+
+// Add a direct override for the startAnim function to prevent it from changing the URL in multiplayer mode
+var originalStartAnim = startAnim;
+startAnim = function() {
+  // If we're in multiplayer mode, don't let startAnim change the URL
+  if (isMultiplayer) {
+    console.log("Preventing startAnim from changing URL in multiplayer mode");
+    
+    // Get the current URL
+    var currentUrl = window.location.href;
+    
+    // Call the original function
+    originalStartAnim.apply(this, arguments);
+    
+    // Restore the URL
+    window.history.replaceState({}, document.title, currentUrl);
+    
+    return;
+  }
+  
+  // Otherwise, call the original function
+  originalStartAnim.apply(this, arguments);
+};
+
+// Also override the fieldPopulateRandom function to prevent it from changing the URL in multiplayer mode
+var originalFieldPopulateRandom = fieldPopulateRandom;
+fieldPopulateRandom = function() {
+  // If we're in multiplayer mode, don't let fieldPopulateRandom change the URL
+  if (isMultiplayer) {
+    console.log("Preventing fieldPopulateRandom from changing URL in multiplayer mode");
+    
+    // Get the current URL
+    var currentUrl = window.location.href;
+    
+    // Call the original function
+    originalFieldPopulateRandom.apply(this, arguments);
+    
+    // Restore the URL
+    window.history.replaceState({}, document.title, currentUrl);
+    
+    return;
+  }
+  
+  // Otherwise, call the original function
+  originalFieldPopulateRandom.apply(this, arguments);
+};
