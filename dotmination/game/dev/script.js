@@ -1,4 +1,4 @@
-// v0.0.20
+// v0.0.21
 
 
 // Dark Mode
@@ -1173,6 +1173,33 @@ $(document).ready(function() {
     $('.mode-modal .card[data-mode="random"]').after($newButton);
   }
   
+  // Add the multiplayer options to the modal if they don't exist
+  if ($('.multiplayer-options').length === 0) {
+    $('.mode-modal .wrapper').append(`
+      <div class="multiplayer-options" style="display: none;">
+        <h3>Multiplayer Game</h3>
+        <div class="multiplayer-buttons">
+          <button id="create-game" class="btn-primary">Create Game</button>
+          <button id="join-game" class="btn-primary">Join Game</button>
+        </div>
+      </div>
+      
+      <div class="game-id-display" style="display: none;">
+        <h3>Game ID</h3>
+        <p>Share this ID with your opponent: <span id="game-id"></span></p>
+        <button class="btn-primary copy-id">Copy ID</button>
+      </div>
+      
+      <div class="game-id-input" style="display: none;">
+        <h3>Enter Game ID</h3>
+        <input type="text" id="join-id" placeholder="Paste Game ID here">
+        <button class="btn-primary btn-connect">Connect</button>
+      </div>
+    `);
+    
+    console.log("Added multiplayer options to modal");
+  }
+  
   // Create Game button handler
   $(document).off('click', '#create-game').on('click', '#create-game', function(e) {
     // Prevent any default behavior
@@ -1311,7 +1338,7 @@ $(document).off('click', '#create-game').on('click', '#create-game', function(e)
   // Start the multiplayer game with empty field
   startMultiplayerAnim();
   
-  // Prevent the modal from closing
+  // Prevent the modal from closing automatically
   return false;
 });
 
