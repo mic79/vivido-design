@@ -1,4 +1,4 @@
-// v0.0.35
+// v0.0.36
 
 
 // Dark Mode
@@ -1599,8 +1599,20 @@ function checkGameEnd() {
     });
     
     if (gameEnded) {
-      // Show the end message
-      showMultiplayerEndMessage(currentPlayer);
+      // Hide level goals
+      $('.level-goals').hide();
+      
+      // Determine if current player won
+      const youWon = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
+      
+      // Create and show the end overlay with win/loss message
+      const endOverlay = $(`
+        <div class="end overlay">
+          <h1>${youWon ? 'You Won!' : 'You Lost!'}</h1>
+          <button class="btn btn-primary rippled">Play Again</button>
+        </div>
+      `);
+      $('.field').append(endOverlay);
       
       // If we're connected, send game end to other player
       if (conn) {
