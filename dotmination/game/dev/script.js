@@ -1,4 +1,4 @@
-// v0.0.36
+// v0.0.37
 
 
 // Dark Mode
@@ -1362,8 +1362,14 @@ function setupConnection() {
         }
       }
     } else if (data.type === 'gameEnd') {
-      // Show end message when received from other player
-      showMultiplayerEndMessage(data.winner);
+      // Hide level goals
+      $('.level-goals').hide();
+      
+      // Determine if current player won
+      const youWon = (isHost && data.winner === "player--1") || (!isHost && data.winner === "player--2");
+      
+      // Add the result text after the h1
+      $('.end.overlay h1').after(`<p class="result-text">${youWon ? 'You Won!' : 'You Lost!'}</p>`);
     }
   });
 }
@@ -1564,26 +1570,6 @@ function updateTurnIndicator() {
   }
 }
 
-// Add function to show multiplayer end message
-function showMultiplayerEndMessage(winner) {
-  // Determine if the current player won
-  const youWon = (isHost && winner === "player--1") || (!isHost && winner === "player--2");
-  
-  // Create the end overlay with multiplayer-specific message
-  const endOverlay = $(`
-    <div class="end overlay">
-      <h1>${youWon ? 'You Won!' : 'You Lost!'}</h1>
-      <button class="btn btn-primary rippled">Play Again</button>
-    </div>
-  `);
-  
-  // Hide the level goals
-  $('.level-goals').hide();
-  
-  // Add the overlay to the field
-  $('.field').append(endOverlay);
-}
-
 // Modify the checkGameEnd function to handle multiplayer
 function checkGameEnd() {
   if (isMultiplayer) {
@@ -1605,14 +1591,8 @@ function checkGameEnd() {
       // Determine if current player won
       const youWon = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
       
-      // Create and show the end overlay with win/loss message
-      const endOverlay = $(`
-        <div class="end overlay">
-          <h1>${youWon ? 'You Won!' : 'You Lost!'}</h1>
-          <button class="btn btn-primary rippled">Play Again</button>
-        </div>
-      `);
-      $('.field').append(endOverlay);
+      // Add the result text after the h1
+      $('.end.overlay h1').after(`<p class="result-text">${youWon ? 'You Won!' : 'You Lost!'}</p>`);
       
       // If we're connected, send game end to other player
       if (conn) {
