@@ -1,4 +1,4 @@
-// v0.0.5
+// v0.0.6
 
 
 // Dark Mode
@@ -1514,7 +1514,6 @@ function startMultiplayerAnim() {
   
   // Clear the field
   $(".end").remove();
-  $(".dot").removeClass(playerClassClear);
   
   // Remove all stage and player classes from dots
   $(".dot").removeClass(function(index, className) {
