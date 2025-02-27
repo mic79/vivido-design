@@ -1338,7 +1338,7 @@ function setupConnection() {
   });
   
   conn.on('data', function(data) {
-    console.log('Received:', data);
+    console.log('Received move:', data);
     if (data.type === 'move') {
       // Find the dot and trigger the click
       const $dot = $('.dot').eq(data.dotIndex);
@@ -1591,7 +1591,7 @@ function checkGameEnd() {
     var gameEnded = true;
     $(".dot").each(function() {
       if (!$(this).is('[class*="player--"]') || $(this).hasClass(currentPlayer)) {
-        if (!$(this).is('[class*="stage--" + (stage_amount - 1) + '"]')) {
+        if (!$(this).is('[class*="stage--"' + (stage_amount - 1) + '"]')) {
           gameEnded = false;
           return false;
         }
