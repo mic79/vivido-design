@@ -1,4 +1,4 @@
-// v0.0.11
+// v0.0.12
 
 
 // Dark Mode
@@ -1182,7 +1182,7 @@ $('.mode-modal .wrapper').on('click', '.card[data-mode="multiplayer"]', function
   $('.game-id-display, .game-id-input').hide();
 });
 
-// Create a new game - completely rewrite this handler
+// Fix the create-game click handler to show the waiting overlay
 $('#create-game').on('click', function(e) {
   // Prevent any default behavior
   e.preventDefault();
@@ -1221,7 +1221,7 @@ $('#create-game').on('click', function(e) {
   return false;
 });
 
-// Join an existing game
+// Fix the join-game click handler
 $('#join-game').on('click', function(e) {
   // Prevent any default behavior
   e.preventDefault();
@@ -1243,50 +1243,193 @@ $('#join-game').on('click', function(e) {
   var newUrl = window.location.pathname + '?mode=multiplayer';
   window.history.replaceState({}, document.title, newUrl);
   
+  // Initialize PeerJS
+  initPeer();
+  
   // Update UI - show the input field
   $('.multiplayer-options').hide();
   $('.game-id-input').show();
-  
-  // Initialize PeerJS
-  initPeer();
   
   // Prevent the modal from closing
   return false;
 });
 
-// Fix the game-id-input to prevent modal closing when clicking inside
-$('.game-id-input').on('click', function(e) {
-  e.stopPropagation();
-});
-
-// Fix the btn-connect click handler
-$('.btn-connect').on('click', function(e) {
-  // Prevent any default behavior
-  e.preventDefault();
-  e.stopPropagation();
+// Fix the showWaitingOverlay function
+function showWaitingOverlay() {
+  console.log("Showing waiting overlay");
   
-  const gameId = $('#join-id').val().trim();
-  if (gameId) {
-    console.log("Connecting to game:", gameId);
-    
-    // Force the URL to be multiplayer mode with the correct ID
-    var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
-    window.history.replaceState({}, document.title, newUrl);
-    
-    // Connect to the peer
-    connectToPeer(gameId);
-    
-    // Close the modal
-    $('body').removeClass('modal-open');
-    
-    // Start the multiplayer game
-    startMultiplayerGame();
+  // Remove any existing overlay
+  $('.waiting-overlay').remove();
+  
+  // Create the overlay with a placeholder for the game ID
+  $('body').append(`
+    <div class="waiting-overlay">
+      <div class="waiting-card">
+        <h2>Waiting for opponent...</h2>
+        <p>Share this ID with your opponent:</p>
+        <div class="game-id-container">
+          <div class="game-id-display" id="overlay-game-id">Generating ID...</div>
+          <button class="copy-id-btn">Copy ID</button>
+        </div>
+        <button class="cancel-waiting-btn">Cancel</button>
+      </div>
+    </div>
+  `);
+  
+  // Update the game ID when it's available
+  function updateGameId() {
+    if (peer && peer.id) {
+      $('#overlay-game-id').text(peer.id);
+    } else {
+      setTimeout(updateGameId, 500);
+    }
   }
-});
+  updateGameId();
+  
+  // Add click handler for the copy button
+  $('.copy-id-btn').on('click', function() {
+    const gameId = $('#overlay-game-id').text();
+    if (gameId && gameId !== "Generating ID...") {
+      navigator.clipboard.writeText(gameId).then(function() {
+        // Show feedback
+        $('.copy-id-btn').text('Copied!');
+        setTimeout(() => {
+          $('.copy-id-btn').text('Copy ID');
+        }, 2000);
+      }).catch(function(err) {
+        // Fallback for older browsers
+        const tempInput = document.createElement('input');
+        tempInput.value = gameId;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempInput);
+        
+        // Show feedback
+        $('.copy-id-btn').text('Copied!');
+        setTimeout(() => {
+          $('.copy-id-btn').text('Copy ID');
+        }, 2000);
+      });
+    }
+  });
+  
+  // Add click handler for the cancel button
+  $('.cancel-waiting-btn').on('click', function() {
+    if (confirm('Are you sure you want to cancel waiting for an opponent?')) {
+      resetMultiplayer();
+      
+      // Reset the game mode to regular
+      gameMode = 'regular';
+      $('body')
+        .removeClass('mode-multiplayer')
+        .addClass('mode-regular');
+      
+      // Update URL
+      var newUrl = window.location.pathname + '?mode=regular';
+      window.history.replaceState({}, document.title, newUrl);
+      
+      // Start a new single player game
+      startAnim();
+    }
+  });
+}
+
+// Fix the connectToPeerWithErrorHandling function
+function connectToPeerWithErrorHandling(id) {
+  console.log("Connecting to peer with error handling:", id);
+  
+  // Show a loading indicator
+  $('.game-id-input').append('<div class="connecting-indicator">Connecting...</div>');
+  
+  try {
+    // Set a timeout for connection attempts
+    var connectionTimeout = setTimeout(function() {
+      // Connection timed out
+      $('.connecting-indicator').remove();
+      alert("Connection timed out. Please check the Game ID and try again.");
+      
+      // Reset the input field
+      $('#join-id').val('');
+    }, 5000);
+    
+    // Make sure peer is initialized
+    if (!peer) {
+      initPeer();
+    }
+    
+    // Wait for peer to be ready
+    function attemptConnection() {
+      if (peer && peer.id) {
+        // Attempt to connect
+        conn = peer.connect(id);
+        
+        conn.on('open', function() {
+          // Connection successful
+          clearTimeout(connectionTimeout);
+          $('.connecting-indicator').remove();
+          
+          // Close the modal
+          $('body').removeClass('modal-open');
+          
+          // Set up the connection
+          setupConnection();
+          
+          // Start the multiplayer game
+          startMultiplayerGame();
+        });
+        
+        conn.on('error', function(err) {
+          // Connection error
+          clearTimeout(connectionTimeout);
+          $('.connecting-indicator').remove();
+          
+          console.error("Connection error:", err);
+          alert("Connection error: " + err + ". Please try again.");
+          
+          // Reset the connection
+          if (conn) {
+            try {
+              conn.close();
+            } catch (e) {
+              console.error("Error closing connection:", e);
+            }
+            conn = null;
+          }
+          
+          // Reset the input field
+          $('#join-id').val('');
+        });
+      } else {
+        // Peer not ready yet, try again
+        setTimeout(attemptConnection, 500);
+      }
+    }
+    
+    // Start connection attempt
+    attemptConnection();
+    
+  } catch (err) {
+    // Error creating connection
+    $('.connecting-indicator').remove();
+    
+    console.error("Failed to connect:", err);
+    alert("Failed to connect: " + err + ". Please try again.");
+    
+    // Reset the input field
+    $('#join-id').val('');
+  }
+}
 
 // Initialize PeerJS
 function initPeer() {
   console.log("Initializing PeerJS connection");
+  
+  // Don't initialize if already initialized
+  if (peer) {
+    console.log("PeerJS already initialized");
+    return;
+  }
   
   // Force the game mode to be multiplayer
   gameMode = 'multiplayer';
@@ -1532,276 +1675,6 @@ function startMultiplayerAnim() {
   $(".end").remove();
   
   // Remove all stage and player classes from dots
-  $(".dot").removeClass(function(index, className) {
-    return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
-  }).removeClass(function(index, className) {
-    return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
-  }).removeClass(playerClassClear);
-  
-  // Initialize the field
-  dots = $(".dot");
-  
-  // Set the current player
-  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-  
-  // Set the color
-  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-  
-  // Show the field
-  show();
-  reset();
-  start();
-  
-  // Restore the URL
-  window.history.replaceState({}, document.title, currentUrl);
-  
-  // Set waiting state based on player
-  waitingForMove = !isHost;
-}
-
-// 1. Fix the showWaitingOverlay function to properly display the game ID
-function showWaitingOverlay() {
-  console.log("Showing waiting overlay");
-  
-  // Remove any existing overlay
-  $('.waiting-overlay').remove();
-  
-  // Wait for peer ID to be available before creating the overlay
-  function createOverlay() {
-    if (!peer || !peer.id) {
-      console.log("Waiting for peer ID...");
-      setTimeout(createOverlay, 500);
-      return;
-    }
-    
-    console.log("Peer ID available:", peer.id);
-    var gameId = peer.id;
-    
-    // Create the overlay with the correct game ID
-    $('body').append(`
-      <div class="waiting-overlay">
-        <div class="waiting-card">
-          <h2>Waiting for opponent...</h2>
-          <p>Share this ID with your opponent:</p>
-          <div class="game-id-container">
-            <div class="game-id-display">${gameId}</div>
-            <button class="copy-id-btn">Copy ID</button>
-          </div>
-          <button class="cancel-waiting-btn">Cancel</button>
-        </div>
-      </div>
-    `);
-    
-    // Add click handler for the copy button to copy ONLY the game ID
-    $('.copy-id-btn').on('click', function() {
-      // Get only the game ID text
-      const gameId = $('.game-id-display').text();
-      
-      // Use modern clipboard API if available
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(gameId)
-          .then(() => {
-            $('.copy-id-btn').text('Copied!');
-            setTimeout(() => {
-              $('.copy-id-btn').text('Copy ID');
-            }, 2000);
-          })
-          .catch(err => {
-            console.error('Failed to copy: ', err);
-            fallbackCopy(gameId);
-          });
-      } else {
-        fallbackCopy(gameId);
-      }
-      
-      // Prevent default behavior
-      return false;
-    });
-    
-    // Fallback copy method
-    function fallbackCopy(text) {
-      const tempInput = document.createElement('input');
-      tempInput.value = text;
-      document.body.appendChild(tempInput);
-      tempInput.select();
-      document.execCommand('copy');
-      document.body.removeChild(tempInput);
-      
-      $('.copy-id-btn').text('Copied!');
-      setTimeout(() => {
-        $('.copy-id-btn').text('Copy ID');
-      }, 2000);
-    }
-    
-    // Add click handler for the cancel button
-    $('.cancel-waiting-btn').on('click', function() {
-      if (confirm('Are you sure you want to cancel waiting for an opponent?')) {
-        resetMultiplayer();
-        
-        // Reset the game mode to regular
-        gameMode = 'regular';
-        $('body')
-          .removeClass('mode-multiplayer')
-          .addClass('mode-regular');
-        
-        // Update URL
-        var newUrl = window.location.pathname + '?mode=regular';
-        window.history.replaceState({}, document.title, newUrl);
-        
-        // Start a new single player game
-        startAnim();
-      }
-    });
-  }
-  
-  // Start the process
-  createOverlay();
-}
-
-// 2. Fix error handling when joining with incorrect ID
-// Update the btn-connect click handler
-$('.btn-connect').on('click', function(e) {
-  // Prevent any default behavior
-  e.preventDefault();
-  e.stopPropagation();
-  
-  const gameId = $('#join-id').val().trim();
-  if (gameId) {
-    console.log("Connecting to game:", gameId);
-    
-    // Force the URL to be multiplayer mode with the correct ID
-    var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
-    window.history.replaceState({}, document.title, newUrl);
-    
-    // Connect to the peer with error handling
-    connectToPeerWithErrorHandling(gameId);
-  }
-});
-
-// Add a function to connect to a peer with error handling
-function connectToPeerWithErrorHandling(id) {
-  console.log("Connecting to peer with error handling:", id);
-  
-  // Show a loading indicator
-  $('.game-id-input').append('<div class="connecting-indicator">Connecting...</div>');
-  
-  try {
-    // Set a timeout for connection attempts
-    var connectionTimeout = setTimeout(function() {
-      // Connection timed out
-      $('.connecting-indicator').remove();
-      alert("Connection timed out. Please check the Game ID and try again.");
-      
-      // Reset the input field
-      $('#join-id').val('');
-    }, 5000);
-    
-    // Attempt to connect
-    conn = peer.connect(id);
-    
-    conn.on('open', function() {
-      // Connection successful
-      clearTimeout(connectionTimeout);
-      $('.connecting-indicator').remove();
-      
-      // Close the modal
-      $('body').removeClass('modal-open');
-      
-      // Set up the connection
-      setupConnection();
-      
-      // Start the multiplayer game
-      startMultiplayerGame();
-    });
-    
-    conn.on('error', function(err) {
-      // Connection error
-      clearTimeout(connectionTimeout);
-      $('.connecting-indicator').remove();
-      
-      console.error("Connection error:", err);
-      alert("Connection error: " + err + ". Please try again.");
-      
-      // Reset the connection
-      if (conn) {
-        try {
-          conn.close();
-        } catch (e) {
-          console.error("Error closing connection:", e);
-        }
-        conn = null;
-      }
-      
-      // Reset the input field
-      $('#join-id').val('');
-    });
-  } catch (err) {
-    // Error creating connection
-    $('.connecting-indicator').remove();
-    
-    console.error("Failed to connect:", err);
-    alert("Failed to connect: " + err + ". Please try again.");
-    
-    // Reset the input field
-    $('#join-id').val('');
-  }
-}
-
-// 3. Fix the win/lose message display
-// Add a function to check for win in multiplayer
-function checkWin() {
-  var player1Dots = $(".dot.player--1").length;
-  var player2Dots = $(".dot.player--2").length;
-  var totalDots = $(".dot").length;
-  
-  console.log("Checking win:", player1Dots, player2Dots, totalDots);
-  
-  if (player1Dots + player2Dots === totalDots) {
-    console.log("Game is over!");
-    
-    // Game is over
-    if (isMultiplayer) {
-      var winner = (player1Dots > player2Dots) ? "player--1" : "player--2";
-      var youWon = (isHost && winner === "player--1") || (!isHost && winner === "player--2");
-      
-      console.log("Winner:", winner, "You won:", youWon);
-      
-      // Show win/lose message
-      showGameEndMessage(youWon);
-      
-      // Notify the other player
-      if (conn) {
-        conn.send({
-          type: 'gameEnd',
-          winner: winner
-        });
-      }
-    } else {
-      // Original win logic for single player
-      var winner = (player1Dots > player2Dots) ? "player--1" : "player--2";
-      showWinner(winner);
-    }
-    return true;
-  }
-  return false;
-}
-
-// 4. Fix the startMultiplayerAnim function to ensure empty field on retry
-// Completely rewrite the startMultiplayerAnim function
-function startMultiplayerAnim() {
-  console.log("Starting multiplayer game with empty field");
-  
-  // Save the current URL
-  var currentUrl = window.location.href;
-  
-  // Reset game state
-  moveAmount = 0;
-  currentPlayer = "player--1"; // Always start with player 1
-  
-  // Clear the field
-  $(".end").remove();
-  
-  // Remove all stage and player classes from dots
   $(".dot").each(function() {
     $(this)
       .removeClass(function(index, className) {
@@ -1833,9 +1706,6 @@ function startMultiplayerAnim() {
   
   // Set waiting state based on player
   waitingForMove = !isHost;
-  
-  // Update turn indicator
-  updateTurnIndicator();
 }
 
 // Add CSS for the waiting overlay and connecting indicator
