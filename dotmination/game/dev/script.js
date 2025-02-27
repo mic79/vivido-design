@@ -1,4 +1,4 @@
-// v0.0.42
+// v0.0.43
 
 
 // Dark Mode
@@ -206,13 +206,11 @@ function animateNextDot() {
 }
 
 function checkDotmination() {
-  if (
-    moveAmount < 2 ||
-    ($(".dot.player--1").length > 0 && $(".dot.player--2").length > 0)
-  ) {
+  if (moveAmount < 2 || ($(".dot.player--1").length > 0 && $(".dot.player--2").length > 0)) {
     nextPlayer();
   } else {
     console.log("won by: " + currentPlayer);
+    console.log("isMultiplayer:", isMultiplayer, "isHost:", isHost);
     stop();
     sound.play();
     
