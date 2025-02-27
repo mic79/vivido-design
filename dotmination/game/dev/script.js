@@ -1,4 +1,4 @@
-// v0.0.25
+// v0.0.27
 
 
 // Dark Mode
@@ -1200,8 +1200,8 @@ $(document).ready(function() {
     console.log("Added multiplayer options to modal");
   }
   
-  // Handle Create Game button click
-  $('.mode-modal').on('click', '#create-game', function(e) {
+  // Add handlers for Create Game and Join Game buttons
+  $('#create-game').on('click', function(e) {
     e.preventDefault();
     e.stopPropagation();
     
@@ -1212,12 +1212,7 @@ $(document).ready(function() {
     isMultiplayer = true;
     gameMode = 'multiplayer';
     
-    // Update body class
-    $('body')
-      .removeClass('mode-random mode-regular')
-      .addClass('mode-multiplayer');
-    
-    // Force the URL to be multiplayer mode
+    // Update URL for multiplayer mode
     var newUrl = window.location.pathname + '?mode=multiplayer';
     window.history.replaceState({}, document.title, newUrl);
     
@@ -1231,14 +1226,11 @@ $(document).ready(function() {
     // Show waiting overlay immediately
     showWaitingOverlay();
     
-    // Start the multiplayer game with empty field
-    startMultiplayerAnim();
-    
     return false;
   });
   
-  // Handle Join Game button click
-  $('.mode-modal').on('click', '#join-game', function(e) {
+  // Join Game button handler
+  $('#join-game').on('click', function(e) {
     e.preventDefault();
     e.stopPropagation();
     
@@ -1249,12 +1241,7 @@ $(document).ready(function() {
     isMultiplayer = true;
     gameMode = 'multiplayer';
     
-    // Update body class
-    $('body')
-      .removeClass('mode-random mode-regular')
-      .addClass('mode-multiplayer');
-    
-    // Force the URL to be multiplayer mode
+    // Update URL for multiplayer mode
     var newUrl = window.location.pathname + '?mode=multiplayer';
     window.history.replaceState({}, document.title, newUrl);
     
@@ -1262,14 +1249,11 @@ $(document).ready(function() {
     $('.multiplayer-options').hide();
     $('.game-id-input').show();
     
-    // Initialize PeerJS
-    initPeer();
-    
     return false;
   });
   
-  // Handle Connect button click
-  $('.mode-modal').on('click', '.btn-connect', function(e) {
+  // Connect button handler
+  $('.btn-connect').on('click', function(e) {
     e.preventDefault();
     e.stopPropagation();
     
@@ -1277,7 +1261,7 @@ $(document).ready(function() {
     if (gameId) {
       console.log("Connecting to game:", gameId);
       
-      // Force the URL to be multiplayer mode with the correct ID
+      // Update URL for multiplayer mode with game ID
       var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
       window.history.replaceState({}, document.title, newUrl);
       
@@ -1289,6 +1273,23 @@ $(document).ready(function() {
     }
     
     return false;
+  });
+  
+  // Prevent modal from closing when clicking the game ID input
+  $('#join-id').on('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  
+  // Also prevent modal from closing when typing in the input
+  $('#join-id').on('keydown', function(e) {
+    e.stopPropagation();
+  });
+  
+  // Prevent modal from closing when clicking anywhere in the game-id-input container
+  $('.game-id-input').on('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
   });
 });
 
