@@ -1,4 +1,4 @@
-// v0.0.30
+// v0.0.31
 
 
 // Dark Mode
@@ -1301,19 +1301,43 @@ let isMultiplayer = false;
 let waitingForMove = false;
 let lastMoveData = null;
 
-// Fix the connectToPeer function to be simpler
+// Fix the connectToPeer function
 function connectToPeer(peerId) {
   console.log("Connecting to peer:", peerId);
   
-  // Make the connection
-  conn = peer.connect(peerId);
+  // Make sure PeerJS is initialized first
+  if (!peer) {
+    peer = new Peer({
+      debug: 2
+    });
+    
+    peer.on('open', function() {
+      // Now that we're initialized, make the connection
+      conn = peer.connect(peerId);
+      setupConnection();
+    });
+    
+    peer.on('error', function(err) {
+      console.error('PeerJS error:', err);
+      alert('Connection error: ' + err.message);
+    });
+  } else {
+    // PeerJS already initialized, make the connection directly
+    conn = peer.connect(peerId);
+    setupConnection();
+  }
+}
+
+// Add setupConnection function back
+function setupConnection() {
+  console.log("Setting up connection");
   
-  // Set up the connection handlers
   conn.on('open', function() {
     console.log('Connection established');
     
-    // Close the modal
+    // Close the modal and remove waiting overlay
     $('body').removeClass('modal-open');
+    $('.waiting-overlay').remove();
     
     // Start the multiplayer game
     startMultiplayerAnim();
@@ -1340,66 +1364,7 @@ function connectToPeer(peerId) {
   });
 }
 
-// Fix the click handler to properly send moves
-$(".field").on("click", ".dot", function() {
-  // Check if we're in multiplayer mode and it's not our turn
-  if (isMultiplayer && conn) {
-    var isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
-    if (!isMyTurn) {
-      console.log("Not your turn");
-      return;
-    }
-    
-    // Send the move to the other player
-    const dotIndex = $(this).index();
-    console.log("Sending move:", dotIndex);
-    conn.send({
-      type: 'move',
-      dotIndex: dotIndex
-    });
-  }
-  
-  if (!$(this).closest(".field").hasClass("animating") &&
-      ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))) {
-    $(this).closest(".field").addClass("animating");
-    $(this)
-      .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
-      .addClass("increment");
-    incrementDotStage($(this));
-  }
-});
-
-// Add function to update turn indicator
-function updateTurnIndicator() {
-  // Remove any existing indicators
-  $('.turn-indicator').remove();
-  
-  // Add the turn indicator
-  if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
-    // It's your turn
-    $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
-  } else {
-    // It's opponent's turn
-    $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
-  }
-}
-
-// Add function to update player indicators
-function updatePlayerIndicators() {
-  // Remove any existing indicators
-  $('.player-indicator').remove();
-  
-  // Add "You" indicator to show which player you are
-  if (isHost) {
-    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
-    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
-  } else {
-    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
-    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
-  }
-}
-
-// Initialize PeerJS
+// Fix the initPeer function
 function initPeer() {
   console.log("Initializing PeerJS connection");
   
@@ -1414,7 +1379,7 @@ function initPeer() {
   
   // Create the peer
   peer = new Peer({
-    debug: 2 // Set debug level for testing
+    debug: 2
   });
   
   peer.on('open', function(id) {
@@ -1435,12 +1400,6 @@ function initPeer() {
     console.log('Incoming connection from peer');
     conn = connection;
     setupConnection();
-    
-    if (isHost) {
-      // Host starts the game when connection is established
-      $('body').removeClass('modal-open');
-      $('.waiting-overlay').remove();
-    }
   });
   
   peer.on('error', function(err) {
@@ -1449,7 +1408,7 @@ function initPeer() {
   });
 }
 
-// Function to show waiting overlay
+// Add function to show waiting overlay
 function showWaitingOverlay() {
   console.log("Showing waiting overlay");
   
