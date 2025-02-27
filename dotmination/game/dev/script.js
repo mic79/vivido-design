@@ -1,4 +1,4 @@
-// v0.0.29
+// v0.0.30
 
 
 // Dark Mode
@@ -80,25 +80,20 @@ $(".field").on("click", ".dot", function() {
     var isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
     if (!isMyTurn) {
       console.log("Not your turn");
-      return; // Not this player's turn
-    }
-  }
-  
-  if (
-    !$(this).closest(".field").hasClass("animating") &&
-    ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))
-  ) {
-    // In multiplayer, send the move to the other player
-    if (isMultiplayer && conn) {
-      const dotIndex = $(this).index();
-      console.log("Sending move:", dotIndex);
-      
-      conn.send({
-        type: 'move',
-        dotIndex: dotIndex
-      });
+      return;
     }
     
+    // Send the move to the other player
+    const dotIndex = $(this).index();
+    console.log("Sending move:", dotIndex);
+    conn.send({
+      type: 'move',
+      dotIndex: dotIndex
+    });
+  }
+  
+  if (!$(this).closest(".field").hasClass("animating") &&
+      ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))) {
     $(this).closest(".field").addClass("animating");
     $(this)
       .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
@@ -1306,142 +1301,73 @@ let isMultiplayer = false;
 let waitingForMove = false;
 let lastMoveData = null;
 
-// Add the connectToPeer function if missing
+// Fix the connectToPeer function to be simpler
 function connectToPeer(peerId) {
   console.log("Connecting to peer:", peerId);
   
-  // Initialize peer if not already done
-  if (!peer) {
-    initPeer();
-    
-    // Need to wait for peer to be ready
-    peer.on('open', function() {
-      // Now that peer is ready, make the connection
-      conn = peer.connect(peerId);
-      setupConnection();
-    });
-  } else {
-    // Peer already initialized, make the connection
-    conn = peer.connect(peerId);
-    setupConnection();
-  }
-}
-
-// Fix the setupConnection function to handle connection properly
-function setupConnection() {
-  console.log("Setting up connection");
+  // Make the connection
+  conn = peer.connect(peerId);
   
-  // Make sure we have a connection
-  if (!conn) {
-    console.error("No connection available");
-    return;
-  }
-  
+  // Set up the connection handlers
   conn.on('open', function() {
     console.log('Connection established');
     
-    // Hide waiting overlay
-    $('.waiting-overlay').remove();
-    
-    // Clear the field for both players
-    startMultiplayerAnim();
-    
-    // Set initial player states
-    currentPlayer = "player--1"; // Always start with player 1
-    
-    // Set waiting state based on player
-    if (isHost) {
-      // Host is player 1, goes first
-      waitingForMove = false;
-    } else {
-      // Client is player 2, waits for host's move
-      waitingForMove = true;
-    }
-    
-    // Update UI
-    $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-    
-    // Set color
-    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-    
-    // Add player indicators
-    updatePlayerIndicators();
-    
-    // Update turn indicator
-    updateTurnIndicator();
-    
-    // Send initial game state if host
-    if (isHost) {
-      sendGameState();
-    }
-    
     // Close the modal
     $('body').removeClass('modal-open');
+    
+    // Start the multiplayer game
+    startMultiplayerAnim();
+    
+    // Set initial states
+    currentPlayer = "player--1";
+    waitingForMove = !isHost;
+    
+    // Update UI
+    updatePlayerIndicators();
+    updateTurnIndicator();
   });
   
   conn.on('data', function(data) {
     console.log('Received data:', data);
-    
     if (data.type === 'move') {
-      // Handle opponent's move
-      handleOpponentMove(data.dotIndex);
-    } else if (data.type === 'gameState') {
-      // Handle initial game state
-      applyGameState(data.state);
+      // Find the dot and simulate the click
+      const $dot = $('.dot').eq(data.dotIndex);
+      if ($dot.length) {
+        waitingForMove = false;
+        $dot.trigger('click');
+      }
     }
   });
 }
 
-// Add function to send game state
-function sendGameState() {
-  if (conn) {
+// Fix the click handler to properly send moves
+$(".field").on("click", ".dot", function() {
+  // Check if we're in multiplayer mode and it's not our turn
+  if (isMultiplayer && conn) {
+    var isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
+    if (!isMyTurn) {
+      console.log("Not your turn");
+      return;
+    }
+    
+    // Send the move to the other player
+    const dotIndex = $(this).index();
+    console.log("Sending move:", dotIndex);
     conn.send({
-      type: 'gameState',
-      state: {
-        currentPlayer: currentPlayer,
-        moveAmount: moveAmount,
-        dots: $('.dot').map(function() {
-          return {
-            classes: $(this).attr('class'),
-            increment: $(this).attr('data-increment')
-          };
-        }).get()
-      }
+      type: 'move',
+      dotIndex: dotIndex
     });
   }
-}
-
-// Add function to apply game state
-function applyGameState(state) {
-  currentPlayer = state.currentPlayer;
-  moveAmount = state.moveAmount;
   
-  // Apply state to dots
-  $('.dot').each(function(i) {
-    if (state.dots[i]) {
-      $(this)
-        .attr('class', state.dots[i].classes)
-        .attr('data-increment', state.dots[i].increment);
-    }
-  });
-  
-  // Update UI
-  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-  updateTurnIndicator();
-}
-
-// Add function to handle opponent's move
-function handleOpponentMove(dotIndex) {
-  console.log("Handling opponent's move:", dotIndex);
-  
-  // Find the dot and trigger the click
-  const $dot = $('.dot').eq(dotIndex);
-  if ($dot.length) {
-    waitingForMove = false;
-    $dot.trigger('click');
-    updateTurnIndicator();
+  if (!$(this).closest(".field").hasClass("animating") &&
+      ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))) {
+    $(this).closest(".field").addClass("animating");
+    $(this)
+      .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
+      .addClass("increment");
+    incrementDotStage($(this));
   }
-}
+});
 
 // Add function to update turn indicator
 function updateTurnIndicator() {
