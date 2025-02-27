@@ -1254,93 +1254,33 @@ $('#join-game').on('click', function(e) {
   return false;
 });
 
-// Fix the showWaitingOverlay function
-function showWaitingOverlay() {
-  console.log("Showing waiting overlay");
+// Fix the btn-connect click handler to properly join a game
+$('.btn-connect').on('click', function(e) {
+  // Prevent any default behavior
+  e.preventDefault();
+  e.stopPropagation();
   
-  // Remove any existing overlay
-  $('.waiting-overlay').remove();
-  
-  // Create the overlay with a placeholder for the game ID
-  $('body').append(`
-    <div class="waiting-overlay">
-      <div class="waiting-card">
-        <h2>Waiting for opponent...</h2>
-        <p>Share this ID with your opponent:</p>
-        <div class="game-id-container">
-          <div class="game-id-display" id="overlay-game-id">Generating ID...</div>
-          <button class="copy-id-btn">Copy ID</button>
-        </div>
-        <button class="cancel-waiting-btn">Cancel</button>
-      </div>
-    </div>
-  `);
-  
-  // Update the game ID when it's available
-  function updateGameId() {
-    if (peer && peer.id) {
-      $('#overlay-game-id').text(peer.id);
-    } else {
-      setTimeout(updateGameId, 500);
-    }
+  const gameId = $('#join-id').val().trim();
+  if (gameId) {
+    console.log("Connecting to game:", gameId);
+    
+    // Force the URL to be multiplayer mode with the correct ID
+    var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Connect to the peer with error handling
+    connectToPeerWithErrorHandling(gameId);
   }
-  updateGameId();
-  
-  // Add click handler for the copy button
-  $('.copy-id-btn').on('click', function() {
-    const gameId = $('#overlay-game-id').text();
-    if (gameId && gameId !== "Generating ID...") {
-      navigator.clipboard.writeText(gameId).then(function() {
-        // Show feedback
-        $('.copy-id-btn').text('Copied!');
-        setTimeout(() => {
-          $('.copy-id-btn').text('Copy ID');
-        }, 2000);
-      }).catch(function(err) {
-        // Fallback for older browsers
-        const tempInput = document.createElement('input');
-        tempInput.value = gameId;
-        document.body.appendChild(tempInput);
-        tempInput.select();
-        document.execCommand('copy');
-        document.body.removeChild(tempInput);
-        
-        // Show feedback
-        $('.copy-id-btn').text('Copied!');
-        setTimeout(() => {
-          $('.copy-id-btn').text('Copy ID');
-        }, 2000);
-      });
-    }
-  });
-  
-  // Add click handler for the cancel button
-  $('.cancel-waiting-btn').on('click', function() {
-    if (confirm('Are you sure you want to cancel waiting for an opponent?')) {
-      resetMultiplayer();
-      
-      // Reset the game mode to regular
-      gameMode = 'regular';
-      $('body')
-        .removeClass('mode-multiplayer')
-        .addClass('mode-regular');
-      
-      // Update URL
-      var newUrl = window.location.pathname + '?mode=regular';
-      window.history.replaceState({}, document.title, newUrl);
-      
-      // Start a new single player game
-      startAnim();
-    }
-  });
-}
+});
 
 // Fix the connectToPeerWithErrorHandling function
 function connectToPeerWithErrorHandling(id) {
   console.log("Connecting to peer with error handling:", id);
   
   // Show a loading indicator
-  $('.game-id-input').append('<div class="connecting-indicator">Connecting...</div>');
+  if ($('.connecting-indicator').length === 0) {
+    $('.game-id-input').append('<div class="connecting-indicator">Connecting...</div>');
+  }
   
   try {
     // Set a timeout for connection attempts
@@ -1368,6 +1308,8 @@ function connectToPeerWithErrorHandling(id) {
           // Connection successful
           clearTimeout(connectionTimeout);
           $('.connecting-indicator').remove();
+          
+          console.log("Connection opened successfully");
           
           // Close the modal
           $('body').removeClass('modal-open');
@@ -1421,73 +1363,7 @@ function connectToPeerWithErrorHandling(id) {
   }
 }
 
-// Initialize PeerJS
-function initPeer() {
-  console.log("Initializing PeerJS connection");
-  
-  // Don't initialize if already initialized
-  if (peer) {
-    console.log("PeerJS already initialized");
-    return;
-  }
-  
-  // Force the game mode to be multiplayer
-  gameMode = 'multiplayer';
-  
-  // Create the peer
-  peer = new Peer({
-    debug: 3 // Set debug level to maximum for testing
-  });
-  
-  peer.on('open', function(id) {
-    console.log('PeerJS connection opened with ID:', id);
-    $('#game-id').text(id);
-    
-    // Force the URL to be correct for multiplayer
-    var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + id;
-    window.history.replaceState({}, document.title, correctUrl);
-    
-    // Make sure the body class is correct
-    $('body')
-      .removeClass('mode-random mode-regular')
-      .addClass('mode-multiplayer');
-  });
-  
-  peer.on('connection', function(connection) {
-    console.log('Incoming connection from peer');
-    conn = connection;
-    setupConnection();
-    
-    if (isHost) {
-      // Host starts the game when connection is established
-      $('body').removeClass('modal-open');
-      startMultiplayerGame();
-    }
-  });
-  
-  peer.on('error', function(err) {
-    console.error('PeerJS error:', err);
-    alert('Connection error: ' + err.message);
-  });
-  
-  peer.on('disconnected', function() {
-    console.log('PeerJS disconnected from server');
-    // Try to reconnect
-    peer.reconnect();
-  });
-  
-  peer.on('close', function() {
-    console.log('PeerJS connection destroyed');
-  });
-}
-
-// Connect to another peer
-function connectToPeer(peerId) {
-  conn = peer.connect(peerId);
-  setupConnection();
-}
-
-// Set up the data connection
+// Fix the setupConnection function to properly handle game start for both players
 function setupConnection() {
   console.log("Setting up connection");
   
@@ -1497,38 +1373,37 @@ function setupConnection() {
     // Hide waiting overlay
     $('.waiting-overlay').remove();
     
-    // Send initial game state if host
+    // Clear the field for both players
+    startMultiplayerAnim();
+    
+    // Set initial player states
+    currentPlayer = "player--1"; // Always start with player 1
+    
+    // Set waiting state based on player
     if (isHost) {
-      // Start with an empty field
-      startMultiplayerAnim();
-      
-      // Send the empty state
-      sendGameState();
-      
       // Host is player 1, goes first
       waitingForMove = false;
-      currentPlayer = "player--1";
     } else {
       // Client is player 2, waits for host's move
       waitingForMove = true;
-      currentPlayer = "player--1"; // Host goes first
     }
     
     // Update UI
     $(".field").removeClass(playerClassClear).addClass(currentPlayer);
     
     // Set color
-    if (currentPlayer == "player--1") {
-      TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-    } else {
-      TweenMax.to("html", 0, {"--color-current": 'var(--color-2)'});
-    }
+    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+    
+    // Add player indicators
+    updatePlayerIndicators();
     
     // Update turn indicator
     updateTurnIndicator();
     
-    // Add player indicators
-    updatePlayerIndicators();
+    // Send initial game state if host
+    if (isHost) {
+      sendGameState();
+    }
   });
   
   conn.on('data', function(data) {
@@ -1773,3 +1648,18 @@ function addWaitingOverlayStyle() {
 $(document).ready(function() {
   addWaitingOverlayStyle();
 });
+
+// Add a function to update the turn indicator
+function updateTurnIndicator() {
+  // Remove any existing indicators
+  $('.turn-indicator').remove();
+  
+  // Add the turn indicator
+  if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
+    // It's your turn
+    $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
+  } else {
+    // It's opponent's turn
+    $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+  }
+}
