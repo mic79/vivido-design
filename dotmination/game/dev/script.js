@@ -1,4 +1,4 @@
-// v0.0.39
+// v0.0.40
 
 
 // Dark Mode
@@ -1600,29 +1600,7 @@ function checkGameEnd() {
     });
     
     if (gameEnded) {
-      // Hide level goals
-      $('.level-goals').hide();
-      
-      // Determine if current player won
-      const youWon = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
-      
-      // Create the end overlay with multiplayer-specific message
-      $("body .container").append(
-        '<div class="end overlay noselect ' + currentPlayer + '">' +
-        '<div class="card">' +
-        '<h1>Dotmination!</h1>' +
-        '<p class="result-text">' + (youWon ? 'You Won!' : 'You Lost!') + '</p>' +
-        '<button class="btn btn-primary rippled">Play Again</button>' +
-        '</div></div>'
-      );
-      
-      // If we're connected, send game end to other player
-      if (conn) {
-        conn.send({
-          type: 'gameEnd',
-          winner: currentPlayer
-        });
-      }
+      console.log('Multiplayer game ended, winner:', currentPlayer);
     }
     
     return gameEnded;
