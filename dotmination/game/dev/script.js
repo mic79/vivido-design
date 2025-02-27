@@ -1,4 +1,4 @@
-// v0.0.31
+// v0.0.32
 
 
 // Dark Mode
@@ -1256,20 +1256,12 @@ $(document).ready(function() {
     if (gameId) {
       console.log("Connecting to game:", gameId);
       
-      // Initialize PeerJS first if not already initialized
-      if (!peer) {
-        initPeer();
-      }
-      
       // Update URL for multiplayer mode with game ID
       var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
       window.history.replaceState({}, document.title, newUrl);
       
       // Connect to the peer
       connectToPeer(gameId);
-      
-      // Don't close the modal until connection is established
-      // The modal will be closed in setupConnection() when the connection is ready
     }
     
     return false;
@@ -1529,4 +1521,33 @@ function startMultiplayerAnim() {
   
   // Set waiting state based on player
   waitingForMove = !isHost;
+}
+
+// Add back the player indicator functions
+function updatePlayerIndicators() {
+  // Remove any existing indicators
+  $('.player-indicator').remove();
+  
+  // Add "You" indicator to show which player you are
+  if (isHost) {
+    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
+  } else {
+    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
+  }
+}
+
+function updateTurnIndicator() {
+  // Remove any existing indicators
+  $('.turn-indicator').remove();
+  
+  // Add the turn indicator
+  if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
+    // It's your turn
+    $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
+  } else {
+    // It's opponent's turn
+    $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+  }
 }
