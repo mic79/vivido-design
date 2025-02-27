@@ -1,4 +1,4 @@
-// v0.0.33
+// v0.0.34
 
 
 // Dark Mode
@@ -1314,7 +1314,7 @@ function connectToPeer(peerId) {
   }
 }
 
-// Fix the setupConnection function to properly handle moves
+// Fix the setupConnection function to handle moves the same way as clicks
 function setupConnection() {
   console.log("Setting up connection");
   
@@ -1346,15 +1346,20 @@ function setupConnection() {
         // Update state before triggering click
         waitingForMove = false;
         
-        // Simulate the click
-        $dot.closest(".field").addClass("animating");
-        $dot
-          .attr("data-increment", parseInt($dot.attr("data-increment")) + 1)
-          .addClass("increment");
-        incrementDotStage($dot);
-        
-        // Update turn indicator
-        updateTurnIndicator();
+        // Only process the move if it's valid
+        if (!$dot.closest(".field").hasClass("animating") &&
+            ($dot.hasClass(currentPlayer) || !$dot.is('[class*="player--"]'))) {
+          
+          // Simulate the click
+          $dot.closest(".field").addClass("animating");
+          $dot
+            .attr("data-increment", parseInt($dot.attr("data-increment")) + 1)
+            .addClass("increment");
+          incrementDotStage($dot);
+          
+          // Update turn indicator
+          updateTurnIndicator();
+        }
       }
     }
   });
