@@ -1,4 +1,4 @@
-// v0.0.28
+// v0.0.29
 
 
 // Dark Mode
@@ -76,7 +76,7 @@ $("body").on("click", ".end", function () {
 
 $(".field").on("click", ".dot", function() {
   // Check if we're in multiplayer mode and it's not our turn
-  if (isMultiplayer) {
+  if (isMultiplayer && conn) {
     var isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
     if (!isMyTurn) {
       console.log("Not your turn");
@@ -1315,17 +1315,13 @@ function connectToPeer(peerId) {
     initPeer();
     
     // Need to wait for peer to be ready
-    function tryConnect() {
-      if (peer && peer.id) {
-        conn = peer.connect(peerId);
-        setupConnection();
-      } else {
-        setTimeout(tryConnect, 500);
-      }
-    }
-    
-    tryConnect();
+    peer.on('open', function() {
+      // Now that peer is ready, make the connection
+      conn = peer.connect(peerId);
+      setupConnection();
+    });
   } else {
+    // Peer already initialized, make the connection
     conn = peer.connect(peerId);
     setupConnection();
   }
@@ -1334,6 +1330,12 @@ function connectToPeer(peerId) {
 // Fix the setupConnection function to handle connection properly
 function setupConnection() {
   console.log("Setting up connection");
+  
+  // Make sure we have a connection
+  if (!conn) {
+    console.error("No connection available");
+    return;
+  }
   
   conn.on('open', function() {
     console.log('Connection established');
@@ -1386,31 +1388,46 @@ function setupConnection() {
     } else if (data.type === 'gameState') {
       // Handle initial game state
       applyGameState(data.state);
-    } else if (data.type === 'gameEnd') {
-      // Handle game end message
-      var winner = data.winner;
-      var youWon = (isHost && winner === "player--1") || (!isHost && winner === "player--2");
-      showGameEndMessage(youWon);
-    } else if (data.type === 'disconnect') {
-      // Handle disconnect message
-      console.log("Received disconnect message:", data.message);
-      alert('The other player has disconnected.');
-      resetMultiplayer();
-      
-      // Reset the game mode to regular
-      gameMode = 'regular';
-      $('body')
-        .removeClass('mode-multiplayer')
-        .addClass('mode-regular');
-      
-      // Update URL
-      var newUrl = window.location.pathname + '?mode=regular';
-      window.history.replaceState({}, document.title, newUrl);
-      
-      // Start a new single player game
-      startAnim();
     }
   });
+}
+
+// Add function to send game state
+function sendGameState() {
+  if (conn) {
+    conn.send({
+      type: 'gameState',
+      state: {
+        currentPlayer: currentPlayer,
+        moveAmount: moveAmount,
+        dots: $('.dot').map(function() {
+          return {
+            classes: $(this).attr('class'),
+            increment: $(this).attr('data-increment')
+          };
+        }).get()
+      }
+    });
+  }
+}
+
+// Add function to apply game state
+function applyGameState(state) {
+  currentPlayer = state.currentPlayer;
+  moveAmount = state.moveAmount;
+  
+  // Apply state to dots
+  $('.dot').each(function(i) {
+    if (state.dots[i]) {
+      $(this)
+        .attr('class', state.dots[i].classes)
+        .attr('data-increment', state.dots[i].increment);
+    }
+  });
+  
+  // Update UI
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  updateTurnIndicator();
 }
 
 // Add function to handle opponent's move
