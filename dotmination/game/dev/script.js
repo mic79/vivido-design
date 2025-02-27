@@ -1,4 +1,5 @@
-// v0.0.2
+// v0.0.3
+
 
 // Dark Mode
 function screenTest(e) {
@@ -73,11 +74,30 @@ $("body").on("click", ".end", function () {
   startAnim();
 });
 
-$(".field").on("click", ".dot", function () {
+$(".field").on("click", ".dot", function() {
+  // Check if we're in multiplayer mode and it's not our turn
+  if (isMultiplayer && waitingForMove) {
+    console.log("Not your turn");
+    return; // Not this player's turn
+  }
+  
   if (
     !$(this).closest(".field").hasClass("animating") &&
     ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))
   ) {
+    // In multiplayer, send the move to the other player
+    if (isMultiplayer && conn) {
+      const dotIndex = $(this).index();
+      console.log("Sending move:", dotIndex);
+      
+      conn.send({
+        type: 'move',
+        dotIndex: dotIndex
+      });
+      
+      waitingForMove = true;
+    }
+    
     $(this).closest(".field").addClass("animating");
     $(this)
       .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
@@ -1139,7 +1159,7 @@ $(document).ready(function() {
   // The rest of your initialization code...
 });
 
-// Add this to the top of the file with other variable declarations
+// Add these variables at the top of your script with other variable declarations
 let peer = null;
 let conn = null;
 let isHost = false;
@@ -1314,6 +1334,8 @@ function connectToPeer(peerId) {
 
 // Set up the data connection
 function setupConnection() {
+  console.log("Setting up connection");
+  
   conn.on('open', function() {
     console.log('Connection established');
     
@@ -1377,7 +1399,7 @@ function setupConnection() {
   
   conn.on('error', function(err) {
     console.error('Connection error:', err);
-    alert('Connection error: ' + err.message);
+    alert('Connection error: ' + err);
   });
 }
 
@@ -1483,49 +1505,32 @@ function startMultiplayerAnim() {
   $(".end").remove();
   $(".dot").removeClass(playerClassClear);
   
-  // Remove all stage classes from dots
+  // Remove all stage and player classes from dots
   $(".dot").removeClass(function(index, className) {
     return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
-  });
-  
-  // Remove all player classes from dots
-  $(".dot").removeClass(function(index, className) {
+  }).removeClass(function(index, className) {
     return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
-  });
+  }).removeClass(playerClassClear);
   
-  // Set up the empty field
-  TweenMax.staggerTo(
-    $(".dot"),
-    0.1,
-    {
-      className: "dot rippled", // No stage classes for empty field
-      repeat: 1,
-      yoyo: true,
-      repeatDelay: 0.2
-    },
-    0.01,
-    function() {
-      // Initialize the dots
-      dots = $(".dot");
-      
-      // Set up the field
-      gsap.delayedCall(0.5, function() {
-        // Set the current player
-        $(".field").addClass(currentPlayer);
-        
-        // Set the color
-        TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-        
-        // Show the field
-        show();
-        reset();
-        start();
-        
-        // Restore the URL
-        window.history.replaceState({}, document.title, currentUrl);
-      });
-    }
-  );
+  // Initialize the field
+  dots = $(".dot");
+  
+  // Set the current player
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  
+  // Set the color
+  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+  
+  // Show the field
+  show();
+  reset();
+  start();
+  
+  // Restore the URL
+  window.history.replaceState({}, document.title, currentUrl);
+  
+  // Set waiting state based on player
+  waitingForMove = !isHost;
 }
 
 // Add a function to show a waiting overlay
@@ -1833,3 +1838,228 @@ fieldPopulateRandom = function() {
   // Otherwise, call the original function
   originalFieldPopulateRandom.apply(this, arguments);
 };
+
+// Add the connection setup function
+function setupConnection() {
+  console.log("Setting up connection");
+  
+  conn.on('open', function() {
+    console.log('Connection established');
+    
+    // Hide waiting overlay
+    $('.waiting-overlay').remove();
+    
+    // Send initial game state if host
+    if (isHost) {
+      sendGameState();
+    }
+  });
+  
+  conn.on('data', function(data) {
+    console.log('Received data:', data);
+    
+    if (data.type === 'move') {
+      // Handle opponent's move
+      handleOpponentMove(data.dotIndex);
+    } else if (data.type === 'gameState') {
+      // Handle initial game state
+      applyGameState(data.state);
+    } else if (data.type === 'disconnect') {
+      // Handle disconnect message
+      console.log("Received disconnect message:", data.message);
+      alert('The other player has disconnected.');
+      resetMultiplayer();
+      
+      // Reset the game mode to regular
+      gameMode = 'regular';
+      $('body')
+        .removeClass('mode-multiplayer')
+        .addClass('mode-regular');
+      
+      // Update URL
+      var newUrl = window.location.pathname + '?mode=regular';
+      window.history.replaceState({}, document.title, newUrl);
+      
+      // Start a new single player game
+      startAnim();
+    }
+  });
+  
+  conn.on('close', function() {
+    console.log('Connection closed');
+    alert('Connection closed. The other player disconnected.');
+    resetMultiplayer();
+    
+    // Reset the game mode to regular
+    gameMode = 'regular';
+    $('body')
+      .removeClass('mode-multiplayer')
+      .addClass('mode-regular');
+    
+    // Update URL
+    var newUrl = window.location.pathname + '?mode=regular';
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Start a new single player game
+    startAnim();
+  });
+  
+  conn.on('error', function(err) {
+    console.error('Connection error:', err);
+    alert('Connection error: ' + err);
+  });
+}
+
+// Connect to a peer
+function connectToPeer(id) {
+  console.log("Connecting to peer:", id);
+  conn = peer.connect(id);
+  setupConnection();
+}
+
+// Send the current game state to the other player
+function sendGameState() {
+  if (!conn || !isMultiplayer) return;
+  
+  console.log("Sending game state");
+  
+  const state = {
+    dots: generateEmptyDotsState(),
+    currentPlayer: currentPlayer
+  };
+  
+  conn.send({
+    type: 'gameState',
+    state: state
+  });
+}
+
+// Generate an empty dots state
+function generateEmptyDotsState() {
+  // Create an array representing empty dots
+  var emptyState = [];
+  $(".dot").each(function(index) {
+    emptyState.push({
+      index: index,
+      stage: 0,
+      player: null
+    });
+  });
+  return emptyState;
+}
+
+// Apply a received game state
+function applyGameState(state) {
+  console.log("Applying game state:", state);
+  
+  // Apply the dots state
+  if (state.dots) {
+    // Clear all dots first
+    $(".dot").removeClass(function(index, className) {
+      return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
+    }).removeClass(function(index, className) {
+      return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
+    });
+    
+    // Apply the state to each dot
+    state.dots.forEach(function(dot) {
+      var $dot = $(".dot").eq(dot.index);
+      if (dot.stage > 0) {
+        $dot.addClass("stage--" + dot.stage);
+      }
+      if (dot.player) {
+        $dot.addClass(dot.player);
+      }
+    });
+  }
+  
+  // Set the current player
+  currentPlayer = state.currentPlayer;
+  
+  // Update UI
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  
+  // Set color
+  if (currentPlayer == "player--1") {
+    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+  } else {
+    TweenMax.to("html", 0, {"--color-current": 'var(--color-2)'});
+  }
+  
+  // Set waiting state based on player
+  waitingForMove = isHost ? (currentPlayer !== "player--1") : (currentPlayer !== "player--2");
+  
+  dots = $(".dot");
+}
+
+// Handle an opponent's move
+function handleOpponentMove(dotIndex) {
+  console.log("Handling opponent move:", dotIndex);
+  
+  // Find the dot and click it
+  const dot = $(".dot").eq(dotIndex);
+  
+  // Store the move data
+  lastMoveData = {
+    dotIndex: dotIndex
+  };
+  
+  // Simulate a click on the dot
+  if (dot.length) {
+    waitingForMove = false;
+    
+    // Manually trigger the dot click logic
+    if (
+      !dot.closest(".field").hasClass("animating") &&
+      (dot.hasClass(currentPlayer) || !dot.is('[class*="player--"]'))
+    ) {
+      dot.closest(".field").addClass("animating");
+      dot
+        .attr("data-increment", parseInt(dot.attr("data-increment")) + 1)
+        .addClass("increment");
+      incrementDotStage(dot);
+    }
+  }
+}
+
+// Completely rewrite the startMultiplayerAnim function
+function startMultiplayerAnim() {
+  console.log("Starting multiplayer game with empty field");
+  
+  // Save the current URL
+  var currentUrl = window.location.href;
+  
+  // Reset game state
+  moveAmount = 0;
+  currentPlayer = "player--1"; // Always start with player 1
+  
+  // Clear the field
+  $(".end").remove();
+  
+  // Remove all stage and player classes from dots
+  $(".dot").removeClass(function(index, className) {
+    return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
+  }).removeClass(function(index, className) {
+    return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
+  }).removeClass(playerClassClear);
+  
+  // Initialize the field
+  dots = $(".dot");
+  
+  // Set the current player
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  
+  // Set the color
+  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+  
+  // Show the field
+  show();
+  reset();
+  start();
+  
+  // Restore the URL
+  window.history.replaceState({}, document.title, currentUrl);
+  
+  // Set waiting state based on player
+  waitingForMove = !isHost;
+}
