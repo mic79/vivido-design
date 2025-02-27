@@ -1,4 +1,4 @@
-// v0.0.38
+// v0.0.37
 
 
 // Dark Mode
@@ -146,100 +146,51 @@ function playerClassClear() {
   return playerArray.join(" ");
 }
 
-function incrementDotStage($dot) {
-  var increment = parseInt($dot.attr("data-increment"));
-  var stage = "stage--" + increment;
-  
-  $dot
-    .addClass(stage)
-    .addClass(currentPlayer);
-  
-  setTimeout(function() {
-    $dot.removeClass("increment");
-    $dot.closest(".field").removeClass("animating");
-    
-    // Check for game end after the animation
-    if (checkGameEnd()) {
-      if (isMultiplayer) {
-        // Hide level goals
-        $('.level-goals').hide();
-        
-        // Determine if current player won
-        const youWon = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
-        
-        // Create multiplayer end overlay
-        $("body .container").append(
-          '<div class="end overlay noselect ' + currentPlayer + '">' +
-          '<div class="card">' +
-          '<h1>Dotmination!</h1>' +
-          '<p class="result-text">' + (youWon ? 'You Won!' : 'You Lost!') + '</p>' +
-          '<button class="btn btn-primary rippled">Play Again</button>' +
-          '</div></div>'
-        );
-        
-        // Animate the overlay
-        TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
-        
-      } else {
-        // Existing single player end game code
-        var time = moment.duration(moment().diff(timeStart));
-        timeDiff = time;
-        
-        if (gameMode == "regular") {
-          if (level < 100) {
-            if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
-              var goalMoves = 'active';
-            } else {
-              var goalMoves = '';
-            }
-
-            if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
-              var goalTime = 'active';
-            } else {
-              var goalTime = '';
-            }
-            
-            $("body .container").append(
-              '<div class="end overlay noselect ' +
-                currentPlayer +
-                '"><div class="card"><h1>Dotmination!</h1><span class="level-goals"><i class="fas fa-star level-goals-won active"></i><i class="fas fa-star level-goals-moves ' + goalMoves + '"></i><i class="fas fa-star level-goals-time ' + goalTime + '"></i></span><p>Next Level <i class="fas fa-arrow-right"></i></p></div></div>'
-            );
-            TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
-          } else {
-            level = 1;
-            $("body .container").append(
-              '<div class="end overlay noselect ' +
-                currentPlayer +
-                '"><div class="card"><h1>Dotmination!</h1><p>Next Level <i class="fas fa-undo"></i></h1></div></div>'
-            );
-          }
-          
-          if($('body').hasClass('mode-regular')) {
-            var levelObj = {'level': level};
-            myDotmination['level'] = level;
-            
-            timeBest = (levelsArray['level' + (level - 1)] !== undefined) ? levelsArray['level' + (level - 1)].time : null;
-            timeDiff = moment.duration($('#time').html()).subtract(timeBest).asMilliseconds();
-            
-            $('.timediff').remove();
-            
-            if(!timeBest || timeDiff < 0) {
-              //console.log('---- TIME IMPROVED ----');
-              levelsArray['level' + (level - 1)] = {'time': $('#time').html()};
-              //$('.overlay').append('<div class="timediff">New time record!</div>');
-              myDotmination['levels'] = levelsArray;
-              myStorage.setObj("myDotmination", myDotmination);
-            } else {
-              //$('.overlay').append('<div class="timediff">Too slow!</div>');
-            }
+function incrementDotStage(trgt) {
+  //console.log('>> index: ' + trgt.index());
+  trgt.attr("data-increment", parseInt(trgt.attr("data-increment")) - 1);
+  if (parseInt(trgt.attr("data-increment")) <= 0) {
+    trgt.removeClass("increment");
+  }
+  if (!trgt.is('[class*="stage--"]')) {
+    trgt.addClass("stage--1 " + currentPlayer);
+  } else {
+    for (i = 1; i <= stage_amount; i++) {
+      var currStage = trgt.is('[class*="stage--' + i + '"]');
+      if (currStage && i < stage_amount) {
+        trgt
+          .removeClass("stage--" + i)
+          .removeClass(playerClassClear)
+          .addClass("stage--" + (i + 1) + " " + currentPlayer);
+        animateNextDot();
+        return;
+      } else if (currStage && i == stage_amount) {
+        trgt.removeClass("stage--" + i).removeClass(playerClassClear);
+        if ("vibrate" in navigator) {
+          window.navigator.vibrate([10, 10, 10]);
+        }
+        var k = dots.length;
+        //console.log("k: " + k);
+        while (--k > -1) {
+          if (
+            Draggable.hitTest(dots[k], trgt.find(".hitarea")) &&
+            k != trgt.index()
+          ) {
+            //console.log(">> k: " + k);
+            $(dots[k]).addClass("increment");
+            //trgt.removeClass("increment");
+            $(dots[k]).filter(function () {
+              $(this).attr(
+                "data-increment",
+                parseInt($(this).attr("data-increment")) + 1
+              );
+            });
           }
         }
       }
-    } else {
-      // If game hasn't ended, move to next player
-      nextPlayer();
     }
-  }, 200);
+  }
+  animateNextDot();
 }
 
 function animateNextDot() {
