@@ -1,4 +1,4 @@
-// v0.0.18
+// v0.0.19
 
 
 // Dark Mode
@@ -836,7 +836,7 @@ $('.level, .random, .mode-modal .backdrop').on('click', function(e) {
   }
 });
 
-// Modify the mode selection to handle URL parameters
+// Fix the multiplayer mode selection and button behavior
 $('.mode-modal .wrapper').on('click', '.card', function(e) {
   if($(this).hasClass('btn-level')) {
     gameMode = 'regular';
@@ -859,8 +859,8 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
     var newUrl = window.location.pathname + '?mode=multiplayer';
     window.history.replaceState({}, document.title, newUrl);
     
-    // Update UI
-    $(this).closest('.row').find('.card').removeClass('selected');
+    // Update UI - make sure only this button is selected
+    $('.mode-modal .card').removeClass('selected');
     $(this).addClass('selected');
     
     $('body')
@@ -882,7 +882,8 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
     }
   }
     
-  $(this).closest('.row').find('.card').removeClass('selected');
+  // Update the selection UI
+  $('.mode-modal .card').removeClass('selected');
   $(this).addClass('selected');
   
   $('body')
@@ -1168,68 +1169,8 @@ let isMultiplayer = false;
 let waitingForMove = false;
 let lastMoveData = null;
 
-// Fix the multiplayer button styling and event handling
-$(document).ready(function() {
-  console.log("Document ready, checking for multiplayer button");
-  
-  // Find the mode-modal element
-  var $modeModal = $('.mode-modal');
-  console.log("Mode modal found:", $modeModal.length > 0);
-  
-  // Check if the multiplayer button already exists
-  var $multiplayerButton = $modeModal.find('.card[data-mode="multiplayer"]');
-  console.log("Existing multiplayer button:", $multiplayerButton.length > 0);
-  
-  // If the button doesn't exist, add it
-  if ($multiplayerButton.length === 0) {
-    console.log("Adding multiplayer button");
-    
-    // Get styling from an existing button
-    var $existingButton = $modeModal.find('.card').first();
-    var buttonClass = $existingButton.attr('class');
-    
-    // Create the button with matching styling
-    var $newButton = $('<div class="' + buttonClass + '" data-mode="multiplayer"><i class="fas fa-users"></i><span>Multiplayer</span></div>');
-    
-    // Add it next to the other mode buttons
-    $modeModal.find('.card[data-mode="random"]').after($newButton);
-    
-    console.log("Multiplayer button added");
-  }
-  
-  // Add the multiplayer options to the modal if they don't exist
-  if ($('.multiplayer-options').length === 0) {
-    $('.mode-modal .wrapper').append(`
-      <div class="multiplayer-options" style="display: none;">
-        <h3>Multiplayer Game</h3>
-        <div class="multiplayer-buttons">
-          <button id="create-game" class="btn-primary">Create Game</button>
-          <button id="join-game" class="btn-primary">Join Game</button>
-        </div>
-      </div>
-      
-      <div class="game-id-display" style="display: none;">
-        <h3>Game ID</h3>
-        <p>Share this ID with your opponent: <span id="game-id"></span></p>
-        <button class="btn-primary copy-id">Copy ID</button>
-      </div>
-      
-      <div class="game-id-input" style="display: none;">
-        <h3>Enter Game ID</h3>
-        <input type="text" id="join-id" placeholder="Paste Game ID here">
-        <button class="btn-primary btn-connect">Connect</button>
-      </div>
-    `);
-    
-    console.log("Added multiplayer options to modal");
-  }
-});
-
-// Remove the separate event handler for the multiplayer button 
-// (it will be handled by the existing mode selection handler)
-
-// Fix the create-game click handler
-$(document).on('click', '#create-game', function(e) {
+// Properly create the Create Game click handler
+$(document).off('click', '#create-game').on('click', '#create-game', function(e) {
   // Prevent any default behavior
   e.preventDefault();
   e.stopPropagation();
@@ -1267,8 +1208,8 @@ $(document).on('click', '#create-game', function(e) {
   return false;
 });
 
-// Fix the join-game click handler
-$(document).on('click', '#join-game', function(e) {
+// Properly create the Join Game click handler
+$(document).off('click', '#join-game').on('click', '#join-game', function(e) {
   // Prevent any default behavior
   e.preventDefault();
   e.stopPropagation();
@@ -1300,8 +1241,8 @@ $(document).on('click', '#join-game', function(e) {
   return false;
 });
 
-// Fix the btn-connect click handler
-$(document).on('click', '.btn-connect', function(e) {
+// Properly create the Connect button click handler
+$(document).off('click', '.btn-connect').on('click', '.btn-connect', function(e) {
   // Prevent any default behavior
   e.preventDefault();
   e.stopPropagation();
@@ -1322,161 +1263,70 @@ $(document).on('click', '.btn-connect', function(e) {
   }
 });
 
-// Initialize PeerJS
-function initPeer() {
-  console.log("Initializing PeerJS connection");
+// Fix the setupConnection function to handle connection properly
+function setupConnection() {
+  console.log("Setting up connection");
   
-  // Don't initialize if already initialized
-  if (peer) {
-    console.log("PeerJS already initialized");
-    return;
-  }
-  
-  // Force the game mode to be multiplayer
-  gameMode = 'multiplayer';
-  
-  // Create the peer
-  peer = new Peer({
-    debug: 3 // Set debug level for testing
-  });
-  
-  peer.on('open', function(id) {
-    console.log('PeerJS connection opened with ID:', id);
-    $('#game-id').text(id);
+  conn.on('open', function() {
+    console.log('Connection established');
     
-    // Force the URL to be correct for multiplayer
-    var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + id;
-    window.history.replaceState({}, document.title, correctUrl);
+    // Hide waiting overlay
+    $('.waiting-overlay').remove();
     
-    // Make sure the body class is correct
-    $('body')
-      .removeClass('mode-random mode-regular')
-      .addClass('mode-multiplayer');
-  });
-  
-  peer.on('connection', function(connection) {
-    console.log('Incoming connection from peer');
-    conn = connection;
-    setupConnection();
+    // Clear the field for both players
+    startMultiplayerAnim();
     
+    // Set initial player states
+    currentPlayer = "player--1"; // Always start with player 1
+    
+    // Set waiting state based on player
     if (isHost) {
-      // Host starts the game when connection is established
-      $('body').removeClass('modal-open');
-      $('.waiting-overlay').remove();
-    }
-  });
-  
-  peer.on('error', function(err) {
-    console.error('PeerJS error:', err);
-    alert('Connection error: ' + err.message);
-  });
-}
-
-// Start a multiplayer game with an empty field
-function startMultiplayerAnim() {
-  console.log("Starting multiplayer game with empty field");
-  
-  // Reset game state
-  moveAmount = 0;
-  currentPlayer = "player--1"; // Always start with player 1
-  
-  // Clear the field
-  $(".end").remove();
-  
-  // Remove all stage and player classes from dots
-  $(".dot").each(function() {
-    $(this)
-      .removeClass(function(index, className) {
-        return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
-      })
-      .removeClass(function(index, className) {
-        return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
-      })
-      .removeClass(playerClassClear)
-      .attr("data-increment", "0");
-  });
-  
-  // Initialize the field
-  dots = $(".dot");
-  
-  // Set the current player
-  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-  
-  // Set the color
-  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-  
-  // Show the field
-  show();
-  reset();
-  start();
-  
-  // Set waiting state based on player
-  waitingForMove = !isHost;
-}
-
-// Fix the showWaitingOverlay function
-function showWaitingOverlay() {
-  console.log("Showing waiting overlay");
-  
-  // Remove any existing overlay
-  $('.waiting-overlay').remove();
-  
-  // Create the overlay with a placeholder for the game ID
-  $('body').append(`
-    <div class="waiting-overlay">
-      <div class="waiting-card">
-        <h2>Waiting for opponent...</h2>
-        <p>Share this ID with your opponent:</p>
-        <div class="game-id-container">
-          <div class="game-id-display" id="overlay-game-id">Generating ID...</div>
-          <button class="copy-id-btn">Copy ID</button>
-        </div>
-        <button class="cancel-waiting-btn">Cancel</button>
-      </div>
-    </div>
-  `);
-  
-  // Update the game ID when it's available
-  function updateGameId() {
-    if (peer && peer.id) {
-      $('#overlay-game-id').text(peer.id);
+      // Host is player 1, goes first
+      waitingForMove = false;
     } else {
-      setTimeout(updateGameId, 500);
+      // Client is player 2, waits for host's move
+      waitingForMove = true;
     }
-  }
-  updateGameId();
-  
-  // Add click handler for the copy button
-  $('.copy-id-btn').on('click', function() {
-    const gameId = $('#overlay-game-id').text();
-    if (gameId && gameId !== "Generating ID...") {
-      navigator.clipboard.writeText(gameId).then(function() {
-        // Show feedback
-        $('.copy-id-btn').text('Copied!');
-        setTimeout(() => {
-          $('.copy-id-btn').text('Copy ID');
-        }, 2000);
-      }).catch(function(err) {
-        // Fallback for older browsers
-        const tempInput = document.createElement('input');
-        tempInput.value = gameId;
-        document.body.appendChild(tempInput);
-        tempInput.select();
-        document.execCommand('copy');
-        document.body.removeChild(tempInput);
-        
-        // Show feedback
-        $('.copy-id-btn').text('Copied!');
-        setTimeout(() => {
-          $('.copy-id-btn').text('Copy ID');
-        }, 2000);
-      });
+    
+    // Update UI
+    $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+    
+    // Set color
+    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+    
+    // Add player indicators
+    updatePlayerIndicators();
+    
+    // Update turn indicator
+    updateTurnIndicator();
+    
+    // Send initial game state if host
+    if (isHost) {
+      sendGameState();
     }
+    
+    // Close the modal
+    $('body').removeClass('modal-open');
   });
   
-  // Add click handler for the cancel button
-  $('.cancel-waiting-btn').on('click', function() {
-    if (confirm('Are you sure you want to cancel waiting for an opponent?')) {
+  conn.on('data', function(data) {
+    console.log('Received data:', data);
+    
+    if (data.type === 'move') {
+      // Handle opponent's move
+      handleOpponentMove(data.dotIndex);
+    } else if (data.type === 'gameState') {
+      // Handle initial game state
+      applyGameState(data.state);
+    } else if (data.type === 'gameEnd') {
+      // Handle game end message
+      var winner = data.winner;
+      var youWon = (isHost && winner === "player--1") || (!isHost && winner === "player--2");
+      showGameEndMessage(youWon);
+    } else if (data.type === 'disconnect') {
+      // Handle disconnect message
+      console.log("Received disconnect message:", data.message);
+      alert('The other player has disconnected.');
       resetMultiplayer();
       
       // Reset the game mode to regular
@@ -1493,4 +1343,34 @@ function showWaitingOverlay() {
       startAnim();
     }
   });
+}
+
+// Add a function to update player indicators
+function updatePlayerIndicators() {
+  // Remove any existing indicators
+  $('.player-indicator').remove();
+  
+  // Add "You" indicator to show which player you are
+  if (isHost) {
+    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
+  } else {
+    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
+  }
+}
+
+// Add a function to update the turn indicator
+function updateTurnIndicator() {
+  // Remove any existing indicators
+  $('.turn-indicator').remove();
+  
+  // Add the turn indicator
+  if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
+    // It's your turn
+    $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
+  } else {
+    // It's opponent's turn
+    $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+  }
 }
