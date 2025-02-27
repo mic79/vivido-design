@@ -1,4 +1,4 @@
-// v0.0.37
+// v0.0.39
 
 
 // Dark Mode
@@ -1368,8 +1368,23 @@ function setupConnection() {
       // Determine if current player won
       const youWon = (isHost && data.winner === "player--1") || (!isHost && data.winner === "player--2");
       
-      // Add the result text after the h1
-      $('.end.overlay h1').after(`<p class="result-text">${youWon ? 'You Won!' : 'You Lost!'}</p>`);
+      // Create the end overlay with multiplayer-specific message
+      $("body .container").append(
+        '<div class="end overlay noselect ' + currentPlayer + '">' +
+        '<div class="card">' +
+        '<h1>Dotmination!</h1>' +
+        '<p class="result-text">' + (youWon ? 'You Won!' : 'You Lost!') + '</p>' +
+        '<button class="btn btn-primary rippled">Play Again</button>' +
+        '</div></div>'
+      );
+      
+      // If we're connected, send game end to other player
+      if (conn) {
+        conn.send({
+          type: 'gameEnd',
+          winner: currentPlayer
+        });
+      }
     }
   });
 }
@@ -1591,8 +1606,15 @@ function checkGameEnd() {
       // Determine if current player won
       const youWon = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
       
-      // Add the result text after the h1
-      $('.end.overlay h1').after(`<p class="result-text">${youWon ? 'You Won!' : 'You Lost!'}</p>`);
+      // Create the end overlay with multiplayer-specific message
+      $("body .container").append(
+        '<div class="end overlay noselect ' + currentPlayer + '">' +
+        '<div class="card">' +
+        '<h1>Dotmination!</h1>' +
+        '<p class="result-text">' + (youWon ? 'You Won!' : 'You Lost!') + '</p>' +
+        '<button class="btn btn-primary rippled">Play Again</button>' +
+        '</div></div>'
+      );
       
       // If we're connected, send game end to other player
       if (conn) {
