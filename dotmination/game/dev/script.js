@@ -1,4 +1,4 @@
-// v0.0.34
+// v0.0.35
 
 
 // Dark Mode
@@ -1338,7 +1338,7 @@ function setupConnection() {
   });
   
   conn.on('data', function(data) {
-    console.log('Received move:', data);
+    console.log('Received:', data);
     if (data.type === 'move') {
       // Find the dot and trigger the click
       const $dot = $('.dot').eq(data.dotIndex);
@@ -1361,6 +1361,9 @@ function setupConnection() {
           updateTurnIndicator();
         }
       }
+    } else if (data.type === 'gameEnd') {
+      // Show end message when received from other player
+      showMultiplayerEndMessage(data.winner);
     }
   });
 }
@@ -1558,5 +1561,59 @@ function updateTurnIndicator() {
   } else {
     // It's opponent's turn
     $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+  }
+}
+
+// Add function to show multiplayer end message
+function showMultiplayerEndMessage(winner) {
+  // Determine if the current player won
+  const youWon = (isHost && winner === "player--1") || (!isHost && winner === "player--2");
+  
+  // Create the end overlay with multiplayer-specific message
+  const endOverlay = $(`
+    <div class="end overlay">
+      <h1>${youWon ? 'You Won!' : 'You Lost!'}</h1>
+      <button class="btn btn-primary rippled">Play Again</button>
+    </div>
+  `);
+  
+  // Hide the level goals
+  $('.level-goals').hide();
+  
+  // Add the overlay to the field
+  $('.field').append(endOverlay);
+}
+
+// Modify the checkGameEnd function to handle multiplayer
+function checkGameEnd() {
+  if (isMultiplayer) {
+    // Check if any dots can still be clicked
+    var gameEnded = true;
+    $(".dot").each(function() {
+      if (!$(this).is('[class*="player--"]') || $(this).hasClass(currentPlayer)) {
+        if (!$(this).is('[class*="stage--" + (stage_amount - 1) + '"]')) {
+          gameEnded = false;
+          return false;
+        }
+      }
+    });
+    
+    if (gameEnded) {
+      // Show the end message
+      showMultiplayerEndMessage(currentPlayer);
+      
+      // If we're connected, send game end to other player
+      if (conn) {
+        conn.send({
+          type: 'gameEnd',
+          winner: currentPlayer
+        });
+      }
+    }
+    
+    return gameEnded;
+  } else {
+    // Existing single-player game end check
+    return $(".dot[class*='stage--" + (stage_amount - 1) + "']").length == dots.length;
   }
 }
