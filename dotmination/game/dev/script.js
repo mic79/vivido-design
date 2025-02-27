@@ -1,4 +1,4 @@
-// v0.0.27
+// v0.0.28
 
 
 // Dark Mode
@@ -1261,6 +1261,11 @@ $(document).ready(function() {
     if (gameId) {
       console.log("Connecting to game:", gameId);
       
+      // Initialize PeerJS first if not already initialized
+      if (!peer) {
+        initPeer();
+      }
+      
       // Update URL for multiplayer mode with game ID
       var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
       window.history.replaceState({}, document.title, newUrl);
@@ -1268,8 +1273,8 @@ $(document).ready(function() {
       // Connect to the peer
       connectToPeer(gameId);
       
-      // Close the modal
-      $('body').removeClass('modal-open');
+      // Don't close the modal until connection is established
+      // The modal will be closed in setupConnection() when the connection is ready
     }
     
     return false;
@@ -1408,22 +1413,20 @@ function setupConnection() {
   });
 }
 
-// Add a function to update player indicators
-function updatePlayerIndicators() {
-  // Remove any existing indicators
-  $('.player-indicator').remove();
+// Add function to handle opponent's move
+function handleOpponentMove(dotIndex) {
+  console.log("Handling opponent's move:", dotIndex);
   
-  // Add "You" indicator to show which player you are
-  if (isHost) {
-    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
-    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
-  } else {
-    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
-    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
+  // Find the dot and trigger the click
+  const $dot = $('.dot').eq(dotIndex);
+  if ($dot.length) {
+    waitingForMove = false;
+    $dot.trigger('click');
+    updateTurnIndicator();
   }
 }
 
-// Add a function to update the turn indicator
+// Add function to update turn indicator
 function updateTurnIndicator() {
   // Remove any existing indicators
   $('.turn-indicator').remove();
@@ -1435,6 +1438,21 @@ function updateTurnIndicator() {
   } else {
     // It's opponent's turn
     $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+  }
+}
+
+// Add function to update player indicators
+function updatePlayerIndicators() {
+  // Remove any existing indicators
+  $('.player-indicator').remove();
+  
+  // Add "You" indicator to show which player you are
+  if (isHost) {
+    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
+  } else {
+    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
   }
 }
 
