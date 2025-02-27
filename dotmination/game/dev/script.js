@@ -1,4 +1,4 @@
-// v0.0.41
+// v0.0.42
 
 
 // Dark Mode
@@ -212,7 +212,7 @@ function checkDotmination() {
   ) {
     nextPlayer();
   } else {
-    //console.log("won by: " + currentPlayer);
+    console.log("won by: " + currentPlayer);
     stop();
     sound.play();
     
@@ -1589,6 +1589,8 @@ function updateTurnIndicator() {
 
 // Modify the checkGameEnd function to handle multiplayer
 function checkGameEnd() {
+  console.log('checkGameEnd called, isMultiplayer:', isMultiplayer);
+  
   if (isMultiplayer) {
     // Check if any dots can still be clicked
     var gameEnded = true;
