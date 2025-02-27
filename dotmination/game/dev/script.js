@@ -1,4 +1,4 @@
-// v0.0.32
+// v0.0.33
 
 
 // Dark Mode
@@ -1293,34 +1293,28 @@ let isMultiplayer = false;
 let waitingForMove = false;
 let lastMoveData = null;
 
-// Fix the connectToPeer function
+// Fix the connectToPeer function to not initialize PeerJS
 function connectToPeer(peerId) {
   console.log("Connecting to peer:", peerId);
   
-  // Make sure PeerJS is initialized first
+  // Initialize PeerJS if not already done
   if (!peer) {
-    peer = new Peer({
-      debug: 2
-    });
+    initPeer();
     
+    // Wait for peer to be ready before connecting
     peer.on('open', function() {
-      // Now that we're initialized, make the connection
+      // Now make the connection
       conn = peer.connect(peerId);
       setupConnection();
     });
-    
-    peer.on('error', function(err) {
-      console.error('PeerJS error:', err);
-      alert('Connection error: ' + err.message);
-    });
   } else {
-    // PeerJS already initialized, make the connection directly
+    // PeerJS already initialized, connect directly
     conn = peer.connect(peerId);
     setupConnection();
   }
 }
 
-// Add setupConnection function back
+// Fix the setupConnection function to properly handle moves
 function setupConnection() {
   console.log("Setting up connection");
   
@@ -1344,13 +1338,23 @@ function setupConnection() {
   });
   
   conn.on('data', function(data) {
-    console.log('Received data:', data);
+    console.log('Received move:', data);
     if (data.type === 'move') {
-      // Find the dot and simulate the click
+      // Find the dot and trigger the click
       const $dot = $('.dot').eq(data.dotIndex);
       if ($dot.length) {
+        // Update state before triggering click
         waitingForMove = false;
-        $dot.trigger('click');
+        
+        // Simulate the click
+        $dot.closest(".field").addClass("animating");
+        $dot
+          .attr("data-increment", parseInt($dot.attr("data-increment")) + 1)
+          .addClass("increment");
+        incrementDotStage($dot);
+        
+        // Update turn indicator
+        updateTurnIndicator();
       }
     }
   });
