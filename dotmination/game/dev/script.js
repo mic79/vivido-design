@@ -1,4 +1,4 @@
-// v0.0.10
+// v0.0.11
 
 
 // Dark Mode
@@ -1582,9 +1582,9 @@ function showWaitingOverlay() {
       <div class="waiting-overlay">
         <div class="waiting-card">
           <h2>Waiting for opponent...</h2>
-          <p>Share the game link with your opponent to join.</p>
+          <p>Share this ID with your opponent:</p>
           <div class="game-id-container">
-            <p>Game ID: <span class="game-id-display">${gameId}</span></p>
+            <div class="game-id-display">${gameId}</div>
             <button class="copy-id-btn">Copy ID</button>
           </div>
           <button class="cancel-waiting-btn">Cancel</button>
@@ -1595,7 +1595,7 @@ function showWaitingOverlay() {
     // Add click handler for the copy button to copy ONLY the game ID
     $('.copy-id-btn').on('click', function() {
       // Get only the game ID text
-      const gameId = $('.game-id-display').text().trim();
+      const gameId = $('.game-id-display').text();
       
       // Use modern clipboard API if available
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1658,62 +1658,97 @@ function showWaitingOverlay() {
   createOverlay();
 }
 
-// 2. Fix the turn management to ensure the correct player can interact
-// Update the dot click handler to properly check turns
-$(".field").on("click", ".dot", function() {
-  // Check if we're in multiplayer mode and it's not our turn
-  if (isMultiplayer) {
-    var isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
-    if (!isMyTurn) {
-      console.log("Not your turn");
-      return; // Not this player's turn
-    }
-  }
+// 2. Fix error handling when joining with incorrect ID
+// Update the btn-connect click handler
+$('.btn-connect').on('click', function(e) {
+  // Prevent any default behavior
+  e.preventDefault();
+  e.stopPropagation();
   
-  if (
-    !$(this).closest(".field").hasClass("animating") &&
-    ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))
-  ) {
-    // In multiplayer, send the move to the other player
-    if (isMultiplayer && conn) {
-      const dotIndex = $(this).index();
-      console.log("Sending move:", dotIndex);
-      
-      conn.send({
-        type: 'move',
-        dotIndex: dotIndex
-      });
-    }
+  const gameId = $('#join-id').val().trim();
+  if (gameId) {
+    console.log("Connecting to game:", gameId);
     
-    $(this).closest(".field").addClass("animating");
-    $(this)
-      .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
-      .addClass("increment");
-    incrementDotStage($(this));
+    // Force the URL to be multiplayer mode with the correct ID
+    var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Connect to the peer with error handling
+    connectToPeerWithErrorHandling(gameId);
   }
 });
 
-// Update the nextPlayer function to properly set turn state
-var originalNextPlayer = nextPlayer;
-nextPlayer = function() {
-  // Call the original function
-  originalNextPlayer.apply(this, arguments);
+// Add a function to connect to a peer with error handling
+function connectToPeerWithErrorHandling(id) {
+  console.log("Connecting to peer with error handling:", id);
   
-  // Update turn state for multiplayer
-  if (isMultiplayer) {
-    // Set waiting state based on whose turn it is
-    var isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
-    waitingForMove = !isMyTurn;
+  // Show a loading indicator
+  $('.game-id-input').append('<div class="connecting-indicator">Connecting...</div>');
+  
+  try {
+    // Set a timeout for connection attempts
+    var connectionTimeout = setTimeout(function() {
+      // Connection timed out
+      $('.connecting-indicator').remove();
+      alert("Connection timed out. Please check the Game ID and try again.");
+      
+      // Reset the input field
+      $('#join-id').val('');
+    }, 5000);
     
-    // Update turn indicator
-    updateTurnIndicator();
+    // Attempt to connect
+    conn = peer.connect(id);
     
-    console.log("Turn changed to:", currentPlayer, "isMyTurn:", isMyTurn, "waitingForMove:", waitingForMove);
+    conn.on('open', function() {
+      // Connection successful
+      clearTimeout(connectionTimeout);
+      $('.connecting-indicator').remove();
+      
+      // Close the modal
+      $('body').removeClass('modal-open');
+      
+      // Set up the connection
+      setupConnection();
+      
+      // Start the multiplayer game
+      startMultiplayerGame();
+    });
+    
+    conn.on('error', function(err) {
+      // Connection error
+      clearTimeout(connectionTimeout);
+      $('.connecting-indicator').remove();
+      
+      console.error("Connection error:", err);
+      alert("Connection error: " + err + ". Please try again.");
+      
+      // Reset the connection
+      if (conn) {
+        try {
+          conn.close();
+        } catch (e) {
+          console.error("Error closing connection:", e);
+        }
+        conn = null;
+      }
+      
+      // Reset the input field
+      $('#join-id').val('');
+    });
+  } catch (err) {
+    // Error creating connection
+    $('.connecting-indicator').remove();
+    
+    console.error("Failed to connect:", err);
+    alert("Failed to connect: " + err + ". Please try again.");
+    
+    // Reset the input field
+    $('#join-id').val('');
   }
-};
+}
 
-// 4. Fix the game end and restart
-// Update the checkWin function to properly detect game end
+// 3. Fix the win/lose message display
+// Add a function to check for win in multiplayer
 function checkWin() {
   var player1Dots = $(".dot.player--1").length;
   var player2Dots = $(".dot.player--2").length;
@@ -1751,402 +1786,120 @@ function checkWin() {
   return false;
 }
 
-// Update the handleOpponentMove function to check for win
-function handleOpponentMove(dotIndex) {
-  console.log("Handling opponent move:", dotIndex);
+// 4. Fix the startMultiplayerAnim function to ensure empty field on retry
+// Completely rewrite the startMultiplayerAnim function
+function startMultiplayerAnim() {
+  console.log("Starting multiplayer game with empty field");
   
-  // Find the dot and click it
-  const dot = $(".dot").eq(dotIndex);
+  // Save the current URL
+  var currentUrl = window.location.href;
   
-  // Store the move data
-  lastMoveData = {
-    dotIndex: dotIndex
-  };
+  // Reset game state
+  moveAmount = 0;
+  currentPlayer = "player--1"; // Always start with player 1
   
-  // Simulate a click on the dot
-  if (dot.length) {
-    // Manually trigger the dot click logic
-    if (
-      !dot.closest(".field").hasClass("animating") &&
-      (dot.hasClass(currentPlayer) || !dot.is('[class*="player--"]'))
-    ) {
-      dot.closest(".field").addClass("animating");
-      dot
-        .attr("data-increment", parseInt(dot.attr("data-increment")) + 1)
-        .addClass("increment");
-      incrementDotStage(dot);
-    }
-  }
-}
-
-// Update the setupConnection function to handle game end messages
-function setupConnection() {
-  console.log("Setting up connection");
-  
-  conn.on('open', function() {
-    console.log('Connection established');
-    
-    // Hide waiting overlay
-    $('.waiting-overlay').remove();
-    
-    // Clear the field for both players
-    startMultiplayerAnim();
-    
-    // Set initial player states
-    currentPlayer = "player--1"; // Always start with player 1
-    
-    // Set waiting state based on player
-    if (isHost) {
-      // Host is player 1, goes first
-      waitingForMove = false;
-    } else {
-      // Client is player 2, waits for host's move
-      waitingForMove = true;
-    }
-    
-    // Update UI
-    $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-    
-    // Set color
-    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-    
-    // Add player indicators
-    updatePlayerIndicators();
-    
-    // Update turn indicator
-    updateTurnIndicator();
-    
-    // Send initial game state if host
-    if (isHost) {
-      sendGameState();
-    }
-  });
-  
-  conn.on('data', function(data) {
-    console.log('Received data:', data);
-    
-    if (data.type === 'move') {
-      // Handle opponent's move
-      handleOpponentMove(data.dotIndex);
-    } else if (data.type === 'gameState') {
-      // Handle initial game state
-      applyGameState(data.state);
-    } else if (data.type === 'gameEnd') {
-      // Handle game end message
-      var winner = data.winner;
-      var youWon = (isHost && winner === "player--1") || (!isHost && winner === "player--2");
-      showGameEndMessage(youWon);
-    } else if (data.type === 'disconnect') {
-      // Handle disconnect message
-      console.log("Received disconnect message:", data.message);
-      alert('The other player has disconnected.');
-      resetMultiplayer();
-      
-      // Reset the game mode to regular
-      gameMode = 'regular';
-      $('body')
-        .removeClass('mode-multiplayer')
-        .addClass('mode-regular');
-      
-      // Update URL
-      var newUrl = window.location.pathname + '?mode=regular';
-      window.history.replaceState({}, document.title, newUrl);
-      
-      // Start a new single player game
-      startAnim();
-    }
-  });
-  
-  // Rest of the function remains the same...
-}
-
-// Add a function to start the timer with an offset
-function startTimer(offset = 0) {
-  var startTime = new Date().getTime() - offset;
-  
-  if (window.timer) {
-    clearInterval(window.timer);
-  }
-  
-  window.timer = setInterval(function() {
-    var now = new Date().getTime();
-    var distance = now - startTime;
-    
-    var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-    var seconds = Math.floor((distance % (1000 * 60)) / 1000);
-    
-    minutes = (minutes < 10) ? "0" + minutes : minutes;
-    seconds = (seconds < 10) ? "0" + seconds : seconds;
-    
-    $(".time-value").html(minutes + ":" + seconds);
-  }, 1000);
-}
-
-// Handle an opponent's move
-function handleOpponentMove(dotIndex) {
-  console.log("Handling opponent move:", dotIndex);
-  
-  // Find the dot and click it
-  const dot = $(".dot").eq(dotIndex);
-  
-  // Store the move data
-  lastMoveData = {
-    dotIndex: dotIndex
-  };
-  
-  // Simulate a click on the dot
-  if (dot.length) {
-    waitingForMove = false;
-    
-    // Manually trigger the dot click logic
-    if (
-      !dot.closest(".field").hasClass("animating") &&
-      (dot.hasClass(currentPlayer) || !dot.is('[class*="player--"]'))
-    ) {
-      dot.closest(".field").addClass("animating");
-      dot
-        .attr("data-increment", parseInt(dot.attr("data-increment")) + 1)
-        .addClass("increment");
-      incrementDotStage(dot);
-      
-      // Update turn indicator after the move
-      setTimeout(updateTurnIndicator, 500);
-    }
-  }
-}
-
-// Add a function to update the turn indicator
-function updateTurnIndicator() {
-  // Remove any existing indicators
-  $('.turn-indicator').remove();
-  
-  // Add the turn indicator
-  if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
-    // It's your turn
-    $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
-  } else {
-    // It's opponent's turn
-    $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
-  }
-}
-
-// Add CSS for the player and turn indicators
-var playerIndicatorStyle = `
-.player-indicator {
-  margin-left: 5px;
-  font-size: 12px;
-  opacity: 0.8;
-}
-
-.turn-indicator {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 5px 10px;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: bold;
-  z-index: 100;
-}
-
-.your-turn {
-  background-color: var(--color-current);
-  color: white;
-}
-
-.opponent-turn {
-  background-color: #888;
-  color: white;
-}
-`;
-
-// Add the style to the document
-function addPlayerIndicatorStyle() {
-  var styleElement = document.createElement('style');
-  styleElement.textContent = playerIndicatorStyle;
-  document.head.appendChild(styleElement);
-}
-
-// Initialize the player indicator style
-$(document).ready(function() {
-  addPlayerIndicatorStyle();
-});
-
-// Fix the missing resetMultiplayer function
-function resetMultiplayer() {
-  console.log("Resetting multiplayer completely");
-  isMultiplayer = false;
-  isHost = false;
-  waitingForMove = false;
-  
-  // Close and destroy the connection
-  if (conn) {
-    try {
-      conn.close();
-    } catch (e) {
-      console.error("Error closing connection:", e);
-    }
-    conn = null;
-  }
-  
-  // Close and destroy the peer
-  if (peer) {
-    try {
-      peer.destroy();
-    } catch (e) {
-      console.error("Error destroying peer:", e);
-    }
-    peer = null;
-  }
-  
-  // Reset UI
-  $('.player.player--1 i').removeClass('fa-user').addClass('fa-robot');
-  $('.player.player--2 i').removeClass('fa-user').addClass('fa-user-secret');
-  
-  // Hide multiplayer UI
-  $('.multiplayer-options, .game-id-display, .game-id-input').hide();
-  
-  // Remove multiplayer-specific elements
-  $('.multiplayer-icon, .share-map.multiplayer, .disconnect-multiplayer, .waiting-overlay').remove();
-  
-  // Clear any stored game data
-  lastMoveData = null;
-  
-  console.log("Multiplayer reset complete");
-}
-
-// Add a function to update player indicators
-function updatePlayerIndicators() {
-  // Remove any existing indicators
-  $('.player-indicator').remove();
-  
-  // Add "You" indicator to show which player you are
-  if (isHost) {
-    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
-    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
-  } else {
-    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
-    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
-  }
-}
-
-// Add a function to show game end message for multiplayer
-function showGameEndMessage(youWon) {
-  // Stop the timer
-  if (window.timer) {
-    clearInterval(window.timer);
-  }
-  
-  // Create the end message
-  var message = youWon ? "You Won!" : "You Lost!";
-  var messageClass = youWon ? "win-message" : "lose-message";
-  
-  // Remove any existing end message
+  // Clear the field
   $(".end").remove();
   
-  // Add the new end message
-  $(".field").append(`
-    <div class="end multiplayer-end ${messageClass}">
-      <div class="end-content">
-        <h2>${message}</h2>
-        <button class="btn-retry">Play Again</button>
-      </div>
-    </div>
-  `);
-  
-  // Add click handler for the retry button
-  $(".btn-retry").on("click", function() {
-    // Start a new multiplayer game with empty field
-    startMultiplayerAnim();
-    
-    // Remove the end message
-    $(".end").remove();
-    
-    // Reset the game state
-    currentPlayer = "player--1";
-    moveAmount = 0;
-    
-    // Set waiting state based on player
-    waitingForMove = !isHost;
-    
-    // Update UI
-    $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-    
-    // Set color
-    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-    
-    // Update turn indicator
-    updateTurnIndicator();
-    
-    // Send the new game state to the other player
-    sendGameState();
+  // Remove all stage and player classes from dots
+  $(".dot").each(function() {
+    $(this)
+      .removeClass(function(index, className) {
+        return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
+      })
+      .removeClass(function(index, className) {
+        return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
+      })
+      .removeClass(playerClassClear)
+      .attr("data-increment", "0");
   });
+  
+  // Initialize the field
+  dots = $(".dot");
+  
+  // Set the current player
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  
+  // Set the color
+  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+  
+  // Show the field
+  show();
+  reset();
+  start();
+  
+  // Restore the URL
+  window.history.replaceState({}, document.title, currentUrl);
+  
+  // Set waiting state based on player
+  waitingForMove = !isHost;
+  
+  // Update turn indicator
+  updateTurnIndicator();
 }
 
-// Override the incrementDotStage function to check for win in multiplayer
-var originalIncrementDotStage = incrementDotStage;
-incrementDotStage = function(dot) {
-  // Call the original function
-  originalIncrementDotStage.apply(this, arguments);
-  
-  // Check for win in multiplayer
-  if (isMultiplayer) {
-    setTimeout(function() {
-      checkWin();
-    }, 500);
-  }
-};
-
-// Add CSS for the win/lose messages
-var gameEndStyle = `
-.multiplayer-end {
-  position: absolute;
+// Add CSS for the waiting overlay and connecting indicator
+var waitingOverlayStyle = `
+.waiting-overlay {
+  position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
+  background-color: rgba(0, 0, 0, 0.7);
+  z-index: 1000;
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: rgba(0, 0, 0, 0.7);
-  z-index: 1000;
 }
 
-.end-content {
+.waiting-card {
   background-color: white;
   padding: 20px;
   border-radius: 10px;
   text-align: center;
+  max-width: 80%;
 }
 
-.win-message h2 {
-  color: var(--color-1);
+.game-id-container {
+  margin: 20px 0;
 }
 
-.lose-message h2 {
-  color: var(--color-2);
+.game-id-display {
+  font-size: 16px;
+  font-weight: bold;
+  padding: 10px;
+  background-color: #f0f0f0;
+  border-radius: 5px;
+  margin-bottom: 10px;
+  word-break: break-all;
 }
 
-.btn-retry {
-  margin-top: 15px;
-  padding: 10px 20px;
+.copy-id-btn, .cancel-waiting-btn {
+  padding: 8px 16px;
   background-color: var(--color-current);
   color: white;
   border: none;
-  border-radius: 5px;
+  border-radius: 4px;
   cursor: pointer;
+  margin-top: 10px;
+}
+
+.connecting-indicator {
+  margin-top: 10px;
+  color: var(--color-current);
+  font-style: italic;
 }
 `;
 
 // Add the style to the document
-function addGameEndStyle() {
+function addWaitingOverlayStyle() {
   var styleElement = document.createElement('style');
-  styleElement.textContent = gameEndStyle;
+  styleElement.textContent = waitingOverlayStyle;
   document.head.appendChild(styleElement);
 }
 
-// Initialize the game end style
+// Initialize the waiting overlay style
 $(document).ready(function() {
-  addGameEndStyle();
+  addWaitingOverlayStyle();
 });
