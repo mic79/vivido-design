@@ -1,4 +1,4 @@
-// v0.0.19
+// v0.0.20
 
 
 // Dark Mode
@@ -1158,7 +1158,114 @@ $(document).ready(function() {
   // Check URL parameters
   checkUrlParameters();
   
-  // The rest of your initialization code...
+  // Add the multiplayer button and options to the modal
+  if ($('.mode-modal .card[data-mode="multiplayer"]').length === 0) {
+    console.log("Adding multiplayer button to modal");
+    
+    // Get styling from an existing button
+    var $existingButton = $('.mode-modal .card[data-mode="random"]');
+    var buttonClass = $existingButton.attr('class');
+    
+    // Create the button with matching styling
+    var $newButton = $('<div class="' + buttonClass + '" data-mode="multiplayer"><i class="fas fa-users"></i><span>Multiplayer</span></div>');
+    
+    // Add it after the random button
+    $('.mode-modal .card[data-mode="random"]').after($newButton);
+  }
+  
+  // Create Game button handler
+  $(document).off('click', '#create-game').on('click', '#create-game', function(e) {
+    // Prevent any default behavior
+    e.preventDefault();
+    e.stopPropagation();
+    
+    console.log("Create game clicked");
+    
+    // Set state
+    isHost = true;
+    isMultiplayer = true;
+    gameMode = 'multiplayer';
+    
+    // Update body class
+    $('body')
+      .removeClass('mode-random mode-regular modal-open')
+      .addClass('mode-multiplayer');
+    
+    // Force the URL to be multiplayer mode
+    var newUrl = window.location.pathname + '?mode=multiplayer';
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Initialize PeerJS
+    initPeer();
+    
+    // Update UI
+    $('.multiplayer-options').hide();
+    $('.game-id-display').show();
+    
+    // Show waiting overlay immediately
+    showWaitingOverlay();
+    
+    // Start the multiplayer game with empty field
+    startMultiplayerAnim();
+    
+    // Prevent the modal from closing automatically
+    return false;
+  });
+  
+  // Join Game button handler
+  $(document).off('click', '#join-game').on('click', '#join-game', function(e) {
+    // Prevent any default behavior
+    e.preventDefault();
+    e.stopPropagation();
+    
+    console.log("Join game clicked");
+    
+    // Set state
+    isHost = false;
+    isMultiplayer = true;
+    gameMode = 'multiplayer';
+    
+    // Update body class
+    $('body')
+      .removeClass('mode-random mode-regular')
+      .addClass('mode-multiplayer');
+    
+    // Force the URL to be multiplayer mode
+    var newUrl = window.location.pathname + '?mode=multiplayer';
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Initialize PeerJS
+    initPeer();
+    
+    // Update UI - show the input field
+    $('.multiplayer-options').hide();
+    $('.game-id-input').show();
+    
+    // Prevent the modal from closing
+    return false;
+  });
+  
+  // Connect button handler
+  $(document).off('click', '.btn-connect').on('click', '.btn-connect', function(e) {
+    // Prevent any default behavior
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const gameId = $('#join-id').val().trim();
+    if (gameId) {
+      console.log("Connecting to game:", gameId);
+      
+      // Force the URL to be multiplayer mode with the correct ID
+      var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
+      window.history.replaceState({}, document.title, newUrl);
+      
+      // Connect to the peer
+      connectToPeer(gameId);
+      
+      // Close the modal
+      $('body').removeClass('modal-open');
+    }
+  });
 });
 
 // Add these variables at the top of your script with other variable declarations
@@ -1262,6 +1369,31 @@ $(document).off('click', '.btn-connect').on('click', '.btn-connect', function(e)
     $('body').removeClass('modal-open');
   }
 });
+
+// Add the connectToPeer function if missing
+function connectToPeer(peerId) {
+  console.log("Connecting to peer:", peerId);
+  
+  // Initialize peer if not already done
+  if (!peer) {
+    initPeer();
+    
+    // Need to wait for peer to be ready
+    function tryConnect() {
+      if (peer && peer.id) {
+        conn = peer.connect(peerId);
+        setupConnection();
+      } else {
+        setTimeout(tryConnect, 500);
+      }
+    }
+    
+    tryConnect();
+  } else {
+    conn = peer.connect(peerId);
+    setupConnection();
+  }
+}
 
 // Fix the setupConnection function to handle connection properly
 function setupConnection() {
@@ -1373,4 +1505,177 @@ function updateTurnIndicator() {
     // It's opponent's turn
     $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
   }
+}
+
+// Initialize PeerJS
+function initPeer() {
+  console.log("Initializing PeerJS connection");
+  
+  // Don't initialize if already initialized
+  if (peer) {
+    console.log("PeerJS already initialized");
+    return;
+  }
+  
+  // Force the game mode to be multiplayer
+  gameMode = 'multiplayer';
+  
+  // Create the peer
+  peer = new Peer({
+    debug: 2 // Set debug level for testing
+  });
+  
+  peer.on('open', function(id) {
+    console.log('PeerJS connection opened with ID:', id);
+    $('#game-id').text(id);
+    
+    // Force the URL to be correct for multiplayer
+    var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + id;
+    window.history.replaceState({}, document.title, correctUrl);
+    
+    // Make sure the body class is correct
+    $('body')
+      .removeClass('mode-random mode-regular')
+      .addClass('mode-multiplayer');
+  });
+  
+  peer.on('connection', function(connection) {
+    console.log('Incoming connection from peer');
+    conn = connection;
+    setupConnection();
+    
+    if (isHost) {
+      // Host starts the game when connection is established
+      $('body').removeClass('modal-open');
+      $('.waiting-overlay').remove();
+    }
+  });
+  
+  peer.on('error', function(err) {
+    console.error('PeerJS error:', err);
+    alert('Connection error: ' + err.message);
+  });
+}
+
+// Function to show waiting overlay
+function showWaitingOverlay() {
+  console.log("Showing waiting overlay");
+  
+  // Remove any existing overlay
+  $('.waiting-overlay').remove();
+  
+  // Create the overlay with a placeholder for the game ID
+  $('body').append(`
+    <div class="waiting-overlay">
+      <div class="waiting-card">
+        <h2>Waiting for opponent...</h2>
+        <p>Share this ID with your opponent:</p>
+        <div class="game-id-container">
+          <div class="game-id-display" id="overlay-game-id">Generating ID...</div>
+          <button class="copy-id-btn">Copy ID</button>
+        </div>
+        <button class="cancel-waiting-btn">Cancel</button>
+      </div>
+    </div>
+  `);
+  
+  // Update the game ID when it's available
+  function updateGameId() {
+    if (peer && peer.id) {
+      $('#overlay-game-id').text(peer.id);
+    } else {
+      setTimeout(updateGameId, 500);
+    }
+  }
+  updateGameId();
+  
+  // Add click handler for the copy button
+  $('.copy-id-btn').on('click', function() {
+    const gameId = $('#overlay-game-id').text();
+    if (gameId && gameId !== "Generating ID...") {
+      navigator.clipboard.writeText(gameId).then(function() {
+        // Show feedback
+        $('.copy-id-btn').text('Copied!');
+        setTimeout(() => {
+          $('.copy-id-btn').text('Copy ID');
+        }, 2000);
+      }).catch(function(err) {
+        // Fallback for older browsers
+        const tempInput = document.createElement('input');
+        tempInput.value = gameId;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempInput);
+        
+        // Show feedback
+        $('.copy-id-btn').text('Copied!');
+        setTimeout(() => {
+          $('.copy-id-btn').text('Copy ID');
+        }, 2000);
+      });
+    }
+  });
+  
+  // Add click handler for the cancel button
+  $('.cancel-waiting-btn').on('click', function() {
+    if (confirm('Are you sure you want to cancel waiting for an opponent?')) {
+      resetMultiplayer();
+      
+      // Reset the game mode to regular
+      gameMode = 'regular';
+      $('body')
+        .removeClass('mode-multiplayer')
+        .addClass('mode-regular');
+      
+      // Update URL
+      var newUrl = window.location.pathname + '?mode=regular';
+      window.history.replaceState({}, document.title, newUrl);
+      
+      // Start a new single player game
+      startAnim();
+    }
+  });
+}
+
+// Add function to start multiplayer animation
+function startMultiplayerAnim() {
+  console.log("Starting multiplayer game with empty field");
+  
+  // Reset game state
+  moveAmount = 0;
+  currentPlayer = "player--1"; // Always start with player 1
+  
+  // Clear the field
+  $(".end").remove();
+  
+  // Remove all stage and player classes from dots
+  $(".dot").each(function() {
+    $(this)
+      .removeClass(function(index, className) {
+        return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
+      })
+      .removeClass(function(index, className) {
+        return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
+      })
+      .removeClass(playerClassClear)
+      .attr("data-increment", "0");
+  });
+  
+  // Initialize the field
+  dots = $(".dot");
+  
+  // Set the current player
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  
+  // Set the color
+  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+  
+  // Show the field
+  show();
+  reset();
+  start();
+  
+  // Set waiting state based on player
+  waitingForMove = !isHost;
 }
