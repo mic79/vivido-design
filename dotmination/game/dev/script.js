@@ -1,4 +1,4 @@
-// v0.0.6
+// v0.0.7
 
 
 // Dark Mode
@@ -1363,13 +1363,28 @@ function setupConnection() {
       
       // Host is player 1, goes first
       waitingForMove = false;
+      currentPlayer = "player--1";
     } else {
       // Client is player 2, waits for host's move
       waitingForMove = true;
+      currentPlayer = "player--1"; // Host goes first
+    }
+    
+    // Update UI
+    $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+    
+    // Set color
+    if (currentPlayer == "player--1") {
+      TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+    } else {
+      TweenMax.to("html", 0, {"--color-current": 'var(--color-2)'});
     }
     
     // Update turn indicator
     updateTurnIndicator();
+    
+    // Add player indicators
+    updatePlayerIndicators();
   });
   
   conn.on('data', function(data) {
@@ -1548,6 +1563,9 @@ function showWaitingOverlay() {
   // Remove any existing overlay
   $('.waiting-overlay').remove();
   
+  // Get the game ID
+  var gameId = $('#game-id').text();
+  
   // Create the overlay
   $('body').append(`
     <div class="waiting-overlay">
@@ -1555,7 +1573,7 @@ function showWaitingOverlay() {
         <h2>Waiting for opponent...</h2>
         <p>Share the game link with your opponent to join.</p>
         <div class="game-id-container">
-          <p>Game ID: <span class="game-id-display">${$('#game-id').text()}</span></p>
+          <p>Game ID: <span class="game-id-display">${gameId}</span></p>
           <button class="copy-id-btn">Copy ID</button>
         </div>
         <button class="cancel-waiting-btn">Cancel</button>
@@ -1869,13 +1887,28 @@ function setupConnection() {
       
       // Host is player 1, goes first
       waitingForMove = false;
+      currentPlayer = "player--1";
     } else {
       // Client is player 2, waits for host's move
       waitingForMove = true;
+      currentPlayer = "player--1"; // Host goes first
+    }
+    
+    // Update UI
+    $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+    
+    // Set color
+    if (currentPlayer == "player--1") {
+      TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+    } else {
+      TweenMax.to("html", 0, {"--color-current": 'var(--color-2)'});
     }
     
     // Update turn indicator
     updateTurnIndicator();
+    
+    // Add player indicators
+    updatePlayerIndicators();
   });
   
   conn.on('data', function(data) {
@@ -1948,7 +1981,9 @@ function sendGameState() {
   
   const state = {
     dots: generateEmptyDotsState(),
-    currentPlayer: currentPlayer
+    currentPlayer: currentPlayer,
+    moveAmount: moveAmount,
+    startTime: new Date().getTime() // Send the current time
   };
   
   conn.send({
@@ -1999,6 +2034,26 @@ function applyGameState(state) {
   // Set the current player
   currentPlayer = state.currentPlayer;
   
+  // Set the move amount if provided
+  if (state.moveAmount !== undefined) {
+    moveAmount = state.moveAmount;
+  }
+  
+  // Synchronize the start time if provided
+  if (state.startTime) {
+    // Reset the timer with the synchronized time
+    if (window.timer) {
+      clearInterval(window.timer);
+    }
+    
+    var startTime = state.startTime;
+    var now = new Date().getTime();
+    var elapsedTime = now - startTime;
+    
+    // Start the timer with the elapsed time
+    startTimer(elapsedTime);
+  }
+  
   // Update UI
   $(".field").removeClass(playerClassClear).addClass(currentPlayer);
   
@@ -2013,6 +2068,31 @@ function applyGameState(state) {
   waitingForMove = isHost ? (currentPlayer !== "player--1") : (currentPlayer !== "player--2");
   
   dots = $(".dot");
+  
+  // Update turn indicator
+  updateTurnIndicator();
+}
+
+// Add a function to start the timer with an offset
+function startTimer(offset = 0) {
+  var startTime = new Date().getTime() - offset;
+  
+  if (window.timer) {
+    clearInterval(window.timer);
+  }
+  
+  window.timer = setInterval(function() {
+    var now = new Date().getTime();
+    var distance = now - startTime;
+    
+    var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+    var seconds = Math.floor((distance % (1000 * 60)) / 1000);
+    
+    minutes = (minutes < 10) ? "0" + minutes : minutes;
+    seconds = (seconds < 10) ? "0" + seconds : seconds;
+    
+    $(".time-value").html(minutes + ":" + seconds);
+  }, 1000);
 }
 
 // Handle an opponent's move
@@ -2160,3 +2240,142 @@ function resetMultiplayer() {
   
   console.log("Multiplayer reset complete");
 }
+
+// Add a function to update player indicators
+function updatePlayerIndicators() {
+  // Remove any existing indicators
+  $('.player-indicator').remove();
+  
+  // Add "You" indicator to show which player you are
+  if (isHost) {
+    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
+  } else {
+    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
+  }
+}
+
+// 4. Fix the game end to show win/lose and restart with empty field
+function checkWin() {
+  var player1Dots = $(".dot.player--1").length;
+  var player2Dots = $(".dot.player--2").length;
+  var totalDots = $(".dot").length;
+  
+  if (player1Dots + player2Dots === totalDots) {
+    // Game is over
+    if (isMultiplayer) {
+      var winner = (player1Dots > player2Dots) ? "player--1" : "player--2";
+      var youWon = (isHost && winner === "player--1") || (!isHost && winner === "player--2");
+      
+      // Show win/lose message
+      showGameEndMessage(youWon);
+    } else {
+      // Original win logic for single player
+      var winner = (player1Dots > player2Dots) ? "player--1" : "player--2";
+      showWinner(winner);
+    }
+    return true;
+  }
+  return false;
+}
+
+// Add a function to show game end message for multiplayer
+function showGameEndMessage(youWon) {
+  // Stop the timer
+  if (window.timer) {
+    clearInterval(window.timer);
+  }
+  
+  // Create the end message
+  var message = youWon ? "You Won!" : "You Lost!";
+  var messageClass = youWon ? "win-message" : "lose-message";
+  
+  $(".field").append(`
+    <div class="end multiplayer-end ${messageClass}">
+      <div class="end-content">
+        <h2>${message}</h2>
+        <button class="btn-retry">Play Again</button>
+      </div>
+    </div>
+  `);
+  
+  // Add click handler for the retry button
+  $(".btn-retry").on("click", function() {
+    // Start a new multiplayer game with empty field
+    startMultiplayerAnim();
+    
+    // Remove the end message
+    $(".end").remove();
+    
+    // Send the new game state to the other player
+    sendGameState();
+  });
+}
+
+// Override the incrementDotStage function to check for win in multiplayer
+var originalIncrementDotStage = incrementDotStage;
+incrementDotStage = function(dot) {
+  // Call the original function
+  originalIncrementDotStage.apply(this, arguments);
+  
+  // Check for win in multiplayer
+  if (isMultiplayer) {
+    setTimeout(function() {
+      checkWin();
+    }, 500);
+  }
+};
+
+// Add CSS for the win/lose messages
+var gameEndStyle = `
+.multiplayer-end {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.7);
+  z-index: 1000;
+}
+
+.end-content {
+  background-color: white;
+  padding: 20px;
+  border-radius: 10px;
+  text-align: center;
+}
+
+.win-message h2 {
+  color: var(--color-1);
+}
+
+.lose-message h2 {
+  color: var(--color-2);
+}
+
+.btn-retry {
+  margin-top: 15px;
+  padding: 10px 20px;
+  background-color: var(--color-current);
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+`;
+
+// Add the style to the document
+function addGameEndStyle() {
+  var styleElement = document.createElement('style');
+  styleElement.textContent = gameEndStyle;
+  document.head.appendChild(styleElement);
+}
+
+// Initialize the game end style
+$(document).ready(function() {
+  addGameEndStyle();
+});
