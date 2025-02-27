@@ -1,4 +1,4 @@
-// v0.0.4
+// v0.0.5
 
 
 // Dark Mode
@@ -1196,7 +1196,7 @@ $('#create-game').on('click', function(e) {
   
   // Update body class
   $('body')
-    .removeClass('mode-random mode-regular')
+    .removeClass('mode-random mode-regular modal-open')
     .addClass('mode-multiplayer');
   
   // Force the URL to be multiplayer mode
@@ -1209,6 +1209,12 @@ $('#create-game').on('click', function(e) {
   // Update UI
   $('.multiplayer-options').hide();
   $('.game-id-display').show();
+  
+  // Start the multiplayer game with empty field immediately
+  startMultiplayerGame();
+  
+  // Show waiting overlay immediately
+  showWaitingOverlay();
   
   // Prevent the modal from closing
   return false;
@@ -1247,7 +1253,12 @@ $('#join-game').on('click', function(e) {
   return false;
 });
 
-// Connect to a game
+// Fix the game-id-input to prevent modal closing when clicking inside
+$('.game-id-input').on('click', function(e) {
+  e.stopPropagation();
+});
+
+// Fix the btn-connect click handler
 $('.btn-connect').on('click', function(e) {
   // Prevent any default behavior
   e.preventDefault();
@@ -1344,8 +1355,21 @@ function setupConnection() {
     
     // Send initial game state if host
     if (isHost) {
+      // Start with an empty field
+      startMultiplayerAnim();
+      
+      // Send the empty state
       sendGameState();
+      
+      // Host is player 1, goes first
+      waitingForMove = false;
+    } else {
+      // Client is player 2, waits for host's move
+      waitingForMove = true;
     }
+    
+    // Update turn indicator
+    updateTurnIndicator();
   });
   
   conn.on('data', function(data) {
@@ -1444,16 +1468,20 @@ function startMultiplayerGame() {
     if (delayedCall) {
       delayedCall.kill();
     }
-    
-    // Show waiting overlay if we don't have a connection yet
-    if (!conn || !conn.open) {
-      showWaitingOverlay();
-    }
   }
   
   // Update player indicators
   $('.player.player--1 i').removeClass('fa-robot').addClass('fa-user');
   $('.player.player--2 i').removeClass('fa-user').addClass('fa-user');
+  
+  // Add "You" indicator to show which player you are
+  if (isHost) {
+    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
+  } else {
+    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
+  }
   
   // Set initial player turn
   waitingForMove = !isHost;
@@ -1834,8 +1862,21 @@ function setupConnection() {
     
     // Send initial game state if host
     if (isHost) {
+      // Start with an empty field
+      startMultiplayerAnim();
+      
+      // Send the empty state
       sendGameState();
+      
+      // Host is player 1, goes first
+      waitingForMove = false;
+    } else {
+      // Client is player 2, waits for host's move
+      waitingForMove = true;
     }
+    
+    // Update turn indicator
+    updateTurnIndicator();
   });
   
   conn.on('data', function(data) {
@@ -2001,51 +2042,82 @@ function handleOpponentMove(dotIndex) {
         .attr("data-increment", parseInt(dot.attr("data-increment")) + 1)
         .addClass("increment");
       incrementDotStage(dot);
+      
+      // Update turn indicator after the move
+      setTimeout(updateTurnIndicator, 500);
     }
   }
 }
 
-// Completely rewrite the startMultiplayerAnim function
-function startMultiplayerAnim() {
-  console.log("Starting multiplayer game with empty field");
+// Add a function to update the turn indicator
+function updateTurnIndicator() {
+  // Remove any existing indicators
+  $('.turn-indicator').remove();
   
-  // Save the current URL
-  var currentUrl = window.location.href;
-  
-  // Reset game state
-  moveAmount = 0;
-  currentPlayer = "player--1"; // Always start with player 1
-  
-  // Clear the field
-  $(".end").remove();
-  
-  // Remove all stage and player classes from dots
-  $(".dot").removeClass(function(index, className) {
-    return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
-  }).removeClass(function(index, className) {
-    return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
-  }).removeClass(playerClassClear);
-  
-  // Initialize the field
-  dots = $(".dot");
-  
-  // Set the current player
-  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-  
-  // Set the color
-  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-  
-  // Show the field
-  show();
-  reset();
-  start();
-  
-  // Restore the URL
-  window.history.replaceState({}, document.title, currentUrl);
-  
-  // Set waiting state based on player
-  waitingForMove = !isHost;
+  // Add the turn indicator
+  if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
+    // It's your turn
+    $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
+  } else {
+    // It's opponent's turn
+    $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+  }
 }
+
+// Update the nextPlayer function to update the turn indicator
+var originalNextPlayer = nextPlayer;
+nextPlayer = function() {
+  // Call the original function
+  originalNextPlayer.apply(this, arguments);
+  
+  // Update the turn indicator
+  if (isMultiplayer) {
+    updateTurnIndicator();
+  }
+};
+
+// Add CSS for the player and turn indicators
+var playerIndicatorStyle = `
+.player-indicator {
+  margin-left: 5px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.turn-indicator {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: bold;
+  z-index: 100;
+}
+
+.your-turn {
+  background-color: var(--color-current);
+  color: white;
+}
+
+.opponent-turn {
+  background-color: #888;
+  color: white;
+}
+`;
+
+// Add the style to the document
+function addPlayerIndicatorStyle() {
+  var styleElement = document.createElement('style');
+  styleElement.textContent = playerIndicatorStyle;
+  document.head.appendChild(styleElement);
+}
+
+// Initialize the player indicator style
+$(document).ready(function() {
+  addPlayerIndicatorStyle();
+});
 
 // Fix the missing resetMultiplayer function
 function resetMultiplayer() {
