@@ -1,4 +1,4 @@
-// v0.0.40
+// v0.0.41
 
 
 // Dark Mode
@@ -147,6 +147,7 @@ function playerClassClear() {
 }
 
 function incrementDotStage(trgt) {
+  console.log('incrementDotStage called');
   //console.log('>> index: ' + trgt.index());
   trgt.attr("data-increment", parseInt(trgt.attr("data-increment")) - 1);
   if (parseInt(trgt.attr("data-increment")) <= 0) {
@@ -165,6 +166,7 @@ function incrementDotStage(trgt) {
         animateNextDot();
         return;
       } else if (currStage && i == stage_amount) {
+        console.log('Dot reached max stage, checking for game end');
         trgt.removeClass("stage--" + i).removeClass(playerClassClear);
         if ("vibrate" in navigator) {
           window.navigator.vibrate([10, 10, 10]);
