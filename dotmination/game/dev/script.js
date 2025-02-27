@@ -1,4 +1,4 @@
-// v0.0.21
+// v0.0.22
 
 
 // Dark Mode
@@ -1200,13 +1200,39 @@ $(document).ready(function() {
     console.log("Added multiplayer options to modal");
   }
   
-  // Create Game button handler
-  $(document).off('click', '#create-game').on('click', '#create-game', function(e) {
-    // Prevent any default behavior
+  // Add this to handle Multiplayer button click in the mode modal
+  $('.mode-modal .wrapper').on('click', '.card[data-mode="multiplayer"]', function(e) {
+    console.log("Multiplayer mode button clicked");
+    gameMode = 'multiplayer';
+    
+    // Don't close the modal for multiplayer
+    $('.multiplayer-options').show();
+    $('.game-id-display, .game-id-input').hide();
+    
+    // Update URL for multiplayer mode
+    var newUrl = window.location.pathname + '?mode=multiplayer';
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Update UI - make sure only this button is selected
+    $('.mode-modal .card').removeClass('selected');
+    $(this).addClass('selected');
+    
+    $('body')
+      .removeClass('mode-random mode-regular')
+      .addClass('mode-multiplayer');
+      
+    // Prevent event from propagating and closing the modal
     e.preventDefault();
     e.stopPropagation();
     
+    return false;
+  });
+  
+  // Handle the Create Game button click using event delegation
+  $(document).on('click', '#create-game', function(e) {
     console.log("Create game clicked");
+    e.preventDefault();
+    e.stopPropagation();
     
     // Set state
     isHost = true;
@@ -1218,63 +1244,42 @@ $(document).ready(function() {
       .removeClass('mode-random mode-regular modal-open')
       .addClass('mode-multiplayer');
     
-    // Force the URL to be multiplayer mode
-    var newUrl = window.location.pathname + '?mode=multiplayer';
-    window.history.replaceState({}, document.title, newUrl);
-    
     // Initialize PeerJS
     initPeer();
     
-    // Update UI
-    $('.multiplayer-options').hide();
-    $('.game-id-display').show();
-    
-    // Show waiting overlay immediately
+    // Show waiting overlay
     showWaitingOverlay();
     
-    // Start the multiplayer game with empty field
+    // Start the multiplayer game
     startMultiplayerAnim();
     
-    // Prevent the modal from closing automatically
     return false;
   });
   
-  // Join Game button handler
-  $(document).off('click', '#join-game').on('click', '#join-game', function(e) {
-    // Prevent any default behavior
+  // Handle the Join Game button click using event delegation
+  $(document).on('click', '#join-game', function(e) {
+    console.log("Join game clicked");
     e.preventDefault();
     e.stopPropagation();
-    
-    console.log("Join game clicked");
     
     // Set state
     isHost = false;
     isMultiplayer = true;
     gameMode = 'multiplayer';
     
-    // Update body class
-    $('body')
-      .removeClass('mode-random mode-regular')
-      .addClass('mode-multiplayer');
-    
-    // Force the URL to be multiplayer mode
-    var newUrl = window.location.pathname + '?mode=multiplayer';
-    window.history.replaceState({}, document.title, newUrl);
-    
-    // Initialize PeerJS
-    initPeer();
-    
     // Update UI - show the input field
     $('.multiplayer-options').hide();
     $('.game-id-input').show();
     
-    // Prevent the modal from closing
+    // Initialize PeerJS
+    initPeer();
+    
     return false;
   });
   
-  // Connect button handler
-  $(document).off('click', '.btn-connect').on('click', '.btn-connect', function(e) {
-    // Prevent any default behavior
+  // Handle the Connect button click using event delegation
+  $(document).on('click', '.btn-connect', function(e) {
+    console.log("Connect button clicked");
     e.preventDefault();
     e.stopPropagation();
     
@@ -1282,16 +1287,14 @@ $(document).ready(function() {
     if (gameId) {
       console.log("Connecting to game:", gameId);
       
-      // Force the URL to be multiplayer mode with the correct ID
-      var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
-      window.history.replaceState({}, document.title, newUrl);
-      
       // Connect to the peer
       connectToPeer(gameId);
       
       // Close the modal
       $('body').removeClass('modal-open');
     }
+    
+    return false;
   });
 });
 
@@ -1302,100 +1305,6 @@ let isHost = false;
 let isMultiplayer = false;
 let waitingForMove = false;
 let lastMoveData = null;
-
-// Properly create the Create Game click handler
-$(document).off('click', '#create-game').on('click', '#create-game', function(e) {
-  // Prevent any default behavior
-  e.preventDefault();
-  e.stopPropagation();
-  
-  console.log("Create game clicked");
-  
-  // Set state
-  isHost = true;
-  isMultiplayer = true;
-  gameMode = 'multiplayer';
-  
-  // Update body class
-  $('body')
-    .removeClass('mode-random mode-regular modal-open')
-    .addClass('mode-multiplayer');
-  
-  // Force the URL to be multiplayer mode
-  var newUrl = window.location.pathname + '?mode=multiplayer';
-  window.history.replaceState({}, document.title, newUrl);
-  
-  // Initialize PeerJS
-  initPeer();
-  
-  // Update UI
-  $('.multiplayer-options').hide();
-  $('.game-id-display').show();
-  
-  // Show waiting overlay immediately
-  showWaitingOverlay();
-  
-  // Start the multiplayer game with empty field
-  startMultiplayerAnim();
-  
-  // Prevent the modal from closing automatically
-  return false;
-});
-
-// Properly create the Join Game click handler
-$(document).off('click', '#join-game').on('click', '#join-game', function(e) {
-  // Prevent any default behavior
-  e.preventDefault();
-  e.stopPropagation();
-  
-  console.log("Join game clicked");
-  
-  // Set state
-  isHost = false;
-  isMultiplayer = true;
-  gameMode = 'multiplayer';
-  
-  // Update body class
-  $('body')
-    .removeClass('mode-random mode-regular')
-    .addClass('mode-multiplayer');
-  
-  // Force the URL to be multiplayer mode
-  var newUrl = window.location.pathname + '?mode=multiplayer';
-  window.history.replaceState({}, document.title, newUrl);
-  
-  // Initialize PeerJS
-  initPeer();
-  
-  // Update UI - show the input field
-  $('.multiplayer-options').hide();
-  $('.game-id-input').show();
-  
-  // Prevent the modal from closing
-  return false;
-});
-
-// Properly create the Connect button click handler
-$(document).off('click', '.btn-connect').on('click', '.btn-connect', function(e) {
-  // Prevent any default behavior
-  e.preventDefault();
-  e.stopPropagation();
-  
-  const gameId = $('#join-id').val().trim();
-  if (gameId) {
-    console.log("Connecting to game:", gameId);
-    
-    // Force the URL to be multiplayer mode with the correct ID
-    var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
-    window.history.replaceState({}, document.title, newUrl);
-    
-    // Connect to the peer
-    connectToPeer(gameId);
-    
-    // Close the modal
-    $('body').removeClass('modal-open');
-  }
-});
 
 // Add the connectToPeer function if missing
 function connectToPeer(peerId) {
