@@ -1,4 +1,4 @@
-// v0.0.13
+// v0.0.14
 
 
 // Dark Mode
@@ -1353,3 +1353,218 @@ function connectToPeer(peerId) {
   conn = peer.connect(peerId);
   setupConnection();
 }
+
+// Fix the join-game click handler
+$('#join-game').on('click', function(e) {
+  // Prevent any default behavior
+  e.preventDefault();
+  e.stopPropagation();
+  
+  console.log("Join game clicked");
+  
+  // Set state
+  isHost = false;
+  isMultiplayer = true;
+  gameMode = 'multiplayer';
+  
+  // Update body class
+  $('body')
+    .removeClass('mode-random mode-regular')
+    .addClass('mode-multiplayer');
+  
+  // Force the URL to be multiplayer mode
+  var newUrl = window.location.pathname + '?mode=multiplayer';
+  window.history.replaceState({}, document.title, newUrl);
+  
+  // Initialize PeerJS
+  initPeer();
+  
+  // Update UI - show the input field
+  $('.multiplayer-options').hide();
+  $('.game-id-input').show();
+  
+  // Prevent the modal from closing
+  return false;
+});
+
+// Fix the btn-connect click handler
+$('.btn-connect').on('click', function(e) {
+  // Prevent any default behavior
+  e.preventDefault();
+  e.stopPropagation();
+  
+  const gameId = $('#join-id').val().trim();
+  if (gameId) {
+    console.log("Connecting to game:", gameId);
+    
+    // Force the URL to be multiplayer mode with the correct ID
+    var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Connect to the peer
+    connectToPeer(gameId);
+    
+    // Close the modal
+    $('body').removeClass('modal-open');
+    
+    // Start the multiplayer game
+    startMultiplayerGame();
+  }
+});
+
+// Fix the setupConnection function
+function setupConnection() {
+  console.log("Setting up connection");
+  
+  conn.on('open', function() {
+    console.log('Connection established');
+    
+    // Hide waiting overlay
+    $('.waiting-overlay').remove();
+    
+    // Clear the field for both players
+    startMultiplayerAnim();
+    
+    // Set initial player states
+    currentPlayer = "player--1"; // Always start with player 1
+    
+    // Set waiting state based on player
+    if (isHost) {
+      // Host is player 1, goes first
+      waitingForMove = false;
+    } else {
+      // Client is player 2, waits for host's move
+      waitingForMove = true;
+    }
+    
+    // Update UI
+    $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+    
+    // Set color
+    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+    
+    // Add player indicators
+    updatePlayerIndicators();
+    
+    // Update turn indicator
+    updateTurnIndicator();
+    
+    // Send initial game state if host
+    if (isHost) {
+      sendGameState();
+    }
+  });
+  
+  conn.on('data', function(data) {
+    console.log('Received data:', data);
+    
+    if (data.type === 'move') {
+      // Handle opponent's move
+      handleOpponentMove(data.dotIndex);
+    } else if (data.type === 'gameState') {
+      // Handle initial game state
+      applyGameState(data.state);
+    } else if (data.type === 'gameEnd') {
+      // Handle game end message
+      var winner = data.winner;
+      var youWon = (isHost && winner === "player--1") || (!isHost && winner === "player--2");
+      showGameEndMessage(youWon);
+    } else if (data.type === 'disconnect') {
+      // Handle disconnect message
+      console.log("Received disconnect message:", data.message);
+      alert('The other player has disconnected.');
+      resetMultiplayer();
+      
+      // Reset the game mode to regular
+      gameMode = 'regular';
+      $('body')
+        .removeClass('mode-multiplayer')
+        .addClass('mode-regular');
+      
+      // Update URL
+      var newUrl = window.location.pathname + '?mode=regular';
+      window.history.replaceState({}, document.title, newUrl);
+      
+      // Start a new single player game
+      startAnim();
+    }
+  });
+  
+  conn.on('error', function(err) {
+    console.error('Connection error:', err);
+    alert('Connection error: ' + err);
+  });
+}
+
+// Add a function to update player indicators
+function updatePlayerIndicators() {
+  // Remove any existing indicators
+  $('.player-indicator').remove();
+  
+  // Add "You" indicator to show which player you are
+  if (isHost) {
+    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
+  } else {
+    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
+    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
+  }
+}
+
+// Add a function to update the turn indicator
+function updateTurnIndicator() {
+  // Remove any existing indicators
+  $('.turn-indicator').remove();
+  
+  // Add the turn indicator
+  if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
+    // It's your turn
+    $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
+  } else {
+    // It's opponent's turn
+    $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+  }
+}
+
+// Add CSS for the player and turn indicators
+var playerIndicatorStyle = `
+.player-indicator {
+  margin-left: 5px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.turn-indicator {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: bold;
+  z-index: 100;
+}
+
+.your-turn {
+  background-color: var(--color-current);
+  color: white;
+}
+
+.opponent-turn {
+  background-color: #888;
+  color: white;
+}
+`;
+
+// Add the style to the document
+function addPlayerIndicatorStyle() {
+  var styleElement = document.createElement('style');
+  styleElement.textContent = playerIndicatorStyle;
+  document.head.appendChild(styleElement);
+}
+
+// Initialize the player indicator style
+$(document).ready(function() {
+  addPlayerIndicatorStyle();
+});
