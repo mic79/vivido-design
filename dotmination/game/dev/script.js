@@ -1,4 +1,4 @@
-// v0.0.9
+// v0.0.10
 
 
 // Dark Mode
@@ -1594,7 +1594,8 @@ function showWaitingOverlay() {
     
     // Add click handler for the copy button to copy ONLY the game ID
     $('.copy-id-btn').on('click', function() {
-      const gameId = $('.game-id-display').text();
+      // Get only the game ID text
+      const gameId = $('.game-id-display').text().trim();
       
       // Use modern clipboard API if available
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1612,6 +1613,9 @@ function showWaitingOverlay() {
       } else {
         fallbackCopy(gameId);
       }
+      
+      // Prevent default behavior
+      return false;
     });
     
     // Fallback copy method
@@ -2038,6 +2042,10 @@ function showGameEndMessage(youWon) {
   var message = youWon ? "You Won!" : "You Lost!";
   var messageClass = youWon ? "win-message" : "lose-message";
   
+  // Remove any existing end message
+  $(".end").remove();
+  
+  // Add the new end message
   $(".field").append(`
     <div class="end multiplayer-end ${messageClass}">
       <div class="end-content">
