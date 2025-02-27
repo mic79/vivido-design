@@ -1,4 +1,4 @@
-// v0.0.3
+// v0.0.4
 
 
 // Dark Mode
@@ -1453,7 +1453,7 @@ function startMultiplayerGame() {
   
   // Update player indicators
   $('.player.player--1 i').removeClass('fa-robot').addClass('fa-user');
-  $('.player.player--2 i').removeClass('fa-user-secret').addClass('fa-user');
+  $('.player.player--2 i').removeClass('fa-user').addClass('fa-user');
   
   // Set initial player turn
   waitingForMove = !isHost;
@@ -1471,23 +1471,6 @@ function startMultiplayerGame() {
   // Make sure the multiplayer icon is visible and others are hidden
   $('.multiplayer-icon').show();
   $('.random, .level').hide();
-  
-  // Prevent random map generation from overriding our URL
-  window.setTimeout(function() {
-    if (isHost) {
-      var gameId = $('#game-id').text();
-      if (gameId) {
-        var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
-        window.history.replaceState({}, document.title, correctUrl);
-      }
-    } else {
-      var joinId = $('#join-id').val();
-      if (joinId) {
-        var correctUrl = window.location.pathname + '?mode=multiplayer&id=' + joinId;
-        window.history.replaceState({}, document.title, correctUrl);
-      }
-    }
-  }, 500);
 }
 
 // Create a completely new startMultiplayerAnim function that ensures empty cells
@@ -2062,4 +2045,47 @@ function startMultiplayerAnim() {
   
   // Set waiting state based on player
   waitingForMove = !isHost;
+}
+
+// Fix the missing resetMultiplayer function
+function resetMultiplayer() {
+  console.log("Resetting multiplayer completely");
+  isMultiplayer = false;
+  isHost = false;
+  waitingForMove = false;
+  
+  // Close and destroy the connection
+  if (conn) {
+    try {
+      conn.close();
+    } catch (e) {
+      console.error("Error closing connection:", e);
+    }
+    conn = null;
+  }
+  
+  // Close and destroy the peer
+  if (peer) {
+    try {
+      peer.destroy();
+    } catch (e) {
+      console.error("Error destroying peer:", e);
+    }
+    peer = null;
+  }
+  
+  // Reset UI
+  $('.player.player--1 i').removeClass('fa-user').addClass('fa-robot');
+  $('.player.player--2 i').removeClass('fa-user').addClass('fa-user-secret');
+  
+  // Hide multiplayer UI
+  $('.multiplayer-options, .game-id-display, .game-id-input').hide();
+  
+  // Remove multiplayer-specific elements
+  $('.multiplayer-icon, .share-map.multiplayer, .disconnect-multiplayer, .waiting-overlay').remove();
+  
+  // Clear any stored game data
+  lastMoveData = null;
+  
+  console.log("Multiplayer reset complete");
 }
