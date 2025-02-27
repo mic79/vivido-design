@@ -1,4 +1,4 @@
-// v0.0.7
+// v0.0.8
 
 
 // Dark Mode
@@ -1563,10 +1563,10 @@ function showWaitingOverlay() {
   // Remove any existing overlay
   $('.waiting-overlay').remove();
   
-  // Get the game ID
-  var gameId = $('#game-id').text();
+  // Get the game ID directly from the peer object
+  var gameId = peer ? peer.id : '';
   
-  // Create the overlay
+  // Create the overlay with the correct game ID
   $('body').append(`
     <div class="waiting-overlay">
       <div class="waiting-card">
@@ -1581,21 +1581,30 @@ function showWaitingOverlay() {
     </div>
   `);
   
-  // Add click handler for the copy button
+  // Add click handler for the copy button to copy ONLY the game ID
   $('.copy-id-btn').on('click', function() {
     const gameId = $('.game-id-display').text();
-    const tempInput = document.createElement('input');
-    tempInput.value = gameId;
-    document.body.appendChild(tempInput);
-    tempInput.select();
-    document.execCommand('copy');
-    document.body.removeChild(tempInput);
-    
-    // Show feedback
-    $(this).text('Copied!');
-    setTimeout(() => {
-      $(this).text('Copy ID');
-    }, 2000);
+    navigator.clipboard.writeText(gameId).then(function() {
+      // Show feedback
+      $('.copy-id-btn').text('Copied!');
+      setTimeout(() => {
+        $('.copy-id-btn').text('Copy ID');
+      }, 2000);
+    }).catch(function(err) {
+      // Fallback for older browsers
+      const tempInput = document.createElement('input');
+      tempInput.value = gameId;
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      document.execCommand('copy');
+      document.body.removeChild(tempInput);
+      
+      // Show feedback
+      $('.copy-id-btn').text('Copied!');
+      setTimeout(() => {
+        $('.copy-id-btn').text('Copy ID');
+      }, 2000);
+    });
   });
   
   // Add click handler for the cancel button
@@ -1979,17 +1988,23 @@ function sendGameState() {
   
   console.log("Sending game state");
   
+  // Get the current time
+  var currentTime = new Date().getTime();
+  
   const state = {
     dots: generateEmptyDotsState(),
     currentPlayer: currentPlayer,
     moveAmount: moveAmount,
-    startTime: new Date().getTime() // Send the current time
+    startTime: currentTime
   };
   
   conn.send({
     type: 'gameState',
     state: state
   });
+  
+  // Start the timer on the host side
+  startTimer(0);
 }
 
 // Generate an empty dots state
@@ -2307,6 +2322,22 @@ function showGameEndMessage(youWon) {
     
     // Remove the end message
     $(".end").remove();
+    
+    // Reset the game state
+    currentPlayer = "player--1";
+    moveAmount = 0;
+    
+    // Set waiting state based on player
+    waitingForMove = !isHost;
+    
+    // Update UI
+    $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+    
+    // Set color
+    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+    
+    // Update turn indicator
+    updateTurnIndicator();
     
     // Send the new game state to the other player
     sendGameState();
