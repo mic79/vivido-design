@@ -1,4 +1,4 @@
-// v0.0.14
+// v0.0.15
 
 
 // Dark Mode
@@ -1167,6 +1167,135 @@ let isHost = false;
 let isMultiplayer = false;
 let waitingForMove = false;
 let lastMoveData = null;
+
+// Check if the multiplayer button exists in the modal, if not, add it
+$(document).ready(function() {
+  // Check if the multiplayer button exists
+  if ($('.mode-modal .card[data-mode="multiplayer"]').length === 0) {
+    // Add the multiplayer button to the first row of the modal
+    $('.mode-modal .row:first-child').append(`
+      <div class="card" data-mode="multiplayer">
+        <i class="fas fa-users"></i>
+        <span>Multiplayer</span>
+      </div>
+    `);
+    
+    console.log("Added multiplayer button to modal");
+  }
+  
+  // Add the multiplayer options to the modal if they don't exist
+  if ($('.multiplayer-options').length === 0) {
+    $('.mode-modal .wrapper').append(`
+      <div class="multiplayer-options" style="display: none;">
+        <h3>Multiplayer Game</h3>
+        <div class="multiplayer-buttons">
+          <button id="create-game" class="btn-primary">Create Game</button>
+          <button id="join-game" class="btn-primary">Join Game</button>
+        </div>
+      </div>
+      
+      <div class="game-id-display" style="display: none;">
+        <h3>Game ID</h3>
+        <p>Share this ID with your opponent: <span id="game-id"></span></p>
+        <button class="btn-primary copy-id">Copy ID</button>
+      </div>
+      
+      <div class="game-id-input" style="display: none;">
+        <h3>Enter Game ID</h3>
+        <input type="text" id="join-id" placeholder="Paste Game ID here">
+        <button class="btn-primary btn-connect">Connect</button>
+      </div>
+    `);
+    
+    console.log("Added multiplayer options to modal");
+  }
+  
+  // Add CSS for the multiplayer elements
+  var multiplayer_style = `
+  .multiplayer-options, .game-id-display, .game-id-input {
+    margin-top: 20px;
+    text-align: center;
+  }
+  
+  .multiplayer-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  
+  .btn-primary {
+    padding: 8px 16px;
+    background-color: var(--color-current);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  
+  #join-id {
+    padding: 8px;
+    margin-right: 10px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+  }
+  
+  .waiting-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    z-index: 1000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  
+  .waiting-card {
+    background-color: white;
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
+    max-width: 80%;
+  }
+  
+  .game-id-container {
+    margin: 20px 0;
+  }
+  
+  .game-id-display {
+    font-size: 16px;
+    font-weight: bold;
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-radius: 5px;
+    margin-bottom: 10px;
+    word-break: break-all;
+  }
+  
+  .copy-id-btn, .cancel-waiting-btn {
+    padding: 8px 16px;
+    background-color: var(--color-current);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 10px;
+  }
+  
+  .connecting-indicator {
+    margin-top: 10px;
+    color: var(--color-current);
+    font-style: italic;
+  }
+  `;
+  
+  var styleElement = document.createElement('style');
+  styleElement.textContent = multiplayer_style;
+  document.head.appendChild(styleElement);
+});
 
 // Fix the create-game click handler
 $('#create-game').on('click', function(e) {
