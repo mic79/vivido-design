@@ -1,4 +1,4 @@
-// v0.0.43
+// v0.0.44
 
 
 // Dark Mode
@@ -66,12 +66,14 @@ var delayedCall;
 
 $("body").on("click", ".end", function () {
   // If in random mode, clear the map parameter from URL
-  if (gameMode === 'random') {
+  if (gameMode === 'random' && !isMultiplayer) {
     var newUrl = window.location.pathname + '?mode=random';
     window.history.replaceState({}, document.title, newUrl);
+
+    startAnim();
+  } else if (isMultiplayer) {
+    $('.btn-connect').click();
   }
-  
-  startAnim();
 });
 
 $(".field").on("click", ".dot", function() {
@@ -214,7 +216,13 @@ function checkDotmination() {
     stop();
     sound.play();
     
-    if (currentPlayer == "player--2") {
+    if(isMultiplayer) {
+      $("body .container").append(
+        '<div class="end overlay noselect ' +
+          currentPlayer +
+          '"><div class="card"><h1>Dotmination!</h1><span class="level-goals">' + currentPlayer + ' wins!</span><p>Retry <i class="fas fa-undo"></i></p></div></div>'
+      );
+    } else if (currentPlayer == "player--2") {
       if (level < 100) {
         if($('body').hasClass('mode-regular')) {
           level++;
