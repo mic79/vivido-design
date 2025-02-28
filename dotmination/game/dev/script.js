@@ -897,16 +897,31 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
   } else {
     gameMode = $(this).data('mode');
     
+    // Hide all mode-specific content first
+    $('.list--mode-regular, .multiplayer-options, .waiting-overlay, .game-id-display').hide();
+    
     if (gameMode === 'multiplayer') {
+      e.preventDefault();
+      e.stopPropagation();
       isMultiplayer = true;
-      isHost = true;
-      initPeer();
+      $('.multiplayer-options').show();
+      
+      // Update selection before returning
+      $(this).closest('.row').find('.card').removeClass('selected');
+      $(this).addClass('selected');
+      
+      return false;
+    } else if (gameMode === 'regular') {
+      // Show levels list
+      $('.list--mode-regular').show();
+      isMultiplayer = false;
     } else if (gameMode === 'random') {
+      isMultiplayer = false;
       var newUrl = window.location.pathname + '?mode=random';
       window.history.replaceState({}, document.title, newUrl);
     }
   }
-    
+  
   $(this).closest('.row').find('.card').removeClass('selected');
   $(this).addClass('selected');
   
@@ -1091,6 +1106,10 @@ function signinAnim() {
     $('body')
       .removeClass('mode-regular')
       .addClass('mode-random');
+      
+    // Update mode selection in modal
+    $('.mode-modal .card').removeClass('selected');
+    $('.mode-modal .card[data-mode="random"]').addClass('selected');
     
     // Set up dots first
     setDots();
@@ -1104,7 +1123,8 @@ function signinAnim() {
     reset();
     start();
   } else {
-    gsap.delayedCall(2, startAnim);
+    // Only call startAnim if we're not loading a map from URL
+    startAnim();
   }
 }
 
@@ -1158,6 +1178,10 @@ $(document).ready(function() {
     $('body')
       .removeClass('mode-regular')
       .addClass('mode-random');
+    
+    // Update mode selection in modal
+    $('.mode-modal .card').removeClass('selected');
+    $('.mode-modal .card[data-mode="random"]').addClass('selected');
     
     // Set up dots first
     setDots();
@@ -1329,10 +1353,6 @@ $(document).ready(function() {
     isMultiplayer = true;
     gameMode = 'multiplayer';
     
-    // Update URL for multiplayer mode
-    var newUrl = window.location.pathname + '?mode=multiplayer';
-    window.history.replaceState({}, document.title, newUrl);
-    
     // Initialize PeerJS
     initPeer();
     
@@ -1424,6 +1444,9 @@ function initPeer() {
       if (isHost) {
         // Show the game ID for others to join
         $('.game-id').text(id);
+        // Update URL with the game ID
+        var newUrl = window.location.pathname + '?mode=multiplayer&id=' + id;
+        window.history.replaceState({}, document.title, newUrl);
       }
     });
     
@@ -1481,9 +1504,18 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
     gameMode = $(this).data('mode');
     
     if (gameMode === 'multiplayer') {
+      e.preventDefault();
+      e.stopPropagation();
       isMultiplayer = true;
-      isHost = true;
-      initPeer();
+      // Hide Levels content and show Multiplayer options
+      $('.list--mode-regular').hide();
+      $('.multiplayer-options').show();
+      
+      // Update selection before returning
+      $(this).closest('.row').find('.card').removeClass('selected');
+      $(this).addClass('selected');
+      
+      return false;
     } else if (gameMode === 'random') {
       // ... existing random code ...
     }
