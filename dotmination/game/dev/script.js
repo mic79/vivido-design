@@ -1,4 +1,4 @@
-// v0.0.44
+// v0.0.45
 
 
 // Dark Mode
@@ -72,7 +72,7 @@ $("body").on("click", ".end", function () {
 
     startAnim();
   } else if (isMultiplayer) {
-    $('.btn-connect').click();
+    startMultiplayerAnim();
   }
 });
 
