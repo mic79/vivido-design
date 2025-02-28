@@ -208,6 +208,10 @@ h1 {
   font-size: 30px;
 }
 
+.overlay.end>.card p {
+  position: relative;
+}
+
 .overlay .timediff {
   margin-top: 3rem;
 }

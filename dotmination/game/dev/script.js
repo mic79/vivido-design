@@ -1,5 +1,6 @@
-// v0.0.45
-
+// v0.0.50
+// Singleplayer modes are stable.
+// Multiplayer mode is in progress.
 
 // Dark Mode
 function screenTest(e) {
@@ -64,15 +65,63 @@ var timeBest;
 var timeDiff;
 var delayedCall;
 
-$("body").on("click", ".end", function () {
-  // If in random mode, clear the map parameter from URL
-  if (gameMode === 'random' && !isMultiplayer) {
+// Remove all existing click handlers for .end
+$("body").off("click", ".end, .end *");
+
+// Single consolidated click handler for end overlay actions
+$("body").on("click", ".end .card p", function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  
+  if ($(this).hasClass('retry')) {
+    // Retry current map/level
+    if (gameMode === 'random') {
+      var urlParams = new URLSearchParams(window.location.search);
+      var map = urlParams.get('map');
+      if (map) {
+        // Preserve the current map
+        setDots();
+        buildMapFromString(map);
+        dots = $(".dot");
+        currentPlayer = "player--2";
+        $(".field").addClass(currentPlayer);
+        $(".end").remove();
+        show();
+        reset();
+        start();
+        return;
+      }
+    } else if (gameMode === 'regular') {
+      // For regular mode, just restart current level
+      var newUrl = window.location.pathname + '?mode=regular&level=' + level;
+      window.history.replaceState({}, document.title, newUrl);
+    }
+    startAnim();
+  } 
+  else if ($(this).hasClass('new-map')) {
+    // Generate new random map
     var newUrl = window.location.pathname + '?mode=random';
     window.history.replaceState({}, document.title, newUrl);
-
     startAnim();
-  } else if (isMultiplayer) {
-    startMultiplayerAnim();
+  }
+  else if (gameMode === 'regular') {
+    // Next level - increment here
+    if (level < 100) {
+      level++;
+    } else {
+      level = 1;
+    }
+    var newUrl = window.location.pathname + '?mode=regular&level=' + level;
+    window.history.replaceState({}, document.title, newUrl);
+    startAnim();
+  }
+});
+
+// Prevent clicks on overlay and card from triggering actions
+$("body").on("click", ".end, .end .card", function(e) {
+  if ($(e.target).hasClass('end') || $(e.target).hasClass('card')) {
+    e.preventDefault();
+    e.stopPropagation();
   }
 });
 
@@ -109,38 +158,19 @@ function nextPlayer() {
   if (currentPlayer == playerArray[0]) {
     currentPlayer = playerArray[1];
     TweenMax.to("html", 0, {"--color-current": 'var(--color-2)'});
-    
-    // In multiplayer, handle turn logic
-    if (isMultiplayer) {
-      waitingForMove = !isHost;
-      
-      // Don't start bot action in multiplayer
-      if (delayedCall) {
-        delayedCall.kill();
-      }
-    } else if (delayedCall) {
+    if(delayedCall) {
       delayedCall.kill();
-      delayedCall = gsap.delayedCall(1, botActionRandom);
     }
   } else {
     currentPlayer = playerArray[0];
     TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-    
-    // In multiplayer, handle turn logic
-    if (isMultiplayer) {
-      waitingForMove = isHost;
-      
-      // Don't start bot action in multiplayer
-      if (delayedCall) {
-        delayedCall.kill();
-      }
-    } else if (delayedCall) {
+    if(delayedCall) {
       delayedCall.kill();
     }
+    delayedCall = gsap.delayedCall(1, botActionRandom);
   }
   $(".field").addClass(currentPlayer);
   moveAmount++;
-  //console.log("nextPlayer: " + currentPlayer);
 }
 //nextPlayer();
 
@@ -211,50 +241,67 @@ function checkDotmination() {
   if (moveAmount < 2 || ($(".dot.player--1").length > 0 && $(".dot.player--2").length > 0)) {
     nextPlayer();
   } else {
-    console.log("won by: " + currentPlayer);
-    console.log("isMultiplayer:", isMultiplayer, "isHost:", isHost);
     stop();
     sound.play();
     
-    if(isMultiplayer) {
-      $("body .container").append(
-        '<div class="end overlay noselect ' +
-          currentPlayer +
-          '"><div class="card"><h1>Dotmination!</h1><span class="level-goals">' + currentPlayer + ' wins!</span><p>Retry <i class="fas fa-undo"></i></p></div></div>'
-      );
-    } else if (currentPlayer == "player--2") {
-      if (level < 100) {
-        if($('body').hasClass('mode-regular')) {
-          level++;
-        }/*  else {
-          var goalMoves = '';
-          var goalTime = '';
-        } */
-        
-        if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
+    if (currentPlayer == "player--2") {
+      if (gameMode === 'random') {
+        // Show random mode win screen
+        $("body .container").append(
+          '<div class="end overlay noselect ' + currentPlayer + '">' +
+            '<div class="card">' +
+              '<h1>Dotmination!</h1>' +
+              '<span class="level-goals">' +
+                '<i class="fas fa-star"></i>' +
+                '<i class="fas fa-star"></i>' +
+                '<i class="fas fa-star"></i>' +
+              '</span>' +
+              '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
+              '<p class="new-map">Next <i class="fas fa-random"></i></p>' +
+            '</div>' +
+          '</div>'
+        );
+      } else if (level < 100) {
+        if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
+           moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
           var goalMoves = 'active';
         } else {
           var goalMoves = '';
         }
 
-        if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
+        if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
+           moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
           var goalTime = 'active';
         } else {
           var goalTime = '';
         }
         
         $("body .container").append(
-          '<div class="end overlay noselect ' +
-            currentPlayer +
-            '"><div class="card"><h1>Dotmination!</h1><span class="level-goals"><i class="fas fa-star level-goals-won active"></i><i class="fas fa-star level-goals-moves ' + goalMoves + '"></i><i class="fas fa-star level-goals-time ' + goalTime + '"></i></span><p>Next Level <i class="fas fa-arrow-right"></i></p></div></div>'
+          '<div class="end overlay noselect ' + currentPlayer + '">' +
+            '<div class="card">' +
+              '<h1>Dotmination!</h1>' +
+              '<span class="level-goals">' +
+                '<i class="fas fa-star level-goals-won active"></i>' +
+                '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
+                '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
+              '</span>' +
+              '<p>Next Level <i class="fas fa-arrow-right"></i></p>' +
+            '</div>' +
+          '</div>'
         );
-        TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
+        TweenMax.fromTo($('.overlay > .card'), 2, 
+          {alpha: 0, scale: 0}, 
+          {alpha: 1, scale: 1, ease:Elastic.easeOut}
+        );
       } else {
         level = 1;
         $("body .container").append(
-          '<div class="end overlay noselect ' +
-            currentPlayer +
-            '"><div class="card"><h1>Dotmination!</h1><p>Next Level <i class="fas fa-undo"></i></h1></div></div>'
+          '<div class="end overlay noselect ' + currentPlayer + '">' +
+            '<div class="card">' +
+              '<h1>Dotmination!</h1>' +
+              '<p>Next Level <i class="fas fa-undo"></i></p>' +
+            '</div>' +
+          '</div>'
         );
       }
       
@@ -278,10 +325,20 @@ function checkDotmination() {
         }
       }
     } else {
+      // Player lost - show retry overlay
       $("body .container").append(
-        '<div class="end overlay noselect ' +
-          currentPlayer +
-          '"><div class="card"><h1>Dotmination!</h1><span class="level-goals"><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i></span><p>Retry <i class="fas fa-undo"></i></p></div></div>'
+        '<div class="end overlay noselect ' + currentPlayer + '">' +
+          '<div class="card">' +
+            '<h1>Dotmination!</h1>' +
+            '<span class="level-goals">' +
+              '<i class="fas fa-star"></i>' +
+              '<i class="fas fa-star"></i>' +
+              '<i class="fas fa-star"></i>' +
+            '</span>' +
+            '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
+            (gameMode === 'random' ? '<p class="new-map">Next <i class="fas fa-random"></i></p>' : '') +
+          '</div>' +
+        '</div>'
       );
     }
   }
@@ -364,23 +421,15 @@ $(window).on("resize", function () {
 function startAnim() {
   moveAmount = 0;
   randomNumber = Math.floor(Math.random() * playerArray.length);
-  currentPlayer = "player--2"; //playerArray[randomNumber];
+  currentPlayer = "player--2";
   $('.level-value').html(level);
   setDots();
-  //nextPlayer();
   $(".end").remove();
   $(".dot").removeClass(playerClassClear);
-  
   if(gameMode == 'regular') {
     var populate = fieldPopulateByLevel;
   } else {
     var populate = fieldPopulateRandom;
-    
-    // For random mode, clear the map parameter from URL when starting a new game
-    if ($(".end").length > 0) {  // If we're coming from an end screen
-      var newUrl = window.location.pathname + '?mode=random';
-      window.history.replaceState({}, document.title, newUrl);
-    }
   }
   
   TweenMax.staggerTo(
@@ -396,7 +445,6 @@ function startAnim() {
     populate
   );
 }
-startAnim();
 
 function botActionRandom() {
   var trgt = $(".dot:not(.player--2)");
@@ -510,51 +558,30 @@ function buildMapFromString(mapString) {
 
 // Modify the fieldPopulateRandom function to use URL parameters
 function fieldPopulateRandom() {
-  // Check if there's a map parameter in the URL
-  var urlParams = new URLSearchParams(window.location.search);
-  var mapParam = urlParams.get('map');
-  
-  if (mapParam) {
-    // Try to build the map from the URL parameter
-    var success = buildMapFromString(mapParam);
-    if (!success) {
-      // If failed, generate a new random map
-      generateRandomMap();
-    }
-  } else {
-    // No map parameter, generate a new random map
-    generateRandomMap();
-  }
-  
-  // Generate a new map string and update the URL
-  var newMapString = generateMapString();
-  var newUrl = window.location.pathname + '?mode=random&map=' + newMapString;
-  window.history.replaceState({}, document.title, newUrl);
-  
-  dots = $(".dot");
-  gsap.delayedCall(1, nextPlayer);
-  show();
-  reset();
-  start();
-}
-
-// Helper function to generate a truly random map
-function generateRandomMap() {
-  $(".field .dot").each(function(index) {
+  $(".field .dot").each(function (index) {
     var randomStage = Math.floor(Math.random() * (stage_amount + 1));
     var randomPlayerNumber = Math.floor(Math.random() * playerArray.length) + 1;
     
-    if (randomStage === 0) {
-      // Empty cell
-      $(this).removeClass(function(index, className) {
-        return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
-      }).removeClass(playerClassClear);
+    if (randomStage == 0) {
     } else {
       $(this).addClass(
         "stage--" + randomStage + " player--" + randomPlayerNumber
       );
     }
   });
+  dots = $(".dot");
+
+  // Update URL with new random map state using hex format
+  if (gameMode === 'random') {
+    var mapString = generateMapString();
+    var newUrl = window.location.pathname + '?mode=random&map=' + mapString;
+    window.history.replaceState({}, document.title, newUrl);
+  }
+
+  gsap.delayedCall(1,nextPlayer);
+  show();
+  reset();
+  start();
 }
 
 function fieldPopulateByLevel() {
@@ -598,12 +625,6 @@ var colorNeutral = "#7F7F7F";
 var colorsArr = [["#12DACE", "#E11168"], ["#1100FF", "#FF3F00"], ["#FF00FF", "#0000FF"], ["#5158af", "#af5160"]];
 var colorsIndex = 0;
 
-const hexToRgb = hex =>
-  hex.replace(/^#?([a-f\d])([a-f\d])([a-f\d])$/i
-             ,(m, r, g, b) => '#' + r + r + g + g + b + b)
-    .substring(1).match(/.{2}/g)
-    .map(x => parseInt(x, 16));
-
 function incrementColorsIndex() {
   if (colorsArr.length > 0) {
     if (colorsIndex + 1 >= colorsArr.length) {
@@ -627,21 +648,21 @@ function changeColors() {
   
   TweenMax.to("html", 0, {"--color-1": colorsArr[colorsIndex][0]});
   
-  TweenMax.to("html", 0, {"--color-1-rgba-0": 'rgba(' + hexToRgb(colorsArr[colorsIndex][0]) + ',0.75)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-1": 'rgba(' + hexToRgb(colorsArr[colorsIndex][0]) + ',0.4)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-2": 'rgba(' + hexToRgb(colorsArr[colorsIndex][0]) + ',0.3)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-3": 'rgba(' + hexToRgb(colorsArr[colorsIndex][0]) + ',0.2)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-4": 'rgba(' + hexToRgb(colorsArr[colorsIndex][0]) + ',0.1)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-5": 'rgba(' + hexToRgb(colorsArr[colorsIndex][0]) + ',0)'});
+  TweenMax.to("html", 0, {"--color-1-rgba-0": 'rgba(' + colorsArr[colorsIndex][0] + ',0.75)'});
+  TweenMax.to("html", 0, {"--color-1-rgba-1": 'rgba(' + colorsArr[colorsIndex][0] + ',0.4)'});
+  TweenMax.to("html", 0, {"--color-1-rgba-2": 'rgba(' + colorsArr[colorsIndex][0] + ',0.3)'});
+  TweenMax.to("html", 0, {"--color-1-rgba-3": 'rgba(' + colorsArr[colorsIndex][0] + ',0.2)'});
+  TweenMax.to("html", 0, {"--color-1-rgba-4": 'rgba(' + colorsArr[colorsIndex][0] + ',0.1)'});
+  TweenMax.to("html", 0, {"--color-1-rgba-5": 'rgba(' + colorsArr[colorsIndex][0] + ',0)'});
   
   TweenMax.to("html", 0, {"--color-2": colorsArr[colorsIndex][1]});
   
-  TweenMax.to("html", 0, {"--color-2-rgba-0": 'rgba(' + hexToRgb(colorsArr[colorsIndex][1]) + ',0.75)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-1": 'rgba(' + hexToRgb(colorsArr[colorsIndex][1]) + ',0.4)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-2": 'rgba(' + hexToRgb(colorsArr[colorsIndex][1]) + ',0.3)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-3": 'rgba(' + hexToRgb(colorsArr[colorsIndex][1]) + ',0.2)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-4": 'rgba(' + hexToRgb(colorsArr[colorsIndex][1]) + ',0.1)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-5": 'rgba(' + hexToRgb(colorsArr[colorsIndex][1]) + ',0)'});
+  TweenMax.to("html", 0, {"--color-2-rgba-0": 'rgba(' + colorsArr[colorsIndex][1] + ',0.75)'});
+  TweenMax.to("html", 0, {"--color-2-rgba-1": 'rgba(' + colorsArr[colorsIndex][1] + ',0.4)'});
+  TweenMax.to("html", 0, {"--color-2-rgba-2": 'rgba(' + colorsArr[colorsIndex][1] + ',0.3)'});
+  TweenMax.to("html", 0, {"--color-2-rgba-3": 'rgba(' + colorsArr[colorsIndex][1] + ',0.2)'});
+  TweenMax.to("html", 0, {"--color-2-rgba-4": 'rgba(' + colorsArr[colorsIndex][1] + ',0.1)'});
+  TweenMax.to("html", 0, {"--color-2-rgba-5": 'rgba(' + colorsArr[colorsIndex][1] + ',0)'});
   
   var currentColor;
   if($('.field').hasClass('player--1')) {
@@ -839,58 +860,30 @@ $('.level, .random, .mode-modal .backdrop').on('click', function(e) {
   }
 });
 
-// Fix the multiplayer mode selection and button behavior
 $('.mode-modal .wrapper').on('click', '.card', function(e) {
   if($(this).hasClass('btn-level')) {
     gameMode = 'regular';
     level = $(this).data('level');
     $('.level-value').html(level);
     
-    // Update URL for regular mode
     var newUrl = window.location.pathname + '?mode=regular&level=' + level;
     window.history.replaceState({}, document.title, newUrl);
     
     startAnim();
-  } else if($(this).data('mode') === 'multiplayer') {
-    gameMode = 'multiplayer';
-    
-    // Don't close the modal for multiplayer
-    $('.multiplayer-options').show();
-    $('.game-id-display, .game-id-input').hide();
-    
-    // Update URL for multiplayer mode
-    var newUrl = window.location.pathname + '?mode=multiplayer';
-    window.history.replaceState({}, document.title, newUrl);
-    
-    // Update UI - make sure only this button is selected
-    $('.mode-modal .card').removeClass('selected');
-    $(this).addClass('selected');
-    
-    $('body')
-      .removeClass('mode-random mode-regular')
-      .addClass('mode-multiplayer');
-      
-    return; // Don't proceed with the rest of the function
   } else {
     gameMode = $(this).data('mode');
     
-    // Update URL for the selected mode
     if (gameMode === 'random') {
-      // For random mode, we'll add the map parameter when the map is generated
       var newUrl = window.location.pathname + '?mode=random';
-      window.history.replaceState({}, document.title, newUrl);
-    } else {
-      var newUrl = window.location.pathname + '?mode=' + gameMode;
       window.history.replaceState({}, document.title, newUrl);
     }
   }
     
-  // Update the selection UI
-  $('.mode-modal .card').removeClass('selected');
+  $(this).closest('.row').find('.card').removeClass('selected');
   $(this).addClass('selected');
   
   $('body')
-    .removeClass('mode-random mode-regular mode-multiplayer modal-open')
+    .removeClass('mode-random mode-regular modal-open')
     .addClass('mode-'+gameMode);
   
   if(gameMode === 'regular' && !$(this).hasClass('btn-level')) {
@@ -901,33 +894,48 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
 });
 
 function updateLevelList() {
-  //console.log('updateLevelList', levelsArray);
-  var list = $('.list--mode-regular');
-  var listWrapper = $(list).find('ul');
-  var listItem = $(list).find('li');
+  console.log('Updating level list', levelsArray); // Debug
   
-  $(listWrapper).html('');
-  $.each( levelsArray, function( key, value ) {
-    if(key !== 'level0') {
-      if(moment.duration('00:'+value.time).asSeconds() != 0 && moment.duration('00:'+value.time).asSeconds() < 120) {
-        var goalMoves = 'active';
-      } else {
-        var goalMoves = '';
-      }
+  var list = $('.list--mode-regular');
+  console.log('List element:', list.length); // Check if element exists
+  
+  var listWrapper = list.find('ul');
+  console.log('List wrapper:', listWrapper.length); // Check if ul exists
+  
+  // Make sure the list wrapper exists
+  if (listWrapper.length === 0) {
+    console.log('Creating new ul element');
+    list.append('<ul></ul>');
+    listWrapper = list.find('ul');
+  }
+  
+  listWrapper.empty();
+  
+  $.each(levelsArray, function(key, value) {
+    console.log('Processing level:', key, value); // Debug each level
+    if (key !== 'level0') {
+      var goalMoves = (moment.duration('00:'+value.time).asSeconds() != 0 && 
+                      moment.duration('00:'+value.time).asSeconds() < 120) ? 'active' : '';
       
-      if(moment.duration('00:'+value.time).asSeconds() != 0 && moment.duration('00:'+value.time).asSeconds() < 60) {
-        var goalTime = 'active';
-      } else {
-        var goalTime = '';
-      }
+      var goalTime = (moment.duration('00:'+value.time).asSeconds() != 0 && 
+                     moment.duration('00:'+value.time).asSeconds() < 60) ? 'active' : '';
       
-      $(listWrapper).append('<li class="card btn btn-level" data-level="' + key.split('level')[1] + '"><h2 class="level-number">' + key.split('level')[1] + '</h2><span class="level-time">' + value.time + '</span><span class="level-goals"><i class="fas fa-star level-goals-won active"></i><i class="fas fa-star level-goals-moves ' + goalMoves + '"></i><i class="fas fa-star level-goals-time ' + goalTime + '"></i></span></li>');
-    }
-    
-    if(key.split('level')[1] == level) {
-      $('li[data-level="'+ level +'"]').addClass('selected');
+      listWrapper.append(
+        '<li class="card btn btn-level" data-level="' + key.split('level')[1] + '">' +
+          '<h2 class="level-number">' + key.split('level')[1] + '</h2>' +
+          '<span class="level-time">' + value.time + '</span>' +
+          '<span class="level-goals">' +
+            '<i class="fas fa-star level-goals-won active"></i>' +
+            '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
+            '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
+          '</span>' +
+        '</li>'
+      );
     }
   });
+  
+  // Highlight current level
+  listWrapper.find('li[data-level="'+ level +'"]').addClass('selected');
 }
 // END Mode Modal
 
@@ -947,6 +955,29 @@ $('.time, .time-modal .backdrop').on('click', function(e) {
 $('.time-modal .wrapper').on('click', '.card', function(e) {
   if($(this).hasClass('restart')) {
     $('body').removeClass('modal-open');
+    // Preserve current map in random mode
+    if (gameMode === 'random') {
+      var urlParams = new URLSearchParams(window.location.search);
+      var map = urlParams.get('map');
+      if (map) {
+        // Preserve the current map
+        setDots();
+        buildMapFromString(map);
+        dots = $(".dot");
+        currentPlayer = "player--2";
+        $(".field").addClass(currentPlayer);
+        $(".end").remove();
+        show();
+        reset();
+        start();
+        return;
+      }
+    }
+    // Update URL to current level for regular mode
+    if (gameMode === 'regular') {
+      var newUrl = window.location.pathname + '?mode=regular&level=' + level;
+      window.history.replaceState({}, document.title, newUrl);
+    }
     startAnim();
   }
 });
@@ -1017,9 +1048,33 @@ function signinAnim() {
     ease: Expo.easeIn,
     delay: 0.5
   });
-  //gsap.delayedCall(3, startup);
   gsap.to('.intro', {duration: 0.3, delay:2, autoAlpha: 0});
-  gsap.delayedCall(2, startAnim);
+  
+  // Check URL parameters before starting game
+  var urlParams = new URLSearchParams(window.location.search);
+  var mode = urlParams.get('mode');
+  var map = urlParams.get('map');
+  
+  if (mode === 'random' && map) {
+    gameMode = 'random';
+    $('body')
+      .removeClass('mode-regular')
+      .addClass('mode-random');
+    
+    // Set up dots first
+    setDots();
+    // Then build the map from URL
+    buildMapFromString(map);
+    // Initialize game state without triggering end game
+    dots = $(".dot");
+    currentPlayer = "player--2";
+    $(".field").addClass(currentPlayer);
+    show();
+    reset();
+    start();
+  } else {
+    gsap.delayedCall(2, startAnim);
+  }
 }
 
 $('.intro').on('click', '.btn-signin:not(.disabled)', function() {
@@ -1060,6 +1115,35 @@ $('.intro').on('click', '.rippled:not(.disabled)', function(e) {
   }, 1000);
 });
 // END Intro
+
+// Check URL parameters on page load
+$(document).ready(function() {
+  var urlParams = new URLSearchParams(window.location.search);
+  var mode = urlParams.get('mode');
+  var map = urlParams.get('map');
+  
+  if (mode === 'random' && map) {
+    gameMode = 'random';
+    $('body')
+      .removeClass('mode-regular')
+      .addClass('mode-random');
+    
+    // Set up dots first
+    setDots();
+    // Then build the map from URL
+    buildMapFromString(map);
+    // Initialize game state without triggering end game
+    dots = $(".dot");
+    currentPlayer = "player--2";
+    $(".field").addClass(currentPlayer);
+    show();
+    reset();
+    start();
+  } else {
+    // Only call startAnim if we're not loading a map from URL
+    startAnim();
+  }
+});
 
 // Add a function to check URL parameters on page load
 function checkUrlParameters() {
@@ -1619,3 +1703,13 @@ function checkGameEnd() {
     return $(".dot[class*='stage--" + (stage_amount - 1) + "']").length == dots.length;
   }
 }
+
+// Update the click handler to only update URL with current level
+$("body").on("click", ".end:not(.player--1)", function(e) {
+  if (!$(e.target).closest('.retry, .new-map').length) {
+    // Update URL with current level (already incremented)
+    var newUrl = window.location.pathname + '?mode=regular&level=' + level;
+    window.history.replaceState({}, document.title, newUrl);
+    startAnim();
+  }
+});
