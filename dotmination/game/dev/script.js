@@ -1406,9 +1406,10 @@ $(document).ready(function() {
       initPeer();
       connectToPeer(gameId);
       
-      // Hide the input and show waiting message
+      // Hide the input
       $('.game-id-input').hide();
-      showWaitingOverlay();
+      // Don't show waiting overlay for joining player
+      // $('.waiting-overlay').show();
     }
     
     return false;
@@ -1476,6 +1477,14 @@ function setupConnection() {
         type: 'init',
         map: mapString
       });
+    } else {
+      // For joining player, set up empty field
+      setDots();
+      currentPlayer = "player--2"; // Joining player is player 2
+      $(".field").addClass(currentPlayer);
+      show();
+      reset();
+      start();
     }
   });
   
