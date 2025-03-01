@@ -1463,7 +1463,38 @@ function initPeer() {
   }
 }
 
+function connectToPeer(targetId) {
+  console.log("Attempting to connect to peer:", targetId);
+  
+  if (!peer) {
+    peer = new Peer();
+    
+    peer.on('open', function(id) {
+      console.log("Peer opened with ID:", id);
+      peerId = id;
+      // Create connection after peer is initialized
+      conn = peer.connect(targetId);
+      setupConnection();
+    });
+    
+    peer.on('error', function(err) {
+      console.error("Peer error:", err);
+    });
+  } else {
+    // Peer already exists, just create connection
+    conn = peer.connect(targetId);
+    setupConnection();
+  }
+}
+
 function setupConnection() {
+  console.log("Setting up connection");
+  
+  if (!conn) {
+    console.error("No connection object!");
+    return;
+  }
+  
   conn.on('open', function() {
     console.log("Connection established");
     // Hide waiting overlay when connected
@@ -1508,21 +1539,6 @@ function setupConnection() {
   conn.on('error', function(err) {
     console.error("Connection error:", err);
   });
-}
-
-function connectToPeer(targetId) {
-  if (!peer) {
-    peer = new Peer();
-    
-    peer.on('open', function(id) {
-      peerId = id;
-      conn = peer.connect(targetId);
-      setupConnection();
-    });
-  } else {
-    conn = peer.connect(targetId);
-    setupConnection();
-  }
 }
 
 // Add multiplayer mode handling to the mode modal click handler
