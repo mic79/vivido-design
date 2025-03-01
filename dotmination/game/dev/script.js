@@ -1402,8 +1402,13 @@ $(document).ready(function() {
       var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
       window.history.replaceState({}, document.title, newUrl);
       
-      // Connect to the peer
+      // Initialize PeerJS and connect
+      initPeer();
       connectToPeer(gameId);
+      
+      // Hide the input and show waiting message
+      $('.game-id-input').hide();
+      showWaitingOverlay();
     }
     
     return false;
@@ -1459,6 +1464,10 @@ function initPeer() {
 
 function setupConnection() {
   conn.on('open', function() {
+    console.log("Connection established");
+    // Hide waiting overlay when connected
+    $('.waiting-overlay').hide();
+    
     // Connection ready for data transfer
     if (isHost) {
       // Send initial game state
@@ -1470,14 +1479,8 @@ function setupConnection() {
     }
   });
   
-  conn.on('data', function(data) {
-    if (data.type === 'move') {
-      // Handle received move
-      $(".dot").eq(data.dotIndex).click();
-    } else if (data.type === 'init') {
-      // Handle initial game state
-      buildMapFromString(data.map);
-    }
+  conn.on('error', function(err) {
+    console.error("Connection error:", err);
   });
 }
 
