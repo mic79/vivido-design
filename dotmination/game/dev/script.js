@@ -1472,23 +1472,21 @@ function setupConnection() {
     // Connection ready for data transfer
     if (isHost) {
       // Send initial game state
+      setDots();
+      currentPlayer = "player--1"; // Host starts as player 1
+      $(".field").addClass(currentPlayer);
+      show();
+      reset();
+      start();
+      
       var mapString = generateMapString();
       conn.send({
         type: 'init',
         map: mapString
       });
-    } else {
-      // For joining player, set up empty field
-      setDots();
-      currentPlayer = "player--2"; // Joining player is player 2
-      $(".field").addClass(currentPlayer);
-      show();
-      reset();
-      start();
     }
   });
   
-  // Restore the data handler
   conn.on('data', function(data) {
     console.log("Received data:", data);
     if (data.type === 'move') {
@@ -1499,8 +1497,7 @@ function setupConnection() {
       // Handle initial game state
       console.log("Received initial game state");
       buildMapFromString(data.map);
-      // Set up initial game state for joining player
-      currentPlayer = "player--1"; // Host starts
+      currentPlayer = "player--2"; // Joining player is player 2
       $(".field").addClass(currentPlayer);
       show();
       reset();
