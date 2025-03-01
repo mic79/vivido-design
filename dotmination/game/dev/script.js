@@ -1479,6 +1479,26 @@ function setupConnection() {
     }
   });
   
+  // Restore the data handler
+  conn.on('data', function(data) {
+    console.log("Received data:", data);
+    if (data.type === 'move') {
+      // Handle received move
+      console.log("Processing move on dot:", data.dotIndex);
+      $(".dot").eq(data.dotIndex).click();
+    } else if (data.type === 'init') {
+      // Handle initial game state
+      console.log("Received initial game state");
+      buildMapFromString(data.map);
+      // Set up initial game state for joining player
+      currentPlayer = "player--1"; // Host starts
+      $(".field").addClass(currentPlayer);
+      show();
+      reset();
+      start();
+    }
+  });
+  
   conn.on('error', function(err) {
     console.error("Connection error:", err);
   });
