@@ -1474,16 +1474,7 @@ function connectToPeer(targetId) {
       peerId = id;
       // Create connection after peer is initialized
       conn = peer.connect(targetId);
-      
-      // Set up connection handlers after creating connection
-      conn.on('open', function() {
-        console.log("Connection established");
-        setupConnection();
-      });
-      
-      conn.on('error', function(err) {
-        console.error("Connection error:", err);
-      });
+      setupConnection();
     });
     
     peer.on('error', function(err) {
@@ -1492,16 +1483,7 @@ function connectToPeer(targetId) {
   } else {
     // Peer already exists, just create connection
     conn = peer.connect(targetId);
-    
-    // Set up connection handlers
-    conn.on('open', function() {
-      console.log("Connection established");
-      setupConnection();
-    });
-    
-    conn.on('error', function(err) {
-      console.error("Connection error:", err);
-    });
+    setupConnection();
   }
 }
 
@@ -1513,27 +1495,29 @@ function setupConnection() {
     return;
   }
   
-  // Hide waiting overlay when connected
-  $('.waiting-overlay').hide();
-  
-  // Connection ready for data transfer
-  if (isHost) {
-    // Send initial game state
-    setDots();
-    currentPlayer = "player--1"; // Host starts as player 1
-    $(".field").addClass(currentPlayer);
-    show();
-    reset();
-    start();
+  conn.on('open', function() {
+    console.log("Connection established");
+    // Hide waiting overlay when connected
+    $('.waiting-overlay').hide();
     
-    var mapString = generateMapString();
-    conn.send({
-      type: 'init',
-      map: mapString
-    });
-  }
+    // Connection ready for data transfer
+    if (isHost) {
+      // Send initial game state
+      setDots();
+      currentPlayer = "player--1"; // Host starts as player 1
+      $(".field").addClass(currentPlayer);
+      show();
+      reset();
+      start();
+      
+      var mapString = generateMapString();
+      conn.send({
+        type: 'init',
+        map: mapString
+      });
+    }
+  });
   
-  // Set up data handler
   conn.on('data', function(data) {
     console.log("Received data:", data);
     if (data.type === 'move') {
@@ -1550,6 +1534,10 @@ function setupConnection() {
       reset();
       start();
     }
+  });
+  
+  conn.on('error', function(err) {
+    console.error("Connection error:", err);
   });
 }
 
