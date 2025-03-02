@@ -1893,7 +1893,7 @@ function setupConnectionHandlers(connection) {
       handleOpponentMove(data.dotIndex);
     } else if (data.type === 'gameStart') {
       console.log("Received game start signal from host");
-      handleGameStart();
+      startMultiplayerGame();
     } else if (data.type === 'gameEnd') {
       handleGameEnd(data.winner);
     }
@@ -1920,8 +1920,10 @@ function handleOpponentMove(dotIndex) {
 function handleGameStart() {
   console.log("Starting multiplayer game");
   
-  // Hide connecting overlay
+  // Hide all overlays
   $('.connecting-overlay').remove();
+  $('.mode-modal').removeClass('active');
+  $('body').removeClass('modal-open');
   
   // Initialize game state
   startMultiplayerAnim();
@@ -1966,10 +1968,13 @@ function startMultiplayerGame() {
     conn.send({
       type: 'gameStart'
     });
+    // Small delay to ensure peer receives signal before host starts
+    setTimeout(() => {
+      handleGameStart();
+    }, 100);
+  } else {
+    handleGameStart();
   }
-  
-  // Start the game locally
-  handleGameStart();
 }
 
 function resetMultiplayerState() {
