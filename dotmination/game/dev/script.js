@@ -121,6 +121,20 @@ $("body").on("click", ".end .card p", function(e) {
   
   if ($(this).hasClass('retry')) {
     // Retry current map/level
+    if (isMultiplayer) {
+      // For multiplayer, use the multiplayer game start flow
+      if (isHost) {
+        startMultiplayerGame();
+      } else {
+        // Peer sends ready signal to trigger host to start new game
+        if (conn) {
+          conn.send({ type: 'ready' });
+        }
+      }
+      $(".end").remove();
+      return;
+    }
+    
     if (gameMode === 'random') {
       var urlParams = new URLSearchParams(window.location.search);
       var map = urlParams.get('map');
@@ -1988,6 +2002,23 @@ function handleDisconnection() {
 
 function startMultiplayerGame() {
   console.log("Starting new multiplayer game");
+  
+  // Reset game state first
+  moveAmount = 0;
+  currentPlayer = "player--1";
+  
+  // Clear the field
+  $(".dot").each(function() {
+    $(this)
+      .removeClass(function(index, className) {
+        return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
+      })
+      .removeClass(function(index, className) {
+        return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
+      })
+      .removeClass(playerClassClear)
+      .attr("data-increment", "0");
+  });
   
   // Send game start signal to peer
   if (conn && isHost) {
