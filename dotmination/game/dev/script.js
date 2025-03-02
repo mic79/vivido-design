@@ -1,6 +1,6 @@
-// v0.0.51
+// v0.0.52
 // Singleplayer modes are stable.
-// Multiplayer mode is in progress.
+// Multiplayer mode is working, but needs to be improved.
 
 // Dark Mode
 function screenTest(e) {
