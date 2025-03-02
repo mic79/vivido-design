@@ -1901,10 +1901,6 @@ window.addEventListener('beforeunload', () => {
 function setupConnectionHandlers(connection) {
   console.log("Setting up connection handlers");
   
-  // Track if players are ready for a new game
-  let localPlayerReady = false;
-  let remotePlayerReady = false;
-  
   connection.on('data', function(data) {
     console.log("Received data:", data);
     
@@ -1920,10 +1916,8 @@ function setupConnectionHandlers(connection) {
       handleGameStart();
     } else if (data.type === 'ready') {
       console.log("Received ready signal");
-      remotePlayerReady = true;
-      
-      // If both players are ready and this is the host, start the game
-      if (localPlayerReady && remotePlayerReady && isHost) {
+      if (isHost) {
+        // Host received ready from peer, start the game
         startMultiplayerGame();
       }
     } else if (data.type === 'gameEnd') {
@@ -1940,21 +1934,6 @@ function setupConnectionHandlers(connection) {
     console.error("Connection error:", err);
     handleDisconnection();
   });
-  
-  // Set local player as ready when sending ready signal
-  const originalSend = connection.send;
-  connection.send = function(data) {
-    if (data.type === 'ready') {
-      console.log("Sending ready signal");
-      localPlayerReady = true;
-      
-      // If both players are ready and this is the host, start the game
-      if (localPlayerReady && remotePlayerReady && isHost) {
-        startMultiplayerGame();
-      }
-    }
-    originalSend.call(connection, data);
-  };
 }
 
 function handleOpponentMove(dotIndex) {
@@ -2037,17 +2016,15 @@ function startMultiplayerGame() {
       .attr("data-increment", "0");
   });
   
-  // Send game start signal to peer
-  if (conn && isHost) {
+  // Initialize the field
+  setDots();
+  
+  if (isHost) {
     console.log("Host sending game start signal");
     conn.send({
       type: 'gameStart'
     });
-    // Small delay to ensure peer receives signal before host starts
-    setTimeout(() => {
-      handleGameStart();
-    }, 100);
-  } else {
+    // Start the game for host
     handleGameStart();
   }
 }
