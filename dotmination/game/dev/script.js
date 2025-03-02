@@ -171,25 +171,26 @@ $("body").on("click", ".end, .end .card", function(e) {
   }
 });
 
-$(".field").on("click", ".dot", function() {
+$(".field").off("click", ".dot").on("click", ".dot", function() {
   if (isMultiplayer) {
     const isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
     if (!isMyTurn) {
       console.log("Not your turn");
       return;
     }
+  }
+  
+  if (!$(this).closest(".field").hasClass("animating") &&
+      ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))) {
     
-    // Send move to opponent
-    if (conn) {
+    // If it's multiplayer, send the move to opponent before processing it
+    if (isMultiplayer && conn) {
       conn.send({
         type: 'move',
         dotIndex: $(this).index()
       });
     }
-  }
-  
-  if (!$(this).closest(".field").hasClass("animating") &&
-      ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))) {
+    
     $(this).closest(".field").addClass("animating");
     $(this)
       .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
@@ -203,19 +204,26 @@ function nextPlayer() {
   if (currentPlayer == playerArray[0]) {
     currentPlayer = playerArray[1];
     TweenMax.to("html", 0, {"--color-current": 'var(--color-2)'});
-    if(delayedCall) {
-      delayedCall.kill();
-    }
   } else {
     currentPlayer = playerArray[0];
     TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+  }
+  
+  // Only call bot action in single player mode
+  if (!isMultiplayer && currentPlayer === "player--1") {
     if(delayedCall) {
       delayedCall.kill();
     }
     delayedCall = gsap.delayedCall(1, botActionRandom);
   }
+  
   $(".field").addClass(currentPlayer);
   moveAmount++;
+  
+  // Update turn indicator in multiplayer mode
+  if (isMultiplayer) {
+    updateTurnIndicator();
+  }
 }
 //nextPlayer();
 
@@ -1921,8 +1929,19 @@ function setupConnectionHandlers(connection) {
 function handleOpponentMove(dotIndex) {
   console.log("Handling opponent move at index:", dotIndex);
   
-  // Simulate click on the dot
-  $(".dot").eq(dotIndex).click();
+  // Get the target dot
+  const targetDot = $(".dot").eq(dotIndex);
+  
+  // Only proceed if it's a valid move
+  if (!targetDot.closest(".field").hasClass("animating") &&
+      (targetDot.hasClass(currentPlayer) || !targetDot.is('[class*="player--"]'))) {
+    
+    targetDot.closest(".field").addClass("animating");
+    targetDot
+      .attr("data-increment", parseInt(targetDot.attr("data-increment")) + 1)
+      .addClass("increment");
+    incrementDotStage(targetDot);
+  }
 }
 
 function handleGameStart() {
