@@ -65,19 +65,6 @@ var timeBest;
 var timeDiff;
 var delayedCall;
 
-// Add after your existing variables
-let isMultiplayer = false;
-let isHost = false;
-let peer = null;
-let conn = null;
-
-const CONNECTION_STATES = {
-    DISCONNECTED: 'disconnected',
-    CONNECTING: 'connecting',
-    CONNECTED: 'connected'
-};
-let connectionState = CONNECTION_STATES.DISCONNECTED;
-
 // Remove all existing click handlers for .end
 $("body").off("click", ".end, .end *");
 
@@ -139,20 +126,21 @@ $("body").on("click", ".end, .end .card", function(e) {
 });
 
 $(".field").on("click", ".dot", function() {
-  if (isMultiplayer) {
-    const isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
+  // Check if we're in multiplayer mode and it's not our turn
+  if (isMultiplayer && conn) {
+    var isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
     if (!isMyTurn) {
       console.log("Not your turn");
       return;
     }
     
-    // Send move to opponent
-    if (conn) {
-      conn.send({
-        type: 'move',
-        dotIndex: $(this).index()
-      });
-    }
+    // Send the move to the other player
+    const dotIndex = $(this).index();
+    console.log("Sending move:", dotIndex);
+    conn.send({
+      type: 'move',
+      dotIndex: dotIndex
+    });
   }
   
   if (!$(this).closest(".field").hasClass("animating") &&
@@ -256,123 +244,9 @@ function checkDotmination() {
     stop();
     sound.play();
     
-    if (isMultiplayer) {
-      // Show multiplayer win screen
-      $("body .container").append(
-        '<div class="end overlay noselect ' + currentPlayer + '">' +
-          '<div class="card">' +
-            '<h1>' + (currentPlayer === (isHost ? "player--1" : "player--2") ? 'You Won!' : 'Game Over') + '</h1>' +
-            '<p class="retry">Play Again <i class="fas fa-undo"></i></p>' +
-          '</div>' +
-        '</div>'
-      );
-    } else {
-      if (currentPlayer == "player--2") {
-        if (gameMode === 'random') {
-          // Show random mode win screen
-          $("body .container").append(
-            '<div class="end overlay noselect ' + currentPlayer + '">' +
-              '<div class="card">' +
-                '<h1>Dotmination!</h1>' +
-                '<span class="level-goals">' +
-                  '<i class="fas fa-star"></i>' +
-                  '<i class="fas fa-star"></i>' +
-                  '<i class="fas fa-star"></i>' +
-                '</span>' +
-                '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
-                '<p class="new-map">Next <i class="fas fa-random"></i></p>' +
-              '</div>' +
-            '</div>'
-          );
-        } else if (level < 100) {
-          if($('body').hasClass('mode-regular')) {
-            var levelObj = {'level': level};
-            myDotmination['level'] = level;
-            
-            // Fix the level indexing here
-            timeBest = (levelsArray['level' + level] !== undefined) ? levelsArray['level' + level].time : null;
-            timeDiff = moment.duration($('#time').html()).subtract(timeBest).asMilliseconds();
-            
-            $('.timediff').remove();
-            
-            // Handle time improvement
-            if(timeBest === null || timeDiff < 0) {
-              // Fix the level indexing here too
-              levelsArray['level' + level] = {'time': $('#time').html()};
-              myDotmination['levels'] = levelsArray;
-            }
-            
-            // Add next level ONLY if it doesn't exist yet
-            if (level < 100 && !levelsArray['level' + (level + 1)]) {
-              // Fix the level indexing here as well
-              console.log('Adding new level:', level + 1);
-              console.log('Current levelsArray:', levelsArray);
-              levelsArray['level' + (level + 1)] = {'time': null};
-              myDotmination['levels'] = levelsArray;
-              console.log('Updated levelsArray:', levelsArray);
-            }
-            
-            // Save to localStorage and update UI
-            myStorage.setObj("myDotmination", myDotmination);
-            updateLevelList();
-            
-            // Calculate star states - fix level indexing here too
-            var hasTime = levelsArray['level' + level] && 
-                          levelsArray['level' + level].time && 
-                          levelsArray['level' + level].time !== null;
-            console.log('Level:', level);
-            console.log('Level data:', levelsArray['level' + level]);
-            console.log('Has time:', hasTime);
-            var wonStarClass = hasTime ? 'active' : '';
-            console.log('Star class:', wonStarClass);
-            
-            if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
-               moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
-              var goalMoves = 'active';
-            } else {
-              var goalMoves = '';
-            }
-
-            if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
-               moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
-              var goalTime = 'active';
-            } else {
-              var goalTime = '';
-            }
-            
-            // Show win overlay with correct star states
-            $("body .container").append(
-              '<div class="end overlay noselect ' + currentPlayer + '">' +
-                '<div class="card">' +
-                  '<h1>Dotmination!</h1>' +
-                  '<span class="level-goals">' +
-                    '<i class="fas fa-star level-goals-won ' + wonStarClass + '"></i>' +
-                    '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
-                    '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
-                  '</span>' +
-                  '<p>Next Level <i class="fas fa-arrow-right"></i></p>' +
-                '</div>' +
-              '</div>'
-            );
-            
-            TweenMax.fromTo($('.overlay > .card'), 2, 
-              {alpha: 0, scale: 0}, 
-              {alpha: 1, scale: 1, ease:Elastic.easeOut}
-            );
-          }
-        } else {
-          level = 1;
-          $("body .container").append(
-            '<div class="end overlay noselect ' + currentPlayer + '">' +
-              '<div class="card">' +
-                '<h1>Dotmination!</h1>' +
-                '<p>Next Level <i class="fas fa-undo"></i></p>' +
-              '</div>' +
-            '</div>'
-          );
-        }
-      } else {
-        // Player lost - show retry overlay
+    if (currentPlayer == "player--2") {
+      if (gameMode === 'random') {
+        // Show random mode win screen
         $("body .container").append(
           '<div class="end overlay noselect ' + currentPlayer + '">' +
             '<div class="card">' +
@@ -383,11 +257,113 @@ function checkDotmination() {
                 '<i class="fas fa-star"></i>' +
               '</span>' +
               '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
-              (gameMode === 'random' ? '<p class="new-map">Next <i class="fas fa-random"></i></p>' : '') +
+              '<p class="new-map">Next <i class="fas fa-random"></i></p>' +
+            '</div>' +
+          '</div>'
+        );
+      } else if (level < 100) {
+        if($('body').hasClass('mode-regular')) {
+          var levelObj = {'level': level};
+          myDotmination['level'] = level;
+          
+          // Fix the level indexing here
+          timeBest = (levelsArray['level' + level] !== undefined) ? levelsArray['level' + level].time : null;
+          timeDiff = moment.duration($('#time').html()).subtract(timeBest).asMilliseconds();
+          
+          $('.timediff').remove();
+          
+          // Handle time improvement
+          if(timeBest === null || timeDiff < 0) {
+            // Fix the level indexing here too
+            levelsArray['level' + level] = {'time': $('#time').html()};
+            myDotmination['levels'] = levelsArray;
+          }
+          
+          // Add next level ONLY if it doesn't exist yet
+          if (level < 100 && !levelsArray['level' + (level + 1)]) {
+            // Fix the level indexing here as well
+            console.log('Adding new level:', level + 1);
+            console.log('Current levelsArray:', levelsArray);
+            levelsArray['level' + (level + 1)] = {'time': null};
+            myDotmination['levels'] = levelsArray;
+            console.log('Updated levelsArray:', levelsArray);
+          }
+          
+          // Save to localStorage and update UI
+          myStorage.setObj("myDotmination", myDotmination);
+          updateLevelList();
+          
+          // Calculate star states - fix level indexing here too
+          var hasTime = levelsArray['level' + level] && 
+                        levelsArray['level' + level].time && 
+                        levelsArray['level' + level].time !== null;
+          console.log('Level:', level);
+          console.log('Level data:', levelsArray['level' + level]);
+          console.log('Has time:', hasTime);
+          var wonStarClass = hasTime ? 'active' : '';
+          console.log('Star class:', wonStarClass);
+          
+          if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
+             moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
+            var goalMoves = 'active';
+          } else {
+            var goalMoves = '';
+          }
+
+          if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
+             moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
+            var goalTime = 'active';
+          } else {
+            var goalTime = '';
+          }
+          
+          // Show win overlay with correct star states
+          $("body .container").append(
+            '<div class="end overlay noselect ' + currentPlayer + '">' +
+              '<div class="card">' +
+                '<h1>Dotmination!</h1>' +
+                '<span class="level-goals">' +
+                  '<i class="fas fa-star level-goals-won ' + wonStarClass + '"></i>' +
+                  '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
+                  '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
+                '</span>' +
+                '<p>Next Level <i class="fas fa-arrow-right"></i></p>' +
+              '</div>' +
+            '</div>'
+          );
+          
+          TweenMax.fromTo($('.overlay > .card'), 2, 
+            {alpha: 0, scale: 0}, 
+            {alpha: 1, scale: 1, ease:Elastic.easeOut}
+          );
+        }
+      } else {
+        level = 1;
+        $("body .container").append(
+          '<div class="end overlay noselect ' + currentPlayer + '">' +
+            '<div class="card">' +
+              '<h1>Dotmination!</h1>' +
+              '<p>Next Level <i class="fas fa-undo"></i></p>' +
             '</div>' +
           '</div>'
         );
       }
+    } else {
+      // Player lost - show retry overlay
+      $("body .container").append(
+        '<div class="end overlay noselect ' + currentPlayer + '">' +
+          '<div class="card">' +
+            '<h1>Dotmination!</h1>' +
+            '<span class="level-goals">' +
+              '<i class="fas fa-star"></i>' +
+              '<i class="fas fa-star"></i>' +
+              '<i class="fas fa-star"></i>' +
+            '</span>' +
+            '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
+            (gameMode === 'random' ? '<p class="new-map">Next <i class="fas fa-random"></i></p>' : '') +
+          '</div>' +
+        '</div>'
+      );
     }
   }
 }
@@ -928,14 +904,9 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
       e.preventDefault();
       e.stopPropagation();
       isMultiplayer = true;
+      $('.multiplayer-options').show();
       
-      // Hide all mode-specific content
-      $('.list--mode-regular, .multiplayer-options, .waiting-overlay, .game-id-display').hide();
-      
-      // Start automatic connection process
-      startMultiplayerConnection();
-      
-      // Update selection
+      // Update selection before returning
       $(this).closest('.row').find('.card').removeClass('selected');
       $(this).addClass('selected');
       
@@ -1462,6 +1433,141 @@ $(document).ready(function() {
   });
 });
 
+// Add these variables at the top of your script with other variable declarations
+var isMultiplayer = false;
+var isHost = false;
+var peer = null;
+var conn = null;
+var peerId = null;
+
+// Add the multiplayer initialization code
+function initPeer() {
+  if (!peer) {
+    peer = new Peer();
+    
+    peer.on('open', function(id) {
+      peerId = id;
+      if (isHost) {
+        // Show the game ID for others to join
+        $('.game-id').text(id);
+        // Update URL with the game ID
+        var newUrl = window.location.pathname + '?mode=multiplayer&id=' + id;
+        window.history.replaceState({}, document.title, newUrl);
+      }
+    });
+    
+    peer.on('connection', function(connection) {
+      conn = connection;
+      setupConnection();
+    });
+  }
+}
+
+function connectToPeer(targetId) {
+  console.log("Attempting to connect to peer:", targetId);
+  
+  if (!peer) {
+    peer = new Peer();
+    
+    peer.on('open', function(id) {
+      console.log("Peer opened with ID:", id);
+      peerId = id;
+      // Create connection after peer is initialized
+      conn = peer.connect(targetId);
+      setupConnection();
+    });
+    
+    peer.on('error', function(err) {
+      console.error("Peer error:", err);
+    });
+  } else {
+    // Peer already exists, just create connection
+    conn = peer.connect(targetId);
+    setupConnection();
+  }
+}
+
+function setupConnection() {
+  console.log("Setting up connection");
+  
+  if (!conn) {
+    console.error("No connection object!");
+    return;
+  }
+  
+  conn.on('open', function() {
+    console.log("Connection established");
+    // Hide waiting overlay when connected
+    $('.waiting-overlay').hide();
+    
+    // Connection ready for data transfer
+    if (isHost) {
+      // Send initial game state
+      setDots();
+      currentPlayer = "player--1"; // Host starts as player 1
+      $(".field").addClass(currentPlayer);
+      show();
+      reset();
+      start();
+      
+      var mapString = generateMapString();
+      conn.send({
+        type: 'init',
+        map: mapString
+      });
+    }
+  });
+  
+  conn.on('data', function(data) {
+    console.log("Received data:", data);
+    if (data.type === 'move') {
+      // Handle received move
+      console.log("Processing move on dot:", data.dotIndex);
+      $(".dot").eq(data.dotIndex).click();
+    } else if (data.type === 'init') {
+      // Handle initial game state
+      console.log("Received initial game state");
+      buildMapFromString(data.map);
+      currentPlayer = "player--2"; // Joining player is player 2
+      $(".field").addClass(currentPlayer);
+      show();
+      reset();
+      start();
+    }
+  });
+  
+  conn.on('error', function(err) {
+    console.error("Connection error:", err);
+  });
+}
+
+// Add multiplayer mode handling to the mode modal click handler
+$('.mode-modal .wrapper').on('click', '.card', function(e) {
+  if($(this).hasClass('btn-level')) {
+    // ... existing level code ...
+  } else {
+    gameMode = $(this).data('mode');
+    
+    if (gameMode === 'multiplayer') {
+      e.preventDefault();
+      e.stopPropagation();
+      isMultiplayer = true;
+      // Hide Levels content and show Multiplayer options
+      $('.list--mode-regular').hide();
+      $('.multiplayer-options').show();
+      
+      // Update selection before returning
+      $(this).closest('.row').find('.card').removeClass('selected');
+      $(this).addClass('selected');
+      
+      return false;
+    } else if (gameMode === 'random') {
+      // ... existing random code ...
+    }
+  }
+  // ... rest of existing code ...
+});
+
 // Add a function to show waiting overlay
 function showWaitingOverlay() {
   console.log("Showing waiting overlay");
@@ -1650,293 +1756,3 @@ $("body").on("click", ".end:not(.player--1)", function(e) {
     startAnim();
   }
 });
-
-// Add this new function for automatic multiplayer connection
-function startMultiplayerConnection() {
-    console.log("Starting automatic multiplayer connection");
-    
-    // Show connecting overlay
-    showConnectingOverlay();
-    
-    // Try to connect to existing hosts first
-    tryConnectToHost(1);
-}
-
-function tryConnectToHost(lobbyNumber) {
-    if (lobbyNumber > 10) { // Max 10 lobbies
-        // If we've tried all lobbies, become a host
-        console.log("No available hosts found, becoming host");
-        becomeHost(1);
-        return;
-    }
-
-    console.log("Trying to connect to mic-host" + lobbyNumber);
-    
-    // Initialize peer for connecting
-    if (peer) {
-        peer.destroy();
-    }
-    
-    peer = new Peer(null, {
-        host: "0.peerjs.com",
-        port: 443,
-        secure: true
-    });
-
-    peer.on('open', function() {
-        // Try to connect to host
-        const hostId = 'mic-host' + lobbyNumber;
-        const connection = peer.connect(hostId);
-        
-        // Set a timeout for connection attempt
-        const timeout = setTimeout(() => {
-            console.log("Connection timeout for mic-host" + lobbyNumber);
-            connection.close();
-            // Try next lobby number
-            tryConnectToHost(lobbyNumber + 1);
-        }, 2000);
-
-        connection.on('open', function() {
-            clearTimeout(timeout);
-            console.log("Connected to host", hostId);
-            conn = connection;
-            isHost = false;
-            setupConnectionHandlers(conn);
-            updateConnectingOverlay("Connected to game!");
-        });
-
-        connection.on('error', function(err) {
-            clearTimeout(timeout);
-            console.log("Error connecting to mic-host" + lobbyNumber, err);
-            // Try next lobby number
-            tryConnectToHost(lobbyNumber + 1);
-        });
-    });
-
-    peer.on('error', function(err) {
-        console.log("Peer error while trying to connect", err);
-        // Try next lobby number
-        tryConnectToHost(lobbyNumber + 1);
-    });
-}
-
-function becomeHost(lobbyNumber) {
-    if (lobbyNumber > 10) { // Max 10 lobbies
-        // All slots are taken
-        updateConnectingOverlay("All game slots are full. Please try again later.");
-        return;
-    }
-
-    console.log("Attempting to become mic-host" + lobbyNumber);
-    
-    // Initialize peer as host
-    if (peer) {
-        peer.destroy();
-    }
-    
-    const hostId = 'mic-host' + lobbyNumber;
-    peer = new Peer(hostId, {
-        host: "0.peerjs.com",
-        port: 443,
-        secure: true
-    });
-
-    peer.on('open', function() {
-        console.log("Successfully became host", hostId);
-        isHost = true;
-        updateConnectingOverlay("Waiting for opponent...");
-        
-        peer.on('connection', function(connection) {
-            if (conn) {
-                // Already connected to someone
-                connection.close();
-                return;
-            }
-            conn = connection;
-            setupConnectionHandlers(conn);
-        });
-    });
-
-    peer.on('error', function(err) {
-        if (err.type === 'unavailable-id') {
-            // This host ID is taken, try next number
-            console.log("Host ID taken, trying next number");
-            becomeHost(lobbyNumber + 1);
-        } else {
-            console.error("Host error:", err);
-            updateConnectingOverlay("Connection error. Please try again.");
-        }
-    });
-}
-
-function showConnectingOverlay() {
-    // Remove any existing overlay
-    $('.connecting-overlay').remove();
-    
-    // Create new connecting overlay
-    $('body').append(`
-        <div class="connecting-overlay">
-            <div class="connecting-card">
-                <h2>Connecting to game...</h2>
-                <div class="connecting-status">Searching for available games...</div>
-                <div class="connecting-spinner"></div>
-                <button class="cancel-connection-btn">Cancel</button>
-            </div>
-        </div>
-    `);
-    
-    // Add cancel button handler
-    $('.cancel-connection-btn').on('click', function() {
-        if (confirm('Are you sure you want to cancel connecting?')) {
-            resetMultiplayerState();
-            $('.connecting-overlay').remove();
-            
-            // Reset game mode
-            gameMode = 'regular';
-            $('body')
-                .removeClass('mode-multiplayer')
-                .addClass('mode-regular');
-            
-            // Update URL
-            var newUrl = window.location.pathname + '?mode=regular';
-            window.history.replaceState({}, document.title, newUrl);
-            
-            startAnim();
-        }
-    });
-}
-
-function updateConnectingOverlay(message) {
-    $('.connecting-status').text(message);
-}
-
-function setupConnectionHandlers(connection) {
-    console.log("Setting up connection handlers");
-    
-    connection.on('data', function(data) {
-        console.log("Received data:", data);
-        
-        if (data.type === 'move') {
-            // Handle opponent's move
-            handleOpponentMove(data.dotIndex);
-        } else if (data.type === 'gameStart') {
-            // Handle game start
-            handleGameStart();
-        } else if (data.type === 'gameEnd') {
-            // Handle game end
-            handleGameEnd(data.winner);
-        }
-    });
-
-    connection.on('close', function() {
-        console.log("Connection closed");
-        handleDisconnection();
-    });
-
-    connection.on('error', function(err) {
-        console.error("Connection error:", err);
-        handleDisconnection();
-    });
-
-    // Start the game once connection is established
-    if (isHost) {
-        // Host starts the game
-        startMultiplayerGame();
-    }
-}
-
-function handleOpponentMove(dotIndex) {
-    console.log("Handling opponent move at index:", dotIndex);
-    
-    // Simulate click on the dot
-    $(".dot").eq(dotIndex).click();
-}
-
-function handleGameStart() {
-    console.log("Starting multiplayer game");
-    
-    // Hide connecting overlay
-    $('.connecting-overlay').remove();
-    
-    // Initialize game state
-    startMultiplayerAnim();
-    
-    // Update player indicators
-    updatePlayerIndicators();
-    updateTurnIndicator();
-}
-
-function handleGameEnd(winner) {
-    console.log("Game ended, winner:", winner);
-    
-    // Show appropriate end screen
-    const isWinner = (winner === 'host' && isHost) || (winner === 'peer' && !isHost);
-    $("body .container").append(
-        '<div class="end overlay noselect">' +
-            '<div class="card">' +
-                '<h1>' + (isWinner ? 'You Won!' : 'Game Over') + '</h1>' +
-                '<p class="retry">Play Again <i class="fas fa-undo"></i></p>' +
-            '</div>' +
-        '</div>'
-    );
-}
-
-function handleDisconnection() {
-    console.log("Handling disconnection");
-    
-    // Show disconnection message
-    alert("Connection lost. Returning to single player mode.");
-    
-    // Reset multiplayer state
-    resetMultiplayerState();
-    
-    // Return to regular mode
-    gameMode = 'regular';
-    $('body')
-        .removeClass('mode-multiplayer')
-        .addClass('mode-regular');
-    
-    // Update URL
-    var newUrl = window.location.pathname + '?mode=regular';
-    window.history.replaceState({}, document.title, newUrl);
-    
-    // Start new single player game
-    startAnim();
-}
-
-function startMultiplayerGame() {
-    console.log("Starting new multiplayer game");
-    
-    // Send game start signal to peer
-    if (conn) {
-        conn.send({
-            type: 'gameStart'
-        });
-    }
-    
-    // Start the game locally
-    handleGameStart();
-}
-
-function resetMultiplayerState() {
-    console.log("Resetting multiplayer state");
-    
-    // Close existing connection
-    if (conn) {
-        conn.close();
-        conn = null;
-    }
-    
-    // Destroy peer
-    if (peer) {
-        peer.destroy();
-        peer = null;
-    }
-    
-    // Reset flags
-    isHost = false;
-    isMultiplayer = false;
-    
-    // Remove any overlays
-    $('.connecting-overlay, .waiting-overlay').remove();
-}
