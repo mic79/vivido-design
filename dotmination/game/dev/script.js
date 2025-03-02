@@ -1808,7 +1808,7 @@ function setupPeer(slotNumber) {
       updateConnectingOverlay(`Connected to Host!`);
       saveSessionInfo(slotNumber, 'peer');
       setupConnectionHandlers(conn);
-      startMultiplayerGame();
+      // Peer waits for host to start the game
     });
   });
 
@@ -1827,9 +1827,6 @@ function setupHost(slotNumber) {
 
   peer.on("open", function() {
     if (hasConnected) return;
-    hasConnected = true;
-    connectionState = CONNECTION_STATES.CONNECTED;
-
     console.log("Host started with ID:", sessionID);
     updateConnectingOverlay(`Waiting for opponent to join...`);
     saveSessionInfo(slotNumber, 'host');
@@ -1842,8 +1839,14 @@ function setupHost(slotNumber) {
         newConn.close();
       } else {
         conn = newConn;
-        setupConnectionHandlers(conn);
-        startMultiplayerGame();
+        conn.on("open", function() {
+          if (hasConnected) return;
+          hasConnected = true;
+          connectionState = CONNECTION_STATES.CONNECTED;
+          setupConnectionHandlers(conn);
+          // Only host initiates the game
+          startMultiplayerGame();
+        });
       }
     });
   });
@@ -1878,16 +1881,6 @@ window.addEventListener('beforeunload', () => {
 function setupConnectionHandlers(connection) {
   console.log("Setting up connection handlers");
   
-  connection.on('open', function() {
-    console.log("Connection fully established");
-    connectionState = CONNECTION_STATES.CONNECTED;
-    
-    // Only now start sending data
-    if (isHost) {
-      startMultiplayerGame();
-    }
-  });
-  
   connection.on('data', function(data) {
     console.log("Received data:", data);
     
@@ -1899,6 +1892,7 @@ function setupConnectionHandlers(connection) {
     if (data.type === 'move') {
       handleOpponentMove(data.dotIndex);
     } else if (data.type === 'gameStart') {
+      console.log("Received game start signal from host");
       handleGameStart();
     } else if (data.type === 'gameEnd') {
       handleGameEnd(data.winner);
@@ -1967,7 +1961,8 @@ function startMultiplayerGame() {
   console.log("Starting new multiplayer game");
   
   // Send game start signal to peer
-  if (conn) {
+  if (conn && isHost) {
+    console.log("Host sending game start signal");
     conn.send({
       type: 'gameStart'
     });
