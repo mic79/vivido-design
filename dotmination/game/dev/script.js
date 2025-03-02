@@ -19,6 +19,48 @@ $( document ).ready(function() {
 });
 // END Dark Mode
 
+// Multiplayer Connection Management
+const CONNECTION_STATES = {
+  DISCONNECTED: 'disconnected',
+  CONNECTING: 'connecting',
+  CONNECTED: 'connected'
+};
+
+let peer, conn, sessionID;
+const MAX_LOBBIES = 10;
+let hasConnected = false;
+let connectionState = CONNECTION_STATES.DISCONNECTED;
+let currentAttempt = 1;
+
+// Session persistence
+function saveSessionInfo(slotNumber, role) {
+  localStorage.setItem('dotminationSession', JSON.stringify({
+    slotNumber,
+    role,
+    timestamp: Date.now()
+  }));
+}
+
+function getSessionInfo() {
+  try {
+    const session = JSON.parse(localStorage.getItem('dotminationSession'));
+    if (!session) return null;
+
+    // Check if session is not too old (e.g., 5 minutes)
+    if (Date.now() - session.timestamp > 5 * 60 * 1000) {
+      localStorage.removeItem('dotminationSession');
+      return null;
+    }
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function clearSessionInfo() {
+  localStorage.removeItem('dotminationSession');
+}
+
 // LocalStorage
 var myStorage = window.localStorage;
 
@@ -68,15 +110,6 @@ var delayedCall;
 // Add after your existing variables
 let isMultiplayer = false;
 let isHost = false;
-let peer = null;
-let conn = null;
-
-const CONNECTION_STATES = {
-    DISCONNECTED: 'disconnected',
-    CONNECTING: 'connecting',
-    CONNECTED: 'connected'
-};
-let connectionState = CONNECTION_STATES.DISCONNECTED;
 
 // Remove all existing click handlers for .end
 $("body").off("click", ".end, .end *");
@@ -929,10 +962,8 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
       e.stopPropagation();
       isMultiplayer = true;
       
-      // Hide all mode-specific content
-      $('.list--mode-regular, .multiplayer-options, .waiting-overlay, .game-id-display').hide();
-      
       // Start automatic connection process
+      showConnectingOverlay();
       startMultiplayerConnection();
       
       // Update selection
@@ -1653,321 +1684,366 @@ $("body").on("click", ".end:not(.player--1)", function(e) {
 
 // Add this new function for automatic multiplayer connection
 function startMultiplayerConnection() {
-    console.log("Starting automatic multiplayer connection");
+  console.log("Starting automatic multiplayer connection");
+  
+  connectionState = CONNECTION_STATES.CONNECTING;
+  
+  findAvailableSlot().then(slot => {
+    if (!slot) {
+      updateConnectingOverlay("No available game slots found. Please try again later.");
+      showRetryButton();
+      return;
+    }
     
-    // Show connecting overlay
-    showConnectingOverlay();
-    
-    // Try to connect to existing hosts first
-    tryConnectToHost(1);
+    console.log('slot.role:', slot.role);
+    if (slot.role === 'peer') {
+      setupPeer(slot.slotNumber);
+    } else {
+      setupHost(slot.slotNumber);
+    }
+  });
 }
 
-function tryConnectToHost(lobbyNumber) {
-    if (lobbyNumber > 3) { // Reduce max attempts to 3 for faster fallback
-        console.log("No available hosts found, becoming host");
-        becomeHost(1);
-        return;
-    }
+async function checkPeerAvailability(id) {
+  return new Promise((resolve) => {
+    const tempPeer = new Peer(id, { host: "0.peerjs.com", port: 443, secure: true });
 
-    console.log("Trying to connect to mic-host" + lobbyNumber);
-    
-    if (peer) {
-        peer.destroy();
-    }
-    
-    peer = new Peer(null, {
-        host: "0.peerjs.com",
-        port: 443,
-        secure: true,
-        debug: 3
-    });
-
-    peer.on('open', function() {
-        const hostId = 'mic-host' + lobbyNumber;
-        console.log("Attempting to connect to", hostId);
-        
-        const connection = peer.connect(hostId, {
-            reliable: true
-        });
-        
-        let timeoutId = setTimeout(() => {
-            console.log("Connection timeout for " + hostId);
-            if (connection) {
-                connection.close();
-            }
-            if (peer) {
-                peer.destroy();
-            }
-            tryConnectToHost(lobbyNumber + 1);
-        }, 2000);
-
-        connection.on('open', function() {
-            clearTimeout(timeoutId);
-            console.log("Connected to host", hostId);
-            conn = connection;
-            isHost = false;
-            
-            setupConnectionHandlers(conn);
-            updateConnectingOverlay("Connected to game!");
-        });
-
-        connection.on('error', function(err) {
-            clearTimeout(timeoutId);
-            console.log("Error connecting to " + hostId, err);
-            if (connection) {
-                connection.close();
-            }
-            if (peer) {
-                peer.destroy();
-            }
-            tryConnectToHost(lobbyNumber + 1);
-        });
-    });
-
-    peer.on('error', function(err) {
-        console.log("Peer error while trying to connect", err);
-        if (peer) {
-            peer.destroy();
-        }
-        tryConnectToHost(lobbyNumber + 1);
-    });
-}
-
-function becomeHost(lobbyNumber) {
-    if (lobbyNumber > 3) { // Reduce max attempts to 3
-        updateConnectingOverlay("All game slots are full. Please try again later.");
-        return;
-    }
-
-    console.log("Attempting to become mic-host" + lobbyNumber);
-    
-    if (peer) {
-        peer.destroy();
-    }
-    
-    const hostId = 'mic-host' + lobbyNumber;
-    peer = new Peer(hostId, {
-        host: "0.peerjs.com",
-        port: 443,
-        secure: true,
-        debug: 3
-    });
-
-    let timeoutId = setTimeout(() => {
-        console.log("Host creation timeout for " + hostId);
-        if (peer) {
-            peer.destroy();
-        }
-        becomeHost(lobbyNumber + 1);
+    const timeout = setTimeout(() => {
+      tempPeer.destroy();
+      resolve(false); // Timeout, assume ID is taken
     }, 2000);
 
-    peer.on('open', function() {
-        clearTimeout(timeoutId);
-        console.log("Successfully became host", hostId);
-        isHost = true;
-        updateConnectingOverlay("Waiting for opponent...");
-        
-        peer.on('connection', function(connection) {
-            console.log("Received connection attempt");
-            
-            if (conn) {
-                console.log("Already connected, rejecting new connection");
-                connection.close();
-                return;
-            }
-            
-            conn = connection;
-            
-            conn.on('open', function() {
-                console.log("Connection to peer fully established");
-                setupConnectionHandlers(conn);
-                startMultiplayerGame();
-            });
-        });
+    tempPeer.on("open", () => {
+      // Successfully created peer with this ID
+      clearTimeout(timeout);
+      tempPeer.destroy();
+      resolve(true); // ID is available
     });
 
-    peer.on('error', function(err) {
-        clearTimeout(timeoutId);
-        console.error("Host error:", err);
-        if (err.type === 'unavailable-id') {
-            console.log("Host ID taken, trying next number");
-            becomeHost(lobbyNumber + 1);
-        } else {
-            console.error("Host error:", err);
-            updateConnectingOverlay("Connection error. Please try again.");
+    tempPeer.on("error", (err) => {
+      clearTimeout(timeout);
+      tempPeer.destroy();
+      // Check specifically for unavailable ID error
+      if (err.type === 'unavailable-id') {
+        resolve(false); // ID is taken
+      } else {
+        // For other errors (network, etc), assume ID might be available
+        resolve(true);
+      }
+    });
+  });
+}
+
+async function findAvailableSlot() {
+  updateConnectingOverlay("Searching for available game slots...");
+
+  // First try to reconnect to previous session
+  const previousSession = getSessionInfo();
+  if (previousSession) {
+    const hostId = `dot-host${previousSession.slotNumber}`;
+    const peerId = `dot-peer${previousSession.slotNumber}`;
+
+    // Verify if the previous slot is still valid
+    if (previousSession.role === 'host') {
+      const hostAvailable = await checkPeerAvailability(hostId);
+      if (hostAvailable) {
+        return { slotNumber: previousSession.slotNumber, role: 'host' };
+      }
+    } else {
+      const hostExists = !(await checkPeerAvailability(hostId));
+      if (hostExists) {  // Host exists
+        const peerAvailable = await checkPeerAvailability(peerId);
+        if (peerAvailable) {
+          return { slotNumber: previousSession.slotNumber, role: 'peer' };
         }
-    });
+      }
+    }
+    // If previous slot is not valid, clear the session
+    clearSessionInfo();
+  }
+
+  // If no valid previous session, search for new slot
+  for (let i = 1; i <= MAX_LOBBIES; i++) {
+    const hostId = `dot-host${i}`;
+    
+    // First check if a host exists at this slot
+    const hostAvailable = await checkPeerAvailability(hostId);
+    
+    if (hostAvailable) {
+      // No host exists, we can become the host
+      console.log(`No host found at slot ${i}, becoming host`);
+      return { slotNumber: i, role: 'host' };
+    } else {
+      // A host exists, try to become a peer
+      console.log(`Host found at slot ${i}, attempting to become peer`);
+      const peerId = `dot-peer${i}`;
+      const peerAvailable = await checkPeerAvailability(peerId);
+      if (peerAvailable) {
+        return { slotNumber: i, role: 'peer' };
+      }
+    }
+  }
+
+  return null; // No slots available
 }
 
-function showConnectingOverlay() {
-    // Remove any existing overlay
-    $('.connecting-overlay').remove();
-    
-    // Create new connecting overlay
-    $('body').append(`
-        <div class="connecting-overlay">
-            <div class="connecting-card">
-                <h2>Connecting to game...</h2>
-                <div class="connecting-status">Searching for available games...</div>
-                <div class="connecting-spinner"></div>
-                <button class="cancel-connection-btn">Cancel</button>
-            </div>
-        </div>
-    `);
-    
-    // Add cancel button handler
-    $('.cancel-connection-btn').on('click', function() {
-        if (confirm('Are you sure you want to cancel connecting?')) {
-            resetMultiplayerState();
-            $('.connecting-overlay').remove();
-            
-            // Reset game mode
-            gameMode = 'regular';
-            $('body')
-                .removeClass('mode-multiplayer')
-                .addClass('mode-regular');
-            
-            // Update URL
-            var newUrl = window.location.pathname + '?mode=regular';
-            window.history.replaceState({}, document.title, newUrl);
-            
-            startAnim();
-        }
+function setupPeer(slotNumber) {
+  cleanup();
+  sessionID = `dot-peer${slotNumber}`;
+  peer = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true });
+
+  peer.on("open", function() {
+    if (hasConnected) return;
+
+    console.log("Peer started with ID:", sessionID);
+    updateConnectingOverlay(`Connecting to host...`);
+
+    const hostID = `dot-host${slotNumber}`;
+    conn = peer.connect(hostID);
+
+    conn.on("open", function() {
+      if (hasConnected) return;
+      hasConnected = true;
+      connectionState = CONNECTION_STATES.CONNECTED;
+      updateConnectingOverlay(`Connected to Host!`);
+      saveSessionInfo(slotNumber, 'peer');
+      setupConnectionHandlers(conn);
+      startMultiplayerGame();
     });
+  });
+
+  peer.on("error", function(err) {
+    console.error("Peer error:", err);
+    cleanup();
+    clearSessionInfo();
+    showRetryButton();
+  });
 }
 
-function updateConnectingOverlay(message) {
-    $('.connecting-status').text(message);
+function setupHost(slotNumber) {
+  cleanup();
+  sessionID = `dot-host${slotNumber}`;
+  peer = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true });
+
+  peer.on("open", function() {
+    if (hasConnected) return;
+    hasConnected = true;
+    connectionState = CONNECTION_STATES.CONNECTED;
+
+    console.log("Host started with ID:", sessionID);
+    updateConnectingOverlay(`Waiting for opponent to join...`);
+    saveSessionInfo(slotNumber, 'host');
+
+    peer.on("connection", function(newConn) {
+      console.log("Received connection attempt");
+      
+      if (conn) {
+        console.log("Already connected, rejecting new connection");
+        newConn.close();
+      } else {
+        conn = newConn;
+        setupConnectionHandlers(conn);
+        startMultiplayerGame();
+      }
+    });
+  });
+
+  peer.on("error", function(err) {
+    console.error("Host error:", err);
+    cleanup();
+    clearSessionInfo();
+    showRetryButton();
+  });
 }
+
+function cleanup() {
+  if (conn) {
+    conn.close();
+    conn = null;
+  }
+  if (peer) {
+    peer.destroy();
+    peer = null;
+  }
+  hasConnected = false;
+  connectionState = CONNECTION_STATES.DISCONNECTED;
+}
+
+// Add window unload handler
+window.addEventListener('beforeunload', () => {
+  // Don't clear session info on page reload
+  cleanup();
+});
 
 function setupConnectionHandlers(connection) {
-    console.log("Setting up connection handlers");
+  console.log("Setting up connection handlers");
+  
+  connection.on('open', function() {
+    console.log("Connection fully established");
+    connectionState = CONNECTION_STATES.CONNECTED;
     
-    // Don't start game immediately, wait for connection to be fully established
-    connection.on('open', function() {
-        console.log("Connection fully established");
-        
-        // Only now start sending data
-        if (isHost) {
-            startMultiplayerGame();
-        }
-    });
+    // Only now start sending data
+    if (isHost) {
+      startMultiplayerGame();
+    }
+  });
+  
+  connection.on('data', function(data) {
+    console.log("Received data:", data);
     
-    connection.on('data', function(data) {
-        console.log("Received data:", data);
-        
-        if (data.type === 'move') {
-            handleOpponentMove(data.dotIndex);
-        } else if (data.type === 'gameStart') {
-            handleGameStart();
-        } else if (data.type === 'gameEnd') {
-            handleGameEnd(data.winner);
-        }
-    });
+    if (connectionState !== CONNECTION_STATES.CONNECTED) {
+      console.log("Ignoring data, not fully connected");
+      return;
+    }
+    
+    if (data.type === 'move') {
+      handleOpponentMove(data.dotIndex);
+    } else if (data.type === 'gameStart') {
+      handleGameStart();
+    } else if (data.type === 'gameEnd') {
+      handleGameEnd(data.winner);
+    }
+  });
 
-    connection.on('close', function() {
-        console.log("Connection closed");
-        handleDisconnection();
-    });
+  connection.on('close', function() {
+    console.log("Connection closed");
+    handleDisconnection();
+  });
 
-    connection.on('error', function(err) {
-        console.error("Connection error:", err);
-        handleDisconnection();
-    });
+  connection.on('error', function(err) {
+    console.error("Connection error:", err);
+    handleDisconnection();
+  });
 }
 
 function handleOpponentMove(dotIndex) {
-    console.log("Handling opponent move at index:", dotIndex);
-    
-    // Simulate click on the dot
-    $(".dot").eq(dotIndex).click();
+  console.log("Handling opponent move at index:", dotIndex);
+  
+  // Simulate click on the dot
+  $(".dot").eq(dotIndex).click();
 }
 
 function handleGameStart() {
-    console.log("Starting multiplayer game");
-    
-    // Hide connecting overlay
-    $('.connecting-overlay').remove();
-    
-    // Initialize game state
-    startMultiplayerAnim();
-    
-    // Update player indicators
-    updatePlayerIndicators();
-    updateTurnIndicator();
+  console.log("Starting multiplayer game");
+  
+  // Hide connecting overlay
+  $('.connecting-overlay').remove();
+  
+  // Initialize game state
+  startMultiplayerAnim();
+  
+  // Update player indicators
+  updatePlayerIndicators();
+  updateTurnIndicator();
 }
 
 function handleGameEnd(winner) {
-    console.log("Game ended, winner:", winner);
-    
-    // Show appropriate end screen
-    const isWinner = (winner === 'host' && isHost) || (winner === 'peer' && !isHost);
-    $("body .container").append(
-        '<div class="end overlay noselect">' +
-            '<div class="card">' +
-                '<h1>' + (isWinner ? 'You Won!' : 'Game Over') + '</h1>' +
-                '<p class="retry">Play Again <i class="fas fa-undo"></i></p>' +
-            '</div>' +
-        '</div>'
-    );
+  console.log("Game ended, winner:", winner);
+  
+  // Show appropriate end screen
+  const isWinner = (winner === 'host' && isHost) || (winner === 'peer' && !isHost);
+  $("body .container").append(
+      '<div class="end overlay noselect">' +
+          '<div class="card">' +
+              '<h1>' + (isWinner ? 'You Won!' : 'Game Over') + '</h1>' +
+              '<p class="retry">Play Again <i class="fas fa-undo"></i></p>' +
+          '</div>' +
+      '</div>'
+  );
 }
 
 function handleDisconnection() {
-    console.log("Handling disconnection");
-    
-    // Show disconnection message
-    alert("Connection lost. Returning to single player mode.");
-    
-    // Reset multiplayer state
-    resetMultiplayerState();
-    
-    // Return to regular mode
-    gameMode = 'regular';
-    $('body')
-        .removeClass('mode-multiplayer')
-        .addClass('mode-regular');
-    
-    // Update URL
-    var newUrl = window.location.pathname + '?mode=regular';
-    window.history.replaceState({}, document.title, newUrl);
-    
-    // Start new single player game
-    startAnim();
+  console.log("Handling disconnection");
+  
+  if (connectionState === CONNECTION_STATES.CONNECTED) {
+    // Only show alert if we were previously connected
+    alert("Connection lost. Click Retry to reconnect.");
+  }
+  
+  resetMultiplayerState();
 }
 
 function startMultiplayerGame() {
-    console.log("Starting new multiplayer game");
-    
-    // Send game start signal to peer
-    if (conn) {
-        conn.send({
-            type: 'gameStart'
-        });
-    }
-    
-    // Start the game locally
-    handleGameStart();
+  console.log("Starting new multiplayer game");
+  
+  // Send game start signal to peer
+  if (conn) {
+    conn.send({
+      type: 'gameStart'
+    });
+  }
+  
+  // Start the game locally
+  handleGameStart();
 }
 
 function resetMultiplayerState() {
-    console.log("Resetting multiplayer state");
-    
-    // Close existing connection
-    if (conn) {
-        conn.close();
-        conn = null;
+  console.log("Resetting multiplayer state");
+  
+  cleanup();
+  clearSessionInfo();
+  
+  // Remove any overlays
+  $('.connecting-overlay, .waiting-overlay').remove();
+  
+  // Reset flags
+  isHost = false;
+  isMultiplayer = false;
+  
+  // Show retry button if overlay is still visible
+  showRetryButton();
+}
+
+function showConnectingOverlay() {
+  // Remove any existing overlay
+  $('.connecting-overlay').remove();
+  
+  // Create new connecting overlay with retry button
+  $('body').append(`
+    <div class="connecting-overlay">
+      <div class="connecting-card">
+        <h2>Connecting to game...</h2>
+        <div class="connecting-status">Searching for available games...</div>
+        <div class="connecting-spinner"></div>
+        <button class="cancel-connection-btn">Cancel</button>
+        <button class="retry-connection-btn" style="display: none;">Retry</button>
+      </div>
+    </div>
+  `);
+  
+  // Add cancel button handler
+  $('.cancel-connection-btn').on('click', function() {
+    if (confirm('Are you sure you want to cancel connecting?')) {
+      resetMultiplayerState();
+      $('.connecting-overlay').remove();
+      
+      // Reset game mode
+      gameMode = 'regular';
+      $('body')
+        .removeClass('mode-multiplayer')
+        .addClass('mode-regular');
+      
+      // Update URL
+      var newUrl = window.location.pathname + '?mode=regular';
+      window.history.replaceState({}, document.title, newUrl);
+      
+      startAnim();
     }
-    
-    // Destroy peer
-    if (peer) {
-        peer.destroy();
-        peer = null;
-    }
-    
-    // Reset flags
-    isHost = false;
-    isMultiplayer = false;
-    
-    // Remove any overlays
-    $('.connecting-overlay, .waiting-overlay').remove();
+  });
+
+  // Add retry button handler
+  $('.retry-connection-btn').on('click', function() {
+    $(this).hide();
+    $('.connecting-spinner').show();
+    startMultiplayerConnection();
+  });
+}
+
+function showRetryButton() {
+  $('.connecting-spinner').hide();
+  $('.retry-connection-btn').show();
+}
+
+function updateConnectingOverlay(message) {
+  $('.connecting-status').text(message);
 }

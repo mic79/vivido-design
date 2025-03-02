@@ -1027,3 +1027,19 @@ div[data-modal] {
 .cancel-connection-btn:hover {
     opacity: 0.8;
 }
+
+.retry-connection-btn {
+    margin-top: 1rem;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 0.5rem;
+    background: var(--color-1);
+    color: white;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    display: none;
+}
+
+.retry-connection-btn:hover {
+    opacity: 0.8;
+}
