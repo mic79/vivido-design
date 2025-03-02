@@ -1663,7 +1663,7 @@ function startMultiplayerConnection() {
 }
 
 function tryConnectToHost(lobbyNumber) {
-    if (lobbyNumber > 10) {
+    if (lobbyNumber > 3) { // Reduce max attempts to 3 for faster fallback
         console.log("No available hosts found, becoming host");
         becomeHost(1);
         return;
@@ -1679,7 +1679,7 @@ function tryConnectToHost(lobbyNumber) {
         host: "0.peerjs.com",
         port: 443,
         secure: true,
-        debug: 3 // Add debug level for more detailed logs
+        debug: 3
     });
 
     peer.on('open', function() {
@@ -1690,41 +1690,51 @@ function tryConnectToHost(lobbyNumber) {
             reliable: true
         });
         
-        const timeout = setTimeout(() => {
+        let timeoutId = setTimeout(() => {
             console.log("Connection timeout for " + hostId);
-            connection.close();
+            if (connection) {
+                connection.close();
+            }
+            if (peer) {
+                peer.destroy();
+            }
             tryConnectToHost(lobbyNumber + 1);
-        }, 3000); // Increased timeout to 3 seconds
+        }, 2000);
 
         connection.on('open', function() {
-            clearTimeout(timeout);
+            clearTimeout(timeoutId);
             console.log("Connected to host", hostId);
             conn = connection;
             isHost = false;
             
-            // Wait a short moment before setting up handlers
-            setTimeout(() => {
-                setupConnectionHandlers(conn);
-            }, 500);
-            
+            setupConnectionHandlers(conn);
             updateConnectingOverlay("Connected to game!");
         });
 
         connection.on('error', function(err) {
-            clearTimeout(timeout);
+            clearTimeout(timeoutId);
             console.log("Error connecting to " + hostId, err);
+            if (connection) {
+                connection.close();
+            }
+            if (peer) {
+                peer.destroy();
+            }
             tryConnectToHost(lobbyNumber + 1);
         });
     });
 
     peer.on('error', function(err) {
         console.log("Peer error while trying to connect", err);
+        if (peer) {
+            peer.destroy();
+        }
         tryConnectToHost(lobbyNumber + 1);
     });
 }
 
 function becomeHost(lobbyNumber) {
-    if (lobbyNumber > 10) {
+    if (lobbyNumber > 3) { // Reduce max attempts to 3
         updateConnectingOverlay("All game slots are full. Please try again later.");
         return;
     }
@@ -1740,10 +1750,19 @@ function becomeHost(lobbyNumber) {
         host: "0.peerjs.com",
         port: 443,
         secure: true,
-        debug: 3 // Add debug level for more detailed logs
+        debug: 3
     });
 
+    let timeoutId = setTimeout(() => {
+        console.log("Host creation timeout for " + hostId);
+        if (peer) {
+            peer.destroy();
+        }
+        becomeHost(lobbyNumber + 1);
+    }, 2000);
+
     peer.on('open', function() {
+        clearTimeout(timeoutId);
         console.log("Successfully became host", hostId);
         isHost = true;
         updateConnectingOverlay("Waiting for opponent...");
@@ -1759,15 +1778,16 @@ function becomeHost(lobbyNumber) {
             
             conn = connection;
             
-            // Wait for connection to be fully established before setting up handlers
             conn.on('open', function() {
                 console.log("Connection to peer fully established");
                 setupConnectionHandlers(conn);
+                startMultiplayerGame();
             });
         });
     });
 
     peer.on('error', function(err) {
+        clearTimeout(timeoutId);
         console.error("Host error:", err);
         if (err.type === 'unavailable-id') {
             console.log("Host ID taken, trying next number");
