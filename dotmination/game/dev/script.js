@@ -122,14 +122,9 @@ $("body").on("click", ".end .card p", function(e) {
   if ($(this).hasClass('retry')) {
     // Retry current map/level
     if (isMultiplayer) {
-      // For multiplayer, use the multiplayer game start flow
-      if (isHost) {
-        startMultiplayerGame();
-      } else {
-        // Peer sends ready signal to trigger host to start new game
-        if (conn) {
-          conn.send({ type: 'ready' });
-        }
+      // For multiplayer, both host and peer should send ready signal
+      if (conn) {
+        conn.send({ type: 'ready' });
       }
       $(".end").remove();
       return;
@@ -1906,6 +1901,10 @@ window.addEventListener('beforeunload', () => {
 function setupConnectionHandlers(connection) {
   console.log("Setting up connection handlers");
   
+  // Track if players are ready for a new game
+  let localPlayerReady = false;
+  let remotePlayerReady = false;
+  
   connection.on('data', function(data) {
     console.log("Received data:", data);
     
@@ -1920,8 +1919,11 @@ function setupConnectionHandlers(connection) {
       console.log("Received game start signal from host");
       handleGameStart();
     } else if (data.type === 'ready') {
-      console.log("Peer is ready, starting game");
-      if (isHost) {
+      console.log("Received ready signal");
+      remotePlayerReady = true;
+      
+      // If both players are ready and this is the host, start the game
+      if (localPlayerReady && remotePlayerReady && isHost) {
         startMultiplayerGame();
       }
     } else if (data.type === 'gameEnd') {
@@ -1938,6 +1940,21 @@ function setupConnectionHandlers(connection) {
     console.error("Connection error:", err);
     handleDisconnection();
   });
+  
+  // Set local player as ready when sending ready signal
+  const originalSend = connection.send;
+  connection.send = function(data) {
+    if (data.type === 'ready') {
+      console.log("Sending ready signal");
+      localPlayerReady = true;
+      
+      // If both players are ready and this is the host, start the game
+      if (localPlayerReady && remotePlayerReady && isHost) {
+        startMultiplayerGame();
+      }
+    }
+    originalSend.call(connection, data);
+  };
 }
 
 function handleOpponentMove(dotIndex) {
