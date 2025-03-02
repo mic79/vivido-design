@@ -1789,6 +1789,8 @@ async function findAvailableSlot() {
 
 function setupPeer(slotNumber) {
   cleanup();
+  isHost = false;
+  isMultiplayer = true;
   sessionID = `dot-peer${slotNumber}`;
   peer = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true });
 
@@ -1808,7 +1810,8 @@ function setupPeer(slotNumber) {
       updateConnectingOverlay(`Connected to Host!`);
       saveSessionInfo(slotNumber, 'peer');
       setupConnectionHandlers(conn);
-      // Peer waits for host to start the game
+      // Send ready signal to host
+      conn.send({ type: 'ready' });
     });
   });
 
@@ -1822,6 +1825,8 @@ function setupPeer(slotNumber) {
 
 function setupHost(slotNumber) {
   cleanup();
+  isHost = true;
+  isMultiplayer = true;
   sessionID = `dot-host${slotNumber}`;
   peer = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true });
 
@@ -1844,8 +1849,6 @@ function setupHost(slotNumber) {
           hasConnected = true;
           connectionState = CONNECTION_STATES.CONNECTED;
           setupConnectionHandlers(conn);
-          // Only host initiates the game
-          startMultiplayerGame();
         });
       }
     });
@@ -1893,7 +1896,12 @@ function setupConnectionHandlers(connection) {
       handleOpponentMove(data.dotIndex);
     } else if (data.type === 'gameStart') {
       console.log("Received game start signal from host");
-      startMultiplayerGame();
+      handleGameStart();
+    } else if (data.type === 'ready') {
+      console.log("Peer is ready, starting game");
+      if (isHost) {
+        startMultiplayerGame();
+      }
     } else if (data.type === 'gameEnd') {
       handleGameEnd(data.winner);
     }
