@@ -2036,25 +2036,32 @@ function handleGameStart() {
   $('.mode-modal').removeClass('active');
   $('body').removeClass('modal-open');
   
-  // Set initial game state for peer
-  if (!isHost) {
-    moveAmount = 0;
-    currentPlayer = "player--1"; // Host starts first
-    
-    // Clear and initialize the field
-    $(".field").empty();
-    setDots();
-    $(".field").addClass(currentPlayer);
-    
-    // Set color for player 1
-    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-    
-    // Initialize game state
-    $(".dot").select();
-    show();
-    reset();
-    start();
+  // Set initial game state
+  moveAmount = 0;
+  
+  // Clear and initialize the field
+  $(".field").empty();
+  setDots();
+  
+  // Set initial player based on role
+  if (isHost) {
+    currentPlayer = "player--1"; // Host is always player 1
+  } else {
+    currentPlayer = "player--2"; // Peer is always player 2
   }
+  
+  $(".field").addClass(currentPlayer);
+  
+  // Set color based on current player
+  TweenMax.to("html", 0, {
+    "--color-current": currentPlayer === "player--1" ? 'var(--color-1)' : 'var(--color-2)'
+  });
+  
+  // Initialize game state
+  $(".dot").select();
+  show();
+  reset();
+  start();
   
   // Update UI for both players
   updatePlayerIndicators();
@@ -2126,7 +2133,7 @@ function startMultiplayerGame() {
   
   // Set initial game state
   moveAmount = 0;
-  currentPlayer = "player--1"; // Host always starts first
+  currentPlayer = "player--1"; // Host is always player 1
   
   // Clear and initialize the field
   $(".field").empty();
@@ -2150,8 +2157,7 @@ function startMultiplayerGame() {
       moveAmount: moveAmount,
       mapString: generateMapString(),
       fieldClasses: $(".field").attr('class'),
-      gameMode: gameMode,
-      isHost: isHost
+      gameMode: gameMode
     });
   }
   
