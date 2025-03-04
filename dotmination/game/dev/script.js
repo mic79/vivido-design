@@ -973,6 +973,13 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
     
     startAnim();
   } else {
+    // If we're currently in multiplayer mode, clean up the session
+    if (isMultiplayer) {
+      cleanup();
+      clearSessionInfo();
+      $('.connecting-overlay, .waiting-overlay').remove();
+    }
+    
     gameMode = $(this).data('mode');
     
     // Hide all mode-specific content first
