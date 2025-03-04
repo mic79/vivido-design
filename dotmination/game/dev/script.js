@@ -1942,6 +1942,7 @@ function setupConnectionHandlers(connection) {
           // This is a reconnection or game restart
           if (data.isRestart) {
             // If it's a restart, start a new game
+            hasConnected = true; // Ensure connection state is maintained
             startMultiplayerGame();
           } else {
             // If it's a reconnection, send current game state
@@ -1968,6 +1969,7 @@ function setupConnectionHandlers(connection) {
       } else {
         // Peer should wait for host to start the game
         console.log("Waiting for host to start new game");
+        hasConnected = true; // Ensure connection state is maintained
       }
     } else if (data.type === 'turnUpdate') {
       // Handle turn update from opponent
@@ -2098,7 +2100,8 @@ function handleGameEnd(winner) {
 function handleDisconnection() {
   console.log("Handling disconnection");
   
-  if (connectionState === CONNECTION_STATES.CONNECTED) {
+  // Don't handle disconnection if we're in the middle of a game restart
+  if (connectionState === CONNECTION_STATES.CONNECTED && !hasConnected) {
     if (isHost) {
       // Host should stay connected and show reconnection overlay
       connectionState = CONNECTION_STATES.CONNECTING;
@@ -2110,7 +2113,6 @@ function handleDisconnection() {
         conn.close();
         conn = null;
       }
-      hasConnected = false;
       
       // Keep the host's peer connection active
       if (peer) {
