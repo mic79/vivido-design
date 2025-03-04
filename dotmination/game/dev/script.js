@@ -2147,7 +2147,11 @@ function startMultiplayerGame() {
     conn.send({
       type: 'gameStart',
       currentPlayer: currentPlayer,
-      moveAmount: moveAmount
+      moveAmount: moveAmount,
+      mapString: generateMapString(),
+      fieldClasses: $(".field").attr('class'),
+      gameMode: gameMode,
+      isHost: isHost
     });
   }
   
