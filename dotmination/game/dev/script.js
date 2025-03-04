@@ -2107,39 +2107,59 @@ function handleGameEnd(winner) {
 function handleDisconnection() {
   console.log("Handling disconnection");
   
-  // Don't handle disconnection if we're in the middle of a game restart
+  // If we're in the middle of a game restart, don't handle disconnection
   if (connectionState === CONNECTION_STATES.CONNECTED && !hasConnected) {
-    if (isHost) {
-      // Host should stay connected and show reconnection overlay
-      connectionState = CONNECTION_STATES.CONNECTING;
-      showConnectingOverlay();
-      updateConnectingOverlay("Peer disconnected, awaiting reconnect...");
-      
-      // Reset connection state for reconnection
-      if (conn) {
-        conn.close();
-        conn = null;
-      }
-      
-      // Keep the host's peer connection active
-      if (peer) {
-        peer.on("connection", function(newConn) {
-          console.log("Received new connection attempt");
-          
-          conn = newConn;
-          conn.on("open", function() {
-            if (hasConnected) return;
-            hasConnected = true;
-            connectionState = CONNECTION_STATES.CONNECTED;
-            setupConnectionHandlers(conn);
-          });
-        });
-      }
-    } else {
-      // Peer should show alert and reset state
-      alert("Connection lost. Click Retry to reconnect.");
-      resetMultiplayerState();
+    return;
+  }
+  
+  // If we're not in multiplayer mode, don't handle disconnection
+  if (!isMultiplayer) {
+    return;
+  }
+  
+  if (isHost) {
+    // Host should show reconnection overlay
+    connectionState = CONNECTION_STATES.CONNECTING;
+    showConnectingOverlay();
+    updateConnectingOverlay("Peer disconnected, awaiting reconnect...");
+    
+    // Reset connection state for reconnection
+    if (conn) {
+      conn.close();
+      conn = null;
     }
+    
+    // Keep the host's peer connection active
+    if (peer) {
+      peer.on("connection", function(newConn) {
+        console.log("Received new connection attempt");
+        
+        conn = newConn;
+        conn.on("open", function() {
+          if (hasConnected) return;
+          hasConnected = true;
+          connectionState = CONNECTION_STATES.CONNECTED;
+          setupConnectionHandlers(conn);
+        });
+      });
+    }
+  } else {
+    // Peer should show alert and reset state
+    alert("Opponent has left the game. Click OK to return to menu.");
+    resetMultiplayerState();
+    
+    // Reset the game mode to regular
+    gameMode = 'regular';
+    $('body')
+      .removeClass('mode-multiplayer')
+      .addClass('mode-regular');
+    
+    // Update URL
+    var newUrl = window.location.pathname + '?mode=regular';
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Start a new single player game
+    startAnim();
   }
 }
 
