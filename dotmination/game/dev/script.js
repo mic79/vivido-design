@@ -2117,49 +2117,61 @@ function handleDisconnection() {
     return;
   }
   
-  if (isHost) {
-    // Host should show reconnection overlay
-    connectionState = CONNECTION_STATES.CONNECTING;
-    showConnectingOverlay();
-    updateConnectingOverlay("Peer disconnected, awaiting reconnect...");
-    
-    // Reset connection state for reconnection
-    if (conn) {
-      conn.close();
-      conn = null;
-    }
-    
-    // Keep the host's peer connection active
-    if (peer) {
-      peer.on("connection", function(newConn) {
-        console.log("Received new connection attempt");
-        
-        conn = newConn;
-        conn.on("open", function() {
-          if (hasConnected) return;
-          hasConnected = true;
-          connectionState = CONNECTION_STATES.CONNECTED;
-          setupConnectionHandlers(conn);
+  // Check if this is a mode switch by looking at the URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const currentMode = urlParams.get('mode');
+  const isModeSwitch = currentMode !== 'multiplayer';
+  
+  if (isModeSwitch) {
+    // This is a mode switch, handle it appropriately
+    if (isHost) {
+      // Host should show reconnection overlay
+      connectionState = CONNECTION_STATES.CONNECTING;
+      showConnectingOverlay();
+      updateConnectingOverlay("Peer disconnected, awaiting reconnect...");
+      
+      // Reset connection state for reconnection
+      if (conn) {
+        conn.close();
+        conn = null;
+      }
+      
+      // Keep the host's peer connection active
+      if (peer) {
+        peer.on("connection", function(newConn) {
+          console.log("Received new connection attempt");
+          
+          conn = newConn;
+          conn.on("open", function() {
+            if (hasConnected) return;
+            hasConnected = true;
+            connectionState = CONNECTION_STATES.CONNECTED;
+            setupConnectionHandlers(conn);
+          });
         });
-      });
+      }
+    } else {
+      // Peer should show alert and reset state
+      alert("Opponent has left the game. Click OK to return to menu.");
+      resetMultiplayerState();
+      
+      // Reset the game mode to regular
+      gameMode = 'regular';
+      $('body')
+        .removeClass('mode-multiplayer')
+        .addClass('mode-regular');
+      
+      // Update URL
+      var newUrl = window.location.pathname + '?mode=regular';
+      window.history.replaceState({}, document.title, newUrl);
+      
+      // Start a new single player game
+      startAnim();
     }
   } else {
-    // Peer should show alert and reset state
-    alert("Opponent has left the game. Click OK to return to menu.");
-    resetMultiplayerState();
-    
-    // Reset the game mode to regular
-    gameMode = 'regular';
-    $('body')
-      .removeClass('mode-multiplayer')
-      .addClass('mode-regular');
-    
-    // Update URL
-    var newUrl = window.location.pathname + '?mode=regular';
-    window.history.replaceState({}, document.title, newUrl);
-    
-    // Start a new single player game
-    startAnim();
+    // This is likely a page reload, don't show any alerts or reset state
+    // Just let the reconnection logic handle it
+    console.log("Detected page reload, allowing reconnection");
   }
 }
 
