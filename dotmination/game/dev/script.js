@@ -2138,7 +2138,11 @@ function handleDisconnection() {
 
 function startMultiplayerGame() {
   console.log("Starting multiplayer game");
-  resetMultiplayerState();
+  
+  // Only reset multiplayer state if we're not in a game restart
+  if (!hasConnected) {
+    resetMultiplayerState();
+  }
   
   // Set initial game state
   moveAmount = 0;
@@ -2184,9 +2188,12 @@ function resetMultiplayerState() {
   // Remove any overlays
   $('.connecting-overlay, .waiting-overlay').remove();
   
-  // Reset flags
-  isHost = false;
-  isMultiplayer = false;
+  // Only reset flags if we're not in a game restart
+  if (!hasConnected) {
+    // Reset flags
+    isHost = false;
+    isMultiplayer = false;
+  }
   
   // Show retry button if overlay is still visible
   showRetryButton();
