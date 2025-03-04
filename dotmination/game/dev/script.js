@@ -232,6 +232,8 @@ function nextPlayer() {
   // Update turn indicator in multiplayer mode
   if (isMultiplayer) {
     updateTurnIndicator();
+    // Send turn update to opponent
+    sendTurnUpdate();
   }
 }
 //nextPlayer();
@@ -1956,6 +1958,13 @@ function setupConnectionHandlers(connection) {
           $('.connecting-overlay').remove();
         }
       }
+    } else if (data.type === 'turnUpdate') {
+      // Handle turn update from opponent
+      console.log("Received turn update:", data);
+      currentPlayer = data.currentPlayer;
+      moveAmount = data.moveAmount;
+      $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+      updateTurnIndicator();
     } else if (data.type === 'gameEnd') {
       handleGameEnd(data.winner);
     } else if (data.type === 'gameState') {
@@ -2013,6 +2022,9 @@ function handleOpponentMove(dotIndex) {
       .attr("data-increment", parseInt(targetDot.attr("data-increment")) + 1)
       .addClass("increment");
     incrementDotStage(targetDot);
+    
+    // After the move is processed, update the current player
+    nextPlayer();
   }
 }
 
@@ -2217,4 +2229,15 @@ function clearPlayfield() {
   show();
   reset();
   start();
+}
+
+// Add new function to send turn updates
+function sendTurnUpdate() {
+  if (isMultiplayer && conn) {
+    conn.send({
+      type: 'turnUpdate',
+      currentPlayer: currentPlayer,
+      moveAmount: moveAmount
+    });
+  }
 }
