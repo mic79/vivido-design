@@ -973,11 +973,15 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
     
     startAnim();
   } else {
-    // If we're currently in multiplayer mode, clean up the session
-    if (isMultiplayer) {
-      cleanup();
-      clearSessionInfo();
-      $('.connecting-overlay, .waiting-overlay').remove();
+    // If we're currently in multiplayer mode, notify the other player before cleaning up
+    if (isMultiplayer && conn) {
+      conn.send({ type: 'modeSwitch' });
+      // Give a small delay for the message to be sent
+      setTimeout(() => {
+        cleanup();
+        clearSessionInfo();
+        $('.connecting-overlay, .waiting-overlay').remove();
+      }, 100);
     }
     
     gameMode = $(this).data('mode');
@@ -1922,187 +1926,126 @@ window.addEventListener('beforeunload', () => {
   cleanup();
 });
 
-function setupConnectionHandlers(connection) {
-  console.log("Setting up connection handlers");
-  
-  connection.on('data', function(data) {
-    console.log("Received data:", data);
-    
-    if (connectionState !== CONNECTION_STATES.CONNECTED) {
-      console.log("Ignoring data, not fully connected");
-      return;
-    }
-    
-    if (data.type === 'move') {
-      handleOpponentMove(data.dotIndex);
-    } else if (data.type === 'gameStart') {
-      console.log("Received game start signal from host");
-      handleGameStart();
-    } else if (data.type === 'ready') {
-      console.log("Received ready signal");
-      
-      if (isHost) {
-        // Only start a new game if this is the first connection
-        if (!hasConnected) {
-          startMultiplayerGame();
-        } else {
-          // This is a reconnection or game restart
-          if (data.isRestart) {
-            // If it's a restart, start a new game
-            hasConnected = true; // Ensure connection state is maintained
-            startMultiplayerGame();
-          } else {
-            // If it's a reconnection, send current game state
-            var currentState = {
-              type: 'gameState',
-              currentPlayer: currentPlayer,
-              moveAmount: moveAmount,
-              mapString: generateMapString(),
-              fieldClasses: $(".field").attr('class'),
-              gameMode: gameMode
-            };
-            
-            console.log("Sending complete game state to reconnecting peer:", currentState);
-            connection.send(currentState);
-            
-            // Update UI for host
-            updatePlayerIndicators();
-            updateTurnIndicator();
-            
-            // Hide connecting overlay
-            $('.connecting-overlay').remove();
-          }
-        }
-      } else {
-        // Peer should wait for host to start the game
-        console.log("Waiting for host to start new game");
-        hasConnected = true; // Ensure connection state is maintained
-      }
-    } else if (data.type === 'turnUpdate') {
-      // Handle turn update from opponent
-      console.log("Received turn update:", data);
-      currentPlayer = data.currentPlayer;
-      moveAmount = data.moveAmount;
-      $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-      updateTurnIndicator();
-    } else if (data.type === 'gameEnd') {
-      handleGameEnd(data.winner);
-    } else if (data.type === 'gameState') {
-      // Handle receiving game state after reconnection
-      console.log("Received complete game state after reconnection");
-      
-      // Restore game mode
-      gameMode = data.gameMode;
-      
-      // Restore current player and move amount
-      currentPlayer = data.currentPlayer;
-      moveAmount = data.moveAmount;
-      
-      // Restore field classes
-      $(".field").attr('class', data.fieldClasses);
-      
-      // Restore dots state using map string
-      if (data.mapString) {
-        buildMapFromString(data.mapString);
-      }
-      
-      // Update UI
-      updatePlayerIndicators();
-      updateTurnIndicator();
-      
-      // Hide connecting overlay
-      $('.connecting-overlay').remove();
-    }
-  });
-
-  connection.on('close', function() {
-    console.log("Connection closed");
-    handleDisconnection();
-  });
-
-  connection.on('error', function(err) {
-    console.error("Connection error:", err);
-    handleDisconnection();
-  });
-}
-
+// Add handleOpponentMove function
 function handleOpponentMove(dotIndex) {
   console.log("Handling opponent move at index:", dotIndex);
   
-  // Get the target dot
-  const targetDot = $(".dot").eq(dotIndex);
+  // Find the dot that was clicked
+  const clickedDot = $(".dot").eq(dotIndex);
   
-  // Only proceed if it's a valid move
-  if (!targetDot.closest(".field").hasClass("animating") &&
-      (targetDot.hasClass(currentPlayer) || !targetDot.is('[class*="player--"]'))) {
+  if (clickedDot.length && !clickedDot.closest(".field").hasClass("animating") &&
+      (clickedDot.hasClass(currentPlayer) || !clickedDot.is('[class*="player--"]'))) {
     
-    targetDot.closest(".field").addClass("animating");
-    targetDot
-      .attr("data-increment", parseInt(targetDot.attr("data-increment")) + 1)
+    // Apply the opponent's move
+    clickedDot.closest(".field").addClass("animating");
+    clickedDot
+      .attr("data-increment", parseInt(clickedDot.attr("data-increment")) + 1)
       .addClass("increment");
-    incrementDotStage(targetDot);
+      
+    // Process the move
+    incrementDotStage(clickedDot);
   }
 }
 
-function handleGameStart() {
-  console.log("Handling game start");
+function setupConnectionHandlers(connection) {
+  console.log("Setting up connection handlers");
   
-  // Hide all overlays
-  $('.connecting-overlay').remove();
-  $('.mode-modal').removeClass('active');
-  $('body').removeClass('modal-open');
+  conn = connection;
   
-  // Set initial game state
-  moveAmount = 0;
-  
-  // Clear and initialize the field
-  $(".field").empty();
-  setDots();
-  
-  // Set initial player based on role
-  if (isHost) {
-    currentPlayer = "player--1"; // Host is always player 1
-  } else {
-    currentPlayer = "player--2"; // Peer is always player 2
-  }
-  
-  $(".field").addClass(currentPlayer);
-  
-  // Set color based on current player
-  TweenMax.to("html", 0, {
-    "--color-current": currentPlayer === "player--1" ? 'var(--color-1)' : 'var(--color-2)'
+  conn.on("open", function() {
+    console.log("Connection opened");
+    connectionState = CONNECTION_STATES.CONNECTED;
+    hasConnected = true;
+    
+    // Reset hasSentGameState flag when connection is re-established
+    hasSentGameState = false;
+    
+    // Remove connecting overlay when connection is established
+    $('.connecting-overlay').remove();
+    
+    // If we're the peer, send ready signal immediately
+    if (!isHost) {
+      console.log("Peer sending initial ready signal");
+      conn.send({ type: 'ready' });
+    }
   });
-  
-  // Initialize game state
-  $(".dot").select();
-  show();
-  reset();
-  start();
-  
-  // Update UI for both players
-  updatePlayerIndicators();
-  updateTurnIndicator();
-  
-  // Send ready signal to host
-  if (!isHost && conn) {
-    conn.send({ type: 'ready' });
-  }
+
+  conn.on("data", function(data) {
+    console.log("Received data:", data);
+    
+    if (data.type === 'ready') {
+      console.log("Received ready signal");
+      
+      // Only handle ready signal if we're the host and haven't sent game state yet
+      if (isHost && !hasSentGameState) {
+        console.log("Host sending game state to peer");
+        hasSentGameState = true;
+        
+        // Send complete game state
+        conn.send({
+          type: 'gameState',
+          currentPlayer: currentPlayer,
+          moveAmount: moveAmount,
+          mapString: generateMapString(),
+          fieldClasses: $('.field').attr('class')
+        });
+        
+        // Remove connecting overlay for host after sending game state
+        $('.connecting-overlay').remove();
+      }
+    }
+    
+    if (data.type === 'gameState') {
+      console.log("Received game state");
+      
+      // Restore game state
+      currentPlayer = data.currentPlayer;
+      moveAmount = data.moveAmount;
+      buildMapFromString(data.mapString);
+      $('.field').attr('class', data.fieldClasses);
+      
+      // Update turn indicator based on received state
+      updateTurnIndicator();
+      
+      // Remove connecting overlay
+      $('.connecting-overlay').remove();
+      
+      // Send ready signal to confirm state received
+      if (!isHost) {
+        console.log("Peer confirming game state received");
+        conn.send({ type: 'ready' });
+      }
+    }
+    
+    if (data.type === 'move') {
+      // Process the move first
+      handleOpponentMove(data.dotIndex);
+      
+      // Then update moveAmount to match the host's state
+      if (!isHost) {
+        moveAmount++;
+      }
+    }
+
+    if (data.type === 'turnUpdate') {
+      console.log("Received turn update");
+      currentPlayer = data.currentPlayer;
+      // Only update moveAmount if we're the peer
+      if (!isHost) {
+        moveAmount = data.moveAmount;
+      }
+      updateTurnIndicator();
+    }
+  });
+
+  conn.on("close", function() {
+    console.log("Connection closed");
+    handleDisconnection();
+  });
 }
 
-function handleGameEnd(winner) {
-  console.log("Game ended, winner:", winner);
-  
-  // Show appropriate end screen
-  const isWinner = (winner === 'host' && isHost) || (winner === 'peer' && !isHost);
-  $("body .container").append(
-      '<div class="end overlay noselect">' +
-          '<div class="card">' +
-              '<h1>' + (isWinner ? 'You Won!' : 'Game Over') + '</h1>' +
-              '<p class="retry">Play Again <i class="fas fa-undo"></i></p>' +
-          '</div>' +
-      '</div>'
-  );
-}
+// Add this at the top with other state variables
+let hasSentGameState = false;
 
 function handleDisconnection() {
   console.log("Handling disconnection");
@@ -2169,53 +2112,96 @@ function handleDisconnection() {
       startAnim();
     }
   } else {
-    // This is likely a page reload, don't show any alerts or reset state
-    // Just let the reconnection logic handle it
-    console.log("Detected page reload, allowing reconnection");
+    // This is likely a page reload, handle reconnection
+    console.log("Detected page reload, handling reconnection");
+    
+    if (isHost) {
+      // Host should show reconnection overlay
+      connectionState = CONNECTION_STATES.CONNECTING;
+      showConnectingOverlay();
+      updateConnectingOverlay("Peer disconnected, awaiting reconnect...");
+      
+      // Reset connection state for reconnection
+      if (conn) {
+        conn.close();
+        conn = null;
+      }
+      
+      // Keep the host's peer connection active
+      if (peer) {
+        peer.on("connection", function(newConn) {
+          console.log("Received new connection attempt");
+          
+          conn = newConn;
+          conn.on("open", function() {
+            if (hasConnected) return;
+            hasConnected = true;
+            connectionState = CONNECTION_STATES.CONNECTED;
+            setupConnectionHandlers(conn);
+          });
+        });
+      }
+    } else {
+      // Peer should attempt to reconnect
+      connectionState = CONNECTION_STATES.CONNECTING;
+      showConnectingOverlay();
+      updateConnectingOverlay("Reconnecting to host...");
+      
+      // Reset connection state for reconnection
+      if (conn) {
+        conn.close();
+        conn = null;
+      }
+      
+      // Attempt to reconnect using saved session info
+      const sessionInfo = getSessionInfo();
+      if (sessionInfo) {
+        setupPeer(sessionInfo.slotNumber);
+      } else {
+        // If no session info, show retry button
+        showRetryButton();
+      }
+    }
   }
 }
 
 function startMultiplayerGame() {
   console.log("Starting multiplayer game");
   
-  // Only reset multiplayer state if we're not in a game restart
+  // Reset game state
   if (!hasConnected) {
     resetMultiplayerState();
   }
   
-  // Set initial game state
+  // Clear the field
+  clearPlayfield();
+  
+  // Initialize game elements
+  $('.field').addClass('player--1');
+  currentPlayer = 'player--1';
   moveAmount = 0;
-  currentPlayer = "player--1"; // Host is always player 1
   
-  // Clear and initialize the field
-  $(".field").empty();
-  setDots();
-  $(".field").addClass(currentPlayer);
+  // Set up the initial game state
+  fieldPopulateRandom();
   
-  // Set color for player 1
-  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-  
-  // Initialize game state
-  $(".dot").select();
-  show();
-  reset();
-  start();
+  // Update turn indicator at game start
+  updateTurnIndicator();
   
   // Send initial game state to peer
-  if (conn) {
+  if (isHost && conn) {
+    console.log("Host sending initial game state");
+    hasSentGameState = true;
     conn.send({
-      type: 'gameStart',
+      type: 'gameState',
       currentPlayer: currentPlayer,
       moveAmount: moveAmount,
       mapString: generateMapString(),
-      fieldClasses: $(".field").attr('class'),
-      gameMode: gameMode
+      fieldClasses: $('.field').attr('class')
     });
   }
   
-  // Update UI
-  updatePlayerIndicators();
-  updateTurnIndicator();
+  // Remove connecting overlay
+  $('.connecting-overlay').remove();
 }
 
 function resetMultiplayerState() {
@@ -2317,6 +2303,9 @@ function clearPlayfield() {
   show();
   reset();
   start();
+
+  // Update turn indicator when clearing playfield
+  updateTurnIndicator();
 }
 
 // Add new function to send turn updates
