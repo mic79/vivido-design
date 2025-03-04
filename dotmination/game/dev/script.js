@@ -1933,6 +1933,9 @@ function setupConnectionHandlers(connection) {
       handleGameStart();
     } else if (data.type === 'ready') {
       console.log("Received ready signal");
+      // Clear playfield for both players when restarting
+      clearPlayfield();
+      
       if (isHost) {
         // Only start a new game if this is the first connection
         if (!hasConnected) {
