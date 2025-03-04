@@ -1943,8 +1943,7 @@ function setupConnectionHandlers(connection) {
             moveAmount: moveAmount,
             mapString: generateMapString(),
             fieldClasses: $(".field").attr('class'),
-            gameMode: gameMode,
-            isHost: isHost
+            gameMode: gameMode
           };
           
           console.log("Sending complete game state to reconnecting peer:", currentState);
@@ -1971,9 +1970,8 @@ function setupConnectionHandlers(connection) {
       // Handle receiving game state after reconnection
       console.log("Received complete game state after reconnection");
       
-      // Restore game mode and host status
+      // Restore game mode
       gameMode = data.gameMode;
-      isHost = data.isHost;
       
       // Restore current player and move amount
       currentPlayer = data.currentPlayer;
