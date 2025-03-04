@@ -126,7 +126,7 @@ $("body").on("click", ".end .card p", function(e) {
       if (conn) {
         // Clear the playfield before sending ready signal
         clearPlayfield();
-        conn.send({ type: 'ready' });
+        conn.send({ type: 'ready', isRestart: true });
       }
       $(".end").remove();
       return;
@@ -1933,33 +1933,37 @@ function setupConnectionHandlers(connection) {
       handleGameStart();
     } else if (data.type === 'ready') {
       console.log("Received ready signal");
-      // Clear playfield for both players when restarting
-      clearPlayfield();
       
       if (isHost) {
         // Only start a new game if this is the first connection
         if (!hasConnected) {
           startMultiplayerGame();
         } else {
-          // This is a reconnection or game restart, send current game state
-          var currentState = {
-            type: 'gameState',
-            currentPlayer: currentPlayer,
-            moveAmount: moveAmount,
-            mapString: generateMapString(),
-            fieldClasses: $(".field").attr('class'),
-            gameMode: gameMode
-          };
-          
-          console.log("Sending complete game state to reconnecting peer:", currentState);
-          connection.send(currentState);
-          
-          // Update UI for host
-          updatePlayerIndicators();
-          updateTurnIndicator();
-          
-          // Hide connecting overlay
-          $('.connecting-overlay').remove();
+          // This is a reconnection or game restart
+          if (data.isRestart) {
+            // If it's a restart, start a new game
+            startMultiplayerGame();
+          } else {
+            // If it's a reconnection, send current game state
+            var currentState = {
+              type: 'gameState',
+              currentPlayer: currentPlayer,
+              moveAmount: moveAmount,
+              mapString: generateMapString(),
+              fieldClasses: $(".field").attr('class'),
+              gameMode: gameMode
+            };
+            
+            console.log("Sending complete game state to reconnecting peer:", currentState);
+            connection.send(currentState);
+            
+            // Update UI for host
+            updatePlayerIndicators();
+            updateTurnIndicator();
+            
+            // Hide connecting overlay
+            $('.connecting-overlay').remove();
+          }
         }
       } else {
         // Peer should wait for host to start the game
