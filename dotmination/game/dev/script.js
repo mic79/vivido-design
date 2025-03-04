@@ -979,6 +979,13 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
       e.stopPropagation();
       isMultiplayer = true;
       
+      // Clear playfield immediately
+      clearPlayfield();
+      
+      // Update URL for multiplayer mode
+      var newUrl = window.location.pathname + '?mode=multiplayer';
+      window.history.replaceState({}, document.title, newUrl);
+      
       // Start automatic connection process
       showConnectingOverlay();
       startMultiplayerConnection();
@@ -986,6 +993,11 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
       // Update selection
       $(this).closest('.row').find('.card').removeClass('selected');
       $(this).addClass('selected');
+      
+      // Set body class for multiplayer mode
+      $('body')
+        .removeClass('mode-random mode-regular modal-open')
+        .addClass('mode-multiplayer');
       
       return false;
     } else if (gameMode === 'regular') {
@@ -1002,9 +1014,11 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
   $(this).closest('.row').find('.card').removeClass('selected');
   $(this).addClass('selected');
   
-  $('body')
-    .removeClass('mode-random mode-regular modal-open')
-    .addClass('mode-'+gameMode);
+  if (gameMode !== 'multiplayer') {
+    $('body')
+      .removeClass('mode-random mode-regular modal-open')
+      .addClass('mode-'+gameMode);
+  }
   
   if(gameMode === 'regular' && !$(this).hasClass('btn-level')) {
     $('body').addClass('modal-open');
@@ -1171,7 +1185,16 @@ function signinAnim() {
     ease: Expo.easeIn,
     delay: 0.5
   });
-  gsap.to('.intro', {duration: 0.3, delay:2, autoAlpha: 0});
+  gsap.to('.intro', {duration: 0.3, delay:2, autoAlpha: 0, onComplete: function() {
+    // Check URL parameters after intro animation completes
+    var urlParams = new URLSearchParams(window.location.search);
+    var mode = urlParams.get('mode');
+    
+    if (mode === 'multiplayer') {
+      // Simulate clicking the multiplayer button after intro
+      $('.mode-modal .card[data-mode="multiplayer"]').trigger('click');
+    }
+  }});
   
   // Check URL parameters before starting game
   var urlParams = new URLSearchParams(window.location.search);
@@ -1297,16 +1320,6 @@ function checkUrlParameters() {
       if (levelParam) {
         level = parseInt(levelParam);
         $('.level-value').html(level);
-      }
-    } else if (mode === 'multiplayer') {
-      // Check for multiplayer ID parameter
-      var idParam = urlParams.get('id');
-      if (idParam) {
-        // Auto-join the game if ID is provided
-        $('#join-id').val(idParam);
-        isHost = false;
-        isMultiplayer = true;
-        initPeer();
       }
     }
   }
@@ -1917,11 +1930,60 @@ function setupConnectionHandlers(connection) {
     } else if (data.type === 'ready') {
       console.log("Received ready signal");
       if (isHost) {
-        // Host received ready from peer, start the game
-        startMultiplayerGame();
+        // Only start a new game if this is the first connection
+        if (!hasConnected) {
+          startMultiplayerGame();
+        } else {
+          // This is a reconnection, send current game state
+          var currentState = {
+            type: 'gameState',
+            currentPlayer: currentPlayer,
+            moveAmount: moveAmount,
+            mapString: generateMapString(),
+            fieldClasses: $(".field").attr('class'),
+            gameMode: gameMode,
+            isHost: isHost
+          };
+          
+          console.log("Sending complete game state to reconnecting peer:", currentState);
+          connection.send(currentState);
+          
+          // Update UI for host
+          updatePlayerIndicators();
+          updateTurnIndicator();
+          
+          // Hide connecting overlay
+          $('.connecting-overlay').remove();
+        }
       }
     } else if (data.type === 'gameEnd') {
       handleGameEnd(data.winner);
+    } else if (data.type === 'gameState') {
+      // Handle receiving game state after reconnection
+      console.log("Received complete game state after reconnection");
+      
+      // Restore game mode and host status
+      gameMode = data.gameMode;
+      isHost = data.isHost;
+      
+      // Restore current player and move amount
+      currentPlayer = data.currentPlayer;
+      moveAmount = data.moveAmount;
+      
+      // Restore field classes
+      $(".field").attr('class', data.fieldClasses);
+      
+      // Restore dots state using map string
+      if (data.mapString) {
+        buildMapFromString(data.mapString);
+      }
+      
+      // Update UI
+      updatePlayerIndicators();
+      updateTurnIndicator();
+      
+      // Hide connecting overlay
+      $('.connecting-overlay').remove();
     }
   });
 
@@ -1989,11 +2051,39 @@ function handleDisconnection() {
   console.log("Handling disconnection");
   
   if (connectionState === CONNECTION_STATES.CONNECTED) {
-    // Only show alert if we were previously connected
-    alert("Connection lost. Click Retry to reconnect.");
+    if (isHost) {
+      // Host should stay connected and show reconnection overlay
+      connectionState = CONNECTION_STATES.CONNECTING;
+      showConnectingOverlay();
+      updateConnectingOverlay("Peer disconnected, awaiting reconnect...");
+      
+      // Reset connection state for reconnection
+      if (conn) {
+        conn.close();
+        conn = null;
+      }
+      hasConnected = false;
+      
+      // Keep the host's peer connection active
+      if (peer) {
+        peer.on("connection", function(newConn) {
+          console.log("Received new connection attempt");
+          
+          conn = newConn;
+          conn.on("open", function() {
+            if (hasConnected) return;
+            hasConnected = true;
+            connectionState = CONNECTION_STATES.CONNECTED;
+            setupConnectionHandlers(conn);
+          });
+        });
+      }
+    } else {
+      // Peer should show alert and reset state
+      alert("Connection lost. Click Retry to reconnect.");
+      resetMultiplayerState();
+    }
   }
-  
-  resetMultiplayerState();
 }
 
 function startMultiplayerGame() {
@@ -2003,21 +2093,23 @@ function startMultiplayerGame() {
   moveAmount = 0;
   currentPlayer = "player--1";
   
-  // Clear the field
-  $(".dot").each(function() {
-    $(this)
-      .removeClass(function(index, className) {
-        return (className.match(/(^|\s)stage--\S+/g) || []).join(' ');
-      })
-      .removeClass(function(index, className) {
-        return (className.match(/(^|\s)player--\S+/g) || []).join(' ');
-      })
-      .removeClass(playerClassClear)
-      .attr("data-increment", "0");
-  });
+  // Clear the field completely
+  $(".field").empty();
   
-  // Initialize the field
+  // Reinitialize the field with empty dots
   setDots();
+  
+  // Clear any existing classes from the field
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  
+  // Set the color for player 1
+  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+  
+  // Initialize game state
+  dots = $(".dot");
+  show();
+  reset();
+  start();
   
   if (isHost) {
     console.log("Host sending game start signal");
@@ -2098,4 +2190,31 @@ function showRetryButton() {
 
 function updateConnectingOverlay(message) {
   $('.connecting-status').text(message);
+}
+
+// Add new function to clear playfield
+function clearPlayfield() {
+  console.log("Clearing playfield for multiplayer");
+  
+  // Reset game state
+  moveAmount = 0;
+  currentPlayer = "player--1";
+  
+  // Clear the field completely
+  $(".field").empty();
+  
+  // Reinitialize the field with empty dots
+  setDots();
+  
+  // Clear any existing classes from the field
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  
+  // Set the color for player 1
+  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+  
+  // Initialize game state
+  dots = $(".dot");
+  show();
+  reset();
+  start();
 }
