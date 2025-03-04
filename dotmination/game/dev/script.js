@@ -2020,9 +2020,6 @@ function handleOpponentMove(dotIndex) {
       .attr("data-increment", parseInt(targetDot.attr("data-increment")) + 1)
       .addClass("increment");
     incrementDotStage(targetDot);
-    
-    // After the move is processed, update the current player
-    nextPlayer();
   }
 }
 
