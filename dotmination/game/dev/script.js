@@ -124,6 +124,8 @@ $("body").on("click", ".end .card p", function(e) {
     if (isMultiplayer) {
       // For multiplayer, both host and peer should send ready signal
       if (conn) {
+        // Clear the playfield before sending ready signal
+        clearPlayfield();
         conn.send({ type: 'ready' });
       }
       $(".end").remove();
@@ -1936,7 +1938,7 @@ function setupConnectionHandlers(connection) {
         if (!hasConnected) {
           startMultiplayerGame();
         } else {
-          // This is a reconnection, send current game state
+          // This is a reconnection or game restart, send current game state
           var currentState = {
             type: 'gameState',
             currentPlayer: currentPlayer,
@@ -1956,6 +1958,9 @@ function setupConnectionHandlers(connection) {
           // Hide connecting overlay
           $('.connecting-overlay').remove();
         }
+      } else {
+        // Peer should wait for host to start the game
+        console.log("Waiting for host to start new game");
       }
     } else if (data.type === 'turnUpdate') {
       // Handle turn update from opponent
