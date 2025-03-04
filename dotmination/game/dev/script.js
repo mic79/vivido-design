@@ -2029,19 +2029,41 @@ function handleOpponentMove(dotIndex) {
 }
 
 function handleGameStart() {
-  console.log("Starting multiplayer game");
+  console.log("Handling game start");
   
   // Hide all overlays
   $('.connecting-overlay').remove();
   $('.mode-modal').removeClass('active');
   $('body').removeClass('modal-open');
   
-  // Initialize game state
-  startMultiplayerAnim();
+  // Set initial game state for peer
+  if (!isHost) {
+    moveAmount = 0;
+    currentPlayer = "player--1"; // Host starts first
+    
+    // Clear and initialize the field
+    $(".field").empty();
+    setDots();
+    $(".field").addClass(currentPlayer);
+    
+    // Set color for player 1
+    TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
+    
+    // Initialize game state
+    $(".dot").select();
+    show();
+    reset();
+    start();
+  }
   
-  // Update player indicators
+  // Update UI for both players
   updatePlayerIndicators();
   updateTurnIndicator();
+  
+  // Send ready signal to host
+  if (!isHost && conn) {
+    conn.send({ type: 'ready' });
+  }
 }
 
 function handleGameEnd(winner) {
@@ -2099,38 +2121,39 @@ function handleDisconnection() {
 }
 
 function startMultiplayerGame() {
-  console.log("Starting new multiplayer game");
+  console.log("Starting multiplayer game");
+  resetMultiplayerState();
   
-  // Reset game state first
+  // Set initial game state
   moveAmount = 0;
-  currentPlayer = "player--1";
+  currentPlayer = "player--1"; // Host always starts first
   
-  // Clear the field completely
+  // Clear and initialize the field
   $(".field").empty();
-  
-  // Reinitialize the field with empty dots
   setDots();
+  $(".field").addClass(currentPlayer);
   
-  // Clear any existing classes from the field
-  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-  
-  // Set the color for player 1
+  // Set color for player 1
   TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
   
   // Initialize game state
-  dots = $(".dot");
+  $(".dot").select();
   show();
   reset();
   start();
   
-  if (isHost) {
-    console.log("Host sending game start signal");
+  // Send initial game state to peer
+  if (conn) {
     conn.send({
-      type: 'gameStart'
+      type: 'gameStart',
+      currentPlayer: currentPlayer,
+      moveAmount: moveAmount
     });
-    // Start the game for host
-    handleGameStart();
   }
+  
+  // Update UI
+  updatePlayerIndicators();
+  updateTurnIndicator();
 }
 
 function resetMultiplayerState() {
