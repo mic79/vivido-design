@@ -1,5 +1,6 @@
-// v0.0.53
+// v0.0.54
 // Singleplayer modes are stable.
+// Random mode bot difficulty "smart" is still simply a duplicate of "random" bot.
 // Multiplayer mode is working, but needs to be improved.
 
 // Dark Mode
@@ -106,6 +107,7 @@ var levelsArray = (myDotmination !== null && myDotmination.levels) ? myDotminati
 var timeBest;
 var timeDiff;
 var delayedCall;
+var botDifficulty = 'random'; // Options: 'random', 'smart'
 
 // Add after your existing variables
 let isMultiplayer = false;
@@ -218,16 +220,15 @@ function nextPlayer() {
   } else {
     currentPlayer = playerArray[0];
     TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-  }
-  
-  // Only call bot action in single player mode
-  if (!isMultiplayer && currentPlayer === "player--1") {
     if(delayedCall) {
       delayedCall.kill();
     }
-    delayedCall = gsap.delayedCall(1, botActionRandom);
+    // Use the appropriate bot based on difficulty setting
+    // In regular mode (levels), always use the random bot regardless of difficulty setting
+    const botAction = gameMode === 'regular' ? botActionRandom : 
+                      botDifficulty === 'smart' ? botActionSmart : botActionRandom;
+    delayedCall = gsap.delayedCall(1, botAction);
   }
-  
   $(".field").addClass(currentPlayer);
   moveAmount++;
   
@@ -310,138 +311,141 @@ function checkDotmination() {
     stop();
     sound.play();
     
-    if (isMultiplayer) {
-      // Show multiplayer win screen
-      $("body .container").append(
-        '<div class="end overlay noselect ' + currentPlayer + '">' +
-          '<div class="card">' +
-            '<h1>' + (currentPlayer === (isHost ? "player--1" : "player--2") ? 'You Won!' : 'Game Over') + '</h1>' +
-            '<p class="retry">Play Again <i class="fas fa-undo"></i></p>' +
-          '</div>' +
-        '</div>'
-      );
-    } else {
-      if (currentPlayer == "player--2") {
-        if (gameMode === 'random') {
-          // Show random mode win screen
-          $("body .container").append(
-            '<div class="end overlay noselect ' + currentPlayer + '">' +
-              '<div class="card">' +
-                '<h1>Dotmination!</h1>' +
-                '<span class="level-goals">' +
-                  '<i class="fas fa-star"></i>' +
-                  '<i class="fas fa-star"></i>' +
-                  '<i class="fas fa-star"></i>' +
-                '</span>' +
-                '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
-                '<p class="new-map">Next <i class="fas fa-random"></i></p>' +
-              '</div>' +
-            '</div>'
-          );
-        } else if (level < 100) {
-          if($('body').hasClass('mode-regular')) {
-            var levelObj = {'level': level};
-            myDotmination['level'] = level;
-            
-            // Fix the level indexing here
-            timeBest = (levelsArray['level' + level] !== undefined) ? levelsArray['level' + level].time : null;
-            timeDiff = moment.duration($('#time').html()).subtract(timeBest).asMilliseconds();
-            
-            $('.timediff').remove();
-            
-            // Handle time improvement
-            if(timeBest === null || timeDiff < 0) {
-              // Fix the level indexing here too
-              levelsArray['level' + level] = {'time': $('#time').html()};
-              myDotmination['levels'] = levelsArray;
-            }
-            
-            // Add next level ONLY if it doesn't exist yet
-            if (level < 100 && !levelsArray['level' + (level + 1)]) {
-              // Fix the level indexing here as well
-              console.log('Adding new level:', level + 1);
-              console.log('Current levelsArray:', levelsArray);
-              levelsArray['level' + (level + 1)] = {'time': null};
-              myDotmination['levels'] = levelsArray;
-              console.log('Updated levelsArray:', levelsArray);
-            }
-            
-            // Save to localStorage and update UI
-            myStorage.setObj("myDotmination", myDotmination);
-            updateLevelList();
-            
-            // Calculate star states - fix level indexing here too
-            var hasTime = levelsArray['level' + level] && 
-                          levelsArray['level' + level].time && 
-                          levelsArray['level' + level].time !== null;
-            console.log('Level:', level);
-            console.log('Level data:', levelsArray['level' + level]);
-            console.log('Has time:', hasTime);
-            var wonStarClass = hasTime ? 'active' : '';
-            console.log('Star class:', wonStarClass);
-            
-            if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
-               moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
-              var goalMoves = 'active';
-            } else {
-              var goalMoves = '';
-            }
-
-            if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
-               moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
-              var goalTime = 'active';
-            } else {
-              var goalTime = '';
-            }
-            
-            // Show win overlay with correct star states
-            $("body .container").append(
-              '<div class="end overlay noselect ' + currentPlayer + '">' +
-                '<div class="card">' +
-                  '<h1>Dotmination!</h1>' +
-                  '<span class="level-goals">' +
-                    '<i class="fas fa-star level-goals-won ' + wonStarClass + '"></i>' +
-                    '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
-                    '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
-                  '</span>' +
-                  '<p>Next Level <i class="fas fa-arrow-right"></i></p>' +
-                '</div>' +
-              '</div>'
-            );
-            
-            TweenMax.fromTo($('.overlay > .card'), 2, 
-              {alpha: 0, scale: 0}, 
-              {alpha: 1, scale: 1, ease:Elastic.easeOut}
-            );
-          }
+    if (currentPlayer == "player--2") {
+      if (gameMode === 'random') {
+        // Calculate stars for random mode
+        if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
+          var goalMoves = 'active';
         } else {
-          level = 1;
-          $("body .container").append(
-            '<div class="end overlay noselect ' + currentPlayer + '">' +
-              '<div class="card">' +
-                '<h1>Dotmination!</h1>' +
-                '<p>Next Level <i class="fas fa-undo"></i></p>' +
-              '</div>' +
-            '</div>'
-          );
+          var goalMoves = '';
         }
-      } else {
-        // Player lost - show retry overlay
+
+        if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
+          var goalTime = 'active';
+        } else {
+          var goalTime = '';
+        }
+        
+        // Show random mode win screen
         $("body .container").append(
           '<div class="end overlay noselect ' + currentPlayer + '">' +
             '<div class="card">' +
               '<h1>Dotmination!</h1>' +
               '<span class="level-goals">' +
-                '<i class="fas fa-star"></i>' +
-                '<i class="fas fa-star"></i>' +
-                '<i class="fas fa-star"></i>' +
+                '<i class="fas fa-star level-goals-won active"></i>' +
+                '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
+                '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
               '</span>' +
               '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
-              (gameMode === 'random' ? '<p class="new-map">Next <i class="fas fa-random"></i></p>' : '') +
+              '<p class="new-map">Next <i class="fas fa-random"></i></p>' +
+            '</div>' +
+          '</div>'
+        );
+        
+        TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
+      } else if (level < 100) {
+        if($('body').hasClass('mode-regular')) {
+          var levelObj = {'level': level};
+          myDotmination['level'] = level;
+          
+          // Fix the level indexing here
+          timeBest = (levelsArray['level' + level] !== undefined) ? levelsArray['level' + level].time : null;
+          timeDiff = moment.duration($('#time').html()).subtract(timeBest).asMilliseconds();
+          
+          $('.timediff').remove();
+          
+          // Handle time improvement
+          if(timeBest === null || timeDiff < 0) {
+            // Fix the level indexing here too
+            levelsArray['level' + level] = {'time': $('#time').html()};
+            myDotmination['levels'] = levelsArray;
+          }
+          
+          // Add next level ONLY if it doesn't exist yet
+          if (level < 100 && !levelsArray['level' + (level + 1)]) {
+            // Fix the level indexing here as well
+            console.log('Adding new level:', level + 1);
+            console.log('Current levelsArray:', levelsArray);
+            levelsArray['level' + (level + 1)] = {'time': null};
+            myDotmination['levels'] = levelsArray;
+            console.log('Updated levelsArray:', levelsArray);
+          }
+          
+          // Save to localStorage and update UI
+          myStorage.setObj("myDotmination", myDotmination);
+          updateLevelList();
+          
+          // Calculate star states
+          var hasTime = levelsArray['level' + level] && 
+                        levelsArray['level' + level].time && 
+                        levelsArray['level' + level].time !== null;
+          console.log('Level:', level);
+          console.log('Level data:', levelsArray['level' + level]);
+          console.log('Has time:', hasTime);
+          var wonStarClass = hasTime ? 'active' : '';
+          console.log('Star class:', wonStarClass);
+          
+          if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
+             moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
+            var goalMoves = 'active';
+          } else {
+            var goalMoves = '';
+          }
+
+          if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && 
+             moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
+            var goalTime = 'active';
+          } else {
+            var goalTime = '';
+          }
+          
+          // Show win overlay with correct star states
+          $("body .container").append(
+            '<div class="end overlay noselect ' + currentPlayer + '">' +
+              '<div class="card">' +
+                '<h1>Dotmination!</h1>' +
+                '<span class="level-goals">' +
+                  '<i class="fas fa-star level-goals-won ' + wonStarClass + '"></i>' +
+                  '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
+                  '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
+                '</span>' +
+                '<p>Next Level <i class="fas fa-arrow-right"></i></p>' +
+              '</div>' +
+            '</div>'
+          );
+          
+          TweenMax.fromTo($('.overlay > .card'), 2, 
+            {alpha: 0, scale: 0}, 
+            {alpha: 1, scale: 1, ease:Elastic.easeOut}
+          );
+        }
+      } else {
+        level = 1;
+        $("body .container").append(
+          '<div class="end overlay noselect ' + currentPlayer + '">' +
+            '<div class="card">' +
+              '<h1>Dotmination!</h1>' +
+              '<p>Next Level <i class="fas fa-undo"></i></p>' +
             '</div>' +
           '</div>'
         );
       }
+    } else {
+      // Player lost - show retry overlay
+      $("body .container").append(
+        '<div class="end overlay noselect ' + currentPlayer + '">' +
+          '<div class="card">' +
+            '<h1>Dotmination!</h1>' +
+            '<span class="level-goals">' +
+              '<i class="fas fa-star"></i>' +
+              '<i class="fas fa-star"></i>' +
+              '<i class="fas fa-star"></i>' +
+            '</span>' +
+            '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
+            (gameMode === 'random' ? '<p class="new-map">Next <i class="fas fa-random"></i></p>' : '') +
+          '</div>' +
+        '</div>'
+      );
     }
   }
 }
@@ -524,6 +528,12 @@ function startAnim() {
   moveAmount = 0;
   randomNumber = Math.floor(Math.random() * playerArray.length);
   currentPlayer = "player--2";
+  
+  // Remove turn indicator in singleplayer modes
+  if (!isMultiplayer) {
+    $('.turn-indicator').remove();
+  }
+  
   $('.level-value').html(level);
   setDots();
   $(".end").remove();
@@ -549,6 +559,47 @@ function startAnim() {
 }
 
 function botActionRandom() {
+  var trgt = $(".dot:not(.player--2)");
+  var player2lvl5 = $(".dot.player--2.stage--5");
+  var lvl5 = $(".dot.player--1.stage--5");
+  var randomDotIndex,
+      dotIndexWithHitArr = [];
+  
+  // Check if possible to hit.
+  if ($(lvl5).length > 0) {
+    var dots = $(player2lvl5);
+    
+    for (var i = 0; i < $(lvl5).length; i++) {
+      for (var j = 0; j < $(dots).length; j++) {
+        if (
+          Draggable.hitTest($(dots).eq(j), $(lvl5[i]).find(".hitarea")) &&
+          i != $(lvl5[i]).data("index")
+        ) {
+          var trgtIndex = $(lvl5).eq(i).data("index");
+          trgt = $(dots).eq(trgtIndex);
+          dotIndexWithHitArr.push(trgtIndex);
+        }
+      }
+    }
+    if(dotIndexWithHitArr.length > 0) {
+      // Hit!
+      var randomNum = Math.floor(Math.random() * dotIndexWithHitArr.length);
+      randomDotIndex = dotIndexWithHitArr[randomNum];
+      $(".dot").eq(randomDotIndex).click();
+    } else {
+      // No hit.
+      randomDotIndex = Math.floor(Math.random() * trgt.length);
+      $(".dot").eq($(trgt[randomDotIndex]).index()).click();
+    }
+  } else {
+    // No lvl5.
+    randomDotIndex = Math.floor(Math.random() * trgt.length);
+    $(".dot").eq($(trgt[randomDotIndex]).index()).click();
+  }
+}
+
+// Smart bot - initially identical to random bot
+function botActionSmart() {
   var trgt = $(".dot:not(.player--2)");
   var player2lvl5 = $(".dot.player--2.stage--5");
   var lvl5 = $(".dot.player--1.stage--5");
@@ -676,7 +727,7 @@ function fieldPopulateRandom() {
   // Update URL with new random map state using hex format
   if (gameMode === 'random') {
     var mapString = generateMapString();
-    var newUrl = window.location.pathname + '?mode=random&map=' + mapString;
+    var newUrl = window.location.pathname + '?mode=random&map=' + mapString + '&difficulty=' + botDifficulty;
     window.history.replaceState({}, document.title, newUrl);
   }
 
@@ -987,7 +1038,12 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
     gameMode = $(this).data('mode');
     
     // Hide all mode-specific content first
-    $('.list--mode-regular, .multiplayer-options, .waiting-overlay, .game-id-display').hide();
+    $('.list--mode-regular, .multiplayer-options, .waiting-overlay, .game-id-display, .bot-difficulty').hide();
+    
+    // Remove turn indicator when leaving multiplayer mode
+    if (isMultiplayer) {
+      $('.turn-indicator').remove();
+    }
     
     if (gameMode === 'multiplayer') {
       e.preventDefault();
@@ -1019,27 +1075,86 @@ $('.mode-modal .wrapper').on('click', '.card', function(e) {
       // Show levels list
       $('.list--mode-regular').show();
       isMultiplayer = false;
+      
+      // Update selection
+      $(this).closest('.row').find('.card').removeClass('selected');
+      $(this).addClass('selected');
+      
+      // Keep modal open to show levels
+      $('body')
+        .removeClass('mode-random mode-multiplayer')
+        .addClass('mode-regular modal-open');
+        
     } else if (gameMode === 'random') {
       isMultiplayer = false;
-      var newUrl = window.location.pathname + '?mode=random';
-      window.history.replaceState({}, document.title, newUrl);
+      
+      // Show bot difficulty options
+      $('.bot-difficulty').show();
+      
+      // Set default bot difficulty to "random" (Normal) when switching to Random mode
+      botDifficulty = 'random';
+      $('.difficulty-option').removeClass('selected');
+      $('.difficulty-option[data-difficulty="random"]').addClass('selected');
+      
+      // Update selection
+      $(this).closest('.row').find('.card').removeClass('selected');
+      $(this).addClass('selected');
+      
+      // Keep modal open to show bot difficulty options
+      $('body')
+        .removeClass('mode-regular mode-multiplayer')
+        .addClass('mode-random modal-open');
+      
+      // Don't update URL or start game yet - wait for bot selection
+      return;
     }
   }
   
-  $(this).closest('.row').find('.card').removeClass('selected');
-  $(this).addClass('selected');
-  
-  if (gameMode !== 'multiplayer') {
-    $('body')
-      .removeClass('mode-random mode-regular modal-open')
-      .addClass('mode-'+gameMode);
+  // We've already applied selection in the mode-specific blocks
+  // Only need to handle the case of clicking a level
+  if($(this).hasClass('btn-level')) {
+    $(this).closest('.row').find('.card').removeClass('selected');
+    $(this).addClass('selected');
   }
   
+  // Handle starting the game based on different scenarios
   if(gameMode === 'regular' && !$(this).hasClass('btn-level')) {
+    // For regular mode without level selection, keep modal open
     $('body').addClass('modal-open');
-  } else {
+  } else if($(this).hasClass('btn-level')) {
+    // When a specific level is clicked, start the game
+    $('body').removeClass('modal-open');
     startAnim();
   }
+});
+
+// Update difficulty option handler to match level selection pattern
+$('body').on('click', '.difficulty-option', function(e) {
+  console.log('Difficulty option clicked!');
+  console.log('Button data:', $(this).data('difficulty'));
+  console.log('Event:', e);
+  
+  e.preventDefault();
+  e.stopPropagation();
+  
+  // Update visual selection
+  $('.difficulty-option').removeClass('selected');
+  $(this).addClass('selected');
+  
+  // Update bot difficulty setting
+  botDifficulty = $(this).data('difficulty');
+  
+  // Close the modal and update game mode
+  $('body').removeClass('modal-open');
+  gameMode = 'random';
+  
+  // Update body classes
+  $('body')
+    .removeClass('mode-regular mode-multiplayer')
+    .addClass('mode-random');
+  
+  // Start the game using the standard animation
+  startAnim();
 });
 
 function updateLevelList() {
@@ -1204,43 +1319,49 @@ function signinAnim() {
     // Check URL parameters after intro animation completes
     var urlParams = new URLSearchParams(window.location.search);
     var mode = urlParams.get('mode');
+    var map = urlParams.get('map');
+    var difficulty = urlParams.get('difficulty');
     
-    if (mode === 'multiplayer') {
+    if (mode === 'random') {
+      gameMode = 'random';
+      $('body')
+        .removeClass('mode-regular')
+        .addClass('mode-random');
+        
+      // Update mode selection in modal
+      $('.mode-modal .card').removeClass('selected');
+      $('.mode-modal .card[data-mode="random"]').addClass('selected');
+      
+      // Set difficulty if provided in URL
+      if (difficulty) {
+        botDifficulty = difficulty;
+        $('.difficulty-option').removeClass('selected');
+        $('.difficulty-option[data-difficulty="' + difficulty + '"]').addClass('selected');
+      }
+      
+      if (map) {
+        // Set up dots first
+        setDots();
+        // Then build the map from URL
+        buildMapFromString(map);
+        // Initialize game state without triggering end game
+        dots = $(".dot");
+        currentPlayer = "player--2";
+        $(".field").addClass(currentPlayer);
+        show();
+        reset();
+        start();
+      } else {
+        startAnim();
+      }
+    } else if (mode === 'multiplayer') {
       // Simulate clicking the multiplayer button after intro
       $('.mode-modal .card[data-mode="multiplayer"]').trigger('click');
+    } else {
+      // Only call startAnim if we're not loading a map from URL
+      startAnim();
     }
   }});
-  
-  // Check URL parameters before starting game
-  var urlParams = new URLSearchParams(window.location.search);
-  var mode = urlParams.get('mode');
-  var map = urlParams.get('map');
-  
-  if (mode === 'random' && map) {
-    gameMode = 'random';
-    $('body')
-      .removeClass('mode-regular')
-      .addClass('mode-random');
-      
-    // Update mode selection in modal
-    $('.mode-modal .card').removeClass('selected');
-    $('.mode-modal .card[data-mode="random"]').addClass('selected');
-    
-    // Set up dots first
-    setDots();
-    // Then build the map from URL
-    buildMapFromString(map);
-    // Initialize game state without triggering end game
-    dots = $(".dot");
-    currentPlayer = "player--2";
-    $(".field").addClass(currentPlayer);
-    show();
-    reset();
-    start();
-  } else {
-    // Only call startAnim if we're not loading a map from URL
-    startAnim();
-  }
 }
 
 $('.intro').on('click', '.btn-signin:not(.disabled)', function() {
@@ -1336,6 +1457,12 @@ function checkUrlParameters() {
         level = parseInt(levelParam);
         $('.level-value').html(level);
       }
+    } 
+    else if (mode === 'random') {
+      // Ensure Normal bot is selected for Random mode
+      botDifficulty = 'random';
+      $('.difficulty-option').removeClass('selected');
+      $('.difficulty-option[data-difficulty="random"]').addClass('selected');
     }
   }
 }
@@ -1536,6 +1663,10 @@ $(document).ready(function() {
     e.preventDefault();
     e.stopPropagation();
   });
+  
+  console.log('Document ready - Checking for difficulty buttons:');
+  console.log('Random button:', $('.difficulty-option[data-difficulty="random"]').length);
+  console.log('Smart button:', $('.difficulty-option[data-difficulty="smart"]').length);
 });
 
 // Add a function to show waiting overlay
@@ -1605,6 +1736,12 @@ function showWaitingOverlay() {
       
       // Reset the game mode to regular
       gameMode = 'regular';
+      
+      // Update the UI to reflect the mode change - ensure proper selection in modal
+      $('.mode-modal .card').removeClass('selected');
+      $('.mode-modal .card[data-mode="regular"]').addClass('selected');
+      
+      // Update body classes
       $('body')
         .removeClass('mode-multiplayer')
         .addClass('mode-regular');
@@ -2243,22 +2380,29 @@ function showConnectingOverlay() {
   
   // Add cancel button handler
   $('.cancel-connection-btn').on('click', function() {
-    if (confirm('Are you sure you want to cancel connecting?')) {
-      resetMultiplayerState();
-      $('.connecting-overlay').remove();
-      
-      // Reset game mode
-      gameMode = 'regular';
-      $('body')
-        .removeClass('mode-multiplayer')
-        .addClass('mode-regular');
-      
-      // Update URL
-      var newUrl = window.location.pathname + '?mode=regular';
-      window.history.replaceState({}, document.title, newUrl);
-      
-      startAnim();
-    }
+    // Hide connecting overlay
+    $('.connecting-overlay').hide();
+    
+    // Reset game mode to regular and update UI
+    gameMode = 'regular';
+    $('body')
+      .removeClass('mode-random mode-multiplayer')
+      .addClass('mode-regular');
+    
+    // Update mode selection in modal
+    $('.mode-modal .card').removeClass('selected');
+    $('.mode-modal .card[data-mode="regular"]').addClass('selected');
+    
+    // Show the mode modal with levels list
+    $('.mode-modal').addClass('active');
+    $('body').addClass('modal-open');
+    $('.list--mode-regular').show();
+    
+    // Hide bot difficulty section
+    $('.bot-difficulty').hide();
+    
+    // Update URL
+    window.history.replaceState({}, '', window.location.pathname);
   });
 
   // Add retry button handler
@@ -2318,3 +2462,33 @@ function sendTurnUpdate() {
     });
   }
 }
+
+// Add direct click handlers for difficulty buttons
+$('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficulty="smart"]').on('click', function(e) {
+  console.log('Direct click handler - Difficulty button clicked:', $(this).data('difficulty'));
+  e.preventDefault();
+  e.stopPropagation();
+  
+  // Update visual selection
+  $('.difficulty-option').removeClass('selected');
+  $(this).addClass('selected');
+  
+  // Update bot difficulty setting
+  botDifficulty = $(this).data('difficulty');
+  
+  // Close the modal and update game mode
+  $('body').removeClass('modal-open');
+  gameMode = 'random';
+  
+  // Update body classes
+  $('body')
+    .removeClass('mode-regular mode-multiplayer')
+    .addClass('mode-random');
+  
+  // Update URL with mode and difficulty
+  var newUrl = window.location.pathname + '?mode=random&difficulty=' + botDifficulty;
+  window.history.replaceState({}, document.title, newUrl);
+  
+  // Start the game using the standard animation
+  startAnim();
+});

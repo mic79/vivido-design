@@ -1043,3 +1043,46 @@ div[data-modal] {
 .retry-connection-btn:hover {
     opacity: 0.8;
 }
+
+.bot-difficulty {
+  margin: 2rem 0;
+  text-align: center;
+  display: none;
+}
+
+.mode-random .bot-difficulty {
+  display: block;
+}
+
+.bot-difficulty h3 {
+  margin-bottom: 1rem;
+  font-size: 1.2rem;
+  font-weight: 400;
+}
+
+.bot-difficulty .row {
+  justify-content: center;
+}
+
+.bot-difficulty .card {
+  min-width: 120px;
+  text-align: center;
+  opacity: 0.7;
+  transition: all 0.3s ease;
+}
+
+.bot-difficulty .card.selected {
+  opacity: 1;
+  transform: scale(1.05);
+  box-shadow: 0 0 20px rgba(var(--color-2-rgb), 0.2);
+}
+
+.bot-difficulty .card h1 {
+  margin: 0.5rem 0;
+  font-size: 1.5rem;
+}
+
+.bot-difficulty .card p {
+  margin: 0;
+  font-size: 1rem;
+}
