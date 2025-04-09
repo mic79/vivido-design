@@ -213,6 +213,8 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
 });
 
 function nextPlayer() {
+  console.log("nextPlayer called. isMultiplayer:", isMultiplayer, "gameMode:", gameMode, "currentPlayer:", currentPlayer);
+  
   $(".field").removeClass(currentPlayer);
   if (currentPlayer == playerArray[0]) {
     currentPlayer = playerArray[1];
@@ -225,8 +227,7 @@ function nextPlayer() {
     }
     // Only schedule bot action if not in multiplayer mode
     if (!isMultiplayer) {
-      // Use the appropriate bot based on difficulty setting
-      // In regular mode (levels), always use the random bot regardless of difficulty setting
+      console.log("Scheduling bot action. isMultiplayer:", isMultiplayer, "gameMode:", gameMode);
       const botAction = gameMode === 'regular' ? botActionRandom : 
                         botDifficulty === 'smart' ? botActionSmarter : botActionRandom;
       delayedCall = gsap.delayedCall(1, botAction);
@@ -237,6 +238,7 @@ function nextPlayer() {
   
   // Update turn indicator in multiplayer mode
   if (isMultiplayer) {
+    console.log("Updating multiplayer turn indicator");
     updateTurnIndicator();
     // Send turn update to opponent
     sendTurnUpdate();
@@ -1717,6 +1719,23 @@ function checkUrlParameters() {
       $('.difficulty-option').removeClass('selected');
       $('.difficulty-option[data-difficulty="random"]').addClass('selected');
     }
+    else if (mode === 'multiplayer') {
+      // Set multiplayer flag for proper game initialization
+      isMultiplayer = true;
+      
+      // Check for game ID parameter
+      var gameId = urlParams.get('id');
+      if (gameId) {
+        // If there's a game ID, we're joining a game
+        isHost = false;
+        $('#join-id').val(gameId);
+        $('.multiplayer-options').hide();
+        $('.game-id-input').show();
+      } else {
+        // Without game ID, show multiplayer options
+        $('.multiplayer-options').show();
+      }
+    }
   }
 }
 
@@ -2338,12 +2357,12 @@ function handleOpponentMove(dotIndex) {
 }
 
 function setupConnectionHandlers(connection) {
-  console.log("Setting up connection handlers");
+  console.log("Setting up connection handlers. isMultiplayer:", isMultiplayer, "isHost:", isHost);
   
   conn = connection;
   
   conn.on("open", function() {
-    console.log("Connection opened");
+    console.log("Connection opened. isMultiplayer:", isMultiplayer);
     connectionState = CONNECTION_STATES.CONNECTED;
     hasConnected = true;
     
@@ -2556,7 +2575,7 @@ function handleDisconnection() {
 }
 
 function startMultiplayerGame() {
-  console.log("Starting multiplayer game");
+  console.log("Starting multiplayer game. isMultiplayer:", isMultiplayer, "isHost:", isHost);
   
   // Reset game state
   if (!hasConnected) {
@@ -2570,6 +2589,9 @@ function startMultiplayerGame() {
   $('.field').addClass('player--1');
   currentPlayer = 'player--1';
   moveAmount = 0;
+  
+  // Double check multiplayer flag is set
+  isMultiplayer = true;
   
   // Set up the initial game state
   fieldPopulateRandom();
