@@ -226,7 +226,7 @@ function nextPlayer() {
     // Use the appropriate bot based on difficulty setting
     // In regular mode (levels), always use the random bot regardless of difficulty setting
     const botAction = gameMode === 'regular' ? botActionRandom : 
-                      botDifficulty === 'smart' ? botActionSmart : botActionRandom;
+                      botDifficulty === 'smart' ? botActionSmarter : botActionRandom;
     delayedCall = gsap.delayedCall(1, botAction);
   }
   $(".field").addClass(currentPlayer);
@@ -637,6 +637,256 @@ function botActionSmart() {
     randomDotIndex = Math.floor(Math.random() * trgt.length);
     $(".dot").eq($(trgt[randomDotIndex]).index()).click();
   }
+}
+
+// Enhanced bot AI with improved strategy and code organization
+const BOT_CONSTANTS = {
+  SCORE_THRESHOLD: 5,
+  RECENT_MOVES_LIMIT: 3,
+  CHAIN_WEIGHT: 2,
+  DISRUPT_WEIGHT: 1.5,
+  EARLY_GAME_TURNS: 10,
+  MIN_VIABLE_TARGETS: 3,
+  HIGH_STAGE_THRESHOLD: 3,
+  VISUAL_FEEDBACK_DELAY: 1000
+};
+
+function botActionSmarter() {
+  // Initialize game state
+  const gameState = {
+    targets: $(".dot:not(.player--2)"),
+    player2Stage5: $(".dot.player--2.stage--5"),
+    player1Stage5: $(".dot.player--1.stage--5"),
+    turnCount: $(".dot.player--1").length,
+    recentMoves: []
+  };
+
+  // Try to execute moves in order of priority
+  if (tryStage5Hits(gameState)) return;
+  
+  const viableTargets = findViableTargets(gameState);
+  if (executeViableMove(viableTargets, gameState)) return;
+  
+  executeFallbackStrategy(gameState);
+}
+
+function tryStage5Hits(gameState) {
+  if (gameState.player1Stage5.length === 0) return false;
+
+  for (let i = 0; i < gameState.player1Stage5.length; i++) {
+    for (let j = 0; j < gameState.player2Stage5.length; j++) {
+      const targetDot = $(gameState.player1Stage5[i]);
+      const myDot = $(gameState.player2Stage5[j]);
+      
+      if (Draggable.hitTest(myDot, targetDot.find(".hitarea")) && 
+          myDot.data("index") !== targetDot.data("index")) {
+        
+        const targetIndex = targetDot.data("index");
+        console.log("Bot used stage--5 to hit your stage--5 at index " + targetIndex);
+        
+        const chosenDot = $(".dot").eq(targetIndex);
+        visualFeedback(chosenDot);
+        chosenDot.click();
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function findViableTargets(gameState) {
+  const viableTargets = [];
+  
+  gameState.targets.each(function(i) {
+    const target = $(this);
+    const targetData = evaluateTarget(target, gameState);
+    
+    if (targetData.isSafe) {
+      const score = calculateScore(targetData, gameState.turnCount);
+      
+      if (score > 0 || viableTargets.length < BOT_CONSTANTS.MIN_VIABLE_TARGETS) {
+        viableTargets.push({
+          dot: target,
+          score: score,
+          chain: targetData.chainPotential,
+          disrupt: targetData.disruptPotential
+        });
+      }
+    }
+  });
+  
+  return viableTargets;
+}
+
+function evaluateTarget(target, gameState) {
+  const targetData = {
+    isSafe: true,
+    myStage: getStageNumber(target),
+    chainPotential: 0,
+    disruptPotential: 0,
+    neighbors: 0
+  };
+
+  $(".dot").each(function() {
+    const dot = $(this);
+    if (!Draggable.hitTest(target, dot.find(".hitarea")) || 
+        dot.attr("data-index") === target.attr("data-index")) return;
+
+    targetData.neighbors++;
+    
+    if (dot.hasClass("player--2")) {
+      evaluateOpponentDot(dot, targetData);
+    } else if (dot.hasClass("player--1")) {
+      evaluatePlayerDot(dot, targetData);
+    }
+  });
+
+  return targetData;
+}
+
+function executeViableMove(viableTargets, gameState) {
+  if (viableTargets.length === 0) return false;
+  
+  viableTargets.sort((a, b) => b.score - a.score);
+  
+  if (viableTargets[0].score >= BOT_CONSTANTS.SCORE_THRESHOLD) {
+    const choice = viableTargets[0].dot;
+    logBotChoice(choice, viableTargets[0]);
+    
+    visualFeedback(choice);
+    updateRecentMoves(choice.attr("data-index"), gameState);
+    choice.click();
+    return true;
+  }
+  
+  return false;
+}
+
+function executeFallbackStrategy(gameState) {
+  const fallbackTargets = findFallbackTargets(gameState);
+  
+  if (fallbackTargets.length > 0) {
+    fallbackTargets.sort((a, b) => b.score - a.score);
+    const choice = fallbackTargets[0].dot;
+    
+    console.log("Bot fell back to dot " + choice.attr("data-index") + 
+                " near your stage--" + fallbackTargets[0].disrupt + 
+                " with chain potential");
+    
+    visualFeedback(choice);
+    updateRecentMoves(choice.attr("data-index"), gameState);
+    choice.click();
+  } else {
+    executeRandomMove(gameState);
+  }
+}
+
+function findFallbackTargets(gameState) {
+  const fallbackTargets = [];
+  
+  gameState.targets.each(function(i) {
+    const target = $(this);
+    const fallbackData = evaluateFallbackTarget(target);
+    
+    if ((fallbackData.disrupt >= BOT_CONSTANTS.HIGH_STAGE_THRESHOLD || 
+         fallbackData.chain > 0) && 
+        !gameState.recentMoves.includes(target.attr("data-index"))) {
+      
+      fallbackTargets.push({
+        dot: target,
+        score: (fallbackData.chain * BOT_CONSTANTS.CHAIN_WEIGHT) + 
+               (fallbackData.disrupt * BOT_CONSTANTS.DISRUPT_WEIGHT),
+        disrupt: fallbackData.disrupt
+      });
+    }
+  });
+  
+  return fallbackTargets;
+}
+
+function evaluateFallbackTarget(target) {
+  const data = {
+    disrupt: 0,
+    chain: 0
+  };
+
+  $(".dot").each(function() {
+    const dot = $(this);
+    if (!Draggable.hitTest(target, dot.find(".hitarea")) || 
+        dot.attr("data-index") === target.attr("data-index")) return;
+
+    if (dot.hasClass("player--2")) {
+      const stage = getStageNumber(dot);
+      data.disrupt = Math.max(data.disrupt, stage);
+    } else if (dot.hasClass("player--1")) {
+      const stage = getStageNumber(dot);
+      data.chain += (5 - stage);
+    }
+  });
+
+  return data;
+}
+
+function executeRandomMove(gameState) {
+  const randomDot = gameState.targets.eq(Math.floor(Math.random() * gameState.targets.length));
+  console.log("Bot fell back to random dot " + randomDot.attr("data-index"));
+  
+  visualFeedback(randomDot);
+  updateRecentMoves(randomDot.attr("data-index"), gameState);
+  randomDot.click();
+}
+
+// Utility functions
+function getStageNumber(dot) {
+  const stageMatch = dot.attr("class").match(/stage--(\d)/);
+  return stageMatch ? parseInt(stageMatch[1]) : 0;
+}
+
+function calculateScore(targetData, turnCount) {
+  return (targetData.chainPotential * BOT_CONSTANTS.CHAIN_WEIGHT) + 
+         targetData.disruptPotential +
+         (targetData.myStage === 0 && targetData.neighbors < 3 ? 5 : 0) +
+         (turnCount < BOT_CONSTANTS.EARLY_GAME_TURNS && 
+          targetData.disruptPotential >= 6 ? 5 : 0);
+}
+
+function evaluateOpponentDot(dot, targetData) {
+  const stage = getStageNumber(dot);
+  if (stage > targetData.myStage) {
+    targetData.isSafe = false;
+    console.log("Bot avoided dot " + targetData.dot?.attr("data-index") + 
+                " (stage " + targetData.myStage + ") next to your stage--" + stage);
+  } else if (stage >= BOT_CONSTANTS.HIGH_STAGE_THRESHOLD) {
+    targetData.disruptPotential += stage * 2;
+  }
+}
+
+function evaluatePlayerDot(dot, targetData) {
+  const stage = getStageNumber(dot);
+  if (stage >= BOT_CONSTANTS.HIGH_STAGE_THRESHOLD) {
+    targetData.chainPotential += (5 - stage) * 2;
+  }
+}
+
+function visualFeedback(dot) {
+  dot.addClass("bot-choice");
+  setTimeout(() => dot.removeClass("bot-choice"), BOT_CONSTANTS.VISUAL_FEEDBACK_DELAY);
+}
+
+function updateRecentMoves(moveIndex, gameState) {
+  gameState.recentMoves.push(moveIndex);
+  if (gameState.recentMoves.length > BOT_CONSTANTS.RECENT_MOVES_LIMIT) {
+    gameState.recentMoves.shift();
+  }
+}
+
+function logBotChoice(choice, data) {
+  console.log(
+    "Bot chose dot " + choice.attr("data-index") + 
+    " (stage " + getStageNumber(choice) + ") with score " + 
+    Math.round(data.score) + " (chain: " + Math.round(data.chain) + 
+    ", disrupt: " + Math.round(data.disrupt) + ")"
+  );
 }
 
 // Add this function to generate a unique string representation of the map
