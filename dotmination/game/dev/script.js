@@ -223,11 +223,14 @@ function nextPlayer() {
     if(delayedCall) {
       delayedCall.kill();
     }
-    // Use the appropriate bot based on difficulty setting
-    // In regular mode (levels), always use the random bot regardless of difficulty setting
-    const botAction = gameMode === 'regular' ? botActionRandom : 
-                      botDifficulty === 'smart' ? botActionSmarter : botActionRandom;
-    delayedCall = gsap.delayedCall(1, botAction);
+    // Only schedule bot action if not in multiplayer mode
+    if (!isMultiplayer) {
+      // Use the appropriate bot based on difficulty setting
+      // In regular mode (levels), always use the random bot regardless of difficulty setting
+      const botAction = gameMode === 'regular' ? botActionRandom : 
+                        botDifficulty === 'smart' ? botActionSmarter : botActionRandom;
+      delayedCall = gsap.delayedCall(1, botAction);
+    }
   }
   $(".field").addClass(currentPlayer);
   moveAmount++;
