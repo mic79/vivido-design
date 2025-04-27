@@ -153,6 +153,7 @@ $("body").on("click", ".end .card p", function(e) {
         show();
         reset();
         start();
+        updatePlayerScoresUI(); // <<< Update scores here
         return;
       }
     } else if (gameMode === 'regular') {
@@ -619,7 +620,11 @@ function startAnim() {
       repeatDelay: 0.2
     },
     0.01,
-    populate
+    function() {
+      // Final score update after animation completes
+      updatePlayerScoresUI(); 
+      populate(); // Call populate after animation completes
+    }
   );
 }
 
@@ -1554,6 +1559,7 @@ $('.time-modal .wrapper').on('click', '.card', function(e) {
         show();
         reset();
         start();
+        updatePlayerScoresUI(); // <<< Update scores here
         return;
       }
     }
@@ -1676,6 +1682,12 @@ function signinAnim() {
         show();
         reset();
         start();
+
+        // Update scores immediately after loading map from URL
+        updatePlayerScoresUI();
+
+        // Don't call startAnim() because the map is already set
+        return; // Prevent falling through to startAnim() below
       } else {
         startAnim();
       }
