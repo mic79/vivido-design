@@ -109,6 +109,11 @@ var timeDiff;
 var delayedCall;
 var botDifficulty = 'random'; // Options: 'random', 'smart'
 
+// Variables for sound pitch progression
+let chainReactionCounter = 0;
+const basePitch = 1.0;
+const pitchStep = 0.05; // Increase pitch by 5% each time
+
 // Add after your existing variables
 let isMultiplayer = false;
 let isHost = false;
@@ -196,6 +201,9 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
   if (!$(this).closest(".field").hasClass("animating") &&
       ($(this).hasClass(currentPlayer) || !$(this).is('[class*="player--"]'))) {
     
+    // Reset the pitch counter at the start of a new move/chain
+    chainReactionCounter = 0;
+    
     // If it's multiplayer, send the move to opponent before processing it
     if (isMultiplayer && conn) {
       conn.send({
@@ -259,6 +267,7 @@ function incrementDotStage(trgt) {
   }
   if (!trgt.is('[class*="stage--"]')) {
     trgt.addClass("stage--1 " + currentPlayer);
+    showIncrementAnimation(trgt); // <<< Add animation here
   } else {
     for (i = 1; i <= stage_amount; i++) {
       var currStage = trgt.is('[class*="stage--' + i + '"]');
@@ -267,6 +276,7 @@ function incrementDotStage(trgt) {
           .removeClass("stage--" + i)
           .removeClass(playerClassClear)
           .addClass("stage--" + (i + 1) + " " + currentPlayer);
+        showIncrementAnimation(trgt); // <<< Add animation here
         animateNextDot();
         return;
       } else if (currStage && i == stage_amount) {
@@ -283,14 +293,16 @@ function incrementDotStage(trgt) {
             k != trgt.index()
           ) {
             //console.log(">> k: " + k);
-            $(dots[k]).addClass("increment");
+            var neighborDot = $(dots[k]); // Store neighbor dot in variable
+            neighborDot.addClass("increment");
             //trgt.removeClass("increment");
-            $(dots[k]).filter(function () {
+            neighborDot.filter(function () {
               $(this).attr(
                 "data-increment",
                 parseInt($(this).attr("data-increment")) + 1
               );
             });
+            showIncrementAnimation(neighborDot); // <<< Add animation here for neighbor
           }
         }
       }
@@ -302,10 +314,58 @@ function incrementDotStage(trgt) {
 function animateNextDot() {
   if ($(".dot.increment").length > 0) {
     var next = $(".dot.increment").eq(0);
-    TweenMax.delayedCall(0, incrementDotStage, [next]);
+    // Introduce a small delay (e.g., 0.05 seconds) between increments
+    TweenMax.delayedCall(0.15, incrementDotStage, [next]);
   } else {
     $(".field").removeClass("animating");
+    updatePlayerScoresUI(); // <<< Update scores after chain reaction ends
     checkDotmination();
+  }
+}
+
+// Add this function to show the increment animation
+function showIncrementAnimation(targetDot, incrementValue = 1) {
+  const animationText = `+${incrementValue}`;
+  const $field = $('.field');
+  const fieldOffset = $field.offset();
+  const dotOffset = targetDot.offset();
+  const dotSize = targetDot.width(); // Assuming width and height are the same
+
+  // Calculate position relative to the field
+  const startX = dotOffset.left - fieldOffset.left + (dotSize / 2);
+  const startY = dotOffset.top - fieldOffset.top + (dotSize / 2);
+
+  // Determine color based on current player
+  const animationColor = (currentPlayer === 'player--1') ? 'var(--color-1)' : 'var(--color-2)';
+
+  // Create the animation element
+  const $animationElement = $('<div class="increment-animation"></div>')
+    .text(animationText)
+    .css({
+      left: startX + 'px',
+      top: startY + 'px',
+      color: animationColor,
+      transform: 'translate(-50%, -50%)' // Center the text
+    })
+    .appendTo($field);
+
+  // Animate using GSAP
+  gsap.to($animationElement, {
+    duration: 0.8,
+    y: '-=40', // Move upwards
+    opacity: 0,
+    ease: 'power1.out',
+    onComplete: function() {
+      $animationElement.remove(); // Remove element after animation
+    }
+  });
+
+  // Play the increment sound with adjusted pitch
+  if (incrementSound) {
+    const currentPitch = basePitch + (chainReactionCounter * pitchStep);
+    incrementSound.rate(currentPitch); // Set the playback rate (pitch)
+    incrementSound.play();
+    chainReactionCounter++; // Increment counter for the next sound in the chain
   }
 }
 
@@ -990,6 +1050,7 @@ function fieldPopulateRandom() {
   show();
   reset();
   start();
+  updatePlayerScoresUI(); // <<< Update scores after random population
 }
 
 function fieldPopulateByLevel() {
@@ -1027,6 +1088,7 @@ function fieldPopulateByLevel() {
   show();
   reset();
   start();
+  updatePlayerScoresUI(); // <<< Update scores after level population
 }
 
 var colorNeutral = "#7F7F7F";
@@ -1510,6 +1572,14 @@ var sound = new Howl({
   src: [
     "./sounds/submarine-sonar.mp3"
   ]
+});
+
+// Add sound for dot increment
+var incrementSound = new Howl({
+  src: [
+    "./sounds/submarine-sonar-38243-once.mp3"
+  ],
+  volume: 0.25 // Adjust volume as needed
 });
 
 var logoRings = CSSRulePlugin.getRule(".intro .logo:before");
@@ -2767,3 +2837,20 @@ $('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficu
   // Start the game using the standard animation
   startAnim();
 });
+
+// Function to calculate player score based on dot stages
+function calculatePlayerScore(playerClass) { // e.g., "player--1"
+  let score = 0;
+  $(".dot." + playerClass).each(function() {
+    score += getStageNumber($(this));
+  });
+  return score;
+}
+
+// Function to update the scores in the UI
+function updatePlayerScoresUI() {
+  const score1 = calculatePlayerScore("player--1");
+  const score2 = calculatePlayerScore("player--2");
+  $('#player-1-score').text(score1);
+  $('#player-2-score').text(score2);
+}
