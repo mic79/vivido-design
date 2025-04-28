@@ -218,7 +218,8 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
     $(this)
       .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
       .addClass("increment");
-    incrementDotStage($(this));
+    // Pass the initiating player (currentPlayer) to incrementDotStage
+    incrementDotStage($(this), currentPlayer);
   }
 });
 
@@ -260,16 +261,20 @@ function playerClassClear() {
   return playerArray.join(" ");
 }
 
-function incrementDotStage(trgt) {
-  console.log('incrementDotStage called');
-  //console.log('>> index: ' + trgt.index());
+function incrementDotStage(trgt, player = currentPlayer) {
+  // If a player is explicitly passed (for handling opponent moves),
+  // use that player. Otherwise, use the global currentPlayer.
+  const effectivePlayer = player;
+  console.log(`incrementDotStage called for index: ${trgt.index()} by effectivePlayer: ${effectivePlayer}`);
+
+  // console.log('>> index: ' + trgt.index());
   trgt.attr("data-increment", parseInt(trgt.attr("data-increment")) - 1);
   if (parseInt(trgt.attr("data-increment")) <= 0) {
     trgt.removeClass("increment");
   }
   if (!trgt.is('[class*="stage--"]')) {
-    trgt.addClass("stage--1 " + currentPlayer);
-    showIncrementAnimation(trgt); // <<< Add animation here
+    trgt.addClass("stage--1 " + effectivePlayer);
+    showIncrementAnimation(trgt, 1, effectivePlayer); // <<< Pass effectivePlayer to animation
     updatePlayerScoresUI(); // <<< Update score here
   } else {
     for (i = 1; i <= stage_amount; i++) {
@@ -278,8 +283,8 @@ function incrementDotStage(trgt) {
         trgt
           .removeClass("stage--" + i)
           .removeClass(playerClassClear)
-          .addClass("stage--" + (i + 1) + " " + currentPlayer);
-        showIncrementAnimation(trgt); // <<< Add animation here
+          .addClass("stage--" + (i + 1) + " " + effectivePlayer);
+        showIncrementAnimation(trgt, 1, effectivePlayer); // <<< Pass effectivePlayer to animation
         updatePlayerScoresUI(); // <<< Update score here
         animateNextDot();
         return;
@@ -307,7 +312,8 @@ function incrementDotStage(trgt) {
                 parseInt($(this).attr("data-increment")) + 1
               );
             });
-            showIncrementAnimation(neighborDot); // <<< Add animation here for neighbor
+            // Pass effectivePlayer to animation for neighbors too
+            showIncrementAnimation(neighborDot, 1, effectivePlayer); 
           }
         }
       }
@@ -340,7 +346,9 @@ function animateNextDot() {
 }
 
 // Add this function to show the increment animation
-function showIncrementAnimation(targetDot, incrementValue = 1) {
+function showIncrementAnimation(targetDot, incrementValue = 1, player = currentPlayer) {
+  // Use the passed player for color determination
+  const effectivePlayer = player;
   const animationText = `+${incrementValue}`;
   const $field = $('.field');
   const fieldOffset = $field.offset();
@@ -351,8 +359,8 @@ function showIncrementAnimation(targetDot, incrementValue = 1) {
   const startX = dotOffset.left - fieldOffset.left + (dotSize / 2);
   const startY = dotOffset.top - fieldOffset.top + (dotSize / 2);
 
-  // Determine color based on current player
-  const animationColor = (currentPlayer === 'player--1') ? 'var(--color-1)' : 'var(--color-2)';
+  // Determine color based on the effective player who caused the increment
+  const animationColor = (effectivePlayer === 'player--1') ? 'var(--color-1)' : 'var(--color-2)';
 
   // Create the animation element
   const $animationElement = $('<div class="increment-animation"></div>')
@@ -379,6 +387,7 @@ function showIncrementAnimation(targetDot, incrementValue = 1) {
   // Play the increment sound with adjusted pitch
   if (incrementSound) {
     const currentPitch = basePitch + (chainReactionCounter * pitchStep);
+    // Use a different sound or pitch characteristic if needed based on player
     incrementSound.rate(currentPitch); // Set the playback rate (pitch)
     incrementSound.play();
     chainReactionCounter++; // Increment counter for the next sound in the chain
@@ -2340,11 +2349,16 @@ function handleOpponentMove(dotIndex) {
   // Set flag to indicate we are processing an opponent move
   processingOpponentMove = true;
 
+  // Determine which player's move this is. 
+  // If we received a move, it MUST be the *other* player.
+  const actingPlayer = isHost ? playerArray[1] : playerArray[0]; 
+  console.log(`Processing move for opponent actingPlayer: ${actingPlayer}`);
+
   // Find the dot that was clicked
   const clickedDot = $(".dot").eq(dotIndex);
   
   if (clickedDot.length && !clickedDot.closest(".field").hasClass("animating") &&
-      (clickedDot.hasClass(currentPlayer) || !clickedDot.is('[class*="player--"]'))) {
+      (clickedDot.hasClass(actingPlayer) || !clickedDot.is('[class*="player--"]'))) {
     
     // Apply the opponent's move
     clickedDot.closest(".field").addClass("animating");
@@ -2352,8 +2366,8 @@ function handleOpponentMove(dotIndex) {
       .attr("data-increment", parseInt(clickedDot.attr("data-increment")) + 1)
       .addClass("increment");
       
-    // Process the move
-    incrementDotStage(clickedDot);
+    // Process the move, passing the correct acting player
+    incrementDotStage(clickedDot, actingPlayer);
   }
 }
 
