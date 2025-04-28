@@ -319,14 +319,19 @@ function incrementDotStage(trgt, player = currentPlayer) {
       }
     }
   }
-  animateNextDot();
+  // Pass the correct player context to the next animation step
+  animateNextDot(effectivePlayer); 
 }
 
-function animateNextDot() {
+function animateNextDot(player = currentPlayer) {
+  // Accept the player context (defaults to global if not provided)
+  const effectivePlayer = player;
+  console.log(`animateNextDot called with effectivePlayer: ${effectivePlayer}`);
+
   if ($(".dot.increment").length > 0) {
     var next = $(".dot.increment").eq(0);
-    // Introduce a small delay (e.g., 0.05 seconds) between increments
-    TweenMax.delayedCall(0.1, incrementDotStage, [next]);
+    // Introduce a small delay and PASS the effectivePlayer to the next increment
+    TweenMax.delayedCall(0.1, incrementDotStage, [next, effectivePlayer]);
   } else {
     $(".field").removeClass("animating");
     
