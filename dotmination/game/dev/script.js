@@ -130,16 +130,42 @@ $("body").on("click", ".end .card p", function(e) {
   if ($(this).hasClass('retry')) {
     // Retry current map/level
     if (isMultiplayer) {
-      // For multiplayer, both host and peer should send ready signal
+      // --- Multiplayer Rematch Logic ---
       if (conn) {
-        // Clear the playfield before sending ready signal
-        clearPlayfield();
-        conn.send({ type: 'ready', isRestart: true });
+        // 1. Send ready signal for rematch
+        console.log("Sending rematchReady signal");
+        conn.send({ type: 'rematchReady' });
+        
+        // 2. Set local readiness
+        if (isHost) {
+          hostReadyForRematch = true;
+        } else {
+          peerReadyForRematch = true;
+        }
+        
+        // 3. Visually clear overlay and show waiting state (optional)
+        $(".end").remove();
+        // TODO: Optionally add a "Waiting for opponent..." message here
+
+        // 4. Check if opponent is already ready
+        if (isHost && peerReadyForRematch) {
+          console.log("Both players ready for rematch (Host perspective)");
+          // If peer was already ready, host initiates the game start
+          hostInitiateRematchStart();
+        } else if (!isHost && hostReadyForRematch) {
+          console.log("Both players ready for rematch (Peer perspective)");
+          // Peer just waits for host to send game state
+          // Reset local flags - host will send game state which triggers UI updates
+          hostReadyForRematch = false;
+          peerReadyForRematch = false;
+        }
       }
-      $(".end").remove();
-      return;
+      // Return here to prevent single-player logic execution
+      return; 
+      // --- End Multiplayer Rematch Logic ---
     }
     
+    // --- Single Player Retry Logic ---
     if (gameMode === 'random') {
       var urlParams = new URLSearchParams(window.location.search);
       var map = urlParams.get('map');
@@ -2536,9 +2562,29 @@ function setupConnectionHandlers(connection) {
         // Remove connecting overlay for host now that game state is sent
         $('.connecting-overlay').remove();
       }
+    } 
+    // --- Handle Rematch Ready ---
+    else if (data.type === 'rematchReady') {
+      console.log("Received rematchReady signal");
+      if (isHost) {
+        peerReadyForRematch = true;
+        if (hostReadyForRematch) {
+          console.log("Both players ready for rematch (Host perspective on receive)");
+          hostInitiateRematchStart(); // Both are ready, host starts
+        }
+      } else { // Peer received ready from host
+        hostReadyForRematch = true;
+        if (peerReadyForRematch) {
+          console.log("Both players ready for rematch (Peer perspective on receive)");
+          // Peer just waits for host to send game state
+          // Reset local flags
+          hostReadyForRematch = false;
+          peerReadyForRematch = false;
+        }
+      }
     }
-    
-    if (data.type === 'gameState') {
+    // --- End Handle Rematch Ready ---
+    else if (data.type === 'gameState') {
       console.log("Received game state");
       
       // Restore game state
@@ -2558,6 +2604,10 @@ function setupConnectionHandlers(connection) {
         console.log("Peer confirming game state received");
         conn.send({ type: 'ready' });
       }
+      
+      // Reset rematch flags after game state is synchronized
+      hostReadyForRematch = false;
+      peerReadyForRematch = false;
     }
     
     if (data.type === 'move') {
@@ -2958,4 +3008,28 @@ function showMultiplayerGameOverOverlay(winner) {
 
   // Animation
   TweenMax.fromTo($('.overlay > .card'), 2, { alpha: 0, scale: 0 }, { alpha: 1, scale: 1, ease: Elastic.easeOut });
+}
+
+// Add new function for host to start the rematch
+function hostInitiateRematchStart() {
+  console.log("Host initiating rematch start");
+  clearPlayfield(); // Clear board, reset currentPlayer & moveAmount
+
+  // Send the fresh game state to the peer
+  if (conn) {
+    conn.send({
+      type: 'gameState',
+      currentPlayer: currentPlayer, // player--1 after clearPlayfield
+      moveAmount: moveAmount,     // 0 after clearPlayfield
+      mapString: generateMapString(), // Empty board string
+      fieldClasses: $('.field').attr('class')
+    });
+  }
+
+  updatePlayerScoresUI(); // Update host score UI
+  updateTurnIndicator(); // Show it's host's turn
+
+  // Reset flags
+  hostReadyForRematch = false;
+  peerReadyForRematch = false;
 }
