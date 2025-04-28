@@ -269,6 +269,7 @@ function incrementDotStage(trgt) {
   if (!trgt.is('[class*="stage--"]')) {
     trgt.addClass("stage--1 " + currentPlayer);
     showIncrementAnimation(trgt); // <<< Add animation here
+    updatePlayerScoresUI(); // <<< Update score here
   } else {
     for (i = 1; i <= stage_amount; i++) {
       var currStage = trgt.is('[class*="stage--' + i + '"]');
@@ -278,11 +279,13 @@ function incrementDotStage(trgt) {
           .removeClass(playerClassClear)
           .addClass("stage--" + (i + 1) + " " + currentPlayer);
         showIncrementAnimation(trgt); // <<< Add animation here
+        updatePlayerScoresUI(); // <<< Update score here
         animateNextDot();
         return;
       } else if (currStage && i == stage_amount) {
         console.log('Dot reached max stage, checking for game end');
         trgt.removeClass("stage--" + i).removeClass(playerClassClear);
+        updatePlayerScoresUI(); // <<< Update score here (dot became neutral)
         if ("vibrate" in navigator) {
           window.navigator.vibrate([10, 10, 10]);
         }
@@ -316,10 +319,9 @@ function animateNextDot() {
   if ($(".dot.increment").length > 0) {
     var next = $(".dot.increment").eq(0);
     // Introduce a small delay (e.g., 0.05 seconds) between increments
-    TweenMax.delayedCall(0.15, incrementDotStage, [next]);
+    TweenMax.delayedCall(0.1, incrementDotStage, [next]);
   } else {
     $(".field").removeClass("animating");
-    updatePlayerScoresUI(); // <<< Update scores after chain reaction ends
     checkDotmination();
   }
 }
