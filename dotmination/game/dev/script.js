@@ -408,12 +408,120 @@ function checkDotmination() {
     } else {
       // SP Game Over handling...
       stop();
-      sound.play();
-      // Existing SP win/loss overlay logic...
-      if (currentPlayer == "player--2") {
-        // ... (rest of SP win logic) ...
-      } else {
-        // ... (rest of SP loss logic) ...
+      sound.play(); // Original sonar sound for game end
+      
+      // Restore Single-Player Overlay Logic 
+      if (currentPlayer == "player--2") { // Player 2 (usually User) is the one who made the winning move
+          // --- User Wins --- 
+          if (gameMode === 'random') {
+            // Calculate stars for random mode
+            if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 120) {
+              var goalMoves = 'active';
+            } else {
+              var goalMoves = '';
+            }
+    
+            if(moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 60) {
+              var goalTime = 'active';
+            } else {
+              var goalTime = '';
+            }
+            
+            // Show random mode win screen
+            $("body .container").append(
+              '<div class="end overlay noselect ' + currentPlayer + '">' +
+                '<div class="card">' +
+                  '<h1>Dotmination!</h1>' +
+                  '<span class="level-goals">' +
+                    '<i class="fas fa-star level-goals-won active"></i>' +
+                    '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
+                    '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
+                  '</span>' +
+                  '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
+                  '<p class="new-map">Next <i class="fas fa-random"></i></p>' +
+                '</div>' +
+              '</div>'
+            );
+            
+            TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
+
+          } else if (level < 100) { // Regular mode win
+            if($('body').hasClass('mode-regular')) {
+              var levelObj = {'level': level};
+              myDotmination['level'] = level;
+              
+              timeBest = (levelsArray['level' + level] !== undefined) ? levelsArray['level' + level].time : null;
+              // Ensure timeBest is treated as duration for subtraction
+              let timeBestDuration = timeBest ? moment.duration('00:'+timeBest) : moment.duration(0);
+              timeDiff = moment.duration('00:'+$('#time').html()).subtract(timeBestDuration).asMilliseconds();
+              
+              $('.timediff').remove();
+              
+              if(timeBest === null || timeDiff < 0) {
+                levelsArray['level' + level] = {'time': $('#time').html()};
+                myDotmination['levels'] = levelsArray;
+              }
+              
+              if (level < 100 && !levelsArray['level' + (level + 1)]) {
+                console.log('Adding new level:', level + 1);
+                levelsArray['level' + (level + 1)] = {'time': null};
+                myDotmination['levels'] = levelsArray;
+                console.log('Updated levelsArray:', levelsArray);
+              }
+              
+              myStorage.setObj("myDotmination", myDotmination);
+              updateLevelList();
+              
+              var hasTime = levelsArray['level' + level] && levelsArray['level' + level].time && levelsArray['level' + level].time !== null;
+              var wonStarClass = hasTime ? 'active' : '';
+              var goalMoves = (moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 120) ? 'active' : '';
+              var goalTime = (moment.duration('00:'+$('#time').html()).asSeconds() != 0 && moment.duration('00:'+$('#time').html()).asSeconds() < 60) ? 'active' : '';
+              
+              $("body .container").append(
+                '<div class="end overlay noselect ' + currentPlayer + '">' +
+                  '<div class="card">' +
+                    '<h1>Dotmination!</h1>' +
+                    '<span class="level-goals">' +
+                      '<i class="fas fa-star level-goals-won ' + wonStarClass + '"></i>' +
+                      '<i class="fas fa-star level-goals-moves ' + goalMoves + '"></i>' +
+                      '<i class="fas fa-star level-goals-time ' + goalTime + '"></i>' +
+                    '</span>' +
+                    '<p>Next Level <i class="fas fa-arrow-right"></i></p>' +
+                  '</div>' +
+                '</div>'
+              );
+              
+              TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
+            }
+          } else { // Level 100 win (loop back)
+            level = 1;
+            $("body .container").append(
+              '<div class="end overlay noselect ' + currentPlayer + '">' +
+                '<div class="card">' +
+                  '<h1>Dotmination!</h1>' +
+                  '<p>Next Level <i class="fas fa-undo"></i></p>' +
+                '</div>' +
+              '</div>'
+            );
+            TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut}); // Added missing animation
+          }
+      } else { // Player 1 (usually Bot) is the one who made the winning move -> User Lost
+          // --- User Lost --- 
+          $("body .container").append(
+            '<div class="end overlay noselect ' + currentPlayer + '">' +
+              '<div class="card">' +
+                '<h1>Dotmination!</h1>' +
+                '<span class="level-goals">' +
+                  '<i class="fas fa-star"></i>' +
+                  '<i class="fas fa-star"></i>' +
+                  '<i class="fas fa-star"></i>' +
+                '</span>' +
+                '<p class="retry">Retry <i class="fas fa-undo"></i></p>' +
+                (gameMode === 'random' ? '<p class="new-map">Next <i class="fas fa-random"></i></p>' : '') +
+              '</div>' +
+            '</div>'
+          );
+          TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
       }
     }
   } else { // --- Multiplayer Logic ---
