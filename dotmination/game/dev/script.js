@@ -2722,6 +2722,13 @@ function setupConnectionHandlers(connection) {
       $(".field").removeClass("animating");
       // --- End Fix ---
 
+      // <<< ADD EXPLICIT VISUAL RESET >>>
+      // Force-remove all player/stage classes before applying authoritative state
+      $(".dot").removeClass(function(index, className) {
+        return (className.match(/(^|\s)(stage--|player--)\S+/g) || []).join(' ');
+      });
+      // <<< END EXPLICIT VISUAL RESET >>>
+
       // Restore game state (handles initial sync, rematch, and post-host-turn sync)
       currentPlayer = data.currentPlayer;
       moveAmount = data.moveAmount;
@@ -3002,6 +3009,13 @@ function showConnectingOverlay() {
     // Hide connecting overlay
     $('.connecting-overlay').hide();
     
+    // <<< ADD MULTIPLAYER STATE RESET >>>
+    cleanup(); // Close PeerJS connections
+    clearSessionInfo(); // Clear any saved session
+    isMultiplayer = false; // Explicitly set to false
+    isHost = false; // Explicitly set to false
+    // <<< END MULTIPLAYER STATE RESET >>>
+    
     // Reset game mode to regular and update UI
     gameMode = 'regular';
     $('body')
@@ -3016,6 +3030,7 @@ function showConnectingOverlay() {
     $('.mode-modal').addClass('active');
     $('body').addClass('modal-open');
     $('.list--mode-regular').show();
+    updateLevelList(); // <<< ADD THIS CALL
     
     // Hide bot difficulty section
     $('.bot-difficulty').hide();
