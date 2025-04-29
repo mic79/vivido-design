@@ -1354,6 +1354,56 @@ $('.modal-close').on('click', function() {
 });
 // END Modal
 
+// --- Main Menu Modal Logic ---
+// Open main menu modal
+$('#main-menu-btn').on('click', function(e) {
+  e.stopPropagation(); // Prevent header clicks if any
+  $('.modal').removeClass('active'); // Close any other open modals
+  $('.main-menu-modal').addClass('active');
+  $('body').addClass('modal-open');
+});
+
+// Handle clicks on buttons inside the main menu
+$('.main-menu-modal .btn-main-menu').on('click', function() {
+  const action = $(this).data('action');
+  
+  if (action === 'mode' || action === 'profile') {
+    // Close the main menu modal first for mode/profile actions
+    $('.main-menu-modal').removeClass('active');
+    $('body').removeClass('modal-open');
+    
+    // Perform action after a short delay to allow closing animation
+    setTimeout(() => {
+      if (action === 'mode') {
+        // Open the mode selection modal
+        $('.mode-modal').addClass('active');
+        $('body').addClass('modal-open');
+        if($('body').hasClass('modal-open')) { // Re-check just in case
+          updateLevelList(); // Ensure level list is updated if switching to regular
+        }
+      } else if (action === 'profile') {
+        // Open the profile modal
+        $('.profile-modal').addClass('active');
+        $('body').addClass('modal-open');
+        if($('body').hasClass('modal-open')) { // Re-check
+          updateBestTime(); // Update profile times
+        }
+      }
+    }, 100); // Adjust delay if needed
+  } else if (action === 'colors') {
+    // Trigger color change directly without closing the modal
+    changeColors();
+  }
+});
+
+// Add backdrop click handler specifically for the main menu modal
+$('.main-menu-modal .backdrop').on('click', function() {
+  $(this).closest('.modal').removeClass('active');
+  $('body').removeClass('modal-open');
+});
+
+// --- END Main Menu Modal Logic ---
+
 // Profile modal
 $('.player.player--2, .profile-modal .backdrop').on('click', function(e) {
   e.stopPropagation();

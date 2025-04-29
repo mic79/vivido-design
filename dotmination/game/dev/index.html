@@ -122,6 +122,7 @@
     <div class="field noselect"></div>
   </div>
   <footer>
+    <div id="main-menu-btn" class="header-icon-btn"><i class="fas fa-bars"></i></div>
     <div class="random" data-modal=".mode-modal"><i class="fas fa-random"></i></div>
     <div class="level" data-modal=".mode-modal"><i class="fas fa-layer-group"></i><span class="level-value">100</span></div>
     <div class="multiplayer" data-modal=".mode-modal"><i class="fas fa-users"></i></div>
@@ -230,6 +231,36 @@
           <h1><i class="fas fa-undo"></i></h1>
           <p>Restart</p>
         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Main Menu Modal -->
+<div class="modal main-menu-modal">
+  <div class="backdrop"></div>
+  <div class="wrapper">
+    <div class="modal-close"><i class="fas fa-times"></i></div>
+    <h2>Menu</h2>
+    <div class="row">
+      <div class="col card btn btn-main-menu" data-action="mode">
+        <p>Change Game Mode</p>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col card btn btn-main-menu" data-action="profile">
+        <p>View Profile</p>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col card btn btn-main-menu" data-action="colors">
+        <p>Change Colors</p>
+      </div>
+    </div>
+    <div class="row justify-content-center">
+      <div class="col">
+        <p class="text-center">For info and feedback, please visit<br><a href="https://discord.gg/vvuzWnTWKE" target="_blank" onclick="window.open('https://discord.gg/vvuzWnTWKE', '_system'); return false;">Dotmination Discord</a></p>
+        <p class="smaller">Last updated: 2025-04-29</p>
       </div>
     </div>
   </div>

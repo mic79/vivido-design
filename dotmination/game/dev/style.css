@@ -83,8 +83,20 @@ h1 {
   font-weight: 300;
 }
 
+a {
+  color: inherit;
+}
+
+.text-center {
+  text-align: center;
+}
+
 .row {
   display: flex;
+}
+
+.justify-content-center {
+  justify-content: center !important;
 }
 
 .card {
@@ -423,6 +435,21 @@ header {
   z-index: 99;
 }
 
+.header-icon-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  padding: 10px;
+  color: darkslategrey;
+  font-size: 0.5rem;
+  transform: translateX(-50%) scale(4, 1.5);
+  cursor: pointer;
+}
+
+.dark-mode .header-icon-btn {
+  color: white;
+}
+
 .modal-open header {
   filter: blur(2px);
 }
@@ -530,6 +557,11 @@ footer .time i {
 footer .multiplayer {
   display: none; /* Hidden by default */
   cursor: pointer;
+}
+
+.smaller {
+  font-size: smaller;
+  opacity: 0.5;
 }
 
 /* Show/Hide footer buttons based on game mode */
@@ -1167,3 +1199,12 @@ div[data-modal] {
     background-color: #555;
     color: #ccc;
 }
+
+/* Styles for Main Menu Modal Buttons */
+.main-menu-modal .btn-main-menu {
+  text-align: center;
+}
+.main-menu-modal .btn-main-menu p {
+  margin: 0.5rem 0; /* Add some vertical spacing */
+}
+/* End Styles for Main Menu Modal Buttons */
