@@ -159,6 +159,7 @@ $("body").on("click", ".end .card p", function(e) {
           // Reset local flags - host will send game state which triggers UI updates
           hostReadyForRematch = false;
           peerReadyForRematch = false;
+          initialSyncComplete = false; // <<< ADD THIS LINE
         }
       }
       // Return here to prevent single-player logic execution
