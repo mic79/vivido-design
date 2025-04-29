@@ -118,6 +118,7 @@ const pitchStep = 0.05; // Increase pitch by 5% each time
 let isMultiplayer = false;
 let isHost = false;
 let processingOpponentMove = false; // Flag to track opponent move processing
+let initialSyncComplete = false; // Flag for client initial sync
 
 // Remove all existing click handlers for .end
 $("body").off("click", ".end, .end *");
@@ -273,13 +274,21 @@ function nextPlayer() {
   $(".field").addClass(currentPlayer);
   moveAmount++;
   
-  // Update turn indicator in multiplayer mode
-  if (isMultiplayer) {
-    console.log("Updating multiplayer turn indicator");
-    updateTurnIndicator();
-    // Send turn update to opponent
-    sendTurnUpdate();
+  // Update turn indicator locally first for responsiveness
+  updateTurnIndicator();
+
+  // Send authoritative game state update from host instead of just turn info
+  if (isMultiplayer && isHost && conn) { // Only host sends state after their turn
+    console.log("Host sending gameState after turn completion");
+    conn.send({
+      type: 'gameState',
+      currentPlayer: currentPlayer, // The NEW current player (opponent)
+      moveAmount: moveAmount,
+      mapString: generateMapString(), // Current board state
+      fieldClasses: $('.field').attr('class') // Reflects new current player
+    });
   }
+  // Removed call to sendTurnUpdate()
 }
 //nextPlayer();
 
@@ -357,7 +366,8 @@ function animateNextDot(player = currentPlayer) {
   if ($(".dot.increment").length > 0) {
     var next = $(".dot.increment").eq(0);
     // Introduce a small delay and PASS the effectivePlayer to the next increment
-    TweenMax.delayedCall(0.1, incrementDotStage, [next, effectivePlayer]);
+    // Use gsap.delayedCall instead of TweenMax.delayedCall
+    gsap.delayedCall(0.1, incrementDotStage, [next, effectivePlayer]); 
   } else {
     $(".field").removeClass("animating");
     
@@ -658,10 +668,21 @@ function startAnim() {
   moveAmount = 0;
   randomNumber = Math.floor(Math.random() * playerArray.length);
   currentPlayer = "player--2";
-  
-  // Remove turn indicator in singleplayer modes
+
+  // Set player icons based on mode and difficulty
   if (!isMultiplayer) {
-    $('.turn-indicator').remove();
+    // Determine Player 1 icon
+    let player1Icon = 'fa-robot'; // Default for regular mode or normal random bot
+    if (gameMode === 'random' && botDifficulty === 'smart') {
+      player1Icon = 'fa-brain'; // Harder bot in random mode
+    }
+    $('.player.player--1 i').removeClass('fa-user-secret fa-robot fa-brain').addClass(player1Icon); // Set P1 icon
+
+    // Set Player 2 icon
+    $('.player.player--2 i').removeClass('fa-robot fa-brain').addClass('fa-user-secret'); // Always user icon for P2
+
+    $('.player-indicator').remove(); // Remove any leftover MP indicators
+    $('.turn-indicator').remove(); // Remove turn indicator
   }
   
   $('.level-value').html(level);
@@ -1316,6 +1337,7 @@ function reset() {
 $('div[data-modal]').on('click', function() {
   $('.modal').removeClass('active');
   $($(this).data('modal')).addClass('active');
+  // REMOVED: $('body').addClass('modal-open'); 
 });
 
 $('.modal .wrapper').on('click', function(e) {
@@ -1324,7 +1346,7 @@ $('.modal .wrapper').on('click', function(e) {
 
 $('.modal-close').on('click', function() {
   $(this).closest('.modal').removeClass('active');
-  $('body').removeClass('modal-open');
+  // REMOVED: $('body').removeClass('modal-open');
 });
 // END Modal
 
@@ -1390,8 +1412,12 @@ function updateBestTime() {
 // END Profile modal
 
 // Mode Modal
-$('.level, .random, .mode-modal .backdrop').on('click', function(e) {
-  e.stopPropagation();
+// Include .multiplayer footer button in this selector
+$('.level, .random, .multiplayer, .mode-modal .backdrop').on('click', function(e) { 
+  // Prevent propagation if it's one of the footer buttons to avoid immediate closing
+  if ($(this).hasClass('level') || $(this).hasClass('random') || $(this).hasClass('multiplayer')) {
+    e.stopPropagation(); 
+  }
   $('body').toggleClass('modal-open');
   
   if($('body').hasClass('modal-open')) {
@@ -1743,15 +1769,21 @@ function signinAnim() {
         dots = $(".dot");
         currentPlayer = "player--2";
         $(".field").addClass(currentPlayer);
+
+        // <<< ADD ICON SETTING LOGIC HERE >>>
+        let player1Icon = 'fa-robot'; // Default
+        if (botDifficulty === 'smart') {
+          player1Icon = 'fa-brain'; // Harder bot
+        }
+        $('.player.player--1 i').removeClass('fa-user-secret fa-robot fa-brain').addClass(player1Icon); // Set P1 icon
+        $('.player.player--2 i').removeClass('fa-robot fa-brain').addClass('fa-user-secret'); // Set P2 icon
+        $('.player-indicator').remove(); // Clean up any potential MP indicators
+        $('.turn-indicator').remove(); // Ensure no turn indicator shows
+        // <<< END ICON SETTING LOGIC >>>
+        
         show();
         reset();
         start();
-
-        // Update scores immediately after loading map from URL
-        updatePlayerScoresUI();
-
-        // Don't call startAnim() because the map is already set
-        return; // Prevent falling through to startAnim() below
       } else {
         startAnim();
       }
@@ -2218,30 +2250,44 @@ function startMultiplayerAnim() {
 
 // Add back the player indicator functions
 function updatePlayerIndicators() {
-  // Remove any existing indicators
+  // Remove any existing indicators and icons
   $('.player-indicator').remove();
-  
-  // Add "You" indicator to show which player you are
-  if (isHost) {
-    $('.player.player--1').append('<span class="player-indicator">(You)</span>');
-    $('.player.player--2').append('<span class="player-indicator">(Opponent)</span>');
+  $('.players .player i').removeClass('fa-robot fa-user-secret');
+
+  if (isMultiplayer) {
+    // Multiplayer: Both icons are fa-user-secret
+    $('.player.player--1 i').addClass('fa-user-secret');
+    $('.player.player--2 i').addClass('fa-user-secret');
   } else {
-    $('.player.player--2').append('<span class="player-indicator">(You)</span>');
-    $('.player.player--1').append('<span class="player-indicator">(Opponent)</span>');
+    // Single Player: Set standard icons
+    $('.player.player--1 i').addClass('fa-robot');
+    $('.player.player--2 i').addClass('fa-user-secret');
   }
 }
 
 function updateTurnIndicator() {
   // Remove any existing indicators
   $('.turn-indicator').remove();
-  
-  // Add the turn indicator
-  if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
-    // It's your turn
-    $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
-  } else {
-    // It's opponent's turn
-    $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+  // Remove existing current class from player icons
+  $('.players .player').removeClass('current');
+
+  // Only add the indicator if in multiplayer mode
+  if (isMultiplayer) {
+    // Add the turn indicator text
+    if ((currentPlayer === 'player--1' && isHost) || (currentPlayer === 'player--2' && !isHost)) {
+      // It's your turn
+      $('header').append('<div class="turn-indicator your-turn">Your Turn</div>');
+    } else {
+      // It's opponent's turn
+      $('header').append('<div class="turn-indicator opponent-turn">Opponent\'s Turn</div>');
+    }
+
+    // Add 'current' class to the active player icon
+    if (currentPlayer === 'player--1') {
+      $('.players .player.player--1').addClass('current');
+    } else {
+      $('.players .player.player--2').addClass('current');
+    }
   }
 }
 
@@ -2407,7 +2453,9 @@ function setupPeer(slotNumber) {
       if (hasConnected) return;
       hasConnected = true;
       connectionState = CONNECTION_STATES.CONNECTED;
-      updateConnectingOverlay(`Connected to Host!`);
+      // Remove the overlay immediately upon successful connection
+      $('.connecting-overlay').remove(); 
+      // updateConnectingOverlay(`Connected to Host!`); // Removed this line
       saveSessionInfo(slotNumber, 'peer');
       setupConnectionHandlers(conn);
       // Send ready signal to host
@@ -2514,18 +2562,19 @@ function setupConnectionHandlers(connection) {
   console.log("Setting up connection handlers. isMultiplayer:", isMultiplayer, "isHost:", isHost);
   
   conn = connection;
-  
+  initialSyncComplete = false; // Reset sync flag on new connection setup
+
   conn.on("open", function() {
     console.log("Connection opened. isMultiplayer:", isMultiplayer);
     connectionState = CONNECTION_STATES.CONNECTED;
     hasConnected = true;
-    
+
     // Reset hasSentGameState flag when connection is re-established
     hasSentGameState = false;
-    
-    // Remove connecting overlay when connection is established
+
+    // Remove connecting overlay when connection is established (initial or reconnect)
     $('.connecting-overlay').remove();
-    
+
     // If we're the peer, send ready signal immediately
     if (!isHost) {
       console.log("Peer sending initial ready signal");
@@ -2535,18 +2584,18 @@ function setupConnectionHandlers(connection) {
 
   conn.on("data", function(data) {
     console.log("Received data:", data);
-    
+
     if (data.type === 'ready') {
       console.log("Received ready signal");
-      
+
       // Only handle ready signal if we're the host and haven't sent game state yet
       if (isHost && !hasSentGameState) {
-        console.log("Host sending game state to peer");
-        hasSentGameState = true;
-        
+        console.log("Host sending initial game state to peer");
+        hasSentGameState = true; // Mark that initial state is sent
+
         // Clear the host's board FIRST to ensure a fresh multiplayer start
-        clearPlayfield(); 
-        
+        clearPlayfield();
+
         // Send complete game state REFLECTING THE CLEARED BOARD
         conn.send({
           type: 'gameState',
@@ -2555,14 +2604,14 @@ function setupConnectionHandlers(connection) {
           mapString: generateMapString(), // Generate string from the cleared board
           fieldClasses: $('.field').attr('class') // Get classes from cleared board
         });
-        
+
         // Update host UI after clearing
         updatePlayerScoresUI();
 
         // Remove connecting overlay for host now that game state is sent
         $('.connecting-overlay').remove();
       }
-    } 
+    }
     // --- Handle Rematch Ready ---
     else if (data.type === 'rematchReady') {
       console.log("Received rematchReady signal");
@@ -2570,81 +2619,103 @@ function setupConnectionHandlers(connection) {
         peerReadyForRematch = true;
         if (hostReadyForRematch) {
           console.log("Both players ready for rematch (Host perspective on receive)");
-          hostInitiateRematchStart(); // Both are ready, host starts
+          hostInitiateRematchStart(); // Host resets flags inside this function
         }
       } else { // Peer received ready from host
         hostReadyForRematch = true;
         if (peerReadyForRematch) {
           console.log("Both players ready for rematch (Peer perspective on receive)");
-          // Peer just waits for host to send game state
-          // Reset local flags
+          // Peer resets flags HERE and waits for host's gameState
           hostReadyForRematch = false;
           peerReadyForRematch = false;
+          initialSyncComplete = false; // Reset sync flag for rematch game state
         }
       }
     }
     // --- End Handle Rematch Ready ---
     else if (data.type === 'gameState') {
       console.log("Received game state");
-      
-      // Restore game state
+
+      // --- FIX: Stop any ongoing client-side simulation before applying authoritative state ---
+      console.log("Stopping client-side simulation due to incoming gameState");
+      // Use gsap.killTweensOf instead of TweenMax.killDelayedCallsTo
+      gsap.killTweensOf(incrementDotStage); 
+      $(".dot.increment").removeClass("increment");
+      $(".field").removeClass("animating");
+      // --- End Fix ---
+
+      // Restore game state (handles initial sync, rematch, and post-host-turn sync)
       currentPlayer = data.currentPlayer;
       moveAmount = data.moveAmount;
       buildMapFromString(data.mapString);
       $('.field').attr('class', data.fieldClasses);
+
+      // Update color variable based on received state
+      const currentTurnColor = (currentPlayer === 'player--1') ? 'var(--color-1)' : 'var(--color-2)';
+      TweenMax.to("html", 0, {"--color-current": currentTurnColor});
       
-      // Update turn indicator based on received state
-      updateTurnIndicator();
-      
-      // Remove connecting overlay
-      $('.connecting-overlay').remove();
-      
-      // Send ready signal to confirm state received
-      if (!isHost) {
-        console.log("Peer confirming game state received");
-        conn.send({ type: 'ready' });
+      updatePlayerScoresUI(); // Update scores based on received state
+      updateTurnIndicator(); // Update turn indicator based on received state
+
+      // <<< ADD TIMER RESET/START FOR CLIENT >>>
+      // Peer confirms initial game state received (or rematch state) and resets timer
+      if (!isHost && !initialSyncComplete) {
+          console.log("Peer confirming initial game state received and resetting timer");
+          // Reset timer only on initial/rematch sync
+          reset(); 
+          start();
+          // Send confirmation
+          conn.send({ type: 'ready' });
+          initialSyncComplete = true; // Set flag after confirming
       }
-      
-      // Reset rematch flags after game state is synchronized
-      hostReadyForRematch = false;
-      peerReadyForRematch = false;
+      // Rematch flags are now reset in 'rematchReady' handler or hostInitiateRematchStart
     }
-    
-    if (data.type === 'move') {
-      // Process the move first
+    else if (data.type === 'move') {
+      // Process the move visually (simulation)
       handleOpponentMove(data.dotIndex);
-      
-      // Then update moveAmount to match the host's state
-      if (!isHost) {
-        moveAmount++;
-      }
+      // DO NOT update moveAmount here anymore. Rely on gameState message.
     }
-
-    if (data.type === 'turnUpdate') {
-      console.log("Received turn update", data); // <<< ADD LOG (Receipt)
-      console.log("Peer state BEFORE turnUpdate:", { currentPlayer: currentPlayer, moveAmount: moveAmount }); // <<< ADD LOG (Before)
-      currentPlayer = data.currentPlayer;
-      // Only update moveAmount if we're the peer
-      if (!isHost) {
-        moveAmount = data.moveAmount;
-      }
-      console.log("Peer state AFTER turnUpdate:", { currentPlayer: currentPlayer, moveAmount: moveAmount }); // <<< ADD LOG (After)
-      updateTurnIndicator();
-    }
-
-    if (data.type === 'gameOver') {
+    // REMOVED 'turnUpdate' handler block
+    else if (data.type === 'gameOver') {
       console.log("Received gameOver message", data);
       if (!isHost) {
         // Peer shows overlay based on received winner
         showMultiplayerGameOverOverlay(data.winner);
       }
     }
+    // Handle mode switch signal from host
+    else if (data.type === 'modeSwitch') {
+       console.log("Received modeSwitch signal");
+       if (!isHost) {
+         alert("Host changed game mode. Returning to menu.");
+         resetMultiplayerState(); // Includes cleanup and clearing session
+
+         // Reset the game mode to regular
+         gameMode = 'regular';
+
+         // Update the UI to reflect the mode change
+         $('body').removeClass('mode-multiplayer mode-random').addClass('mode-regular');
+         $('.mode-modal .card').removeClass('selected');
+         $('.mode-modal .card[data-mode="regular"]').addClass('selected');
+         $('.list--mode-regular').show(); // Ensure level list is visible if modal opens
+         $('.bot-difficulty, .multiplayer-options, .game-id-display, .game-id-input').hide(); // Hide other mode sections
+         $('.turn-indicator').remove(); // Remove turn indicator
+
+
+         // Update URL
+         var newUrl = window.location.pathname + '?mode=regular';
+         window.history.replaceState({}, document.title, newUrl);
+
+         // Start a new single player game
+         startAnim();
+       }
+     }
 
   });
 
   conn.on("close", function() {
     console.log("Connection closed");
-    handleDisconnection();
+    handleDisconnection(); // Existing disconnection logic
   });
 }
 
@@ -2899,30 +2970,32 @@ function clearPlayfield() {
   // Remove any existing win/loss overlay
   $(".end.overlay").remove();
 
-  // Reset game state
+  // Reset game state variables
   moveAmount = 0;
-  currentPlayer = "player--1";
-  
-  // Clear the field completely
-  $(".field").empty();
-  
-  // Reinitialize the field with empty dots
-  setDots();
-  
-  // Clear any existing classes from the field
-  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
-  
-  // Set the color for player 1
-  TweenMax.to("html", 0, {"--color-current": 'var(--color-1)'});
-  
-  // Initialize game state
-  dots = $(".dot");
-  show();
-  reset();
-  start();
+  currentPlayer = "player--1"; // Host always starts after clear
 
-  // Update turn indicator when clearing playfield
+  // Clear the field completely (remove dots)
+  $(".field").empty();
+
+  // Reinitialize the field with empty dots based on current layout settings
+  setDots(); // Creates new empty dot elements
+
+  // Clear any existing player classes from the field itself and set the current player
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+
+  // Set the color theme for player 1
+  TweenMax.to("html", 0, { "--color-current": 'var(--color-1)' });
+
+  // Initialize game state references and timer
+  dots = $(".dot"); // Update dots reference
+  show(); // Show timer element
+  reset(); // Reset timer value
+  start(); // Start timer ticking
+
+  // Update scores (should be 0/0), turn indicator, and player icons
+  updatePlayerScoresUI();
   updateTurnIndicator();
+  updatePlayerIndicators(); // <<< ADD THIS CALL
 }
 
 // Add new function to send turn updates

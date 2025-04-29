@@ -454,6 +454,18 @@ header .players .player.player--2 {
   background: var(--color-2);
 }
 
+header .players .player.current {
+  transition: box-shadow 0.3s ease-in-out;
+}
+
+header .players .player.player--1.current {
+  box-shadow: 0 0 0 2px white, 0 0 0 4px var(--color-1);
+}
+
+header .players .player.player--2.current {
+  box-shadow: 0 0 0 2px white, 0 0 0 4px var(--color-2);
+}
+
 header .players .player.selectable {
   cursor: pointer;
 }
@@ -513,6 +525,26 @@ footer .time {
 
 footer .time i {
   margin-left: 0.5rem;
+}
+
+footer .multiplayer {
+  display: none; /* Hidden by default */
+  cursor: pointer;
+}
+
+/* Show/Hide footer buttons based on game mode */
+.mode-multiplayer footer .level,
+.mode-multiplayer footer .random {
+  display: none;
+}
+
+.mode-multiplayer footer .multiplayer {
+  display: block; /* Show multiplayer button in MP mode */
+}
+
+.mode-regular footer .multiplayer,
+.mode-random footer .multiplayer {
+  display: none; /* Hide multiplayer button in SP modes */
 }
 
 .container {
@@ -1111,3 +1143,27 @@ div[data-modal] {
 
 #player-1-score { color: var(--color-1); }
 #player-2-score { color: var(--color-2); }
+
+/* Style for the turn indicator */
+.turn-indicator {
+    padding: 5px 10px;
+    margin-top: 5px; /* Add some space below the player icons */
+    border-radius: 5px;
+    font-weight: bold;
+    text-align: center; /* Center the text */
+}
+
+.turn-indicator.your-turn {
+    background-color: var(--color-current); /* Use the current player's color */
+    color: white;
+}
+
+.turn-indicator.opponent-turn {
+    background-color: #f0f0f0; /* Light grey for opponent's turn */
+    color: #555;
+}
+
+.dark-mode .turn-indicator.opponent-turn {
+    background-color: #555;
+    color: #ccc;
+}
