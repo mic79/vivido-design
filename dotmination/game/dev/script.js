@@ -1198,32 +1198,34 @@ function incrementColorsIndex() {
 
 function changeColors() {
   incrementColorsIndex();
-  /* TweenMax.to($(".players .player--1"), 1, {
-    css: { backgroundColor: colorsArr[colorsIndex][0] },
-    overwrite: true
-  });
-  TweenMax.to($(".players .player--2"), 1, {
-    css: { backgroundColor: colorsArr[colorsIndex][1] },
-    overwrite: true
-  }); */
-  
-  TweenMax.to("html", 0, {"--color-1": colorsArr[colorsIndex][0]});
-  
-  TweenMax.to("html", 0, {"--color-1-rgba-0": 'rgba(' + colorsArr[colorsIndex][0] + ',0.75)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-1": 'rgba(' + colorsArr[colorsIndex][0] + ',0.4)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-2": 'rgba(' + colorsArr[colorsIndex][0] + ',0.3)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-3": 'rgba(' + colorsArr[colorsIndex][0] + ',0.2)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-4": 'rgba(' + colorsArr[colorsIndex][0] + ',0.1)'});
-  TweenMax.to("html", 0, {"--color-1-rgba-5": 'rgba(' + colorsArr[colorsIndex][0] + ',0)'});
-  
-  TweenMax.to("html", 0, {"--color-2": colorsArr[colorsIndex][1]});
-  
-  TweenMax.to("html", 0, {"--color-2-rgba-0": 'rgba(' + colorsArr[colorsIndex][1] + ',0.75)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-1": 'rgba(' + colorsArr[colorsIndex][1] + ',0.4)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-2": 'rgba(' + colorsArr[colorsIndex][1] + ',0.3)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-3": 'rgba(' + colorsArr[colorsIndex][1] + ',0.2)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-4": 'rgba(' + colorsArr[colorsIndex][1] + ',0.1)'});
-  TweenMax.to("html", 0, {"--color-2-rgba-5": 'rgba(' + colorsArr[colorsIndex][1] + ',0)'});
+
+  // Get the HEX colors
+  const hex1 = colorsArr[colorsIndex][0];
+  const hex2 = colorsArr[colorsIndex][1];
+
+  // Convert HEX to RGB using the utility function
+  const rgb1 = hexToRgb(hex1); 
+  const rgb2 = hexToRgb(hex2);
+
+  // Update main colors
+  gsap.to("html", {duration: 0, "--color-1": hex1});
+  gsap.to("html", {duration: 0, "--color-2": hex2});
+
+  // Update RGBA variables for color 1 using RGB values
+  gsap.to("html", {duration: 0, "--color-1-rgba-0": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.75)`});
+  gsap.to("html", {duration: 0, "--color-1-rgba-1": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.4)`});
+  gsap.to("html", {duration: 0, "--color-1-rgba-2": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.3)`});
+  gsap.to("html", {duration: 0, "--color-1-rgba-3": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.2)`});
+  gsap.to("html", {duration: 0, "--color-1-rgba-4": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.1)`});
+  gsap.to("html", {duration: 0, "--color-1-rgba-5": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0)`});
+
+  // Update RGBA variables for color 2 using RGB values
+  gsap.to("html", {duration: 0, "--color-2-rgba-0": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.75)`});
+  gsap.to("html", {duration: 0, "--color-2-rgba-1": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.4)`});
+  gsap.to("html", {duration: 0, "--color-2-rgba-2": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.3)`});
+  gsap.to("html", {duration: 0, "--color-2-rgba-3": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.2)`});
+  gsap.to("html", {duration: 0, "--color-2-rgba-4": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.1)`});
+  gsap.to("html", {duration: 0, "--color-2-rgba-5": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0)`});
   
   var currentColor;
   if($('.field').hasClass('player--1')) {
@@ -1231,7 +1233,8 @@ function changeColors() {
   } else {
     currentColor = 2;
   }
-  TweenMax.to("html", 0, {"--color-current": colorsArr[colorsIndex][currentColor - 1]});
+  // Update the current color (use original HEX)
+  gsap.to("html", {duration: 0, "--color-current": colorsArr[colorsIndex][currentColor - 1]});
 }
 
 //listen to shake event
@@ -1381,34 +1384,58 @@ function updateBestTime() {
       bestTimeIndex;
   var worstTimeAsSeconds,
       worstTimeIndex;
+
+  // Initialize bestTimeAsSeconds to Infinity to ensure first valid time is always lower
+  bestTimeAsSeconds = Infinity; 
+  bestTimeIndex = -1; // Initialize bestTimeIndex to an invalid value
+
+  // Initialize worstTime with the first valid time found
+  worstTimeAsSeconds = undefined;
+  worstTimeIndex = -1;
   
   $(Object.keys(levelsArray)).each(function(index) {
-    var itemTimeAsSeconds = moment.duration('00:'+levelsArray['level'+(index + 1)].time).asSeconds();
+    var currentLevelKey = 'level' + (index + 1);
+    var currentTime = levelsArray[currentLevelKey] ? levelsArray[currentLevelKey].time : null;
     
-    // Check Best Time
-    if(bestTimeAsSeconds == undefined) {
-      bestTimeAsSeconds = itemTimeAsSeconds;
-      bestTimeIndex = index;
-    } else if(bestTimeAsSeconds > itemTimeAsSeconds) {
-      bestTimeAsSeconds = itemTimeAsSeconds;
-      bestTimeIndex = index;
+    // Ensure the level exists and has a time before processing
+    if (currentTime !== null && currentTime !== undefined) { 
+      var itemTimeAsSeconds = moment.duration('00:' + currentTime).asSeconds();
+      
+      // Check Best Time (only compare if time is valid)
+      if (itemTimeAsSeconds < bestTimeAsSeconds) {
+        bestTimeAsSeconds = itemTimeAsSeconds;
+        bestTimeIndex = index;
+      }
+
+      // Check Worst Time (initialize if undefined, then compare)
+      if (worstTimeAsSeconds === undefined || itemTimeAsSeconds > worstTimeAsSeconds) {
+        worstTimeAsSeconds = itemTimeAsSeconds;
+        worstTimeIndex = index;
+      }
     }
-    $('.profile-modal .best-time').attr('data-level', bestTimeIndex + 1);
-    $('.profile-modal .best-time h1').html(levelsArray['level'+(bestTimeIndex + 1)].time);
-    $('.profile-modal .best-time .time-level').html('Level ' + (bestTimeIndex + 1));
-    
-    // Check Worst Time
-    if(worstTimeAsSeconds == undefined) {
-      worstTimeAsSeconds = itemTimeAsSeconds;
-      worstTimeIndex = index;
-    } else if(worstTimeAsSeconds < itemTimeAsSeconds) {
-      worstTimeAsSeconds = itemTimeAsSeconds;
-      worstTimeIndex = index;
-    }
-    $('.profile-modal .worst-time').attr('data-level', worstTimeIndex + 1);
-    $('.profile-modal .worst-time h1').html(levelsArray['level'+(worstTimeIndex + 1)].time);
-    $('.profile-modal .worst-time .time-level').html('Level ' + (worstTimeIndex + 1));
   });
+
+  // Update Best Time display
+  if (bestTimeIndex !== -1) { // Check if a valid best time was found
+    $('.profile-modal .best-time').attr('data-level', bestTimeIndex + 1);
+    $('.profile-modal .best-time h1').html(levelsArray['level' + (bestTimeIndex + 1)].time);
+    $('.profile-modal .best-time .time-level').html('Level ' + (bestTimeIndex + 1));
+  } else {
+    $('.profile-modal .best-time').removeAttr('data-level');
+    $('.profile-modal .best-time h1').html('None');
+    $('.profile-modal .best-time .time-level').html('');
+  }
+
+  // Update Worst Time display
+  if (worstTimeIndex !== -1) { // Check if a valid worst time was found
+    $('.profile-modal .worst-time').attr('data-level', worstTimeIndex + 1);
+    $('.profile-modal .worst-time h1').html(levelsArray['level' + (worstTimeIndex + 1)].time);
+    $('.profile-modal .worst-time .time-level').html('Level ' + (worstTimeIndex + 1));
+  } else {
+    $('.profile-modal .worst-time').removeAttr('data-level');
+    $('.profile-modal .worst-time h1').html('None');
+    $('.profile-modal .worst-time .time-level').html('');
+  }
 }
 // END Profile modal
 
