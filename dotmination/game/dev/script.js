@@ -1346,7 +1346,7 @@ $('.modal .wrapper').on('click', function(e) {
 
 $('.modal-close').on('click', function() {
   $(this).closest('.modal').removeClass('active');
-  // REMOVED: $('body').removeClass('modal-open');
+  $('body').removeClass('modal-open'); // <<< ADD THIS LINE BACK
 });
 // END Modal
 
