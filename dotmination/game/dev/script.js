@@ -2068,7 +2068,7 @@ $(document).ready(function() {
     var buttonClass = $existingButton.attr('class');
     
     // Create the button with matching styling
-    var $newButton = $('<div class="' + buttonClass + '" data-mode="multiplayer"><i class="fas fa-users"></i><span>Multiplayer</span></div>');
+    var $newButton = $('<div class="' + buttonClass + '" data-mode="multiplayer"><h1><i class="fas fa-users"></i></h1><p>Multiplayer</p></div>');
     
     // Add it after the random button
     $('.mode-modal .card[data-mode="random"]').after($newButton);

@@ -300,12 +300,12 @@ a {
 
 .intro .colors-overlay .overlay-color-1 {
   left: 0;
-  background-color: #12dace;
+  background-color: var(--color-1);
 }
 
 .intro .colors-overlay .overlay-color-2 {
   right: 0;
-  background-color: #e11168;
+  background-color: var(--color-2);
 }
 
 .intro .logo {
