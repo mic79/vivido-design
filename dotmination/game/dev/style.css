@@ -564,6 +564,11 @@ footer .multiplayer {
   opacity: 0.5;
 }
 
+.x-small {
+  font-size: x-small;
+  opacity: 0.5;
+}
+
 /* Show/Hide footer buttons based on game mode */
 .mode-multiplayer footer .level,
 .mode-multiplayer footer .random {
