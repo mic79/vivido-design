@@ -1,6 +1,5 @@
-// v0.0.54
+// v0.0.55
 // Singleplayer modes are stable.
-// Random mode bot difficulty "smart" is still simply a duplicate of "random" bot.
 // Multiplayer mode is working, but needs to be improved.
 
 // Dark Mode
@@ -38,6 +37,7 @@ function saveSessionInfo(slotNumber, role) {
   localStorage.setItem('dotminationSession', JSON.stringify({
     slotNumber,
     role,
+    startType: multiplayerStartType, // <<< Save start type
     timestamp: Date.now()
   }));
 }
@@ -45,7 +45,8 @@ function saveSessionInfo(slotNumber, role) {
 function getSessionInfo() {
   try {
     const session = JSON.parse(localStorage.getItem('dotminationSession'));
-    if (!session) return null;
+    // Ensure session exists and has a startType
+    if (!session || !session.startType) return null; 
 
     // Check if session is not too old (e.g., 5 minutes)
     if (Date.now() - session.timestamp > 5 * 60 * 1000) {
@@ -117,8 +118,11 @@ const pitchStep = 0.05; // Increase pitch by 5% each time
 // Add after your existing variables
 let isMultiplayer = false;
 let isHost = false;
+let multiplayerStartType = 'blank'; // Default start type
 let processingOpponentMove = false; // Flag to track opponent move processing
 let initialSyncComplete = false; // Flag for client initial sync
+let initialUrlCheckComplete = false; // <<< Add this flag
+let matchStarter = "player--1"; // Player who starts the current match
 
 // Remove all existing click handlers for .end
 $("body").off("click", ".end, .end *");
@@ -572,7 +576,13 @@ function checkDotmination() {
          
          // Send gameOver message to peer
          if (conn) {
-           conn.send({ type: 'gameOver', winner: winner });
+           // <<< Send final map state WITH the gameOver message >>>
+           const finalMapString = generateMapString();
+           conn.send({ 
+             type: 'gameOver', 
+             winner: winner,
+             mapString: finalMapString // <<< Include final state
+           });
          }
          
          // Show overlay locally for host
@@ -1503,121 +1513,6 @@ $('.level, .random, .multiplayer, .mode-modal .backdrop').on('click', function(e
   }
 });
 
-$('.mode-modal .wrapper').on('click', '.card', function(e) {
-  if($(this).hasClass('btn-level')) {
-    gameMode = 'regular';
-    level = $(this).data('level');
-    $('.level-value').html(level);
-    
-    var newUrl = window.location.pathname + '?mode=regular&level=' + level;
-    window.history.replaceState({}, document.title, newUrl);
-    
-    startAnim();
-  } else {
-    // If we're currently in multiplayer mode, notify the other player before cleaning up
-    if (isMultiplayer && conn) {
-      conn.send({ type: 'modeSwitch' });
-      // Give a small delay for the message to be sent
-      setTimeout(() => {
-        cleanup();
-        clearSessionInfo();
-        $('.connecting-overlay, .waiting-overlay').remove();
-      }, 100);
-    }
-    
-    gameMode = $(this).data('mode');
-    
-    // Hide all mode-specific content first
-    $('.list--mode-regular, .multiplayer-options, .waiting-overlay, .game-id-display, .bot-difficulty').hide();
-    
-    // Remove turn indicator when leaving multiplayer mode
-    if (isMultiplayer) {
-      $('.turn-indicator').remove();
-    }
-    
-    if (gameMode === 'multiplayer') {
-      e.preventDefault();
-      e.stopPropagation();
-      isMultiplayer = true;
-      
-      // Clear playfield immediately
-      clearPlayfield();
-      
-      // Update URL for multiplayer mode
-      var newUrl = window.location.pathname + '?mode=multiplayer';
-      window.history.replaceState({}, document.title, newUrl);
-      
-      // Start automatic connection process
-      showConnectingOverlay();
-      startMultiplayerConnection();
-      
-      // Update selection
-      $(this).closest('.row').find('.card').removeClass('selected');
-      $(this).addClass('selected');
-      
-      // Set body class for multiplayer mode
-      $('body')
-        .removeClass('mode-random mode-regular modal-open')
-        .addClass('mode-multiplayer');
-      
-      return false;
-    } else if (gameMode === 'regular') {
-      // Show levels list
-      $('.list--mode-regular').show();
-      isMultiplayer = false;
-      
-      // Update selection
-      $(this).closest('.row').find('.card').removeClass('selected');
-      $(this).addClass('selected');
-      
-      // Keep modal open to show levels
-      $('body')
-        .removeClass('mode-random mode-multiplayer')
-        .addClass('mode-regular modal-open');
-        
-    } else if (gameMode === 'random') {
-      isMultiplayer = false;
-      
-      // Show bot difficulty options
-      $('.bot-difficulty').show();
-      
-      // Set default bot difficulty to "random" (Normal) when switching to Random mode
-      botDifficulty = 'random';
-      $('.difficulty-option').removeClass('selected');
-      $('.difficulty-option[data-difficulty="random"]').addClass('selected');
-      
-      // Update selection
-      $(this).closest('.row').find('.card').removeClass('selected');
-      $(this).addClass('selected');
-      
-      // Keep modal open to show bot difficulty options
-      $('body')
-        .removeClass('mode-regular mode-multiplayer')
-        .addClass('mode-random modal-open');
-      
-      // Don't update URL or start game yet - wait for bot selection
-      return;
-    }
-  }
-  
-  // We've already applied selection in the mode-specific blocks
-  // Only need to handle the case of clicking a level
-  if($(this).hasClass('btn-level')) {
-    $(this).closest('.row').find('.card').removeClass('selected');
-    $(this).addClass('selected');
-  }
-  
-  // Handle starting the game based on different scenarios
-  if(gameMode === 'regular' && !$(this).hasClass('btn-level')) {
-    // For regular mode without level selection, keep modal open
-    $('body').addClass('modal-open');
-  } else if($(this).hasClass('btn-level')) {
-    // When a specific level is clicked, start the game
-    $('body').removeClass('modal-open');
-    startAnim();
-  }
-});
-
 // Update difficulty option handler to match level selection pattern
 $('body').on('click', '.difficulty-option', function(e) {
   console.log('Difficulty option clicked!');
@@ -1949,6 +1844,12 @@ $(document).ready(function() {
 
 // Add a function to check URL parameters on page load
 function checkUrlParameters() {
+  // Only run this entire check once on initial page load
+  if (initialUrlCheckComplete) {
+    return;
+  }
+  initialUrlCheckComplete = true;
+
   var urlParams = new URLSearchParams(window.location.search);
   var mode = urlParams.get('mode');
   
@@ -1976,24 +1877,22 @@ function checkUrlParameters() {
       $('.difficulty-option[data-difficulty="random"]').addClass('selected');
     }
     else if (mode === 'multiplayer') {
-      // Set multiplayer flag for proper game initialization
-      isMultiplayer = true;
-      
-      // Check for game ID parameter
-      var gameId = urlParams.get('id');
-      if (gameId) {
-        // If there's a game ID, we're joining a game
-        isHost = false;
-        $('#join-id').val(gameId);
-        $('.multiplayer-options').hide();
-        $('.game-id-input').show();
-      } else {
-        // Without game ID, show multiplayer options
-        $('.multiplayer-options').show();
+      // Only run this direct-load-to-multiplayer logic if we are not already connecting/connected
+      if (connectionState === CONNECTION_STATES.DISCONNECTED) {
+        isHost = true; // Assume hosting if loading directly into MP mode
+        
+        // Open the mode modal and show start options
+        $('.mode-modal').addClass('active');
+        $('body').addClass('modal-open');
+        $('.multiplayer-start-options').show();
+        // Hide other irrelevant sections
+        $('.list--mode-regular, .bot-difficulty, .multiplayer-start-options, .game-id-display, .game-id-input').hide(); 
+         
+        // Deprecated joining via URL ID - Remove related logic
       }
     }
   }
-}
+} 
 
 // Add a share button to the UI for random maps
 function addShareButton() {
@@ -2073,128 +1972,45 @@ $(document).ready(function() {
     // Add it after the random button
     $('.mode-modal .card[data-mode="random"]').after($newButton);
   }
-  
-  // Add the multiplayer options to the modal if they don't exist
-  if ($('.multiplayer-options').length === 0) {
-    $('.mode-modal .wrapper').append(`
-      <div class="multiplayer-options" style="display: none;">
-        <h3>Multiplayer Game</h3>
-        <div class="multiplayer-buttons">
-          <button id="create-game" class="btn-primary">Create Game</button>
-          <button id="join-game" class="btn-primary">Join Game</button>
-        </div>
-      </div>
-      
-      <div class="game-id-display" style="display: none;">
-        <h3>Game ID</h3>
-        <p>Share this ID with your opponent: <span id="game-id"></span></p>
-        <button class="btn-primary copy-id">Copy ID</button>
-      </div>
-      
-      <div class="game-id-input" style="display: none;">
-        <h3>Enter Game ID</h3>
-        <input type="text" id="join-id" placeholder="Paste Game ID here">
-        <button class="btn-primary btn-connect">Connect</button>
-      </div>
-    `);
-    
-    console.log("Added multiplayer options to modal");
-  }
-  
-  // Add handlers for Create Game and Join Game buttons
-  $('#create-game').on('click', function(e) {
+
+  // Add handler for Start Type selection buttons
+  $('.btn-start-type').on('click', function(e) {
     e.preventDefault();
     e.stopPropagation();
-    
-    console.log("Create game clicked");
-    
-    // Set state
-    isHost = true;
-    isMultiplayer = true;
-    gameMode = 'multiplayer';
-    
-    // Initialize PeerJS
-    initPeer();
-    
-    // Update UI
-    $('.multiplayer-options').hide();
-    $('.game-id-display').show();
-    
-    // Show waiting overlay immediately
-    showWaitingOverlay();
-    
-    return false;
-  });
-  
-  // Join Game button handler
-  $('#join-game').on('click', function(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    console.log("Join game clicked");
-    
-    // Set state
-    isHost = false;
+
+    // <<< Force cleanup before starting new connection process >>>
+    console.log("Forcing cleanup before start type selection...");
+    cleanup();
+    hasSentGameState = false; // <<< Reset this flag during cleanup
+    clearSessionInfo(); // Also clear session info here just in case
+ 
+    multiplayerStartType = $(this).data('start-type');
+    console.log("Start type selected:", multiplayerStartType);
+
+    // <<< CLOSE THE MODAL >>>
+    $('.mode-modal').removeClass('active');
+    $('body').removeClass('modal-open');
+
+    // Set state *after* cleanup and type selection
     isMultiplayer = true;
     gameMode = 'multiplayer';
     
     // Update URL for multiplayer mode
     var newUrl = window.location.pathname + '?mode=multiplayer';
     window.history.replaceState({}, document.title, newUrl);
-    
-    // Update UI - show the input field
-    $('.multiplayer-options').hide();
-    $('.game-id-input').show();
-    
-    return false;
+
+    // Show overlay immediately, but delay the connection attempt slightly
+    showConnectingOverlay(); 
+    console.log("Showing connecting overlay, delaying connection start...");
+
+    setTimeout(() => {
+        console.log("Attempting startMultiplayerConnection after delay.");
+        startMultiplayerConnection(); // This will handle finding slot and setting up host/peer
+    }, 100); // 100ms delay
+ 
+    // Update UI: Show Game ID display if HOST (handled inside setupHost)
+    // $('.game-id-display').show(); 
   });
-  
-  // Connect button handler
-  $('.btn-connect').on('click', function(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const gameId = $('#join-id').val().trim();
-    if (gameId) {
-      console.log("Connecting to game:", gameId);
-      
-      // Update URL for multiplayer mode with game ID
-      var newUrl = window.location.pathname + '?mode=multiplayer&id=' + gameId;
-      window.history.replaceState({}, document.title, newUrl);
-      
-      // Initialize PeerJS and connect
-      initPeer();
-      connectToPeer(gameId);
-      
-      // Hide the input
-      $('.game-id-input').hide();
-      // Don't show waiting overlay for joining player
-      // $('.waiting-overlay').show();
-    }
-    
-    return false;
-  });
-  
-  // Prevent modal from closing when clicking the game ID input
-  $('#join-id').on('click', function(e) {
-    e.preventDefault();
-    e.stopPropagation();
-  });
-  
-  // Also prevent modal from closing when typing in the input
-  $('#join-id').on('keydown', function(e) {
-    e.stopPropagation();
-  });
-  
-  // Prevent modal from closing when clicking anywhere in the game-id-input container
-  $('.game-id-input').on('click', function(e) {
-    e.preventDefault();
-    e.stopPropagation();
-  });
-  
-  console.log('Document ready - Checking for difficulty buttons:');
-  console.log('Random button:', $('.difficulty-option[data-difficulty="random"]').length);
-  console.log('Smart button:', $('.difficulty-option[data-difficulty="smart"]').length);
 });
 
 // Add a function to show waiting overlay
@@ -2408,13 +2224,14 @@ $("body").on("click", ".end:not(.player--1)", function(e) {
 
 // Add this new function for automatic multiplayer connection
 function startMultiplayerConnection() {
-  console.log("Starting automatic multiplayer connection");
-  
+  // Note: isHost is determined *by* findAvailableSlot now
+  console.log("startMultiplayerConnection called. Desired startType:", multiplayerStartType); 
+   
   connectionState = CONNECTION_STATES.CONNECTING;
-  
-  findAvailableSlot().then(slot => {
+   
+  findAvailableSlot(multiplayerStartType).then(slot => { // <<< Pass startType
     if (!slot) {
-      updateConnectingOverlay("No available game slots found. Please try again later.");
+      updateConnectingOverlay("No available game slots found for type '" + multiplayerStartType + "'. Please try again later.");
       showRetryButton();
       return;
     }
@@ -2458,49 +2275,55 @@ async function checkPeerAvailability(id) {
   });
 }
 
-async function findAvailableSlot() {
-  updateConnectingOverlay("Searching for available game slots...");
+async function findAvailableSlot(desiredStartType) { // <<< Accept desiredStartType
+  updateConnectingOverlay("Searching for '" + desiredStartType + "' game slots...");
 
   // First try to reconnect to previous session
   const previousSession = getSessionInfo();
   if (previousSession) {
-    const hostId = `dot-host${previousSession.slotNumber}`;
-    const peerId = `dot-peer${previousSession.slotNumber}`;
+    // Check if previous session matches desired start type
+    if (previousSession.startType === desiredStartType) {
+      const slotNumber = previousSession.slotNumber;
+      const hostId = `dot-host-${desiredStartType}-${slotNumber}`;
+      const peerId = `dot-peer-${desiredStartType}-${slotNumber}`;
 
-    // Verify if the previous slot is still valid
-    if (previousSession.role === 'host') {
-      const hostAvailable = await checkPeerAvailability(hostId);
-      if (hostAvailable) {
-        return { slotNumber: previousSession.slotNumber, role: 'host' };
-      }
-    } else {
-      const hostExists = !(await checkPeerAvailability(hostId));
-      if (hostExists) {  // Host exists
-        const peerAvailable = await checkPeerAvailability(peerId);
-        if (peerAvailable) {
-          return { slotNumber: previousSession.slotNumber, role: 'peer' };
+      // Verify if the previous slot is still valid for the desired type
+      if (previousSession.role === 'host') {
+        const hostAvailable = await checkPeerAvailability(hostId);
+        if (hostAvailable) {
+          console.log(`Reconnecting as host for type ${desiredStartType} in slot ${slotNumber}`);
+          return { slotNumber: slotNumber, role: 'host' }; // Start type is implicitly matched
+        }
+      } else { // Previous role was peer
+        const hostExists = !(await checkPeerAvailability(hostId)); // Check if HOST for desired type exists
+        if (hostExists) { 
+          const peerAvailable = await checkPeerAvailability(peerId); // Check if PEER ID for desired type is free
+          if (peerAvailable) {
+            console.log(`Reconnecting as peer for type ${desiredStartType} in slot ${slotNumber}`);
+            return { slotNumber: slotNumber, role: 'peer' }; // Start type is implicitly matched
+          }
         }
       }
+      // If previous session slot is not valid, clear the session
+      clearSessionInfo();
     }
-    // If previous slot is not valid, clear the session
-    clearSessionInfo();
   }
 
   // If no valid previous session, search for new slot
   for (let i = 1; i <= MAX_LOBBIES; i++) {
-    const hostId = `dot-host${i}`;
+    const hostId = `dot-host-${desiredStartType}-${i}`; // ID for host with desired type
+    const peerId = `dot-peer-${desiredStartType}-${i}`; // ID for peer with desired type
     
-    // First check if a host exists at this slot
+    // Check if a host for the desired type already exists
     const hostAvailable = await checkPeerAvailability(hostId);
     
     if (hostAvailable) {
-      // No host exists, we can become the host
-      console.log(`No host found at slot ${i}, becoming host`);
+      // No host for this type exists, we can become the host
+      console.log(`No host found for type ${desiredStartType} in slot ${i}, becoming host`);
       return { slotNumber: i, role: 'host' };
     } else {
-      // A host exists, try to become a peer
-      console.log(`Host found at slot ${i}, attempting to become peer`);
-      const peerId = `dot-peer${i}`;
+      // A host for this type exists, try to become a peer
+      console.log(`Host found for type ${desiredStartType} in slot ${i}, attempting to become peer`);
       const peerAvailable = await checkPeerAvailability(peerId);
       if (peerAvailable) {
         return { slotNumber: i, role: 'peer' };
@@ -2515,7 +2338,9 @@ function setupPeer(slotNumber) {
   cleanup();
   isHost = false;
   isMultiplayer = true;
-  sessionID = `dot-peer${slotNumber}`;
+  // Generate ID based on the chosen start type
+  sessionID = `dot-peer-${multiplayerStartType}-${slotNumber}`; 
+  cleanup(); // Cleanup before creating new peer
   peer = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true });
 
   peer.on("open", function() {
@@ -2524,7 +2349,8 @@ function setupPeer(slotNumber) {
     console.log("Peer started with ID:", sessionID);
     updateConnectingOverlay(`Connecting to host...`);
 
-    const hostID = `dot-host${slotNumber}`;
+    // Connect to the host ID matching the chosen start type
+    const hostID = `dot-host-${multiplayerStartType}-${slotNumber}`; 
     conn = peer.connect(hostID);
 
     conn.on("open", function() {
@@ -2553,7 +2379,9 @@ function setupHost(slotNumber) {
   cleanup();
   isHost = true;
   isMultiplayer = true;
-  sessionID = `dot-host${slotNumber}`;
+  // Generate ID based on the chosen start type
+  sessionID = `dot-host-${multiplayerStartType}-${slotNumber}`; 
+  cleanup(); // Cleanup before creating new peer
   peer = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true });
 
   peer.on("open", function() {
@@ -2671,16 +2499,21 @@ function setupConnectionHandlers(connection) {
         console.log("Host sending initial game state to peer");
         hasSentGameState = true; // Mark that initial state is sent
 
-        // Clear the host's board FIRST to ensure a fresh multiplayer start
-        clearPlayfield();
+        // Clear the host's board FIRST using the chosen start type
+        clearPlayfield(multiplayerStartType, matchStarter); // <<< PASS THE matchStarter (should be player--1 initially) >>>
 
-        // Send complete game state REFLECTING THE CLEARED BOARD
+        // <<< Re-read global start type just in case >>>
+        const currentStartType = multiplayerStartType; 
+
+        // Send complete game state REFLECTING THE CLEARED BOARD and including startType
         conn.send({
           type: 'gameState',
-          currentPlayer: currentPlayer, // Should be player--1 after clearPlayfield
-          moveAmount: moveAmount,     // Should be 0 after clearPlayfield
-          mapString: generateMapString(), // Generate string from the cleared board
-          fieldClasses: $('.field').attr('class') // Get classes from cleared board
+          currentPlayer: currentPlayer, 
+          moveAmount: moveAmount,     
+          mapString: generateMapString(), 
+          fieldClasses: $('.field').attr('class'),
+          startType: currentStartType, // <<< Send current start type
+          matchStarter: matchStarter // <<< Send who starts this match
         });
 
         // Update host UI after clearing
@@ -2730,6 +2563,8 @@ function setupConnectionHandlers(connection) {
       // <<< END EXPLICIT VISUAL RESET >>>
 
       // Restore game state (handles initial sync, rematch, and post-host-turn sync)
+      multiplayerStartType = data.startType; // <<< Store start type from host
+      matchStarter = data.matchStarter; // <<< Store who started this match
       currentPlayer = data.currentPlayer;
       moveAmount = data.moveAmount;
       buildMapFromString(data.mapString);
@@ -2763,10 +2598,37 @@ function setupConnectionHandlers(connection) {
     // REMOVED 'turnUpdate' handler block
     else if (data.type === 'gameOver') {
       console.log("Received gameOver message", data);
-      if (!isHost) {
+      // Client needs to stop animations and show overlay
+      if (!isHost) { 
+        console.log("Client stopping animations on game over...");
+
+        // <<< Apply final board state received from host >>>
+        // Note: This function also implicitly updates the UI for dots
+        if (data.mapString) {
+          buildMapFromString(data.mapString);
+        } else {
+          console.warn("gameOver message received without mapString!");
+        }
+
+        // <<< Recalculate scores based on final board state applied above >>>
+        updatePlayerScoresUI(); // <<< MOVED HERE
+
+        // Stop any ongoing dot animations
+        gsap.killTweensOf(incrementDotStage);
+        $(".dot.increment").removeClass("increment");
+        $(".field").removeClass("animating");
+
         // Peer shows overlay based on received winner
         showMultiplayerGameOverOverlay(data.winner);
       }
+      // Host also stops local animations if they were running (e.g., simultaneous game end)
+      else { 
+        console.log("Host stopping animations on game over...");
+        gsap.killTweensOf(incrementDotStage);
+        $(".dot.increment").removeClass("increment");
+        $(".field").removeClass("animating");
+        // Host overlay is shown earlier in checkDotmination
+      } 
     }
     // Handle mode switch signal from host
     else if (data.type === 'modeSwitch') {
@@ -2979,6 +2841,7 @@ function resetMultiplayerState() {
   // Only reset flags if we're not in a game restart
   if (!hasConnected) {
     // Reset flags
+    multiplayerStartType = 'blank'; // <<< Reset start type
     isHost = false;
     isMultiplayer = false;
   }
@@ -3008,12 +2871,16 @@ function showConnectingOverlay() {
   $('.cancel-connection-btn').on('click', function() {
     // Hide connecting overlay
     $('.connecting-overlay').hide();
+
+    // Hide multiplayer options
++   $('.multiplayer-start-options').hide();
     
     // <<< ADD MULTIPLAYER STATE RESET >>>
     cleanup(); // Close PeerJS connections
     clearSessionInfo(); // Clear any saved session
     isMultiplayer = false; // Explicitly set to false
     isHost = false; // Explicitly set to false
+    multiplayerStartType = 'blank'; // <<< Reset start type
     // <<< END MULTIPLAYER STATE RESET >>>
     
     // Reset game mode to regular and update UI
@@ -3057,15 +2924,16 @@ function updateConnectingOverlay(message) {
 }
 
 // Add new function to clear playfield
-function clearPlayfield() {
-  console.log("Clearing playfield for multiplayer");
+function clearPlayfield(startType, starter) { // <<< Accept starter argument
+  console.log(`Clearing playfield. Type: ${startType}, Starter: ${starter}`);
   
   // Remove any existing win/loss overlay
   $(".end.overlay").remove();
 
   // Reset game state variables
   moveAmount = 0;
-  currentPlayer = "player--1"; // Host always starts after clear
+  // Set the currentPlayer based on who should start this match
+  currentPlayer = starter;
 
   // Clear the field completely (remove dots)
   $(".field").empty();
@@ -3073,19 +2941,38 @@ function clearPlayfield() {
   // Reinitialize the field with empty dots based on current layout settings
   setDots(); // Creates new empty dot elements
 
+  // Populate dots for multiplayer start
+  dots = $(".dot"); // Update dots reference
+
+  if (startType === 'half-filled') {
+    const totalDots = dots.length;
+    const midPoint = Math.ceil(totalDots / 2);
+
+    dots.each(function(index) {
+      if (index < midPoint) {
+        // Assign to player 1
+        $(this).addClass("stage--3 player--1");
+      } else {
+        // Assign to player 2
+        $(this).addClass("stage--3 player--2");
+      }
+    });
+  } // If startType is 'blank', we just leave the dots empty after setDots()
+  
   // Clear any existing player classes from the field itself and set the current player
-  $(".field").removeClass(playerClassClear).addClass(currentPlayer);
+  $(".field").removeClass(playerClassClear).addClass(starter); // Use starter here
 
   // Set the color theme for player 1
-  TweenMax.to("html", 0, { "--color-current": 'var(--color-1)' });
+  // Set the color theme based on the starting player
+  const startColor = (starter === 'player--1') ? 'var(--color-1)' : 'var(--color-2)';
+  TweenMax.to("html", 0, { "--color-current": startColor });
 
-  // Initialize game state references and timer
-  dots = $(".dot"); // Update dots reference
+  // Initialize timer
   show(); // Show timer element
   reset(); // Reset timer value
   start(); // Start timer ticking
 
-  // Update scores (should be 0/0), turn indicator, and player icons
+  // Update scores (should reflect new population), turn indicator, and player icons
   updatePlayerScoresUI();
   updateTurnIndicator();
   updatePlayerIndicators(); // <<< ADD THIS CALL
@@ -3102,36 +2989,6 @@ function sendTurnUpdate() {
     });
   }
 }
-
-// Add direct click handlers for difficulty buttons
-$('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficulty="smart"]').on('click', function(e) {
-  console.log('Direct click handler - Difficulty button clicked:', $(this).data('difficulty'));
-  e.preventDefault();
-  e.stopPropagation();
-  
-  // Update visual selection
-  $('.difficulty-option').removeClass('selected');
-  $(this).addClass('selected');
-  
-  // Update bot difficulty setting
-  botDifficulty = $(this).data('difficulty');
-  
-  // Close the modal and update game mode
-  $('body').removeClass('modal-open');
-  gameMode = 'random';
-  
-  // Update body classes
-  $('body')
-    .removeClass('mode-regular mode-multiplayer')
-    .addClass('mode-random');
-  
-  // Update URL with mode and difficulty
-  var newUrl = window.location.pathname + '?mode=random&difficulty=' + botDifficulty;
-  window.history.replaceState({}, document.title, newUrl);
-  
-  // Start the game using the standard animation
-  startAnim();
-});
 
 // Function to calculate player score based on dot stages
 function calculatePlayerScore(playerClass) { // e.g., "player--1"
@@ -3179,7 +3036,13 @@ function showMultiplayerGameOverOverlay(winner) {
 // Add new function for host to start the rematch
 function hostInitiateRematchStart() {
   console.log("Host initiating rematch start");
-  clearPlayfield(); // Clear board, reset currentPlayer & moveAmount
+  // Determine who starts the *next* match
+  const nextStarter = (matchStarter === playerArray[0]) ? playerArray[1] : playerArray[0];
+  matchStarter = nextStarter; // Update the global starter for the *new* match
+  console.log(`Rematch will be started by: ${matchStarter}`);
+
+  // Clear playfield, setting currentPlayer based on the new matchStarter
+  clearPlayfield(multiplayerStartType, matchStarter); 
 
   // Send the fresh game state to the peer
   if (conn) {
@@ -3187,8 +3050,10 @@ function hostInitiateRematchStart() {
       type: 'gameState',
       currentPlayer: currentPlayer, // player--1 after clearPlayfield
       moveAmount: moveAmount,     // 0 after clearPlayfield
-      mapString: generateMapString(), // Empty board string
-      fieldClasses: $('.field').attr('class')
+      mapString: generateMapString(), 
+      fieldClasses: $('.field').attr('class'),
+      startType: multiplayerStartType, // <<< Also send startType
+      matchStarter: matchStarter // <<< Send the updated starter
     });
   }
 
@@ -3199,3 +3064,151 @@ function hostInitiateRematchStart() {
   hostReadyForRematch = false;
   peerReadyForRematch = false;
 }
+
+// Add direct click handlers for difficulty buttons
+$('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficulty="smart"]').on('click', function(e) {
+  console.log('Direct click handler - Difficulty button clicked:', $(this).data('difficulty'));
+  e.preventDefault();
+  e.stopPropagation();
+
+  // Update visual selection
+  $('.difficulty-option').removeClass('selected');
+  $(this).addClass('selected');
+
+  // Update bot difficulty setting
+  botDifficulty = $(this).data('difficulty');
+
+  // Close the modal and update game mode
+  $('body').removeClass('modal-open');
+  gameMode = 'random';
+
+  // Update body classes
+  $('body')
+    .removeClass('mode-regular mode-multiplayer')
+    .addClass('mode-random');
+
+  // Update URL with mode and difficulty
+  var newUrl = window.location.pathname + '?mode=random&difficulty=' + botDifficulty;
+  window.history.replaceState({}, document.title, newUrl);
+
+  // Start the game using the standard animation
+  startAnim();
+});
+
+// --- REFACTORED MODE MODAL HANDLERS --- 
+
+// Handler specifically for Mode Selection Buttons (Regular, Random, Multiplayer)
+$('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
+  // If we're currently in multiplayer mode, notify the other player before cleaning up
+  if (isMultiplayer && conn) {
+    conn.send({ type: 'modeSwitch' });
+    // Give a small delay for the message to be sent
+    setTimeout(() => {
+      cleanup();
+      clearSessionInfo();
+      $('.connecting-overlay, .waiting-overlay').remove();
+    }, 100);
+  }
+  
+  gameMode = $(this).data('mode');
+  console.log("Mode button clicked:", gameMode);
+
+  // General cleanup: hide all specific sections first
+  $('.list--mode-regular, .bot-difficulty, .multiplayer-start-options, .game-id-display, .game-id-input').hide();
+
+  // Remove turn indicator if leaving multiplayer mode
+  if (isMultiplayer && gameMode !== 'multiplayer') { // Only remove if switching AWAY from MP
+    multiplayerStartType = 'blank'; // <<< Reset start type when switching away
+    $('.turn-indicator').remove();
+    isMultiplayer = false; // Reset flag when switching away
+  }
+
+  // Handle specific mode logic
+  if (gameMode === 'multiplayer') {
+    e.preventDefault();
+    e.stopPropagation(); // Keep stopPropagation for this specific case maybe?
+    isMultiplayer = true;
+    isHost = true; // Assume host role immediately
+    
+    // Update URL
+    var newUrl = window.location.pathname + '?mode=multiplayer';
+    window.history.replaceState({}, document.title, newUrl);
+    
+    // Show start type options
+    $('.multiplayer-start-options').show();
+    
+    // Update selection in the modal
+    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
+    $(this).addClass('selected');
+    
+    // Set body class & keep modal open
+    $('body')
+      .removeClass('mode-random mode-regular modal-open')
+      .addClass('mode-multiplayer modal-open'); 
+    
+    return false;
+  } else if (gameMode === 'regular') {
+    // Hide multiplayer options
++   $('.multiplayer-start-options').hide();
+
+    $('.list--mode-regular').show();
+    updateLevelList(); 
+    
+    // Update selection in the modal
+    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
+    $(this).addClass('selected');
+
+    // Set body class & keep modal open
+    $('body')
+      .removeClass('mode-random mode-multiplayer')
+      .addClass('mode-regular modal-open');
+       
+  } else if (gameMode === 'random') {
+    // Hide multiplayer options
++   $('.multiplayer-start-options').hide();
+
+    $('.bot-difficulty').show();
+    
+    // Set default bot difficulty
+    botDifficulty = 'random';
+    $('.difficulty-option').removeClass('selected');
+    $('.difficulty-option[data-difficulty="random"]').addClass('selected');
+    
+    // Update selection in the modal
+    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
+    $(this).addClass('selected');
+
+    // Set body class & keep modal open
+    $('body')
+      .removeClass('mode-regular mode-multiplayer')
+      .addClass('mode-random modal-open');
+    
+    // Don't start game yet
+    return; // Need return here to prevent modal close
+  }
+  
+  // If we reached here (Regular or Random mode selected), keep modal open
+  // (Unless a level/difficulty is clicked later)
+  $('body').addClass('modal-open');
+});
+
+// Handler specifically for Level Selection Buttons
+$('.mode-modal .wrapper').on('click', '.btn-level', function(e) {
+  console.log("Level button clicked:", $(this).data('level'));
+  gameMode = 'regular';
+  level = $(this).data('level');
+  $('.level-value').html(level);
+  
+  var newUrl = window.location.pathname + '?mode=regular&level=' + level;
+  window.history.replaceState({}, document.title, newUrl);
+  
+  // Update selection
+  $('.mode-modal .wrapper .btn-level').removeClass('selected'); // Use more specific selector
+  $(this).addClass('selected');
+
+  // Close modal and start game
+  $('body').removeClass('modal-open');
+  startAnim();
+});
+
+// --- END REFACTORED MODE MODAL HANDLERS ---
