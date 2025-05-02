@@ -1,6 +1,6 @@
-// v0.0.55
+// v1.0.0
 // Singleplayer modes are stable.
-// Multiplayer mode is working, but needs to be improved.
+// Multiplayer mode is working, peerJS can get restricted by firewalls. Could be extended with TURN server.
 
 // Dark Mode
 function screenTest(e) {
@@ -30,7 +30,6 @@ let peer, conn, sessionID;
 const MAX_LOBBIES = 10;
 let hasConnected = false;
 let connectionState = CONNECTION_STATES.DISCONNECTED;
-let currentAttempt = 1;
 
 // Session persistence
 function saveSessionInfo(slotNumber, role) {
@@ -367,45 +366,36 @@ function incrementDotStage(trgt, player = currentPlayer) {
         animateNextDot();
         return;
       } else if (currStage && i == stage_amount) {
-        console.log('Dot reached max stage, checking for game end');
         trgt.removeClass("stage--" + i).removeClass(playerClassClear);
         updatePlayerScoresUI(); // <<< Update score here (dot became neutral)
         if ("vibrate" in navigator) {
           window.navigator.vibrate([10, 10, 10]);
         }
         var k = dots.length;
-        //console.log("k: " + k);
         while (--k > -1) {
           if (
             Draggable.hitTest(dots[k], trgt.find(".hitarea")) &&
             k != trgt.index()
           ) {
-            //console.log(">> k: " + k);
             var neighborDot = $(dots[k]); // Store neighbor dot in variable
             neighborDot.addClass("increment");
-            //trgt.removeClass("increment");
             neighborDot.filter(function () {
               $(this).attr(
                 "data-increment",
                 parseInt($(this).attr("data-increment")) + 1
               );
             });
-            // Pass effectivePlayer to animation for neighbors too
             showIncrementAnimation(neighborDot, 1, effectivePlayer); 
           }
         }
       }
     }
   }
-  // Pass the correct player context to the next animation step
   animateNextDot(effectivePlayer, justCompletedStep2); // Pass the flag
 }
 
 function animateNextDot(player = currentPlayer, tutorialStep2Flag = false) {
-  // console.log("animateNextDot called. tutorialStep2Flag received:", tutorialStep2Flag);
-  // Accept the player context (defaults to global if not provided)
   const effectivePlayer = player;
-  // console.log(`animateNextDot called with effectivePlayer: ${effectivePlayer}`);
 
   if ($(".dot.increment").length > 0) {
     var next = $(".dot.increment").eq(0);
@@ -413,94 +403,77 @@ function animateNextDot(player = currentPlayer, tutorialStep2Flag = false) {
   } else {
     $(".field").removeClass("animating");
 
-    // <<< TUTORIAL CHECK & FEEDBACK >>>
     if (isTutorialMode) {
-        updateTutorialFeedback(); // <<< UPDATE FEEDBACK HERE
-        checkTutorialStepCompletion(); // Pass the flag here (flag removed, check relies on state)
+        updateTutorialFeedback();
+        checkTutorialStepCompletion();
     }
-    // <<< END TUTORIAL CHECK & FEEDBACK >>>
 
-    // Determine if we should check game state/switch turns
     const shouldCheckState = !isMultiplayer || isHost || !processingOpponentMove;
 
     if (shouldCheckState) {
-       checkDotmination(); // This will call nextPlayer if game isn't over
+       checkDotmination();
     }
 
-    // Always reset the flag *after* the check if it was true
     if (processingOpponentMove) {
       processingOpponentMove = false;
     }
   }
 }
 
-// Add this function to show the increment animation
 function showIncrementAnimation(targetDot, incrementValue = 1, player = currentPlayer) {
-  // Use the passed player for color determination
   const effectivePlayer = player;
   const animationText = `+${incrementValue}`;
   const $field = $('.field');
   const fieldOffset = $field.offset();
   const dotOffset = targetDot.offset();
-  const dotSize = targetDot.width(); // Assuming width and height are the same
+  const dotSize = targetDot.width();
 
-  // Calculate position relative to the field
   const startX = dotOffset.left - fieldOffset.left + (dotSize / 2);
   const startY = dotOffset.top - fieldOffset.top + (dotSize / 2);
 
-  // Determine color based on the effective player who caused the increment
   const animationColor = (effectivePlayer === 'player--1') ? 'var(--color-1)' : 'var(--color-2)';
 
-  // Create the animation element
   const $animationElement = $('<div class="increment-animation"></div>')
     .text(animationText)
     .css({
       left: startX + 'px',
       top: startY + 'px',
       color: animationColor,
-      transform: 'translate(-50%, -50%)' // Center the text
+      transform: 'translate(-50%, -50%)'
     })
     .appendTo($field);
 
-  // Animate using GSAP
   gsap.to($animationElement, {
     duration: 0.8,
-    y: '-=40', // Move upwards
+    y: '-=40',
     opacity: 0,
     ease: 'power1.out',
     onComplete: function() {
-      $animationElement.remove(); // Remove element after animation
+      $animationElement.remove();
     }
   });
 
-  // Play the increment sound with adjusted pitch
   if (incrementSound) {
     const currentPitch = basePitch + (chainReactionCounter * pitchStep);
-    // Use a different sound or pitch characteristic if needed based on player
-    incrementSound.rate(currentPitch); // Set the playback rate (pitch)
+    incrementSound.rate(currentPitch);
     incrementSound.play();
-    chainReactionCounter++; // Increment counter for the next sound in the chain
+    chainReactionCounter++;
   }
 }
 
 function checkDotmination() {
-  // <<< ADD TUTORIAL MODE CHECK >>>
   if (isTutorialMode && tutorialStep < 5) {
-    // console.log("checkDotmination: In tutorial step < 5, skipping regular win/loss check.");
-    // Tutorial progression is handled by checkTutorialStepCompletion
     return; 
   }
-  // <<< END TUTORIAL MODE CHECK >>>
 
   const isGameOver = !(moveAmount < 2 || ($(".dot.player--1").length > 0 && $(".dot.player--2").length > 0));
 
-  if (!isMultiplayer) { // --- Single Player Logic ---
+  if (!isMultiplayer) {
     if (!isGameOver) {
-      nextPlayer(); // SP turn switch
+      nextPlayer();
     } else {
-      // SP Game Over handling...
       stop();
-      sound.play(); // Original sonar sound for game end
+      sound.play();
       
       // Restore Single-Player Overlay Logic 
       if (currentPlayer == "player--2") { // Player 2 (usually User) is the one who made the winning move
@@ -555,10 +528,8 @@ function checkDotmination() {
               }
               
               if (level < 100 && !levelsArray['level' + (level + 1)]) {
-                console.log('Adding new level:', level + 1);
                 levelsArray['level' + (level + 1)] = {'time': null};
                 myDotmination['levels'] = levelsArray;
-                console.log('Updated levelsArray:', levelsArray);
               }
               
               myStorage.setObj("myDotmination", myDotmination);
@@ -595,7 +566,7 @@ function checkDotmination() {
                 '</div>' +
               '</div>'
             );
-            TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut}); // Added missing animation
+            TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
           }
       } else { // Player 1 (usually Bot) is the one who made the winning move -> User Lost
           // --- User Lost --- 
@@ -619,23 +590,21 @@ function checkDotmination() {
   } else { // --- Multiplayer Logic ---
     if (isGameOver) {
        // MP Game Over Handling (Host Driven)
-       console.log("Multiplayer Game Over condition met - Host needs to handle this.");
        if (isHost) {
          // Determine winner (the one who still has dots)
          const winner = $(".dot.player--1").length > 0 ? "player--1" : "player--2";
-         console.log(`Host determined winner: ${winner}`);
-         
+
          // Send gameOver message to peer
          if (conn) {
            // <<< Send final map state WITH the gameOver message >>>
            const finalMapString = generateMapString();
-           conn.send({ 
-             type: 'gameOver', 
+           conn.send({
+             type: 'gameOver',
              winner: winner,
              mapString: finalMapString // <<< Include final state
            });
          }
-         
+
          // Show overlay locally for host
          showMultiplayerGameOverOverlay(winner);
        }
@@ -816,7 +785,7 @@ function botActionRandom() {
 }
 
 // Smart bot - initially identical to random bot
-function botActionSmart() {
+function botActionSmarter() {
   var trgt = $(".dot:not(.player--2)");
   var player2lvl5 = $(".dot.player--2.stage--5");
   var lvl5 = $(".dot.player--1.stage--5");
@@ -1577,10 +1546,6 @@ $('.level, .random, .multiplayer, .mode-modal .backdrop').on('click', function(e
 
 // Update difficulty option handler to match level selection pattern
 $('body').on('click', '.difficulty-option', function(e) {
-  console.log('Difficulty option clicked!');
-  console.log('Button data:', $(this).data('difficulty'));
-  console.log('Event:', e);
-  
   e.preventDefault();
   e.stopPropagation();
   
@@ -1605,33 +1570,25 @@ $('body').on('click', '.difficulty-option', function(e) {
 });
 
 function updateLevelList() {
-  console.log('Updating level list', levelsArray); // Debug
-  
   var list = $('.list--mode-regular');
-  console.log('List element:', list.length); // Check if element exists
-  
   var listWrapper = list.find('ul');
-  console.log('List wrapper:', listWrapper.length); // Check if ul exists
-  
+
   // Make sure the list wrapper exists
   if (listWrapper.length === 0) {
-    console.log('Creating new ul element');
     list.append('<ul></ul>');
     listWrapper = list.find('ul');
   }
-  
+
   listWrapper.empty();
-  
+
   $.each(levelsArray, function(key, value) {
-    console.log('Processing level:', key, value); // Debug each level
     if (key !== 'level0') {
-      var goalMoves = (moment.duration('00:'+value.time).asSeconds() != 0 && 
+      var goalMoves = (moment.duration('00:'+value.time).asSeconds() != 0 &&
                       moment.duration('00:'+value.time).asSeconds() < 120) ? 'active' : '';
-      
-      var goalTime = (moment.duration('00:'+value.time).asSeconds() != 0 && 
+
+      var goalTime = (moment.duration('00:'+value.time).asSeconds() != 0 &&
                      moment.duration('00:'+value.time).asSeconds() < 60) ? 'active' : '';
       
-      // Only set won star to active if there's a valid time
       var wonStar = (value.time && value.time !== null) ? 'active' : '';
       
       listWrapper.append(
@@ -2908,7 +2865,7 @@ function showConnectingOverlay() {
     $('.connecting-overlay').hide();
 
     // Hide multiplayer options
-+   $('.multiplayer-start-options').hide();
+    $('.multiplayer-start-options').hide();
     
     // <<< ADD MULTIPLAYER STATE RESET >>>
     cleanup(); // Close PeerJS connections
@@ -3011,18 +2968,6 @@ function clearPlayfield(startType, starter) { // <<< Accept starter argument
   updatePlayerScoresUI();
   updateTurnIndicator();
   updatePlayerIndicators(); // <<< ADD THIS CALL
-}
-
-// Add new function to send turn updates
-function sendTurnUpdate() {
-  if (isMultiplayer && conn) {
-    console.log("Sending turnUpdate:", { currentPlayer: currentPlayer, moveAmount: moveAmount }); // <<< ADD LOG
-    conn.send({
-      type: 'turnUpdate',
-      currentPlayer: currentPlayer,
-      moveAmount: moveAmount
-    });
-  }
 }
 
 // Function to calculate player score based on dot stages
@@ -3183,22 +3128,6 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
     
     return false;
   } else if (gameMode === 'regular') {
-    // Hide multiplayer options
-+   $('.multiplayer-start-options').hide();
-
-    $('.list--mode-regular').show();
-    updateLevelList(); 
-    
-    // Update selection in the modal
-    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
-    $(this).addClass('selected');
-
-    // Set body class & keep modal open
-    $('body')
-      .removeClass('mode-random mode-multiplayer')
-      .addClass('mode-regular modal-open');
-       
-  } else if (gameMode === 'random') {
     // Hide multiplayer options
 +   $('.multiplayer-start-options').hide();
 
@@ -3436,7 +3365,6 @@ function setupTutorialBoard(step) {
 }
 
 function showTutorialStepModal(step) {
-  console.log(`Showing modal for Tutorial Step ${step}`);
   let title = "";
   let instruction = "";
   let objective = "";
@@ -3450,12 +3378,12 @@ function showTutorialStepModal(step) {
     case 2:
       title = '<small>Step 2</small><br><span style="color:var(--color-2)">Growing Dots</span>';
       instruction = 'Clicking your own dot again makes it grow +1. Dots grow from Stage 1 up to Stage 5.';
-      objective = '<strong>Objective</strong><br>Click the <span style="color:var(--color-2)">center dot</span>, until it reaches Stage 5.';
+      objective = '<strong>Objective</strong><br>Click the <span style="color:var(--color-2)">center dot</span> until it reaches Stage 5.';
       break;
     case 3:
       title = '<small>Step 3</small><br><span style="color:var(--color-2)">Explosions & Take-overs</span>';
-      instruction = 'Clicking a dot at Stage 5 makes it explode, adding a stage to adjacent dots and converting them to your color.';
-      objective = '<strong>Objective</strong><br>Click <span style="color:var(--color-2)">your Stage 5 dot</span> to take over the blue dot.';
+      instruction = 'Clicking a dot at Stage 5 makes it explode, adding a stage to neighboring dots and converting them to your color.';
+      objective = '<strong>Objective</strong><br>Click <span style="color:var(--color-2)">your Stage 5 dot</span> to take over the opponent\'s dot.';
       break;
     case 4:
       title = '<small>Step 4</small><br><span style="color:var(--color-2)">Chain Reactions</span>';
@@ -3472,7 +3400,6 @@ function showTutorialStepModal(step) {
   $('#tutorial-step-title').html(title);
   $('#tutorial-step-instruction').html(instruction);
   $('#tutorial-step-objective').html(objective); // Set initial objective
-  // $('#tutorial-step-feedback').html(""); // No longer needed
 
   // Show the modal after a short delay 
   setTimeout(() => {
@@ -3496,7 +3423,6 @@ function showTutorialStepModal(step) {
 
 function checkTutorialStepCompletion(justCompletedStep2 = false) {
   if (!isTutorialMode) return; // Exit if not in tutorial
-  console.log("checkTutorialStepCompletion called. justCompletedStep2 received:", justCompletedStep2, "Current Step:", tutorialStep); // <<< ADD LOG
 
   let objectiveMet = false;
 
@@ -3511,7 +3437,6 @@ function checkTutorialStepCompletion(justCompletedStep2 = false) {
       // Objective met when the target dot reaches stage 5
       if (tutorialTargetDotIndex !== -1 && targetDotT2.hasClass('stage--5')) {
            objectiveMet = true;
-           console.log("Tutorial Step 2: Objective met based on target dot reaching stage 5.");
       }
       break;
     case 3: // Explode to capture
@@ -3524,28 +3449,19 @@ function checkTutorialStepCompletion(justCompletedStep2 = false) {
       // Check if the player clicked a starting dot AND if animations are finished.
       if (tutorialStep4Clicked && $(".dot.increment").length === 0) {
         objectiveMet = true;
-        console.log("Tutorial Step 4: Objective met, player clicked starter and animations finished.");
       }
       break;
     case 5: // Completion Screen
       // Automatically complete when step 5 is reached
       objectiveMet = true;
-      console.log("Tutorial Step 5: Showing completion screen.");
       break;
   }
 
   if (objectiveMet) {
-    console.log(`Tutorial Step ${tutorialStep} objective met.`);
     // Delay slightly before advancing to allow animations to settle
-    /* REMOVED: No longer auto-advance
-    setTimeout(() => {
-        advanceTutorialStep();
-    }, 1000); // Adjust delay as needed
-    */
-    // <<< REINSTATE AUTO-ADVANCE FOR STEPS 1-4 >>>
     setTimeout(() => {
       // Only advance if not on the final step (which now has a button)
-      if (tutorialStep < 5) { 
+      if (tutorialStep < 5) {
         advanceTutorialStep();
       }
     }, 1000); // Adjust delay as needed
@@ -3553,7 +3469,6 @@ function checkTutorialStepCompletion(justCompletedStep2 = false) {
 }
 
 function endTutorial() {
-  console.log("Tutorial Completed!");
   isTutorialMode = false;
   tutorialStep = 0;
   // Hide the tutorial modal
@@ -3572,8 +3487,6 @@ function endTutorial() {
 
 // Example: Modify nextPlayer to not call bot in tutorial steps 1-4
 function nextPlayer() {
-  console.log("nextPlayer called. isTutorialMode:", isTutorialMode, "tutorialStep:", tutorialStep, "isMultiplayer:", isMultiplayer, "gameMode:", gameMode, "currentPlayer:", currentPlayer);
-
   $(".field").removeClass(currentPlayer);
   if (currentPlayer == playerArray[0]) {
     currentPlayer = playerArray[1];
@@ -3586,7 +3499,6 @@ function nextPlayer() {
     }
     // Only schedule bot action if not in multiplayer and not in tutorial steps 1-4
     if (!isMultiplayer && !(isTutorialMode && tutorialStep < 5)) {
-      console.log("Scheduling bot action. isTutorialMode:", isTutorialMode, "tutorialStep:", tutorialStep, "isMultiplayer:", isMultiplayer, "gameMode:", gameMode);
       const botAction = gameMode === 'regular' ? botActionRandom :
                         botDifficulty === 'smart' ? botActionSmarter : botActionRandom;
       delayedCall = gsap.delayedCall(1, botAction);
@@ -3603,7 +3515,6 @@ function nextPlayer() {
 
   // Send authoritative game state update from host instead of just turn info
   if (isMultiplayer && isHost && conn) { // Only host sends state after their turn
-    console.log("Host sending gameState after turn completion");
     conn.send({
       type: 'gameState',
       currentPlayer: currentPlayer, // The NEW current player (opponent)
@@ -3619,7 +3530,6 @@ function nextPlayer() {
 function animateNextDot(player = currentPlayer, tutorialStep2Flag = false) {
   // Accept the player context (defaults to global if not provided)
   const effectivePlayer = player;
-  // console.log(`animateNextDot called with effectivePlayer: ${effectivePlayer}`);
 
   if ($(".dot.increment").length > 0) {
     var next = $(".dot.increment").eq(0);
@@ -3629,119 +3539,94 @@ function animateNextDot(player = currentPlayer, tutorialStep2Flag = false) {
 
     // <<< TUTORIAL CHECK & FEEDBACK >>>
     if (isTutorialMode) {
-        updateTutorialFeedback(); // <<< UPDATE FEEDBACK HERE
-        checkTutorialStepCompletion(); // Pass the flag here (flag removed, check relies on state)
+        updateTutorialFeedback();
+        checkTutorialStepCompletion();
     }
-    // <<< END TUTORIAL CHECK & FEEDBACK >>>
 
-    // Determine if we should check game state/switch turns
     const shouldCheckState = !isMultiplayer || isHost || !processingOpponentMove;
 
     if (shouldCheckState) {
-       checkDotmination(); // This will call nextPlayer if game isn't over
+       checkDotmination();
     }
 
-    // Always reset the flag *after* the check if it was true
     if (processingOpponentMove) {
       processingOpponentMove = false;
     }
   }
 }
 
-// << NEW: Function to update tutorial feedback text >>
 function updateTutorialFeedback() {
     if (!isTutorialMode) return;
 
     let feedbackText = "";
     switch (tutorialStep) {
-        case 1: // Claim 3 dots
+        case 1:
             const claimedCount = $(".dot.player--2").length;
             const needed = 3 - claimedCount;
             if (needed > 0) {
                 feedbackText = `<strong>Objective</strong><br>That's ${claimedCount}! Now claim ${needed} more dot${needed > 1 ? 's' : ''}.`;
             } else {
-                feedbackText = "<strong>Objective</strong><br>Great! Objective met."; // This will be brief before advancing
+                feedbackText = "<strong>Objective</strong><br>Great! Objective met.";
             }
             break;
-        case 2: // Make dot explode
+        case 2:
             const targetDotT2 = $(".dot").eq(tutorialTargetDotIndex);
-            const currentStageT2 = getStageNumber(targetDotT2); // Get the numeric stage
-            if (currentStageT2 === 0 && !targetDotT2.is('[class*="player--"]')) { // Check if it's stage 0 AND not owned yet
+            const currentStageT2 = getStageNumber(targetDotT2);
+            if (currentStageT2 === 0 && !targetDotT2.is('[class*="player--"]')) {
                  feedbackText = "<strong>Objective</strong><br>Click the dot to claim it and start growing.";
             } else if (currentStageT2 > 0 && currentStageT2 < 5) {
                 const clicksNeeded = 5 - currentStageT2;
                 feedbackText = `<strong>Objective</strong><br>Keep clicking... ${clicksNeeded} more click${clicksNeeded > 1 ? 's' : ''} to go!`;
             } else {
-                 feedbackText = "<strong>Objective</strong><br>Great! Onto the next step."; // Fallback
+                 feedbackText = "<strong>Objective</strong><br>Great! Onto the next step.";
             }
             break;
-        case 3: // Explode to capture
-            const targetDotT3 = $(".dot").eq(tutorialTargetDotIndex); // This is P1 dot (index 19)
-            const explodingDotT3 = $(".dot").eq(20); // This is P2 dot (index 20)
-             if (explodingDotT3.hasClass('stage--5')) { // <<< Check for stage 5
+        case 3:
+            const targetDotT3 = $(".dot").eq(tutorialTargetDotIndex);
+            const explodingDotT3 = $(".dot").eq(20);
+             if (explodingDotT3.hasClass('stage--5')) {
                 feedbackText = "<strong>Objective</strong><br>Click your Stage 5 dot to capture the opponent's dot!";
             } else if (targetDotT3.hasClass('player--2')) {
                 feedbackText = "<strong>Objective</strong><br>Captured! Objective met.";
             } else {
-                 // Check if player clicked their dot but hasn't captured yet
                  if (explodingDotT3.is('[class*="stage--"]') && explodingDotT3.hasClass('player--2')) {
                      feedbackText = "<strong>Objective</strong><br>Explosion started...";
                  } else {
-                     feedbackText = "<strong>Objective</strong><br>Click your red dot next to the blue one.";
+                     feedbackText = "<strong>Objective</strong><br>Click your dot next to the opponent\'s dot."; // Made color-neutral
                  }
             }
             break;
-        case 4: // Chain reaction
+        case 4:
              if ($(".dot.increment").length > 0) {
                  feedbackText = "<strong>Objective</strong><br>Watch the chain reaction!";
-             } else if (tutorialStep4Clicked) { // Check if player clicked
+             } else if (tutorialStep4Clicked) {
                  feedbackText = "<strong>Objective</strong><br>Nice chain! Objective met.";
              } else {
                  feedbackText = "<strong>Objective</strong><br>Click any of your blinking dots to start the chain.";
              }
             break;
-        case 5: // Completion Screen Feedback
-            feedbackText = "<strong>Congratulations!</strong><br>You finished the tutorial. Click 'Next' to play.";
+        case 5:
+            feedbackText = "<strong>Congratulations!</strong><br>You finished the tutorial. Click 'Start Level 1' to play.";
             break;
         default:
-             feedbackText = ""; // Should not happen
+             feedbackText = "";
     }
 
-    // Update the objective paragraph with feedback text
-    if (feedbackText) { // Only update if there is feedback
+    if (feedbackText) {
         $('#tutorial-step-objective').html(feedbackText);
     }
-    // If feedbackText is empty, the original objective text remains.
 }
 
-
-// << END NEW Tutorial Functions >>
-
-// << NEW: Quit Tutorial Button Handler >>
 $('#btn-quit-tutorial').on('click', function() {
-    if (!isTutorialMode) return; // Only act if in tutorial mode
+    if (!isTutorialMode) return;
 
-    console.log("Quitting tutorial...");
     isTutorialMode = false;
     tutorialStep = 0;
 
-    // Hide the tutorial modal
     $('.tutorial-step-modal').removeClass('active');
     $('body').removeClass('modal-open no-backdrop');
-
-    // Transition back to Level 1
-    level = 1;
-    gameMode = 'regular';
-    $('body').removeClass('mode-multiplayer mode-random').addClass('mode-regular'); // Ensure body class is updated
-    $('.level-value').html(level); // Update level display in footer
-    var newUrl = window.location.pathname + '?mode=regular&level=1';
-    window.history.replaceState({}, document.title, newUrl);
-    startAnim(); // Restart game at level 1
 });
 
-// --- END REFACTORED MODE MODAL HANDLERS ---
-
-// Helper function to get the numeric stage of a dot
 function getStageNumber(dotElement) {
     const classes = dotElement.attr('class') || '';
     const match = classes.match(/stage--(\d+)/);
@@ -3749,23 +3634,18 @@ function getStageNumber(dotElement) {
 }
 
 function checkDotmination() {
-  // <<< ADD TUTORIAL MODE CHECK >>>
   if (isTutorialMode && tutorialStep < 5) {
-    // console.log("checkDotmination: In tutorial step < 5, skipping regular win/loss check.");
-    // Tutorial progression is handled by checkTutorialStepCompletion
     return; 
   }
-  // <<< END TUTORIAL MODE CHECK >>>
 
   const isGameOver = !(moveAmount < 2 || ($(".dot.player--1").length > 0 && $(".dot.player--2").length > 0));
 
-  if (!isMultiplayer) { // --- Single Player Logic ---
+  if (!isMultiplayer) {
     if (!isGameOver) {
-      nextPlayer(); // SP turn switch
+      nextPlayer();
     } else {
-      // SP Game Over handling...
       stop();
-      sound.play(); // Original sonar sound for game end
+      sound.play();
       
       // Restore Single-Player Overlay Logic 
       if (currentPlayer == "player--2") { // Player 2 (usually User) is the one who made the winning move
@@ -3820,10 +3700,8 @@ function checkDotmination() {
               }
               
               if (level < 100 && !levelsArray['level' + (level + 1)]) {
-                console.log('Adding new level:', level + 1);
                 levelsArray['level' + (level + 1)] = {'time': null};
                 myDotmination['levels'] = levelsArray;
-                console.log('Updated levelsArray:', levelsArray);
               }
               
               myStorage.setObj("myDotmination", myDotmination);
@@ -3860,7 +3738,7 @@ function checkDotmination() {
                 '</div>' +
               '</div>'
             );
-            TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut}); // Added missing animation
+            TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
           }
       } else { // Player 1 (usually Bot) is the one who made the winning move -> User Lost
           // --- User Lost --- 
@@ -3884,23 +3762,21 @@ function checkDotmination() {
   } else { // --- Multiplayer Logic ---
     if (isGameOver) {
        // MP Game Over Handling (Host Driven)
-       console.log("Multiplayer Game Over condition met - Host needs to handle this.");
        if (isHost) {
          // Determine winner (the one who still has dots)
          const winner = $(".dot.player--1").length > 0 ? "player--1" : "player--2";
-         console.log(`Host determined winner: ${winner}`);
-         
+
          // Send gameOver message to peer
          if (conn) {
            // <<< Send final map state WITH the gameOver message >>>
            const finalMapString = generateMapString();
-           conn.send({ 
-             type: 'gameOver', 
+           conn.send({
+             type: 'gameOver',
              winner: winner,
              mapString: finalMapString // <<< Include final state
            });
          }
-         
+
          // Show overlay locally for host
          showMultiplayerGameOverOverlay(winner);
        }
