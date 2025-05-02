@@ -906,19 +906,22 @@ footer .multiplayer {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-end; /* Revert to original */
   overflow: hidden;
-  pointer-events: none;
+  pointer-events: none; 
   z-index: 100;
 }
 
 .modal-open .modal.active .backdrop {
-  opacity: 1;
-  pointer-events: auto;
+  /* Don't apply opacity for tutorial modal backdrop */
+  /* opacity: 1; */
+  pointer-events: auto; /* Keep for OTHER modals */
 }
 
 .modal-open .modal.active .wrapper {
-  transform: translateY(0%);
+  /* Default transform */
+  /* transform: translateY(0%); - Handled specifically for tutorial modal */
+  transform: translateY(0%); /* Revert to original */
 }
 
 .modal .backdrop {
@@ -951,6 +954,87 @@ footer .multiplayer {
   display: table;
   cursor: pointer;
 }
+
+/* << NEW Tutorial Modal CSS >> */
+.welcome-tutorial-modal p {
+  text-align: center;
+}
+.tutorial-step-modal .backdrop {
+  display: none; /* Hide backdrop specifically */
+}
+
+/* Prevent blur when tutorial modal is active */
+body.modal-open.no-backdrop header,
+body.modal-open.no-backdrop footer, /* Also prevent footer blur */
+body.modal-open.no-backdrop .field-wrapper {
+  filter: none;
+}
+
+body.no-backdrop header {
+  pointer-events: none;
+}
+
+/* Position tutorial wrapper at the bottom */
+.tutorial-step-modal .wrapper {
+    position: absolute;
+    bottom: 5px;
+    left: 0;
+    max-height: 35vh; /* Limit height */
+    width: 95%; /* Adjust width */
+    /* Ensure visibility when active */
+    opacity: 1;
+    transition: opacity 0.3s; /* Optional fade */
+}
+
+/* Hide when not active */
+.tutorial-step-modal:not(.active) .wrapper {
+    opacity: 0;
+    pointer-events: none; /* Prevent interaction when hidden */
+}
+.tutorial-step-modal p {
+  text-align: center;
+}
+#tutorial-step-title {
+  margin-top: 0;
+}
+#tutorial-step-objective {
+  margin-bottom: 2rem;
+}
+/* << END NEW Tutorial Modal CSS >> */
+
+/* Style for Quit Tutorial Button */
+.btn-quit-tutorial {
+    position: absolute;
+    bottom: 10px;
+    right: 15px;
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    background-color: #f8f9fa;
+    color: #555;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    pointer-events: auto; /* Ensure button is clickable */
+    z-index: 101; /* Above modal wrapper content */
+}
+.btn-quit-tutorial:hover {
+    background-color: #e9ecef;
+}
+/* End Style for Quit Tutorial Button */
+
+#btn-start-level-1 {
+  display: none;
+}
+/* Show only on step 5 */
+.tutorial-step-modal.step-5 #btn-start-level-1 {
+    display: block !important;
+}
+
+/* Hide quit button on step 5 */
+.tutorial-step-modal.step-5 #btn-quit-tutorial {
+    display: none;
+}
+/* << END Style for Start Level 1 Button >> */
 
 .modal .wrapper {
   position: relative;

@@ -236,6 +236,11 @@
       </div>
     </div>
     <div class="row">
+      <div class="col card btn btn-main-menu" data-action="how-to-play">
+        <p>How to Play</p>
+      </div>
+    </div>
+    <div class="row">
       <div class="col card btn btn-main-menu" data-action="profile">
         <p>View Profile</p>
       </div>
@@ -251,6 +256,39 @@
         <p class="smaller">Last updated: 2025-04-29</p>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Tutorial Welcome Modal -->
+<div class="modal welcome-tutorial-modal">
+  <div class="backdrop"></div>
+  <div class="wrapper">
+    <div class="modal-close"><i class="fas fa-times"></i></div>
+    <h2>Welcome to Dotmination!</h2>
+    <p>Learn the basics with a quick interactive tutorial.</p>
+    <div class="row">
+      <div class="col card btn btn-start-tutorial">
+        <h1><i class="fas fa-graduation-cap"></i></h1>
+        <p>Start Tutorial</p>
+      </div>
+      <div class="col card btn btn-skip-tutorial">
+        <h1><i class="fas fa-play-circle"></i></h1>
+        <p>Play Level 1</p>
+      </div>
+    </div>
+    <p class="smaller">You can access this tutorial anytime from the Main Menu.</p>
+  </div>
+</div>
+
+<!-- Tutorial Step Instruction Modal -->
+<div class="modal tutorial-step-modal">
+  <div class="backdrop"></div>
+  <div class="wrapper">
+    <h2 id="tutorial-step-title">Step X</h2>
+    <p id="tutorial-step-instruction">Instruction for the step goes here.</p>
+    <p id="tutorial-step-objective">Objective: Do this thing.</p>
+    <button id="btn-quit-tutorial" class="btn-quit-tutorial">Quit Tutorial</button>
+    <div class="row"><div id="btn-start-level-1" class="col card btn btn-start-level-1 text-center">Start Level 1</div></div>
   </div>
 </div>
 
