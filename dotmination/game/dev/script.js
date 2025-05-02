@@ -235,6 +235,11 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
   let clickedDot = $(this);
   let clickedIndex = clickedDot.index();
 
+  // << NEW: Prevent clicks during Tutorial Step 5 >>
+  if (isTutorialMode && tutorialStep === 5) {
+    return; // Ignore clicks on the field when tutorial complete modal is shown
+  }
+  
   // --- Tutorial Step 4 Check (Log only) ---
   if (isTutorialMode && tutorialStep === 4) {
     if (tutorialChainStartIndices.includes(clickedIndex)) {
@@ -3272,30 +3277,22 @@ function setupTutorialBoard(step) {
   tutorialChainStartIndices = [];
   tutorialStep4Clicked = false; // <<< Reset flag
 
-  // Clear field completely first
-  $(".field").empty().removeClass(playerClassClear);
-  setDots(); // Create new empty dots
-  dots = $(".dot"); // Update reference
-
   // Define map strings or setup logic for each step
-  const emptyMap = Array(dots.length).fill('0').join('');
+  // Estimate dot count if field is empty (e.g., on first load)
+  const currentDotCount = $(".field .dot").length;
+  const estimatedDotCount = currentDotCount > 0 ? currentDotCount : 45; // Default to 45 if no dots exist
+  const emptyMap = Array(estimatedDotCount).fill('0').join('');
   const TUTORIAL_MAP_T1 = emptyMap;
-  // T2: P2 Stage 4 (9) at index 15 (<<< Updated index)
-  // const TUTORIAL_MAP_T2 = emptyMap.substring(0, 15) + '9' + emptyMap.substring(16);
   // T2: P2 Stage 1 (6) at index 15 (<<< Updated stage)
   const TUTORIAL_MAP_T2 = emptyMap.substring(0, 15) + '6' + emptyMap.substring(16);
-  // T3: P2 Stage 4 (9) at index 20, P1 Stage 1 (1) at index 19 (<<< Updated indices)
-  // const TUTORIAL_MAP_T3 = emptyMap.substring(0, 19) + '19' + emptyMap.substring(21);
-  // T3: P1 Stage 1 (1) at index 19, P2 Stage 5 (A) at index 20 (<<< Updated P2 stage)
-  const TUTORIAL_MAP_T3 = emptyMap.substring(0, 19) + '1A' + emptyMap.substring(21);
-  // T4: P2 Stage 4 (9) at indices 17, 22, 27
-  // const TUTORIAL_MAP_T4 = emptyMap.substring(0, 17) + '9' + emptyMap.substring(18, 22) + '9' + emptyMap.substring(23, 27) + '9' + emptyMap.substring(28);
-  // T4: P2 Stage 5 (A) at indices 11, 15, 19, 24, 29 (<<< Updated indices and stage)
+  // T3: P1 Stage 3 (3) at index 10, P2 Stage 5 (A) at index 11
+  const TUTORIAL_MAP_T3 = emptyMap.substring(0, 10) + '3A' + emptyMap.substring(12);
+  // T4: P2 Stage 5 (A) at indices 5, 11, 15 and P1 Stage 5 (5) at indices 7, 10
   let t4Arr = emptyMap.split('');
-  [11, 15, 19, 24, 29].forEach(i => { if(i < t4Arr.length) t4Arr[i] = 'A'; });
+  [5, 11, 15].forEach(i => { if(i < t4Arr.length) t4Arr[i] = 'A'; }); // P2 Stage 5
+  [7, 10].forEach(i => { if(i < t4Arr.length) t4Arr[i] = '5'; });     // P1 Stage 5
   const TUTORIAL_MAP_T4 = t4Arr.join('');
-  // T5: P2 Stage 3 (8) at index 22, P1 Stage 1 (1) at index 27
-  const TUTORIAL_MAP_T5 = emptyMap.substring(0, 22) + '8' + emptyMap.substring(23, 27) + '1' + emptyMap.substring(28);
+  // T5 map no longer needed as we don't load it
 
 
   let mapToLoad = "";
@@ -3304,64 +3301,74 @@ function setupTutorialBoard(step) {
   switch (step) {
     case 1: // T1: Claim 3 dots
       mapToLoad = TUTORIAL_MAP_T1;
-      // Ensure field is completely empty
-      dots.removeClass(function(index, className) {
-        return (className.match(/(^|\s)(stage--|player--)\S+/g) || []).join(' ');
-      }).attr("data-increment", "0");
       break;
     case 2: // T2: Make dot explode
       mapToLoad = TUTORIAL_MAP_T2;
-      // tutorialTargetDotIndex = 22; // Store the index of the dot to explode
-      tutorialTargetDotIndex = 15; // <<< Updated index
+      tutorialTargetDotIndex = 15; 
       break;
     case 3: // T3: Explode to capture
       mapToLoad = TUTORIAL_MAP_T3;
-      // tutorialTargetDotIndex = 21; // Store the index of the P1 dot to capture
-      tutorialTargetDotIndex = 19; // <<< Updated index
+      tutorialTargetDotIndex = 10; // Opponent dot is now at index 10
       break;
     case 4: // T4: Chain reaction
       mapToLoad = TUTORIAL_MAP_T4;
-      // tutorialChainStartIndices = [17, 22, 27]; // Store indices player should click
-      tutorialChainStartIndices = [11, 15, 19, 24, 29]; // <<< Updated indices
+      tutorialChainStartIndices = [5, 11, 15]; // User should only click their own dots (P2)
       break;
     case 5: // T5: Completion Screen
-      mapToLoad = TUTORIAL_MAP_T1; // Use empty map
-      // No specific target needed
+      // *** Don't load a map or clear the field for the final step ***
+      loadMap = false; // Prevent buildMapFromString
       break;
   }
 
-  // Load the map string if required for the step
-  if (loadMap && mapToLoad) {
-    buildMapFromString(mapToLoad);
+  // *** Only clear and repopulate board if NOT step 5 ***
+  if (step !== 5) {
+    // Clear field completely first
+    $(".field").empty().removeClass(playerClassClear);
+    setDots(); // Create new empty dots
+    dots = $(".dot"); // Update reference
+
+    // Load the map string if required for the step
+    if (loadMap && mapToLoad) {
+      buildMapFromString(mapToLoad);
+    }
+  } else {
+      // Ensure dots reference is up-to-date for step 5 if not reset
+      dots = $(".dot"); 
   }
+
 
   // Set initial player (User = Player 2)
   currentPlayer = "player--2";
-  $(".field").addClass(currentPlayer);
+  $(".field").removeClass(playerClassClear).addClass(currentPlayer); // Ensure field has correct player class
   TweenMax.to("html", 0, {"--color-current": 'var(--color-2)'});
 
-  // Update scores, etc.
-  updatePlayerScoresUI();
-  // No turn indicator needed for tutorial steps 1-4
+  // Update scores, etc. (will reflect final state of step 4 when step 5 is shown)
+  updatePlayerScoresUI(); 
+  
+  // Turn indicator logic
   if (step < 5) {
       $('.turn-indicator').remove();
       $('.players .player').removeClass('current');
   } else {
-      updateTurnIndicator();
+      // No turn indicator needed on completion screen
+      $('.turn-indicator').remove();
+      $('.players .player').removeClass('current');
   }
   updatePlayerIndicators();
 
-  // Disable bot for steps 1-4
+  // Disable bot for all tutorial steps now
   if (delayedCall) {
     delayedCall.kill();
   }
 
-  // Start timer for step 5 maybe?
+  // Remove timer start logic for step 5
+  /* 
   if(step === 5) {
       show();
       reset();
       start();
-  }
+  } 
+  */
 }
 
 function showTutorialStepModal(step) {
@@ -3387,7 +3394,7 @@ function showTutorialStepModal(step) {
       break;
     case 4:
       title = '<small>Step 4</small><br><span style="color:var(--color-2)">Chain Reactions</span>';
-      instruction = 'Explosions can trigger other explosions, creating powerful chain reactions.';
+      instruction = 'It all adds up, so one explosion can trigger chain reactions.';
       objective = '<strong>Objective</strong><br>Click one of <span style="color:var(--color-2)">your dots</span> to start a chain reaction.';
       break;
     case 5:
@@ -3582,14 +3589,14 @@ function updateTutorialFeedback() {
             }
             break;
         case 3:
-            const targetDotT3 = $(".dot").eq(tutorialTargetDotIndex);
-            const explodingDotT3 = $(".dot").eq(20);
-             if (explodingDotT3.hasClass('stage--5')) {
-                feedbackText = "<strong>Objective</strong><br>Click your Stage 5 dot to capture the opponent's dot!";
-            } else if (targetDotT3.hasClass('player--2')) {
-                feedbackText = "<strong>Objective</strong><br>Captured! Objective met.";
-            } else {
-                 if (explodingDotT3.is('[class*="stage--"]') && explodingDotT3.hasClass('player--2')) {
+            const targetDotT3_fb = $(".dot").eq(10); // Opponent dot is index 10
+            const explodingDotT3_fb = $(".dot").eq(11); // User dot is index 11
+             if (explodingDotT3_fb.hasClass('stage--5')) { 
+                 feedbackText = "<strong>Objective</strong><br>Click your Stage 5 dot to capture the opponent's dot!";
+             } else if (targetDotT3_fb.hasClass('player--2')) {
+                 feedbackText = "<strong>Objective</strong><br>Captured! Objective met.";
+             } else {
+                 if (explodingDotT3_fb.is('[class*="stage--"]') && explodingDotT3_fb.hasClass('player--2')) {
                      feedbackText = "<strong>Objective</strong><br>Explosion started...";
                  } else {
                      feedbackText = "<strong>Objective</strong><br>Click your dot next to the opponent\'s dot."; // Made color-neutral

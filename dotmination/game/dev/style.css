@@ -979,7 +979,7 @@ body.no-backdrop header {
     position: absolute;
     bottom: 5px;
     left: 0;
-    max-height: 35vh; /* Limit height */
+    max-height: 40vh; /* Limit height */
     width: 95%; /* Adjust width */
     /* Ensure visibility when active */
     opacity: 1;
@@ -996,6 +996,9 @@ body.no-backdrop header {
 }
 #tutorial-step-title {
   margin-top: 0;
+}
+#tutorial-step-instruction, #tutorial-step-objective {
+  font-size: 16px;
 }
 #tutorial-step-objective {
   margin-bottom: 2rem;
