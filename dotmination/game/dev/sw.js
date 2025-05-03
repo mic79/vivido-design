@@ -1,8 +1,8 @@
-const CACHE_NAME = 'dotmination-cache-v4';
+const CACHE_NAME = 'dotmination-cache-v5';
 const urlsToCache = [
   './',
   './index.html',
-  './style.css?v=2024051601',
+  './style.css?v=2024051602',
   './manifest.json',
   './lib/normalize.css',
   './fonts/roboto.css',
@@ -20,7 +20,7 @@ const urlsToCache = [
   './lib/moment.js',
   './lib/howler.min.js',
   './modules/utils.js?v=2024051601',
-  './script.js?v=2024051601',
+  './script.js?v=2024051602',
   'https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js', // External script
   './sounds/submarine-sonar.mp3',
   './sounds/submarine-sonar-38243-once.mp3'

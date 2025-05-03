@@ -212,7 +212,7 @@ $("body").on("click", ".end .card p", function(e) {
   }
   else if (gameMode === 'regular') {
     // Next level - increment here
-    if (level < 100) {
+    if (level < 200) { // <<< Changed from 100 to 200
       level++;
     } else {
       level = 1;
@@ -515,7 +515,7 @@ function checkDotmination() {
             
             TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
 
-          } else if (level < 100) { // Regular mode win
+          } else if (level < 200) { // <<< Changed from 100 to 200 (Regular mode win)
             if($('body').hasClass('mode-regular')) {
               var levelObj = {'level': level};
               myDotmination['level'] = level;
@@ -532,7 +532,8 @@ function checkDotmination() {
                 myDotmination['levels'] = levelsArray;
               }
               
-              if (level < 100 && !levelsArray['level' + (level + 1)]) {
+              // <<< Check if next level exists up to new max (200) >>>
+              if (level < 200 && !levelsArray['level' + (level + 1)]) { 
                 levelsArray['level' + (level + 1)] = {'time': null};
                 myDotmination['levels'] = levelsArray;
               }
@@ -561,7 +562,7 @@ function checkDotmination() {
               
               TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
             }
-          } else { // Level 100 win (loop back)
+          } else { // <<< Level 200 win (loop back) >>>
             level = 1;
             $("body .container").append(
               '<div class="end overlay noselect ' + currentPlayer + '">' +
@@ -1191,8 +1192,25 @@ function fieldPopulateByLevel() {
       }
       var dotPlayerNumber = 2;
     } else {
-      var dotStage = Math.floor(Number((Math.PI * (index + 1) * level).toString()[7]) / 10 * 5);
-      var dotPlayerNumber = Math.floor(Number((Math.PI * (index + 1) * level).toString()[5]) / 10 * 2) + 1;
+      var piString = (Math.PI * (index + 1) * level).toString();
+      
+      // Default values in case of NaN
+      var defaultStage = (index + level) % 5; // Range 0-4
+      var defaultPlayer = (index % 2) + 1; // Range 1-2
+
+      // Calculate dotStage with NaN check
+      var stageChar = piString[7];
+      var stageNum = Number(stageChar);
+      var dotStage = (stageChar === undefined || isNaN(stageNum)) 
+                     ? defaultStage 
+                     : Math.floor(stageNum / 10 * 5); // Original calculation produces 0-4
+
+      // Calculate dotPlayerNumber with NaN check
+      var playerChar = piString[5];
+      var playerNum = Number(playerChar);
+      var dotPlayerNumber = (playerChar === undefined || isNaN(playerNum)) 
+                            ? defaultPlayer 
+                            : Math.floor(playerNum / 10 * 2) + 1; // Original calculation produces 1-2
     }
     
     //console.log('---');
@@ -1200,9 +1218,13 @@ function fieldPopulateByLevel() {
     //console.log('stage', dotStage);
     //console.log('player', dotPlayerNumber);
     if (dotStage == 0) {
+      // Dot remains empty
     } else {
-      //dotStage = 5;
-      //dotPlayerNumber = 2;
+      // Ensure stage is within bounds (though calculations should handle this)
+      dotStage = Math.max(0, Math.min(5, dotStage)); // Clamp stage 0-5 (level 0 uses 5)
+      // Ensure player is valid
+      dotPlayerNumber = (dotPlayerNumber === 1 || dotPlayerNumber === 2) ? dotPlayerNumber : defaultPlayer; 
+
       $(this).addClass(
         "stage--" + dotStage + " player--" + dotPlayerNumber
       );
@@ -3708,7 +3730,7 @@ function checkDotmination() {
             
             TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
 
-          } else if (level < 100) { // Regular mode win
+          } else if (level < 200) { // <<< Changed from 100 to 200 (Regular mode win)
             if($('body').hasClass('mode-regular')) {
               var levelObj = {'level': level};
               myDotmination['level'] = level;
@@ -3725,7 +3747,8 @@ function checkDotmination() {
                 myDotmination['levels'] = levelsArray;
               }
               
-              if (level < 100 && !levelsArray['level' + (level + 1)]) {
+              // <<< Check if next level exists up to new max (200) >>>
+              if (level < 200 && !levelsArray['level' + (level + 1)]) { 
                 levelsArray['level' + (level + 1)] = {'time': null};
                 myDotmination['levels'] = levelsArray;
               }
@@ -3754,7 +3777,7 @@ function checkDotmination() {
               
               TweenMax.fromTo($('.overlay > .card'), 2, {alpha: 0, scale: 0}, {alpha: 1, scale: 1, ease:Elastic.easeOut});
             }
-          } else { // Level 100 win (loop back)
+          } else { // <<< Level 200 win (loop back) >>>
             level = 1;
             $("body .container").append(
               '<div class="end overlay noselect ' + currentPlayer + '">' +
