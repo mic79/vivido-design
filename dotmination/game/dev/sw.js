@@ -1,8 +1,8 @@
-const CACHE_NAME = 'dotmination-cache-v3';
+const CACHE_NAME = 'dotmination-cache-v4';
 const urlsToCache = [
   './',
   './index.html',
-  './style.css',
+  './style.css?v=2024051601',
   './manifest.json',
   './lib/normalize.css',
   './fonts/roboto.css',
@@ -19,8 +19,8 @@ const urlsToCache = [
   './lib/shake.js',
   './lib/moment.js',
   './lib/howler.min.js',
-  './modules/utils.js',
-  './script.js',
+  './modules/utils.js?v=2024051601',
+  './script.js?v=2024051601',
   'https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js', // External script
   './sounds/submarine-sonar.mp3',
   './sounds/submarine-sonar-38243-once.mp3'
@@ -36,6 +36,7 @@ self.addEventListener('install', event => {
         // Use addAll which fetches and caches in one step
         return cache.addAll(urlsToCache);
       })
+      .then(() => self.skipWaiting())
       .catch(error => {
         console.error('Service Worker: Failed to cache during install:', error);
       })
