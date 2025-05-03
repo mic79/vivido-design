@@ -2510,7 +2510,7 @@ function setupConnectionHandlers(connection) {
           mapString: generateMapString(), 
           fieldClasses: $('.field').attr('class'),
           startType: currentStartType, // <<< Send current start type
-          matchStarter: matchStarter // <<< Send who starts this match
+          matchStarter: matchStarter // <<< Send who started this match
         });
 
         // Update host UI after clearing
@@ -3133,10 +3133,10 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
     
     return false;
   } else if (gameMode === 'regular') {
-    // Hide multiplayer options
-+   $('.multiplayer-start-options').hide();
+    // Hide Random mode and multiplayer options
+    $('.bot-difficulty, .multiplayer-start-options').hide();
 
-    $('.bot-difficulty').show();
+    $('.list--mode-regular').show();
     
     // Set default bot difficulty
     botDifficulty = 'random';
@@ -3154,8 +3154,27 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
     
     // Don't start game yet
     return; // Need return here to prevent modal close
+  } else if (gameMode === 'random') {
+
+    $('.bot-difficulty').show();
+
+    // Set default bot difficulty
+    botDifficulty = 'random';
+    $('.difficulty-option').removeClass('selected');
+    $('.difficulty-option[data-difficulty="random"]').addClass('selected');
+
+    // Update selection in the modal
+    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
+    $(this).addClass('selected');
+    $('.list--mode-regular, .multiplayer-start-options').hide(); // Explicitly hide other sections
+
+    // Set body class & keep modal open
+    $('body')
+      .removeClass('mode-regular mode-multiplayer')
+      .addClass('mode-random modal-open');
+    // No return here - allow modal to stay open consistently
   }
-  
+
   // If we reached here (Regular or Random mode selected), keep modal open
   // (Unless a level/difficulty is clicked later)
   $('body').addClass('modal-open');
