@@ -1,4 +1,4 @@
-// v1.0.4
+// v1.0.5
 // Singleplayer modes are stable.
 // Multiplayer mode is working, peerJS setup with TURN server.
 // Partially divided into modules.
@@ -2105,7 +2105,7 @@ async function setupPeer(slotNumber) { // Added async
 
   try {
     updateConnectingOverlay("Fetching network configuration...");
-    const response = await fetch("https://dotmination.metered.live/api/v1/turn/credentials?apiKey=4f9c8072346e4c0a6393a4582e70e89f94b4");
+    const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev");
     if (!response.ok) {
       throw new Error(`Metered.ca API Error: ${response.status} ${response.statusText}`);
     }
@@ -2178,7 +2178,7 @@ async function setupHost(slotNumber) { // Added async
 
   try {
     updateConnectingOverlay("Fetching network configuration...");
-    const response = await fetch("https://dotmination.metered.live/api/v1/turn/credentials?apiKey=4f9c8072346e4c0a6393a4582e70e89f94b4");
+    const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev/");
     if (!response.ok) {
       throw new Error(`Metered.ca API Error: ${response.status} ${response.statusText}`);
     }
