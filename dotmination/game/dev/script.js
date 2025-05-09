@@ -1,6 +1,6 @@
-// v1.0.2
+// v1.0.3
 // Singleplayer modes are stable.
-// Multiplayer mode is working, peerJS can get restricted by firewalls. Could be extended with TURN server.
+// Multiplayer mode is working, peerJS setup with TURN server.
 // Partially divided into modules.
 
 // Import Tutorial Module
@@ -1974,26 +1974,35 @@ $("body").on("click", ".end:not(.player--1)", function(e) {
 });
 
 // Add this new function for automatic multiplayer connection
-function startMultiplayerConnection() {
+async function startMultiplayerConnection() { // Added async
   // Note: isHost is determined *by* findAvailableSlot now
   console.log("startMultiplayerConnection called. Desired startType:", multiplayerStartType); 
    
   connectionState = CONNECTION_STATES.CONNECTING;
    
-  findAvailableSlot(multiplayerStartType).then(slot => { // <<< Pass startType
+  try { // Wrapped in try-catch for better error handling during setup
+    const slot = await findAvailableSlot(multiplayerStartType); // findAvailableSlot is already async
     if (!slot) {
-      updateConnectingOverlay("No available game slots found for type '" + multiplayerStartType + "'. Please try again later.");
+      updateConnectingOverlay("No available game slots for type '" + multiplayerStartType + "'. Please try again.");
       showRetryButton();
+      connectionState = CONNECTION_STATES.DISCONNECTED;
       return;
     }
-    
+
     console.log('slot.role:', slot.role);
     if (slot.role === 'peer') {
-      setupPeer(slot.slotNumber);
+      await setupPeer(slot.slotNumber); // Added await
     } else {
-      setupHost(slot.slotNumber);
+      await setupHost(slot.slotNumber); // Added await
     }
-  });
+  } catch (error) {
+    console.error("Error during multiplayer connection setup:", error);
+    updateConnectingOverlay(`Connection setup failed: ${error.message}. Please retry.`);
+    showRetryButton();
+    connectionState = CONNECTION_STATES.DISCONNECTED;
+    cleanup(); // Ensure cleanup on setup failure
+    clearSessionInfo();
+  }
 }
 
 async function checkPeerAvailability(id) {
@@ -2085,35 +2094,51 @@ async function findAvailableSlot(desiredStartType) { // <<< Accept desiredStartT
   return null; // No slots available
 }
 
-function setupPeer(slotNumber) {
+async function setupPeer(slotNumber) { // Added async
   cleanup();
   isHost = false;
   isMultiplayer = true;
   // Generate ID based on the chosen start type
   sessionID = `dot-peer-${multiplayerStartType}-${slotNumber}`; 
-  cleanup(); // Cleanup before creating new peer
+  let iceServersConfig;
+  let fetchSuccess = false;
+
+  try {
+    updateConnectingOverlay("Fetching network configuration...");
+    const response = await fetch("https://dotmination.metered.live/api/v1/turn/credentials?apiKey=4f9c8072346e4c0a6393a4582e70e89f94b4");
+    if (!response.ok) {
+      throw new Error(`Metered.ca API Error: ${response.status} ${response.statusText}`);
+    }
+    iceServersConfig = await response.json(); // This is the array of ICE server objects
+    console.log("Fetched ICE Servers from Metered.ca:", iceServersConfig);
+    fetchSuccess = true;
+  } catch (error) {
+    console.error("Failed to fetch ICE servers from Metered.ca:", error);
+    updateConnectingOverlay(`Network config error. Using fallback.`);
+    // Fallback to default STUN servers if Metered.ca fails
+    iceServersConfig = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
+    ];
+  }
+
   peer = new Peer(sessionID, {
     host: "0.peerjs.com",
     port: 443,
     secure: true,
     config: {
-      'iceServers': [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun.cloudflare.com:3478' },
-        {
-          urls: 'turn:turn.speed.cloudflare.com:50000',
-          username: '66d469d6159d42a192100fb31b3464161097158b96618dedf49e5aabc1fa56a2b6d3936956d9f41924c7b34d04cc93e0b0abfac4fa473afe87d3e3132b7927f1',
-          credential: 'aba9b169546eb6dcc7bfb1cdf34544cf95b5161d602e3b5fa7c8342b2e9802fb'
-        }
-      ]
+      'iceServers': iceServersConfig // Use fetched or fallback
     }
   });
 
   peer.on("open", function() {
-    if (hasConnected) return;
+    // if (hasConnected) return; // This hasConnected check might be too early or managed by cleanup()
 
-    console.log("Peer started with ID:", sessionID);
+    console.log("Peer PeerJS object opened with ID:", sessionID);
     updateConnectingOverlay(`Connecting to host...`);
+    if (!fetchSuccess) {
+        console.warn("Using fallback STUN servers for P2P connection.");
+    }
 
     // Connect to the host ID matching the chosen start type
     const hostID = `dot-host-${multiplayerStartType}-${slotNumber}`; 
@@ -2125,50 +2150,67 @@ function setupPeer(slotNumber) {
       connectionState = CONNECTION_STATES.CONNECTED;
       // Remove the overlay immediately upon successful connection
       $('.connecting-overlay').remove(); 
-      // updateConnectingOverlay(`Connected to Host!`); // Removed this line
       saveSessionInfo(slotNumber, 'peer');
       setupConnectionHandlers(conn);
       // Send ready signal to host
       conn.send({ type: 'ready' });
     });
+    // It's good practice to also handle conn.on('error') here if specific error handling for data connection is needed
   });
 
   peer.on("error", function(err) {
-    console.error("Peer error:", err);
+    console.error("Peer peer error:", err);
+    updateConnectingOverlay(`Connection error: ${err.type}. Please retry.`);
     cleanup();
     clearSessionInfo();
     showRetryButton();
   });
 }
 
-function setupHost(slotNumber) {
+async function setupHost(slotNumber) { // Added async
   cleanup();
   isHost = true;
   isMultiplayer = true;
   // Generate ID based on the chosen start type
   sessionID = `dot-host-${multiplayerStartType}-${slotNumber}`; 
-  cleanup(); // Cleanup before creating new peer
+  let iceServersConfig;
+  let fetchSuccess = false;
+
+  try {
+    updateConnectingOverlay("Fetching network configuration...");
+    const response = await fetch("https://dotmination.metered.live/api/v1/turn/credentials?apiKey=4f9c8072346e4c0a6393a4582e70e89f94b4");
+    if (!response.ok) {
+      throw new Error(`Metered.ca API Error: ${response.status} ${response.statusText}`);
+    }
+    iceServersConfig = await response.json();
+    console.log("Fetched ICE Servers from Metered.ca:", iceServersConfig);
+    fetchSuccess = true;
+  } catch (error) {
+    console.error("Failed to fetch ICE servers from Metered.ca:", error);
+    updateConnectingOverlay(`Network config error. Using fallback.`);
+    iceServersConfig = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
+    ];
+  }
+
   peer = new Peer(sessionID, {
     host: "0.peerjs.com",
     port: 443,
     secure: true,
     config: {
-      'iceServers': [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun.cloudflare.com:3478' },
-        {
-          urls: 'turn:turn.speed.cloudflare.com:50000',
-          username: '66d469d6159d42a192100fb31b3464161097158b96618dedf49e5aabc1fa56a2b6d3936956d9f41924c7b34d04cc93e0b0abfac4fa473afe87d3e3132b7927f1',
-          credential: 'aba9b169546eb6dcc7bfb1cdf34544cf95b5161d602e3b5fa7c8342b2e9802fb'
-        }
-      ]
+      'iceServers': iceServersConfig // Use fetched or fallback
     }
   });
 
   peer.on("open", function() {
-    if (hasConnected) return;
-    console.log("Host started with ID:", sessionID);
+    // if (hasConnected) return; // This hasConnected check might be too early
+
+    console.log("Host PeerJS object opened with ID:", sessionID);
     updateConnectingOverlay(`Waiting for opponent to join...`);
+     if (!fetchSuccess) {
+        console.warn("Using fallback STUN servers for P2P connection.");
+    }
     saveSessionInfo(slotNumber, 'host');
 
     peer.on("connection", function(newConn) {
@@ -2183,6 +2225,7 @@ function setupHost(slotNumber) {
           if (hasConnected) return;
           hasConnected = true;
           connectionState = CONNECTION_STATES.CONNECTED;
+          // Consider removing overlay here for host too, or in setupConnectionHandlers
           setupConnectionHandlers(conn);
         });
       }
@@ -2190,7 +2233,8 @@ function setupHost(slotNumber) {
   });
 
   peer.on("error", function(err) {
-    console.error("Host error:", err);
+    console.error("Host peer error:", err);
+    updateConnectingOverlay(`Connection error: ${err.type}. Please retry.`);
     cleanup();
     clearSessionInfo();
     showRetryButton();
