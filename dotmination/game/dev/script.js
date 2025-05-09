@@ -1,4 +1,4 @@
-// v1.0.1
+// v1.0.2
 // Singleplayer modes are stable.
 // Multiplayer mode is working, peerJS can get restricted by firewalls. Could be extended with TURN server.
 // Partially divided into modules.
@@ -2099,8 +2099,12 @@ function setupPeer(slotNumber) {
     config: {
       'iceServers': [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' },
-        { urls: 'turn:turn.bistri.com:80', username: 'homeo', credential: 'homeo' } // Corrected TURN config
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        {
+          urls: 'turn:turn.speed.cloudflare.com:50000',
+          username: '66d469d6159d42a192100fb31b3464161097158b96618dedf49e5aabc1fa56a2b6d3936956d9f41924c7b34d04cc93e0b0abfac4fa473afe87d3e3132b7927f1',
+          credential: 'aba9b169546eb6dcc7bfb1cdf34544cf95b5161d602e3b5fa7c8342b2e9802fb'
+        }
       ]
     }
   });
@@ -2151,8 +2155,12 @@ function setupHost(slotNumber) {
     config: {
       'iceServers': [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' },
-        { urls: 'turn:turn.bistri.com:80', username: 'homeo', credential: 'homeo' } // Corrected TURN config
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        {
+          urls: 'turn:turn.speed.cloudflare.com:50000',
+          username: '66d469d6159d42a192100fb31b3464161097158b96618dedf49e5aabc1fa56a2b6d3936956d9f41924c7b34d04cc93e0b0abfac4fa473afe87d3e3132b7927f1',
+          credential: 'aba9b169546eb6dcc7bfb1cdf34544cf95b5161d602e3b5fa7c8342b2e9802fb'
+        }
       ]
     }
   });
