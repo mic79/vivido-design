@@ -1,0 +1,1345 @@
+* {
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  box-sizing: border-box;
+}
+
+.noselect {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+:focus {
+  outline: 0;
+}
+
+html,
+body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+html {
+  --color-neutral: #7f7f7f;
+  --color-neutral-rgb: 127, 127, 127;
+  --color-neutral-rgba-1: rgba(127, 127, 127, 0.4);
+  --color-neutral-rgba-2: rgba(127, 127, 127, 0.3);
+  --color-neutral-rgba-3: rgba(127, 127, 127, 0.2);
+  --color-neutral-rgba-4: rgba(127, 127, 127, 0.1);
+  --color-neutral-rgba-5: rgba(127, 127, 127, 0.0);
+  --color-1: #12dace;
+  --color-1-rgb: 18, 218, 206;
+  --color-1-rgba-0: rgba(18, 218, 206, 0.75);
+  --color-1-rgba-1: rgba(18, 218, 206, 0.4);
+  --color-1-rgba-2: rgba(18, 218, 206, 0.3);
+  --color-1-rgba-3: rgba(18, 218, 206, 0.2);
+  --color-1-rgba-4: rgba(18, 218, 206, 0.1);
+  --color-1-rgba-5: rgba(18, 218, 206, 0);
+  --color-2: #e11168;
+  --color-2-rgb: 225, 17, 104;
+  --color-2-rgba-0: rgba(225, 17, 104, 0.75);
+  --color-2-rgba-1: rgba(225, 17, 104, 0.4);
+  --color-2-rgba-2: rgba(225, 17, 104, 0.3);
+  --color-2-rgba-3: rgba(225, 17, 104, 0.2);
+  --color-2-rgba-4: rgba(225, 17, 104, 0.1);
+  --color-2-rgba-5: rgba(225, 17, 104, 0);
+  --color-current: var(--color-2);
+  font-size: 14px;
+}
+
+body {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  font-family: "Roboto Condensed", sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: darkslategrey;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body.dark-mode {
+  background: darkslategrey;
+  color: white;
+}
+
+/*@media (prefers-color-scheme: dark) {
+  body {
+    background: darkslategrey;
+    color: white;
+  }
+}*/
+
+h1 {
+  margin-bottom: 20px;
+  font-family: 'Roboto Condensed', sans-serif;
+  font-size: 1.8rem;
+  font-weight: 300;
+}
+
+a {
+  color: inherit;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.row {
+  display: flex;
+}
+
+.justify-content-center {
+  justify-content: center !important;
+}
+
+.card {
+  margin: 8px;
+  padding: 1rem;
+  background: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.05);
+  transition: 0.3s box-shadow;
+}
+
+/*@media (prefers-color-scheme: dark) {
+  .card {
+    background: darkslategrey;
+    color: white;
+  }
+}*/
+
+.dark-mode .card {
+  background: darkslategrey;
+  color: white;
+}
+
+.card.btn {
+  cursor: pointer;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .card.btn:hover {
+    box-shadow: 0 0 16px rgba(0, 0, 0, 0.15);
+  }
+}
+
+.card.btn.selected {
+  color: var(--color-2);
+  box-shadow: 0 0 16px var(--color-2-rgba-3);
+}
+
+.list ul {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.list.list--mode-regular {
+  display: none;
+}
+
+.mode-regular .list.list--mode-regular {
+  display: flex;
+}
+
+.overlay {
+  position: absolute;
+  height: 100%;
+  width: 100%;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.8);
+  z-index: 89;
+}
+
+.dark-mode .overlay {
+  background: rgba(47, 79, 79, 0.8);
+}
+
+/*@media (prefers-color-scheme: dark) {
+  .overlay {
+    background: rgba(47, 79, 79, 0.8);
+  }
+}*/
+
+.overlay.end {
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.overlay.end.player--1 {
+  color: var(--color-1);
+}
+
+.overlay.end.player--2 {
+  color: var(--color-2);
+}
+
+.overlay.end>.card {
+  position: relative;
+  height: 340px;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999rem;
+}
+
+.overlay.end>.card:before {
+  content: '';
+  position: absolute;
+  height: 100%;
+  width: 100%;
+  border-radius: 999rem;
+  box-shadow: 0 0 0 3rem var(--color-neutral-rgba-1), 0 0 0 6rem var(--color-neutral-rgba-2), 0 0 0 9rem var(--color-neutral-rgba-3), 0 0 0 12rem var(--color-neutral-rgba-4);
+  opacity: 0.3;
+}
+
+.overlay.end>.card h1 {
+  margin-top: 80px;
+  font-size: 2.4rem;
+}
+
+.overlay.end>.card .level-goals i {
+  margin-bottom: 20px;
+  font-size: 30px;
+}
+
+.overlay.end>.card p {
+  position: relative;
+}
+
+.overlay .timediff {
+  margin-top: 3rem;
+}
+
+.intro {
+  position: absolute;
+  height: 100%;
+  width: 100%;
+  top: 0;
+  left: 0;
+  background: white;
+  z-index: 9999;
+}
+
+.intro .rippled {
+  position: relative;
+  overflow: hidden;
+  transition: 0.4s all;
+  cursor: pointer;
+}
+
+.intro .ripple {
+  position: absolute;
+  height: 100px;
+  width: 100px;
+  background-color: rgba(127, 127, 127, 0.1);
+  border-radius: 100%;
+  transform: scale(0);
+}
+
+.intro .ripple-animate {
+  -webkit-animation: ripple 1s linear;
+  animation: ripple 1s linear;
+}
+
+@-webkit-keyframes ripple {
+  100% {
+    transform: scale(5);
+    background-color: transparent;
+  }
+}
+
+@keyframes ripple {
+  100% {
+    transform: scale(5);
+    background-color: transparent;
+  }
+}
+
+.intro .logo-wrapper {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(127, 127, 127, 0.02);
+}
+
+.intro .colors-overlay {
+  position: absolute;
+  height: 100%;
+  width: 100%;
+  z-index: 3;
+  mix-blend-mode: color;
+  pointer-events: none;
+}
+
+.intro .colors-overlay .overlay-color-1,
+.intro .colors-overlay .overlay-color-2 {
+  position: absolute;
+  height: 100%;
+  width: 50%;
+}
+
+.intro .colors-overlay .overlay-color-1 {
+  left: 0;
+  background-color: var(--color-1);
+}
+
+.intro .colors-overlay .overlay-color-2 {
+  right: 0;
+  background-color: var(--color-2);
+}
+
+.intro .logo {
+  position: relative;
+  height: 12rem;
+  width: 12rem;
+  margin-top: -30vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.intro .logo:before {
+  content: "";
+  position: absolute;
+  height: 2.5rem;
+  width: 2.5rem;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #7f7f7f;
+  box-shadow: 0 0 0 1.25rem rgba(127, 127, 127, 0.4), 0 0 0 2.5rem rgba(127, 127, 127, 0.2), 0 0 0 3.75rem rgba(127, 127, 127, 0.1), 0 0 0 5rem rgba(127, 127, 127, 0.05);
+  border-radius: 50%;
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.intro .logo.disabled:before {
+  cursor: default;
+}
+
+.intro .logo .logo-typo {
+  margin-top: 18rem;
+  color: rgba(127, 127, 127, 0.75);
+  font-family: aaux-next, sans-serif;
+  font-size: 1.8rem;
+  font-style: normal;
+  font-weight: 300;
+  pointer-events: none;
+}
+
+.intro .btn-signin {
+  position: absolute;
+  min-width: 120px;
+  bottom: 15%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  background: white;
+  border: 1px solid #e5e5e5;
+  border-radius: 99rem;
+  box-shadow: 0 0 0 3px rgba(127, 127, 127, 0);
+  outline: 0;
+  color: #7f7f7f;
+  text-transform: uppercase;
+  transition: 0.4s all;
+  cursor: pointer;
+  opacity: 0;
+  z-index: 5;
+}
+
+.intro .btn-signin:hover {
+  box-shadow: 0 0 0 4px rgba(127, 127, 127, 0.1);
+  color: #000;
+}
+
+.intro .madeby {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  color: #7f7f7f;
+  font-family: "Abel", sans-serif;
+  font-size: 18px;
+  text-align: center;
+  opacity: 0;
+  z-index: 4;
+}
+
+.intro .madeby small {
+  font-family: "Roboto", sans-serif;
+  font-weight: 300;
+  font-size: 8px;
+}
+
+.menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  padding: 3rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #f2f2f2;
+  z-index: 99999;
+}
+.menu ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.menu li {
+  margin: 0.5rem 0;
+  padding: 1rem;
+  color: #7f7f7f;
+  font-size: 18px;
+  text-align: center;
+}
+.menu .version {
+
+}
+
+header {
+  position: relative;
+  padding: 10px 30px 0 30px;
+  z-index: 99;
+}
+
+.header-icon-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  padding: 10px;
+  color: darkslategrey;
+  font-size: 0.5rem;
+  transform: translateX(-50%) scale(4, 1.5);
+  cursor: pointer;
+}
+
+.dark-mode .header-icon-btn {
+  color: white;
+}
+
+.modal-open header {
+  filter: blur(2px);
+}
+
+header .players {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+header .players .player {
+  position: relative;
+  height: 40px;
+  width: 40px;
+  margin: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  border-radius: 50%;
+  color: white;
+}
+
+header .players .player.player--1 {
+  background: var(--color-1);
+}
+
+header .players .player.player--2 {
+  background: var(--color-2);
+}
+
+header .players .player.current {
+  transition: box-shadow 0.3s ease-in-out;
+}
+
+header .players .player.player--1.current {
+  box-shadow: 0 0 0 2px white, 0 0 0 4px var(--color-1);
+}
+
+header .players .player.player--2.current {
+  box-shadow: 0 0 0 2px white, 0 0 0 4px var(--color-2);
+}
+
+header .players .player.selectable {
+  cursor: pointer;
+}
+
+header .players .player .progress-circle {
+  position: absolute;
+  height: 50px;
+  width: 50px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: transparent;
+  border-radius: 50%;
+  opacity: 0.5;
+  z-index: -1;
+}
+
+footer {
+  position: relative;
+  width: 100%;
+  padding: 10px 30px 30px 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 99;
+}
+
+.modal-open footer {
+  filter: blur(2px);
+}
+
+footer .random {
+  display: none;
+  cursor: pointer;
+}
+
+.mode-random footer .random {
+  display: block;
+}
+
+footer .level {
+  cursor: pointer;
+}
+
+footer .level i {
+  margin-right: 0.5rem;
+}
+
+.mode-random footer .level {
+  display: none;
+}
+
+footer .time {
+  display: inline-flex;
+  cursor: pointer;
+}
+
+footer .time i {
+  margin-left: 0.5rem;
+}
+
+footer .multiplayer {
+  display: none; /* Hidden by default */
+  cursor: pointer;
+}
+
+.smaller {
+  font-size: smaller;
+  opacity: 0.5;
+}
+
+.x-small {
+  font-size: x-small;
+  opacity: 0.5;
+}
+
+/* Show/Hide footer buttons based on game mode */
+.mode-multiplayer footer .level,
+.mode-multiplayer footer .random {
+  display: none;
+}
+
+.mode-multiplayer footer .multiplayer {
+  display: block; /* Show multiplayer button in MP mode */
+}
+
+.mode-regular footer .multiplayer,
+.mode-random footer .multiplayer {
+  display: none; /* Hide multiplayer button in SP modes */
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+@media only screen and (min-width: 480px) {
+  .container {
+    position: relative;
+    box-shadow: 0 0 16px rgba(0, 0, 0, 0.05);
+    border-radius: 30px;
+    overflow: hidden;
+  }
+}
+
+@media only screen and (max-height: 720px) {
+  .container {
+    transform: scale(0.85);
+  }
+}
+
+.container:before {
+  content: '';
+  position: absolute;
+  height: 70%;
+  width: 100%;
+  top: 30%;
+  left: 0;
+  background: linear-gradient(0deg, var(--color-current), transparent);
+  opacity: 0.1;
+  transition: 0.3s background;
+  z-index: 1;
+}
+
+@media only screen and (max-height: 720px) {
+  .container:before {
+    transform: scale(2);
+  }
+}
+
+.field-wrapper {
+  position: relative;
+  z-index: 2;
+}
+
+.modal-open .field-wrapper {
+  filter: blur(2px);
+}
+
+.field-wrapper>svg {
+  position: absolute;
+  height: 125%;
+  width: 100%;
+  top: -11%;
+  left: 0;
+  z-index: 1;
+}
+
+.field {
+  position: relative;
+  margin: 15px 30px;
+  z-index: 2;
+}
+
+.field.player--1 .dot.player--2:before {
+  background: var(--color-2);
+  transition: 0.3s box-shadow;
+}
+
+.field.player--1 .dot.player--2.stage--1:before {
+  box-shadow: 0 0 0 0.3rem var(--color-2-rgba-1), 0 0 0 0.6rem var(--color-2-rgba-2), 0 0 0 0.9rem var(--color-2-rgba-3), 0 0 0 1.2rem var(--color-2-rgba-4);
+}
+
+.field.player--1 .dot.player--2.stage--2:before {
+  box-shadow: 0 0 0 0.3rem var(--color-2-rgba-2), 0 0 0 0.6rem var(--color-2-rgba-3), 0 0 0 0.9rem var(--color-2-rgba-4);
+}
+
+.field.player--1 .dot.player--2.stage--3:before {
+  box-shadow: 0 0 0 0.3rem var(--color-2-rgba-3), 0 0 0 0.6rem var(--color-2-rgba-4);
+}
+
+.field.player--1 .dot.player--2.stage--4:before {
+  box-shadow: 0 0 0 0.3rem var(--color-2-rgba-4);
+}
+
+.field.player--1 .dot.player--2.stage--5:before {
+  box-shadow: 0 0 0 0 var(--color-2-rgba-5);
+}
+
+.field.player--1 .dot:not(.player--2):before {
+  background: var(--color-1);
+  transition: 0.3s box-shadow;
+}
+
+.field.player--1 .dot:not(.player--2).stage--1:before {
+  box-shadow: 0 0 0 0.3rem var(--color-1-rgba-1), 0 0 0 0.6rem var(--color-1-rgba-2), 0 0 0 0.9rem var(--color-1-rgba-3), 0 0 0 1.2rem var(--color-1-rgba-4);
+}
+
+.field.player--1 .dot:not(.player--2).stage--2:before {
+  box-shadow: 0 0 0 0.3rem var(--color-1-rgba-2), 0 0 0 0.6rem var(--color-1-rgba-3), 0 0 0 0.9rem var(--color-1-rgba-4);
+}
+
+.field.player--1 .dot:not(.player--2).stage--3:before {
+  box-shadow: 0 0 0 0.3rem var(--color-1-rgba-3), 0 0 0 0.6rem var(--color-1-rgba-4);
+}
+
+.field.player--1 .dot:not(.player--2).stage--4:before {
+  box-shadow: 0 0 0 0.3rem var(--color-1-rgba-4);
+}
+
+.field.player--1 .dot:not(.player--2).stage--5:before {
+  box-shadow: 0 0 0 0 var(--color-1-rgba-5);
+}
+
+.field.player--2 .dot.player--1:before {
+  background: var(--color-1);
+  transition: 0.3s box-shadow;
+}
+
+.field.player--2 .dot.player--1.stage--1:before {
+  box-shadow: 0 0 0 0.3rem var(--color-1-rgba-1), 0 0 0 0.6rem var(--color-1-rgba-2), 0 0 0 0.9rem var(--color-1-rgba-3), 0 0 0 1.2rem var(--color-1-rgba-4);
+}
+
+.field.player--2 .dot.player--1.stage--2:before {
+  box-shadow: 0 0 0 0.3rem var(--color-1-rgba-2), 0 0 0 0.6rem var(--color-1-rgba-3), 0 0 0 0.9rem var(--color-1-rgba-4);
+}
+
+.field.player--2 .dot.player--1.stage--3:before {
+  box-shadow: 0 0 0 0.3rem var(--color-1-rgba-3), 0 0 0 0.6rem var(--color-1-rgba-4);
+}
+
+.field.player--2 .dot.player--1.stage--4:before {
+  box-shadow: 0 0 0 0.3rem var(--color-1-rgba-4);
+}
+
+.field.player--2 .dot.player--1.stage--5:before {
+  box-shadow: 0 0 0 0 var(--color-1-rgba-5);
+}
+
+.field.player--2 .dot:not(.player--1):before {
+  background: var(--color-2);
+}
+
+.field.player--2 .dot:not(.player--1).stage--1:before {
+  box-shadow: 0 0 0 0.3rem var(--color-2-rgba-1), 0 0 0 0.6rem var(--color-2-rgba-2), 0 0 0 0.9rem var(--color-2-rgba-3), 0 0 0 1.2rem var(--color-2-rgba-4);
+}
+
+.field.player--2 .dot:not(.player--1).stage--2:before {
+  box-shadow: 0 0 0 0.3rem var(--color-2-rgba-2), 0 0 0 0.6rem var(--color-2-rgba-3), 0 0 0 0.9rem var(--color-2-rgba-4);
+}
+
+.field.player--2 .dot:not(.player--1).stage--3:before {
+  box-shadow: 0 0 0 0.3rem var(--color-2-rgba-3), 0 0 0 0.6rem var(--color-2-rgba-4);
+}
+
+.field.player--2 .dot:not(.player--1).stage--4:before {
+  box-shadow: 0 0 0 0.3rem var(--color-2-rgba-4);
+}
+
+.field.player--2 .dot:not(.player--1).stage--5:before {
+  box-shadow: 0 0 0 0 var(--color-2-rgba-5);
+}
+
+.dot {
+  position: absolute;
+  height: 64px;
+  width: 64px;
+  border-radius: 50%;
+  opacity: 0.4;
+  transition: 0.3s all cubic-bezier(0, 1.4, 1, 1);
+  cursor: pointer;
+}
+
+.dot:before {
+  content: "";
+  position: absolute;
+  height: 5%;
+  width: 5%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: black;
+  border-radius: 50%;
+  box-shadow: 0 0 1rem 0.25rem #e6e6e6;
+  transition: 0.3s all cubic-bezier(0, 1.4, 1, 1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dot:not([class*="stage--"]):hover:before {
+    height: 15%;
+    width: 15%;
+  }
+}
+
+.dot[class*="stage--"] {
+  opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dot[class*="stage--"] {
+    margin-top: 0;
+    margin-left: 0;
+  }
+
+  .dot[class*="stage--"]:hover {
+    height: 96px;
+    width: 96px;
+    margin-top: -16px;
+    margin-left: -16px;
+    z-index: 2;
+  }
+
+  .dot[class*="stage--"]:hover:before {
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+
+  .dot[class*="stage--"]:hover .hitarea {
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+}
+
+.dot.stage--1:before {
+  height: 16%;
+  width: 16%;
+  box-shadow: 0 0 0 0.3rem #999999, 0 0 0 0.6rem #b3b3b3, 0 0 0 0.9rem #cccccc, 0 0 0 1.2rem #e6e6e6;
+}
+
+.dot.stage--2:before {
+  height: 32%;
+  width: 32%;
+  box-shadow: 0 0 0 0.3rem #b3b3b3, 0 0 0 0.6rem #cccccc, 0 0 0 0.9rem #e6e6e6;
+}
+
+.dot.stage--3:before {
+  height: 48%;
+  width: 48%;
+  box-shadow: 0 0 0 0.3rem #cccccc, 0 0 0 0.6rem #e6e6e6;
+}
+
+.dot.stage--4:before {
+  height: 64%;
+  width: 64%;
+  box-shadow: 0 0 0 0.3rem #e6e6e6;
+}
+
+.dot.stage--5:before {
+  height: 80%;
+  width: 80%;
+  box-shadow: 0 0 0 0 black;
+}
+
+.dot .hitarea {
+  position: absolute;
+  height: 101%;
+  width: 101%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* Add styles for the increment animation */
+.increment-animation {
+  position: absolute; /* Position relative to the .field */
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: white; /* Default color */
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
+  pointer-events: none; /* Don't interfere with clicks */
+  z-index: 10; /* Above dots */
+  opacity: 1;
+  white-space: nowrap; /* Prevent wrapping if we use +N later */
+}
+
+.level-goals i {
+  margin-left: 4px;
+  margin-right: 4px;
+  background: darkslategrey;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  opacity: 0.1;
+  font-size: 22px;
+}
+
+.level-goals i.active {
+  background: -webkit-linear-gradient(#FFD850 0%, #FFC839 25%, #FFB950 35.94%, #FFDD63 71.88%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  opacity: 1;
+}
+
+.ripple {
+  background-color: rgba(200, 200, 200, 0.5);
+  border-radius: 100%;
+  height: 100px;
+  position: absolute;
+  transform: scale(0);
+  width: 100px;
+}
+
+.ripple-animate {
+  -webkit-animation: ripple 0.4s linear;
+  animation: ripple 0.4s linear;
+}
+
+@keyframes ripple {
+  100% {
+    transform: scale(1.5);
+    background-color: transparent;
+  }
+}
+
+.modal {
+  position: absolute;
+  height: 100%;
+  width: 100%;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end; /* Revert to original */
+  overflow: hidden;
+  pointer-events: none; 
+  z-index: 100;
+}
+
+.modal-open .modal.active .backdrop {
+  /* Don't apply opacity for tutorial modal backdrop */
+  /* opacity: 1; */
+  pointer-events: auto; /* Keep for OTHER modals */
+}
+
+.modal-open .modal.active .wrapper {
+  /* Default transform */
+  /* transform: translateY(0%); - Handled specifically for tutorial modal */
+  transform: translateY(0%); /* Revert to original */
+}
+
+.modal .backdrop {
+  position: absolute;
+  height: 100%;
+  width: 100%;
+  top: 0;
+  left: 0;
+  background: rgba(255, 255, 255, 0.5);
+  opacity: 0;
+  transition: 0.3s opacity;
+}
+
+/*@media (prefers-color-scheme: dark) {
+  .modal .backdrop {
+    background: rgba(47, 79, 79, 0.5);
+    color: white;
+  }
+}*/
+
+.dark-mode .modal .backdrop {
+  background: rgba(47, 79, 79, 0.5);
+  color: white;
+}
+
+.modal .modal-close {
+  position: absolute;
+  right: 1rem;
+  padding: 0.5rem;
+  display: table;
+  cursor: pointer;
+}
+
+/* << NEW Tutorial Modal CSS >> */
+.welcome-tutorial-modal p {
+  text-align: center;
+}
+.tutorial-step-modal .backdrop {
+  display: none; /* Hide backdrop specifically */
+}
+
+/* Prevent blur when tutorial modal is active */
+body.modal-open.no-backdrop header,
+body.modal-open.no-backdrop footer, /* Also prevent footer blur */
+body.modal-open.no-backdrop .field-wrapper {
+  filter: none;
+}
+
+body.no-backdrop header {
+  pointer-events: none;
+}
+
+/* Position tutorial wrapper at the bottom */
+.tutorial-step-modal .wrapper {
+    position: absolute;
+    bottom: 5px;
+    left: 0;
+    max-height: 40vh; /* Limit height */
+    width: 95%; /* Adjust width */
+    /* Ensure visibility when active */
+    opacity: 1;
+    transition: opacity 0.3s; /* Optional fade */
+}
+
+/* Hide when not active */
+.tutorial-step-modal:not(.active) .wrapper {
+    opacity: 0;
+    pointer-events: none; /* Prevent interaction when hidden */
+}
+.tutorial-step-modal p {
+  text-align: center;
+}
+#tutorial-step-title {
+  margin-top: 0;
+}
+#tutorial-step-instruction, #tutorial-step-objective {
+  font-size: 16px;
+}
+#tutorial-step-objective {
+  margin-bottom: 2rem;
+}
+/* << END NEW Tutorial Modal CSS >> */
+
+/* Style for Quit Tutorial Button */
+.btn-quit-tutorial {
+    position: absolute;
+    bottom: 10px;
+    right: 15px;
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    background-color: #f8f9fa;
+    color: #555;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    pointer-events: auto; /* Ensure button is clickable */
+    z-index: 101; /* Above modal wrapper content */
+}
+.btn-quit-tutorial:hover {
+    background-color: #e9ecef;
+}
+/* End Style for Quit Tutorial Button */
+
+#btn-start-level-1 {
+  display: none;
+}
+/* Show only on step 5 */
+.tutorial-step-modal.step-5 #btn-start-level-1 {
+    display: block !important;
+}
+
+/* Hide quit button on step 5 */
+.tutorial-step-modal.step-5 #btn-quit-tutorial {
+    display: none;
+}
+/* << END Style for Start Level 1 Button >> */
+
+.modal .wrapper {
+  position: relative;
+  min-height: 100px;
+  width: 96%;
+  max-width: 380px;
+  margin: 2%;
+  padding: 20px;
+  background: white;
+  border-radius: 0.75rem;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.15);
+  overflow-y: auto;
+  transform: translateY(200%);
+  transition: 0.3s transform;
+  pointer-events: all;
+}
+
+/*@media (prefers-color-scheme: dark) {
+  .modal .wrapper {
+    background: darkslategrey;
+    color: white;
+  }
+}*/
+
+.dark-mode .modal .wrapper {
+  background: darkslategrey;
+  color: white;
+}
+
+.modal .wrapper .row {
+  align-items: center;
+  justify-content: stretch;
+}
+
+.modal .wrapper .col {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal .wrapper h2 {
+  text-align: center;
+}
+
+.modal .wrapper .card h1,
+.modal .wrapper .card p {
+  margin: 0;
+}
+
+.modal .wrapper .list li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  overflow: hidden;
+  text-transform: uppercase;
+}
+
+.modal .wrapper .list li .level-number {
+  position: absolute;
+  height: 100%;
+  width: 60px;
+  top: 0;
+  left: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fcfcfc;
+  text-align: center;
+}
+
+/*@media (prefers-color-scheme: dark) {
+  .modal .wrapper .list li .level-number {
+    background: darkslategrey;
+    color: white;
+  }
+}*/
+
+.dark-mode .modal .wrapper .list li .level-number {
+  background: darkslategrey;
+  color: white;
+}
+
+.modal .wrapper .list li .level-time {
+  margin-left: 80px;
+}
+
+.modal.time-modal .best-time h1,
+.modal.time-modal .best-time p {
+  margin: 0;
+}
+
+div[data-modal] {
+  cursor: pointer;
+}
+
+.connecting-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.9);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+}
+
+.dark-mode .connecting-overlay {
+    background: rgba(47, 79, 79, 0.9);
+}
+
+.connecting-card {
+    background: white;
+    padding: 2rem;
+    border-radius: 1rem;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+}
+
+.dark-mode .connecting-card {
+    background: darkslategrey;
+    color: white;
+}
+
+.connecting-spinner {
+    width: 40px;
+    height: 40px;
+    margin: 20px auto;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid var(--color-2);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.cancel-connection-btn {
+    margin-top: 1rem;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 0.5rem;
+    background: var(--color-2);
+    color: white;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.cancel-connection-btn:hover {
+    opacity: 0.8;
+}
+
+.retry-connection-btn {
+    margin-top: 1rem;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 0.5rem;
+    background: var(--color-1);
+    color: white;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    display: none;
+}
+
+.retry-connection-btn:hover {
+    opacity: 0.8;
+}
+
+.bot-difficulty {
+  margin: 2rem 0;
+  text-align: center;
+  display: none;
+}
+
+.mode-random .bot-difficulty {
+  display: block;
+}
+
+.bot-difficulty h3 {
+  margin-bottom: 1rem;
+  font-size: 1.2rem;
+  font-weight: 400;
+}
+
+.bot-difficulty .row {
+  justify-content: center;
+}
+
+.bot-difficulty .card {
+  min-width: 120px;
+  text-align: center;
+  opacity: 0.7;
+  transition: all 0.3s ease;
+}
+
+.bot-difficulty .card.selected {
+  opacity: 1;
+  transform: scale(1.05);
+  box-shadow: 0 0 20px rgba(var(--color-2-rgb), 0.2);
+}
+
+.bot-difficulty .card h1 {
+  margin: 0.5rem 0;
+  font-size: 1.5rem;
+}
+
+.bot-difficulty .card p {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* Add styles for player scores */
+.player-score {
+  font-size: 1.4rem;
+  font-weight: bold;
+  min-width: 30px; /* Ensure space for score */
+  text-align: center;
+  margin: 0 5px; /* Spacing around the score */
+}
+
+#player-1-score { color: var(--color-1); }
+#player-2-score { color: var(--color-2); }
+
+/* Style for the turn indicator */
+.turn-indicator {
+    padding: 5px 10px;
+    margin-top: 5px; /* Add some space below the player icons */
+    border-radius: 5px;
+    font-weight: bold;
+    text-align: center; /* Center the text */
+}
+
+.turn-indicator.your-turn {
+    background-color: var(--color-current); /* Use the current player's color */
+    color: white;
+}
+
+.turn-indicator.opponent-turn {
+    background-color: #f0f0f0; /* Light grey for opponent's turn */
+    color: #555;
+}
+
+.dark-mode .turn-indicator.opponent-turn {
+    background-color: #555;
+    color: #ccc;
+}
+
+/* Styles for Main Menu Modal Buttons */
+.main-menu-modal .btn-main-menu {
+  text-align: center;
+}
+.main-menu-modal .btn-main-menu p {
+  margin: 0.5rem 0; /* Add some vertical spacing */
+}
+/* End Styles for Main Menu Modal Buttons */
+
+/* Styles for Multiplayer Start Options (mimicking Bot Difficulty) */
+.multiplayer-start-options {
+  margin: 2rem 0;
+  text-align: center;
+  /* display: none; is handled inline or by JS */
+}
+
+.multiplayer-start-options h3 {
+  margin-bottom: 1rem;
+  font-size: 1.2rem;
+  font-weight: 400;
+}
+
+.multiplayer-start-options .row {
+  justify-content: center;
+}
+
+.multiplayer-start-options .card.start-type-option { /* Be specific */
+  min-width: 120px; /* Match bot difficulty */
+  text-align: center;
+  opacity: 0.7;
+  transition: all 0.3s ease;
+}
+
+/* No .selected state needed as modal closes immediately, but hover can be nice */
+@media (hover: hover) and (pointer: fine) {
+  .multiplayer-start-options .card.start-type-option:hover {
+    opacity: 1;
+    transform: scale(1.05);
+    box-shadow: 0 0 20px rgba(var(--color-current-rgb, var(--color-2-rgb)), 0.2); /* Use current color if available */
+  }
+}
+
+.multiplayer-start-options .card.start-type-option h1 {
+  font-size: 1.5rem; /* Match bot difficulty */
+}
+
+.multiplayer-start-options .card.start-type-option p {
+  margin: 0;
+  font-size: 1rem; /* Match bot difficulty */
+}
+/* End Styles for Multiplayer Start Options */
