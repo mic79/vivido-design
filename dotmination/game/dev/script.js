@@ -2092,7 +2092,18 @@ function setupPeer(slotNumber) {
   // Generate ID based on the chosen start type
   sessionID = `dot-peer-${multiplayerStartType}-${slotNumber}`; 
   cleanup(); // Cleanup before creating new peer
-  peer = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true });
+  peer = new Peer(sessionID, {
+    host: "0.peerjs.com",
+    port: 443,
+    secure: true,
+    config: {
+      'iceServers': [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
+        { urls: 'turn:turn.bistri.com:80', username: 'homeo', credential: 'homeo' } // Corrected TURN config
+      ]
+    }
+  });
 
   peer.on("open", function() {
     if (hasConnected) return;
@@ -2133,7 +2144,18 @@ function setupHost(slotNumber) {
   // Generate ID based on the chosen start type
   sessionID = `dot-host-${multiplayerStartType}-${slotNumber}`; 
   cleanup(); // Cleanup before creating new peer
-  peer = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true });
+  peer = new Peer(sessionID, {
+    host: "0.peerjs.com",
+    port: 443,
+    secure: true,
+    config: {
+      'iceServers': [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
+        { urls: 'turn:turn.bistri.com:80', username: 'homeo', credential: 'homeo' } // Corrected TURN config
+      ]
+    }
+  });
 
   peer.on("open", function() {
     if (hasConnected) return;
