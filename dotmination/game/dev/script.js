@@ -1,7 +1,8 @@
-// v1.0.5
+// v1.0.6
 // Singleplayer modes are stable.
 // Multiplayer mode is working, peerJS setup with TURN server.
 // Partially divided into modules.
+// Added experimental RTS mode.
 
 // Import Tutorial Module
 import * as tutorial from './modules/tutorial.js';
