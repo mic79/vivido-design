@@ -9,8 +9,6 @@ import * as tutorial from './modules/tutorial.js';
 import { isEven, hexToRgb, showTimer, resetTimer, startTimer, stopTimer, getStageNumber } from './modules/utils.js';
 // Import Bot Logic
 import { getBotMove } from './modules/botLogic.js';
-// Import Real-Time Resource Mode Module
-import * as rtrMode from './modules/realTimeResourceMode.js';
 
 // Assume other modules will be imported later if needed
 // import * as state from './modules/state.js';
@@ -259,15 +257,6 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
   }
   // <<< END TUTORIAL CHECK >>>
 
-  if (gameMode === 'realTimeResource') {
-    // For RTR mode, the human player is always playerArray[1] ("player--2")
-    // The bot (playerArray[0]) actions are triggered by rtrMode's internal timer.
-    // Ensure current player is set correctly if it affects any shared UI updates, though rtrMode handles most.
-    // currentPlayer = playerArray[1]; // This might be better set at the start of RTR game.
-    rtrMode.handleRealTimeDotClick(clickedDot, playerArray[1]); 
-    return; // RTR mode handles its own logic post-click
-  }
-
   // Multiplayer turn check
   if (isMultiplayer) {
     const isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
@@ -314,7 +303,7 @@ function nextPlayer() {
       delayedCall.kill();
     }
     // Only schedule bot action if not in multiplayer and not in tutorial steps 1-4
-    if (!isMultiplayer && !(tutorial.isTutorialActive() && window.tutorialStep < 5) && gameMode !== 'realTimeResource') { 
+    if (!isMultiplayer && !(tutorial.isTutorialActive() && window.tutorialStep < 5)) { 
       console.log("Scheduling bot action. Difficulty:", botDifficulty);
       
       // Prepare gameState for the bot
@@ -352,10 +341,6 @@ function nextPlayer() {
       mapString: generateMapString(), // Current board state
       fieldClasses: $('.field').attr('class') // Reflects new current player
     });
-  } else if (gameMode === 'realTimeResource') {
-    // In RTR mode, there are no "turns" like this.
-    // Bot actions are handled by rtrMode.runBotLogic interval.
-    // Player actions are direct.
   }
 }
 //nextPlayer();
@@ -401,11 +386,7 @@ function incrementDotStage(trgt, player = currentPlayer) {
           .addClass("stage--" + (i + 1) + " " + effectivePlayer);
         showIncrementAnimation(trgt, 1, effectivePlayer); // <<< Pass effectivePlayer to animation
         updatePlayerScoresUI(); // <<< Update score here
-        if (gameMode === 'realTimeResource') {
-          animateNextDot(effectivePlayer); // Always pass effectivePlayer in RTR mode
-        } else {
-          animateNextDot(); // Use default for other modes
-        }
+        animateNextDot();
         return;
       } else if (currStage && i == stage_amount) {
         trgt.removeClass("stage--" + i).removeClass(playerClassClear);
@@ -433,31 +414,18 @@ function incrementDotStage(trgt, player = currentPlayer) {
       }
     }
   }
-  if (gameMode === 'realTimeResource') {
-    animateNextDot(effectivePlayer, justCompletedStep2); // Always pass effectivePlayer in RTR mode
-  } else {
-    animateNextDot(undefined, justCompletedStep2); // Use default for other modes
-  }
+  animateNextDot(effectivePlayer, justCompletedStep2); // Pass the flag
 }
 
-function animateNextDot(player = currentPlayer, justCompletedStep2) {
+function animateNextDot(player = currentPlayer) {
   const effectivePlayer = player;
 
   if ($(".dot.increment").length > 0) {
     var next = $(".dot.increment").eq(0);
-    // For RTS mode, resolve chain instantly (no delay). For other modes, keep original delay.
-    if (gameMode === 'realTimeResource') {
-      gsap.delayedCall(0, incrementDotStage, [next, effectivePlayer]); 
-    } else {
-      gsap.delayedCall(0.1, incrementDotStage, [next]); 
-    }
+    // <<< FIX: Pass only necessary args to incrementDotStage (remove justCompletedStep2) >>>
+    gsap.delayedCall(0.1, incrementDotStage, [next, effectivePlayer]); 
   } else {
     $(".field").removeClass("animating");
-
-    // --- RTS MODE: Clear chain lock when chain is finished ---
-    if (gameMode === 'realTimeResource' && typeof rtrMode.clearActiveChainPlayerLock === 'function') {
-      rtrMode.clearActiveChainPlayerLock();
-    }
 
     // <<< FIX: Call tutorial module completion check >>>
     if (tutorial.isTutorialActive()) {
@@ -483,7 +451,6 @@ function animateNextDot(player = currentPlayer, justCompletedStep2) {
     const shouldCheckState = !isMultiplayer || isHost || !processingOpponentMove;
 
     if (shouldCheckState) {
-       // In RTR mode, checkDotmination might still be relevant after an explosion sequence completes.
        checkDotmination();
     }
 
@@ -516,11 +483,8 @@ function showIncrementAnimation(targetDot, incrementValue = 1, player = currentP
     })
     .appendTo($field);
 
-  // Set animation duration: 0 for RTS mode, 0.8 for others
-  const animationDuration = (gameMode === 'realTimeResource') ? 0 : 0.8;
-
   gsap.to($animationElement, {
-    duration: animationDuration,
+    duration: 0.8,
     y: '-=40',
     opacity: 0,
     ease: 'power1.out',
@@ -543,35 +507,12 @@ function checkDotmination() {
     return; 
   }
 
-  // For RTR mode, game over might be slightly different (e.g., one player has 0 dots, or a resource-based timeout)
-  // For now, we'll use the existing logic but ensure nextPlayer() isn't called if it's an RTR game over.
-  const isGameOverRTR = gameMode === 'realTimeResource' && ($('.dot.player--1').length === 0 || $('.dot.player--2').length === 0);
-  const isGameOverClassic = !(moveAmount < 2 || ($('.dot.player--1').length > 0 && $('.dot.player--2').length > 0));
-  const isGameOver = (gameMode === 'realTimeResource') ? isGameOverRTR : isGameOverClassic;
-
+  const isGameOver = !(moveAmount < 2 || ($(".dot.player--1").length > 0 && $(".dot.player--2").length > 0));
 
   if (!isMultiplayer) {
     if (!isGameOver) {
-      if (gameMode !== 'realTimeResource') {
-        nextPlayer();
-      }
+      nextPlayer();
     } else {
-      if (gameMode === 'realTimeResource') {
-        rtrMode.stopRealTimeResourceGame(); // Stop RTR intervals
-        stopTimer();
-        sound.play();
-        // Determine winner
-        let winner = null;
-        if ($('.dot.player--1').length > 0 && $('.dot.player--2').length === 0) {
-          winner = 'player--1';
-        } else if ($('.dot.player--2').length > 0 && $('.dot.player--1').length === 0) {
-          winner = 'player--2';
-        }
-        if (winner) {
-          rtrMode.showGameOverOverlay(winner);
-        }
-        return;
-      }
       stopTimer(); 
       sound.play();
       
@@ -867,43 +808,25 @@ function updatePlayerIcons() {
 function startAnim() {
   moveAmount = 0;
   randomNumber = Math.floor(Math.random() * playerArray.length);
-  // currentPlayer = "player--2"; // Original line, might need adjustment based on mode
+  currentPlayer = "player--2";
 
   // Explicitly set botDifficulty for regular mode
   if (gameMode === 'regular') {
     botDifficulty = 'random';
     console.log("startAnim: Regular mode detected. Bot difficulty set to 'random'.");
-    currentPlayer = "player--2"; // User starts in regular mode
-  } else if (gameMode === 'random') {
-    currentPlayer = "player--2"; // User starts in random mode
-  } else if (gameMode === 'multiplayer') {
-    // currentPlayer is determined by host/peer logic and game state sync
-    // For a fresh multiplayer game start (before connection), P1 might be default.
-    // This will be overwritten by game state from host anyway.
-    currentPlayer = "player--1"; 
-  } else if (gameMode === 'realTimeResource') {
-    currentPlayer = playerArray[1]; // Human player in RTR is Player 2
-    // Bot (Player 1) is handled by rtrMode
   }
 
   updatePlayerIcons(); // Call the new function here
   
   $('.level-value').html(level);
-  // Stop any existing RTR game before starting a new animation/mode
-  if (gameMode !== 'realTimeResource') { // If changing FROM RTR or it was never RTR
-      rtrMode.stopRealTimeResourceGame(); 
-  }
-
   setDots();
   $(".end").remove();
   $(".dot").removeClass(playerClassClear);
-  
-  var populate = null;
-  if (gameMode == 'regular') {
-    populate = fieldPopulateByLevel;
-  } else if (gameMode == 'random') {
-    populate = fieldPopulateRandom;
-  } // For realTimeResource, leave as null
+  if(gameMode == 'regular') {
+    var populate = fieldPopulateByLevel;
+  } else {
+    var populate = fieldPopulateRandom;
+  }
   
   TweenMax.staggerTo(
     $(".dot"),
@@ -917,14 +840,8 @@ function startAnim() {
     0.01,
     function() {
       // Final score update after animation completes
-      if (gameMode !== 'realTimeResource') {
-        updatePlayerScoresUI(); 
-      }
-      if (gameMode === 'realTimeResource') {
-        rtrMode.startRealTimeResourceGame(); // RTR mode handles its own population and resource display
-      } else if (typeof populate === 'function') {
-        populate(); // Only call if function
-      }
+      updatePlayerScoresUI(); 
+      populate(); // Call populate after animation completes
     }
   );
 }
@@ -1020,9 +937,8 @@ function fieldPopulateRandom() {
     var newUrl = window.location.pathname + '?mode=random&map=' + mapString + '&difficulty=' + botDifficulty;
     window.history.replaceState({}, document.title, newUrl);
   }
-  if (gameMode !== 'realTimeResource') { // nextPlayer not used in RTR
-    gsap.delayedCall(1,nextPlayer);
-  }
+
+  gsap.delayedCall(1,nextPlayer);
   // <<< FIX: Use imported timer functions >>>
   showTimer();
   resetTimer();
@@ -1082,9 +998,7 @@ function fieldPopulateByLevel() {
   });
   dots = $(".dot");
 
-  if (gameMode !== 'realTimeResource') { // nextPlayer not used in RTR
-    gsap.delayedCall(1,nextPlayer);
-  }
+  gsap.delayedCall(1,nextPlayer);
   // <<< FIX: Use imported timer functions >>>
   showTimer();
   resetTimer();
@@ -2899,7 +2813,6 @@ function calculatePlayerScore(playerClass) { // e.g., "player--1"
 
 // Function to update the scores in the UI (ensure this calls the corrected calculatePlayerScore)
 function updatePlayerScoresUI() {
-  if (gameMode === 'realTimeResource') return;
   const score1 = calculatePlayerScore("player--1");
   const score2 = calculatePlayerScore("player--2");
   $('#player-1-score').text(score1);
@@ -2996,7 +2909,7 @@ $('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficu
 
 // --- REFACTORED MODE MODAL HANDLERS --- 
 
-// Handler specifically for Mode Selection Buttons (Regular, Random, Multiplayer, RealTimeResource)
+// Handler specifically for Mode Selection Buttons (Regular, Random, Multiplayer)
 $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
   // If we're currently in multiplayer mode, notify the other player before cleaning up
   if (isMultiplayer && conn && $(this).data('mode') !== 'multiplayer') {
@@ -3008,15 +2921,8 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
     }, 100);
   }
   
-  const newMode = $(this).data('mode');
-  console.log("Mode button clicked (div[data-mode]):", newMode);
-
-  // Stop RTR mode if switching away from it
-  if (gameMode === 'realTimeResource' && newMode !== 'realTimeResource') {
-    rtrMode.stopRealTimeResourceGame();
-  }
-
-  gameMode = newMode;
+  gameMode = $(this).data('mode');
+  console.log("Mode button clicked (div[data-mode]):", gameMode);
 
   // General cleanup: hide all specific sections first
   $('.list--mode-regular, .bot-difficulty, .multiplayer-start-options, .game-id-display, .game-id-input').hide();
@@ -3029,55 +2935,52 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
 
   if (gameMode === 'multiplayer') {
     e.preventDefault();
-    e.stopPropagation(); 
+    e.stopPropagation(); // Keep stopPropagation for this specific case maybe?
     isMultiplayer = true;
-    isHost = true; 
+    isHost = true; // Assume host role immediately
     
+    // Update URL
     var newUrl = window.location.pathname + '?mode=multiplayer';
     window.history.replaceState({}, document.title, newUrl);
     
+    // Show start type options
     $('.multiplayer-start-options').show();
     
+    // Update selection in the modal
     $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
     $(this).addClass('selected');
     
+    // Set body class & keep modal open
     $('body')
-      .removeClass('mode-random mode-regular mode-realTimeResource modal-open') // Added mode-realTimeResource
+      .removeClass('mode-random mode-regular modal-open')
       .addClass('mode-multiplayer modal-open'); 
     
     return false;
   } else if (gameMode === 'regular') {
     $('.list--mode-regular').show();
+    $('.bot-difficulty, .multiplayer-start-options').hide();
+    // Correct body class management for selecting 'Regular' mode type
     $('body')
-      .removeClass('mode-random mode-multiplayer mode-realTimeResource modal-open') // Added mode-realTimeResource
-      .addClass('mode-regular modal-open'); 
+      .removeClass('mode-random mode-multiplayer') 
+      .addClass('mode-regular modal-open'); // Keep modal open to select a level
     $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
     $(this).addClass('selected');
-    updateLevelList(); 
-    return; 
+    updateLevelList(); // Ensure level list is populated/updated
+    return; // Keep modal open
   } else if (gameMode === 'random') {
     $('.bot-difficulty').show();
-    botDifficulty = 'random'; 
+    $('.list--mode-regular, .multiplayer-start-options').hide(); 
+    botDifficulty = 'random'; // Default to normal bot when random mode is selected
     $('.difficulty-option').removeClass('selected');
     $('.difficulty-option[data-difficulty="random"]').addClass('selected');
     $('body')
-      .removeClass('mode-regular mode-multiplayer mode-realTimeResource modal-open') // Added mode-realTimeResource
-      .addClass('mode-random modal-open'); 
+      .removeClass('mode-regular mode-multiplayer')
+      .addClass('mode-random modal-open'); // Keep modal open to select difficulty
     $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
     $(this).addClass('selected');
-  } else if (gameMode === 'realTimeResource') {
-    // No specific sub-options for RTR mode in the modal currently
-    // Close modal and start game
-    $('body')
-      .removeClass('mode-regular mode-random mode-multiplayer modal-open')
-      .addClass('mode-realTimeResource'); 
-    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
-    $(this).addClass('selected');
-    $('.mode-modal').removeClass('active'); // Close modal
-    $('body').removeClass('modal-open');   // Remove modal-open class
-    startAnim(); // This will trigger rtrMode.startRealTimeResourceGame()
-    return; 
   }
+  // No explicit return here for random, allow modal to stay open
+  // If other modes are added, they might need their own return or fall-through logic
 });
 
 // Handler specifically for Level Selection Buttons
@@ -3209,7 +3112,6 @@ try {
         updatePlayerIndicatorsFunc: updatePlayerIndicators,
         getStageNumberFunc: getStageNumber, 
         incrementDotStageFunc: incrementDotStage, 
-        animateNextDotFunc: animateNextDot, // Added this reference
         dotsRef: dots, 
         currentPlayerRef: { get value() { return currentPlayer; }, set value(v) { currentPlayer = v; } },
         playerArrayRef: playerArray, 
@@ -3219,25 +3121,6 @@ try {
         botDifficultyRef: { get value() { return botDifficulty; }, set value(v) { botDifficulty = v; } },
         cleanupFunc: cleanup,
         resetMultiplayerStateFunc: resetMultiplayerState
-    });
-
-    // Initialize Real-Time Resource Mode Module
-    rtrMode.initialize({
-        incrementDotStageFunc: incrementDotStage,
-        updatePlayerScoresUIFunc: updatePlayerScoresUI, // The rtrMode will use this to update resource display
-        getStageNumberFunc: getStageNumber,
-        dotsRef: dots, // Pass a function to get current dots, as it can change
-        playerArrayRef: playerArray,
-        // botGetMove: getBotMove, // For future adaptation of the smart bot
-        isEvenFunc: isEven,
-        checkDotminationFunc: checkDotmination,
-        showTimerFunc: showTimer,
-        resetTimerFunc: resetTimer,
-        startTimerFunc: startTimer,
-        stopTimerFunc: stopTimer,
-        animateNextDotFunc: animateNextDot,
-        setDotsFunc: setDots,
-        buildMapFromStringFunc: buildMapFromString
     });
 
     // Ensure a game state is loaded BEFORE checking for the tutorial, 
