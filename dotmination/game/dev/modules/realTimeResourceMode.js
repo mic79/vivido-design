@@ -1,11 +1,11 @@
 // Dotmination - Real-Time Resource Mode Module
 
 // --- Configuration ---
-const INITIAL_RESOURCES = 10;
+const INITIAL_RESOURCES = 25;
 const RESOURCE_GAIN_INTERVAL = 2000; // ms (2 seconds)
 const RESOURCE_GAIN_AMOUNT = 1;
-const ACTION_COOLDOWN_DURATION = 1000; // ms (1 second)
-const BOT_THINK_INTERVAL = 750; // ms, how often the bot considers a move
+const ACTION_COOLDOWN_DURATION = 100; // ms (0.1 second)
+const BOT_THINK_INTERVAL = 200; // ms, how often the bot considers a move
 
 // --- State Variables ---
 let player1Resources = 0;
@@ -970,9 +970,9 @@ export function clearActiveChainPlayerLock() {
 }
 
 // Add CSS for .bot-path highlight (for dev/debug)
-$('<style>.bot-path{box-shadow:0 0 0 4px #00F,0 0 12px #00F3;z-index:10 !important;}</style>').appendTo('head');
+// $('<style>.bot-path{box-shadow:0 0 0 4px #00F,0 0 12px #00F3;z-index:10 !important;}</style>').appendTo('head');
 // Add CSS for .bot-path-defend highlight (green ring)
-$('<style>.bot-path-defend{box-shadow:0 0 0 4px #0F0,0 0 12px #0F03;z-index:10 !important;}</style>').appendTo('head');
+// $('<style>.bot-path-defend{box-shadow:0 0 0 4px #0F0,0 0 12px #0F03;z-index:10 !important;}</style>').appendTo('head');
 // Add CSS for chain overtake highlights (stronger for best plan)
-$('<style>.bot-path-chain-buffer{box-shadow:0 0 0 4px orange,0 0 12px orange;z-index:10 !important;}.bot-path-chain-bomb{box-shadow:0 0 0 4px purple,0 0 12px purple;z-index:10 !important;}.bot-path-chain-best-buffer{box-shadow:0 0 0 6px #ff9800,0 0 16px #ff9800;z-index:11 !important;}.bot-path-chain-best-bomb{box-shadow:0 0 0 6px #b400ff,0 0 16px #b400ff;z-index:11 !important;}</style>').appendTo('head'); 
-$('<style>.bot-path-chain-buffer{box-shadow:0 0 0 4px orange,0 0 12px orange;z-index:10 !important;}.bot-path-chain-bomb{box-shadow:0 0 0 4px purple,0 0 12px purple;z-index:10 !important;}.bot-path-chain-best-buffer{box-shadow:0 0 0 6px #ff9800,0 0 16px #ff9800;z-index:11 !important;}.bot-path-chain-best-bomb{box-shadow:0 0 0 6px #b400ff,0 0 16px #b400ff;z-index:11 !important;}</style>').appendTo('head'); 
+// $('<style>.bot-path-chain-buffer{box-shadow:0 0 0 4px orange,0 0 12px orange;z-index:10 !important;}.bot-path-chain-bomb{box-shadow:0 0 0 4px purple,0 0 12px purple;z-index:10 !important;}.bot-path-chain-best-buffer{box-shadow:0 0 0 6px #ff9800,0 0 16px #ff9800;z-index:11 !important;}.bot-path-chain-best-bomb{box-shadow:0 0 0 6px #b400ff,0 0 16px #b400ff;z-index:11 !important;}</style>').appendTo('head'); 
+// $('<style>.bot-path-chain-buffer{box-shadow:0 0 0 4px orange,0 0 12px orange;z-index:10 !important;}.bot-path-chain-bomb{box-shadow:0 0 0 4px purple,0 0 12px purple;z-index:10 !important;}.bot-path-chain-best-buffer{box-shadow:0 0 0 6px #ff9800,0 0 16px #ff9800;z-index:11 !important;}.bot-path-chain-best-bomb{box-shadow:0 0 0 6px #b400ff,0 0 16px #b400ff;z-index:11 !important;}</style>').appendTo('head'); 

@@ -1343,3 +1343,17 @@ div[data-modal] {
   font-size: 1rem; /* Match bot difficulty */
 }
 /* End Styles for Multiplayer Start Options */
+
+footer .rts {
+  display: none;
+  cursor: pointer;
+}
+
+.mode-realTimeResource footer .rts {
+  display: block;
+}
+
+.mode-realTimeResource footer .random,
+.mode-realTimeResource footer .level {
+  display: none;
+}

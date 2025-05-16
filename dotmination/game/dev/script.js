@@ -1,4 +1,4 @@
-// v1.0.6
+// v1.0.7
 // Singleplayer modes are stable.
 // Multiplayer mode is working, peerJS setup with TURN server.
 // Partially divided into modules.
@@ -1325,9 +1325,9 @@ function updateBestTime() {
 
 // Mode Modal
 // Include .multiplayer footer button in this selector
-$('.level, .random, .multiplayer, .mode-modal .backdrop').on('click', function(e) { 
+$('.level, .random, .multiplayer, .rts, .mode-modal .backdrop').on('click', function(e) { 
   // Prevent propagation if it's one of the footer buttons to avoid immediate closing
-  if ($(this).hasClass('level') || $(this).hasClass('random') || $(this).hasClass('multiplayer')) {
+  if ($(this).hasClass('level') || $(this).hasClass('random') || $(this).hasClass('multiplayer') || $(this).hasClass('rts')) {
     e.stopPropagation(); 
   }
   $('body').toggleClass('modal-open');
@@ -1568,6 +1568,15 @@ function signinAnim() {
         gameMode = 'multiplayer'; 
         checkUrlParameters(); // This will call startAnim() internally for MP and open modal
         console.log("Intro onComplete: mode=multiplayer. Called checkUrlParameters.");
+      } else if (mode === 'realTimeResource') {
+        gameMode = 'realTimeResource';
+        $('body')
+          .removeClass('mode-regular mode-multiplayer mode-random')
+          .addClass('mode-realTimeResource');
+        $('.mode-modal .card').removeClass('selected');
+        $('.mode-modal .card[data-mode="realTimeResource"]').addClass('selected');
+        startAnim();
+        console.log("Intro onComplete: mode=realTimeResource from URL. Started RTS mode.");
       } else if (mode === 'regular') { // Explicit regular mode from URL
         gameMode = 'regular'; 
         checkUrlParameters(); // Sets up level if present
@@ -1657,6 +1666,14 @@ $(document).ready(function() {
     resetTimer();
     startTimer();
     updatePlayerScoresUI(); 
+  } else if (mode === 'realTimeResource') {
+    gameMode = 'realTimeResource';
+    $('body')
+      .removeClass('mode-regular mode-multiplayer mode-random')
+      .addClass('mode-realTimeResource');
+    $('.mode-modal .card').removeClass('selected');
+    $('.mode-modal .card[data-mode="realTimeResource"]').addClass('selected');
+    startAnim();
   } else {
     // Tutorial.checkStartTutorial() handles other startup scenarios including calling startAnim if needed
   }
@@ -3076,6 +3093,8 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
     $(this).addClass('selected');
     $('.mode-modal').removeClass('active'); // Close modal
     $('body').removeClass('modal-open');   // Remove modal-open class
+    var newUrl = window.location.pathname + '?mode=realTimeResource';
+    window.history.replaceState({}, document.title, newUrl);
     startAnim(); // This will trigger rtrMode.startRealTimeResourceGame()
     return; 
   }
@@ -3250,6 +3269,7 @@ try {
     let gameAlreadyLoadedOrSpecificMode = 
         (modeFromUrlFinal === 'random' && mapFromUrlFinal) || // Random map from URL has its own setup
         (modeFromUrlFinal === 'multiplayer') || // Multiplayer from URL calls startAnim in checkUrlParameters
+        (modeFromUrlFinal === 'realTimeResource') || // <-- Added this line!
         ($('.field .dot').length > 0 && hasPlayedBefore && modeFromUrlFinal !== null); // Game possibly loaded by signinAnim for returning player with specific mode
 
     if (!gameAlreadyLoadedOrSpecificMode && !window.isTutorialMode) {

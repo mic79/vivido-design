@@ -1,8 +1,8 @@
-const CACHE_NAME = 'dotmination-cache-v6';
+const CACHE_NAME = 'dotmination-cache-v7';
 const urlsToCache = [
   './',
   './index.html',
-  './style.css?v=2024051603',
+  './style.css?v=2024051604',
   './manifest.json',
   './lib/normalize.css',
   './fonts/roboto.css',
@@ -19,11 +19,11 @@ const urlsToCache = [
   './lib/shake.js',
   './lib/moment.js',
   './lib/howler.min.js',
-  './modules/utils.js?v=2024051603',,
-  './modules/tutorial.js?v=2024051603',,
-  './modules/botLogic.js?v=2024051603',
-  './modules/realTimeResourceMode.js?v=2024051603',
-  './script.js?v=2024051607',
+  './modules/utils.js?v=2024051604',,
+  './modules/tutorial.js?v=2024051604',,
+  './modules/botLogic.js?v=2024051604',
+  './modules/realTimeResourceMode.js?v=2024051604',
+  './script.js?v=2024051608',
   'https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js', // External script
   './sounds/submarine-sonar.mp3',
   './sounds/submarine-sonar-38243-once.mp3'
