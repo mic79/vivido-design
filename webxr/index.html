@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>WebXR Environment</title>
+    <meta name="description" content="Basic WebXR environment using A-Frame">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
+  </head>
+  <body>
+    <script>
+      // Physics world setup
+      const world = new CANNON.World();
+      world.gravity.set(0, 0, 0); // Zero gravity for the world
+      world.broadphase = new CANNON.NaiveBroadphase();
+      world.solver.iterations = 10;
+
+      // Create materials
+      const defaultMaterial = new CANNON.Material('default');
+      const ballMaterial = new CANNON.Material('ball');
+      const floorMaterial = new CANNON.Material('floor');
+
+      // Create contact materials
+      const ballFloorContact = new CANNON.ContactMaterial(
+        ballMaterial,
+        floorMaterial,
+        {
+          friction: 0.0,
+          restitution: 1.0
+        }
+      );
+      world.addContactMaterial(ballFloorContact);
+
+      // Add contact material for ball vs. default (walls/ceiling)
+      const ballDefaultContact = new CANNON.ContactMaterial(
+        ballMaterial,
+        defaultMaterial,
+        {
+          friction: 0.0,
+          restitution: 1.0
+        }
+      );
+      world.addContactMaterial(ballDefaultContact);
+
+      // Add collision event handling to the physics world
+      world.addEventListener('beginContact', function(event) {
+        const bodyA = event.bodyA;
+        const bodyB = event.bodyB;
+        
+        // Get the A-Frame entities associated with these bodies
+        const entityA = bodyA.el;
+        const entityB = bodyB.el;
+        
+        if (entityA && entityB) {
+          // Create and dispatch collision events for both entities
+          const eventA = new CustomEvent('collision', {
+            detail: { body: bodyB, bodyEl: entityB }
+          });
+          const eventB = new CustomEvent('collision', {
+            detail: { body: bodyA, bodyEl: entityA }
+          });
+          
+          entityA.dispatchEvent(eventA);
+          entityB.dispatchEvent(eventB);
+        }
+      });
+
+      // Game state
+      const gameState = {
+        score: { player1: 0, player2: 0 },
+        timeRemaining: 120, // 2 minutes in seconds
+        isPlaying: false,
+        isReady: { player1: false, player2: false },
+        ballSpawned: { player1: false, player2: false }
+      };
+
+      // Hand collider component
+      AFRAME.registerComponent('hand-collider', {
+        init: function() {
+          this.el.addEventListener('triggerdown', this.onGripDown.bind(this));
+          this.el.addEventListener('triggerup', this.onGripUp.bind(this));
+        },
+        
+        onGripDown: function(evt) {
+          const handWorldPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(handWorldPos);
+          const grabbableObjects = this.el.sceneEl.querySelectorAll('[simple-grab]');
+          
+          grabbableObjects.forEach(obj => {
+            const objWorldPos = new THREE.Vector3();
+            obj.object3D.getWorldPosition(objWorldPos);
+            const distance = handWorldPos.distanceTo(objWorldPos);
+            
+            if (distance < 0.1) {
+              obj.components['simple-grab'].onGripDown({ target: this.el });
+            }
+          });
+        },
+        
+        onGripUp: function(evt) {
+          const grabbableObjects = this.el.sceneEl.querySelectorAll('[simple-grab]');
+          grabbableObjects.forEach(obj => {
+            if (obj.components['simple-grab'].isGrabbed) {
+              obj.components['simple-grab'].onGripUp({ target: this.el });
+            }
+          });
+        }
+      });
+
+      // Simple grab component
+      AFRAME.registerComponent('simple-grab', {
+        schema: {
+          player: { type: 'string', default: 'player1' }  // Add player ownership
+        },
+        init: function() {
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this.body = null;
+          
+          // Set initial position based on player
+          const spawnZ = this.data.player === 'player1' ? -3 : 2.5;
+          this.initialPosition = new CANNON.Vec3(0, 1.0, spawnZ);
+          
+          const shape = new CANNON.Sphere(0.1);
+          this.body = new CANNON.Body({
+            mass: 1,
+            shape: shape,
+            position: this.initialPosition,
+            material: ballMaterial,
+            linearDamping: 0.0,
+            angularDamping: 0.0
+          });
+          this.body.gravity = new CANNON.Vec3(0, 0, 0);
+          world.addBody(this.body);
+
+          // Listen for A button press on the scene
+          this.el.sceneEl.addEventListener('abuttondown', (evt) => {
+            // Get the hand that pressed the button
+            const hand = evt.target;
+            const isLeftHand = hand.id === 'leftHand';
+            const isRightHand = hand.id === 'rightHand';
+            
+            // Check if this ball belongs to the player who pressed the button
+            const isPlayer1Ball = this.data.player === 'player1';
+            const isPlayer2Ball = this.data.player === 'player2';
+            
+            // Left hand controls player1's ball, right hand controls player2's ball
+            if ((isLeftHand && isPlayer1Ball) || (isRightHand && isPlayer2Ball)) {
+              this.resetPosition();
+            }
+          });
+
+          // Store reference to the entity on the body
+          this.body.el = this.el;
+          
+          // Add collision event listener
+          this.el.addEventListener('obbcollisionstarted', (evt) => {
+            console.log('Ball collision detected:', this.data.player, evt.detail);
+            const collider = evt.detail.withEl;
+            // Helper to respawn this ball
+            const respawn = () => {
+              console.log('Respawning ball for', this.data.player);
+              this.resetPosition();
+            };
+            // Player2's ball (blue) hits bot's target sphere
+            if (this.data.player === 'player2' && collider && collider.id === 'bot-target') {
+              const bot = document.querySelector('[bot]');
+              const impactEffect = bot && bot.components['impact-effect'];
+              if (impactEffect) impactEffect.playEffect();
+              respawn();
+              return;
+            }
+            // Player1's ball (red) hits player target sphere (blue, id="player-target")
+            if (this.data.player === 'player1' && collider && collider.id === 'player-target') {
+              const impactEffect = document.querySelector('#player').components['impact-effect'];
+              if (impactEffect) impactEffect.playEffect();
+              respawn();
+              return;
+            }
+            // Any ball hits back wall (z = 4 or z = -4)
+            if (collider && collider.getAttribute && collider.getAttribute('geometry')) {
+              const geom = collider.getAttribute('geometry');
+              const pos = collider.getAttribute('position');
+              // Check for back wall by position and geometry
+              if (pos && geom && geom.width === 4 && geom.height === 4 && (Math.abs(pos.z - 4) < 0.01 || Math.abs(pos.z + 4) < 0.01)) {
+                respawn();
+                return;
+              }
+            }
+          });
+        },
+        
+        resetPosition: function() {
+          if (this.constraint) {
+            world.removeConstraint(this.constraint);
+            this.constraint = null;
+          }
+          if (this.handBody) {
+            world.removeBody(this.handBody);
+            this.handBody = null;
+          }
+          this.body.position.copy(this.initialPosition);
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          this.body.quaternion.set(0, 0, 0, 1);
+          this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+        },
+        
+        tick: function() {
+          if (this.body) {
+            if (this.isGrabbed && this.grabbingHand) {
+              // When grabbed, directly update position and rotation
+              const handWorldPos = new THREE.Vector3();
+              const handWorldQuat = new THREE.Quaternion();
+              this.grabbingHand.object3D.getWorldPosition(handWorldPos);
+              this.grabbingHand.object3D.getWorldQuaternion(handWorldQuat);
+              
+              // Store previous position for velocity calculation
+              if (!this.lastPosition) {
+                this.lastPosition = new THREE.Vector3();
+              }
+              this.lastPosition.copy(this.el.object3D.position);
+              
+              this.el.object3D.position.copy(handWorldPos);
+              this.el.object3D.quaternion.copy(handWorldQuat);
+              
+              // Update physics body to match
+              this.body.position.copy(handWorldPos);
+              this.body.quaternion.copy(handWorldQuat);
+              this.body.velocity.set(0, 0, 0);
+              this.body.angularVelocity.set(0, 0, 0);
+              // Keep zero gravity
+              this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+            } else {
+              // When not grabbed, update visual position from physics
+              this.el.object3D.position.copy(this.body.position);
+              this.el.object3D.quaternion.copy(this.body.quaternion);
+            }
+          }
+        },
+        
+        onGripDown: function(evt) {
+          if (this.isGrabbed) return;
+          
+          this.grabbingHand = evt.target;
+          this.isGrabbed = true;
+          // Keep zero gravity
+          this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+
+          // Robust haptic feedback on grab (Meta Quest compatible)
+          if (this.grabbingHand && this.grabbingHand.components && this.grabbingHand.components['tracked-controls']) {
+            const trackedControls = this.grabbingHand.components['tracked-controls'];
+            if (trackedControls.controller && trackedControls.controller.gamepad) {
+              const gamepad = trackedControls.controller.gamepad;
+              if (gamepad.hapticActuators && gamepad.hapticActuators.length > 0) {
+                let success = false;
+                for (let i = 0; i < gamepad.hapticActuators.length; i++) {
+                  const haptics = gamepad.hapticActuators[i];
+                  if (haptics && typeof haptics.pulse === 'function') {
+                    console.log('Triggering haptic pulse on actuator', i);
+                    haptics.pulse(0.7, 100);
+                    success = true;
+                  }
+                }
+                if (!success) {
+                  console.warn('No haptic actuators with pulse() found on gamepad:', gamepad);
+                }
+              } else {
+                console.warn('No haptic actuators found on gamepad:', gamepad);
+              }
+            } else {
+              console.warn('No gamepad found on controller:', trackedControls.controller);
+            }
+          }
+        },
+        
+        onGripUp: function(evt) {
+          if (!this.isGrabbed || evt.target !== this.grabbingHand) return;
+          
+          // Calculate velocity based on movement
+          const currentPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(currentPos);
+          const velocity = new THREE.Vector3().subVectors(currentPos, this.lastPosition);
+          
+          // Restore physics body with velocity but keep zero gravity
+          this.body.velocity.set(velocity.x * 60, velocity.y * 60, velocity.z * 60);
+          this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+          
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this.lastPosition = null;
+        }
+      });
+
+      // Physics update loop
+      AFRAME.registerComponent('physics-world', {
+        tick: function() {
+          world.step(1/60);
+        }
+      });
+
+      // Add glow component
+      AFRAME.registerComponent('glow', {
+        schema: {
+          color: {default: '#ffffff', type: 'color'},
+          intensity: {default: 1.0}
+        },
+        init: function () {
+          this.el.addEventListener('object3dset', function () {
+            this.update();
+          }.bind(this));
+        },
+        update: function () {
+          var data = this.data;
+          this.el.object3D.traverse(function (node) {
+            if (node.isMesh) {
+              node.material.emissive.copy(new THREE.Color(data.color));
+              node.material.emissiveIntensity = data.intensity;
+            }
+          });
+        }
+      });
+
+      // Player zone component
+      AFRAME.registerComponent('player-zone', {
+        schema: {
+          player: { type: 'string', default: 'player1' },
+          radius: { type: 'number', default: 1 }
+        },
+        init: function() {
+          // Create zone indicator
+          this.zoneIndicator = document.createElement('a-ring');
+          this.zoneIndicator.setAttribute('radius-inner', this.data.radius - 0.1);
+          this.zoneIndicator.setAttribute('radius-outer', this.data.radius);
+          this.zoneIndicator.setAttribute('color', this.data.player === 'player1' ? '#ff0000' : '#0000ff');
+          this.zoneIndicator.setAttribute('opacity', 0.5);
+          this.zoneIndicator.setAttribute('rotation', '-90 0 0');
+          this.zoneIndicator.setAttribute('position', '0 0.01 0'); // Slightly above floor to prevent z-fighting
+          this.el.appendChild(this.zoneIndicator);
+          
+          // Create dark overlay
+          this.darkOverlay = document.createElement('a-entity');
+          this.darkOverlay.setAttribute('geometry', {
+            primitive: 'sphere',
+            radius: 100,
+            phiLength: 180
+          });
+          this.darkOverlay.setAttribute('material', {
+            color: '#000000',
+            opacity: 0.8,
+            side: 'back'
+          });
+          this.darkOverlay.setAttribute('visible', false);
+          this.el.sceneEl.appendChild(this.darkOverlay);
+        },
+        
+        tick: function() {
+          const player = document.querySelector(`#${this.data.player}`);
+          if (!player) return;
+          
+          const playerPos = player.object3D.position;
+          const zonePos = this.el.object3D.position;
+          const distance = playerPos.distanceTo(zonePos);
+          
+          // Update zone indicator position
+          this.zoneIndicator.object3D.position.copy(zonePos);
+          this.zoneIndicator.object3D.position.y = 0.01;
+          
+          // Check if player is in zone
+          if (distance > this.data.radius) {
+            this.darkOverlay.setAttribute('visible', true);
+            this.zoneIndicator.setAttribute('color', '#ff0000');
+          } else {
+            this.darkOverlay.setAttribute('visible', false);
+            this.zoneIndicator.setAttribute('color', this.data.player === 'player1' ? '#ff0000' : '#0000ff');
+          }
+        }
+      });
+
+      // Game manager component
+      AFRAME.registerComponent('game-manager', {
+        schema: {
+          playerScore: { type: 'number', default: 0 },
+          botScore: { type: 'number', default: 0 },
+          gameStarted: { type: 'boolean', default: false }
+        },
+        init: function() {
+          console.log('Game manager initialized');
+          this.playerScore = 0;
+          this.botScore = 0;
+          this.gameStarted = false;
+          
+          // Get references to the displays
+          this.scoreDisplay = this.el.querySelector('#score-display');
+          this.startMessage = this.el.querySelector('#start-message');
+          
+          // Hide score display initially
+          this.scoreDisplay.setAttribute('visible', false);
+          
+          // Listen for A button press on both controllers
+          this.el.sceneEl.addEventListener('abuttondown', (evt) => {
+            if (!this.gameStarted) {
+              this.startGame();
+            }
+          });
+        },
+
+        startGame: function() {
+          console.log('Game started!');
+          this.gameStarted = true;
+          this.startMessage.setAttribute('visible', false);
+          this.scoreDisplay.setAttribute('visible', true);
+          
+          // Enable bot and player collision
+          const bot = this.el.sceneEl.querySelector('[bot]');
+          const player = this.el.sceneEl.querySelector('#player');
+          if (bot) bot.setAttribute('bot', 'enabled', true);
+          if (player) player.setAttribute('player-collision', 'enabled', true);
+        },
+
+        onBotHit: function() {
+          if (!this.gameStarted) return;
+          console.log('Bot hit! Increasing player score');
+          this.playerScore += 1;
+          this.updateScore();
+        },
+
+        onPlayerHit: function() {
+          if (!this.gameStarted) return;
+          console.log('Player hit! Increasing bot score');
+          this.botScore += 1;
+          this.updateScore();
+        },
+
+        updateScore: function() {
+          console.log('Updating score display:', this.playerScore, this.botScore);
+          this.scoreDisplay.setAttribute('text', {
+            value: `Player: ${this.playerScore} - Bot: ${this.botScore}`
+          });
+        }
+      });
+
+      // Impact effect component
+      AFRAME.registerComponent('impact-effect', {
+        schema: {
+          color: { type: 'color', default: '#ffffff' }
+        },
+        init: function() {
+          // Find the impact sphere in the entity's children
+          this.impactSphere = this.el.querySelector('a-sphere[id$="-impact"]');
+          if (!this.impactSphere) {
+            console.error('No impact sphere found for entity:', this.el);
+          }
+        },
+        
+        playEffect: function() {
+          console.log('Playing impact effect');
+          if (!this.impactSphere) return;
+          
+          // Start small and make visible
+          this.impactSphere.setAttribute('radius', 0.1);
+          this.impactSphere.setAttribute('visible', true);
+          
+          // Animate the sphere growing
+          const startTime = Date.now();
+          const duration = 1000; // 1 second animation
+          
+          const animate = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            
+            // Grow from 0.1 to 1.5 radius (3m diameter)
+            const radius = 0.1 + (1.4 * progress);
+            this.impactSphere.setAttribute('radius', radius);
+            
+            // Fade out opacity
+            const opacity = 0.5 * (1 - progress);
+            this.impactSphere.setAttribute('opacity', opacity);
+            
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+            } else {
+              this.impactSphere.setAttribute('visible', false);
+            }
+          };
+          
+          animate();
+        }
+      });
+
+      // Static physics component for non-grabbable objects
+      AFRAME.registerComponent('static-physics', {
+        init: function() {
+          let shape;
+          const geometry = this.el.getAttribute('geometry');
+          
+          if (geometry && geometry.primitive === 'box') {
+            const width = geometry.width || 1;
+            const height = geometry.height || 1;
+            const depth = geometry.depth || 1;
+            shape = new CANNON.Box(new CANNON.Vec3(width/2, height/2, depth/2));
+          } else if (geometry && geometry.primitive === 'sphere') {
+            shape = new CANNON.Sphere(geometry.radius || 0.2);
+          } else if (geometry && geometry.primitive === 'cylinder') {
+            const radius = geometry.radius || 0.5;
+            const height = geometry.height || 1;
+            shape = new CANNON.Cylinder(radius, radius, height, 16);
+            
+            // Rotate to match A-Frame's orientation
+            const quat = new CANNON.Quaternion();
+            quat.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+            shape.transformAllPoints(new CANNON.Vec3(), quat);
+          } else {
+            // Default to sphere shape for bot
+            shape = new CANNON.Sphere(0.2);
+          }
+          
+          const body = new CANNON.Body({
+            mass: 0,
+            shape: shape,
+            material: defaultMaterial,
+            collisionFilterGroup: 1,
+            collisionFilterMask: 1
+          });
+          
+          const position = this.el.getAttribute('position');
+          const rotation = this.el.getAttribute('rotation');
+          body.position.set(position.x, position.y, position.z);
+          
+          if (rotation) {
+            const rad = Math.PI / 180;
+            body.quaternion.setFromEuler(
+              rotation.x * rad,
+              rotation.y * rad,
+              rotation.z * rad
+            );
+          }
+          
+          // Store reference to the entity on the body
+          body.el = this.el;
+          
+          world.addBody(body);
+          this.body = body;
+        }
+      });
+
+      // Player collision component
+      AFRAME.registerComponent('player-collision', {
+        schema: {
+          enabled: { type: 'boolean', default: false }
+        },
+        init: function() {
+          // Create a capsule shape for the player (better than sphere for character collision)
+          const radius = 0.2; // Slightly smaller radius
+          const height = 1.6; // Approximate player height
+          const segments = 8; // Number of segments for the capsule
+          
+          // Create a cylinder for the main body
+          const cylinderShape = new CANNON.Cylinder(radius, radius, height, segments);
+          
+          // Create spheres for the top and bottom
+          const sphereShape = new CANNON.Sphere(radius);
+          
+          // Create the physics body
+          this.body = new CANNON.Body({
+            mass: 1,
+            material: new CANNON.Material('default'),
+            linearDamping: 0.5,
+            fixedRotation: true,
+            type: CANNON.Body.DYNAMIC,
+            collisionFilterGroup: 1,
+            collisionFilterMask: 1,
+            position: this.el.object3D.position.clone().add(new THREE.Vector3(0, 1.0, 0)) // Offset upward by half height
+          });
+          
+          // Add the shapes to the body with proper orientation
+          // Rotate cylinder to match A-Frame's orientation
+          const cylinderQuat = new CANNON.Quaternion();
+          cylinderQuat.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+          this.body.addShape(cylinderShape, new CANNON.Vec3(0, 0, 0), cylinderQuat);
+          
+          // Add spheres with proper offsets
+          this.body.addShape(sphereShape, new CANNON.Vec3(0, height/2, 0)); // Top sphere
+          this.body.addShape(sphereShape, new CANNON.Vec3(0, -height/2, 0)); // Bottom sphere
+          
+          // Add contact material for better collision response
+          const contactMaterial = new CANNON.ContactMaterial(
+            this.body.material,
+            new CANNON.Material('default'),
+            {
+              friction: 0.3,
+              restitution: 0.2
+            }
+          );
+          world.addContactMaterial(contactMaterial);
+          
+          world.addBody(this.body);
+          this.initialPosition = this.el.object3D.position.clone();
+          this.targetHeight = 1.0; // Target height for the player
+          
+          // Store reference to the entity on the body
+          this.body.el = this.el;
+          
+          // Add collision event listener
+          this.el.addEventListener('obbcollisionstarted', (evt) => {
+            if (!this.data.enabled) return;
+            console.log('Player collision event received:', evt.detail);
+            const collider = evt.detail.withEl;
+            if (collider && collider.getAttribute('simple-grab') && 
+                collider.getAttribute('simple-grab').player === 'player1') {
+              console.log('Player hit by bot ball!');
+              // Visual feedback
+              const playerSphere = this.el.querySelector('a-sphere');
+              if (playerSphere) {
+                playerSphere.setAttribute('color', '#0000ff');
+                setTimeout(() => {
+                  playerSphere.setAttribute('color', '#ffffff');
+                }, 1000);
+              }
+              
+              // Play impact effect
+              const impactEffect = this.el.components['impact-effect'];
+              if (impactEffect) {
+                console.log('Playing player impact effect');
+                impactEffect.playEffect();
+              } else {
+                console.log('No impact effect component found on player');
+              }
+              
+              // Update score
+              const gameManager = this.el.sceneEl.querySelector('#game-manager');
+              if (gameManager && gameManager.components['game-manager']) {
+                gameManager.components['game-manager'].onPlayerHit();
+              }
+            }
+          });
+        },
+        
+        tick: function() {
+          // Update player position based on physics, maintaining the height offset
+          const physicsPos = this.body.position;
+          
+          // Keep the player at a constant height
+          //physicsPos.x = this.targetX;
+          physicsPos.z = this.targetZ;
+          physicsPos.y = this.targetHeight;
+          
+          // Update the visual position
+          this.el.object3D.position.set(physicsPos.x, physicsPos.y - 1.0, physicsPos.z);
+          
+          // Zero out any vertical velocity to prevent floating/sinking
+          this.body.velocity.x = 0;
+          this.body.velocity.y = 0;
+          this.body.velocity.z = 0;
+        }
+      });
+
+      // Bot component for AI player
+      AFRAME.registerComponent('bot', {
+        schema: {
+          throwInterval: { type: 'number', default: 5000 }, // 5 seconds
+          minThrowForce: { type: 'number', default: 5 },  // Halved from 10
+          maxThrowForce: { type: 'number', default: 10 },  // Halved from 20
+          enabled: { type: 'boolean', default: false }
+        },
+        init: function() {
+          this.ball = null;
+          this.lastThrowTime = 0;
+          this.throwInterval = this.data.throwInterval;
+          this.isHit = false;
+          this.hitCooldown = 2000; // 2 seconds cooldown after being hit
+          this.lastHitTime = 0;
+          
+          // Find the bot's ball
+          this.el.sceneEl.addEventListener('loaded', () => {
+            this.ball = this.el.sceneEl.querySelector('[simple-grab="player: player1"]');
+          });
+
+          // Listen for collisions
+          this.el.addEventListener('obbcollisionstarted', (evt) => {
+            if (!this.data.enabled) return;
+            console.log('Bot collision started:', evt.detail);
+            this.onCollision(evt);
+          });
+        },
+        
+        onCollision: function(evt) {
+          console.log('Bot collision handler called:', evt.detail);
+          const now = Date.now();
+          if (now - this.lastHitTime < this.hitCooldown) return;
+          
+          const collider = evt.detail.withEl;
+          console.log('Collider:', collider);
+          
+          if (collider && collider.getAttribute('simple-grab') && 
+              collider.getAttribute('simple-grab').player === 'player2') {
+            console.log('Bot hit by player ball!');
+            this.isHit = true;
+            this.lastHitTime = now;
+            
+            // Visual feedback
+            const botSphere = this.el.querySelector('a-sphere');
+            if (botSphere) {
+              botSphere.setAttribute('color', '#ff0000');
+              setTimeout(() => {
+                botSphere.setAttribute('color', '#ff0000');
+                this.isHit = false;
+              }, 1000);
+            }
+            
+            // Play impact effect
+            const impactEffect = this.el.components['impact-effect'];
+            if (impactEffect) {
+              console.log('Playing bot impact effect');
+              impactEffect.playEffect();
+            } else {
+              console.log('No impact effect component found on bot');
+            }
+            
+            // Update score
+            const gameManager = this.el.sceneEl.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].onBotHit();
+            }
+          }
+        },
+        
+        tick: function(time) {
+          if (!this.ball || !this.data.enabled) return;
+          
+          // Check if it's time to throw
+          if (time - this.lastThrowTime > this.throwInterval && !this.isHit) {
+            this.throwBall();
+            this.lastThrowTime = time;
+          }
+        },
+        
+        throwBall: function() {
+          if (!this.ball || !this.ball.components['simple-grab']) return;
+          
+          // Get player position
+          const player = document.querySelector('#player');
+          if (!player) return;
+          
+          const playerPos = new THREE.Vector3();
+          player.object3D.getWorldPosition(playerPos);
+          
+          // Calculate random throw angle
+          const throwAngle = this.calculateThrowAngle(playerPos);
+          
+          // Calculate throw force
+          const throwForce = this.data.minThrowForce + 
+            Math.random() * (this.data.maxThrowForce - this.data.minThrowForce);
+          
+          // Reset ball position
+          this.ball.components['simple-grab'].resetPosition();
+          
+          // Apply velocity
+          const ballBody = this.ball.components['simple-grab'].body;
+          if (ballBody) {
+            ballBody.velocity.set(
+              throwAngle.x * throwForce,
+              throwAngle.y * throwForce,
+              throwAngle.z * throwForce
+            );
+          }
+        },
+        
+        calculateThrowAngle: function(playerPos) {
+          // Get bot position
+          const botPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(botPos);
+          
+          // Use the world position of the player's target sphere (blue sphere inside camera)
+          let targetPos = new THREE.Vector3();
+          const playerTargetSphere = document.querySelector('#player-target');
+          if (playerTargetSphere) {
+            playerTargetSphere.object3D.getWorldPosition(targetPos);
+          } else {
+            // fallback to playerPos
+            targetPos.copy(playerPos);
+          }
+          // Calculate direct vector to player
+          const directVector = new THREE.Vector3()
+            .subVectors(targetPos, botPos)
+            .normalize();
+          
+          // Randomly choose between direct throw or bounce throw
+          if (Math.random() < 0.5) {
+            // Direct throw
+            return directVector;
+          } else {
+            // Bounce throw - randomly choose a wall/floor/ceiling to bounce off
+            const bounceTypes = [
+              { axis: 'x', value: 2 },    // Right wall
+              { axis: 'x', value: -2 },   // Left wall
+              { axis: 'y', value: 4 },    // Ceiling
+              { axis: 'y', value: 0 },    // Floor
+              { axis: 'z', value: 4 },    // Front wall
+              { axis: 'z', value: -4 }    // Back wall
+            ];
+            
+            const bounce = bounceTypes[Math.floor(Math.random() * bounceTypes.length)];
+            const bouncePoint = new THREE.Vector3();
+            bouncePoint[bounce.axis] = bounce.value;
+            
+            // Calculate vector to bounce point
+            const toBounce = new THREE.Vector3()
+              .subVectors(bouncePoint, botPos)
+              .normalize();
+            
+            // Calculate vector from bounce point to player
+            const fromBounce = new THREE.Vector3()
+              .subVectors(targetPos, bouncePoint)
+              .normalize();
+            
+            // Combine vectors for final throw direction
+            return new THREE.Vector3()
+              .addVectors(toBounce, fromBounce)
+              .normalize();
+          }
+        }
+      });
+
+      // Add haptic feedback on hand collision with a ball
+      AFRAME.registerComponent('hand-haptics', {
+        init: function() {
+          this.el.addEventListener('obbcollisionstarted', (evt) => {
+            const collider = evt.detail.withEl;
+            // Check if the collider is a ball (has simple-grab component)
+            if (collider && collider.components && collider.components['simple-grab']) {
+              // Try to get the gamepad from the controller
+              const trackedControls = this.el.components['tracked-controls'];
+              if (trackedControls && trackedControls.controller && trackedControls.controller.gamepad && trackedControls.controller.gamepad.hapticActuators) {
+                const haptics = trackedControls.controller.gamepad.hapticActuators[0];
+                if (haptics) {
+                  // Pulse: (intensity, duration)
+                  haptics.pulse(0.7, 100);
+                }
+              }
+            }
+          });
+        }
+      });
+
+    </script>
+
+    <a-scene physics-world game-manager
+    vr-mode-ui="enabled: true"
+      renderer="antialias: true; colorManagement: true; shadowMapEnabled: true"
+    webxr="requiredFeatures: local-floor">
+      
+      <!-- Game room walls -->
+      <!-- Floor -->
+      <a-box position="0 0 0" 
+             width="4" 
+             height="0.1" 
+             depth="8" 
+             color="#808080"
+             material="shader: standard; metalness: 0; roughness: 1"
+             shadow="cast: true; receive: true"
+             static-physics>
+      </a-box>
+
+      <!-- Ceiling -->
+      <a-box position="0 4 0" 
+             width="4" 
+             height="0.1" 
+             depth="8" 
+             color="#808080"
+             material="shader: standard; metalness: 0; roughness: 1"
+             shadow="cast: true; receive: true"
+             static-physics>
+      </a-box>
+
+      <!-- Left wall -->
+      <a-box position="-2 2 0" 
+             width="0.1" 
+             height="4" 
+             depth="8" 
+             color="#808080"
+             material="shader: standard; metalness: 0; roughness: 1"
+             shadow="cast: true; receive: true"
+             static-physics>
+      </a-box>
+      
+      <!-- Right wall -->
+      <a-box position="2 2 0" 
+             width="0.1" 
+             height="4" 
+             depth="8" 
+             color="#808080"
+             material="shader: standard; metalness: 0; roughness: 1"
+             shadow="cast: true; receive: true"
+             static-physics>
+      </a-box>
+      
+      <!-- Back wall -->
+      <a-box position="0 2 -4" 
+             width="4" 
+             height="4" 
+             depth="0.1" 
+             color="#808080"
+             material="shader: standard; metalness: 0; roughness: 1"
+             shadow="cast: true; receive: true"
+             static-physics
+             obb-collider>
+      </a-box>
+      
+      <!-- Front wall -->
+      <a-box position="0 2 4" 
+             width="4" 
+             height="4" 
+             depth="0.1" 
+             color="#808080"
+             material="shader: standard; metalness: 0; roughness: 1"
+             shadow="cast: true; receive: true"
+             static-physics
+             obb-collider>
+      </a-box>
+
+      <!-- Player 1 zone -->
+      <a-entity position="0 0.05 -3" player-zone="player: player1; radius: 1">
+      </a-entity>
+
+      <!-- Player 2 zone -->
+      <a-entity position="0 0.05 3" player-zone="player: player2; radius: 1">
+      </a-entity>
+
+      <!-- Add game manager entity with score display -->
+      <a-entity id="game-manager" game-manager>
+        <a-entity id="score-display" position="0 2.5 -2" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="start-message" position="0 2.5 -2" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
+      </a-entity>
+
+      <!-- Bot (AI player) -->
+      <a-entity position="0 1.6 -3" bot impact-effect="color: #ff0000">
+        <a-sphere id="bot-target" radius="0.2" color="#ff0000" obb-collider material="wireframe: true; color: #ff0000; opacity: 0.5" glow="color: #ff0000; intensity: 1.5"></a-sphere>
+        <a-sphere id="bot-impact" radius="1.5" color="#ff0000" opacity="0.5" visible="false" material="side: double"></a-sphere>
+      </a-entity>
+
+      <!-- Player 1 ball spawn (AI player's ball) -->
+      <a-sphere position="0 1 -3" 
+             radius="0.1"
+             color="#ff0000" 
+             glow="color: #ff0000; intensity: 1.5"
+             shadow="cast: true"
+             simple-grab="player: player1"
+             obb-collider>
+        <a-entity light="type: point;
+                       color: #ff0000;
+                       intensity: 1.5;     
+                       distance: 5;       
+                       decay: 2;
+                       castShadow: true;    
+                       shadowBias: -0.001"  
+                  position="0 0 0">
+        </a-entity>
+        <a-sphere radius="0.1" color="#ff0000" material="wireframe: true; color: #ff0000; opacity: 0.5"></a-sphere>
+      </a-sphere>
+
+      <!-- Player 2 ball spawn (Human player's ball) -->
+      <a-sphere position="0 1 0" 
+             radius="0.1"
+             color="#0000ff" 
+             glow="color: #0000ff; intensity: 1.5"
+             shadow="cast: true"
+             simple-grab="player: player2"
+             obb-collider>
+        <a-entity light="type: point; 
+                       color: #0000ff;
+                       intensity: 1.5;     
+                       distance: 5;       
+                       decay: 2;
+                       castShadow: true;    
+                       shadowBias: -0.001"  
+                  position="0 0 0">
+        </a-entity>
+        <a-sphere radius="0.1" color="#0000ff" material="wireframe: true; color: #0000ff; opacity: 0.5"></a-sphere>
+      </a-sphere>
+
+      <!-- Basic Camera Rig for VR -->
+      <a-entity id="player" position="0 0 3" impact-effect="color: #0000ff">
+        <a-sphere id="player-impact" radius="1.5" color="#0000ff" opacity="0.5" visible="false" material="side: double" position="0 1.5 0"></a-sphere>
+        <a-entity id="rig" position="0 0 0">
+          <a-entity camera look-controls="pointerLockEnabled: false">
+            <a-sphere radius="0.1" color="#ffffff" glow="color: #0000ff; intensity: 1.5" id="player-target" position="0 0 0" obb-collider></a-sphere>
+          </a-entity>
+          
+          <a-entity id="leftHand" 
+                   hand-controls="hand: left; modelStyle: lowPoly; color: #ffcccc"
+                   oculus-touch-controls="hand: left"
+                   hand-collider
+                   hand-haptics
+                   >
+          </a-entity>
+          
+          <a-entity id="rightHand" 
+                   hand-controls="hand: right; modelStyle: lowPoly; color: #ccccff"
+                   oculus-touch-controls="hand: right"
+                   hand-collider
+                   hand-haptics
+                   >
+          </a-entity>
+        </a-entity>
+      </a-entity>
+
+      <a-sky color="#000000"></a-sky>
+    </a-scene>
+  </body>
+</html> 
