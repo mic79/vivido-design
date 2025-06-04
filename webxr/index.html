@@ -124,7 +124,7 @@
       function updateMultiplayerStatus(msg) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.4\n${msg}`);
+          versionDisplay.setAttribute('text', 'value', `v0.5\n${msg}`);
         }
       }
 
@@ -321,9 +321,10 @@
             // Host's head (player2)
             const rig = document.querySelector('#rig');
             if (rig) {
-              const pos = rig.object3D.position;
-              const rot = rig.object3D.rotation;
-              conn.send({ type: 'player-pos', player: 'player2', position: { x: pos.x, y: pos.y, z: pos.z }, rotation: { x: rot.x, y: rot.y, z: rot.z } });
+              // Do NOT sync rig position, let A-Frame/WebXR handle camera height
+              // const pos = rig.object3D.position;
+              // const rot = rig.object3D.rotation;
+              // conn.send({ type: 'player-pos', player: 'player2', position: { x: pos.x, y: pos.y, z: pos.z }, rotation: { x: rot.x, y: rot.y, z: rot.z } });
             }
           } else {
             // Peer sends red ball and their own head position
@@ -335,9 +336,10 @@
             // Peer's head (player1)
             const rig = document.querySelector('#rig');
             if (rig) {
-              const pos = rig.object3D.position;
-              const rot = rig.object3D.rotation;
-              conn.send({ type: 'player-pos', player: 'player1', position: { x: pos.x, y: pos.y, z: pos.z }, rotation: { x: rot.x, y: rot.y, z: rot.z } });
+              // Do NOT sync rig position, let A-Frame/WebXR handle camera height
+              // const pos = rig.object3D.position;
+              // const rot = rig.object3D.rotation;
+              // conn.send({ type: 'player-pos', player: 'player1', position: { x: pos.x, y: pos.y, z: pos.z }, rotation: { x: rot.x, y: rot.y, z: rot.z } });
             }
           }
           setTimeout(syncLoop, 50); // 20Hz
@@ -1485,7 +1487,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.4; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.5; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
