@@ -539,9 +539,11 @@
             audioContext.resume();
           }
           
-          // Start all ball sounds
+          // Start all ball hum sounds
           this.ballSounds.forEach(sound => {
-            sound.components.sound.playSound();
+            if (sound.id && (sound.id === 'red-ball-hum' || sound.id === 'blue-ball-hum')) {
+              sound.components.sound.playSound();
+            }
           });
           
           // Initialize bounce sound
@@ -622,6 +624,9 @@
         },
         init: function() {
           this.impactSphere = this.el.querySelector('a-sphere[id$="-impact"]');
+          if (!this.impactSphere) {
+            console.warn('Impact sphere not found for:', this.el.id);
+          }
         },
         
         playEffect: function() {
@@ -638,6 +643,7 @@
           // Start small and make visible
           this.impactSphere.setAttribute('radius', 0.1);
           this.impactSphere.setAttribute('visible', true);
+          this.impactSphere.setAttribute('opacity', 0.5);
           
           // Animate the sphere growing
           const startTime = Date.now();
@@ -659,6 +665,7 @@
               requestAnimationFrame(animate);
             } else {
               this.impactSphere.setAttribute('visible', false);
+              this.impactSphere.setAttribute('opacity', 0.5);
             }
           };
           
@@ -1215,8 +1222,7 @@
                                         refDistance: 1;
                                         maxDistance: 20;
                                         poolSize: 8;
-                                        rate: 1.5;
-                                        on: sound-ended">
+                                        rate: 1.5;">
       </a-entity>
 
       <!-- Bot (AI player) -->
@@ -1232,7 +1238,7 @@
                     position="0 0 0">
           </a-entity>
         </a-sphere>
-        <a-sphere id="bot-impact" radius="1.5" color="#ff0000" opacity="0.5" visible="false" material="side: double"></a-sphere>
+        <a-sphere id="bot-impact" radius="1.5" color="#ff0000" opacity="0.5" visible="false" material="side: double; transparent: true"></a-sphere>
       </a-entity>
 
       <!-- Player 1 ball spawn (AI player's ball) -->
@@ -1254,7 +1260,7 @@
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.1" color="#ff0000" material="wireframe: true; color: #ff0000; opacity: 0.5"></a-sphere>
-        <a-entity sound="src: url(audio/electric-hum.wav); 
+        <a-entity id="red-ball-hum" sound="src: url(audio/electric-hum.wav); 
                         autoplay: false; 
                         loop: true; 
                         volume: 0.6;
@@ -1262,7 +1268,8 @@
                         distanceModel: inverse;
                         refDistance: 1;
                         maxDistance: 4;
-                        rolloffFactor: 1;">
+                        rolloffFactor: 1;
+                        poolSize: 1;">
         </a-entity>
       </a-sphere>
 
@@ -1285,7 +1292,7 @@
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.1" color="#0000ff" material="wireframe: true; color: #0000ff; opacity: 0.5"></a-sphere>
-        <a-entity sound="src: url(audio/electric-hum.wav); 
+        <a-entity id="blue-ball-hum" sound="src: url(audio/electric-hum.wav); 
                         autoplay: false; 
                         loop: true; 
                         volume: 0.6;
@@ -1293,7 +1300,8 @@
                         distanceModel: inverse;
                         refDistance: 1;
                         maxDistance: 4;
-                        rolloffFactor: 1;">
+                        rolloffFactor: 1;
+                        poolSize: 1;">
         </a-entity>
       </a-sphere>
 
