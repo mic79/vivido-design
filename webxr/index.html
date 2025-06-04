@@ -9,7 +9,6 @@
     <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   </head>
   <body>
     <script>
@@ -106,267 +105,6 @@
         isReady: { player1: false, player2: false },
         ballSpawned: { player1: false, player2: false }
       };
-
-      // Multiplayer constants
-      const MAX_LOBBIES = 10;
-      const multiplayerStartType = 'dodgeball';
-      let isHost = false;
-      let isMultiplayer = false;
-      let peer = null;
-      let conn = null;
-      let sessionID = null;
-      let hasConnected = false;
-      let connectionState = 'DISCONNECTED';
-      let multiplayerStatus = '';
-      let multiplayerCleanup = null;
-
-      // Helper: update #version-display with status
-      function updateMultiplayerStatus(msg) {
-        const versionDisplay = document.getElementById('version-display');
-        if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.6\n${msg}`);
-        }
-      }
-
-      // Helper: fetch ICE servers (TURN/STUN)
-      async function fetchIceServers() {
-        try {
-          const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev/");
-          if (!response.ok) throw new Error('Failed to fetch ICE servers');
-          return await response.json();
-        } catch (e) {
-          return [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun.cloudflare.com:3478' }
-          ];
-        }
-      }
-
-      // Helper: check if a PeerJS ID is available
-      async function checkPeerAvailability(id) {
-        return new Promise((resolve) => {
-          const tempPeer = new Peer(id, { host: "0.peerjs.com", port: 443, secure: true });
-          const timeout = setTimeout(() => { tempPeer.destroy(); resolve(false); }, 2000);
-          tempPeer.on("open", () => { clearTimeout(timeout); tempPeer.destroy(); resolve(true); });
-          tempPeer.on("error", (err) => {
-            clearTimeout(timeout); tempPeer.destroy();
-            if (err.type === 'unavailable-id') resolve(false); else resolve(true);
-          });
-        });
-      }
-
-      // Find available slot for host/peer
-      async function findAvailableSlot() {
-        for (let i = 1; i <= MAX_LOBBIES; i++) {
-          const hostId = `dot-host-${multiplayerStartType}-${i}`;
-          const peerId = `dot-peer-${multiplayerStartType}-${i}`;
-          const hostAvailable = await checkPeerAvailability(hostId);
-          if (hostAvailable) return { slotNumber: i, role: 'host' };
-          else {
-            const peerAvailable = await checkPeerAvailability(peerId);
-            if (peerAvailable) return { slotNumber: i, role: 'peer' };
-          }
-        }
-        return null;
-      }
-
-      // Multiplayer connection logic
-      async function startMultiplayerConnection() {
-        updateMultiplayerStatus('Connecting...');
-        connectionState = 'CONNECTING';
-        try {
-          const slot = await findAvailableSlot();
-          if (!slot) {
-            updateMultiplayerStatus('No available slots.');
-            connectionState = 'DISCONNECTED';
-            return;
-          }
-          if (slot.role === 'peer') await setupPeer(slot.slotNumber);
-          else await setupHost(slot.slotNumber);
-        } catch (e) {
-          updateMultiplayerStatus('Connection failed.');
-          connectionState = 'DISCONNECTED';
-        }
-      }
-
-      async function setupPeer(slotNumber) {
-        cleanupMultiplayer();
-        isHost = false;
-        isMultiplayer = true;
-        sessionID = `dot-peer-${multiplayerStartType}-${slotNumber}`;
-        const iceServersConfig = await fetchIceServers();
-        peer = new Peer(sessionID, {
-          host: "0.peerjs.com", port: 443, secure: true,
-          config: { 'iceServers': iceServersConfig }
-        });
-        peer.on("open", function() {
-          updateMultiplayerStatus('Connecting to host...');
-          const hostID = `dot-host-${multiplayerStartType}-${slotNumber}`;
-          conn = peer.connect(hostID);
-          conn.on("open", function() {
-            hasConnected = true;
-            connectionState = 'CONNECTED';
-            updateMultiplayerStatus('Multiplayer: Connected!');
-            setupConnectionHandlers(conn);
-            conn.send({ type: 'ready' });
-            onMultiplayerStart();
-          });
-        });
-        peer.on("error", function(err) {
-          updateMultiplayerStatus(`Peer error: ${err.type}`);
-          cleanupMultiplayer();
-        });
-      }
-
-      async function setupHost(slotNumber) {
-        cleanupMultiplayer();
-        isHost = true;
-        isMultiplayer = true;
-        sessionID = `dot-host-${multiplayerStartType}-${slotNumber}`;
-        const iceServersConfig = await fetchIceServers();
-        peer = new Peer(sessionID, {
-          host: "0.peerjs.com", port: 443, secure: true,
-          config: { 'iceServers': iceServersConfig }
-        });
-        peer.on("open", function() {
-          updateMultiplayerStatus('Waiting for opponent...');
-          peer.on("connection", function(newConn) {
-            if (conn) { newConn.close(); return; }
-            conn = newConn;
-            conn.on("open", function() {
-              hasConnected = true;
-              connectionState = 'CONNECTED';
-              updateMultiplayerStatus('Multiplayer: Connected!');
-              setupConnectionHandlers(conn);
-              onMultiplayerStart();
-            });
-          });
-        });
-        peer.on("error", function(err) {
-          updateMultiplayerStatus(`Host error: ${err.type}`);
-          cleanupMultiplayer();
-        });
-      }
-
-      function cleanupMultiplayer() {
-        if (conn) { try { conn.close(); } catch(e){} conn = null; }
-        if (peer) { try { peer.destroy(); } catch(e){} peer = null; }
-        isHost = false;
-        isMultiplayer = false;
-        sessionID = null;
-        hasConnected = false;
-        connectionState = 'DISCONNECTED';
-        if (typeof multiplayerCleanup === 'function') multiplayerCleanup();
-        updateMultiplayerStatus('Singleplayer');
-      }
-
-      // Minimal game state sync (both balls, both player positions)
-      function setupConnectionHandlers(connection) {
-        connection.on('data', (data) => {
-          if (data.type === 'ball-state') {
-            // Update remote ball state
-            if (isHost && data.ball === 'player1') {
-              // Host receives red ball state from peer
-              const redBall = document.querySelector('[simple-grab="player: player1"]');
-              if (redBall && redBall.components['simple-grab']) {
-                redBall.components['simple-grab'].body.position.copy(data.position);
-                redBall.components['simple-grab'].body.velocity.copy(data.velocity);
-              }
-            } else if (!isHost && data.ball === 'player2') {
-              // Peer receives blue ball state from host
-              const blueBall = document.querySelector('[simple-grab="player: player2"]');
-              if (blueBall && blueBall.components['simple-grab']) {
-                blueBall.components['simple-grab'].body.position.copy(data.position);
-                blueBall.components['simple-grab'].body.velocity.copy(data.velocity);
-              }
-            }
-          } else if (data.type === 'player-pos') {
-            // Update remote player head position
-            if (isHost && data.player === 'player1') {
-              // Host receives peer's (player1) head position
-              updateRemotePlayerHead('player1', data.position, data.rotation);
-            } else if (!isHost && data.player === 'player2') {
-              // Peer receives host's (player2) head position
-              updateRemotePlayerHead('player2', data.position, data.rotation);
-            }
-          } else if (data.type === 'ready') {
-            // Peer is ready
-          }
-        });
-        connection.on('close', () => {
-          updateMultiplayerStatus('Disconnected. Returning to singleplayer.');
-          cleanupMultiplayer();
-        });
-      }
-
-      // Called when multiplayer starts
-      function onMultiplayerStart() {
-        // Hide bot, pause singleplayer logic
-        const bot = document.querySelector('[bot]');
-        if (bot) bot.setAttribute('bot', 'enabled', false);
-        updateMultiplayerStatus('Multiplayer: Connected!');
-        // Start sync loop
-        if (multiplayerCleanup) multiplayerCleanup();
-        let running = true;
-        function syncLoop() {
-          if (!running || !isMultiplayer || !conn || connectionState !== 'CONNECTED') return;
-          // Host sends blue ball
-          if (isHost) {
-            const blueBall = document.querySelector('[simple-grab="player: player2"]');
-            if (blueBall && blueBall.components['simple-grab']) {
-              const body = blueBall.components['simple-grab'].body;
-              conn.send({ type: 'ball-state', ball: 'player2', position: { x: body.position.x, y: body.position.y, z: body.position.z }, velocity: { x: body.velocity.x, y: body.velocity.y, z: body.velocity.z } });
-            }
-          } else {
-            // Peer sends red ball
-            const redBall = document.querySelector('[simple-grab="player: player1"]');
-            if (redBall && redBall.components['simple-grab']) {
-              const body = redBall.components['simple-grab'].body;
-              conn.send({ type: 'ball-state', ball: 'player1', position: { x: body.position.x, y: body.position.y, z: body.position.z }, velocity: { x: body.velocity.x, y: body.velocity.y, z: body.velocity.z } });
-            }
-          }
-          setTimeout(syncLoop, 50); // 20Hz
-        }
-        syncLoop();
-        multiplayerCleanup = () => { running = false; };
-      }
-
-      // Only allow each player to grab/throw their own ball in multiplayer
-      // Patch simple-grab to enforce this
-      (function() {
-        if (AFRAME.components['simple-grab'] && AFRAME.components['simple-grab'].Component) {
-          AFRAME.components['simple-grab'].Component.prototype.canGrab = function(handEl) {
-            if (!isMultiplayer) return true;
-            // Host is player2 (blue), peer is player1 (red)
-            const myPlayer = isHost ? 'player2' : 'player1';
-            return this.data.player === myPlayer;
-          };
-        }
-      })();
-
-      // Dummy function for remote player head update (expand as needed)
-      function updateRemotePlayerHead(player, position, rotation) {
-        // You can visualize the remote player's head here if desired
-      }
-
-      // Listen for Y button to toggle multiplayer
-      AFRAME.registerComponent('multiplayer-toggle', {
-        init: function() {
-          this.isMultiplayerActive = false;
-          this.el.sceneEl.addEventListener('ybuttondown', () => {
-            if (!isMultiplayer) {
-              updateMultiplayerStatus('Searching for match...');
-              startMultiplayerConnection();
-            } else {
-              updateMultiplayerStatus('Leaving multiplayer...');
-              cleanupMultiplayer();
-              // Re-enable bot
-              const bot = document.querySelector('[bot]');
-              if (bot) bot.setAttribute('bot', 'enabled', true);
-            }
-          });
-        }
-      });
 
       // Hand collider component
       AFRAME.registerComponent('hand-collider', {
@@ -1376,7 +1114,7 @@
 
     </script>
 
-    <a-scene physics-world game-manager sound-manager multiplayer-toggle
+    <a-scene physics-world game-manager sound-manager
     vr-mode-ui="enabled: true"
       renderer="antialias: true; colorManagement: true; shadowMapEnabled: true"
     webxr="requiredFeatures: local-floor">
@@ -1470,7 +1208,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.6; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.3; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
