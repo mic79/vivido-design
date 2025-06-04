@@ -623,16 +623,45 @@
           color: { type: 'color', default: '#ffffff' }
         },
         init: function() {
+          // Find the impact sphere within this entity
           this.impactSphere = this.el.querySelector('a-sphere[id$="-impact"]');
           if (!this.impactSphere) {
             console.warn('Impact sphere not found for:', this.el.id);
             return;
           }
-          
-          // Ensure initial state
-          this.impactSphere.setAttribute('visible', false);
-          this.impactSphere.setAttribute('opacity', 0.5);
-          this.impactSphere.setAttribute('radius', 0.1);
+
+          // Store animation state
+          this.isAnimating = false;
+          this.animationFrame = null;
+
+          // Add collision event listener
+          this.el.addEventListener('obbcollisionstarted', (evt) => {
+            const collider = evt.detail.withEl;
+            if (!collider || !collider.hasAttribute('simple-grab')) return;
+
+            // Check if this is the player target
+            const isPlayerTarget = this.el.id === 'player-target';
+            const isBotTarget = this.el.id === 'bot-target';
+            
+            // Get the ball's player
+            const ballPlayer = collider.getAttribute('simple-grab').player;
+            
+            // Only play effect if:
+            // - Player target is hit by player1's ball (bot's ball)
+            // - Bot target is hit by player2's ball (player's ball)
+            const shouldPlayEffect = (isPlayerTarget && ballPlayer === 'player1') || 
+                                   (isBotTarget && ballPlayer === 'player2');
+
+            if (shouldPlayEffect) {
+              this.playEffect();
+            }
+          });
+        },
+
+        remove: function() {
+          if (this.animationFrame) {
+            cancelAnimationFrame(this.animationFrame);
+          }
         },
         
         playEffect: function() {
@@ -640,11 +669,15 @@
             console.warn('Cannot play effect - impact sphere not found');
             return;
           }
+
+          // If already animating, cancel the current animation
+          if (this.isAnimating && this.animationFrame) {
+            cancelAnimationFrame(this.animationFrame);
+          }
           
           // Play impact sound
           const impactSound = document.querySelector('#impact-sound');
           if (impactSound) {
-            // Position the sound at the impact location
             impactSound.object3D.position.copy(this.el.object3D.position);
             impactSound.components.sound.playSound();
           }
@@ -657,6 +690,7 @@
           // Animate the sphere growing
           const startTime = Date.now();
           const duration = 1000; // 1 second animation
+          this.isAnimating = true;
           
           const animate = () => {
             const elapsed = Date.now() - startTime;
@@ -671,15 +705,17 @@
             this.impactSphere.setAttribute('opacity', opacity);
             
             if (progress < 1) {
-              requestAnimationFrame(animate);
+              this.animationFrame = requestAnimationFrame(animate);
             } else {
               this.impactSphere.setAttribute('visible', false);
-              this.impactSphere.setAttribute('opacity', 0.5);
+              this.impactSphere.setAttribute('opacity', 0);
               this.impactSphere.setAttribute('radius', 0.1);
+              this.isAnimating = false;
+              this.animationFrame = null;
             }
           };
           
-          animate();
+          this.animationFrame = requestAnimationFrame(animate);
         }
       });
 
@@ -1206,7 +1242,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.1; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.2; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
@@ -1237,8 +1273,8 @@
       </a-entity>
 
       <!-- Bot (AI player) -->
-      <a-entity position="0 1.6 -6" bot impact-effect="color: #ff0000">
-        <a-sphere id="bot-target" radius="0.2" color="#ff0000" obb-collider material="wireframe: true; color: #ff0000; opacity: 0.5" glow="color: #ff0000; intensity: 1.5">
+      <a-entity position="0 1.6 -6" bot>
+        <a-sphere id="bot-target" radius="0.2" color="#ff0000" obb-collider material="wireframe: true; color: #ff0000; opacity: 0.5" glow="color: #ff0000; intensity: 1.5" impact-effect="color: #ff0000">
           <a-entity light="type: point;
                          color: #ff0000;
                          intensity: 0.8;     
@@ -1248,8 +1284,9 @@
                          shadowBias: -0.001"  
                     position="0 0 0">
           </a-entity>
+          <!-- Impact sphere is now a child of the target -->
+          <a-sphere id="bot-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"></a-sphere>
         </a-sphere>
-        <a-sphere id="bot-impact" radius="1.5" color="#ff0000" opacity="0.5" visible="false" material="side: double; transparent: true"></a-sphere>
       </a-entity>
 
       <!-- Player 1 ball spawn (AI player's ball) -->
@@ -1317,12 +1354,11 @@
       </a-sphere>
 
       <!-- Basic Camera Rig for VR -->
-      <a-entity id="player" position="0 0 6" impact-effect="color: #0000ff">
-        <a-sphere id="player-impact" radius="1.5" color="#0000ff" opacity="0.5" visible="false" material="side: double; transparent: true" position="0 1.5 0"></a-sphere>
+      <a-entity id="player" position="0 0 6">
         <a-entity id="rig" position="0 0 0">
           <a-entity camera look-controls="pointerLockEnabled: false">
             <!-- This is the target sphere that needs to be hit -->
-            <a-sphere id="player-target" radius="0.2" color="#0000ff" glow="color: #0000ff; intensity: 1.5" obb-collider material="transparent: true; opacity: 0.5">
+            <a-sphere id="player-target" radius="0.2" color="#0000ff" glow="color: #0000ff; intensity: 1.5" obb-collider material="transparent: true; opacity: 0.5" impact-effect="color: #0000ff">
               <a-entity light="type: point;
                              color: #0000ff;
                              intensity: 0.8;     
@@ -1332,6 +1368,8 @@
                              shadowBias: -0.001"  
                         position="0 0 0">
               </a-entity>
+              <!-- Impact sphere is now a child of the target -->
+              <a-sphere id="player-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"></a-sphere>
             </a-sphere>
           </a-entity>
           
