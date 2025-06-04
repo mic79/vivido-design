@@ -129,7 +129,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.9 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.10 | ${text}`);
         }
       }
 
@@ -399,6 +399,21 @@
       // In tick, send local player2 (blue) and ball state; apply mirrored remote to player1 (red)
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
+          // In multiplayer, send the local camera's world position/rotation as player state
+          if (isMultiplayer) {
+            const camera = document.querySelector('[camera]');
+            if (camera) {
+              const worldPos = new THREE.Vector3();
+              camera.object3D.getWorldPosition(worldPos);
+              const worldQuat = new THREE.Quaternion();
+              camera.object3D.getWorldQuaternion(worldQuat);
+              const worldRot = new THREE.Euler().setFromQuaternion(worldQuat, 'YXZ');
+              sendPlayerState({
+                x: worldPos.x, y: worldPos.y, z: worldPos.z,
+                rx: worldRot.x, ry: worldRot.y, rz: worldRot.z
+              });
+            }
+          }
           // In multiplayer, update the red player (bot) with the mirrored remote player state
           if (isMultiplayer && remotePlayerState) {
             const mirroredX = -remotePlayerState.x;
@@ -413,8 +428,9 @@
           const blueBall = document.querySelector('[simple-grab="player: player2"]');
           if (blueBall) {
             const pos = blueBall.object3D.position;
-            const rot = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
-            sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: rot.x, vy: rot.y, vz: rot.z });
+            const rot = blueBall.object3D.rotation;
+            const vel = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
+            sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: vel.x, vy: vel.y, vz: vel.z });
           }
           // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) ---
           if (remotePlayerState) {
@@ -1619,7 +1635,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.9; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.10; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
