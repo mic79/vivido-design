@@ -128,7 +128,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.4 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.5 | ${text}`);
         }
       }
 
@@ -363,14 +363,14 @@
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
           if (!isMultiplayer) return;
-          // Send local player2 (blue) state
+          // --- LOCAL PERSPECTIVE SYSTEM ---
+          // Always send local player2 (blue) and blue ball state
           const player2 = document.querySelector('#player');
           if (player2) {
             const pos = player2.object3D.position;
             const rot = player2.object3D.rotation;
             sendPlayerState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z });
           }
-          // Send local player2 (blue) ball state
           const blueBall = document.querySelector('[simple-grab="player: player2"]');
           if (blueBall) {
             const pos = blueBall.object3D.position;
@@ -378,15 +378,17 @@
             const vel = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
             sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: vel.x, vy: vel.y, vz: vel.z });
           }
-          // Apply remote player1 (red) state
+          // --- REMOTE PLAYER (ALWAYS RED) ---
+          // Apply remote player state to Player 1 (red)
           if (remotePlayerState) {
-            const player1 = document.querySelector('#bot');
+            // Player 1 is the bot entity (red)
+            const player1 = document.querySelector('[bot]');
             if (player1) {
               player1.object3D.position.set(remotePlayerState.x, remotePlayerState.y, remotePlayerState.z);
               player1.object3D.rotation.set(remotePlayerState.rx, remotePlayerState.ry, remotePlayerState.rz);
             }
           }
-          // Apply remote player1 (red) ball state
+          // Apply remote ball state to Player 1's (red) ball
           if (remoteBallState) {
             const redBall = document.querySelector('[simple-grab="player: player1"]');
             if (redBall) {
@@ -397,6 +399,16 @@
                 redBall.components['simple-grab'].body.velocity.set(remoteBallState.vx, remoteBallState.vy, remoteBallState.vz);
               }
             }
+          }
+          // Prevent local input from affecting Player 1 (red) and their ball in multiplayer
+          if (isMultiplayer) {
+            // Disable grabbing for red ball
+            const redBall = document.querySelector('[simple-grab="player: player1"]');
+            if (redBall && redBall.components['simple-grab']) {
+              redBall.components['simple-grab'].isGrabbed = false;
+              redBall.components['simple-grab'].grabbingHand = null;
+            }
+            // Optionally, disable bot logic (already handled elsewhere)
           }
         }
       });
@@ -1503,7 +1515,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.4; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.5; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
