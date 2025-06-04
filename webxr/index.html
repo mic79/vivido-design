@@ -626,11 +626,20 @@
           this.impactSphere = this.el.querySelector('a-sphere[id$="-impact"]');
           if (!this.impactSphere) {
             console.warn('Impact sphere not found for:', this.el.id);
+            return;
           }
+          
+          // Ensure initial state
+          this.impactSphere.setAttribute('visible', false);
+          this.impactSphere.setAttribute('opacity', 0.5);
+          this.impactSphere.setAttribute('radius', 0.1);
         },
         
         playEffect: function() {
-          if (!this.impactSphere) return;
+          if (!this.impactSphere) {
+            console.warn('Cannot play effect - impact sphere not found');
+            return;
+          }
           
           // Play impact sound
           const impactSound = document.querySelector('#impact-sound');
@@ -640,7 +649,7 @@
             impactSound.components.sound.playSound();
           }
           
-          // Start small and make visible
+          // Reset and show impact sphere
           this.impactSphere.setAttribute('radius', 0.1);
           this.impactSphere.setAttribute('visible', true);
           this.impactSphere.setAttribute('opacity', 0.5);
@@ -666,6 +675,7 @@
             } else {
               this.impactSphere.setAttribute('visible', false);
               this.impactSphere.setAttribute('opacity', 0.5);
+              this.impactSphere.setAttribute('radius', 0.1);
             }
           };
           
@@ -1196,6 +1206,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.1; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
@@ -1307,10 +1318,11 @@
 
       <!-- Basic Camera Rig for VR -->
       <a-entity id="player" position="0 0 6" impact-effect="color: #0000ff">
-        <a-sphere id="player-impact" radius="1.5" color="#0000ff" opacity="0.5" visible="false" material="side: double" position="0 1.5 0"></a-sphere>
+        <a-sphere id="player-impact" radius="1.5" color="#0000ff" opacity="0.5" visible="false" material="side: double; transparent: true" position="0 1.5 0"></a-sphere>
         <a-entity id="rig" position="0 0 0">
           <a-entity camera look-controls="pointerLockEnabled: false">
-            <a-sphere radius="0.1" color="#ffffff" glow="color: #0000ff; intensity: 1.5" id="player-target" position="0 0 0" obb-collider>
+            <!-- This is the target sphere that needs to be hit -->
+            <a-sphere id="player-target" radius="0.2" color="#0000ff" glow="color: #0000ff; intensity: 1.5" obb-collider material="transparent: true; opacity: 0.5">
               <a-entity light="type: point;
                              color: #0000ff;
                              intensity: 0.8;     
