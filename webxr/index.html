@@ -128,7 +128,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.6 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.7 | ${text}`);
         }
       }
 
@@ -436,27 +436,47 @@
           scoreDisplay.setAttribute('text', 'value', `You: ${multiplayerScore.local} - Opponent: ${multiplayerScore.remote}`);
         }
       }
-      // Patch game manager to sync score in multiplayer
-      const origOnBotHit = AFRAME.components['game-manager'].Component.prototype.onBotHit;
-      const origOnPlayerHit = AFRAME.components['game-manager'].Component.prototype.onPlayerHit;
-      AFRAME.components['game-manager'].Component.prototype.onBotHit = function() {
-        if (isMultiplayer) {
-          multiplayerScore.local += 1;
-          updateScoreDisplayMultiplayer();
-          sendScoreUpdate();
-        } else {
-          origOnBotHit.call(this);
+      // Patch game manager to sync score in multiplayer, but only after A-Frame and the component are loaded
+      function patchGameManagerScoreSync() {
+        const gm = AFRAME.components['game-manager'];
+        if (!gm || !gm.Component) return false;
+        if (gm.Component.prototype._multiplayerPatched) return true;
+        const origOnBotHit = gm.Component.prototype.onBotHit;
+        const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
+        gm.Component.prototype.onBotHit = function() {
+          if (isMultiplayer) {
+            multiplayerScore.local += 1;
+            updateScoreDisplayMultiplayer();
+            sendScoreUpdate();
+          } else {
+            origOnBotHit.call(this);
+          }
+        };
+        gm.Component.prototype.onPlayerHit = function() {
+          if (isMultiplayer) {
+            multiplayerScore.remote += 1;
+            updateScoreDisplayMultiplayer();
+            sendScoreUpdate();
+          } else {
+            origOnPlayerHit.call(this);
+          }
+        };
+        gm.Component.prototype._multiplayerPatched = true;
+        return true;
+      }
+      // Wait for A-Frame and scene to be loaded before patching
+      function tryPatchGameManager() {
+        if (!patchGameManagerScoreSync()) {
+          setTimeout(tryPatchGameManager, 100);
         }
-      };
-      AFRAME.components['game-manager'].Component.prototype.onPlayerHit = function() {
-        if (isMultiplayer) {
-          multiplayerScore.remote += 1;
-          updateScoreDisplayMultiplayer();
-          sendScoreUpdate();
+      }
+      document.addEventListener('DOMContentLoaded', () => {
+        if (document.querySelector('a-scene')) {
+          document.querySelector('a-scene').addEventListener('loaded', tryPatchGameManager);
         } else {
-          origOnPlayerHit.call(this);
+          setTimeout(tryPatchGameManager, 100);
         }
-      };
+      });
 
       // Hand collider component
       AFRAME.registerComponent('hand-collider', {
@@ -1560,7 +1580,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.6; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.7; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
