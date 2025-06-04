@@ -630,10 +630,6 @@
             return;
           }
 
-          // Store animation state
-          this.isAnimating = false;
-          this.animationFrame = null;
-
           // Add collision event listener
           this.el.addEventListener('obbcollisionstarted', (evt) => {
             const collider = evt.detail.withEl;
@@ -657,22 +653,11 @@
             }
           });
         },
-
-        remove: function() {
-          if (this.animationFrame) {
-            cancelAnimationFrame(this.animationFrame);
-          }
-        },
         
         playEffect: function() {
           if (!this.impactSphere) {
             console.warn('Cannot play effect - impact sphere not found');
             return;
-          }
-
-          // If already animating, cancel the current animation
-          if (this.isAnimating && this.animationFrame) {
-            cancelAnimationFrame(this.animationFrame);
           }
           
           // Play impact sound
@@ -682,40 +667,20 @@
             impactSound.components.sound.playSound();
           }
           
-          // Reset and show impact sphere
+          // Reset impact sphere state
           this.impactSphere.setAttribute('radius', 0.1);
+          this.impactSphere.setAttribute('material', 'opacity', 0.5);
           this.impactSphere.setAttribute('visible', true);
-          this.impactSphere.setAttribute('opacity', 0.5);
           
-          // Animate the sphere growing
-          const startTime = Date.now();
-          const duration = 1000; // 1 second animation
-          this.isAnimating = true;
+          // Trigger the animations
+          this.impactSphere.emit('impact');
           
-          const animate = () => {
-            const elapsed = Date.now() - startTime;
-            const progress = Math.min(elapsed / duration, 1);
-            
-            // Grow from 0.1 to 1.5 radius (3m diameter)
-            const radius = 0.1 + (1.4 * progress);
-            this.impactSphere.setAttribute('radius', radius);
-            
-            // Fade out opacity
-            const opacity = 0.5 * (1 - progress);
-            this.impactSphere.setAttribute('opacity', opacity);
-            
-            if (progress < 1) {
-              this.animationFrame = requestAnimationFrame(animate);
-            } else {
-              this.impactSphere.setAttribute('visible', false);
-              this.impactSphere.setAttribute('opacity', 0);
-              this.impactSphere.setAttribute('radius', 0.1);
-              this.isAnimating = false;
-              this.animationFrame = null;
-            }
-          };
-          
-          this.animationFrame = requestAnimationFrame(animate);
+          // Reset after animation completes
+          setTimeout(() => {
+            this.impactSphere.setAttribute('visible', false);
+            this.impactSphere.setAttribute('material', 'opacity', 0);
+            this.impactSphere.setAttribute('radius', 0.1);
+          }, 1000);
         }
       });
 
@@ -866,12 +831,13 @@
               }
               
               // Play impact effect
-              const impactEffect = this.el.components['impact-effect'];
+              const playerTarget = document.querySelector('#player-target');
+              const impactEffect = playerTarget && playerTarget.components['impact-effect'];
               if (impactEffect) {
                 console.log('Playing player impact effect');
                 impactEffect.playEffect();
               } else {
-                console.log('No impact effect component found on player');
+                console.log('No impact effect component found on player-target');
               }
               
               // Update score
@@ -1242,7 +1208,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.2; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.3; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
@@ -1284,8 +1250,11 @@
                          shadowBias: -0.001"  
                     position="0 0 0">
           </a-entity>
-          <!-- Impact sphere is now a child of the target -->
-          <a-sphere id="bot-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"></a-sphere>
+          <!-- Impact sphere with animation component -->
+          <a-sphere id="bot-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
+            animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
+            animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
+          </a-sphere>
         </a-sphere>
       </a-entity>
 
@@ -1368,8 +1337,11 @@
                              shadowBias: -0.001"  
                         position="0 0 0">
               </a-entity>
-              <!-- Impact sphere is now a child of the target -->
-              <a-sphere id="player-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"></a-sphere>
+              <!-- Impact sphere with animation component -->
+              <a-sphere id="player-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"
+                animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
+                animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
+              </a-sphere>
             </a-sphere>
           </a-entity>
           
