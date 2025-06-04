@@ -123,12 +123,13 @@
       let remotePlayerState = null;
       let remoteBallState = null;
       let multiplayerCleanup = null;
+      let isSearchingForMatch = false;
 
       // Helper: update version display with status
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.8 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.9 | ${text}`);
         }
       }
 
@@ -141,9 +142,11 @@
             lastMultiplayerToggle = now;
             if (!isMultiplayer) {
               updateMultiplayerStatus('Searching for match...');
+              isSearchingForMatch = true;
               startMultiplayerConnection();
             } else {
               updateMultiplayerStatus('Returning to singleplayer...');
+              isSearchingForMatch = false;
               endMultiplayer();
             }
           });
@@ -334,6 +337,7 @@
         isMultiplayer = true;
         multiplayerStatus = 'Multiplayer Connected';
         updateMultiplayerStatus('Multiplayer Connected');
+        isSearchingForMatch = false;
       }
       function endMultiplayer() {
         isMultiplayer = false;
@@ -351,6 +355,13 @@
         if (scoreDisplay) {
           scoreDisplay.setAttribute('text', 'value', 'Player: 0 - Bot: 0');
         }
+        isSearchingForMatch = false;
+        // Set bot to default singleplayer position (head height)
+        const botEntity = document.querySelector('[bot]');
+        if (botEntity) {
+          botEntity.object3D.position.set(0, 1.6, -6);
+          botEntity.object3D.rotation.set(0, 0, 0);
+        }
       }
       function cleanupMultiplayer() {
         if (conn) { try { conn.close(); } catch(e){} }
@@ -367,42 +378,58 @@
         if (scene && !scene.hasAttribute('multiplayer-toggle')) {
           scene.setAttribute('multiplayer-toggle', '');
         }
+        // Wait for the scene to load, then set bot to default singleplayer position (head height) at startup
+        function setBotToDefaultPosition() {
+          const botEntity = document.querySelector('[bot]');
+          if (botEntity) {
+            botEntity.object3D.position.set(0, 1.6, -6);
+            botEntity.object3D.rotation.set(0, 0, 0);
+          } else {
+            setTimeout(setBotToDefaultPosition, 50);
+          }
+        }
+        if (scene) {
+          scene.addEventListener('loaded', setBotToDefaultPosition);
+        } else {
+          setBotToDefaultPosition();
+        }
       });
 
       // --- GAME STATE SYNC ---
       // In tick, send local player2 (blue) and ball state; apply mirrored remote to player1 (red)
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
-          if (!isMultiplayer) return;
-          // --- LOCAL PERSPECTIVE SYSTEM ---
-          // Always send local player2 (blue) and blue ball state
-          const player2 = document.querySelector('#player');
-          if (player2) {
-            const pos = player2.object3D.position;
-            const rot = player2.object3D.rotation;
-            sendPlayerState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z });
-          }
-          const blueBall = document.querySelector('[simple-grab="player: player2"]');
-          if (blueBall) {
-            const pos = blueBall.object3D.position;
-            const rot = blueBall.object3D.rotation;
-            const vel = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
-            sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: vel.x, vy: vel.y, vz: vel.z });
-          }
-          // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) ---
-          if (remotePlayerState) {
+          // In multiplayer, update the red player (bot) with the mirrored remote player state
+          if (isMultiplayer && remotePlayerState) {
             const mirroredX = -remotePlayerState.x;
             const mirroredZ = -remotePlayerState.z;
             const mirroredRy = -remotePlayerState.ry;
             const player1 = document.querySelector('[bot]');
             if (player1) {
               player1.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
-              player1.object3D.rotation.set(remotePlayerState.rx, mirroredRy, remotePlayerState.rz);
-              // Update red target (opponent's head)
-              const botTarget = player1.querySelector('#bot-target');
-              if (botTarget) {
-                botTarget.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
-                botTarget.object3D.rotation.set(remotePlayerState.rx, mirroredRy, remotePlayerState.rz);
+              player1.object3D.rotation.set(remotePlayerState.rx, mirroredRy, 0);
+            }
+          }
+          const blueBall = document.querySelector('[simple-grab="player: player2"]');
+          if (blueBall) {
+            const pos = blueBall.object3D.position;
+            const rot = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
+            sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: rot.x, vy: rot.y, vz: rot.z });
+          }
+          // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) ---
+          if (remotePlayerState) {
+            const mirroredX = -remotePlayerState.x;
+            const mirroredZ = -remotePlayerState.z;
+            const mirroredVx = -remotePlayerState.vx;
+            const mirroredVz = -remotePlayerState.vz;
+            const mirroredRy = -remotePlayerState.ry;
+            const redBall = document.querySelector('[simple-grab="player: player1"]');
+            if (redBall) {
+              redBall.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
+              redBall.object3D.rotation.set(remotePlayerState.rx, mirroredRy, remotePlayerState.rz);
+              if (redBall.components['simple-grab']?.body) {
+                redBall.components['simple-grab'].body.position.set(mirroredX, remotePlayerState.y, mirroredZ);
+                redBall.components['simple-grab'].body.velocity.set(mirroredVx, remotePlayerState.vy, mirroredVz);
               }
             }
           }
@@ -1592,7 +1619,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.8; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.9; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
@@ -1623,8 +1650,8 @@
       </a-entity>
 
       <!-- Bot (AI player) -->
-      <a-entity position="0 1.6 -6" bot>
-        <a-sphere id="bot-target" radius="0.2" color="#ff0000" obb-collider material="wireframe: true; color: #ff0000; opacity: 0.5" glow="color: #ff0000; intensity: 1.5" impact-effect="color: #ff0000">
+      <a-entity position="0 0 -6" bot>
+        <a-sphere id="bot-target" radius="0.2" color="#ff0000" position="0 0 0" obb-collider material="wireframe: true; color: #ff0000; opacity: 0.5" glow="color: #ff0000; intensity: 1.5" impact-effect="color: #ff0000">
           <a-entity light="type: point;
                          color: #ff0000;
                          intensity: 0.8;     
