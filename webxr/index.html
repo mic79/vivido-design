@@ -9,6 +9,7 @@
     <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   </head>
   <body>
     <script>
@@ -105,6 +106,300 @@
         isReady: { player1: false, player2: false },
         ballSpawned: { player1: false, player2: false }
       };
+
+      // Multiplayer state
+      let isMultiplayer = false;
+      let isHost = false;
+      let peer = null;
+      let conn = null;
+      let multiplayerSlot = null;
+      let multiplayerStatus = 'Singleplayer';
+      let hasConnected = false;
+      const MAX_LOBBIES = 10;
+      let multiplayerStartType = 'dodgeball';
+      let sessionID = null;
+      let connectionState = 'disconnected';
+      let lastMultiplayerToggle = 0;
+      let remotePlayerState = null;
+      let remoteBallState = null;
+      let multiplayerCleanup = null;
+
+      // Helper: update version display with status
+      function updateMultiplayerStatus(text) {
+        const versionDisplay = document.getElementById('version-display');
+        if (versionDisplay) {
+          versionDisplay.setAttribute('text', 'value', `v0.4 | ${text}`);
+        }
+      }
+
+      // Listen for Y button to toggle multiplayer
+      AFRAME.registerComponent('multiplayer-toggle', {
+        init: function() {
+          this.el.sceneEl.addEventListener('ybuttondown', () => {
+            const now = Date.now();
+            if (now - lastMultiplayerToggle < 1000) return; // debounce
+            lastMultiplayerToggle = now;
+            if (!isMultiplayer) {
+              updateMultiplayerStatus('Searching for match...');
+              startMultiplayerConnection();
+            } else {
+              updateMultiplayerStatus('Returning to singleplayer...');
+              endMultiplayer();
+            }
+          });
+        }
+      });
+
+      // Multiplayer connection logic (slot-based, PeerJS, TURN support)
+      async function startMultiplayerConnection() {
+        connectionState = 'connecting';
+        multiplayerStatus = 'Searching...';
+        updateMultiplayerStatus('Searching for match...');
+        try {
+          const slot = await findAvailableSlot(multiplayerStartType);
+          if (!slot) {
+            updateMultiplayerStatus('No available slots. Try again.');
+            connectionState = 'disconnected';
+            return;
+          }
+          multiplayerSlot = slot.slotNumber;
+          isHost = slot.role === 'host';
+          if (isHost) {
+            await setupHost(multiplayerSlot);
+          } else {
+            await setupPeer(multiplayerSlot);
+          }
+        } catch (e) {
+          updateMultiplayerStatus('Connection failed.');
+          connectionState = 'disconnected';
+        }
+      }
+
+      async function checkPeerAvailability(id) {
+        return new Promise((resolve) => {
+          const tempPeer = new Peer(id, { host: "0.peerjs.com", port: 443, secure: true });
+          const timeout = setTimeout(() => {
+            tempPeer.destroy();
+            resolve(false);
+          }, 2000);
+          tempPeer.on("open", () => {
+            clearTimeout(timeout);
+            tempPeer.destroy();
+            resolve(true);
+          });
+          tempPeer.on("error", (err) => {
+            clearTimeout(timeout);
+            tempPeer.destroy();
+            if (err.type === 'unavailable-id') {
+              resolve(false);
+            } else {
+              resolve(true);
+            }
+          });
+        });
+      }
+
+      async function findAvailableSlot(desiredStartType) {
+        for (let i = 1; i <= MAX_LOBBIES; i++) {
+          const hostId = `dot-host-${desiredStartType}-${i}`;
+          const peerId = `dot-peer-${desiredStartType}-${i}`;
+          const hostAvailable = await checkPeerAvailability(hostId);
+          if (hostAvailable) {
+            return { slotNumber: i, role: 'host' };
+          } else {
+            const peerAvailable = await checkPeerAvailability(peerId);
+            if (peerAvailable) {
+              return { slotNumber: i, role: 'peer' };
+            }
+          }
+        }
+        return null;
+      }
+
+      async function setupPeer(slotNumber) {
+        cleanupMultiplayer();
+        isMultiplayer = true;
+        isHost = false;
+        sessionID = `dot-peer-${multiplayerStartType}-${slotNumber}`;
+        let iceServersConfig = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ];
+        try {
+          const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev");
+          if (response.ok) {
+            iceServersConfig = await response.json();
+          }
+        } catch (e) {}
+        peer = new Peer(sessionID, {
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { 'iceServers': iceServersConfig }
+        });
+        peer.on("open", function() {
+          updateMultiplayerStatus('Connecting to host...');
+          const hostID = `dot-host-${multiplayerStartType}-${slotNumber}`;
+          conn = peer.connect(hostID);
+          conn.on("open", function() {
+            multiplayerStatus = 'Multiplayer Connected';
+            updateMultiplayerStatus('Multiplayer Connected');
+            setupConnectionHandlers(conn);
+            onMultiplayerStart();
+          });
+        });
+        peer.on("error", function(err) {
+          updateMultiplayerStatus(`Peer error: ${err.type}`);
+          cleanupMultiplayer();
+        });
+      }
+
+      async function setupHost(slotNumber) {
+        cleanupMultiplayer();
+        isMultiplayer = true;
+        isHost = true;
+        sessionID = `dot-host-${multiplayerStartType}-${slotNumber}`;
+        let iceServersConfig = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ];
+        try {
+          const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev/");
+          if (response.ok) {
+            iceServersConfig = await response.json();
+          }
+        } catch (e) {}
+        peer = new Peer(sessionID, {
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { 'iceServers': iceServersConfig }
+        });
+        peer.on("open", function() {
+          updateMultiplayerStatus('Waiting for opponent...');
+          peer.on("connection", function(newConn) {
+            if (conn) {
+              newConn.close();
+            } else {
+              conn = newConn;
+              conn.on("open", function() {
+                multiplayerStatus = 'Multiplayer Connected';
+                updateMultiplayerStatus('Multiplayer Connected');
+                setupConnectionHandlers(conn);
+                onMultiplayerStart();
+              });
+            }
+          });
+        });
+        peer.on("error", function(err) {
+          updateMultiplayerStatus(`Peer error: ${err.type}`);
+          cleanupMultiplayer();
+        });
+      }
+
+      function setupConnectionHandlers(conn) {
+        conn.on('data', (data) => {
+          if (data.type === 'player-state') {
+            remotePlayerState = data.state;
+          } else if (data.type === 'ball-state') {
+            remoteBallState = data.state;
+          }
+        });
+        conn.on('close', () => {
+          updateMultiplayerStatus('Connection lost. Returning to singleplayer.');
+          endMultiplayer();
+        });
+      }
+
+      function sendPlayerState(state) {
+        if (conn && conn.open) {
+          conn.send({ type: 'player-state', state });
+        }
+      }
+      function sendBallState(state) {
+        if (conn && conn.open) {
+          conn.send({ type: 'ball-state', state });
+        }
+      }
+
+      function onMultiplayerStart() {
+        // Hide bot, disable bot logic
+        const bot = document.querySelector('[bot]');
+        if (bot) bot.setAttribute('bot', 'enabled', false);
+        isMultiplayer = true;
+        multiplayerStatus = 'Multiplayer Connected';
+        updateMultiplayerStatus('Multiplayer Connected');
+      }
+      function endMultiplayer() {
+        isMultiplayer = false;
+        multiplayerStatus = 'Singleplayer';
+        updateMultiplayerStatus('Singleplayer');
+        cleanupMultiplayer();
+        // Re-enable bot
+        const bot = document.querySelector('[bot]');
+        if (bot) bot.setAttribute('bot', 'enabled', true);
+        remotePlayerState = null;
+        remoteBallState = null;
+      }
+      function cleanupMultiplayer() {
+        if (conn) { try { conn.close(); } catch(e){} }
+        if (peer) { try { peer.destroy(); } catch(e){} }
+        conn = null;
+        peer = null;
+        multiplayerSlot = null;
+        hasConnected = false;
+      }
+
+      // Attach multiplayer-toggle to scene
+      document.addEventListener('DOMContentLoaded', () => {
+        const scene = document.querySelector('a-scene');
+        if (scene && !scene.hasAttribute('multiplayer-toggle')) {
+          scene.setAttribute('multiplayer-toggle', '');
+        }
+      });
+
+      // --- GAME STATE SYNC ---
+      // In tick, send local player2 (blue) and ball state; apply remote to player1 (red)
+      AFRAME.registerComponent('multiplayer-sync', {
+        tick: function() {
+          if (!isMultiplayer) return;
+          // Send local player2 (blue) state
+          const player2 = document.querySelector('#player');
+          if (player2) {
+            const pos = player2.object3D.position;
+            const rot = player2.object3D.rotation;
+            sendPlayerState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z });
+          }
+          // Send local player2 (blue) ball state
+          const blueBall = document.querySelector('[simple-grab="player: player2"]');
+          if (blueBall) {
+            const pos = blueBall.object3D.position;
+            const rot = blueBall.object3D.rotation;
+            const vel = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
+            sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: vel.x, vy: vel.y, vz: vel.z });
+          }
+          // Apply remote player1 (red) state
+          if (remotePlayerState) {
+            const player1 = document.querySelector('#bot');
+            if (player1) {
+              player1.object3D.position.set(remotePlayerState.x, remotePlayerState.y, remotePlayerState.z);
+              player1.object3D.rotation.set(remotePlayerState.rx, remotePlayerState.ry, remotePlayerState.rz);
+            }
+          }
+          // Apply remote player1 (red) ball state
+          if (remoteBallState) {
+            const redBall = document.querySelector('[simple-grab="player: player1"]');
+            if (redBall) {
+              redBall.object3D.position.set(remoteBallState.x, remoteBallState.y, remoteBallState.z);
+              redBall.object3D.rotation.set(remoteBallState.rx, remoteBallState.ry, remoteBallState.rz);
+              if (redBall.components['simple-grab']?.body) {
+                redBall.components['simple-grab'].body.position.set(remoteBallState.x, remoteBallState.y, remoteBallState.z);
+                redBall.components['simple-grab'].body.velocity.set(remoteBallState.vx, remoteBallState.vy, remoteBallState.vz);
+              }
+            }
+          }
+        }
+      });
 
       // Hand collider component
       AFRAME.registerComponent('hand-collider', {
@@ -1114,7 +1409,7 @@
 
     </script>
 
-    <a-scene physics-world game-manager sound-manager
+    <a-scene physics-world game-manager sound-manager multiplayer-sync
     vr-mode-ui="enabled: true"
       renderer="antialias: true; colorManagement: true; shadowMapEnabled: true"
     webxr="requiredFeatures: local-floor">
@@ -1208,7 +1503,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.3; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.4; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
