@@ -124,7 +124,7 @@
       function updateMultiplayerStatus(msg) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.5\n${msg}`);
+          versionDisplay.setAttribute('text', 'value', `v0.6\n${msg}`);
         }
       }
 
@@ -310,36 +310,19 @@
         let running = true;
         function syncLoop() {
           if (!running || !isMultiplayer || !conn || connectionState !== 'CONNECTED') return;
-          // Host sends blue ball and their own head position
+          // Host sends blue ball
           if (isHost) {
-            // Blue ball (player2)
             const blueBall = document.querySelector('[simple-grab="player: player2"]');
             if (blueBall && blueBall.components['simple-grab']) {
               const body = blueBall.components['simple-grab'].body;
               conn.send({ type: 'ball-state', ball: 'player2', position: { x: body.position.x, y: body.position.y, z: body.position.z }, velocity: { x: body.velocity.x, y: body.velocity.y, z: body.velocity.z } });
             }
-            // Host's head (player2)
-            const rig = document.querySelector('#rig');
-            if (rig) {
-              // Do NOT sync rig position, let A-Frame/WebXR handle camera height
-              // const pos = rig.object3D.position;
-              // const rot = rig.object3D.rotation;
-              // conn.send({ type: 'player-pos', player: 'player2', position: { x: pos.x, y: pos.y, z: pos.z }, rotation: { x: rot.x, y: rot.y, z: rot.z } });
-            }
           } else {
-            // Peer sends red ball and their own head position
+            // Peer sends red ball
             const redBall = document.querySelector('[simple-grab="player: player1"]');
             if (redBall && redBall.components['simple-grab']) {
               const body = redBall.components['simple-grab'].body;
               conn.send({ type: 'ball-state', ball: 'player1', position: { x: body.position.x, y: body.position.y, z: body.position.z }, velocity: { x: body.velocity.x, y: body.velocity.y, z: body.velocity.z } });
-            }
-            // Peer's head (player1)
-            const rig = document.querySelector('#rig');
-            if (rig) {
-              // Do NOT sync rig position, let A-Frame/WebXR handle camera height
-              // const pos = rig.object3D.position;
-              // const rot = rig.object3D.rotation;
-              // conn.send({ type: 'player-pos', player: 'player1', position: { x: pos.x, y: pos.y, z: pos.z }, rotation: { x: rot.x, y: rot.y, z: rot.z } });
             }
           }
           setTimeout(syncLoop, 50); // 20Hz
@@ -1487,7 +1470,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.5; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.6; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
