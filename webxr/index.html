@@ -129,7 +129,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.10 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.11 | ${text}`);
         }
       }
 
@@ -500,6 +500,7 @@
         const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
         gm.Component.prototype.onBotHit = function() {
           if (isMultiplayer) {
+            // Always increment local score when you hit the opponent
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -509,6 +510,7 @@
         };
         gm.Component.prototype.onPlayerHit = function() {
           if (isMultiplayer) {
+            // Always increment remote score when opponent hits you
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -1635,7 +1637,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.10; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.11; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
