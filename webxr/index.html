@@ -129,7 +129,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.11 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.12 | ${text}`);
         }
       }
 
@@ -1545,7 +1545,7 @@
 
     <a-scene physics-world game-manager sound-manager multiplayer-sync
     vr-mode-ui="enabled: true"
-      renderer="antialias: true; colorManagement: true; shadowMapEnabled: true"
+      renderer="antialias: true; colorManagement: true; shadowMapEnabled: false"
     webxr="requiredFeatures: local-floor">
       
       <!-- Game room walls -->
@@ -1556,7 +1556,6 @@
              depth="16" 
              color="#808080"
              material="shader: standard; metalness: 0; roughness: 1"
-             shadow="cast: true; receive: true"
              static-physics
              obb-collider
              class="collidable">
@@ -1569,7 +1568,6 @@
              depth="16" 
              color="#808080"
              material="shader: standard; metalness: 0; roughness: 1"
-             shadow="cast: true; receive: true"
              static-physics
              obb-collider
              class="collidable">
@@ -1582,7 +1580,6 @@
              depth="16" 
              color="#808080"
              material="shader: standard; metalness: 0; roughness: 1"
-             shadow="cast: true; receive: true"
              static-physics
              obb-collider
              class="collidable">
@@ -1595,7 +1592,6 @@
              depth="16" 
              color="#808080"
              material="shader: standard; metalness: 0; roughness: 1"
-             shadow="cast: true; receive: true"
              static-physics
              obb-collider
              class="collidable">
@@ -1608,7 +1604,6 @@
              depth="0.1" 
              color="#808080"
              material="shader: standard; metalness: 0; roughness: 1"
-             shadow="cast: true; receive: true"
              static-physics
              obb-collider
              class="collidable">
@@ -1621,7 +1616,6 @@
              depth="0.1" 
              color="#808080"
              material="shader: standard; metalness: 0; roughness: 1"
-             shadow="cast: true; receive: true"
              static-physics
              obb-collider
              class="collidable">
@@ -1637,7 +1631,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.11; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.12; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
@@ -1674,9 +1668,7 @@
                          color: #ff0000;
                          intensity: 0.8;     
                          distance: 3;       
-                         decay: 2;
-                         castShadow: true;    
-                         shadowBias: -0.001"  
+                         decay: 2"  
                     position="0 0 0">
           </a-entity>
           <!-- Impact sphere with animation component -->
@@ -1692,7 +1684,6 @@
              radius="0.1"
              color="#ff0000" 
              glow="color: #ff0000; intensity: 1.5"
-             shadow="cast: true"
              simple-grab="player: player1"
              debug-collider
              obb-collider>
@@ -1700,9 +1691,7 @@
                        color: #ff0000;
                        intensity: 1.5;     
                        distance: 5;       
-                       decay: 2;
-                       castShadow: true;    
-                       shadowBias: -0.001"  
+                       decay: 2;"  
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.1" color="#ff0000" material="wireframe: true; color: #ff0000; opacity: 0.5"></a-sphere>
@@ -1724,7 +1713,6 @@
              radius="0.1"
              color="#0000ff" 
              glow="color: #0000ff; intensity: 1.5"
-             shadow="cast: true"
              simple-grab="player: player2"
              debug-collider
              obb-collider>
@@ -1732,9 +1720,7 @@
                        color: #0000ff;
                        intensity: 1.5;     
                        distance: 5;       
-                       decay: 2;
-                       castShadow: true;    
-                       shadowBias: -0.001"  
+                       decay: 2"  
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.1" color="#0000ff" material="wireframe: true; color: #0000ff; opacity: 0.5"></a-sphere>
@@ -1761,9 +1747,7 @@
                              color: #0000ff;
                              intensity: 0.8;     
                              distance: 3;       
-                             decay: 2;
-                             castShadow: true;    
-                             shadowBias: -0.001"  
+                             decay: 2"  
                         position="0 0 0">
               </a-entity>
               <!-- Impact sphere with animation component -->
