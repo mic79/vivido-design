@@ -742,7 +742,7 @@
                   .normalize();
                 
                 // Move towards hand with much slower speed based on distance
-                const moveSpeed = Math.min(2, distance * 10); // Reduced from 20/100 to 2/10
+                const moveSpeed = Math.min(4, distance * 20); // Doubled from 2/10 to 4/20
                 this.el.object3D.position.add(toHand.multiplyScalar(moveSpeed * 0.016));
                 
                 // Update physics body to match
@@ -753,8 +753,8 @@
                 this.body.position.copy(handWorldPos);
               }
               
-              // Smoothly rotate to match hand (slower rotation)
-              this.el.object3D.quaternion.slerp(handWorldQuat, 0.1); // Reduced from 0.3 to 0.1
+              // Smoothly rotate to match hand (faster rotation)
+              this.el.object3D.quaternion.slerp(handWorldQuat, 0.2); // Doubled from 0.1 to 0.2
               this.body.quaternion.copy(this.el.object3D.quaternion);
               
               // Zero out velocities while grabbed
@@ -790,7 +790,8 @@
                   // Physical constants (tuned for game feel)
                   const BALL_RADIUS = 0.1; // meters
                   const AIR_DENSITY = 1.225; // kg/m³
-                  const LIFT_COEFFICIENT = 0.2; // increased from 0.1 to 0.2
+                  const LIFT_COEFFICIENT = 0.2;
+                  const MAX_ANGULAR_SPEED = 30; // Maximum spin speed
                   
                   // Calculate cross-sectional area
                   const crossSectionalArea = Math.PI * BALL_RADIUS * BALL_RADIUS;
@@ -798,8 +799,11 @@
                   // Calculate volume
                   const volume = (4/3) * Math.PI * BALL_RADIUS * BALL_RADIUS * BALL_RADIUS;
                   
+                  // Clamp angular speed to maximum
+                  const clampedAngularSpeed = Math.min(angularSpeed, MAX_ANGULAR_SPEED);
+                  
                   // Calculate base force magnitude (F = ρ * V * A * C * |ω| * |v|)
-                  const forceMagnitude = AIR_DENSITY * volume * crossSectionalArea * LIFT_COEFFICIENT * angularSpeed * linearSpeed;
+                  const forceMagnitude = AIR_DENSITY * volume * crossSectionalArea * LIFT_COEFFICIENT * clampedAngularSpeed * linearSpeed;
                   
                   // Calculate direction using cross product (ω × v)
                   const magnusForce = new THREE.Vector3()
@@ -817,6 +821,14 @@
                   this.body.velocity.x += magnusForce.x;
                   this.body.velocity.y += magnusForce.y;
                   this.body.velocity.z += magnusForce.z;
+                  
+                  // Clamp angular velocity to maximum
+                  if (angularSpeed > MAX_ANGULAR_SPEED) {
+                    const scale = MAX_ANGULAR_SPEED / angularSpeed;
+                    this.body.angularVelocity.x *= scale;
+                    this.body.angularVelocity.y *= scale;
+                    this.body.angularVelocity.z *= scale;
+                  }
                 }
 
                 // Add damping
