@@ -129,7 +129,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.12 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.13 | ${text}`);
         }
       }
 
@@ -428,9 +428,8 @@
           const blueBall = document.querySelector('[simple-grab="player: player2"]');
           if (blueBall) {
             const pos = blueBall.object3D.position;
-            const rot = blueBall.object3D.rotation;
-            const vel = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
-            sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: vel.x, vy: vel.y, vz: vel.z });
+            const rot = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
+            sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: rot.x, vy: rot.y, vz: rot.z });
           }
           // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) ---
           if (remotePlayerState) {
@@ -542,7 +541,7 @@
           this.el.addEventListener('triggerup', this.onGripUp.bind(this));
           
           // Create a collision body for the hand
-          const shape = new CANNON.Sphere(0.05); // Match the debug sphere size
+          const shape = new CANNON.Sphere(0.1); // Increased from 0.05 to 0.1
           this.body = new CANNON.Body({
             mass: 0, // Static body
             shape: shape,
@@ -722,7 +721,7 @@
         tick: function() {
           if (this.body) {
             if (this.isGrabbed && this.grabbingHand) {
-              // When grabbed, directly update position and rotation
+              // When grabbed, smoothly move towards hand
               const handWorldPos = new THREE.Vector3();
               const handWorldQuat = new THREE.Quaternion();
               this.grabbingHand.object3D.getWorldPosition(handWorldPos);
@@ -732,14 +731,36 @@
               this.lastPosition.copy(this.el.object3D.position);
               this.lastRotation.copy(this.el.object3D.quaternion);
               
-              this.el.object3D.position.copy(handWorldPos);
-              this.el.object3D.quaternion.copy(handWorldQuat);
+              // Calculate distance to hand
+              const distance = this.el.object3D.position.distanceTo(handWorldPos);
               
-              // Update physics body to match
-              this.body.position.copy(handWorldPos);
-              this.body.quaternion.copy(handWorldQuat);
+              // If far from hand, use spring-like behavior
+              if (distance > 0.1) {
+                // Calculate direction to hand
+                const toHand = new THREE.Vector3()
+                  .subVectors(handWorldPos, this.el.object3D.position)
+                  .normalize();
+                
+                // Move towards hand with much slower speed based on distance
+                const moveSpeed = Math.min(2, distance * 10); // Reduced from 20/100 to 2/10
+                this.el.object3D.position.add(toHand.multiplyScalar(moveSpeed * 0.016));
+                
+                // Update physics body to match
+                this.body.position.copy(this.el.object3D.position);
+              } else {
+                // When close to hand, stick to it
+                this.el.object3D.position.copy(handWorldPos);
+                this.body.position.copy(handWorldPos);
+              }
+              
+              // Smoothly rotate to match hand (slower rotation)
+              this.el.object3D.quaternion.slerp(handWorldQuat, 0.1); // Reduced from 0.3 to 0.1
+              this.body.quaternion.copy(this.el.object3D.quaternion);
+              
+              // Zero out velocities while grabbed
               this.body.velocity.set(0, 0, 0);
               this.body.angularVelocity.set(0, 0, 0);
+              
               // Keep zero gravity
               this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
             } else {
@@ -749,34 +770,53 @@
 
               // Apply minimal Magnus effect only for very high spin
               if (this.body.velocity.length() > 0.1) {
-                const angularSpeed = Math.sqrt(
-                  this.body.angularVelocity.x * this.body.angularVelocity.x +
-                  this.body.angularVelocity.y * this.body.angularVelocity.y +
-                  this.body.angularVelocity.z * this.body.angularVelocity.z
+                const velocity = new THREE.Vector3(
+                  this.body.velocity.x,
+                  this.body.velocity.y,
+                  this.body.velocity.z
                 );
 
-                // Only apply effect for very high spin
-                if (angularSpeed > 5.0) {
-                  // Calculate a very small sideways force
-                  const sidewaysForce = 0.0001 * angularSpeed;
+                const angularVelocity = new THREE.Vector3(
+                  this.body.angularVelocity.x,
+                  this.body.angularVelocity.y,
+                  this.body.angularVelocity.z
+                );
+
+                const angularSpeed = angularVelocity.length();
+                const linearSpeed = velocity.length();
+                
+                // Apply Magnus effect for any significant spin
+                if (angularSpeed > 0.1) {
+                  // Physical constants (tuned for game feel)
+                  const BALL_RADIUS = 0.1; // meters
+                  const AIR_DENSITY = 1.225; // kg/m³
+                  const LIFT_COEFFICIENT = 0.2; // increased from 0.1 to 0.2
                   
-                  // Apply force perpendicular to velocity
-                  const velocity = new THREE.Vector3(
-                    this.body.velocity.x,
-                    this.body.velocity.y,
-                    this.body.velocity.z
-                  ).normalize();
+                  // Calculate cross-sectional area
+                  const crossSectionalArea = Math.PI * BALL_RADIUS * BALL_RADIUS;
                   
-                  // Create perpendicular vector
-                  const perpendicular = new THREE.Vector3(
-                    -velocity.z,
-                    0,
-                    velocity.x
-                  ).normalize();
+                  // Calculate volume
+                  const volume = (4/3) * Math.PI * BALL_RADIUS * BALL_RADIUS * BALL_RADIUS;
+                  
+                  // Calculate base force magnitude (F = ρ * V * A * C * |ω| * |v|)
+                  const forceMagnitude = AIR_DENSITY * volume * crossSectionalArea * LIFT_COEFFICIENT * angularSpeed * linearSpeed;
+                  
+                  // Calculate direction using cross product (ω × v)
+                  const magnusForce = new THREE.Vector3()
+                    .crossVectors(angularVelocity, velocity)
+                    .normalize() // Get direction only
+                    .multiplyScalar(forceMagnitude); // Apply magnitude
+                  
+                  // Cap the maximum force to prevent extreme effects
+                  const maxForce = 0.1;
+                  if (magnusForce.length() > maxForce) {
+                    magnusForce.normalize().multiplyScalar(maxForce);
+                  }
                   
                   // Apply the force
-                  this.body.velocity.x += perpendicular.x * sidewaysForce;
-                  this.body.velocity.z += perpendicular.z * sidewaysForce;
+                  this.body.velocity.x += magnusForce.x;
+                  this.body.velocity.y += magnusForce.y;
+                  this.body.velocity.z += magnusForce.z;
                 }
 
                 // Add damping
@@ -1631,7 +1671,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.12; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.13; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
