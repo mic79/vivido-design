@@ -129,7 +129,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.14 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.15 | ${text}`);
         }
       }
 
@@ -721,7 +721,7 @@
         tick: function() {
           if (this.body) {
             if (this.isGrabbed && this.grabbingHand) {
-              // When grabbed, smoothly move towards hand
+              // When grabbed, directly update position and rotation
               const handWorldPos = new THREE.Vector3();
               const handWorldQuat = new THREE.Quaternion();
               this.grabbingHand.object3D.getWorldPosition(handWorldPos);
@@ -731,33 +731,13 @@
               this.lastPosition.copy(this.el.object3D.position);
               this.lastRotation.copy(this.el.object3D.quaternion);
               
-              // Calculate distance to hand
-              const distance = this.el.object3D.position.distanceTo(handWorldPos);
+              // Update visual position and rotation
+              this.el.object3D.position.copy(handWorldPos);
+              this.el.object3D.quaternion.copy(handWorldQuat);
               
-              // If far from hand, use spring-like behavior
-              if (distance > 0.1) {
-                // Calculate direction to hand
-                const toHand = new THREE.Vector3()
-                  .subVectors(handWorldPos, this.el.object3D.position)
-                  .normalize();
-                
-                // Move towards hand with much slower speed based on distance
-                const moveSpeed = Math.min(4, distance * 20); // Doubled from 2/10 to 4/20
-                this.el.object3D.position.add(toHand.multiplyScalar(moveSpeed * 0.016));
-                
-                // Update physics body to match
-                this.body.position.copy(this.el.object3D.position);
-              } else {
-                // When close to hand, stick to it
-                this.el.object3D.position.copy(handWorldPos);
-                this.body.position.copy(handWorldPos);
-              }
-              
-              // Smoothly rotate to match hand (faster rotation)
-              this.el.object3D.quaternion.slerp(handWorldQuat, 0.2); // Doubled from 0.1 to 0.2
-              this.body.quaternion.copy(this.el.object3D.quaternion);
-              
-              // Zero out velocities while grabbed
+              // Update physics body
+              this.body.position.copy(handWorldPos);
+              this.body.quaternion.copy(handWorldQuat);
               this.body.velocity.set(0, 0, 0);
               this.body.angularVelocity.set(0, 0, 0);
               
@@ -1683,7 +1663,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.14; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.15; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
