@@ -10,7 +10,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-    <!-- Optional: Load advanced bot logic -->
     <script src="advanced-bot.js"></script>
   </head>
   <body>
@@ -131,7 +130,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.17 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.18 | ${text}`);
         }
       }
 
@@ -145,12 +144,10 @@
             if (!isMultiplayer) {
               updateMultiplayerStatus('Searching for match...');
               isSearchingForMatch = true;
-              this.el.sceneEl.emit('multiplayer-start');
               startMultiplayerConnection();
             } else {
               updateMultiplayerStatus('Returning to singleplayer...');
               isSearchingForMatch = false;
-              this.el.sceneEl.emit('multiplayer-end');
               endMultiplayer();
             }
           });
@@ -162,6 +159,8 @@
         connectionState = 'connecting';
         multiplayerStatus = 'Searching...';
         updateMultiplayerStatus('Searching for match...');
+        // Keep bot enabled during connection phase
+        isMultiplayer = false;
         try {
           const slot = await findAvailableSlot(multiplayerStartType);
           if (!slot) {
@@ -249,15 +248,15 @@
           const hostID = `dot-host-${multiplayerStartType}-${slotNumber}`;
           conn = peer.connect(hostID);
           conn.on("open", function() {
-            multiplayerStatus = 'Multiplayer Connected';
-            updateMultiplayerStatus('Multiplayer Connected');
             setupConnectionHandlers(conn);
             onMultiplayerStart();
           });
         });
         peer.on("error", function(err) {
           updateMultiplayerStatus(`Peer error: ${err.type}`);
-          cleanupMultiplayer();
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
         });
       }
 
@@ -290,8 +289,6 @@
             } else {
               conn = newConn;
               conn.on("open", function() {
-                multiplayerStatus = 'Multiplayer Connected';
-                updateMultiplayerStatus('Multiplayer Connected');
                 setupConnectionHandlers(conn);
                 onMultiplayerStart();
               });
@@ -300,7 +297,9 @@
         });
         peer.on("error", function(err) {
           updateMultiplayerStatus(`Peer error: ${err.type}`);
-          cleanupMultiplayer();
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
         });
       }
 
@@ -319,7 +318,15 @@
         });
         conn.on('close', () => {
           updateMultiplayerStatus('Connection lost. Returning to singleplayer.');
-          endMultiplayer();
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100); // Small delay to ensure proper cleanup
+        });
+        conn.on('error', (err) => {
+          updateMultiplayerStatus('Connection error. Returning to singleplayer.');
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
         });
       }
 
@@ -335,13 +342,20 @@
       }
 
       function onMultiplayerStart() {
-        // Hide bot, disable bot logic
-        const bot = document.querySelector('[bot]');
-        if (bot) bot.setAttribute('bot', 'enabled', false);
-        isMultiplayer = true;
-        multiplayerStatus = 'Multiplayer Connected';
-        updateMultiplayerStatus('Multiplayer Connected');
-        isSearchingForMatch = false;
+        // Only fully start multiplayer when connection is established
+        if (conn && conn.open) {
+          // Hide bot, disable bot logic
+          const bot = document.querySelector('[advanced-bot]');
+          if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+          isMultiplayer = true;
+          multiplayerStatus = 'Multiplayer Connected';
+          updateMultiplayerStatus('Multiplayer Connected');
+          isSearchingForMatch = false;
+          
+          // Switch to multiplayer score display immediately
+          multiplayerScore = { local: 0, remote: 0 };
+          updateScoreDisplayMultiplayer();
+        }
       }
       function endMultiplayer() {
         isMultiplayer = false;
@@ -349,11 +363,19 @@
         updateMultiplayerStatus('Singleplayer');
         cleanupMultiplayer();
         // Re-enable bot
-        const bot = document.querySelector('[bot]');
-        if (bot) bot.setAttribute('bot', 'enabled', true);
+        const bot = document.querySelector('[advanced-bot]');
+        if (bot) bot.setAttribute('advanced-bot', 'enabled', true);
         remotePlayerState = null;
         remoteBallState = null;
         multiplayerScore = { local: 0, remote: 0 };
+        
+        // Reset the actual game manager scores
+        const gameManager = document.querySelector('#game-manager');
+        if (gameManager && gameManager.components['game-manager']) {
+          gameManager.components['game-manager'].playerScore = 0;
+          gameManager.components['game-manager'].botScore = 0;
+        }
+        
         // Restore singleplayer score display
         const scoreDisplay = document.getElementById('score-display');
         if (scoreDisplay) {
@@ -361,7 +383,7 @@
         }
         isSearchingForMatch = false;
         // Set bot to default singleplayer position (head height)
-        const botEntity = document.querySelector('[bot]');
+        const botEntity = document.querySelector('[advanced-bot]');
         if (botEntity) {
           botEntity.object3D.position.set(0, 1.6, -6);
           botEntity.object3D.rotation.set(0, 0, 0);
@@ -384,7 +406,7 @@
         }
         // Wait for the scene to load, then set bot to default singleplayer position (head height) at startup
         function setBotToDefaultPosition() {
-          const botEntity = document.querySelector('[bot]');
+          const botEntity = document.querySelector('[advanced-bot]');
           if (botEntity) {
             botEntity.object3D.position.set(0, 1.6, -6);
             botEntity.object3D.rotation.set(0, 0, 0);
@@ -404,7 +426,7 @@
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
           // In multiplayer, send the local camera's world position/rotation as player state
-          if (isMultiplayer) {
+          if (isMultiplayer && conn && conn.open) {
             const camera = document.querySelector('[camera]');
             if (camera) {
               const worldPos = new THREE.Vector3();
@@ -423,7 +445,7 @@
             const mirroredX = -remotePlayerState.x;
             const mirroredZ = -remotePlayerState.z;
             const mirroredRy = -remotePlayerState.ry;
-            const player1 = document.querySelector('[bot]');
+            const player1 = document.querySelector('[advanced-bot]');
             if (player1) {
               player1.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
               player1.object3D.rotation.set(remotePlayerState.rx, mirroredRy, 0);
@@ -470,7 +492,7 @@
             }
           }
           // Prevent local input from affecting Player 1 (red) and their ball in multiplayer
-          if (isMultiplayer) {
+          if (isMultiplayer && conn && conn.open) {
             const redBall = document.querySelector('[simple-grab="player: player1"]');
             if (redBall && redBall.components['simple-grab']) {
               redBall.components['simple-grab'].isGrabbed = false;
@@ -502,22 +524,24 @@
         const origOnBotHit = gm.Component.prototype.onBotHit;
         const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
         gm.Component.prototype.onBotHit = function() {
-          if (isMultiplayer) {
+          if (isMultiplayer && conn && conn.open) {
             // Always increment local score when you hit the opponent
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
           } else {
+            // Use singleplayer scoring when not in active multiplayer connection
             origOnBotHit.call(this);
           }
         };
         gm.Component.prototype.onPlayerHit = function() {
-          if (isMultiplayer) {
+          if (isMultiplayer && conn && conn.open) {
             // Always increment remote score when opponent hits you
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
           } else {
+            // Use singleplayer scoring when not in active multiplayer connection
             origOnPlayerHit.call(this);
           }
         };
@@ -1053,11 +1077,11 @@
           this.startMessage.setAttribute('visible', false);
           this.scoreDisplay.setAttribute('visible', true);
           
-          // Enable bot and player collision
-          const bot = this.el.sceneEl.querySelector('[bot]');
-          const player = this.el.sceneEl.querySelector('#player');
-          if (bot) bot.setAttribute('bot', 'enabled', true);
-          if (player) player.setAttribute('player-collision', 'enabled', true);
+                      // Enable bot and player collision
+            const bot = this.el.sceneEl.querySelector('[advanced-bot]');
+            const player = this.el.sceneEl.querySelector('#player');
+            if (bot) bot.setAttribute('advanced-bot', 'enabled', true);
+            if (player) player.setAttribute('player-collision', 'enabled', true);
           
           // Dispatch game started event
           this.el.sceneEl.emit('gameStarted');
@@ -1736,7 +1760,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.17; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.18; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
@@ -1767,7 +1791,7 @@
       </a-entity>
 
       <!-- Bot (AI player) -->
-      <a-entity position="0 0 -6" bot advanced-bot="enabled: true; difficulty: medium; strategy: balanced">
+      <a-entity position="0 0 -6" advanced-bot="enabled: true; difficulty: medium; debug: true">
         <a-sphere id="bot-target" radius="0.2" color="#ff0000" position="0 0 0" obb-collider material="wireframe: true; color: #ff0000; opacity: 0.5" glow="color: #ff0000; intensity: 1.5" impact-effect="color: #ff0000">
           <a-entity light="type: point;
                          color: #ff0000;
