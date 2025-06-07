@@ -10,6 +10,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- Optional: Load advanced bot logic -->
+    <script src="advanced-bot.js"></script>
   </head>
   <body>
     <script>
@@ -129,7 +131,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.16 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.17 | ${text}`);
         }
       }
 
@@ -143,10 +145,12 @@
             if (!isMultiplayer) {
               updateMultiplayerStatus('Searching for match...');
               isSearchingForMatch = true;
+              this.el.sceneEl.emit('multiplayer-start');
               startMultiplayerConnection();
             } else {
               updateMultiplayerStatus('Returning to singleplayer...');
               isSearchingForMatch = false;
+              this.el.sceneEl.emit('multiplayer-end');
               endMultiplayer();
             }
           });
@@ -1732,7 +1736,7 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.16; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.17; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
@@ -1763,7 +1767,7 @@
       </a-entity>
 
       <!-- Bot (AI player) -->
-      <a-entity position="0 0 -6" bot>
+      <a-entity position="0 0 -6" bot advanced-bot="enabled: true; difficulty: medium; strategy: balanced">
         <a-sphere id="bot-target" radius="0.2" color="#ff0000" position="0 0 0" obb-collider material="wireframe: true; color: #ff0000; opacity: 0.5" glow="color: #ff0000; intensity: 1.5" impact-effect="color: #ff0000">
           <a-entity light="type: point;
                          color: #ff0000;
