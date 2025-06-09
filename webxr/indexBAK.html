@@ -24,8 +24,6 @@
       const defaultMaterial = new CANNON.Material('default');
       const ballMaterial = new CANNON.Material('ball');
       const floorMaterial = new CANNON.Material('floor');
-      const racketMaterial = new CANNON.Material('racket');
-      const backWallMaterial = new CANNON.Material('backWall');
 
       // Create contact materials
       const ballFloorContact = new CANNON.ContactMaterial(
@@ -60,30 +58,6 @@
       );
       world.addContactMaterial(ballBallContact);
 
-      // Add contact material for ball vs. racket (with friction for spin)
-      const ballRacketContact = new CANNON.ContactMaterial(
-        ballMaterial,
-        racketMaterial,
-        {
-          friction: 0.8,  // Very high friction for spin transfer
-          restitution: 0.85,  // Slightly less bouncy than walls
-          contactEquationStiffness: 1e8,  // Stiffer contact for better spin transfer
-          contactEquationRelaxation: 3    // Better contact resolution
-        }
-      );
-      world.addContactMaterial(ballRacketContact);
-
-      // Add contact material for ball vs. back walls (no bounce - should respawn)
-      const ballBackWallContact = new CANNON.ContactMaterial(
-        ballMaterial,
-        backWallMaterial,
-        {
-          friction: 0.0,
-          restitution: 0.0  // No bounce - ball should respawn instead
-        }
-      );
-      world.addContactMaterial(ballBackWallContact);
-
       // Add collision event handling to the physics world
       world.addEventListener('beginContact', function(event) {
         const bodyA = event.bodyA;
@@ -92,8 +66,6 @@
         // Get the A-Frame entities associated with these bodies
         const entityA = bodyA.el;
         const entityB = event.bodyB.el;
-        
-        // Physics world collision detection (for ball-ball and ball-wall collisions)
         
         if (entityA && entityB) {
           // Check if either entity is a ball
@@ -127,22 +99,6 @@
         }
       });
 
-      // Add end contact event handling
-      world.addEventListener('endContact', function(event) {
-        const bodyA = event.bodyA;
-        const bodyB = event.bodyB;
-        
-        // Check for racket-ball contact ending
-        if (bodyA.isRacket) {
-          bodyA.isInContact = false;
-          bodyA.contactBall = null;
-        }
-        if (bodyB.isRacket) {
-          bodyB.isInContact = false;
-          bodyB.contactBall = null;
-        }
-      });
-
       // Game state
       const gameState = {
         score: { player1: 0, player2: 0 },
@@ -150,12 +106,6 @@
         isPlaying: false,
         isReady: { player1: false, player2: false },
         ballSpawned: { player1: false, player2: false }
-      };
-
-      // Racket mode state - independent per player
-      const racketMode = {
-        player1: false, // Red player / opponent in multiplayer
-        player2: false  // Blue player / local player
       };
 
       // Multiplayer state
@@ -180,7 +130,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.19 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.18 | ${text}`);
         }
       }
 
@@ -201,45 +151,8 @@
               endMultiplayer();
             }
           });
-
-          // Listen for B button to toggle racket mode with debounce
-          let lastBButtonTime = 0;
-          this.el.sceneEl.addEventListener('bbuttondown', () => {
-            const now = Date.now();
-            if (now - lastBButtonTime < 500) return; // 500ms debounce
-            lastBButtonTime = now;
-            toggleRacketMode();
-          });
         }
       });
-
-      // Racket mode toggle function - per player
-      function toggleRacketMode() {
-        // Determine which player is toggling (local player is always player2)
-        const player = isMultiplayer ? 'player2' : 'player2'; // Local player controls player2 rackets
-        
-        racketMode[player] = !racketMode[player];
-        
-        // Get racket elements for the local player (always left/right hand)
-        const leftRacket = document.querySelector('#leftHandRacket');
-        const rightRacket = document.querySelector('#rightHandRacket');
-        
-        // Show/hide local player's rackets
-        if (racketMode[player]) {
-          if (leftRacket) leftRacket.setAttribute('visible', true);
-          if (rightRacket) rightRacket.setAttribute('visible', true);
-          console.log('Racket mode activated for', player);
-        } else {
-          if (leftRacket) leftRacket.setAttribute('visible', false);
-          if (rightRacket) rightRacket.setAttribute('visible', false);
-          console.log('Racket mode deactivated for', player);
-        }
-        
-        // Send racket mode state to opponent in multiplayer
-        if (isMultiplayer && conn && conn.open) {
-          conn.send({ type: 'racket-mode', player: player, active: racketMode[player] });
-        }
-      }
 
       // Multiplayer connection logic (slot-based, PeerJS, TURN support)
       async function startMultiplayerConnection() {
@@ -401,10 +314,6 @@
             multiplayerScore.remote = data.score.local;
             multiplayerScore.local = data.score.remote;
             updateScoreDisplayMultiplayer();
-          } else if (data.type === 'racket-mode') {
-            // Sync opponent's racket mode state
-            racketMode.player1 = data.active; // Remote player becomes player1
-            console.log('Opponent racket mode:', data.active ? 'ON' : 'OFF');
           }
         });
         conn.on('close', () => {
@@ -653,7 +562,7 @@
         }
       });
 
-      // Hand collider component - 144Hz optimized for Quest 3
+      // Hand collider component
       AFRAME.registerComponent('hand-collider', {
         init: function() {
           this.el.addEventListener('triggerdown', this.onGripDown.bind(this));
@@ -677,7 +586,6 @@
           
           // Track if trigger is held
           this.isTriggerHeld = false;
-          this.lastGrabCheck = 0;
 
           // Determine which player this hand belongs to
           this.isLeftHand = this.el.id === 'leftHand';
@@ -685,18 +593,14 @@
         },
         
         tick: function() {
-          // Update physics body position to match hand position at full framerate
+          // Update physics body position to match hand position
           const handWorldPos = new THREE.Vector3();
           this.el.object3D.getWorldPosition(handWorldPos);
           this.body.position.copy(handWorldPos);
           
-          // If trigger is held, check for grabbable objects at 144Hz
+          // If trigger is held, check for grabbable objects
           if (this.isTriggerHeld) {
-            const now = Date.now();
-            if (now - this.lastGrabCheck > 7) { // 144Hz - 6.94ms for Quest 3 optimization
-              this.checkForGrabbableObjects();
-              this.lastGrabCheck = now;
-            }
+            this.checkForGrabbableObjects();
           }
         },
         
@@ -935,18 +839,14 @@
                   }
                 }
 
-                // Add minimal damping only for very slow balls to prevent infinite bouncing
-                const speed = velocity.length();
-                const currentAngularSpeed = angularVelocity.length();
-                if (speed < 0.5 && currentAngularSpeed < 1.0) { // Only damp if both linear and angular are slow
-                  const damping = 0.995;
-                  this.body.velocity.x *= damping;
-                  this.body.velocity.y *= damping;
-                  this.body.velocity.z *= damping;
-                  this.body.angularVelocity.x *= damping;
-                  this.body.angularVelocity.y *= damping;
-                  this.body.angularVelocity.z *= damping;
-                }
+                // Add damping
+                const damping = 0.999;
+                this.body.velocity.x *= damping;
+                this.body.velocity.y *= damping;
+                this.body.velocity.z *= damping;
+                this.body.angularVelocity.x *= damping;
+                this.body.angularVelocity.y *= damping;
+                this.body.angularVelocity.z *= damping;
               }
             }
           }
@@ -1001,28 +901,10 @@
         }
       });
 
-      // Physics update loop - Anti-tunneling optimized
+      // Physics update loop
       AFRAME.registerComponent('physics-world', {
-        init: function() {
-          this.lastTime = 0;
-        },
-        tick: function(time) {
-          // Use much smaller, more frequent physics steps to prevent tunneling
-          const deltaTime = (time - this.lastTime) / 1000;
-          if (deltaTime > 0) {
-            const maxStep = 1/240; // Even smaller timestep (240Hz) for fast racket movements
-            const steps = Math.ceil(deltaTime / maxStep);
-            const stepSize = deltaTime / steps;
-            
-            // Clamp to reasonable step count to prevent performance issues
-            const clampedSteps = Math.min(steps, 8);
-            const clampedStepSize = deltaTime / clampedSteps;
-            
-            for (let i = 0; i < clampedSteps; i++) {
-              world.step(clampedStepSize);
-            }
-          }
-          this.lastTime = time;
+        tick: function() {
+          world.step(1/60);
         }
       });
 
@@ -1297,38 +1179,6 @@
           let shape;
           const geometry = this.el.getAttribute('geometry');
           
-          // Check if this is a racket (has id ending with "Racket")
-          const isRacket = this.el.id && this.el.id.endsWith('Racket');
-          
-          // For rackets, don't create physics bodies - handle collision manually
-          if (isRacket) {
-            this.body = null;
-            this.lastHitTime = 0; // Track last hit to prevent multiple rapid hits
-            this.lastRacketPos = null; // Initialize as null to detect first frame
-            this.tick = function() {
-              const worldPos = new THREE.Vector3();
-              const worldQuat = new THREE.Quaternion();
-              this.el.object3D.getWorldPosition(worldPos);
-              this.el.object3D.getWorldQuaternion(worldQuat);
-              
-              // Initialize position tracking on first frame
-              if (!this.lastRacketPos) {
-                this.lastRacketPos = worldPos.clone();
-                console.log('Initialized racket tracking for', this.el.id);
-                return;
-              }
-              
-              // Eleven Table Tennis style: Check for ball collision along movement path
-              const movement = worldPos.distanceTo(this.lastRacketPos);
-              if (movement > 0.00001) { // Extreme sensitivity - detect micro-movements
-                this.checkSweptCollision(this.lastRacketPos, worldPos);
-              }
-              
-              // Update position tracking
-              this.lastRacketPos.copy(worldPos);
-            };
-          } else {
-                      // For non-racket objects, create normal physics bodies
           if (geometry && geometry.primitive === 'box') {
             const width = geometry.width || 1;
             const height = geometry.height || 1;
@@ -1350,200 +1200,49 @@
             shape = new CANNON.Sphere(0.2);
           }
           
-                    // Check if this is a back wall (z = 8 or z = -8)
-          const wallPosition = this.el.getAttribute('position');
-          const isBackWall = wallPosition && (Math.abs(wallPosition.z - 8) < 0.01 || Math.abs(wallPosition.z + 8) < 0.01);
-          
           const body = new CANNON.Body({
             mass: 0,
             shape: shape,
-            material: isBackWall ? backWallMaterial : defaultMaterial,
-            type: CANNON.Body.STATIC,
+            material: defaultMaterial,
             collisionFilterGroup: 1,
             collisionFilterMask: 1
           });
           
           const position = this.el.getAttribute('position');
-            const rotation = this.el.getAttribute('rotation');
-            body.position.set(position.x, position.y, position.z);
-            
-            if (rotation) {
-              const rad = Math.PI / 180;
-              body.quaternion.setFromEuler(
-                rotation.x * rad,
-                rotation.y * rad,
-                rotation.z * rad
-              );
-            }
-            
-            // Store reference to the entity on the body
-            body.el = this.el;
-            body.isRacket = false;
-            
-            // Add collision event listener for non-rackets
-            this.el.addEventListener('obbcollisionstarted', (evt) => {
-              const collider = evt.detail.withEl;
-              if (collider && collider.hasAttribute('simple-grab')) {
-                // Regular wall/obstacle collision
-                const bounceSound = document.querySelector('#bounce-sound');
-                if (bounceSound) {
-                  const ballPos = collider.object3D.position;
-                  bounceSound.object3D.position.copy(ballPos);
-                  bounceSound.components.sound.stopSound();
-                  bounceSound.components.sound.playSound();
-                }
-              }
-            });
-            
-            world.addBody(body);
-            this.body = body;
-          }
-        },
-        
-        // Plane-based collision detection - only one surface!
-        checkSweptCollision: function(startPos, endPos) {
-          // Only check collision if racket mode is active for this player
-          // Local player (hands) always controls player2's rackets
-          if (!racketMode.player2) {
-            return;
+          const rotation = this.el.getAttribute('rotation');
+          body.position.set(position.x, position.y, position.z);
+          
+          if (rotation) {
+            const rad = Math.PI / 180;
+            body.quaternion.setFromEuler(
+              rotation.x * rad,
+              rotation.y * rad,
+              rotation.z * rad
+            );
           }
           
-          const blueBall = document.querySelector('[simple-grab="player: player2"]');
-          if (!blueBall || !blueBall.components['simple-grab']?.body) {
-            return;
-          }
+          // Store reference to the entity on the body
+          body.el = this.el;
           
-          // Much shorter cooldown to allow rapid hits
-          const now = Date.now();
-          if (now - this.lastHitTime < 16) { // ~60fps - allow very rapid hits
-            return;
-          }
-          
-          const ballPos = new THREE.Vector3().copy(blueBall.components['simple-grab'].body.position);
-          const ballRadius = 0.1;
-          
-          // Get racket position and orientation
-          const racketWorldPos = new THREE.Vector3();
-          const racketWorldQuat = new THREE.Quaternion();
-          this.el.object3D.getWorldPosition(racketWorldPos);
-          this.el.object3D.getWorldQuaternion(racketWorldQuat);
-          
-          // Calculate distance from racket to ball
-          const distanceToBall = racketWorldPos.distanceTo(ballPos);
-          
-          // Dynamic proximity check - larger threshold for faster movements to prevent tunneling
-          const movementVector = new THREE.Vector3().subVectors(endPos, startPos);
-          const movementSpeed = movementVector.length();
-          
-          // Increase collision radius based on movement speed to catch fast hits
-          const dynamicRadius = ballRadius + 0.01 + (movementSpeed * 2.0); // Base + speed-based expansion
-          
-          // For fast movements, check multiple points along the path to prevent tunneling
-          if (movementSpeed > 0.05) { // For fast movements
-            let hitDetected = false;
-            const numSteps = Math.min(Math.ceil(movementSpeed * 20), 10); // More steps for faster movement, max 10
-            
-            for (let i = 0; i <= numSteps; i++) {
-              const t = i / numSteps;
-              const interpPos = new THREE.Vector3().lerpVectors(startPos, endPos, t);
-              const distanceAtStep = interpPos.distanceTo(ballPos);
-              
-              if (distanceAtStep <= ballRadius + 0.05) { // Slightly larger threshold for swept detection
-                hitDetected = true;
-                break;
+          // Add collision event listener
+          this.el.addEventListener('obbcollisionstarted', (evt) => {
+            const collider = evt.detail.withEl;
+            if (collider && collider.hasAttribute('simple-grab')) {
+              const bounceSound = document.querySelector('#bounce-sound');
+              if (bounceSound) {
+                // Get the ball's position for more accurate sound placement
+                const ballPos = collider.object3D.position;
+                bounceSound.object3D.position.copy(ballPos);
+                // Stop any currently playing sound before starting a new one
+                bounceSound.components.sound.stopSound();
+                bounceSound.components.sound.playSound();
               }
             }
-            
-            if (!hitDetected) {
-              return; // No collision detected along path
-            }
-          } else {
-            // For slow movements, use direct distance check
-            if (distanceToBall > dynamicRadius) {
-              return; // Too far away
-            }
-          }
+          });
           
-          // No minimum speed requirement - allow static contact and pushing
-          
-          // Record hit time to enforce cooldown
-          this.lastHitTime = now;
-          
-          // Calculate velocity at point of contact
-          const deltaTime = 1/144; // Assume 144Hz sampling
-          const contactVelocity = new THREE.Vector3()
-            .subVectors(endPos, startPos)
-            .divideScalar(deltaTime);
-          
-          // Apply impact with proper contact velocity
-          this.applySweptImpact(blueBall, contactVelocity, ballPos);
-        },
-        
-        applySweptImpact: function(ballEl, racketVelocity, contactPoint) {
-          const ballBody = ballEl.components['simple-grab'].body;
-          if (!ballBody) return;
-          
-          // Primary: Apply linear velocity transfer (ball movement)
-          const velocityMultiplier = 0.8; // How much racket velocity transfers to ball
-          const newVelocity = {
-            x: racketVelocity.x * velocityMultiplier,
-            y: racketVelocity.y * velocityMultiplier,
-            z: racketVelocity.z * velocityMultiplier
-          };
-          
-          // Add to existing ball velocity (don't replace completely)
-          ballBody.velocity.x += newVelocity.x;
-          ballBody.velocity.y += newVelocity.y;
-          ballBody.velocity.z += newVelocity.z;
-          
-          // Cap maximum ball speed at 10 m/s for controlled gameplay
-          const currentSpeed = Math.sqrt(
-            ballBody.velocity.x * ballBody.velocity.x +
-            ballBody.velocity.y * ballBody.velocity.y +
-            ballBody.velocity.z * ballBody.velocity.z
-          );
-          
-          if (currentSpeed > 10) {
-            const scale = 10 / currentSpeed;
-            ballBody.velocity.x *= scale;
-            ballBody.velocity.y *= scale;
-            ballBody.velocity.z *= scale;
-            console.log('Ball speed capped at 10 m/s (was', currentSpeed.toFixed(1), 'm/s)');
-          }
-          
-          // Secondary: Apply spin based on racket velocity at contact point
-          const spinMultiplier = 1.0; // Reduced since we now have primary velocity transfer
-          const newSpin = {
-            x: -racketVelocity.y * spinMultiplier, // Up/Down movement creates topspin/backspin
-            y: racketVelocity.x * spinMultiplier,  // Left/Right movement creates sidespin
-            z: racketVelocity.z * spinMultiplier   // Forward/Back movement
-          };
-          
-          ballBody.angularVelocity.x += newSpin.x;
-          ballBody.angularVelocity.y += newSpin.y;
-          ballBody.angularVelocity.z += newSpin.z;
-          
-          console.log('Swept impact applied - Velocity:', racketVelocity.length().toFixed(3), 
-                     'Ball velocity added:', newVelocity.x.toFixed(2), newVelocity.y.toFixed(2), newVelocity.z.toFixed(2),
-                     'Spin:', newSpin.x.toFixed(2), newSpin.y.toFixed(2), newSpin.z.toFixed(2));
-          
-          // Play feedback
-          const bounceSound = document.querySelector('#bounce-sound');
-          if (bounceSound) {
-            bounceSound.object3D.position.copy(contactPoint);
-            bounceSound.components.sound.stopSound();
-            bounceSound.components.sound.playSound();
-          }
-          
-          // Haptic feedback
-          const hand = this.el.parentEl;
-          if (hand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
-            const haptics = hand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
-            haptics.pulse(0.6, 100).catch(() => {}); // Lighter haptic for more precise feel
-          }
-        },
-
-        // Removed handleRacketHit function - using only swept collision detection now
+          world.addBody(body);
+          this.body = body;
+        }
       });
 
       // Player collision component
@@ -2061,10 +1760,9 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.19; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.18; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
-
       </a-entity>
 
       <!-- Add impact sound entities -->
@@ -2197,18 +1895,6 @@
                    debug-controller
                    custom-hand-controls
                    >
-            <!-- Racket for left hand -->
-            <a-box id="leftHandRacket"
-                   width="0.2" 
-                   height="0.2" 
-                   depth="0.02"
-                   position="0 0 -0.15"
-                   rotation="0 -90 0"
-                   color="#00ff00"
-                   material="opacity: 0.7; transparent: true; emissive: #004400; emissiveIntensity: 0.3"
-                   static-physics="isRacket: true"
-                   visible="false">
-            </a-box>
           </a-entity>
           
           <a-entity id="rightHand" 
@@ -2219,18 +1905,6 @@
                    debug-controller
                    custom-hand-controls
                    >
-            <!-- Racket for right hand -->
-            <a-box id="rightHandRacket"
-                   width="0.2" 
-                   height="0.2" 
-                   depth="0.02"
-                   position="0 0 -0.15"
-                   rotation="0 -90 0"
-                   color="#00ff00"
-                   material="opacity: 0.7; transparent: true; emissive: #004400; emissiveIntensity: 0.3"
-                   static-physics="isRacket: true"
-                   visible="false">
-            </a-box>
           </a-entity>
         </a-entity>
       </a-entity>
