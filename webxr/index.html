@@ -180,7 +180,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.19 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.20 | ${text}`);
         }
       }
 
@@ -773,6 +773,11 @@
           // Track previous rotation for spin calculation
           this.lastRotation = new THREE.Quaternion();
           this.lastPosition = new THREE.Vector3();
+          this.lastPositionTime = 0;
+          
+          // Velocity smoothing for consistent throwing
+          this.velocityHistory = [];
+          this.maxHistorySize = 5;
 
           // Listen for A button press on the scene
           this.el.sceneEl.addEventListener('abuttondown', (evt) => {
@@ -852,8 +857,26 @@
               this.grabbingHand.object3D.getWorldQuaternion(handWorldQuat);
               
               // Store previous position and rotation for velocity calculation
-              this.lastPosition.copy(this.el.object3D.position);
+              const currentTime = performance.now();
+              const currentPos = new THREE.Vector3();
+              this.el.object3D.getWorldPosition(currentPos);
+              
+              // Calculate instantaneous velocity for history
+              if (this.lastPositionTime > 0) {
+                const deltaTime = Math.max((currentTime - this.lastPositionTime) / 1000, 0.001);
+                const displacement = new THREE.Vector3().subVectors(currentPos, this.lastPosition);
+                const instantVelocity = displacement.divideScalar(deltaTime);
+                
+                // Add to velocity history for smoothing
+                this.velocityHistory.push(instantVelocity.clone());
+                if (this.velocityHistory.length > this.maxHistorySize) {
+                  this.velocityHistory.shift();
+                }
+              }
+              
+              this.lastPosition.copy(currentPos);
               this.lastRotation.copy(this.el.object3D.quaternion);
+              this.lastPositionTime = currentTime;
               
               // Update visual position and rotation
               this.el.object3D.position.copy(handWorldPos);
@@ -889,49 +912,33 @@
                 const angularSpeed = angularVelocity.length();
                 const linearSpeed = velocity.length();
                 
-                // Apply Magnus effect for any significant spin
-                if (angularSpeed > 0.1) {
-                  // Physical constants (tuned for game feel)
-                  const BALL_RADIUS = 0.1; // meters
-                  const AIR_DENSITY = 1.225; // kg/m³
-                  const LIFT_COEFFICIENT = 0.2;
-                  const MAX_ANGULAR_SPEED = 30; // Maximum spin speed
+                // Debug: Always log spin and speed when ball is moving to see what we're working with
+                if (linearSpeed > 0.5) {
+                  console.log('Ball moving - Speed:', linearSpeed.toFixed(2), 'm/s, Spin:', angularSpeed.toFixed(2), 'rad/s');
+                }
+                
+                // Apply Magnus effect - subtle curve to existing motion
+                if (angularSpeed > 0.1 && linearSpeed > 0.5) { // Much lower thresholds
+                  // Calculate Magnus force as acceleration (not velocity change)
+                  const magnusAcceleration = new THREE.Vector3()
+                    .crossVectors(angularVelocity, velocity);
                   
-                  // Calculate cross-sectional area
-                  const crossSectionalArea = Math.PI * BALL_RADIUS * BALL_RADIUS;
+                  // Small but noticeable effect - frame rate independent acceleration
+                  const frameTime = 1/72; // Assume 72fps for consistent effect
+                  const magnusStrength = 0.005; // Very subtle Magnus effect - just barely visible
                   
-                  // Calculate volume
-                  const volume = (4/3) * Math.PI * BALL_RADIUS * BALL_RADIUS * BALL_RADIUS;
+                  // Scale acceleration by frame time and strength
+                  magnusAcceleration.multiplyScalar(magnusStrength * frameTime);
                   
-                  // Clamp angular speed to maximum
-                  const clampedAngularSpeed = Math.min(angularSpeed, MAX_ANGULAR_SPEED);
+                  // Apply as acceleration (small velocity change per frame)
+                  this.body.velocity.x += magnusAcceleration.x;
+                  this.body.velocity.y += magnusAcceleration.y;
+                  this.body.velocity.z += magnusAcceleration.z;
                   
-                  // Calculate base force magnitude (F = ρ * V * A * C * |ω| * |v|)
-                  const forceMagnitude = AIR_DENSITY * volume * crossSectionalArea * LIFT_COEFFICIENT * clampedAngularSpeed * linearSpeed;
-                  
-                  // Calculate direction using cross product (ω × v)
-                  const magnusForce = new THREE.Vector3()
-                    .crossVectors(angularVelocity, velocity)
-                    .normalize() // Get direction only
-                    .multiplyScalar(forceMagnitude); // Apply magnitude
-                  
-                  // Cap the maximum force to prevent extreme effects
-                  const maxForce = 0.1;
-                  if (magnusForce.length() > maxForce) {
-                    magnusForce.normalize().multiplyScalar(maxForce);
-                  }
-                  
-                  // Apply the force
-                  this.body.velocity.x += magnusForce.x;
-                  this.body.velocity.y += magnusForce.y;
-                  this.body.velocity.z += magnusForce.z;
-                  
-                  // Clamp angular velocity to maximum
-                  if (angularSpeed > MAX_ANGULAR_SPEED) {
-                    const scale = MAX_ANGULAR_SPEED / angularSpeed;
-                    this.body.angularVelocity.x *= scale;
-                    this.body.angularVelocity.y *= scale;
-                    this.body.angularVelocity.z *= scale;
+                  // Log Magnus effect occasionally (not every frame)
+                  if (Math.random() < 0.01) { // 1% chance per frame (~0.7 times per second at 72fps)
+                    console.log('Magnus ACTIVE - Accel:', magnusAcceleration.length().toFixed(6), 
+                               'Spin:', angularSpeed.toFixed(2), 'Speed:', linearSpeed.toFixed(2));
                   }
                 }
 
@@ -970,10 +977,39 @@
         onGripUp: function(evt) {
           if (!this.isGrabbed || evt.target !== this.grabbingHand) return;
           
-          // Calculate linear velocity based on movement
-          const currentPos = new THREE.Vector3();
-          this.el.object3D.getWorldPosition(currentPos);
-          const velocity = new THREE.Vector3().subVectors(currentPos, this.lastPosition);
+          // Use smoothed velocity from history for more consistent throws
+          let velocity = new THREE.Vector3(0, 0, 0);
+          
+          if (this.velocityHistory.length > 0) {
+            // Calculate weighted average of recent velocities (more recent = higher weight)
+            let totalWeight = 0;
+            for (let i = 0; i < this.velocityHistory.length; i++) {
+              const weight = (i + 1) / this.velocityHistory.length; // Linear weighting towards recent
+              velocity.add(this.velocityHistory[i].clone().multiplyScalar(weight));
+              totalWeight += weight;
+            }
+            velocity.divideScalar(totalWeight);
+            
+            // Apply reasonable velocity scaling for better game feel
+            const throwMultiplier = 1.5; // Slight boost for satisfying throws
+            velocity.multiplyScalar(throwMultiplier);
+            
+            // Cap maximum throw speed for gameplay balance
+            const maxThrowSpeed = 25; // m/s
+            if (velocity.length() > maxThrowSpeed) {
+              velocity.normalize().multiplyScalar(maxThrowSpeed);
+            }
+          } else {
+            // Fallback to single-frame calculation if no history
+            const currentTime = performance.now();
+            const deltaTime = Math.max((currentTime - this.lastPositionTime) / 1000, 0.008); // Min 8ms (125fps)
+            
+            const currentPos = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(currentPos);
+            const displacement = new THREE.Vector3().subVectors(currentPos, this.lastPosition);
+            
+            velocity = displacement.divideScalar(deltaTime).multiplyScalar(1.5);
+          }
           
           // Calculate angular velocity based on rotation change
           const currentRot = new THREE.Quaternion();
@@ -985,16 +1021,22 @@
           
           // Convert quaternion to angular velocity
           const axis = new THREE.Vector3();
-          const angle = 2 * Math.acos(deltaRot.w);
+          const angle = 2 * Math.acos(Math.abs(deltaRot.w));
           if (angle > 0.0001) {
             axis.set(deltaRot.x, deltaRot.y, deltaRot.z).normalize();
-            axis.multiplyScalar(angle * 60); // Scale by 60 to match linear velocity scale
+            // Balanced angular velocity for noticeable but controlled Magnus effect
+            axis.multiplyScalar(angle * 40); // Moderate spin amount
           }
           
-          // Restore physics body with both linear and angular velocity
-          this.body.velocity.set(velocity.x * 60, velocity.y * 60, velocity.z * 60);
+          // Apply velocity to physics body
+          this.body.velocity.set(velocity.x, velocity.y, velocity.z);
           this.body.angularVelocity.set(axis.x, axis.y, axis.z);
           this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+          
+          console.log('Throw velocity:', velocity.length().toFixed(2), 'm/s (smoothed)');
+          
+          // Clear velocity history for next throw
+          this.velocityHistory = [];
           
           this.isGrabbed = false;
           this.grabbingHand = null;
@@ -1175,52 +1217,226 @@
           this.botScore = 0;
           this.gameStarted = false;
           
+          // Match states: WAITING, COUNTDOWN, PLAYING, OVERTIME, ENDED
+          this.matchState = 'WAITING';
+          this.matchDuration = 180; // 3 minutes in seconds
+          this.matchStartTime = 0;
+          this.countdownTime = 3;
+          this.countdownStartTime = 0;
+          
           // Get references to the displays
           this.scoreDisplay = this.el.querySelector('#score-display');
           this.startMessage = this.el.querySelector('#start-message');
+          this.timerDisplay = this.el.querySelector('#timer-display');
           
-          // Hide score display initially
+          // Hide score and timer displays initially
           this.scoreDisplay.setAttribute('visible', false);
+          this.timerDisplay.setAttribute('visible', false);
           
           // Listen for A button press on both controllers
           this.el.sceneEl.addEventListener('abuttondown', (evt) => {
-            if (!this.gameStarted) {
-              this.startGame();
+            if (this.matchState === 'WAITING') {
+              this.startCountdown();
+            } else if (this.matchState === 'ENDED') {
+              this.resetMatch();
             }
           });
         },
 
-        startGame: function() {
+        tick: function() {
+          const currentTime = Date.now();
+          
+          if (this.matchState === 'COUNTDOWN') {
+            const elapsed = (currentTime - this.countdownStartTime) / 1000;
+            const remaining = Math.ceil(this.countdownTime - elapsed);
+            
+            if (remaining > 0) {
+              this.startMessage.setAttribute('text', 'value', remaining.toString());
+            } else {
+              this.startMessage.setAttribute('text', 'value', 'GO!');
+              setTimeout(() => {
+                this.startMatch();
+              }, 500);
+            }
+          } else if (this.matchState === 'PLAYING') {
+            this.updateTimer();
+          }
+        },
+
+        startCountdown: function() {
+          this.matchState = 'COUNTDOWN';
+          this.countdownStartTime = Date.now();
+          this.startMessage.setAttribute('visible', true);
+          this.startMessage.setAttribute('text', 'value', '3');
+          
+          // Reset and respawn balls
+          this.respawnBalls();
+          
+          console.log('Match countdown started');
+        },
+
+        startMatch: function() {
+          this.matchState = 'PLAYING';
+          this.matchStartTime = Date.now();
           this.gameStarted = true;
+          
+          // Hide start message, show game UI
           this.startMessage.setAttribute('visible', false);
           this.scoreDisplay.setAttribute('visible', true);
+          this.timerDisplay.setAttribute('visible', true);
           
-                      // Enable bot and player collision
-            const bot = this.el.sceneEl.querySelector('[advanced-bot]');
-            const player = this.el.sceneEl.querySelector('#player');
-            if (bot) bot.setAttribute('advanced-bot', 'enabled', true);
-            if (player) player.setAttribute('player-collision', 'enabled', true);
+          // Reset scores
+          this.playerScore = 0;
+          this.botScore = 0;
+          this.updateScore();
+          
+          // Enable bot and player collision
+          const bot = this.el.sceneEl.querySelector('[advanced-bot]');
+          const player = this.el.sceneEl.querySelector('#player');
+          if (bot) bot.setAttribute('advanced-bot', 'enabled', true);
+          if (player) player.setAttribute('player-collision', 'enabled', true);
           
           // Dispatch game started event
           this.el.sceneEl.emit('gameStarted');
+          
+          console.log('Match started - 3 minutes');
+        },
+
+        updateTimer: function() {
+          const currentTime = Date.now();
+          const elapsed = (currentTime - this.matchStartTime) / 1000;
+          const remaining = Math.max(0, this.matchDuration - elapsed);
+          
+          const minutes = Math.floor(remaining / 60);
+          const seconds = Math.floor(remaining % 60);
+          const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+          
+          this.timerDisplay.setAttribute('text', 'value', `Time: ${timeString}`);
+          
+          // Check if time is up
+          if (remaining <= 0 && this.matchState === 'PLAYING') {
+            if (this.playerScore === this.botScore) {
+              this.startOvertime();
+            } else {
+              this.endMatch();
+            }
+          }
+        },
+
+        startOvertime: function() {
+          this.matchState = 'OVERTIME';
+          this.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
+          console.log('Match went to overtime - sudden death');
+        },
+
+        endMatch: function() {
+          this.matchState = 'ENDED';
+          this.gameStarted = false;
+          
+          // Disable bot
+          const bot = this.el.sceneEl.querySelector('[advanced-bot]');
+          if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+          
+          // Determine winner
+          let winner;
+          if (isMultiplayer && conn && conn.open) {
+            winner = multiplayerScore.local > multiplayerScore.remote ? 'You win!' : 'Opponent wins!';
+          } else {
+            winner = this.playerScore > this.botScore ? 'Player wins!' : 'Bot wins!';
+          }
+          
+          // Show end message
+          this.startMessage.setAttribute('visible', true);
+          this.startMessage.setAttribute('text', 'value', `${winner}\nPress A to play again`);
+          this.timerDisplay.setAttribute('text', 'value', 'Match ended');
+          
+          console.log(`Match ended: ${winner}`);
+        },
+
+        resetMatch: function() {
+          this.matchState = 'WAITING';
+          this.playerScore = 0;
+          this.botScore = 0;
+          this.gameStarted = false;
+          
+          // Reset multiplayer scores too
+          if (isMultiplayer) {
+            multiplayerScore.local = 0;
+            multiplayerScore.remote = 0;
+          }
+          
+          // Hide game UI, show start message
+          this.scoreDisplay.setAttribute('visible', false);
+          this.timerDisplay.setAttribute('visible', false);
+          this.startMessage.setAttribute('visible', true);
+          this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+          
+          // Disable bot
+          const bot = this.el.sceneEl.querySelector('[advanced-bot]');
+          if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+          
+          console.log('Match reset to waiting state');
+        },
+
+        respawnBalls: function() {
+          // Reset both balls to their spawn positions
+          const blueBall = document.querySelector('[simple-grab="player: player2"]');
+          const redBall = document.querySelector('[simple-grab="player: player1"]');
+          
+          if (blueBall && blueBall.components['simple-grab']) {
+            blueBall.components['simple-grab'].resetPosition();
+          }
+          if (redBall && redBall.components['simple-grab']) {
+            redBall.components['simple-grab'].resetPosition();
+          }
+          
+          console.log('Balls respawned');
         },
 
         onBotHit: function() {
-          if (!this.gameStarted) return;
-          this.playerScore += 1;
-          this.updateScore();
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          
+          if (isMultiplayer && conn && conn.open) {
+            multiplayerScore.local += 1;
+            updateScoreDisplayMultiplayer();
+            sendScoreUpdate();
+          } else {
+            this.playerScore += 1;
+            this.updateScore();
+          }
+          
+          // Check for overtime win
+          if (this.matchState === 'OVERTIME') {
+            this.endMatch();
+          }
         },
 
         onPlayerHit: function() {
-          if (!this.gameStarted) return;
-          this.botScore += 1;
-          this.updateScore();
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          
+          if (isMultiplayer && conn && conn.open) {
+            multiplayerScore.remote += 1;
+            updateScoreDisplayMultiplayer();
+            sendScoreUpdate();
+          } else {
+            this.botScore += 1;
+            this.updateScore();
+          }
+          
+          // Check for overtime win
+          if (this.matchState === 'OVERTIME') {
+            this.endMatch();
+          }
         },
 
         updateScore: function() {
-          this.scoreDisplay.setAttribute('text', {
-            value: `Player: ${this.playerScore} - Bot: ${this.botScore}`
-          });
+          if (isMultiplayer && conn && conn.open) {
+            updateScoreDisplayMultiplayer();
+          } else {
+            this.scoreDisplay.setAttribute('text', {
+              value: `Player: ${this.playerScore} - Bot: ${this.botScore}`
+            });
+          }
         }
       });
 
@@ -1305,6 +1521,7 @@
             this.body = null;
             this.lastHitTime = 0; // Track last hit to prevent multiple rapid hits
             this.lastRacketPos = null; // Initialize as null to detect first frame
+            this.lastRacketTime = 0;
             this.tick = function() {
               const worldPos = new THREE.Vector3();
               const worldQuat = new THREE.Quaternion();
@@ -1314,6 +1531,7 @@
               // Initialize position tracking on first frame
               if (!this.lastRacketPos) {
                 this.lastRacketPos = worldPos.clone();
+                this.lastRacketTime = performance.now();
                 console.log('Initialized racket tracking for', this.el.id);
                 return;
               }
@@ -1326,6 +1544,7 @@
               
               // Update position tracking
               this.lastRacketPos.copy(worldPos);
+              this.lastRacketTime = performance.now();
             };
           } else {
                       // For non-racket objects, create normal physics bodies
@@ -1469,8 +1688,9 @@
           // Record hit time to enforce cooldown
           this.lastHitTime = now;
           
-          // Calculate velocity at point of contact
-          const deltaTime = 1/144; // Assume 144Hz sampling
+          // Calculate velocity at point of contact using actual time elapsed
+          const currentTime = performance.now();
+          const deltaTime = Math.max((currentTime - this.lastRacketTime) / 1000, 0.001); // Convert to seconds, prevent division by zero
           const contactVelocity = new THREE.Vector3()
             .subVectors(endPos, startPos)
             .divideScalar(deltaTime);
@@ -1523,9 +1743,8 @@
           ballBody.angularVelocity.y += newSpin.y;
           ballBody.angularVelocity.z += newSpin.z;
           
-          console.log('Swept impact applied - Velocity:', racketVelocity.length().toFixed(3), 
-                     'Ball velocity added:', newVelocity.x.toFixed(2), newVelocity.y.toFixed(2), newVelocity.z.toFixed(2),
-                     'Spin:', newSpin.x.toFixed(2), newSpin.y.toFixed(2), newSpin.z.toFixed(2));
+          console.log('Racket impact applied - Velocity:', racketVelocity.length().toFixed(2), 'm/s (frame-rate independent)',
+                     'Ball velocity added:', newVelocity.x.toFixed(2), newVelocity.y.toFixed(2), newVelocity.z.toFixed(2));
           
           // Play feedback
           const bounceSound = document.querySelector('#bounce-sound');
@@ -1876,6 +2095,74 @@
         }
       });
 
+      // FPS counter component
+      AFRAME.registerComponent('fps-counter', {
+        init: function() {
+          this.frameCount = 0;
+          this.lastTime = performance.now();
+          this.fps = 0;
+          this.fpsHistory = [];
+          this.updateInterval = 500; // Update every 500ms for smooth display
+          this.lastUpdate = 0;
+        },
+        
+        tick: function() {
+          const currentTime = performance.now();
+          this.frameCount++;
+          
+          // Update FPS every 500ms
+          if (currentTime - this.lastUpdate >= this.updateInterval) {
+            const deltaTime = currentTime - this.lastTime;
+            const currentFPS = Math.round((this.frameCount * 1000) / deltaTime);
+            
+            // Keep a history of recent FPS values for smoothing
+            this.fpsHistory.push(currentFPS);
+            if (this.fpsHistory.length > 5) {
+              this.fpsHistory.shift(); // Keep only last 5 readings
+            }
+            
+            // Calculate average FPS for smoother display
+            const avgFPS = Math.round(this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length);
+            this.fps = avgFPS;
+            
+            // Update the version display
+            this.updateVersionDisplay();
+            
+            // Reset counters
+            this.frameCount = 0;
+            this.lastTime = currentTime;
+            this.lastUpdate = currentTime;
+          }
+        },
+        
+        updateVersionDisplay: function() {
+          const versionDisplay = document.getElementById('version-display');
+          if (versionDisplay) {
+            const currentText = versionDisplay.getAttribute('text').value;
+            
+            // Extract version and status parts
+            const parts = currentText.split(' | ');
+            const version = parts[0];
+            const status = parts.length > 1 ? parts[1] : '';
+            
+            // Update with FPS, preserving any existing status
+            if (status && !status.includes('FPS')) {
+              versionDisplay.setAttribute('text', 'value', `${version} | ${this.fps} FPS | ${status}`);
+            } else if (status && status.includes('FPS')) {
+              // Replace existing FPS
+              const statusWithoutFPS = status.replace(/\d+ FPS/, '').replace(/^\s*\|\s*/, '').replace(/\s*\|\s*$/, '');
+              if (statusWithoutFPS) {
+                versionDisplay.setAttribute('text', 'value', `${version} | ${this.fps} FPS | ${statusWithoutFPS}`);
+              } else {
+                versionDisplay.setAttribute('text', 'value', `${version} | ${this.fps} FPS`);
+              }
+            } else {
+              versionDisplay.setAttribute('text', 'value', `${version} | ${this.fps} FPS`);
+            }
+          }
+        }
+      });
+
       // Add custom hand controls override
       AFRAME.registerComponent('custom-hand-controls', {
         init: function() {
@@ -1902,11 +2189,118 @@
         }
       });
 
+      // Frame rate info component (for debugging only - do not use to limit FPS in VR!)
+      AFRAME.registerComponent('frame-rate-info', {
+        init: function() {
+          console.log('=== FRAME RATE INFO ===');
+          console.log('VR Display Refresh Rate:', this.getVRRefreshRate());
+          console.log('Browser supports:', this.getBrowserCapabilities());
+          console.log('Current renderer info:', this.getRendererInfo());
+          console.log('======================');
+        },
+        
+        getVRRefreshRate: function() {
+          if (this.el.xrSession && this.el.xrSession.renderState) {
+            return `${this.el.xrSession.renderState.baseLayer?.framebuffer ? 'VR Session Active' : 'No VR Session'}`;
+          }
+          return 'Not in VR mode';
+        },
+        
+        getBrowserCapabilities: function() {
+          const capabilities = [];
+          if ('xr' in navigator) capabilities.push('WebXR');
+          if ('getVRDisplays' in navigator) capabilities.push('WebVR (deprecated)');
+          if (window.requestAnimationFrame) capabilities.push('requestAnimationFrame');
+          return capabilities.join(', ');
+        },
+        
+        getRendererInfo: function() {
+          const renderer = this.el.renderer;
+          if (renderer) {
+            return {
+              pixelRatio: renderer.getPixelRatio(),
+              maxTextureSize: renderer.capabilities?.maxTextureSize || 'unknown',
+              precision: renderer.capabilities?.precision || 'unknown'
+            };
+          }
+          return 'Renderer not available';
+        }
+      });
+
+      // Ball speed tracker component
+      AFRAME.registerComponent('ball-speed-tracker', {
+        init: function() {
+          this.ballStats = {
+            player1: { current: 0, fastest: 0, color: 'Red' },
+            player2: { current: 0, fastest: 0, color: 'Blue' }
+          };
+          this.lastUpdate = 0;
+          this.updateInterval = 100; // Update every 100ms for smooth display
+          this.statsDisplay = null;
+        },
+
+        tick: function() {
+          const now = performance.now();
+          if (now - this.lastUpdate < this.updateInterval) return;
+          this.lastUpdate = now;
+
+          // Get ball entities
+          const blueBall = document.querySelector('[simple-grab="player: player2"]');
+          const redBall = document.querySelector('[simple-grab="player: player1"]');
+
+          // Update speeds
+          if (blueBall && blueBall.components['simple-grab']?.body) {
+            const velocity = blueBall.components['simple-grab'].body.velocity;
+            const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+            this.ballStats.player2.current = speed;
+            if (speed > this.ballStats.player2.fastest) {
+              this.ballStats.player2.fastest = speed;
+            }
+          }
+
+          if (redBall && redBall.components['simple-grab']?.body) {
+            const velocity = redBall.components['simple-grab'].body.velocity;
+            const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+            this.ballStats.player1.current = speed;
+            if (speed > this.ballStats.player1.fastest) {
+              this.ballStats.player1.fastest = speed;
+            }
+          }
+
+          // Update display
+          this.updateDisplay();
+        },
+
+        updateDisplay: function() {
+          if (!this.statsDisplay) {
+            this.statsDisplay = document.querySelector('#ball-stats-text');
+          }
+          
+          if (this.statsDisplay) {
+            const blue = this.ballStats.player2;
+            const red = this.ballStats.player1;
+            
+            const displayText = 
+              `${blue.color} ball: ${blue.current.toFixed(1)} m/s (Max: ${blue.fastest.toFixed(1)})` + 
+              `\n${red.color} ball: ${red.current.toFixed(1)} m/s (Max: ${red.fastest.toFixed(1)})`;
+            
+            this.statsDisplay.setAttribute('value', displayText);
+          }
+        },
+
+        // Reset max speeds (could be called on game restart)
+        resetMaxSpeeds: function() {
+          this.ballStats.player1.fastest = 0;
+          this.ballStats.player2.fastest = 0;
+          console.log('Ball speed records reset');
+        }
+      });
+
     </script>
 
-    <a-scene physics-world game-manager sound-manager multiplayer-sync
+    <a-scene physics-world game-manager sound-manager multiplayer-sync fps-counter frame-rate-info ball-speed-tracker
     vr-mode-ui="enabled: true"
-      renderer="antialias: true; colorManagement: true; shadowMapEnabled: false"
+      renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
     webxr="requiredFeatures: local-floor">
       
       <!-- Game room walls -->
@@ -2061,8 +2455,9 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.19; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 2.8 0" text="value: v0.20; align: center; width: 2; color: #ffffff"></a-entity>
         <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="timer-display" position="0 2.2 0" text="value: Time: 3:00; align: center; width: 2; color: #ffff00"></a-entity>
         <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
 
       </a-entity>
@@ -2209,6 +2604,31 @@
                    static-physics="isRacket: true"
                    visible="false">
             </a-box>
+            
+            <!-- Stats display on arm/wrist -->
+            <a-entity id="arm-stats" 
+                      position="0 0.1 0.05" 
+                      rotation="-45 0 0">
+              <!-- Background panel -->
+              <a-plane width="0.25" 
+                       height="0.15" 
+                       color="#000000" 
+                       material="opacity: 0.8; transparent: true"
+                       position="0 0 -0.001">
+              </a-plane>
+              
+              <!-- Stats text -->
+              <a-text id="ball-stats-text"
+                      value="Blue ball: -- m/s&#10;Red ball: -- m/s"
+                      position="0 0 0"
+                      align="center"
+                      width="0.25"
+                      color="#00ff00"
+                      font="dejavu"
+                      geometry="primitive: plane; width: auto; height: auto"
+                      material="color: transparent; transparent: true">
+              </a-text>
+            </a-entity>
           </a-entity>
           
           <a-entity id="rightHand" 
