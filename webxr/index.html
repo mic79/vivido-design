@@ -11,6 +11,7 @@
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="advanced-bot.js"></script>
+    <script src="game-modes.js"></script>
   </head>
   <body>
     <script>
@@ -152,10 +153,10 @@
         ballSpawned: { player1: false, player2: false }
       };
 
-      // Racket mode state - independent per player
+      // Racket mode state - per hand tracking
       const racketMode = {
-        player1: false, // Red player / opponent in multiplayer
-        player2: false  // Blue player / local player
+        player1: { left: false, right: false }, // Red player / opponent in multiplayer
+        player2: { left: false, right: false }  // Blue player / local player
       };
 
       // Multiplayer state
@@ -184,9 +185,23 @@
         }
       }
 
-      // Listen for Y button to toggle multiplayer
+      // Helper: update mode display
+      function updateModeDisplay(mode, enabled) {
+        const scene = document.querySelector('a-scene');
+        const gameModesComponent = scene && scene.components['game-modes'];
+        if (gameModesComponent && gameModesComponent.updateModeDisplay) {
+          gameModesComponent.updateModeDisplay(mode, enabled);
+        } else {
+          // Fallback if component not ready
+          setTimeout(() => updateModeDisplay(mode, enabled), 100);
+        }
+      }
+
+      // Listen for Y button to toggle multiplayer and B button to switch modes
       AFRAME.registerComponent('multiplayer-toggle', {
         init: function() {
+          this.lastModeSwitch = 0;
+          
           this.el.sceneEl.addEventListener('ybuttondown', () => {
             const now = Date.now();
             if (now - lastMultiplayerToggle < 1000) return; // debounce
@@ -202,44 +217,135 @@
             }
           });
 
-          // Listen for B button to toggle racket mode with debounce
-          let lastBButtonTime = 0;
+          // Listen for B button to switch game modes
           this.el.sceneEl.addEventListener('bbuttondown', () => {
             const now = Date.now();
-            if (now - lastBButtonTime < 500) return; // 500ms debounce
-            lastBButtonTime = now;
-            toggleRacketMode();
+            if (now - this.lastModeSwitch < 1000) return; // debounce
+            this.lastModeSwitch = now;
+            
+            // In multiplayer, only host can switch modes
+            if (isMultiplayer && !isHost) {
+              console.log('Only host can switch modes in multiplayer');
+              return;
+            }
+            
+            this.switchGameMode();
           });
+
+          // Listen for grip button presses for individual racket control
+          this.el.sceneEl.addEventListener('gripdown', (evt) => {
+            const hand = evt.target;
+            this.handleGripDown(hand);
+          });
+          
+          this.el.sceneEl.addEventListener('gripup', (evt) => {
+            const hand = evt.target;
+            this.handleGripUp(hand);
+          });
+        },
+        
+        handleGripDown: function(hand) {
+          const isLeftHand = hand.id === 'leftHand';
+          const isRightHand = hand.id === 'rightHand';
+          
+          if (isLeftHand) {
+            this.setRacketVisible('left', true);
+          } else if (isRightHand) {
+            this.setRacketVisible('right', true);
+          }
+        },
+        
+        handleGripUp: function(hand) {
+          const isLeftHand = hand.id === 'leftHand';
+          const isRightHand = hand.id === 'rightHand';
+          
+          if (isLeftHand) {
+            this.setRacketVisible('left', false);
+          } else if (isRightHand) {
+            this.setRacketVisible('right', false);
+          }
+        },
+        
+        setRacketVisible: function(handSide, visible) {
+          // Local player is always player2
+          racketMode.player2[handSide] = visible;
+          
+          // Get the appropriate racket element
+          const racketId = handSide === 'left' ? '#leftHandRacket' : '#rightHandRacket';
+          const racket = document.querySelector(racketId);
+          
+          if (racket) {
+            racket.setAttribute('visible', visible);
+            console.log(`${handSide} racket ${visible ? 'activated' : 'deactivated'}`);
+          }
+          
+          // Send racket state to opponent in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({ 
+              type: 'racket-mode', 
+              player: 'player2', 
+              hand: handSide, 
+              active: visible 
+            });
+          }
+        },
+
+        switchGameMode: function() {
+          const scene = this.el.sceneEl;
+          const gameModesComponent = scene.components['game-modes'];
+          
+          if (!gameModesComponent) {
+            console.log('Game modes component not found');
+            return;
+          }
+          
+          // Get current mode
+          const currentMode = gameModesComponent.data.mode;
+          const isEnabled = gameModesComponent.data.enabled;
+          
+          // Toggle between default and bouncing-ball modes
+          let newMode, newEnabled;
+          if (!isEnabled || currentMode === 'default') {
+            newMode = 'bouncing-ball';
+            newEnabled = true;
+          } else {
+            newMode = 'default';
+            newEnabled = false;
+          }
+          
+          // Apply mode change locally
+          this.applyModeChange(newMode, newEnabled);
+          
+          // Send mode change to peer in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({
+              type: 'mode-change',
+              mode: newMode,
+              enabled: newEnabled
+            });
+          }
+          
+          console.log(`Mode switched to: ${newEnabled ? newMode : 'default (disabled)'}`);
+        },
+
+        applyModeChange: function(mode, enabled) {
+          const scene = this.el.sceneEl;
+          const gameModesComponent = scene.components['game-modes'];
+          
+          if (gameModesComponent) {
+            // Remove current mode if any
+            if (gameModesComponent.data.enabled) {
+              gameModesComponent.remove();
+            }
+            
+            // Apply new mode
+            scene.setAttribute('game-modes', `enabled: ${enabled}; mode: ${mode}`);
+            
+            // Update mode display
+            updateModeDisplay(mode, enabled);
+          }
         }
       });
-
-      // Racket mode toggle function - per player
-      function toggleRacketMode() {
-        // Determine which player is toggling (local player is always player2)
-        const player = isMultiplayer ? 'player2' : 'player2'; // Local player controls player2 rackets
-        
-        racketMode[player] = !racketMode[player];
-        
-        // Get racket elements for the local player (always left/right hand)
-        const leftRacket = document.querySelector('#leftHandRacket');
-        const rightRacket = document.querySelector('#rightHandRacket');
-        
-        // Show/hide local player's rackets
-        if (racketMode[player]) {
-          if (leftRacket) leftRacket.setAttribute('visible', true);
-          if (rightRacket) rightRacket.setAttribute('visible', true);
-          console.log('Racket mode activated for', player);
-        } else {
-          if (leftRacket) leftRacket.setAttribute('visible', false);
-          if (rightRacket) rightRacket.setAttribute('visible', false);
-          console.log('Racket mode deactivated for', player);
-        }
-        
-        // Send racket mode state to opponent in multiplayer
-        if (isMultiplayer && conn && conn.open) {
-          conn.send({ type: 'racket-mode', player: player, active: racketMode[player] });
-        }
-      }
 
       // Multiplayer connection logic (slot-based, PeerJS, TURN support)
       async function startMultiplayerConnection() {
@@ -402,9 +508,50 @@
             multiplayerScore.local = data.score.remote;
             updateScoreDisplayMultiplayer();
           } else if (data.type === 'racket-mode') {
-            // Sync opponent's racket mode state
-            racketMode.player1 = data.active; // Remote player becomes player1
-            console.log('Opponent racket mode:', data.active ? 'ON' : 'OFF');
+            // Sync opponent's per-hand racket mode state
+            racketMode.player1[data.hand] = data.active; // Remote player becomes player1
+            console.log(`Opponent ${data.hand} racket:`, data.active ? 'ON' : 'OFF');
+          } else if (data.type === 'ready-update') {
+            // Sync ready state
+            multiplayerReady.remote = data.ready;
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].updateReadyState();
+            }
+          } else if (data.type === 'countdown-start') {
+            // Sync countdown start
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].syncedStartCountdown(data.startTime);
+            }
+          } else if (data.type === 'game-state') {
+            // Sync game state changes (overtime/end)
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              const gm = gameManager.components['game-manager'];
+              gm.matchState = data.state;
+              
+              if (data.state === 'OVERTIME') {
+                gm.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
+                console.log('Synced: Match went to overtime');
+              } else if (data.state === 'ENDED') {
+                // Flip the winner message for the receiving player
+                const flippedWinner = data.winner.includes('You win!') ? 'Opponent wins!' : 'You win!';
+                gm.startMessage.setAttribute('visible', true);
+                gm.startMessage.setAttribute('text', 'value', `${flippedWinner}\nPress A to play again`);
+                gm.timerDisplay.setAttribute('text', 'value', 'Match ended');
+                gm.gameStarted = false;
+                console.log('Synced: Match ended -', flippedWinner);
+              }
+            }
+          } else if (data.type === 'mode-change') {
+            // Sync game mode changes from host
+            const scene = document.querySelector('a-scene');
+            const multiplayerToggle = scene && scene.components['multiplayer-toggle'];
+            if (multiplayerToggle) {
+              multiplayerToggle.applyModeChange(data.mode, data.enabled);
+              console.log(`Received mode change: ${data.enabled ? data.mode : 'default (disabled)'}`);
+            }
           }
         });
         conn.on('close', () => {
@@ -445,7 +592,14 @@
           
           // Switch to multiplayer score display immediately
           multiplayerScore = { local: 0, remote: 0 };
+          multiplayerReady = { local: false, remote: false };
           updateScoreDisplayMultiplayer();
+          
+          // Set game to waiting for ready state
+          const gameManager = document.querySelector('#game-manager');
+          if (gameManager && gameManager.components['game-manager']) {
+            gameManager.components['game-manager'].setMultiplayerWaiting();
+          }
         }
       }
       function endMultiplayer() {
@@ -459,6 +613,7 @@
         remotePlayerState = null;
         remoteBallState = null;
         multiplayerScore = { local: 0, remote: 0 };
+        multiplayerReady = { local: false, remote: false };
         
         // Reset the actual game manager scores
         const gameManager = document.querySelector('#game-manager');
@@ -468,9 +623,11 @@
         }
         
         // Restore singleplayer score display
-        const scoreDisplay = document.getElementById('score-display');
-        if (scoreDisplay) {
-          scoreDisplay.setAttribute('text', 'value', 'Player: 0 - Bot: 0');
+        const blueScore = document.getElementById('blue-score');
+        const redScore = document.getElementById('red-score');
+        if (blueScore && redScore) {
+          blueScore.setAttribute('text', 'value', '0');
+          redScore.setAttribute('text', 'value', '0');
         }
         isSearchingForMatch = false;
         // Set bot to default singleplayer position (head height)
@@ -596,15 +753,25 @@
       // --- MULTIPLAYER SCORE SYNC ---
       // Multiplayer score state
       let multiplayerScore = { local: 0, remote: 0 };
+      // Multiplayer ready state
+      let multiplayerReady = { local: false, remote: false };
       function sendScoreUpdate() {
         if (conn && conn.open) {
           conn.send({ type: 'score-update', score: multiplayerScore });
         }
       }
+      function sendReadyUpdate() {
+        if (conn && conn.open) {
+          conn.send({ type: 'ready-update', ready: multiplayerReady.local });
+        }
+      }
       function updateScoreDisplayMultiplayer() {
-        const scoreDisplay = document.getElementById('score-display');
-        if (scoreDisplay) {
-          scoreDisplay.setAttribute('text', 'value', `You: ${multiplayerScore.local} - Opponent: ${multiplayerScore.remote}`);
+        const blueScore = document.getElementById('blue-score');
+        const redScore = document.getElementById('red-score');
+        if (blueScore && redScore) {
+          // In multiplayer, local player is always blue, remote is red
+          blueScore.setAttribute('text', 'value', multiplayerScore.local.toString());
+          redScore.setAttribute('text', 'value', multiplayerScore.remote.toString());
         }
       }
       // Patch game manager to sync score in multiplayer, but only after A-Frame and the component are loaded
@@ -925,7 +1092,7 @@
                   
                   // Small but noticeable effect - frame rate independent acceleration
                   const frameTime = 1/72; // Assume 72fps for consistent effect
-                  const magnusStrength = 0.005; // Very subtle Magnus effect - just barely visible
+                  const magnusStrength = 0.008; // Slightly stronger Magnus effect - more noticeable curvature
                   
                   // Scale acceleration by frame time and strength
                   magnusAcceleration.multiplyScalar(magnusStrength * frameTime);
@@ -1236,7 +1403,11 @@
           // Listen for A button press on both controllers
           this.el.sceneEl.addEventListener('abuttondown', (evt) => {
             if (this.matchState === 'WAITING') {
-              this.startCountdown();
+              if (isMultiplayer && conn && conn.open) {
+                this.handleMultiplayerReady();
+              } else {
+                this.startCountdown();
+              }
             } else if (this.matchState === 'ENDED') {
               this.resetMatch();
             }
@@ -1261,6 +1432,62 @@
           } else if (this.matchState === 'PLAYING') {
             this.updateTimer();
           }
+        },
+
+        handleMultiplayerReady: function() {
+          // Mark local player as ready
+          multiplayerReady.local = true;
+          sendReadyUpdate();
+          this.updateReadyState();
+        },
+
+        updateReadyState: function() {
+          if (!isMultiplayer || !conn || !conn.open) return;
+          
+          if (multiplayerReady.local && !multiplayerReady.remote) {
+            this.startMessage.setAttribute('text', 'value', 'Waiting for other player...');
+          } else if (!multiplayerReady.local && multiplayerReady.remote) {
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+          } else if (multiplayerReady.local && multiplayerReady.remote) {
+            // Both ready - start countdown
+            const startTime = Date.now();
+            this.syncedStartCountdown(startTime);
+            // Send countdown sync to other player
+            if (conn && conn.open) {
+              conn.send({ type: 'countdown-start', startTime: startTime });
+            }
+          }
+        },
+
+        setMultiplayerWaiting: function() {
+          this.matchState = 'WAITING';
+          this.gameStarted = false;
+          multiplayerReady.local = false;
+          multiplayerReady.remote = false;
+          
+          // Show start message
+          this.startMessage.setAttribute('visible', true);
+          this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+          this.scoreDisplay.setAttribute('visible', false);
+          this.timerDisplay.setAttribute('visible', false);
+          
+          console.log('Multiplayer waiting for both players to be ready');
+        },
+
+        syncedStartCountdown: function(startTime) {
+          this.matchState = 'COUNTDOWN';
+          this.countdownStartTime = startTime;
+          this.startMessage.setAttribute('visible', true);
+          this.startMessage.setAttribute('text', 'value', '3');
+          
+          // Reset ready states
+          multiplayerReady.local = false;
+          multiplayerReady.remote = false;
+          
+          // Reset and respawn balls
+          this.respawnBalls();
+          
+          console.log('Synchronized countdown started');
         },
 
         startCountdown: function() {
@@ -1315,7 +1542,17 @@
           
           // Check if time is up
           if (remaining <= 0 && this.matchState === 'PLAYING') {
-            if (this.playerScore === this.botScore) {
+            // Use correct scores for multiplayer vs singleplayer
+            let score1, score2;
+            if (isMultiplayer && conn && conn.open) {
+              score1 = multiplayerScore.local;
+              score2 = multiplayerScore.remote;
+            } else {
+              score1 = this.playerScore;
+              score2 = this.botScore;
+            }
+            
+            if (score1 === score2) {
               this.startOvertime();
             } else {
               this.endMatch();
@@ -1327,6 +1564,11 @@
           this.matchState = 'OVERTIME';
           this.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
           console.log('Match went to overtime - sudden death');
+          
+          // Sync overtime state in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({ type: 'game-state', state: 'OVERTIME' });
+          }
         },
 
         endMatch: function() {
@@ -1350,6 +1592,11 @@
           this.startMessage.setAttribute('text', 'value', `${winner}\nPress A to play again`);
           this.timerDisplay.setAttribute('text', 'value', 'Match ended');
           
+          // Sync end state in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({ type: 'game-state', state: 'ENDED', winner: winner });
+          }
+          
           console.log(`Match ended: ${winner}`);
         },
 
@@ -1359,10 +1606,12 @@
           this.botScore = 0;
           this.gameStarted = false;
           
-          // Reset multiplayer scores too
+          // Reset multiplayer scores and ready states
           if (isMultiplayer) {
             multiplayerScore.local = 0;
             multiplayerScore.remote = 0;
+            multiplayerReady.local = false;
+            multiplayerReady.remote = false;
           }
           
           // Hide game UI, show start message
@@ -1433,9 +1682,13 @@
           if (isMultiplayer && conn && conn.open) {
             updateScoreDisplayMultiplayer();
           } else {
-            this.scoreDisplay.setAttribute('text', {
-              value: `Player: ${this.playerScore} - Bot: ${this.botScore}`
-            });
+            // In singleplayer, player is blue, bot is red
+            const blueScore = document.getElementById('blue-score');
+            const redScore = document.getElementById('red-score');
+            if (blueScore && redScore) {
+              blueScore.setAttribute('text', 'value', this.playerScore.toString());
+              redScore.setAttribute('text', 'value', this.botScore.toString());
+            }
           }
         }
       });
@@ -1571,7 +1824,15 @@
           
                     // Check if this is a back wall (z = 8 or z = -8)
           const wallPosition = this.el.getAttribute('position');
-          const isBackWall = wallPosition && (Math.abs(wallPosition.z - 8) < 0.01 || Math.abs(wallPosition.z + 8) < 0.01);
+          let isBackWall = wallPosition && (Math.abs(wallPosition.z - 8) < 0.01 || Math.abs(wallPosition.z + 8) < 0.01);
+          
+          // In bouncing ball mode, only z=8 (behind blue player) should be a back wall
+          // z=-8 (behind red player) should bounce like side walls
+          const scene = this.el.sceneEl;
+          const gameModesComponent = scene && scene.components['game-modes'];
+          if (gameModesComponent && gameModesComponent.data.enabled && gameModesComponent.data.mode === 'bouncing-ball') {
+            isBackWall = wallPosition && Math.abs(wallPosition.z - 8) < 0.01; // Only z=8 is back wall
+          }
           
           const body = new CANNON.Body({
             mass: 0,
@@ -1621,9 +1882,21 @@
         
         // Plane-based collision detection - only one surface!
         checkSweptCollision: function(startPos, endPos) {
-          // Only check collision if racket mode is active for this player
-          // Local player (hands) always controls player2's rackets
-          if (!racketMode.player2) {
+          // Only check collision if THIS SPECIFIC racket is active
+          // Determine which hand this racket belongs to
+          const isLeftRacket = this.el.id === 'leftHandRacket';
+          const isRightRacket = this.el.id === 'rightHandRacket';
+          
+          // Check if THIS specific racket is active
+          if (isLeftRacket && !racketMode.player2.left) {
+            return; // Left racket not active
+          }
+          if (isRightRacket && !racketMode.player2.right) {
+            return; // Right racket not active
+          }
+          
+          // If we can't determine which racket this is, don't allow collision
+          if (!isLeftRacket && !isRightRacket) {
             return;
           }
           
@@ -2299,6 +2572,7 @@
     </script>
 
     <a-scene physics-world game-manager sound-manager multiplayer-sync fps-counter frame-rate-info ball-speed-tracker
+             game-modes="enabled: true; mode: bouncing-ball"
     vr-mode-ui="enabled: true"
       renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
     webxr="requiredFeatures: local-floor">
@@ -2455,10 +2729,21 @@
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
-        <a-entity id="version-display" position="0 2.8 0" text="value: v0.20; align: center; width: 2; color: #ffffff"></a-entity>
-        <a-entity id="score-display" position="0 2.5 0" text="value: Player: 0 - Bot: 0; align: center; width: 2; color: #ffffff"></a-entity>
-        <a-entity id="timer-display" position="0 2.2 0" text="value: Time: 3:00; align: center; width: 2; color: #ffff00"></a-entity>
-        <a-entity id="start-message" position="0 2.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
+        <!-- Smaller version display moved closer to ceiling -->
+        <a-entity id="version-display" position="0 3.6 0" text="value: v0.20; align: center; width: 1.5; color: #ffffff"></a-entity>
+        
+        <!-- Large colored score display -->
+        <a-entity id="score-display" position="0 3.3 0">
+          <!-- Blue player score (left side) -->
+          <a-entity id="blue-score" position="-0.3 0 0" text="value: 0; align: center; width: 4; color: #0099ff"></a-entity>
+          <!-- Dash separator -->
+          <a-entity position="0 0 0" text="value: -; align: center; width: 4; color: #ffffff"></a-entity>
+          <!-- Red player score (right side) -->
+          <a-entity id="red-score" position="0.3 0 0" text="value: 0; align: center; width: 4; color: #ff4444"></a-entity>
+        </a-entity>
+        
+        <a-entity id="timer-display" position="0 3.0 0" text="value: Time: 3:00; align: center; width: 2; color: #ffff00"></a-entity>
+        <a-entity id="start-message" position="0 2.7 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
 
       </a-entity>
 
@@ -2599,8 +2884,8 @@
                    depth="0.02"
                    position="0 0 -0.15"
                    rotation="0 -90 0"
-                   color="#00ff00"
-                   material="opacity: 0.7; transparent: true; emissive: #004400; emissiveIntensity: 0.3"
+                   color="#0099ff"
+                   material="wireframe: true; opacity: 0.8; transparent: true"
                    static-physics="isRacket: true"
                    visible="false">
             </a-box>
@@ -2626,7 +2911,7 @@
                       color="#00ff00"
                       font="dejavu"
                       geometry="primitive: plane; width: auto; height: auto"
-                      material="color: transparent; transparent: true">
+                      material="color: #000000; transparent: true; opacity: 0">
               </a-text>
             </a-entity>
           </a-entity>
@@ -2646,8 +2931,8 @@
                    depth="0.02"
                    position="0 0 -0.15"
                    rotation="0 -90 0"
-                   color="#00ff00"
-                   material="opacity: 0.7; transparent: true; emissive: #004400; emissiveIntensity: 0.3"
+                   color="#0099ff"
+                   material="wireframe: true; opacity: 0.8; transparent: true"
                    static-physics="isRacket: true"
                    visible="false">
             </a-box>
