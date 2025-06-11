@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>WebXR Dotmination</title>
+    <meta name="description" content="WebXR spherical environment with hexagonal playfield">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.173.0/examples/js/utils/BufferGeometryUtils.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.3/howler.min.js"></script>
+  </head>
+  <body>
+    <a-scene background="color: #222" stats fps-counter game-state>
+      <!-- Camera rig -->
+      <a-entity id="camera-rig" position="0 0 0">
+        <a-entity id="camera" camera look-controls position="0 0 0"></a-entity>
+        
+        <!-- VR Controllers -->
+        <a-entity id="leftHand" 
+                  oculus-touch-controls="hand: left"
+                  controller-raycast="hand: left">
+          <!-- Wrist display -->
+          <a-entity id="wrist-display" position="0 0.1 0.05" rotation="-45 0 0">
+            <!-- Background panel -->
+            <a-plane width="0.15" height="0.12" color="#000000" material="opacity: 0.8; transparent: true" position="0 0 -0.001"></a-plane>
+            <!-- Version and game info text -->
+            <a-text id="version-text" value="Dotmination v0.1" align="center" width="0.15" color="#00ff00" position="0 0.02 0"></a-text>
+            <a-text id="turn-text" value="Player 1's Turn" align="center" width="0.15" color="#ff0000" position="0 -0.02 0"></a-text>
+          </a-entity>
+        </a-entity>
+        <a-entity id="rightHand" 
+                  oculus-touch-controls="hand: right"
+                  controller-raycast="hand: right">
+        </a-entity>
+      </a-entity>
+
+      <!-- Environment -->
+      <a-entity id="environment" sphere-controls>
+        <!-- Geodesic cells container -->
+        <a-entity id="geodesic-cells" tiles></a-entity>
+        
+        <!-- Simplified lighting for even illumination -->
+        <a-light type="ambient" intensity="1.5" color="#ffffff"></a-light>
+      </a-entity>
+
+      <!-- Debug intersection sphere -->
+      <a-sphere id="debug-point" radius="0.02" color="#ff0000" visible="false"></a-sphere>
+
+      <!-- Audio pool container -->
+      <a-entity id="audio-pool"></a-entity>
+    </a-scene>
+
+    <script>
+      // Game state component to manage turns and game flow
+      AFRAME.registerComponent('game-state', {
+        init: function() {
+          this.reset();
+          
+          // Listen for game over
+          this.el.addEventListener('game-over', this.onGameOver.bind(this));
+          
+          // Listen for restart
+          this.el.addEventListener('restart-game', this.reset.bind(this));
+          
+          // Listen for turn changes to update display
+          this.el.addEventListener('turn-start', this.onTurnStart.bind(this));
+          
+          // Add turn switching lock
+          this.switchingTurn = false;
+
+          // Initialize audio pool
+          this.initAudioPool();
+        },
+        
+        reset: function() {
+          this.currentPlayer = 1; // Player 1 starts
+          this.isGameOver = false;
+          this.turnCount = 0; // Track number of turns
+          this.playerColors = {
+            1: new THREE.Color(1, 0, 0), // Red for Player 1
+            2: new THREE.Color(0, 0, 1)  // Blue for Player 2
+          };
+          
+          // Reset all cells
+          const cells = document.querySelector('#geodesic-cells');
+          if (cells && cells.object3D) {
+            cells.object3D.traverse((node) => {
+              if (node instanceof THREE.Mesh) {
+                node.userData.stage = 0;
+                node.userData.owner = null;
+                node.material.color.setHex(0xffffff);
+                node.scale.set(1, 1, 1);
+              }
+            });
+          }
+          
+          // Emit turn start event
+          this.el.emit('turn-start', { player: this.currentPlayer });
+          
+          // If Player 2 (bot) starts, trigger bot move
+          if (this.currentPlayer === 2) {
+            this.makeBotMove();
+          }
+        },
+        
+        switchTurn: function() {
+          // Prevent multiple turn switches
+          if (this.switchingTurn) {
+            console.log('Turn switch already in progress, ignoring');
+            return;
+          }
+          
+          this.switchingTurn = true;
+          console.log('Switching turn from Player', this.currentPlayer);
+          
+          this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
+          this.turnCount++; // Increment turn count
+          this.el.emit('turn-start', { player: this.currentPlayer });
+          
+          // If it's the bot's turn, schedule the move
+          if (this.currentPlayer === 2) {
+            // End the turn switch lock immediately
+            this.switchingTurn = false;
+            // Schedule bot move with a longer delay to ensure all animations are complete
+            console.log('Bot will move in 2 seconds...');
+            setTimeout(() => {
+              this.makeBotMove();
+            }, 2000); // Back to 2 seconds
+          } else {
+            // For player 1, end the turn switch immediately
+            this.switchingTurn = false;
+          }
+        },
+        
+        makeBotMove: function() {
+          const cells = document.querySelector('#geodesic-cells');
+          if (!cells || !cells.object3D) return;
+          
+          // Keep trying until we make a valid move
+          const tryBotMove = () => {
+            // First check if it's still the bot's turn
+            if (this.currentPlayer !== 2) {
+              console.log('Not bot turn anymore, stopping retry');
+              return;
+            }
+
+            // Get the controller-raycast component that handles cell clicks
+            const raycastComponent = document.querySelector('[controller-raycast]').components['controller-raycast'];
+            if (!raycastComponent) {
+              console.log('Controller raycast component not found, retrying in 100ms...');
+              setTimeout(tryBotMove, 100);
+              return;
+            }
+
+            // Check if chain reaction is in progress
+            if (raycastComponent.chainReactionInProgress) {
+              console.log('Chain reaction in progress, retrying in 100ms...');
+              setTimeout(tryBotMove, 100);
+              return;
+            }
+
+            // Get all valid moves for the bot (Player 2):
+            // 1. Neutral cells (no owner)
+            // 2. Bot's own cells (including stage 5)
+            const validMoves = [];
+            cells.object3D.traverse((node) => {
+              if (node instanceof THREE.Mesh && node.userData.isHexagonal) {
+                const isNeutral = !node.userData.owner;
+                const isBotOwned = node.userData.owner === 2;
+                
+                // Add extra check for recently exploded cells
+                const isRecentlyExploded = raycastComponent.explodedCells && raycastComponent.explodedCells.has(raycastComponent.meshes.indexOf(node));
+                
+                if ((isNeutral || isBotOwned) && !isRecentlyExploded) {
+                  validMoves.push(node);
+                }
+              }
+            });
+            
+            if (validMoves.length > 0) {
+              // Choose random valid move
+              const randomCell = validMoves[Math.floor(Math.random() * validMoves.length)];
+              console.log('Bot choosing cell:', randomCell.userData.tileIndex);
+              
+              // Set a flag to indicate this is a bot move
+              raycastComponent.isBotMove = true;
+              
+              // Store the current exploded cells set size
+              const currentExplodedSize = raycastComponent.explodedCells ? raycastComponent.explodedCells.size : 0;
+              
+              // Call handleCellClick directly
+              raycastComponent.handleCellClick(randomCell);
+              
+              // Clear the flag
+              raycastComponent.isBotMove = false;
+              
+              // Check if the move was invalid (exploded cells set didn't change)
+              if (raycastComponent.explodedCells && raycastComponent.explodedCells.size === currentExplodedSize) {
+                console.log('Bot move was invalid, retrying in 100ms...');
+                setTimeout(tryBotMove, 100);
+              }
+            } else {
+              // If no valid moves found, wait a bit and try again
+              console.log('No valid moves found, retrying in 100ms...');
+              setTimeout(tryBotMove, 100);
+            }
+          };
+
+          // Start trying to make a move
+          tryBotMove();
+        },
+        
+        checkGameOver: function() {
+          // Only check for game over after 2 turns have passed
+          if (this.turnCount < 2) return false;
+
+          const cells = document.querySelector('#geodesic-cells');
+          if (!cells || !cells.object3D) return false;
+          
+          let player1Cells = 0;
+          let player2Cells = 0;
+          
+          cells.object3D.traverse((node) => {
+            if (node instanceof THREE.Mesh && node.userData.isHexagonal) {
+              if (node.userData.owner === 1) player1Cells++;
+              if (node.userData.owner === 2) player2Cells++;
+            }
+          });
+          
+          if ((player1Cells === 0 && player2Cells > 0) || 
+              (player2Cells === 0 && player1Cells > 0)) {
+            const winner = player1Cells > 0 ? 1 : 2;
+            this.isGameOver = true;
+            this.el.emit('game-over', { winner });
+            return true;
+          }
+          
+          return false;
+        },
+        
+        onGameOver: function(evt) {
+          const winner = evt.detail.winner;
+          console.log(`Game Over! Player ${winner} wins!`);
+          
+          // Show game over message on wrist display
+          const versionText = document.getElementById('version-text');
+          if (versionText) {
+            versionText.setAttribute('text', 'value', `Player ${winner} wins!`);
+            versionText.setAttribute('text', 'color', winner === 1 ? '#ff0000' : '#0000ff');
+          }
+        },
+        
+        onTurnStart: function(evt) {
+          const player = evt.detail.player;
+          const turnText = document.getElementById('turn-text');
+          if (turnText) {
+            turnText.setAttribute('text', {
+              value: `Player ${player}'s Turn`,
+              color: player === 1 ? '#ff0000' : '#0000ff'
+            });
+          }
+        },
+
+        initAudioPool: function() {
+          // Initialize Howler sound
+          this.sonarSound = new Howl({
+            src: ['audio/submarine-sonar-38243-once.mp3'],
+            volume: 0.5,
+            pool: 20 // Allow up to 20 simultaneous sounds
+          });
+        },
+
+        playCellSound: function(cell, chainDepth = 0) {
+          // Get world position of the cell
+          const worldPos = new THREE.Vector3();
+          cell.getWorldPosition(worldPos);
+          
+          // Calculate pitch based on chain depth (increase by 0.2 for each level for more noticeable change)
+          const pitch = 1.0 + (chainDepth * 0.2);
+          console.log('Playing sound with pitch:', pitch, 'at chain depth:', chainDepth);
+          
+          // Play sound with Howler
+          if (this.sonarSound) {
+            const soundId = this.sonarSound.play();
+            this.sonarSound.rate(pitch, soundId);
+            
+            // Set 3D position
+            this.sonarSound.pos(worldPos.x, worldPos.y, worldPos.z, soundId);
+            this.sonarSound.pannerAttr({
+              panningModel: 'HRTF',
+              distanceModel: 'inverse',
+              refDistance: 1.0,
+              maxDistance: 10000,
+              rolloffFactor: 1,
+              coneInnerAngle: 360,
+              coneOuterAngle: 360,
+              coneOuterGain: 0
+            }, soundId);
+          }
+        }
+      });
+
+      // Tiles component to handle neighbor relationships
+      AFRAME.registerComponent('tiles', {
+        init: function() {
+          this.tiles = [];
+          
+          // Wait for cells to be created
+          this.el.addEventListener('cells-created', (evt) => {
+            const meshes = evt.detail.meshes;
+            const tileData = evt.detail.tileData;
+            
+            // Store tile data with pre-calculated neighbors
+            this.tiles = tileData;
+            
+            console.log('Tile neighbor data:', this.tiles);
+          });
+        }
+      });
+
+      // Controller raycast component
+      AFRAME.registerComponent('controller-raycast', {
+        schema: {
+          hand: {type: 'string', default: 'right'}
+        },
+
+        init: function() {
+          this.raycaster = new THREE.Raycaster();
+          this.meshes = [];
+          this.lastHit = null;
+          this.direction = new THREE.Vector3(0, 0, -1);
+          this.tempMatrix = new THREE.Matrix4();
+          this.intersectionPoint = new THREE.Vector3();
+          this.origin = new THREE.Vector3();
+          this.isVR = false;
+          
+          // Track if chain reaction is in progress
+          this.chainReactionInProgress = false;
+          
+          // Simplified click handling
+          this.clickStartPosition = null;
+          this.clickStartTime = 0;
+          this.clickThreshold = 5; // pixels
+          this.clickTimeThreshold = 300; // milliseconds
+          this.clickStartCell = null;
+          
+          // Create visible ray line (only for VR)
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 0,0,-1], 3));
+          const material = new THREE.LineBasicMaterial({color: 0x00ff00, opacity: 0.8, transparent: true});
+          this.rayLine = new THREE.Line(geometry, material);
+          this.rayLine.rotation.x = THREE.MathUtils.degToRad(-30);
+          this.el.object3D.add(this.rayLine);
+
+          // Create debug point
+          const debugGeometry = new THREE.SphereGeometry(0.02);
+          const debugMaterial = new THREE.MeshBasicMaterial({color: 0xff0000});
+          this.debugSphere = new THREE.Mesh(debugGeometry, debugMaterial);
+          this.debugSphere.visible = false;
+          this.el.sceneEl.object3D.add(this.debugSphere);
+
+          // Bind VR trigger events
+          this.el.addEventListener('triggerdown', this.onTriggerDown.bind(this));
+          
+          // Listen for bot moves
+          const cells = document.querySelector('#geodesic-cells');
+          if (cells) {
+            cells.addEventListener('bot-move', (evt) => {
+              if (evt.detail.cell) {
+                this.handleCellClick(evt.detail.cell);
+              }
+            });
+          }
+
+          // Listen for enter VR/exit VR
+          const scene = this.el.sceneEl;
+          scene.addEventListener('enter-vr', () => {
+            this.isVR = true;
+            this.rayLine.visible = true;
+          });
+          scene.addEventListener('exit-vr', () => {
+            this.isVR = false;
+            this.rayLine.visible = false;
+          });
+          
+          // Add mouse/touch event listeners to the scene
+          const canvas = scene.canvas;
+          if (canvas) {
+            // Mouse events
+            canvas.addEventListener('mousedown', this.onMouseDown.bind(this));
+            canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
+            canvas.addEventListener('mouseup', this.onMouseUp.bind(this));
+            
+            // Touch events
+            canvas.addEventListener('touchstart', this.onTouchStart.bind(this));
+            canvas.addEventListener('touchmove', this.onTouchMove.bind(this));
+            canvas.addEventListener('touchend', this.onTouchEnd.bind(this));
+          }
+          
+          // Get all tile meshes after they're created
+          this.el.sceneEl.addEventListener('loaded', () => {
+            setTimeout(() => {
+              const cells = document.querySelector('#geodesic-cells');
+              if (cells && cells.object3D) {
+                cells.object3D.traverse((node) => {
+                  if (node instanceof THREE.Mesh) {
+                    // Create material with better visibility
+                    const material = new THREE.MeshBasicMaterial({
+                      color: 0xffffff,
+                      side: THREE.DoubleSide
+                    });
+                    node.material = material;
+                    this.meshes.push(node);
+                    node.userData.stage = 0;
+                    node.userData.owner = null;
+                  }
+                });
+                console.log('Found meshes:', this.meshes.length);
+              }
+            }, 1000);
+          });
+        },
+
+        updateRaycasterFromMouse: function(x, y) {
+          const scene = this.el.sceneEl;
+          const camera = scene.camera;
+          const bounds = scene.canvas.getBoundingClientRect();
+          
+          // Convert mouse/touch position to normalized device coordinates (-1 to +1)
+          const mouseX = ((x - bounds.left) / bounds.width) * 2 - 1;
+          const mouseY = -((y - bounds.top) / bounds.height) * 2 + 1;
+          
+          this.raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+        },
+
+        onMouseMove: function(evt) {
+          if (!this.isVR) {
+            this.updateRaycasterFromMouse(evt.clientX, evt.clientY);
+            this.checkIntersections();
+          }
+        },
+
+        onMouseDown: function(evt) {
+          if (!this.isVR) {
+            evt.preventDefault();
+            
+            // Check if turn is switching or if it's bot's turn
+            const gameState = document.querySelector('a-scene').components['game-state'];
+            if (gameState && (gameState.switchingTurn || gameState.currentPlayer === 2)) {
+              console.log('Ignoring mousedown - ' + (gameState.switchingTurn ? 'turn switching' : 'bot turn'));
+              return;
+            }
+            
+            this.updateRaycasterFromMouse(evt.clientX, evt.clientY);
+            this.checkIntersections();
+            
+            // Store click start info
+            this.clickStartPosition = { x: evt.clientX, y: evt.clientY };
+            this.clickStartTime = performance.now();
+            this.clickStartCell = this.lastHit;
+          }
+        },
+
+        onMouseUp: function(evt) {
+          if (!this.isVR && this.clickStartPosition) {
+            evt.preventDefault();
+            
+            // Check if turn is switching or if it's bot's turn
+            const gameState = document.querySelector('a-scene').components['game-state'];
+            if (gameState && (gameState.switchingTurn || gameState.currentPlayer === 2)) {
+              console.log('Ignoring mouseup - ' + (gameState.switchingTurn ? 'turn switching' : 'bot turn'));
+              this.clickStartPosition = null;
+              this.clickStartTime = 0;
+              this.clickStartCell = null;
+              return;
+            }
+            
+            // Check if this was a click or a drag
+            const dx = evt.clientX - this.clickStartPosition.x;
+            const dy = evt.clientY - this.clickStartPosition.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const timeDiff = performance.now() - this.clickStartTime;
+            
+            // If movement was small and quick enough, consider it a click
+            if (distance < this.clickThreshold && timeDiff < this.clickTimeThreshold) {
+              if (this.clickStartCell) {
+                this.handleCellClick(this.clickStartCell);
+              }
+            }
+            
+            // Reset click tracking
+            this.clickStartPosition = null;
+            this.clickStartTime = 0;
+            this.clickStartCell = null;
+          }
+        },
+
+        onTouchStart: function(evt) {
+          if (!this.isVR && evt.touches.length > 0) {
+            evt.preventDefault();
+            
+            // Check if turn is switching or if it's bot's turn
+            const gameState = document.querySelector('a-scene').components['game-state'];
+            if (gameState && (gameState.switchingTurn || gameState.currentPlayer === 2)) {
+              console.log('Ignoring touchstart - ' + (gameState.switchingTurn ? 'turn switching' : 'bot turn'));
+              return;
+            }
+            
+            const touch = evt.touches[0];
+            this.updateRaycasterFromMouse(touch.clientX, touch.clientY);
+            this.checkIntersections();
+            
+            // Store click start info
+            this.clickStartPosition = { x: touch.clientX, y: touch.clientY };
+            this.clickStartTime = performance.now();
+            this.clickStartCell = this.lastHit;
+          }
+        },
+
+        onTouchMove: function(evt) {
+          if (!this.isVR && evt.touches.length > 0) {
+            evt.preventDefault();
+            const touch = evt.touches[0];
+            this.updateRaycasterFromMouse(touch.clientX, touch.clientY);
+            this.checkIntersections();
+          }
+        },
+
+        onTouchEnd: function(evt) {
+          if (!this.isVR && this.clickStartPosition) {
+            evt.preventDefault();
+            
+            // Check if turn is switching or if it's bot's turn
+            const gameState = document.querySelector('a-scene').components['game-state'];
+            if (gameState && (gameState.switchingTurn || gameState.currentPlayer === 2)) {
+              console.log('Ignoring touchend - ' + (gameState.switchingTurn ? 'turn switching' : 'bot turn'));
+              this.clickStartPosition = null;
+              this.clickStartTime = 0;
+              this.clickStartCell = null;
+              return;
+            }
+            
+            // For touch end, we don't have coordinates, so just check time
+            const timeDiff = performance.now() - this.clickStartTime;
+            
+            // If quick enough, consider it a tap
+            if (timeDiff < this.clickTimeThreshold) {
+              if (this.clickStartCell) {
+                this.handleCellClick(this.clickStartCell);
+              }
+            }
+            
+            // Reset click tracking
+            this.clickStartPosition = null;
+            this.clickStartTime = 0;
+            this.clickStartCell = null;
+          }
+        },
+
+        checkIntersections: function() {
+          const intersects = this.raycaster.intersectObjects(this.meshes);
+
+          if (intersects.length > 0) {
+            const hit = intersects[0];
+            this.intersectionPoint.copy(hit.point);
+            
+            // Update debug sphere
+            this.debugSphere.position.copy(this.intersectionPoint);
+            this.debugSphere.visible = true;
+            
+            // Handle highlighting
+            if (this.lastHit && this.lastHit !== hit.object) {
+              // Don't scale down if it's the locked target cell
+              if (this.lastHit !== this.clickStartCell) {
+                this.lastHit.scale.set(1, 1, 1);
+              }
+            }
+            
+            // Don't scale up if we have a different locked target
+            if (!this.clickStartCell || hit.object === this.clickStartCell) {
+              hit.object.scale.set(1.05, 1.05, 1.05);
+            }
+            this.lastHit = hit.object;
+          } else {
+            if (this.lastHit && this.lastHit !== this.clickStartCell) {
+              this.lastHit.scale.set(1, 1, 1);
+              this.lastHit = null;
+            }
+            this.debugSphere.visible = false;
+          }
+        },
+
+        tick: function() {
+          if (this.isVR) {
+            // VR mode: Update raycaster from controller
+            this.el.object3D.getWorldPosition(this.origin);
+            const worldQuat = new THREE.Quaternion();
+            this.el.object3D.getWorldQuaternion(worldQuat);
+            
+            this.direction.set(0, 0, -1)
+              .applyAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(-30))
+              .applyQuaternion(worldQuat);
+            this.raycaster.set(this.origin, this.direction);
+
+            // Update ray line
+            const positions = this.rayLine.geometry.attributes.position.array;
+            positions[0] = 0;
+            positions[1] = 0;
+            positions[2] = 0;
+            positions[3] = 0;
+            positions[4] = 0;
+            positions[5] = -20;
+            this.rayLine.geometry.attributes.position.needsUpdate = true;
+            
+            this.checkIntersections();
+          }
+        },
+
+        onTriggerDown: function() {
+          if (this.lastHit) {
+            this.handleCellClick(this.lastHit);
+          }
+        },
+
+        handleCellClick: function(hitObject) {
+          // Skip non-hexagonal tiles
+          if (!hitObject.userData.isHexagonal) {
+            return;
+          }
+
+          // Get game state
+          const gameState = document.querySelector('a-scene').components['game-state'];
+          if (!gameState || gameState.isGameOver) {
+            console.log('Click ignored - game is over');
+            return;
+          }
+
+          // Check if chain reaction is in progress
+          if (this.chainReactionInProgress) {
+            console.log('Click ignored - chain reaction in progress');
+            return;
+          }
+
+          // Strict turn checking - only allow player 1 clicks during player 1's turn
+          // and bot moves during player 2's turn
+          const isPlayerMove = gameState.currentPlayer === 1;
+          const isBotMove = gameState.currentPlayer === 2 && this.isBotMove;
+          
+          if (!isPlayerMove && !isBotMove) {
+            console.log('Click ignored - wrong turn');
+            return;
+          }
+
+          console.log('Processing click on cell:', hitObject.userData.tileIndex, 
+                     'by', isPlayerMove ? 'player' : 'bot');
+
+          // Only check switchingTurn for player moves (not bot moves)
+          if (gameState.currentPlayer === 1 && gameState.switchingTurn) {
+            console.log('Click ignored - turn switching in progress');
+            return;
+          }
+
+          const currentPlayer = gameState.currentPlayer;
+          
+          // Check if this is a valid move:
+          // 1. Cell must be either neutral (no owner) OR owned by current player
+          // 2. Cannot take over opponent's cells directly (only through explosions)
+          const cellOwner = hitObject.userData.owner;
+          if (cellOwner !== null && cellOwner !== currentPlayer) {
+            console.log('Invalid move: cell owned by other player');
+            return;
+          }
+
+          const cellIndex = this.meshes.indexOf(hitObject);
+          const currentStage = parseInt(hitObject.userData.stage || 0);
+          
+          // Track cells that have exploded this turn to prevent immediate reuse
+          this.explodedCells = this.explodedCells || new Set();
+          
+          // If this cell exploded this turn, prevent interaction
+          if (this.explodedCells.has(cellIndex)) {
+            console.log('Invalid move: cell exploded this turn');
+            return;
+          }
+          
+          // Function to handle cell explosion and chain reactions
+          const explodeCell = async (cell, index, sourcePlayer, chainDepth = 0) => {
+            // Skip if this cell has already been processed in this chain
+            if (this.explodedCells.has(index)) {
+              console.log(`Cell ${index} already exploded in this chain, skipping`);
+              return;
+            }
+
+            console.log(`Cell ${index} exploded (stage 5 -> 0) at chain depth ${chainDepth}`);
+            // Add to exploded cells set
+            this.explodedCells.add(index);
+            
+            // Reset this cell to stage 0 and remove owner
+            cell.userData.stage = 0;
+            cell.userData.owner = null;
+            cell.scale.set(1, 1, 1);
+            cell.material.color.setHex(0xffffff);
+            
+            // Play sound for explosion with chain depth
+            gameState.playCellSound(cell, chainDepth);
+            
+            // Find and increment all neighboring cells
+            console.log('Incrementing neighbors:');
+            
+            // Get the tile data from the tiles component
+            const tilesComponent = document.querySelector('#geodesic-cells').components.tiles;
+            if (tilesComponent && tilesComponent.tiles) {
+              const tileData = tilesComponent.tiles[index];
+              if (tileData && tileData.neighbors) {
+                console.log(`Found ${tileData.neighbors.length} neighbors for cell ${index}:`, tileData.neighbors);
+                
+                // Queue to handle chain reactions
+                const explosionQueue = [];
+                
+                // First increment all neighbors
+                tileData.neighbors.forEach(neighborIndex => {
+                  if (neighborIndex >= 0 && neighborIndex < this.meshes.length) {
+                    const neighborMesh = this.meshes[neighborIndex];
+                    const neighborStage = parseInt(neighborMesh.userData.stage || 0);
+                    
+                    // Skip if this neighbor has already exploded in this chain
+                    if (this.explodedCells.has(neighborIndex)) {
+                      console.log(`  Cell ${neighborIndex} already exploded, skipping increment`);
+                      return;
+                    }
+                    
+                    // Always increment stage and set owner to the player who caused the explosion
+                    neighborMesh.userData.stage = neighborStage + 1;
+                    neighborMesh.userData.owner = sourcePlayer; // Cells are captured through explosion
+                    
+                    // If stage exceeds 5, add to explosion queue
+                    if (neighborMesh.userData.stage > 5) {
+                      neighborMesh.userData.stage = 5;
+                      explosionQueue.push(neighborMesh);
+                      console.log(`  Cell ${neighborIndex} queued for explosion at stage 5`);
+                    } else {
+                      // Only update appearance and play sound for non-exploding neighbors
+                      this.updateCellAppearance(neighborMesh);
+                      
+                      // Scale up briefly for visual feedback
+                      neighborMesh.scale.set(1.05, 1.05, 1.05);
+                      setTimeout(() => {
+                        neighborMesh.scale.set(1, 1, 1);
+                      }, 200);
+                      
+                      // Play sound for neighbor update with chain depth
+                      gameState.playCellSound(neighborMesh, chainDepth);
+                      console.log(`  Cell ${neighborIndex} updated to stage ${neighborMesh.userData.stage}`);
+                    }
+                  }
+                });
+                
+                // Process chain reactions with increased depth and delays
+                if (explosionQueue.length > 0) {
+                  console.log(`Processing ${explosionQueue.length} explosions in chain depth ${chainDepth}`);
+                  // Create a promise-based delay function
+                  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+                  
+                  // Process all explosions in this chain depth
+                  for (const nextCell of explosionQueue) {
+                    // Wait for 300ms between explosions
+                    await delay(300);
+                    const nextIndex = this.meshes.indexOf(nextCell);
+                    if (!this.explodedCells.has(nextIndex)) {
+                      await explodeCell(nextCell, nextIndex, sourcePlayer, chainDepth + 1);
+                    } else {
+                      console.log(`Skipping already exploded cell ${nextIndex} in chain depth ${chainDepth}`);
+                    }
+                  }
+                }
+              }
+            }
+          };
+          
+          if (currentStage === 5) {
+            // Set chain reaction flag before starting explosion
+            this.chainReactionInProgress = true;
+            // Make explodeCell async and wait for it to complete
+            (async () => {
+              try {
+                await explodeCell(hitObject, cellIndex, currentPlayer, 0);
+              } finally {
+                // Only clear the flag after ALL explosions are complete
+                console.log('All chain reactions complete, clearing flag');
+                this.chainReactionInProgress = false;
+              }
+            })();
+          } else {
+            // For non-explosion moves:
+            // - If cell is neutral (stage 0), current player claims it
+            // - If cell is owned by current player, increment its stage
+            hitObject.userData.stage = currentStage + 1;
+            hitObject.userData.owner = currentPlayer;
+            console.log(`Cell ${cellIndex}: stage ${currentStage} -> ${hitObject.userData.stage}`);
+            
+            // Update cell appearance
+            this.updateCellAppearance(hitObject);
+            
+            // Scale up briefly for visual feedback
+            hitObject.scale.set(1.05, 1.05, 1.05);
+            setTimeout(() => {
+              hitObject.scale.set(1, 1, 1);
+            }, 200);
+            
+            // Play sound for cell update (no chain depth for regular updates)
+            gameState.playCellSound(hitObject, 0);
+          }
+
+          // Check for game over
+          if (!gameState.checkGameOver()) {
+            // Clear exploded cells set when switching turns
+            this.explodedCells.clear();
+            // Switch turns if game is not over
+            gameState.switchTurn();
+          }
+        },
+
+        updateCellAppearance: function(cell) {
+          const gameState = document.querySelector('a-scene').components['game-state'];
+          if (!gameState) return;
+
+          // Get base grayscale color based on stage
+          const stageColors = [
+            0xffffff, // Stage 0: White
+            0xcccccc, // Stage 1: Light gray
+            0x999999, // Stage 2: Medium light gray
+            0x666666, // Stage 3: Medium gray
+            0x333333, // Stage 4: Dark gray
+            0x000000  // Stage 5: Black
+          ];
+          const stage = Math.min(cell.userData.stage || 0, 5);
+          const baseColor = new THREE.Color(stageColors[stage]);
+          
+          // If cell is owned, blend with player color
+          if (cell.userData.owner) {
+            const playerColor = gameState.playerColors[cell.userData.owner];
+            baseColor.lerp(playerColor, 0.3); // 30% player color tint
+          }
+          
+          cell.material.color.copy(baseColor);
+        },
+
+        calculateNeighbors: function() {
+          // First find the minimum distance between any two cells
+          let minDistance = Infinity;
+          for (let i = 0; i < this.meshes.length; i++) {
+            const pos1 = new THREE.Vector3();
+            this.meshes[i].getWorldPosition(pos1);
+            for (let j = i + 1; j < this.meshes.length; j++) {
+              const pos2 = new THREE.Vector3();
+              this.meshes[j].getWorldPosition(pos2);
+              const distance = pos1.distanceTo(pos2);
+              if (distance > 0.001 && distance < minDistance) {
+                minDistance = distance;
+              }
+            }
+          }
+          
+          if (minDistance === Infinity) {
+            console.error('Failed to calculate minimum distance between cells');
+            return;
+          }
+          
+          // Set threshold to be 1.2 times the minimum distance
+          const threshold = minDistance * 1.2;
+          console.log('Neighbor threshold set to:', threshold);
+          
+          // For each cell, find its neighbors
+          this.meshes.forEach((cell, cellIndex) => {
+            const cellPos = new THREE.Vector3();
+            cell.getWorldPosition(cellPos);
+            const neighbors = [];
+            
+            this.meshes.forEach((otherCell, otherIndex) => {
+              if (cellIndex !== otherIndex) {
+                const otherPos = new THREE.Vector3();
+                otherCell.getWorldPosition(otherPos);
+                const distance = cellPos.distanceTo(otherPos);
+                if (distance <= threshold) {
+                  neighbors.push(otherIndex);
+                }
+              }
+            });
+            
+            cell.userData.neighbors = neighbors;
+            console.log(`Cell ${cellIndex} has neighbors:`, neighbors);
+          });
+        },
+
+        updateStageText: function(cellMesh) {
+          // Remove existing text entity if any
+          if (cellMesh.userData.stageText) {
+            const oldText = document.querySelector(`#stage-text-${cellMesh.uuid}`);
+            if (oldText) {
+              oldText.parentNode.removeChild(oldText);
+            }
+          }
+
+          // Get world position for the cell
+          const worldPos = new THREE.Vector3();
+          cellMesh.getWorldPosition(worldPos);
+
+          // Create new text entity
+          const stage = cellMesh.userData.stage || 0;
+          const textEntity = document.createElement('a-entity');
+          textEntity.id = `stage-text-${cellMesh.uuid}`;
+          textEntity.setAttribute('position', `${worldPos.x} ${worldPos.y} ${worldPos.z}`);
+          textEntity.setAttribute('text', {
+            value: stage.toString(),
+            align: 'center',
+            width: 2,
+            color: '#000000',
+            side: 'double'
+          });
+          textEntity.setAttribute('look-at', '[camera]');
+          
+          // Add to scene
+          document.querySelector('a-scene').appendChild(textEntity);
+          cellMesh.userData.stageText = textEntity;
+        }
+      });
+
+      // Sphere rotation component
+      AFRAME.registerComponent('sphere-controls', {
+        schema: {
+          rotationSpeed: { type: 'number', default: 2 }, // Base rotation speed
+          smoothing: { type: 'number', default: 0.15 }   // Smoothing factor (0-1)
+        },
+
+        init: function() {
+          this.sphereRotation = { x: 0, y: 0, z: 0 };
+          this.targetRotation = 0;
+          this.currentThumbstick = 0;
+          
+          // Get left controller
+          this.leftController = document.getElementById('leftHand');
+          if (!this.leftController) {
+            console.warn('Left controller not found for sphere rotation');
+            return;
+          }
+
+          // Listen for thumbstick events
+          this.leftController.addEventListener('thumbstickmoved', this.onThumbstickMoved.bind(this));
+        },
+
+        onThumbstickMoved: function(evt) {
+          if (!evt || !evt.detail) return;
+          
+          // Store current thumbstick value
+          this.currentThumbstick = evt.detail.x || 0;
+          
+          // Apply deadzone
+          if (Math.abs(this.currentThumbstick) < 0.1) {
+            this.currentThumbstick = 0;
+          }
+        },
+
+        tick: function(time, deltaTime) {
+          if (!deltaTime) return; // Skip first frame
+          
+          // Calculate target rotation based on thumbstick value
+          const rotationDelta = this.currentThumbstick * this.data.rotationSpeed * (deltaTime / 16.67); // Normalize to ~60fps
+          this.targetRotation += rotationDelta;
+          
+          // Smoothly interpolate current rotation towards target
+          const diff = this.targetRotation - this.sphereRotation.y;
+          if (Math.abs(diff) > 0.001) { // Only update if difference is significant
+            this.sphereRotation.y += diff * this.data.smoothing;
+            
+            // Apply rotation
+            this.el.setAttribute('rotation', {
+              x: 0,
+              y: this.sphereRotation.y,
+              z: 0
+            });
+          }
+        }
+      });
+
+      // FPS counter component
+      AFRAME.registerComponent('fps-counter', {
+        init: function() {
+          this.frameCount = 0;
+          this.lastTime = performance.now();
+          this.fps = 0;
+          this.fpsHistory = [];
+          this.updateInterval = 500; // Update every 500ms for smooth display
+          this.lastUpdate = 0;
+        },
+        
+        tick: function() {
+          const currentTime = performance.now();
+          this.frameCount++;
+          
+          // Update FPS every 500ms
+          if (currentTime - this.lastUpdate >= this.updateInterval) {
+            const deltaTime = currentTime - this.lastTime;
+            const currentFPS = Math.round((this.frameCount * 1000) / deltaTime);
+            
+            // Keep a history of recent FPS values for smoothing
+            this.fpsHistory.push(currentFPS);
+            if (this.fpsHistory.length > 5) {
+              this.fpsHistory.shift(); // Keep only last 5 readings
+            }
+            
+            // Calculate average FPS for smoother display
+            const avgFPS = Math.round(this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length);
+            this.fps = avgFPS;
+            
+            // Update the wrist display
+            const fpsText = document.getElementById('fps-text');
+            if (fpsText) {
+              fpsText.setAttribute('text', 'value', `FPS: ${this.fps}`);
+            }
+            
+            // Reset counters
+            this.frameCount = 0;
+            this.lastTime = currentTime;
+            this.lastUpdate = currentTime;
+          }
+        }
+      });
+
+      // --- Geodesic Sphere Tiling from JSON (3D triangle fan) ---
+      async function addGeodesicCellsFromJSON() {
+        const cellContainer = document.querySelector('#geodesic-cells');
+        if (!cellContainer) { console.warn('Geodesic cell container not found!'); return; }
+        
+        // Load the JSON file
+        let data;
+        try {
+          const res = await fetch('hexasphere-42tiles.json');
+          data = await res.json();
+        } catch (e) {
+          console.error('Failed to load hexasphere-42tiles.json:', e);
+          return;
+        }
+
+        const tiles = data.tiles;
+        let created = 0;
+        const createdMeshes = [];
+        const tileData = []; // Store original boundary data
+        
+        tiles.forEach((tile, idx) => {
+          // Parse boundary vertices as 3D points
+          const boundary = tile.boundary.map(v => new THREE.Vector3(parseFloat(v.x), parseFloat(v.y), parseFloat(v.z)));
+          if (boundary.length < 3) return; // skip degenerate
+
+          // Store original boundary data
+          tileData.push({
+            index: idx,
+            boundary: boundary,
+            edges: [] // Will store edges as pairs of vertex indices
+          });
+
+          // Create edges array (pairs of consecutive vertices)
+          for (let i = 0; i < boundary.length; i++) {
+            const nextIdx = (i + 1) % boundary.length;
+            tileData[tileData.length - 1].edges.push([i, nextIdx]);
+          }
+
+          // Create geometry
+          const geometry = new THREE.BufferGeometry();
+          const vertices = [];
+          for (let i = 1; i < boundary.length - 1; i++) {
+            vertices.push(boundary[0].x, boundary[0].y, boundary[0].z);
+            vertices.push(boundary[i].x, boundary[i].y, boundary[i].z);
+            vertices.push(boundary[i+1].x, boundary[i+1].y, boundary[i+1].z);
+          }
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+          geometry.computeVertexNormals();
+
+          // Create material
+          const material = new THREE.MeshStandardMaterial({
+            color: boundary.length === 6 ? 0xffffff : 0xff0000,
+            metalness: 0.4,
+            roughness: 0.5,
+            side: THREE.DoubleSide,
+            emissive: 0x000000,
+            emissiveIntensity: 0
+          });
+
+          // Create mesh and add to container
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.userData.tileIndex = idx;
+          mesh.userData.isHexagonal = boundary.length === 6;
+          mesh.userData.stage = 0;
+          mesh.visible = boundary.length === 6; // Hide non-hexagonal tiles
+          cellContainer.object3D.add(mesh);
+          createdMeshes.push(mesh);
+          created++;
+        });
+        console.log('Tiles created:', created);
+        
+        // Calculate tile centers and find neighbors based on distance
+        tileData.forEach((tile, idx) => {
+          // Calculate center point by averaging vertices
+          const center = new THREE.Vector3();
+          tile.boundary.forEach(vertex => {
+            center.add(vertex);
+          });
+          center.divideScalar(tile.boundary.length);
+          tile.center = center;
+          
+          console.log(`\nAnalyzing tile ${idx} with ${tile.boundary.length} vertices:`);
+          console.log(`  Center: (${center.x.toFixed(4)}, ${center.y.toFixed(4)}, ${center.z.toFixed(4)})`);
+          tile.boundary.forEach((v, i) => {
+            console.log(`  Vertex ${i}: (${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)})`);
+          });
+        });
+
+        // Find neighbors based on center-to-center distance
+        const averageEdgeLength = 15; // Approximate based on vertex coordinates
+        const neighborThreshold = averageEdgeLength * 1.2; // Allow some margin
+
+        tileData.forEach((tile, idx) => {
+          const neighbors = [];
+          
+          tileData.forEach((otherTile, otherIdx) => {
+            if (idx !== otherIdx && otherTile.boundary.length === 6) { // Only consider hexagonal tiles as neighbors
+              const distance = tile.center.distanceTo(otherTile.center);
+              
+              if (distance <= neighborThreshold) {
+                neighbors.push(otherIdx);
+                if (idx === 40) {
+                  console.log(`  Found neighbor ${otherIdx} at distance ${distance.toFixed(4)}`);
+                }
+              }
+            }
+          });
+          
+          tile.neighbors = neighbors;
+          console.log(`Tile ${idx} has ${neighbors.length} neighbors:`, neighbors);
+        });
+        
+        // Emit event with created meshes and neighbor data
+        cellContainer.emit('cells-created', { 
+          meshes: createdMeshes,
+          tileData: tileData
+        });
+      }
+
+      document.addEventListener('DOMContentLoaded', function() {
+        addGeodesicCellsFromJSON();
+      });
+    </script>
+  </body>
+</html> 
