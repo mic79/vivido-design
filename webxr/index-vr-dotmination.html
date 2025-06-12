@@ -13,22 +13,43 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.3/howler.min.js"></script>
   </head>
   <body>
-    <a-scene background="color: #222" stats fps-counter game-state>
+    <a-scene background="color: #222" game-state>
       <!-- Camera rig -->
       <a-entity id="camera-rig" position="0 0 0">
-        <a-entity id="camera" camera look-controls position="0 0 0"></a-entity>
+        <a-entity id="camera" camera look-controls position="0 0 0">
+          <!-- Add cursor for mouse/touch click support -->
+          <a-entity cursor="rayOrigin: mouse" raycaster="objects: .clickable"></a-entity>
+          <!-- Score HUD (non-VR only) -->
+          <a-entity id="score-hud" position="0 -0.45 -0.5" visible="true">
+            <!-- Top info row -->
+            <a-text id="hud-version-fps" value="v0.1 | 90 FPS" align="center" width="0.32" color="#fff" position="0 0.18 0.001" baseline="top" side="double" font-size="0.04"></a-text>
+            <!-- Score row -->
+            <a-entity position="0 0.1 0">
+              <a-plane id="hud-p1-bg" width="0.13" height="0.09" color="#ff2222" material="opacity: 0.7; transparent: true" position="-0.09 0 0"></a-plane>
+              <a-plane id="hud-p2-bg" width="0.13" height="0.09" color="#2266ff" material="opacity: 0.7; transparent: true" position="0.09 0 0"></a-plane>
+              <a-text id="hud-p1-score" value="0" align="center" width="0.65" color="#fff" position="-0.09 0 0.001" baseline="center" side="double" height="0.45"></a-text>
+              <a-text id="hud-p2-score" value="0" align="center" width="0.65" color="#fff" position="0.09 0 0.001" baseline="center" side="double" height="0.45"></a-text>
+            </a-entity>
+            <!-- Status/message row -->
+            <a-text id="hud-status" value="" align="center" width="0.7" color="#fff" position="0 0.28 0.001" baseline="bottom" side="double"></a-text>
+          </a-entity>
+        </a-entity>
         
         <!-- VR Controllers -->
         <a-entity id="leftHand" 
                   oculus-touch-controls="hand: left"
                   controller-raycast="hand: left">
-          <!-- Wrist display -->
+          <!-- Wrist display (VR only) -->
           <a-entity id="wrist-display" position="0 0.1 0.05" rotation="-45 0 0">
-            <!-- Background panel -->
-            <a-plane width="0.15" height="0.12" color="#000000" material="opacity: 0.8; transparent: true" position="0 0 -0.001"></a-plane>
-            <!-- Version and game info text -->
-            <a-text id="version-text" value="Dotmination v0.1" align="center" width="0.15" color="#00ff00" position="0 0.02 0"></a-text>
-            <a-text id="turn-text" value="Player 1's Turn" align="center" width="0.15" color="#ff0000" position="0 -0.02 0"></a-text>
+            <!-- Top info row -->
+            <a-text id="wrist-version-fps" value="v0.1 | 90 FPS" align="center" width="0.35" color="#fff" position="0 0.09 0" baseline="top" side="double"></a-text>
+            <!-- Score row -->
+            <a-plane id="wrist-p1-bg" width="0.065" height="0.05" color="#ff2222" material="opacity: 0.7; transparent: true" position="-0.04 0 0"></a-plane>
+            <a-plane id="wrist-p2-bg" width="0.065" height="0.05" color="#2266ff" material="opacity: 0.7; transparent: true" position="0.04 0 0"></a-plane>
+            <a-text id="wrist-p1-score" value="0" align="center" width="0.325" color="#fff" position="-0.04 0 0.001" baseline="center" side="double" height="0.25"></a-text>
+            <a-text id="wrist-p2-score" value="0" align="center" width="0.325" color="#fff" position="0.04 0 0.001" baseline="center" side="double" height="0.25"></a-text>
+            <!-- Status/message row -->
+            <a-text id="wrist-status" value="" align="center" width="0.35" color="#fff" position="0 -0.13 0" baseline="bottom" side="double"></a-text>
           </a-entity>
         </a-entity>
         <a-entity id="rightHand" 
@@ -47,42 +68,64 @@
       </a-entity>
 
       <!-- Debug intersection sphere -->
-      <a-sphere id="debug-point" radius="0.02" color="#ff0000" visible="false"></a-sphere>
+      <!-- <a-sphere id="debug-point" radius="0.02" color="#ff0000" visible="false"></a-sphere> -->
 
       <!-- Audio pool container -->
       <a-entity id="audio-pool"></a-entity>
     </a-scene>
 
     <script>
+      // Centralized player colors for UI and tiles
+      const playerColors = {
+        1: { hex: '#ff2222', aframe: '#ff2222', rgba: 'rgba(255,34,34,0.7)', three: new THREE.Color('#ff2222') }, // Red
+        2: { hex: '#2266ff', aframe: '#2266ff', rgba: 'rgba(34,102,255,0.7)', three: new THREE.Color('#2266ff') }  // Blue
+      };
+
       // Game state component to manage turns and game flow
       AFRAME.registerComponent('game-state', {
         init: function() {
           this.reset();
-          
           // Listen for game over
           this.el.addEventListener('game-over', this.onGameOver.bind(this));
-          
           // Listen for restart
           this.el.addEventListener('restart-game', this.reset.bind(this));
-          
           // Listen for turn changes to update display
           this.el.addEventListener('turn-start', this.onTurnStart.bind(this));
-          
           // Add turn switching lock
           this.switchingTurn = false;
-
           // Initialize audio pool
           this.initAudioPool();
+          // Track VR mode
+          this.isVR = false;
+          // Listen for VR mode changes
+          const scene = document.querySelector('a-scene');
+          scene.addEventListener('enter-vr', () => {
+            this.isVR = true;
+            this.updateAllDisplays();
+          });
+          scene.addEventListener('exit-vr', () => {
+            this.isVR = false;
+            this.updateAllDisplays();
+          });
+          // FPS update hook
+          this.fps = 0;
+          this.version = 'v0.1';
+          // Button click handling (mouse/touch/controller)
+          this.setupButtonClicks();
+          // Initial UI update
+          this.updateAllDisplays();
         },
-        
+        setupButtonClicks: function() {
+          // Remove button click setup since we're removing the buttons
+        },
+        onStartButtonClick: function() {
+          // Remove button click handler since we're removing the buttons
+        },
         reset: function() {
           this.currentPlayer = 1; // Player 1 starts
           this.isGameOver = false;
           this.turnCount = 0; // Track number of turns
-          this.playerColors = {
-            1: new THREE.Color(1, 0, 0), // Red for Player 1
-            2: new THREE.Color(0, 0, 1)  // Blue for Player 2
-          };
+          this.playerColors = playerColors; // Use centralized colors
           
           // Reset all cells
           const cells = document.querySelector('#geodesic-cells');
@@ -104,6 +147,9 @@
           if (this.currentPlayer === 2) {
             this.makeBotMove();
           }
+
+          // Update score HUD on reset
+          this.updateAllDisplays();
         },
         
         switchTurn: function() {
@@ -133,6 +179,9 @@
             // For player 1, end the turn switch immediately
             this.switchingTurn = false;
           }
+
+          // Update score HUD after turn switch
+          this.updateAllDisplays();
         },
         
         makeBotMove: function() {
@@ -251,6 +300,8 @@
             versionText.setAttribute('text', 'value', `Player ${winner} wins!`);
             versionText.setAttribute('text', 'color', winner === 1 ? '#ff0000' : '#0000ff');
           }
+          this.isGameOver = true;
+          this.updateAllDisplays();
         },
         
         onTurnStart: function(evt) {
@@ -262,6 +313,9 @@
               color: player === 1 ? '#ff0000' : '#0000ff'
             });
           }
+
+          // Update score HUD on turn start
+          this.updateAllDisplays();
         },
 
         initAudioPool: function() {
@@ -300,6 +354,119 @@
               coneOuterGain: 0
             }, soundId);
           }
+        },
+
+        updateAllDisplays: function() {
+          // Show/hide HUD and wrist display based on VR mode
+          const hud = document.getElementById('score-hud');
+          const wrist = document.getElementById('wrist-display');
+          if (hud) hud.setAttribute('visible', !this.isVR);
+          if (wrist) wrist.setAttribute('visible', !!this.isVR);
+          // Update both displays
+          this.updateScoreDisplays();
+          this.updateStatusDisplays();
+          this.updateVersionFpsDisplays();
+          this.updateButtonDisplays();
+        },
+
+        updateScoreDisplays: function() {
+          // Calculate score for each player
+          let p1 = 0, p2 = 0;
+          const cells = document.querySelector('#geodesic-cells');
+          if (cells && cells.object3D) {
+            cells.object3D.traverse((node) => {
+              if (node instanceof THREE.Mesh && node.userData.isHexagonal && node.userData.owner) {
+                const stage = parseInt(node.userData.stage || 0);
+                if (node.userData.owner === 1) p1 += stage;
+                if (node.userData.owner === 2) p2 += stage;
+              }
+            });
+          }
+          // HUD
+          const hudP1 = document.getElementById('hud-p1-score');
+          const hudP2 = document.getElementById('hud-p2-score');
+          if (hudP1) hudP1.setAttribute('value', p1);
+          if (hudP2) hudP2.setAttribute('value', p2);
+          // Wrist
+          const wristP1 = document.getElementById('wrist-p1-score');
+          const wristP2 = document.getElementById('wrist-p2-score');
+          if (wristP1) wristP1.setAttribute('value', p1);
+          if (wristP2) wristP2.setAttribute('value', p2);
+          // Update background colors from centralized playerColors
+          const hudP1Bg = document.getElementById('hud-p1-bg');
+          const hudP2Bg = document.getElementById('hud-p2-bg');
+          if (hudP1Bg) hudP1Bg.setAttribute('color', playerColors[1].aframe);
+          if (hudP2Bg) hudP2Bg.setAttribute('color', playerColors[2].aframe);
+          const wristP1Bg = document.getElementById('wrist-p1-bg');
+          const wristP2Bg = document.getElementById('wrist-p2-bg');
+          if (wristP1Bg) wristP1Bg.setAttribute('color', playerColors[1].aframe);
+          if (wristP2Bg) wristP2Bg.setAttribute('color', playerColors[2].aframe);
+        },
+
+        updateStatusDisplays: function() {
+          // Status logic
+          let status = '';
+          if (this.isGameOver) {
+            // Show win/lose
+            if (this.turnCount > 0) {
+              const winner = this.getWinner();
+              if (winner === 1) status = 'You won!';
+              else if (winner === 2) status = 'You lost!';
+              else status = 'Game Over';
+            } else {
+              status = '';
+            }
+          } else if (this.turnCount === 0) {
+            status = '';
+          } else {
+            status = (this.currentPlayer === 1) ? 'Your Turn' : "Opponent's Turn";
+          }
+          // HUD
+          const hudStatus = document.getElementById('hud-status');
+          if (hudStatus) hudStatus.setAttribute('value', status);
+          // Wrist
+          const wristStatus = document.getElementById('wrist-status');
+          if (wristStatus) wristStatus.setAttribute('value', status);
+        },
+
+        updateVersionFpsDisplays: function() {
+          // Version and FPS
+          const version = this.version || 'v0.1';
+          const fps = (typeof this.fps === 'number' && this.fps > 0) ? `${this.fps} FPS` : '';
+          const topText = fps ? `${version} | ${fps}` : version;
+          // HUD
+          const hudVF = document.getElementById('hud-version-fps');
+          if (hudVF) hudVF.setAttribute('value', topText);
+          // Wrist
+          const wristVF = document.getElementById('wrist-version-fps');
+          if (wristVF) wristVF.setAttribute('value', topText);
+        },
+
+        updateButtonDisplays: function() {
+          // Remove button display updates since we're removing the buttons
+        },
+
+        getWinner: function() {
+          // Returns 1 or 2 if there's a winner, null otherwise
+          const cells = document.querySelector('#geodesic-cells');
+          let player1Cells = 0, player2Cells = 0;
+          if (cells && cells.object3D) {
+            cells.object3D.traverse((node) => {
+              if (node instanceof THREE.Mesh && node.userData.isHexagonal) {
+                if (node.userData.owner === 1) player1Cells++;
+                if (node.userData.owner === 2) player2Cells++;
+              }
+            });
+          }
+          if (player1Cells > 0 && player2Cells === 0) return 1;
+          if (player2Cells > 0 && player1Cells === 0) return 2;
+          return null;
+        },
+
+        // FPS update hook (called by fps-counter component)
+        setFPS: function(fps) {
+          this.fps = fps;
+          this.updateVersionFpsDisplays();
         }
       });
 
@@ -346,6 +513,10 @@
           this.clickThreshold = 5; // pixels
           this.clickTimeThreshold = 300; // milliseconds
           this.clickStartCell = null;
+
+          // Haptic feedback tracking
+          this.lastHapticTime = 0;
+          this.hapticCooldown = 200; // ms between haptic pulses
           
           // Create visible ray line (only for VR)
           const geometry = new THREE.BufferGeometry();
@@ -356,11 +527,11 @@
           this.el.object3D.add(this.rayLine);
 
           // Create debug point
-          const debugGeometry = new THREE.SphereGeometry(0.02);
-          const debugMaterial = new THREE.MeshBasicMaterial({color: 0xff0000});
-          this.debugSphere = new THREE.Mesh(debugGeometry, debugMaterial);
-          this.debugSphere.visible = false;
-          this.el.sceneEl.object3D.add(this.debugSphere);
+          // const debugGeometry = new THREE.SphereGeometry(0.02);
+          // const debugMaterial = new THREE.MeshBasicMaterial({color: 0xff0000});
+          // this.debugSphere = new THREE.Mesh(debugGeometry, debugMaterial);
+          // this.debugSphere.visible = false;
+          // this.el.sceneEl.object3D.add(this.debugSphere);
 
           // Bind VR trigger events
           this.el.addEventListener('triggerdown', this.onTriggerDown.bind(this));
@@ -408,9 +579,10 @@
                 cells.object3D.traverse((node) => {
                   if (node instanceof THREE.Mesh) {
                     // Create material with better visibility
-                    const material = new THREE.MeshBasicMaterial({
+                    const material = new THREE.MeshStandardMaterial({
                       color: 0xffffff,
-                      side: THREE.DoubleSide
+                      side: THREE.DoubleSide,
+                      wireframe: false // Disable wireframe
                     });
                     node.material = material;
                     this.meshes.push(node);
@@ -567,10 +739,6 @@
             const hit = intersects[0];
             this.intersectionPoint.copy(hit.point);
             
-            // Update debug sphere
-            this.debugSphere.position.copy(this.intersectionPoint);
-            this.debugSphere.visible = true;
-            
             // Handle highlighting
             if (this.lastHit && this.lastHit !== hit.object) {
               // Don't scale down if it's the locked target cell
@@ -582,6 +750,18 @@
             // Don't scale up if we have a different locked target
             if (!this.clickStartCell || hit.object === this.clickStartCell) {
               hit.object.scale.set(1.05, 1.05, 1.05);
+              
+              // Add haptic feedback on hover in VR
+              if (this.isVR) {
+                const currentTime = performance.now();
+                if (currentTime - this.lastHapticTime > this.hapticCooldown) {
+                  const gamepad = this.el.components['oculus-touch-controls'].gamepad;
+                  if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+                    gamepad.hapticActuators[0].pulse(0.1, 50);
+                  }
+                  this.lastHapticTime = currentTime;
+                }
+              }
             }
             this.lastHit = hit.object;
           } else {
@@ -589,7 +769,6 @@
               this.lastHit.scale.set(1, 1, 1);
               this.lastHit = null;
             }
-            this.debugSphere.visible = false;
           }
         },
 
@@ -633,8 +812,15 @@
 
           // Get game state
           const gameState = document.querySelector('a-scene').components['game-state'];
-          if (!gameState || gameState.isGameOver) {
-            console.log('Click ignored - game is over');
+          if (!gameState) {
+            console.log('Click ignored - no game state');
+            return;
+          }
+
+          // If game is over, clicking any tile will restart the game
+          if (gameState.isGameOver) {
+            console.log('Game over - restarting on tile click');
+            this.el.emit('restart-game');
             return;
           }
 
@@ -706,6 +892,26 @@
             
             // Play sound for explosion with chain depth
             gameState.playCellSound(cell, chainDepth);
+
+            // Trigger haptic feedback on both controllers for explosion
+            if (this.isVR) {
+              const leftController = document.getElementById('leftHand');
+              const rightController = document.getElementById('rightHand');
+              
+              if (leftController) {
+                const leftGamepad = leftController.components['oculus-touch-controls'].gamepad;
+                if (leftGamepad && leftGamepad.hapticActuators && leftGamepad.hapticActuators[0]) {
+                  leftGamepad.hapticActuators[0].pulse(0.5, 100);
+                }
+              }
+              
+              if (rightController) {
+                const rightGamepad = rightController.components['oculus-touch-controls'].gamepad;
+                if (rightGamepad && rightGamepad.hapticActuators && rightGamepad.hapticActuators[0]) {
+                  rightGamepad.hapticActuators[0].pulse(0.5, 100);
+                }
+              }
+            }
             
             // Find and increment all neighboring cells
             console.log('Incrementing neighbors:');
@@ -841,7 +1047,7 @@
           
           // If cell is owned, blend with player color
           if (cell.userData.owner) {
-            const playerColor = gameState.playerColors[cell.userData.owner];
+            const playerColor = gameState.playerColors[cell.userData.owner].three;
             baseColor.lerp(playerColor, 0.3); // 30% player color tint
           }
           
@@ -1085,7 +1291,8 @@
             roughness: 0.5,
             side: THREE.DoubleSide,
             emissive: 0x000000,
-            emissiveIntensity: 0
+            emissiveIntensity: 0,
+            wireframe: false // Disable wireframe
           });
 
           // Create mesh and add to container
