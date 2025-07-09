@@ -1,0 +1,3205 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>WebXR Zero-G Environment</title>
+    <meta name="description" content="Zero-gravity WebXR environment using A-Frame with Lone Echo-style locomotion">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
+    <script src="advanced-bot.js"></script>
+    <script src="game-modes.js"></script>
+  </head>
+  <body>
+    <script>
+      // Physics world setup for zero-gravity
+      const world = new CANNON.World();
+      world.gravity.set(0, 0, 0); // Zero gravity for space environment
+      world.broadphase = new CANNON.NaiveBroadphase();
+      world.solver.iterations = 10;
+
+      // Multiplayer state
+      let isMultiplayer = false;
+      let isHost = false;
+      let peer = null;
+      let conn = null;
+      let multiplayerSlot = null;
+      let multiplayerStatus = 'Singleplayer';
+      let hasConnected = false;
+      const MAX_LOBBIES = 10;
+      let multiplayerStartType = 'zerog';
+      let sessionID = null;
+      let connectionState = 'disconnected';
+      let lastMultiplayerToggle = 0;
+      let remotePlayerState = null;
+      let remoteBallState = null;
+      let multiplayerCleanup = null;
+      let isSearchingForMatch = false;
+
+      // Multiplayer score state
+      let multiplayerScore = { local: 0, remote: 0 };
+      // Multiplayer ready state
+      let multiplayerReady = { local: false, remote: false };
+
+      // Helper: update HUD status display
+      function updateMultiplayerStatus(text) {
+        const hudStatus = document.getElementById('hud-status');
+        if (hudStatus) {
+          hudStatus.setAttribute('text', 'value', text);
+        }
+      }
+
+      // Update HUD score display
+      function updateHUDScore(playerScore, opponentScore, isMultiplayer = false) {
+        const hudScore = document.querySelector('#hud-score');
+        if (hudScore) {
+          const playerScoreEl = hudScore.children[0];
+          const opponentScoreEl = hudScore.children[1];
+          
+          if (playerScoreEl && opponentScoreEl) {
+            const opponentLabel = isMultiplayer ? 'Opponent' : 'Bot';
+            playerScoreEl.setAttribute('text', 'value', `You: ${playerScore}`);
+            opponentScoreEl.setAttribute('text', 'value', `${opponentLabel}: ${opponentScore}`);
+          }
+        }
+      }
+
+      // Show/hide HUD elements during gameplay
+function setGameplayHUD(isPlaying) {
+  const hudStatus = document.querySelector('#hud-status');
+  const hudScore = document.querySelector('#hud-score');
+  const hudTimer = document.querySelector('#hud-timer');
+  const hudMessage = document.querySelector('#hud-message');
+  
+  if (hudStatus) {
+    hudStatus.setAttribute('visible', !isPlaying);
+  }
+  if (hudScore) {
+    hudScore.setAttribute('visible', isPlaying);
+  }
+  if (hudTimer) {
+    hudTimer.setAttribute('visible', isPlaying);
+  }
+  if (hudMessage) {
+    hudMessage.setAttribute('visible', false); // Hide during gameplay
+  }
+}
+
+      // Create materials for zero-g environment
+      const defaultMaterial = new CANNON.Material('default');
+      const playerMaterial = new CANNON.Material('player');
+      const surfaceMaterial = new CANNON.Material('surface');
+      const ballMaterial = new CANNON.Material('ball');
+      
+      /* 
+       * COLLISION FILTERING SYSTEM:
+       * Group 1: Player (can grab surfaces, ignores balls when held)
+       * Group 2: Balls (can hit walls/surfaces, pass through player body)  
+       * Group 4: Walls/Surfaces (interact with both player and balls)
+       * 
+       * This prevents physics reactions when holding balls near your body!
+       */
+
+      // Create contact materials for realistic surface interaction
+      const playerSurfaceContact = new CANNON.ContactMaterial(
+        playerMaterial,
+        surfaceMaterial,
+        {
+          friction: 0.8,
+          restitution: 0.3
+        }
+      );
+      world.addContactMaterial(playerSurfaceContact);
+
+      const ballSurfaceContact = new CANNON.ContactMaterial(
+        ballMaterial,
+        surfaceMaterial,
+        {
+          friction: 0.1,
+          restitution: 0.9
+        }
+      );
+      world.addContactMaterial(ballSurfaceContact);
+
+      // Zero-G Player Controller - Physics-based movement
+      AFRAME.registerComponent('zerog-player', {
+        schema: {
+          mass: { type: 'number', default: 70 }, // kg
+          linearDamping: { type: 'number', default: 0.05 },
+          angularDamping: { type: 'number', default: 0.1 },
+          thrusterForce: { type: 'number', default: 0.8 },
+          maxSpeed: { type: 'number', default: 8 },
+          rotationSpeed: { type: 'number', default: 2 }
+        },
+        
+        init: function() {
+          console.log('🚀 Zero-G Player Controller initialized (Option B: Visual Collision System)');
+          
+          // Option B: No physics body - use visual collision detection instead
+          
+          // Create collision visualization (this IS our collision system now)
+          this.createCollisionVisualization();
+          
+          // Option B: Custom physics simulation state
+          this.velocity = new THREE.Vector3(0, 0, 0);
+          this.angularVelocity = new THREE.Vector3(0, 0, 0);
+          this.lastPosition = new THREE.Vector3(0, 0, 0);
+          this.collisionMargin = 0.02; // 2cm safety margin
+          this.damping = 0.996; // 0.4% velocity loss per frame (much gentler)
+          this.minVelocity = 0.01; // Stop very slow movement
+          
+          // Movement state
+          this.isGrabbing = { left: false, right: false };
+          this.grabbedSurface = { left: null, right: null };
+          this.grabInfo = { left: null, right: null };
+          this.thrusterActive = { left: false, right: false };
+          
+          // NEW: Track grip state for continuous ball grabbing
+          this.gripHeld = { left: false, right: false };
+          
+          // Rotation state
+          this.rotationY = 0;
+          this.thumbstickRotation = { left: 0, right: 0 };
+          
+          // Braking state
+          this.isBraking = { left: false, right: false };
+          this.brakingForce = 0.9; // Stronger braking for immediate effect
+          
+          // Get hand references
+          this.leftHand = null;
+          this.rightHand = null;
+          this.rig = null;
+          
+          // Debug mode (for optional console output)
+          this.debugMode = this.data.debug || false;
+          
+          // Wait for scene to load to get hand references
+          this.el.sceneEl.addEventListener('loaded', () => {
+            this.leftHand = document.querySelector('#leftHand');
+            this.rightHand = document.querySelector('#rightHand');
+            this.rig = document.querySelector('#rig');
+            
+            console.log('🎯 Zero-G player initialized (Option B):');
+            console.log(`   • Left hand: ${this.leftHand ? 'Found' : 'NOT FOUND'}`);
+            console.log(`   • Right hand: ${this.rightHand ? 'Found' : 'NOT FOUND'}`);
+            console.log(`   • Rig: ${this.rig ? 'Found' : 'NOT FOUND'}`);
+            console.log(`   • Collision system: Visual wireframes (camera children)`);
+            console.log(`   • Custom physics: Velocity + collision response`);
+            
+            this.setupHandEvents();
+            
+            // Add keyboard listener for toggling collision visualization
+            this.keydownListener = (evt) => {
+              if (evt.key === 'c' || evt.key === 'C') {
+                this.toggleCollisionVisualization();
+              }
+            };
+            document.addEventListener('keydown', this.keydownListener);
+
+          });
+        },
+        
+        setupHandEvents: function() {
+          // Grip controls for grabbing surfaces AND balls (EchoVR style)
+          this.el.sceneEl.addEventListener('gripdown', (evt) => {
+            const hand = evt.target;
+            const isLeft = hand.id === 'leftHand';
+            const handKey = isLeft ? 'left' : 'right';
+            
+            // Track grip state for continuous ball grabbing
+            this.gripHeld[handKey] = true;
+            
+            // Try to grab balls first (priority), then static surfaces
+            this.tryGrabBall(hand);
+            
+            // If no ball was grabbed, try static surfaces
+            if (!this.isGrabbing[handKey]) {
+              this.handleGrab(hand, true);
+            }
+          });
+          
+          this.el.sceneEl.addEventListener('gripup', (evt) => {
+            const hand = evt.target;
+            const isLeft = hand.id === 'leftHand';
+            const handKey = isLeft ? 'left' : 'right';
+            
+            // Track grip state
+            this.gripHeld[handKey] = false;
+            
+            // Release whatever is being grabbed (ball or surface)
+            this.releaseGrabbedBall(hand);
+            this.handleGrab(hand, false);
+          });
+          
+          // Trigger controls for thrusters ONLY (EchoVR style)
+          this.el.sceneEl.addEventListener('triggerdown', (evt) => {
+            const hand = evt.target;
+            this.handleThruster(hand, true);
+          });
+          
+          this.el.sceneEl.addEventListener('triggerup', (evt) => {
+            const hand = evt.target;
+            this.handleThruster(hand, false);
+          });
+          
+          // Thumbstick controls for rotation
+          this.el.sceneEl.addEventListener('thumbstickmoved', (evt) => {
+            const hand = evt.target;
+            this.handleThumbstick(hand, evt.detail);
+          });
+          
+          // B button unused in this system
+          
+          // Thumbstick click for braking (Echo VR style)
+          this.el.sceneEl.addEventListener('thumbstickdown', (evt) => {
+            const hand = evt.target;
+            this.startBraking(hand);
+          });
+          
+          this.el.sceneEl.addEventListener('thumbstickup', (evt) => {
+            const hand = evt.target;
+            this.stopBraking(hand);
+          });
+        },
+        
+        // Debug arrows removed - not useful for this system
+        
+        handleThumbstick: function(hand, detail) {
+          const isLeft = hand.id === 'leftHand';
+          
+          // Use right thumbstick for rotation (common VR convention)
+          // Flip the direction to match expected behavior
+          if (!isLeft && Math.abs(detail.x) > 0.1) {
+            this.thumbstickRotation.right = -detail.x;
+            if (this.debugMode) {
+              console.log(`🎮 Right thumbstick: ${detail.x.toFixed(2)} → rotation: ${this.thumbstickRotation.right.toFixed(2)}`);
+            }
+          } else if (!isLeft) {
+            this.thumbstickRotation.right = 0;
+          }
+          
+          // Left thumbstick could be used for other things in the future
+          if (isLeft && Math.abs(detail.x) > 0.1) {
+            this.thumbstickRotation.left = -detail.x;
+            if (this.debugMode) {
+              console.log(`🎮 Left thumbstick: ${detail.x.toFixed(2)} → rotation: ${this.thumbstickRotation.left.toFixed(2)}`);
+            }
+          } else if (isLeft) {
+            this.thumbstickRotation.left = 0;
+          }
+        },
+        
+        handleGrab: function(hand, isDown) {
+          const isLeft = hand.id === 'leftHand';
+          const handKey = isLeft ? 'left' : 'right';
+          
+
+          
+          if (isDown) {
+            // Check for nearby surfaces to grab
+            const surface = this.findNearestGrabbableSurface(hand);
+            
+            if (surface) {
+              this.grabbedSurface[handKey] = surface;
+              this.attachToSurface(hand, surface);
+              
+              // Haptic feedback
+              this.playHapticFeedback(hand, 0.5, 100);
+            }
+          } else {
+            if (this.isGrabbing[handKey]) {
+              this.releaseFromSurface(hand);
+              this.grabbedSurface[handKey] = null;
+            }
+          }
+        },
+        
+        handleThruster: function(hand, isActive) {
+          const isLeft = hand.id === 'leftHand';
+          const handKey = isLeft ? 'left' : 'right';
+          
+          this.thrusterActive[handKey] = isActive;
+          
+          if (isActive) {
+            // Visual thruster effect
+            this.showThrusterEffect(hand);
+          } else {
+            this.hideThrusterEffect(hand);
+          }
+        },
+        
+        findNearestGrabbableSurface: function(hand) {
+          const handPos = new THREE.Vector3();
+          hand.object3D.getWorldPosition(handPos);
+          const handRadius = 0.08; // Hand collision radius
+          
+                  // Look for elements with grab-surface component OR zerog-ball attribute
+        const allElements = document.querySelectorAll('[grab-surface], [zerog-ball]');
+          let nearestSurface = null;
+          let minDistance = Infinity;
+          
+          allElements.forEach(element => {
+            const distance = this.getDistanceToSurface(handPos, handRadius, element);
+            
+            // If hand is touching or very close to surface (within 5cm)
+            if (distance <= 0.05) {
+              if (distance < minDistance) {
+                minDistance = distance;
+                nearestSurface = element;
+              }
+            }
+          });
+          
+          // Only log when something is found
+          if (nearestSurface) {
+            const distanceCm = minDistance > 0 ? (minDistance * 100).toFixed(1) : "touching";
+            console.log(`✓ Grabbed ${nearestSurface.tagName.toLowerCase()} - ${distanceCm}cm`);
+          }
+          
+          return nearestSurface;
+        },
+        
+        getDistanceToSurface: function(handPos, handRadius, element) {
+          const elementPos = new THREE.Vector3();
+          element.object3D.getWorldPosition(elementPos);
+          const geometry = element.getAttribute('geometry');
+          
+          if (!geometry) {
+            // Fallback to simple distance for elements without geometry
+            return handPos.distanceTo(elementPos) - handRadius;
+          }
+          
+          // Check collision based on geometry type
+          if (geometry.primitive === 'box') {
+            return this.distanceToBox(handPos, handRadius, elementPos, geometry);
+          } else if (geometry.primitive === 'sphere') {
+            return this.distanceToSphere(handPos, handRadius, elementPos, geometry);
+          } else if (geometry.primitive === 'cylinder') {
+            return this.distanceToCylinder(handPos, handRadius, elementPos, geometry);
+          } else {
+            // Fallback
+            return handPos.distanceTo(elementPos) - handRadius;
+          }
+        },
+        
+        distanceToBox: function(handPos, handRadius, boxPos, geometry) {
+          // Calculate distance from hand sphere to box surface
+          const halfWidth = geometry.width / 2;
+          const halfHeight = geometry.height / 2;
+          const halfDepth = geometry.depth / 2;
+          
+          // Get relative position of hand to box center
+          const relativePos = new THREE.Vector3().subVectors(handPos, boxPos);
+          
+          // Calculate closest point on box to hand
+          const closestPoint = new THREE.Vector3(
+            Math.max(-halfWidth, Math.min(halfWidth, relativePos.x)),
+            Math.max(-halfHeight, Math.min(halfHeight, relativePos.y)),
+            Math.max(-halfDepth, Math.min(halfDepth, relativePos.z))
+          );
+          
+          // Distance from hand to closest point on box surface
+          const distance = relativePos.distanceTo(closestPoint);
+          
+          // Subtract hand radius to get surface distance
+          return Math.max(0, distance - handRadius);
+        },
+        
+        distanceToSphere: function(handPos, handRadius, spherePos, geometry) {
+          const sphereRadius = geometry.radius;
+          const centerDistance = handPos.distanceTo(spherePos);
+          
+          // Distance to sphere surface minus hand radius
+          return Math.max(0, centerDistance - sphereRadius - handRadius);
+        },
+        
+        distanceToCylinder: function(handPos, handRadius, cylinderPos, geometry) {
+          const cylinderRadius = geometry.radius;
+          const cylinderHeight = geometry.height;
+          
+          // Get relative position
+          const relativePos = new THREE.Vector3().subVectors(handPos, cylinderPos);
+          
+          // Distance to cylinder axis (ignoring Y)
+          const radialDistance = Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z);
+          
+          // Clamp Y to cylinder height
+          const clampedY = Math.max(-cylinderHeight/2, Math.min(cylinderHeight/2, relativePos.y));
+          
+          // Calculate distance to cylinder surface
+          let distance;
+          if (Math.abs(relativePos.y) <= cylinderHeight/2) {
+            // Hand is within cylinder height, check radial distance
+            distance = Math.max(0, radialDistance - cylinderRadius);
+          } else {
+            // Hand is above/below cylinder, check distance to circular ends
+            const endDistance = Math.abs(relativePos.y) - cylinderHeight/2;
+            if (radialDistance <= cylinderRadius) {
+              distance = endDistance;
+            } else {
+              distance = Math.sqrt(endDistance * endDistance + Math.pow(radialDistance - cylinderRadius, 2));
+            }
+          }
+          
+          // Subtract hand radius
+          return Math.max(0, distance - handRadius);
+        },
+        
+        attachToSurface: function(hand, surface) {
+          const handPos = new THREE.Vector3();
+          hand.object3D.getWorldPosition(handPos);
+          
+          const surfacePos = new THREE.Vector3();
+          surface.object3D.getWorldPosition(surfacePos);
+          
+          const isLeft = hand.id === 'leftHand';
+          const handKey = isLeft ? 'left' : 'right';
+          
+          // Check if this is a ball and handle differently
+          if (surface.hasAttribute('zerog-ball') && surface.components['zerog-ball']) {
+            // For balls, call the ball's onGrab method
+            surface.components['zerog-ball'].onGrab(hand);
+            
+            this.grabInfo[handKey] = {
+              surface: surface,
+              isBall: true,
+              initialHandPos: handPos.clone(),
+              lastHandPos: handPos.clone()
+            };
+            
+
+          } else {
+            // For static surfaces, use normal grab behavior
+            // Option B: Use VR rig position instead of physics body
+            const rigPos = new THREE.Vector3();
+            this.rig.object3D.getWorldPosition(rigPos);
+            
+            this.grabInfo[handKey] = {
+              surface: surface,
+              isBall: false,
+              initialHandPos: handPos.clone(),
+              lastHandPos: handPos.clone(),
+              initialSurfacePos: surfacePos.clone(),
+              initialPlayerPos: rigPos.clone(),
+              grabPoint: surfacePos.clone()
+            };
+            
+
+          }
+          
+          // Set grabbing flag
+          this.isGrabbing[handKey] = true;
+          
+
+        },
+        
+        releaseFromSurface: function(hand) {
+          const isLeft = hand.id === 'leftHand';
+          const handKey = isLeft ? 'left' : 'right';
+          
+          const grabInfo = this.grabInfo[handKey];
+          if (grabInfo) {
+            // If releasing a ball, call the ball's onRelease method
+            if (grabInfo.isBall && grabInfo.surface.components['zerog-ball']) {
+              grabInfo.surface.components['zerog-ball'].onRelease();
+            }
+          }
+          
+          // Clear grab info
+          this.grabInfo[handKey] = null;
+          this.isGrabbing[handKey] = false;
+          
+
+        },
+        
+        showThrusterEffect: function(hand) {
+          const thrusterVFX = hand.querySelector('.thruster-vfx');
+          if (thrusterVFX) {
+            thrusterVFX.setAttribute('visible', true);
+            thrusterVFX.setAttribute('material', 'opacity', 0.8);
+          }
+        },
+        
+        hideThrusterEffect: function(hand) {
+          const thrusterVFX = hand.querySelector('.thruster-vfx');
+          if (thrusterVFX) {
+            thrusterVFX.setAttribute('visible', false);
+          }
+        },
+        
+        // Debug arrow functions removed - not useful for this system
+        
+        playHapticFeedback: function(hand, intensity, duration) {
+          if (hand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
+            const haptics = hand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
+            haptics.pulse(intensity, duration).catch(() => {});
+          }
+                },
+
+        createCollisionVisualization: function() {
+          // Create wireframe visualization of the collision capsule
+          const radius = 0.25;
+          const height = 1.6;
+          
+          // Option A: Add wireframes as camera children so they follow VR headset automatically
+          const camera = document.querySelector('[camera]');
+          if (!camera) {
+            console.warn('Camera not found - cannot create collision visualization');
+            return;
+          }
+          
+          // Main cylinder (body center) - positioned relative to camera
+          const cylinderWireframe = document.createElement('a-cylinder');
+          cylinderWireframe.setAttribute('radius', radius);
+          cylinderWireframe.setAttribute('height', height);
+          cylinderWireframe.setAttribute('material', {
+            color: '#00ff00',
+            wireframe: true,
+            opacity: 0.3,
+            transparent: true
+          });
+          cylinderWireframe.setAttribute('position', '0 -0.4 0'); // 0.4m below camera (body center)
+          camera.appendChild(cylinderWireframe);
+          
+          // Top sphere (head level) - positioned at camera position
+          const topSphereWireframe = document.createElement('a-sphere');
+          topSphereWireframe.setAttribute('radius', radius);
+          topSphereWireframe.setAttribute('material', {
+            color: '#00ff00',
+            wireframe: true,
+            opacity: 0.3,
+            transparent: true
+          });
+          topSphereWireframe.setAttribute('position', '0 0 0'); // At camera position (head level)
+          camera.appendChild(topSphereWireframe);
+          
+          // Bottom sphere (feet level) - positioned 1.6m below camera
+          const bottomSphereWireframe = document.createElement('a-sphere');
+          bottomSphereWireframe.setAttribute('radius', radius);
+          bottomSphereWireframe.setAttribute('material', {
+            color: '#00ff00',
+            wireframe: true,
+            opacity: 0.3,
+            transparent: true
+          });
+          bottomSphereWireframe.setAttribute('position', '0 -0.8 0'); // 0.8m below camera (feet level)
+          camera.appendChild(bottomSphereWireframe);
+          
+          // Store references and hide by default
+          this.collisionVisualization = {
+            cylinder: cylinderWireframe,
+            topSphere: topSphereWireframe,
+            bottomSphere: bottomSphereWireframe,
+            visible: false
+          };
+          
+          // Hide by default
+          this.setCollisionVisualizationVisible(false);
+          
+          console.log('🔍 Player collision capsule visualization created (Option A: follows VR headset)');
+          console.log(`   • Cylinder: ${radius}m radius × ${height}m height at body center (-0.8m from head)`);
+          console.log(`   • Top sphere: ${radius}m radius at head level (camera position)`);
+          console.log(`   • Bottom sphere: ${radius}m radius at feet level (-1.6m from head)`);
+          console.log(`   • Wireframes automatically follow VR headset movement`);
+          console.log(`   • Physics body also follows headset, so visual and collision are synced`);
+          console.log(`   • Press 'C' key to toggle collision visualization`);
+        },
+
+        toggleCollisionVisualization: function() {
+          if (this.collisionVisualization) {
+            this.collisionVisualization.visible = !this.collisionVisualization.visible;
+            this.setCollisionVisualizationVisible(this.collisionVisualization.visible);
+            console.log(`🔍 Collision visualization: ${this.collisionVisualization.visible ? 'ON' : 'OFF'}`);
+          }
+        },
+
+        setCollisionVisualizationVisible: function(visible) {
+          if (this.collisionVisualization) {
+            this.collisionVisualization.cylinder.setAttribute('visible', visible);
+            this.collisionVisualization.topSphere.setAttribute('visible', visible);
+            this.collisionVisualization.bottomSphere.setAttribute('visible', visible);
+          }
+        },
+
+        tick: function(time, deltaTime) {
+          // Option B: Custom physics simulation with visual collision detection
+          if (!this.rig) return;
+          
+          const dt = Math.min(deltaTime / 1000, 0.033); // Cap at 30fps for stability
+          
+          // Apply thumbstick rotation
+          this.applyRotation(dt);
+          
+          // Apply thruster forces to velocity
+          this.applyThrusterForces(dt);
+          
+          // Apply movement from grabbed surfaces
+          this.applyGrabMovement(dt);
+          
+          // Apply gradual braking if active
+          this.applyGradualBraking(dt);
+          
+          // Apply damping to velocity
+          this.applyDamping(dt);
+          
+          // Check for collisions and apply responses
+          this.checkAndResolveCollisions(dt);
+          
+          // Apply velocity to move VR rig
+          this.applyVelocityToRig(dt);
+          
+          // Update grab visual feedback
+          this.updateGrabFeedback();
+          
+          // NEW: Continuous ball grabbing while grip is held
+          this.updateGripBallGrabbing();
+        },
+
+        // Option B: Apply damping to velocity
+        applyDamping: function(dt) {
+          const dampingFactor = Math.pow(this.damping, dt * 60); // Frame-rate independent
+          this.velocity.multiplyScalar(dampingFactor);
+          
+          // Stop very slow movement to prevent infinite drift
+          if (this.velocity.length() < this.minVelocity) {
+            this.velocity.set(0, 0, 0);
+          }
+        },
+        
+        // Option B: Apply velocity to move VR rig
+        applyVelocityToRig: function(dt) {
+          if (this.velocity.length() > 0) {
+            const movement = this.velocity.clone().multiplyScalar(dt);
+            this.rig.object3D.position.add(movement);
+            
+            if (this.debugMode && this.velocity.length() > 0.1) {
+              console.log('Rig moved by velocity:', movement.toArray().map(x => x.toFixed(3)));
+            }
+          }
+        },
+        
+        // Option B: Check for collisions using visual wireframes and resolve them
+        checkAndResolveCollisions: function(dt) {
+          if (!this.collisionVisualization) {
+            return; // No collision checking if wireframes not created yet
+          }
+          
+          // Get current camera position (this is our collision center)
+          const camera = document.querySelector('[camera]');
+          if (!camera) return;
+          
+          const cameraWorldPos = new THREE.Vector3();
+          camera.object3D.getWorldPosition(cameraWorldPos);
+          
+          // Check collision points (head, body center, feet)
+          const collisionPoints = [
+            { pos: cameraWorldPos.clone(), radius: 0.25, name: 'head' }, // Head level
+            { pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.4, 0)), radius: 0.25, name: 'body' }, // Body center
+            { pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.8, 0)), radius: 0.25, name: 'feet' } // Feet level
+          ];
+          
+          let totalCollisionResponse = new THREE.Vector3(0, 0, 0);
+          
+          // Check each collision point against all collidable surfaces
+          collisionPoints.forEach(point => {
+            const response = this.checkPointCollision(point.pos, point.radius, point.name);
+            if (response.length() > 0) {
+              totalCollisionResponse.add(response);
+            }
+          });
+          
+          // Check for ball hits on player target (separate from wall collisions)
+          this.checkBallHits(cameraWorldPos);
+          
+          // Apply collision response by moving rig and dampening velocity
+          if (totalCollisionResponse.length() > 0) {
+            // Move rig away from collision
+            this.rig.object3D.position.add(totalCollisionResponse);
+            
+            // Dampen velocity in collision direction
+            const collisionNormal = totalCollisionResponse.clone().normalize();
+            const velocityInCollisionDirection = this.velocity.clone().projectOnVector(collisionNormal);
+            this.velocity.sub(velocityInCollisionDirection.multiplyScalar(1.2)); // Remove + a bit extra
+            
+            if (this.debugMode) {
+              console.log('Collision response applied:', totalCollisionResponse.toArray().map(x => x.toFixed(3)));
+            }
+          }
+        },
+        
+        // Option B: Check a single point for collision with surfaces
+        checkPointCollision: function(point, radius, pointName) {
+          const response = new THREE.Vector3(0, 0, 0);
+          
+          // Check against all grab-surface objects
+          const surfaces = document.querySelectorAll('[grab-surface]');
+          surfaces.forEach(surface => {
+            const surfacePos = new THREE.Vector3();
+            surface.object3D.getWorldPosition(surfacePos);
+            const geometry = surface.getAttribute('geometry');
+            
+            if (!geometry) return;
+            
+            const collision = this.getCollisionResponse(point, radius, surfacePos, geometry);
+            if (collision.length() > 0) {
+              response.add(collision);
+              if (this.debugMode) {
+                console.log(`${pointName} collision with ${surface.tagName}:`, collision.toArray().map(x => x.toFixed(3)));
+              }
+            }
+          });
+          
+          return response;
+        },
+        
+        // Option B: Calculate collision response for point vs geometry
+        getCollisionResponse: function(point, radius, surfacePos, geometry) {
+          const response = new THREE.Vector3(0, 0, 0);
+          
+          if (geometry.primitive === 'box') {
+            // Box collision
+            const halfWidth = geometry.width / 2;
+            const halfHeight = geometry.height / 2;
+            const halfDepth = geometry.depth / 2;
+            
+            // Get point relative to box center
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Find closest point on box surface
+            const closestPoint = new THREE.Vector3(
+              Math.max(-halfWidth, Math.min(halfWidth, relativePos.x)),
+              Math.max(-halfHeight, Math.min(halfHeight, relativePos.y)),
+              Math.max(-halfDepth, Math.min(halfDepth, relativePos.z))
+            );
+            
+            // Distance from point to closest point on box
+            const distance = relativePos.distanceTo(closestPoint);
+            const penetration = radius + this.collisionMargin - distance;
+            
+            if (penetration > 0) {
+              // Calculate push-out direction
+              const direction = relativePos.clone().sub(closestPoint).normalize();
+              if (direction.length() === 0) {
+                // Point is exactly on surface, push up
+                direction.set(0, 1, 0);
+              }
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'sphere') {
+            // Sphere collision
+            const sphereRadius = geometry.radius;
+            const distance = point.distanceTo(surfacePos);
+            const penetration = radius + sphereRadius + this.collisionMargin - distance;
+            
+            if (penetration > 0) {
+              const direction = point.clone().sub(surfacePos).normalize();
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          }
+          
+          return response;
+        },
+        
+        // Check for ball hits on player target sphere
+        checkBallHits: function(playerPos) {
+          // Get all balls
+          const balls = document.querySelectorAll('[zerog-ball]');
+          
+          balls.forEach(ball => {
+            if (!ball.body) return; // Skip if no physics body
+            
+            const ballPos = new THREE.Vector3();
+            ballPos.copy(ball.body.position);
+            const ballVelocity = ball.body.velocity.length();
+            
+            // Check distance to player target (camera position)
+            const distance = ballPos.distanceTo(playerPos);
+            const hitDistance = 0.3; // 0.2m target radius + 0.1m ball radius
+            
+            // Only trigger if ball is moving and close to player target
+            if (distance <= hitDistance && ballVelocity > 0.5) {
+              // Check which player owns this ball
+              const ballPlayer = ball.getAttribute('zerog-ball').player;
+              
+              // Only opponent balls (player1) can hit the player target
+              if (ballPlayer === 'player1') {
+                // Play impact effect
+                const playerTarget = document.querySelector('#player-target');
+                if (playerTarget && playerTarget.components['impact-effect']) {
+                  playerTarget.components['impact-effect'].playEffect();
+                  
+                  // Reset ball after hit
+                  if (ball.components['zerog-ball']) {
+                    ball.components['zerog-ball'].resetPosition();
+                  }
+                  
+                  if (this.debugMode) {
+                    console.log('Player hit by opponent ball!');
+                  }
+                }
+              }
+            }
+          });
+        },
+        
+        updateGrabFeedback: function() {
+          // Show visual feedback for grabbable objects in range
+          if (!this.leftHand || !this.rightHand) return;
+          
+          const leftNearby = this.findNearestGrabbableSurface(this.leftHand);
+          const rightNearby = this.findNearestGrabbableSurface(this.rightHand);
+          
+          // Reset all grabbable objects to normal color first
+          document.querySelectorAll('.grabbable-surface, [zerog-ball]').forEach(el => {
+            if (el.hasAttribute('material')) {
+              const currentColor = el.getAttribute('material').color;
+              if (currentColor === '#00ff00') { // Reset if it was highlighted
+                el.setAttribute('material', 'color', '#888888');
+              }
+            }
+          });
+          
+          // Highlight objects in grab range
+          if (leftNearby && !this.isGrabbing.left) {
+            leftNearby.setAttribute('material', 'color', '#00ff00');
+          }
+          if (rightNearby && !this.isGrabbing.right && rightNearby !== leftNearby) {
+            rightNearby.setAttribute('material', 'color', '#00ff00');
+          }
+        },
+        
+        // Option B: Apply rotation to VR rig only (no physics body)
+        applyRotation: function(deltaTime) {
+          if (!this.rig) {
+            console.log('⚠️ Rig not found for rotation');
+            return;
+          }
+          
+          // Apply rotation from right thumbstick
+          const rotationInput = this.thumbstickRotation.right;
+          if (Math.abs(rotationInput) > 0.1) {
+            const rotationSpeed = this.data.rotationSpeed * deltaTime; // deltaTime is already in seconds
+            this.rotationY += rotationInput * rotationSpeed;
+            
+            // Apply rotation to the rig only (Option B: no physics body)
+            this.rig.object3D.rotation.y = this.rotationY;
+            
+            // Debug output
+            if (this.debugMode) {
+              console.log(`🔄 Rotation applied: input=${rotationInput.toFixed(2)}, Y=${this.rotationY.toFixed(2)}`);
+            }
+          }
+        },
+        
+        // Option B: Apply thruster forces to velocity
+        applyThrusterForces: function(dt) {
+          if (!this.leftHand || !this.rightHand) return;
+          
+          let totalThrust = new THREE.Vector3(0, 0, 0);
+          
+          // Left hand thruster
+          if (this.thrusterActive.left) {
+            // Get thrust direction from controller orientation
+            const leftDir = new THREE.Vector3(0, -1, 0); // pointing down from controller
+            const worldQuat = new THREE.Quaternion();
+            this.leftHand.object3D.getWorldQuaternion(worldQuat);
+            leftDir.applyQuaternion(worldQuat);
+            leftDir.multiplyScalar(this.data.thrusterForce * dt); // Frame-rate independent force
+            
+            totalThrust.add(leftDir);
+            
+            if (this.debugMode) {
+              console.log('Left thrust force:', leftDir.clone().normalize().toArray().map(x => x.toFixed(2)));
+            }
+          }
+          
+          // Right hand thruster
+          if (this.thrusterActive.right) {
+            // Get thrust direction from controller orientation
+            const rightDir = new THREE.Vector3(0, -1, 0); // pointing down from controller
+            const worldQuat = new THREE.Quaternion();
+            this.rightHand.object3D.getWorldQuaternion(worldQuat);
+            rightDir.applyQuaternion(worldQuat);
+            rightDir.multiplyScalar(this.data.thrusterForce * dt); // Frame-rate independent force
+            
+            totalThrust.add(rightDir);
+            
+            if (this.debugMode) {
+              console.log('Right thrust force:', rightDir.clone().normalize().toArray().map(x => x.toFixed(2)));
+            }
+          }
+          
+          // Apply thrust to velocity (Option B approach)
+          if (totalThrust.length() > 0) {
+            this.velocity.add(totalThrust);
+            
+            // Cap maximum velocity
+            if (this.velocity.length() > this.data.maxSpeed) {
+              this.velocity.normalize().multiplyScalar(this.data.maxSpeed);
+            }
+            
+            if (this.debugMode) {
+              console.log('Velocity changed by thrust:', totalThrust.toArray().map(x => x.toFixed(3)));
+            }
+          }
+        },
+        
+        // Option B: Apply grab movement to velocity
+        applyGrabMovement: function(dt) {
+          // Handle pulling/pushing when grabbing STATIC surfaces (not balls)
+          ['left', 'right'].forEach(handKey => {
+            if (this.isGrabbing[handKey] && this.grabInfo[handKey]) {
+              const grabInfo = this.grabInfo[handKey];
+              
+              // CRITICAL: Only apply player movement for static surfaces, NEVER for balls
+              if (grabInfo.isBall) {
+                return; // Balls handle their own movement, do NOT affect player
+              }
+              
+              // Double-check: Ensure surface is not a ball by checking for zerog-ball attribute
+              if (grabInfo.surface && grabInfo.surface.hasAttribute('zerog-ball')) {
+                return; // Additional safety check
+              }
+              
+              const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+              if (!hand) return;
+              
+              const currentHandPos = new THREE.Vector3();
+              hand.object3D.getWorldPosition(currentHandPos);
+              
+              // Calculate how much the hand has moved since last frame
+              const handMovement = new THREE.Vector3()
+                .subVectors(currentHandPos, grabInfo.lastHandPos);
+              
+              const movementMagnitude = handMovement.length();
+              
+              // Only apply movement if hand has moved significantly
+              if (movementMagnitude > 0.001) { // 0.1cm minimum movement
+                
+                // Apply hand movement as velocity change in opposite direction
+                // This creates the "pulling yourself toward/away from object" effect
+                const movementStrength = 80.0; // Scale factor for responsiveness
+                const velocityChange = handMovement.clone().negate().multiplyScalar(movementStrength / dt);
+                
+                // Add to velocity (Option B approach)
+                this.velocity.add(velocityChange.multiplyScalar(dt));
+                
+                // Cap maximum velocity
+                if (this.velocity.length() > this.data.maxSpeed) {
+                  this.velocity.normalize().multiplyScalar(this.data.maxSpeed);
+                }
+                
+                if (this.debugMode) {
+                  console.log('Velocity changed by grab:', velocityChange.toArray().map(x => x.toFixed(3)));
+                }
+              }
+              
+              // Update last hand position for next frame
+              grabInfo.lastHandPos.copy(currentHandPos);
+            }
+          });
+        },
+        
+        startBraking: function(hand) {
+          const isLeft = hand.id === 'leftHand';
+          const handKey = isLeft ? 'left' : 'right';
+          
+          // Start braking for this hand
+          this.isBraking[handKey] = true;
+          
+          // Haptic feedback when starting braking
+          this.playHapticFeedback(hand, 0.2, 100);
+        },
+        
+        stopBraking: function(hand) {
+          const isLeft = hand.id === 'leftHand';
+          const handKey = isLeft ? 'left' : 'right';
+          
+          // Stop braking for this hand
+          this.isBraking[handKey] = false;
+          
+          // Haptic feedback when stopping braking
+          this.playHapticFeedback(hand, 0.1, 50);
+        },
+        
+        // Option B: Apply braking to velocity
+        applyGradualBraking: function(dt) {
+          // Check if either hand is braking
+          const isBrakingActive = this.isBraking.left || this.isBraking.right;
+          
+          if (isBrakingActive) {
+            // Apply stronger braking to velocity
+            const brakingFactor = Math.pow(this.brakingForce, dt * 60); // Frame-rate independent
+            this.velocity.multiplyScalar(brakingFactor);
+            
+            if (this.debugMode && this.velocity.length() > 0.1) {
+              console.log('Braking applied, velocity:', this.velocity.length().toFixed(2));
+            }
+          }
+        },
+
+        // NEW: Try to grab a ball with the specified hand
+        tryGrabBall: function(hand) {
+          const isLeft = hand.id === 'leftHand';
+          const handKey = isLeft ? 'left' : 'right';
+          
+          // Don't grab if already grabbing something
+          if (this.isGrabbing[handKey]) return;
+          
+          // Look for nearby balls only (not static surfaces)
+          const ball = this.findNearestBall(hand);
+          
+          if (ball) {
+            // Only grab player's own ball (player2)
+            const ballPlayer = ball.getAttribute('zerog-ball')?.player;
+            if (ballPlayer === 'player2') {
+              this.grabbedSurface[handKey] = ball;
+              this.attachToSurface(hand, ball);
+              
+              // Haptic feedback
+              this.playHapticFeedback(hand, 0.5, 100);
+              
+              console.log(`✓ Grabbed ball with ${handKey} hand (grip)`);
+            }
+          }
+        },
+        
+        // NEW: Release grabbed ball  
+        releaseGrabbedBall: function(hand) {
+          const isLeft = hand.id === 'leftHand';
+          const handKey = isLeft ? 'left' : 'right';
+          
+          const grabInfo = this.grabInfo[handKey];
+          if (grabInfo && grabInfo.isBall) {
+            this.releaseFromSurface(hand);
+            this.grabbedSurface[handKey] = null;
+            console.log(`✓ Released ball with ${handKey} hand (grip)`);
+          }
+        },
+        
+        // NEW: Find nearest ball (not static surfaces)
+        findNearestBall: function(hand) {
+          const handPos = new THREE.Vector3();
+          hand.object3D.getWorldPosition(handPos);
+          const handRadius = 0.08; // Hand collision radius
+          
+          // Look for balls only
+          const balls = document.querySelectorAll('[zerog-ball]');
+          let nearestBall = null;
+          let minDistance = Infinity;
+          
+          balls.forEach(ball => {
+            const distance = this.getDistanceToSurface(handPos, handRadius, ball);
+            
+            // If hand is touching or very close to ball (within 10cm for easier grabbing)
+            if (distance <= 0.10) {
+              if (distance < minDistance) {
+                minDistance = distance;
+                nearestBall = ball;
+              }
+            }
+          });
+          
+          return nearestBall;
+        },
+        
+        // NEW: Continuous ball grabbing while grip is held
+        updateGripBallGrabbing: function() {
+          // Check each hand
+          ['left', 'right'].forEach(handKey => {
+            const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+            if (!hand) return;
+            
+            // If grip is held but not currently grabbing anything
+            if (this.gripHeld[handKey] && !this.isGrabbing[handKey]) {
+              // Continuously try to grab nearby balls
+              this.tryGrabBall(hand);
+            }
+          });
+        },
+
+        remove: function() {
+          // Option B: No physics body to remove
+          
+          // Clean up event listener
+          if (this.keydownListener) {
+            document.removeEventListener('keydown', this.keydownListener);
+          }
+          
+          // Clean up collision visualization elements from camera
+          if (this.collisionVisualization) {
+            if (this.collisionVisualization.cylinder && this.collisionVisualization.cylinder.parentNode) {
+              this.collisionVisualization.cylinder.parentNode.removeChild(this.collisionVisualization.cylinder);
+            }
+            if (this.collisionVisualization.topSphere && this.collisionVisualization.topSphere.parentNode) {
+              this.collisionVisualization.topSphere.parentNode.removeChild(this.collisionVisualization.topSphere);
+            }
+            if (this.collisionVisualization.bottomSphere && this.collisionVisualization.bottomSphere.parentNode) {
+              this.collisionVisualization.bottomSphere.parentNode.removeChild(this.collisionVisualization.bottomSphere);
+            }
+          }
+        }
+      });
+
+      // Surface Grab Points - Interactive surfaces for grabbing
+      AFRAME.registerComponent('grab-surface', {
+        schema: {
+          type: { type: 'string', default: 'static' }, // static, dynamic
+          strength: { type: 'number', default: 1.0 }
+        },
+        
+        init: function() {
+          // Add grabbable class
+          this.el.classList.add('grabbable-surface');
+          
+          // Create physics body for surface
+          const geometry = this.el.getAttribute('geometry');
+          let shape;
+          
+          if (geometry && geometry.primitive === 'box') {
+            shape = new CANNON.Box(new CANNON.Vec3(
+              geometry.width / 2,
+              geometry.height / 2,
+              geometry.depth / 2
+            ));
+          } else if (geometry && geometry.primitive === 'sphere') {
+            shape = new CANNON.Sphere(geometry.radius);
+          } else {
+            // Fallback for unknown geometry
+            shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
+          }
+          
+          this.body = new CANNON.Body({
+            mass: this.data.type === 'static' ? 0 : 1,
+            shape: shape,
+            material: surfaceMaterial,
+            type: this.data.type === 'static' ? CANNON.Body.STATIC : CANNON.Body.DYNAMIC,
+            collisionFilterGroup: 4, // Surfaces are in group 4
+            collisionFilterMask: 3   // Surfaces collide with groups 1 (player) + 2 (balls) = 3
+          });
+          
+          const position = this.el.getAttribute('position');
+          const rotation = this.el.getAttribute('rotation');
+          this.body.position.set(position.x, position.y, position.z);
+          
+          // Apply rotation if present
+          if (rotation) {
+            const rad = Math.PI / 180;
+            this.body.quaternion.setFromEuler(
+              rotation.x * rad,
+              rotation.y * rad,
+              rotation.z * rad
+            );
+          }
+          
+          world.addBody(this.body);
+          
+          // Store body reference for grabbing
+          this.el.body = this.body;
+          
+
+          
+          // Visual feedback for grabbable surfaces
+          this.el.addEventListener('mouseenter', () => {
+            this.el.setAttribute('material', 'color', '#00ff00');
+          });
+          
+          this.el.addEventListener('mouseleave', () => {
+            this.el.setAttribute('material', 'color', '#ffffff');
+          });
+        }
+      });
+
+
+
+      // Zero-G Bot Component - AI opponent for singleplayer
+      AFRAME.registerComponent('zerog-bot', {
+        schema: {
+          enabled: { type: 'boolean', default: true },
+          difficulty: { type: 'string', default: 'medium' },
+          throwInterval: { type: 'number', default: 4000 }, // 4 seconds between throws
+          minThrowForce: { type: 'number', default: 3 },
+          maxThrowForce: { type: 'number', default: 8 },
+          movementSpeed: { type: 'number', default: 1.5 },
+          accuracy: { type: 'number', default: 0.7 }
+        },
+        
+        init: function() {
+          this.ball = null;
+          this.lastThrowTime = 0;
+          this.lastMoveTime = 0;
+          this.moveInterval = 6000; // Move every 6 seconds
+          this.targetPosition = new THREE.Vector3();
+          this.isMoving = false;
+          this.moveStartTime = 0;
+          this.moveStartPos = new THREE.Vector3();
+          this.moveDuration = 2000; // 2 second movement duration
+          
+          // Player tracking for predictive aiming
+          this.playerPos = new THREE.Vector3();
+          this.playerLastPos = new THREE.Vector3();
+          this.playerVelocity = new THREE.Vector3();
+          this.lastPlayerUpdate = 0;
+          
+          // Create physics body for the bot
+          const shape = new CANNON.Sphere(0.2);
+          this.body = new CANNON.Body({
+            mass: 50, // 50kg bot
+            shape: shape,
+            material: defaultMaterial,
+            position: new CANNON.Vec3(0, 2, -10), // Start at back of space
+            linearDamping: 0.8,
+            angularDamping: 0.8,
+            collisionFilterGroup: 1,
+            collisionFilterMask: 6 // Collide with balls (group 2) and surfaces (group 4)
+          });
+          
+          this.body.gravity = new CANNON.Vec3(0, 0, 0); // Zero gravity
+          world.addBody(this.body);
+          
+          // Store reference
+          this.body.el = this.el;
+          
+          // Initialize position
+          this.generateNewTargetPosition();
+          
+          // Listen for game events
+          this.el.sceneEl.addEventListener('loaded', () => {
+            this.ball = this.el.sceneEl.querySelector('[zerog-ball="player: player1"]');
+          });
+          
+          // Add collision detection for bot being hit
+          this.body.addEventListener('collide', (evt) => {
+            this.checkPlayerBallHit(evt);
+          });
+          
+          // Update difficulty settings
+          if (this.data.difficulty === 'easy') {
+            this.data.throwInterval = 6000;  // 6 seconds between throws
+            this.data.accuracy = 0.5;        // 50% accuracy
+          } else if (this.data.difficulty === 'medium') {
+            this.data.throwInterval = 4000;  // 4 seconds between throws  
+            this.data.accuracy = 0.7;        // 70% accuracy
+          } else if (this.data.difficulty === 'hard') {
+            this.data.throwInterval = 3000;  // 3 seconds between throws
+            this.data.accuracy = 0.9;        // 90% accuracy
+          }
+        },
+        
+                 checkPlayerBallHit: function(evt) {
+           if (!this.data.enabled) return;
+           
+           const otherBody = evt.target === this.body ? evt.body : evt.target;
+           
+           // Check if hit by player's ball (player2)
+           if (otherBody.el && otherBody.el.hasAttribute('zerog-ball')) {
+             const ballPlayer = otherBody.el.getAttribute('zerog-ball').player;
+             if (ballPlayer === 'player2') {
+               // Bot was hit - only trigger impact effect (scoring handled by zerog-ball component)
+               const impactEffect = this.el.components['impact-effect'];
+               if (impactEffect) {
+                 impactEffect.playEffect();
+               }
+               
+               console.log('Bot hit by player ball!');
+             }
+           }
+         },
+        
+        generateNewTargetPosition: function() {
+          // Generate a random position in the back half of the space
+          this.targetPosition.set(
+            (Math.random() - 0.5) * 12, // X: -6 to 6
+            Math.random() * 4 + 1,      // Y: 1 to 5
+            Math.random() * -6 - 4      // Z: -4 to -10 (back half)
+          );
+        },
+        
+        updatePlayerTracking: function(time) {
+          // Get player TARGET position (the actual sphere that needs to be hit)
+          const playerTarget = document.querySelector('#player-target');
+          if (!playerTarget) return;
+          
+          // Store previous position
+          this.playerLastPos.copy(this.playerPos);
+          
+          // Get current world position of the target sphere
+          playerTarget.object3D.getWorldPosition(this.playerPos);
+          
+          // Calculate velocity if we have a previous frame
+          if (this.lastPlayerUpdate > 0) {
+            const deltaTime = (time - this.lastPlayerUpdate) / 1000; // Convert to seconds
+            if (deltaTime > 0.001) { // Avoid division by zero
+              this.playerVelocity.subVectors(this.playerPos, this.playerLastPos).divideScalar(deltaTime);
+            }
+          }
+          
+          this.lastPlayerUpdate = time;
+        },
+        
+        startMovementToTarget: function(currentTime) {
+          this.isMoving = true;
+          this.moveStartTime = currentTime; // Use A-Frame time consistently
+          this.moveStartPos.copy(this.body.position);
+          
+          // Calculate velocity needed to reach target
+          const direction = new THREE.Vector3()
+            .subVectors(this.targetPosition, this.moveStartPos)
+            .normalize();
+          
+          const velocity = direction.multiplyScalar(this.data.movementSpeed);
+          
+          // Apply velocity to physics body
+          this.body.velocity.set(velocity.x, velocity.y, velocity.z);
+          
+          console.log(`Bot moving to: ${this.targetPosition.x.toFixed(1)}, ${this.targetPosition.y.toFixed(1)}, ${this.targetPosition.z.toFixed(1)}`);
+        },
+        
+        stopMovement: function() {
+          this.isMoving = false;
+          // Apply damping to slow down
+          this.body.velocity.scale(0.1, this.body.velocity);
+          console.log('Bot stopped moving, generating new target...');
+          this.generateNewTargetPosition();
+        },
+        
+        throwBallAtPlayer: function() {
+          if (!this.ball || !this.ball.components['zerog-ball']) return;
+          
+          // Reset ball to bot position
+          this.ball.components['zerog-ball'].resetPosition();
+          const ballBody = this.ball.components['zerog-ball'].body;
+          
+          // Position ball slightly in front of bot
+          const botPos = new THREE.Vector3().copy(this.body.position);
+          botPos.z += 0.5; // Slightly forward
+          ballBody.position.set(botPos.x, botPos.y, botPos.z);
+          
+          // Calculate throw force
+          const throwForce = this.data.minThrowForce + 
+            Math.random() * (this.data.maxThrowForce - this.data.minThrowForce);
+          
+          // SIMPLIFIED AIMING: Direct aim at player target with minimal prediction
+          let targetPos = this.playerPos.clone();
+          const velocityMagnitude = this.playerVelocity.length();
+          
+          // Only use light prediction for fast-moving players (> 2 m/s)
+          if (velocityMagnitude > 2.0) {
+            const currentDistance = botPos.distanceTo(this.playerPos);
+            const estimatedTravelTime = currentDistance / throwForce;
+            const predictedMovement = this.playerVelocity.clone().multiplyScalar(estimatedTravelTime * 0.3); // Only 30% prediction
+            targetPos.add(predictedMovement);
+            console.log(`Light prediction: Player moving fast (${velocityMagnitude.toFixed(2)} m/s)`);
+          } else {
+            console.log(`Direct aim: Target at player position`);
+          }
+          
+          // Calculate throw direction
+          let direction = new THREE.Vector3().subVectors(targetPos, botPos).normalize();
+          
+          // Bot accuracy - set to 100% accurate (no inaccuracy)
+          let inaccuracy = 0; // 100% accurate - no spread
+          
+          // No inaccuracy applied - bot is perfectly accurate
+          // direction.x += (Math.random() - 0.5) * inaccuracy;
+          // direction.y += (Math.random() - 0.5) * inaccuracy;
+          // direction.z += (Math.random() - 0.5) * inaccuracy;
+          // direction.normalize(); // Already normalized above
+          
+          // Apply velocity to ball
+          ballBody.velocity.set(
+            direction.x * throwForce,
+            direction.y * throwForce,
+            direction.z * throwForce
+          );
+          
+          // Add some spin
+          ballBody.angularVelocity.set(
+            (Math.random() - 0.5) * 10,
+            (Math.random() - 0.5) * 10,
+            (Math.random() - 0.5) * 10
+          );
+          
+          // Log position info for debugging
+          console.log(`Bot at: (${botPos.x.toFixed(1)}, ${botPos.y.toFixed(1)}, ${botPos.z.toFixed(1)})`);
+          console.log(`Player target at: (${this.playerPos.x.toFixed(1)}, ${this.playerPos.y.toFixed(1)}, ${this.playerPos.z.toFixed(1)})`);
+          console.log(`Bot threw ball with force ${throwForce.toFixed(1)}, inaccuracy: ${inaccuracy}m`);
+        },
+        
+        tick: function(time) {
+          if (!this.data.enabled) return;
+          
+          // Update visual position from physics
+          this.el.object3D.position.copy(this.body.position);
+          this.el.object3D.quaternion.copy(this.body.quaternion);
+          
+          // Keep zero gravity
+          this.body.gravity.set(0, 0, 0);
+          
+          // Track player movement for predictive aiming
+          this.updatePlayerTracking(time);
+          
+          // Movement logic
+          if (!this.isMoving && time - this.lastMoveTime > this.moveInterval) {
+            console.log(`Bot preparing to move (${((time - this.lastMoveTime)/1000).toFixed(1)}s since last move)`);
+            this.startMovementToTarget(time); // Pass current time
+            this.lastMoveTime = time;
+          }
+          
+          // Stop movement after duration
+          if (this.isMoving && time - this.moveStartTime > this.moveDuration) {
+            this.stopMovement();
+          }
+          
+          // Throwing logic - only when match is active
+          const gameManager = this.el.sceneEl.querySelector('#game-manager');
+          const isMatchActive = gameManager && gameManager.components['game-manager'] && 
+                               (gameManager.components['game-manager'].matchState === 'PLAYING' || 
+                                gameManager.components['game-manager'].matchState === 'OVERTIME');
+          
+          if (isMatchActive && time - this.lastThrowTime > this.data.throwInterval) {
+            console.log(`Bot preparing to throw (${((time - this.lastThrowTime)/1000).toFixed(1)}s since last throw)`);
+            this.throwBallAtPlayer();
+            this.lastThrowTime = time;
+          }
+        },
+        
+        remove: function() {
+          if (this.body) {
+            world.removeBody(this.body);
+          }
+        }
+      });
+
+      // Game manager component for zero-g multiplayer
+      AFRAME.registerComponent('game-manager', {
+        schema: {
+          playerScore: { type: 'number', default: 0 },
+          opponentScore: { type: 'number', default: 0 },
+          gameStarted: { type: 'boolean', default: false }
+        },
+        init: function() {
+          this.playerScore = 0;
+          this.opponentScore = 0;
+          this.gameStarted = false;
+          
+          // Match states: WAITING, COUNTDOWN, PLAYING, OVERTIME, ENDED
+          this.matchState = 'WAITING';
+          this.matchDuration = 180; // 3 minutes in seconds
+          this.matchStartTime = 0;
+          this.countdownTime = 3;
+          this.countdownStartTime = 0;
+          
+          // Get references to the HUD displays
+          this.scoreDisplay = this.el.querySelector('#score-display');
+          this.startMessage = document.querySelector('#hud-message');
+          this.timerDisplay = document.querySelector('#hud-timer');
+          
+          // Show initial message in HUD
+          if (this.startMessage) {
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start\nY for Multiplayer');
+          }
+          
+          // Hide score and timer displays initially
+          if (this.scoreDisplay) this.scoreDisplay.setAttribute('visible', false);
+          if (this.timerDisplay) this.timerDisplay.setAttribute('visible', false);
+          
+          // Listen for A button press on both controllers
+          this.el.sceneEl.addEventListener('abuttondown', (evt) => {
+            if (this.matchState === 'WAITING') {
+              if (isMultiplayer && conn && conn.open) {
+                this.handleMultiplayerReady();
+              } else {
+                this.startCountdown();
+              }
+            } else if (this.matchState === 'ENDED') {
+              this.resetMatch();
+            }
+          });
+        },
+
+        tick: function() {
+          const currentTime = Date.now();
+          
+          if (this.matchState === 'COUNTDOWN') {
+            const elapsed = (currentTime - this.countdownStartTime) / 1000;
+            const remaining = Math.ceil(this.countdownTime - elapsed);
+            
+            if (remaining > 0) {
+              this.startMessage.setAttribute('text', 'value', remaining.toString());
+            } else {
+              this.startMessage.setAttribute('text', 'value', 'GO!');
+              setTimeout(() => {
+                this.startMatch();
+              }, 500);
+            }
+          } else if (this.matchState === 'PLAYING') {
+            this.updateTimer();
+          }
+        },
+
+        handleMultiplayerReady: function() {
+          // Mark local player as ready
+          multiplayerReady.local = true;
+          sendReadyUpdate();
+          this.updateReadyState();
+        },
+
+        updateReadyState: function() {
+          if (!isMultiplayer || !conn || !conn.open) return;
+          
+          if (multiplayerReady.local && !multiplayerReady.remote) {
+            this.startMessage.setAttribute('text', 'value', 'Waiting for other player...');
+          } else if (!multiplayerReady.local && multiplayerReady.remote) {
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+          } else if (multiplayerReady.local && multiplayerReady.remote) {
+            // Both ready - start countdown
+            const startTime = Date.now();
+            this.syncedStartCountdown(startTime);
+            // Send countdown sync to other player
+            if (conn && conn.open) {
+              conn.send({ type: 'countdown-start', startTime: startTime });
+            }
+          }
+        },
+
+        setMultiplayerWaiting: function() {
+          this.matchState = 'WAITING';
+          this.gameStarted = false;
+          multiplayerReady.local = false;
+          multiplayerReady.remote = false;
+          
+          // Show start message
+          if (this.startMessage) {
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+          }
+          if (this.scoreDisplay) this.scoreDisplay.setAttribute('visible', false);
+          if (this.timerDisplay) this.timerDisplay.setAttribute('visible', false);
+          
+          console.log('Multiplayer waiting for both players to be ready');
+        },
+
+        syncedStartCountdown: function(startTime) {
+          this.matchState = 'COUNTDOWN';
+          this.countdownStartTime = startTime;
+          if (this.startMessage) {
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', '3');
+          }
+          
+          // Reset ready states
+          multiplayerReady.local = false;
+          multiplayerReady.remote = false;
+          
+          // Reset and respawn balls
+          this.respawnBalls();
+          
+          console.log('Synchronized countdown started');
+        },
+
+        startCountdown: function() {
+          this.matchState = 'COUNTDOWN';
+          this.countdownStartTime = Date.now();
+          if (this.startMessage) {
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', '3');
+          }
+          
+          // Reset and respawn balls
+          this.respawnBalls();
+          
+          console.log('Match countdown started');
+        },
+
+        startMatch: function() {
+          this.matchState = 'PLAYING';
+          this.matchStartTime = Date.now();
+          this.gameStarted = true;
+          
+          // Hide start message, show game UI
+          if (this.startMessage) this.startMessage.setAttribute('visible', false);
+          if (this.scoreDisplay) this.scoreDisplay.setAttribute('visible', true);
+          if (this.timerDisplay) this.timerDisplay.setAttribute('visible', true);
+          
+          // Show HUD score display, hide controls
+          setGameplayHUD(true);
+          
+          // Reset scores
+          this.playerScore = 0;
+          this.opponentScore = 0;
+          this.updateScore();
+          
+          // NEW: Activate tractor beam for 2 seconds at start
+          this.activateStartTractorBeam();
+          
+          console.log('Zero-G match started - 3 minutes');
+        },
+        
+        // NEW: Activate tractor beam for player's ball at start
+        activateStartTractorBeam: function() {
+          const playerBall = document.querySelector('[zerog-ball="player: player2"]');
+          if (playerBall && playerBall.components['zerog-ball']) {
+            playerBall.components['zerog-ball'].startAutoReturn();
+            console.log('🔥 Start tractor beam activated for player ball!');
+          }
+        },
+
+        updateTimer: function() {
+          if (!this.timerDisplay) return;
+          
+          const currentTime = Date.now();
+          const elapsed = (currentTime - this.matchStartTime) / 1000;
+          const remaining = Math.max(0, this.matchDuration - elapsed);
+          
+          const minutes = Math.floor(remaining / 60);
+          const seconds = Math.floor(remaining % 60);
+          const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+          
+          this.timerDisplay.setAttribute('text', 'value', `Time: ${timeString}`);
+          
+          // Check if time is up
+          if (remaining <= 0 && this.matchState === 'PLAYING') {
+            // Use correct scores for multiplayer vs singleplayer
+            let score1, score2;
+            if (isMultiplayer && conn && conn.open) {
+              score1 = multiplayerScore.local;
+              score2 = multiplayerScore.remote;
+            } else {
+              score1 = this.playerScore;
+              score2 = this.opponentScore;
+            }
+            
+            if (score1 === score2) {
+              this.startOvertime();
+            } else {
+              this.endMatch();
+            }
+          }
+        },
+
+        startOvertime: function() {
+          this.matchState = 'OVERTIME';
+          if (this.timerDisplay) {
+            this.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next hit wins!');
+          }
+          console.log('Match went to overtime - sudden death');
+          
+          // Sync overtime state in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({ type: 'game-state', state: 'OVERTIME' });
+          }
+        },
+
+        endMatch: function() {
+          this.matchState = 'ENDED';
+          this.gameStarted = false;
+          
+          // Hide HUD score display, show controls
+          setGameplayHUD(false);
+          
+          // Determine winner
+          let winner;
+          if (isMultiplayer && conn && conn.open) {
+            winner = multiplayerScore.local > multiplayerScore.remote ? 'You win!' : 'Opponent wins!';
+          } else {
+            winner = this.playerScore > this.opponentScore ? 'Player wins!' : 'Opponent wins!';
+          }
+          
+          // Show end message
+          if (this.startMessage) {
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', `${winner}\nPress A to play again`);
+          }
+          if (this.timerDisplay) {
+            this.timerDisplay.setAttribute('text', 'value', 'Match ended');
+          }
+          
+          // Sync end state in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({ type: 'game-state', state: 'ENDED', winner: winner });
+          }
+          
+          console.log(`Zero-G match ended: ${winner}`);
+        },
+
+        resetMatch: function() {
+          this.matchState = 'WAITING';
+          this.playerScore = 0;
+          this.opponentScore = 0;
+          this.gameStarted = false;
+          
+          // Hide HUD score display, show controls
+          setGameplayHUD(false);
+          
+          // Reset multiplayer scores and ready states
+          if (isMultiplayer) {
+            multiplayerScore.local = 0;
+            multiplayerScore.remote = 0;
+            multiplayerReady.local = false;
+            multiplayerReady.remote = false;
+          }
+          
+          // Hide game UI, show start message
+          if (this.scoreDisplay) this.scoreDisplay.setAttribute('visible', false);
+          if (this.timerDisplay) this.timerDisplay.setAttribute('visible', false);
+          if (this.startMessage) {
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+          }
+          
+          console.log('Zero-G match reset to waiting state');
+        },
+
+        respawnBalls: function() {
+          // Reset both balls to their spawn positions
+          const blueBall = document.querySelector('[zerog-ball="player: player2"]');
+          const redBall = document.querySelector('[zerog-ball="player: player1"]');
+          
+          if (blueBall && blueBall.components['zerog-ball']) {
+            blueBall.components['zerog-ball'].resetPosition();
+          }
+          if (redBall && redBall.components['zerog-ball']) {
+            redBall.components['zerog-ball'].resetPosition();
+          }
+          
+          console.log('Zero-G balls respawned');
+        },
+
+        onPlayerHit: function() {
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          
+          if (isMultiplayer && conn && conn.open) {
+            multiplayerScore.local += 1;
+            updateScoreDisplayMultiplayer();
+            sendScoreUpdate();
+          } else {
+            this.playerScore += 1;
+            this.updateScore();
+          }
+          
+          // Check for overtime win
+          if (this.matchState === 'OVERTIME') {
+            this.endMatch();
+          }
+        },
+
+        onOpponentHit: function() {
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          
+          if (isMultiplayer && conn && conn.open) {
+            multiplayerScore.remote += 1;
+            updateScoreDisplayMultiplayer();
+            sendScoreUpdate();
+          } else {
+            this.opponentScore += 1;
+            this.updateScore();
+          }
+          
+          // Check for overtime win
+          if (this.matchState === 'OVERTIME') {
+            this.endMatch();
+          }
+        },
+
+        updateScore: function() {
+          if (isMultiplayer && conn && conn.open) {
+            updateScoreDisplayMultiplayer();
+            updateHUDScore(multiplayerScore.local, multiplayerScore.remote, true);
+          } else {
+            // In singleplayer, player is blue, opponent is red
+            const blueScore = document.getElementById('blue-score');
+            const redScore = document.getElementById('red-score');
+            if (blueScore && redScore) {
+              blueScore.setAttribute('text', 'value', this.playerScore.toString());
+              redScore.setAttribute('text', 'value', this.opponentScore.toString());
+            }
+            // Update HUD score display
+            updateHUDScore(this.playerScore, this.opponentScore, false);
+          }
+        }
+      });
+
+      // Physics update loop - Anti-tunneling optimized for zero-gravity
+      AFRAME.registerComponent('physics-world', {
+        init: function() {
+          this.lastTime = 0;
+        },
+        tick: function(time) {
+          const deltaTime = (time - this.lastTime) / 1000;
+          if (deltaTime > 0) {
+            // Use smaller timesteps to prevent tunneling at high speeds in zero-g
+            const maxStep = 1/240; // 240Hz timestep for better collision detection
+            const steps = Math.ceil(deltaTime / maxStep);
+            
+            // Clamp to reasonable step count to prevent performance issues
+            const clampedSteps = Math.min(steps, 8);
+            const clampedStepSize = deltaTime / clampedSteps;
+            
+            for (let i = 0; i < clampedSteps; i++) {
+              world.step(clampedStepSize);
+            }
+          }
+          this.lastTime = time;
+        }
+      });
+
+      // Impact effect component
+      AFRAME.registerComponent('impact-effect', {
+        schema: {
+          color: { type: 'color', default: '#ffffff' }
+        },
+        init: function() {
+          // Find the impact sphere within this entity
+          this.impactSphere = this.el.querySelector('a-sphere[id$="-impact"]');
+          if (!this.impactSphere) {
+            console.warn('Impact sphere not found for:', this.el.id);
+            return;
+          }
+        },
+        
+        playEffect: function() {
+          if (!this.impactSphere) {
+            console.warn('Cannot play effect - impact sphere not found');
+            return;
+          }
+          
+          // Play impact sound
+          const impactSound = document.querySelector('#impact-sound');
+          if (impactSound) {
+            impactSound.object3D.position.copy(this.el.object3D.position);
+            impactSound.components.sound.playSound();
+          }
+          
+          // Reset impact sphere state
+          this.impactSphere.setAttribute('radius', 0.1);
+          this.impactSphere.setAttribute('material', 'opacity', 0.5);
+          this.impactSphere.setAttribute('visible', true);
+          
+          // Trigger the animations
+          this.impactSphere.emit('impact');
+          
+          // Note: Scoring is handled by the zerog-ball component collision detection
+          
+          // Reset after animation completes
+          setTimeout(() => {
+            this.impactSphere.setAttribute('visible', false);
+            this.impactSphere.setAttribute('material', 'opacity', 0);
+            this.impactSphere.setAttribute('radius', 0.1);
+          }, 1000);
+        }
+      });
+
+      // Listen for Y button to toggle multiplayer
+      AFRAME.registerComponent('multiplayer-toggle', {
+        init: function() {
+          this.el.sceneEl.addEventListener('ybuttondown', () => {
+            const now = Date.now();
+            if (now - lastMultiplayerToggle < 1000) return; // debounce
+            lastMultiplayerToggle = now;
+            if (!isMultiplayer) {
+              updateMultiplayerStatus('Searching for match...');
+              isSearchingForMatch = true;
+              startMultiplayerConnection();
+            } else {
+              updateMultiplayerStatus('Returning to singleplayer...');
+              isSearchingForMatch = false;
+              endMultiplayer();
+            }
+          });
+        }
+      });
+
+      // Multiplayer connection logic (slot-based, PeerJS, TURN support)
+      async function startMultiplayerConnection() {
+        connectionState = 'connecting';
+        multiplayerStatus = 'Searching...';
+        updateMultiplayerStatus('Searching for match...');
+        isMultiplayer = false;
+        try {
+          const slot = await findAvailableSlot(multiplayerStartType);
+          if (!slot) {
+            updateMultiplayerStatus('No available slots. Try again.');
+            connectionState = 'disconnected';
+            return;
+          }
+          multiplayerSlot = slot.slotNumber;
+          isHost = slot.role === 'host';
+          if (isHost) {
+            await setupHost(multiplayerSlot);
+          } else {
+            await setupPeer(multiplayerSlot);
+          }
+        } catch (e) {
+          updateMultiplayerStatus('Connection failed.');
+          connectionState = 'disconnected';
+        }
+      }
+
+      async function checkPeerAvailability(id) {
+        return new Promise((resolve) => {
+          const tempPeer = new Peer(id, { host: "0.peerjs.com", port: 443, secure: true });
+          const timeout = setTimeout(() => {
+            tempPeer.destroy();
+            resolve(false);
+          }, 2000);
+          tempPeer.on("open", () => {
+            clearTimeout(timeout);
+            tempPeer.destroy();
+            resolve(true);
+          });
+          tempPeer.on("error", (err) => {
+            clearTimeout(timeout);
+            tempPeer.destroy();
+            if (err.type === 'unavailable-id') {
+              resolve(false);
+            } else {
+              resolve(true);
+            }
+          });
+        });
+      }
+
+      async function findAvailableSlot(desiredStartType) {
+        for (let i = 1; i <= MAX_LOBBIES; i++) {
+          const hostId = `zerog-host-${desiredStartType}-${i}`;
+          const peerId = `zerog-peer-${desiredStartType}-${i}`;
+          const hostAvailable = await checkPeerAvailability(hostId);
+          if (hostAvailable) {
+            return { slotNumber: i, role: 'host' };
+          } else {
+            const peerAvailable = await checkPeerAvailability(peerId);
+            if (peerAvailable) {
+              return { slotNumber: i, role: 'peer' };
+            }
+          }
+        }
+        return null;
+      }
+
+      async function setupPeer(slotNumber) {
+        cleanupMultiplayer();
+        isMultiplayer = true;
+        isHost = false;
+        sessionID = `zerog-peer-${multiplayerStartType}-${slotNumber}`;
+        let iceServersConfig = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ];
+        try {
+          const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev");
+          if (response.ok) {
+            iceServersConfig = await response.json();
+          }
+        } catch (e) {
+          console.log('TURN server proxy not available, using fallback STUN servers:', e.message);
+          // Fallback to basic STUN servers if TURN proxy fails
+          iceServersConfig = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun.cloudflare.com:3478' }
+          ];
+        }
+        peer = new Peer(sessionID, {
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { 'iceServers': iceServersConfig }
+        });
+        peer.on("open", function() {
+          updateMultiplayerStatus('Connecting to host...');
+          const hostID = `zerog-host-${multiplayerStartType}-${slotNumber}`;
+          conn = peer.connect(hostID);
+          conn.on("open", function() {
+            setupConnectionHandlers(conn);
+            onMultiplayerStart();
+          });
+        });
+        peer.on("error", function(err) {
+          updateMultiplayerStatus(`Peer error: ${err.type}`);
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
+        });
+      }
+
+      async function setupHost(slotNumber) {
+        cleanupMultiplayer();
+        isMultiplayer = true;
+        isHost = true;
+        sessionID = `zerog-host-${multiplayerStartType}-${slotNumber}`;
+        let iceServersConfig = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ];
+        try {
+          const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev/");
+          if (response.ok) {
+            iceServersConfig = await response.json();
+          }
+        } catch (e) {
+          console.log('TURN server proxy not available, using fallback STUN servers:', e.message);
+          // Fallback to basic STUN servers if TURN proxy fails
+          iceServersConfig = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun.cloudflare.com:3478' }
+          ];
+        }
+        peer = new Peer(sessionID, {
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { 'iceServers': iceServersConfig }
+        });
+        peer.on("open", function() {
+          updateMultiplayerStatus('Waiting for opponent...');
+          peer.on("connection", function(newConn) {
+            if (conn) {
+              newConn.close();
+            } else {
+              conn = newConn;
+              conn.on("open", function() {
+                setupConnectionHandlers(conn);
+                onMultiplayerStart();
+              });
+            }
+          });
+        });
+        peer.on("error", function(err) {
+          updateMultiplayerStatus(`Peer error: ${err.type}`);
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
+        });
+      }
+
+      function setupConnectionHandlers(conn) {
+        conn.on('data', (data) => {
+          if (data.type === 'player-state') {
+            remotePlayerState = data.state;
+          } else if (data.type === 'ball-state') {
+            remoteBallState = data.state;
+          } else if (data.type === 'score-update') {
+            // Mirror remote/local for display
+            multiplayerScore.remote = data.score.local;
+            multiplayerScore.local = data.score.remote;
+            updateScoreDisplayMultiplayer();
+          } else if (data.type === 'ready-update') {
+            // Sync ready state
+            multiplayerReady.remote = data.ready;
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].updateReadyState();
+            }
+          } else if (data.type === 'countdown-start') {
+            // Sync countdown start
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].syncedStartCountdown(data.startTime);
+            }
+          } else if (data.type === 'game-state') {
+            // Sync game state changes (overtime/end)
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              const gm = gameManager.components['game-manager'];
+              gm.matchState = data.state;
+              
+              if (data.state === 'OVERTIME') {
+                gm.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next hit wins!');
+                console.log('Synced: Match went to overtime');
+              } else if (data.state === 'ENDED') {
+                // Flip the winner message for the receiving player
+                const flippedWinner = data.winner.includes('You win!') ? 'Opponent wins!' : 'You win!';
+                gm.startMessage.setAttribute('visible', true);
+                gm.startMessage.setAttribute('text', 'value', `${flippedWinner}\nPress A to play again`);
+                gm.timerDisplay.setAttribute('text', 'value', 'Match ended');
+                gm.gameStarted = false;
+                console.log('Synced: Match ended -', flippedWinner);
+              }
+            }
+          }
+        });
+        conn.on('close', () => {
+          updateMultiplayerStatus('Connection lost. Returning to singleplayer.');
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
+        });
+        conn.on('error', (err) => {
+          updateMultiplayerStatus('Connection error. Returning to singleplayer.');
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
+        });
+      }
+
+      function sendPlayerState(state) {
+        if (conn && conn.open) {
+          conn.send({ type: 'player-state', state });
+        }
+      }
+      function sendBallState(state) {
+        if (conn && conn.open) {
+          conn.send({ type: 'ball-state', state });
+        }
+      }
+
+      function onMultiplayerStart() {
+        // Only fully start multiplayer when connection is established
+        if (conn && conn.open) {
+          isMultiplayer = true;
+          multiplayerStatus = 'Multiplayer Connected';
+          updateMultiplayerStatus('Multiplayer Connected');
+          isSearchingForMatch = false;
+          
+          // Show opponent player, hide bot
+          const opponent = document.querySelector('#opponent-player');
+          const bot = document.querySelector('#zerog-bot');
+          
+          if (opponent) {
+            opponent.setAttribute('visible', true);
+          }
+          if (bot && bot.components['zerog-bot']) {
+            bot.setAttribute('visible', false);
+            bot.components['zerog-bot'].data.enabled = false;
+          }
+          
+          // Switch to multiplayer score display immediately
+          multiplayerScore = { local: 0, remote: 0 };
+          multiplayerReady = { local: false, remote: false };
+          updateScoreDisplayMultiplayer();
+          
+          // Set game to waiting for ready state
+          const gameManager = document.querySelector('#game-manager');
+          if (gameManager && gameManager.components['game-manager']) {
+            gameManager.components['game-manager'].setMultiplayerWaiting();
+          }
+        }
+      }
+      
+      function endMultiplayer() {
+        isMultiplayer = false;
+        multiplayerStatus = 'Singleplayer';
+        updateMultiplayerStatus('Singleplayer');
+        cleanupMultiplayer();
+        remotePlayerState = null;
+        remoteBallState = null;
+        multiplayerScore = { local: 0, remote: 0 };
+        multiplayerReady = { local: false, remote: false };
+        
+        // Hide opponent player, show bot
+        const opponent = document.querySelector('#opponent-player');
+        const bot = document.querySelector('#zerog-bot');
+        
+        if (opponent) {
+          opponent.setAttribute('visible', false);
+        }
+        if (bot && bot.components['zerog-bot']) {
+          bot.setAttribute('visible', true);
+          bot.components['zerog-bot'].data.enabled = true;
+        }
+        
+        // Reset the actual game manager scores
+        const gameManager = document.querySelector('#game-manager');
+        if (gameManager && gameManager.components['game-manager']) {
+          gameManager.components['game-manager'].playerScore = 0;
+          gameManager.components['game-manager'].opponentScore = 0;
+        }
+        
+        // Restore singleplayer score display
+        const blueScore = document.getElementById('blue-score');
+        const redScore = document.getElementById('red-score');
+        if (blueScore && redScore) {
+          blueScore.setAttribute('text', 'value', '0');
+          redScore.setAttribute('text', 'value', '0');
+        }
+        isSearchingForMatch = false;
+      }
+      
+      function cleanupMultiplayer() {
+        if (conn) { try { conn.close(); } catch(e){} }
+        if (peer) { try { peer.destroy(); } catch(e){} }
+        conn = null;
+        peer = null;
+        multiplayerSlot = null;
+        hasConnected = false;
+      }
+
+      function sendScoreUpdate() {
+        if (conn && conn.open) {
+          conn.send({ type: 'score-update', score: multiplayerScore });
+        }
+      }
+      function sendReadyUpdate() {
+        if (conn && conn.open) {
+          conn.send({ type: 'ready-update', ready: multiplayerReady.local });
+        }
+      }
+      function updateScoreDisplayMultiplayer() {
+        const blueScore = document.getElementById('blue-score');
+        const redScore = document.getElementById('red-score');
+        if (blueScore && redScore) {
+          // In multiplayer, local player is always blue, remote is red
+          blueScore.setAttribute('text', 'value', multiplayerScore.local.toString());
+          redScore.setAttribute('text', 'value', multiplayerScore.remote.toString());
+        }
+      }
+
+      // Attach multiplayer-toggle to scene
+      document.addEventListener('DOMContentLoaded', () => {
+        const scene = document.querySelector('a-scene');
+        if (scene && !scene.hasAttribute('multiplayer-toggle')) {
+          scene.setAttribute('multiplayer-toggle', '');
+        }
+        
+        // Initialize bot visibility for singleplayer
+        const bot = document.querySelector('#zerog-bot');
+        const opponent = document.querySelector('#opponent-player');
+        
+        if (bot) {
+          bot.setAttribute('visible', true);
+          if (bot.components['zerog-bot']) {
+            bot.components['zerog-bot'].data.enabled = true;
+          }
+        }
+        if (opponent) {
+          opponent.setAttribute('visible', false);
+        }
+        
+        // Initialize status display
+        updateMultiplayerStatus('Singleplayer');
+      });
+
+      // --- MULTIPLAYER SYNC COMPONENT ---
+      AFRAME.registerComponent('multiplayer-sync', {
+        tick: function() {
+          // In multiplayer, send the local VR rig position/rotation as player state
+          if (isMultiplayer && conn && conn.open) {
+            const rig = document.querySelector('#rig');
+            if (rig) {
+              const rigPos = rig.object3D.position;
+              const rigRot = rig.object3D.rotation;
+              sendPlayerState({
+                x: rigPos.x, y: rigPos.y, z: rigPos.z,
+                rx: rigRot.x, ry: rigRot.y, rz: rigRot.z
+              });
+            }
+          }
+          
+          // Send ball states
+          const blueBall = document.querySelector('[zerog-ball="player: player2"]');
+          if (blueBall && isMultiplayer && conn && conn.open) {
+            const pos = blueBall.object3D.position;
+            const ballComponent = blueBall.components['zerog-ball'];
+            const velocity = ballComponent?.body?.velocity || {x:0, y:0, z:0};
+            sendBallState({ 
+              x: pos.x, y: pos.y, z: pos.z, 
+              vx: velocity.x, vy: velocity.y, vz: velocity.z 
+            });
+          }
+          
+          // Apply remote player state (mirrored for opponent)
+          if (isMultiplayer && remotePlayerState) {
+            const mirroredX = -remotePlayerState.x;
+            const mirroredZ = -remotePlayerState.z;
+            const mirroredRy = -remotePlayerState.ry;
+            
+            // Update opponent player position (we'll need to create an opponent entity)
+            const opponent = document.querySelector('#opponent-player');
+            if (opponent) {
+              opponent.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
+              opponent.object3D.rotation.set(remotePlayerState.rx, mirroredRy, 0);
+            }
+          }
+          
+          // Apply remote ball state (mirrored for opponent)
+          if (isMultiplayer && remoteBallState) {
+            const mirroredX = -remoteBallState.x;
+            const mirroredZ = -remoteBallState.z;
+            const mirroredVx = -remoteBallState.vx;
+            const mirroredVz = -remoteBallState.vz;
+            
+            const redBall = document.querySelector('[zerog-ball="player: player1"]');
+            if (redBall) {
+              redBall.object3D.position.set(mirroredX, remoteBallState.y, mirroredZ);
+              if (redBall.components['zerog-ball']?.body) {
+                redBall.components['zerog-ball'].body.position.set(mirroredX, remoteBallState.y, mirroredZ);
+                redBall.components['zerog-ball'].body.velocity.set(mirroredVx, remoteBallState.vy, mirroredVz);
+              }
+            }
+          }
+          
+          // Prevent local input from affecting opponent's ball in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            const redBall = document.querySelector('[zerog-ball="player: player1"]');
+            if (redBall && redBall.components['zerog-ball']) {
+              redBall.components['zerog-ball'].isGrabbed = false;
+            }
+          }
+        }
+      });
+
+      // Dynamic ball physics for zero-g - can be grabbed and thrown
+      AFRAME.registerComponent('zerog-ball', {
+        schema: {
+          player: { type: 'string', default: 'player1' }
+        },
+        
+        init: function() {
+          // Make balls grabbable
+          this.el.classList.add('grabbable-surface');
+          
+          // Track if ball is being grabbed
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          
+          // Set initial position based on player
+          const spawnPos = this.el.getAttribute('position');
+          this.initialPosition = new CANNON.Vec3(spawnPos.x, spawnPos.y, spawnPos.z);
+          
+          const shape = new CANNON.Sphere(0.1);
+          this.body = new CANNON.Body({
+            mass: 1,
+            shape: shape,
+            material: ballMaterial,
+            linearDamping: 0.02, // Slight damping for realistic movement
+            angularDamping: 0.02,
+            position: this.initialPosition,
+            collisionFilterGroup: 2, // Balls are in group 2
+            collisionFilterMask: 4   // Balls only collide with group 4 (walls/surfaces)
+          });
+          
+          // Zero gravity
+          this.body.gravity = new CANNON.Vec3(0, 0, 0);
+          
+          world.addBody(this.body);
+          
+          // Store body reference for grabbing
+          this.el.body = this.body;
+          
+          // Add collision detection for bounce sounds and target hits
+          this.body.addEventListener('collide', (evt) => {
+            const contact = evt.contact;
+            const otherBody = evt.target === this.body ? evt.body : evt.target;
+            
+            // Check for target hits first
+            this.checkTargetHit();
+            
+            // Only play bounce sound if not grabbed and moving fast enough
+            if (!this.isGrabbed && this.body.velocity.length() > 0.5) {
+              const bounceSound = document.querySelector('#bounce-sound');
+              if (bounceSound) {
+                // Position sound at collision point
+                const collisionPoint = new THREE.Vector3();
+                collisionPoint.copy(this.body.position);
+                bounceSound.object3D.position.copy(collisionPoint);
+                
+                // Stop any currently playing sound and play new one
+                bounceSound.components.sound.stopSound();
+                bounceSound.components.sound.playSound();
+              }
+            }
+          });
+          
+          // Velocity tracking for smooth throwing
+          this.velocityHistory = [];
+          this.maxHistorySize = 5;
+          this.lastPosition = new THREE.Vector3();
+          this.lastPositionTime = 0;
+          
+          // Tractor beam with A button - only for player's own ball
+          this.tractorBeamActive = false;
+          this.targetPosition = new THREE.Vector3();
+          
+          // NEW: Auto-return mode (for 2 seconds after hitting target)
+          this.autoReturnActive = false;
+          this.autoReturnStartTime = 0;
+          this.autoReturnDuration = 2000; // 2 seconds
+          
+          // NEW: Hit cooldown to prevent multiple hits during auto-return
+          this.lastHitTime = 0;
+          this.hitCooldown = 2000; // 2 seconds cooldown
+          
+          this.el.sceneEl.addEventListener('abuttondown', () => {
+            // Only allow human player to control their own ball (player2's ball)
+            if (this.data.player === 'player2') {
+              this.tractorBeamActive = true;
+              console.log('🔥 Tractor beam activated (A button)!');
+            }
+          });
+          
+          this.el.sceneEl.addEventListener('abuttonup', () => {
+            // Only for player's ball
+            if (this.data.player === 'player2') {
+              this.tractorBeamActive = false;
+              console.log('❄️ Tractor beam deactivated (A button)');
+            }
+          });
+        },
+        
+        resetPosition: function() {
+          this.body.position.copy(this.initialPosition);
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          this.body.gravity.set(0, 0, 0);
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this.velocityHistory = [];
+          
+          // Clear hit cooldown and auto-return when manually resetting
+          this.lastHitTime = 0;
+          this.autoReturnActive = false;
+        },
+        
+        checkTargetHit: function() {
+          if (this.isGrabbed || !this.body) return;
+          
+          const ballPos = new THREE.Vector3().copy(this.body.position);
+          const ballVelocity = this.body.velocity.length();
+          
+          // Only check hits if ball is moving
+          if (ballVelocity < 0.5) return;
+          
+          // Check hit cooldown to prevent multiple hits during auto-return
+          const now = Date.now();
+          if (now - this.lastHitTime < this.hitCooldown) {
+            return; // Still in cooldown period
+          }
+          
+          // Check distance to player target (always target sphere inside camera)
+          const playerTarget = document.querySelector('#player-target');
+          if (playerTarget && this.data.player === 'player1') {
+            const playerTargetPos = new THREE.Vector3();
+            playerTarget.object3D.getWorldPosition(playerTargetPos);
+            const distance = ballPos.distanceTo(playerTargetPos);
+            
+            if (distance < 0.3) { // 0.2m target radius + 0.1m ball radius
+              const impactEffect = playerTarget.components['impact-effect'];
+              if (impactEffect) {
+                impactEffect.playEffect();
+              }
+              
+                             // Update score through game manager (bot ball hit player - bot scores)
+               const gameManager = this.el.sceneEl.querySelector('#game-manager');
+               if (gameManager && gameManager.components['game-manager']) {
+                 gameManager.components['game-manager'].onOpponentHit();
+               }
+              
+              // Record hit time to prevent multiple hits
+              this.lastHitTime = now;
+              
+              this.resetPosition(); // Reset ball after hit
+              console.log('Bot ball hit player target!');
+              return;
+            }
+          }
+          
+          // Check distance to opponent target (in multiplayer) OR bot target (in singleplayer)
+          const opponentTarget = document.querySelector('#opponent-target');
+          const botTarget = document.querySelector('#bot-target');
+          
+          if (this.data.player === 'player2') {
+            // Player ball - check hits on opponent (multiplayer) or bot (singleplayer)
+            let targetToCheck = null;
+            
+            if (isMultiplayer && opponentTarget) {
+              targetToCheck = opponentTarget;
+            } else if (!isMultiplayer && botTarget) {
+              targetToCheck = botTarget;
+            }
+            
+            if (targetToCheck) {
+              const targetPos = new THREE.Vector3();
+              targetToCheck.object3D.getWorldPosition(targetPos);
+              const distance = ballPos.distanceTo(targetPos);
+              
+              if (distance < 0.3) { // 0.2m target radius + 0.1m ball radius
+                const impactEffect = targetToCheck.components['impact-effect'];
+                if (impactEffect) {
+                  impactEffect.playEffect();
+                }
+                
+                                 // Update score through game manager (player ball hit opponent/bot - player scores)
+                 const gameManager = this.el.sceneEl.querySelector('#game-manager');
+                 if (gameManager && gameManager.components['game-manager']) {
+                   gameManager.components['game-manager'].onPlayerHit();
+                 }
+                
+                // Record hit time to prevent multiple hits
+                this.lastHitTime = now;
+                
+                this.startAutoReturn(); // Start auto-return instead of instant reset
+                console.log('Player ball hit target!');
+                return;
+              }
+            }
+          }
+        },
+        
+        onGrab: function(hand) {
+          this.isGrabbed = true;
+          this.grabbingHand = hand;
+          this.body.gravity.set(0, 0, 0);
+          
+          // Cancel auto-return if player grabs the ball
+          if (this.autoReturnActive) {
+            this.autoReturnActive = false;
+            console.log('❄️ Auto-return cancelled - ball grabbed by player');
+          }
+          
+          // Start velocity tracking
+          this.velocityHistory = [];
+          const handPos = new THREE.Vector3();
+          hand.object3D.getWorldPosition(handPos);
+          this.lastPosition.copy(handPos);
+          this.lastPositionTime = performance.now();
+          
+          // Haptic feedback
+          if (hand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
+            const haptics = hand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
+            haptics.pulse(0.7, 100).catch(() => {});
+          }
+        },
+        
+        onRelease: function() {
+          if (!this.isGrabbed) return;
+          
+          // Calculate throw velocity from hand movement history
+          let velocity = new THREE.Vector3(0, 0, 0);
+          
+          if (this.velocityHistory.length > 0) {
+            // Use weighted average of recent velocities
+            let totalWeight = 0;
+            for (let i = 0; i < this.velocityHistory.length; i++) {
+              const weight = (i + 1) / this.velocityHistory.length;
+              velocity.add(this.velocityHistory[i].clone().multiplyScalar(weight));
+              totalWeight += weight;
+            }
+            velocity.divideScalar(totalWeight);
+            
+            // Scale for satisfying throws
+            velocity.multiplyScalar(1.5);
+            
+            // Cap maximum throw speed
+            const maxThrowSpeed = 15; // m/s
+            if (velocity.length() > maxThrowSpeed) {
+              velocity.normalize().multiplyScalar(maxThrowSpeed);
+            }
+          }
+          
+          // Apply velocity to physics body
+          this.body.velocity.set(velocity.x, velocity.y, velocity.z);
+          
+          // Add some spin based on throw
+          const spinFactor = Math.min(velocity.length() * 2, 20);
+          this.body.angularVelocity.set(
+            (Math.random() - 0.5) * spinFactor,
+            (Math.random() - 0.5) * spinFactor,
+            (Math.random() - 0.5) * spinFactor
+          );
+          
+          this.body.gravity.set(0, 0, 0);
+          
+
+          
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this.velocityHistory = [];
+        },
+        
+        tick: function() {
+          if (this.body) {
+            if (this.isGrabbed && this.grabbingHand) {
+              // When grabbed, track hand movement for throwing
+              const handPos = new THREE.Vector3();
+              this.grabbingHand.object3D.getWorldPosition(handPos);
+              
+              // Update ball position to hand position
+              this.el.object3D.position.copy(handPos);
+              this.body.position.copy(handPos);
+              this.body.velocity.set(0, 0, 0);
+              this.body.angularVelocity.set(0, 0, 0);
+              
+              // Track velocity history for throwing
+              const currentTime = performance.now();
+              if (this.lastPositionTime > 0) {
+                const deltaTime = Math.max((currentTime - this.lastPositionTime) / 1000, 0.001);
+                const displacement = new THREE.Vector3().subVectors(handPos, this.lastPosition);
+                const instantVelocity = displacement.divideScalar(deltaTime);
+                
+                this.velocityHistory.push(instantVelocity.clone());
+                if (this.velocityHistory.length > this.maxHistorySize) {
+                  this.velocityHistory.shift();
+                }
+              }
+              
+              this.lastPosition.copy(handPos);
+              this.lastPositionTime = currentTime;
+            } else {
+              // When not grabbed, update visual position from physics
+              this.el.object3D.position.copy(this.body.position);
+              this.el.object3D.quaternion.copy(this.body.quaternion);
+              
+              // Check auto-return timeout (turn off after 2 seconds)
+              if (this.autoReturnActive && Date.now() - this.autoReturnStartTime > this.autoReturnDuration) {
+                this.autoReturnActive = false;
+                console.log('❄️ Auto-return deactivated after 2 seconds');
+              }
+              
+              // Tractor beam logic (only for player's ball when A is held OR grip is held OR auto-return)
+              if (this.shouldActivateTractorBeam() && this.data.player === 'player2') {
+                this.applyTractorBeam();
+              }
+              
+              // Check for target hits each frame when moving
+              this.checkTargetHit();
+              
+              // Keep zero gravity
+              this.body.gravity.set(0, 0, 0);
+              
+              // Apply slight damping to prevent infinite bouncing
+              const speed = this.body.velocity.length();
+              if (speed < 0.1) {
+                this.body.velocity.scale(0.98, this.body.velocity);
+                this.body.angularVelocity.scale(0.98, this.body.angularVelocity);
+              }
+            }
+          }
+        },
+        
+        // NEW: Check if tractor beam should be activated (A button OR grip buttons OR auto-return)
+        shouldActivateTractorBeam: function() {
+          // Always activate if A button is held
+          if (this.tractorBeamActive) {
+            return true;
+          }
+          
+          // Always activate if in auto-return mode (after hitting target)
+          if (this.autoReturnActive) {
+            return true;
+          }
+          
+          // Also activate if either grip is held but ball is not currently being grabbed
+          if (this.isGrabbed) {
+            return false; // Don't use tractor beam if ball is already grabbed
+          }
+          
+          // Check if player is holding grips (get from zerog-player component)
+          const player = document.querySelector('[zerog-player]');
+          if (player && player.components['zerog-player']) {
+            const playerComponent = player.components['zerog-player'];
+            const gripState = playerComponent.gripHeld;
+            const grabbingState = playerComponent.isGrabbing;
+            
+            // Only allow tractor beam from hands that are holding grip BUT NOT grabbing surfaces
+            const leftHandFree = gripState.left && !grabbingState.left;
+            const rightHandFree = gripState.right && !grabbingState.right;
+            
+            return leftHandFree || rightHandFree;
+          }
+          
+          return false;
+        },
+        
+        // NEW: Start auto-return mode (called when ball hits target)
+        startAutoReturn: function() {
+          if (this.data.player === 'player2') { // Only for player's ball
+            this.autoReturnActive = true;
+            this.autoReturnStartTime = Date.now();
+            console.log('🔥 Auto-return activated for 2 seconds after hitting target!');
+          }
+        },
+        
+        // NEW: Tractor beam effect - attracts ball to position in front of player
+        applyTractorBeam: function() {
+          if (!this.body) return;
+          
+          // Get player camera (the "player" position)
+          const camera = document.querySelector('[camera]');
+          if (!camera) return;
+          
+          // Get camera world position and rotation
+          const cameraWorldPos = new THREE.Vector3();
+          const cameraWorldQuat = new THREE.Quaternion();
+          camera.object3D.getWorldPosition(cameraWorldPos);
+          camera.object3D.getWorldQuaternion(cameraWorldQuat);
+          
+          // Calculate target position: 30cm in front of camera, 30cm lower (chest height)
+          const forwardDirection = new THREE.Vector3(0, 0, -1); // Forward in camera space
+          forwardDirection.applyQuaternion(cameraWorldQuat);
+          
+          this.targetPosition.copy(cameraWorldPos);
+          this.targetPosition.add(forwardDirection.multiplyScalar(0.3)); // 30cm forward
+          this.targetPosition.y -= 0.3; // 30cm lower for chest height
+          
+          // Calculate attraction force toward target position
+          const ballPos = new THREE.Vector3().copy(this.body.position);
+          const attractionVector = new THREE.Vector3().subVectors(this.targetPosition, ballPos);
+          const distance = attractionVector.length();
+          
+          if (distance > 0.01) { // Only apply force if not already at target
+            // Normalize and apply force - stronger when farther away
+            attractionVector.normalize();
+            
+            // Adaptive force: stronger for distant objects, gentler when close
+            let forceMultiplier;
+            if (distance > 2.0) {
+              forceMultiplier = 25.0; // Strong force for distant balls
+            } else if (distance > 0.5) {
+              forceMultiplier = 15.0; // Medium force for medium distance
+            } else {
+              forceMultiplier = 8.0;  // Gentle force when close to avoid jitter
+            }
+            
+            attractionVector.multiplyScalar(forceMultiplier);
+            
+            // Apply force to ball
+            this.body.velocity.x += attractionVector.x * 0.016; // Assume ~60fps
+            this.body.velocity.y += attractionVector.y * 0.016;
+            this.body.velocity.z += attractionVector.z * 0.016;
+            
+            // Dampen velocity to prevent overshooting when close
+            if (distance < 0.5) {
+              this.body.velocity.x *= 0.9;
+              this.body.velocity.y *= 0.9;
+              this.body.velocity.z *= 0.9;
+            }
+            
+            // Cap maximum tractor beam velocity for safety
+            const maxTractorSpeed = 10.0;
+            const currentSpeed = Math.sqrt(
+              this.body.velocity.x * this.body.velocity.x +
+              this.body.velocity.y * this.body.velocity.y +
+              this.body.velocity.z * this.body.velocity.z
+            );
+            
+            if (currentSpeed > maxTractorSpeed) {
+              const scale = maxTractorSpeed / currentSpeed;
+              this.body.velocity.x *= scale;
+              this.body.velocity.y *= scale;
+              this.body.velocity.z *= scale;
+            }
+            
+            // Debug info (occasional)
+            if (Math.random() < 0.02) { // 2% chance per frame (~1.2 times per second at 60fps)
+              let activationMethod;
+              if (this.tractorBeamActive) {
+                activationMethod = 'A button';
+              } else if (this.autoReturnActive) {
+                activationMethod = 'Auto-return';
+              } else {
+                activationMethod = 'Grip buttons';
+              }
+              console.log(`🔥 Tractor beam (${activationMethod}): ${distance.toFixed(2)}m away, force: ${forceMultiplier.toFixed(1)}`);
+            }
+          }
+        }
+      });
+
+      // FPS counter
+      AFRAME.registerComponent('fps-counter', {
+        init: function() {
+          this.frameCount = 0;
+          this.lastTime = performance.now();
+          this.fps = 0;
+          this.fpsHistory = [];
+          this.updateInterval = 500;
+          this.lastUpdate = 0;
+        },
+        
+        tick: function() {
+          const currentTime = performance.now();
+          this.frameCount++;
+          
+          if (currentTime - this.lastUpdate >= this.updateInterval) {
+            const deltaTime = currentTime - this.lastTime;
+            const currentFPS = Math.round((this.frameCount * 1000) / deltaTime);
+            
+            this.fpsHistory.push(currentFPS);
+            if (this.fpsHistory.length > 5) {
+              this.fpsHistory.shift();
+            }
+            
+            const avgFPS = Math.round(this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length);
+            this.fps = avgFPS;
+            
+            this.updateVersionDisplay();
+            
+            this.frameCount = 0;
+            this.lastTime = currentTime;
+            this.lastUpdate = currentTime;
+          }
+        },
+        
+        updateVersionDisplay: function() {
+          const versionDisplay = document.getElementById('version-display');
+          if (versionDisplay) {
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.0 | ${this.fps} FPS`);
+          }
+        }
+      });
+
+      // Fix for hand-controls clipAction error
+      AFRAME.registerComponent('custom-hand-controls', {
+        init: function() {
+          // Override the problematic animation methods to prevent clipAction errors
+          setTimeout(() => {
+            const handControls = this.el.components['hand-controls'];
+            if (handControls) {
+              // Store original methods
+              this.originalAnimateGesture = handControls.animateGesture;
+              this.originalPlayAnimation = handControls.playAnimation;
+              
+              // Override with no-op functions
+              handControls.animateGesture = function() {};
+              handControls.playAnimation = function() {};
+              
+              console.log('Fixed hand-controls clipAction error for', this.el.id);
+            }
+          }, 100);
+        },
+        
+        remove: function() {
+          // Restore original methods if needed
+          const handControls = this.el.components['hand-controls'];
+          if (handControls && this.originalAnimateGesture && this.originalPlayAnimation) {
+            handControls.animateGesture = this.originalAnimateGesture;
+            handControls.playAnimation = this.originalPlayAnimation;
+          }
+        }
+      });
+
+    </script>
+
+    <a-scene physics-world fps-counter game-manager multiplayer-sync multiplayer-toggle
+             renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
+             webxr="requiredFeatures: local-floor">
+      
+      <!-- Space Station Environment -->
+      
+      <!-- Main chamber floor (doubled size) -->
+      <a-box position="0 -2 0" 
+             width="16" 
+             height="0.2" 
+             depth="32" 
+             color="#444444"
+             material="shader: standard; metalness: 0.8; roughness: 0.2"
+             grab-surface="type: static">
+      </a-box>
+
+      <!-- Main chamber ceiling (doubled size) -->
+      <a-box position="0 6 0" 
+             width="16" 
+             height="0.2" 
+             depth="32" 
+             color="#444444"
+             material="shader: standard; metalness: 0.8; roughness: 0.2"
+             grab-surface="type: static">
+      </a-box>
+
+      <!-- Left wall (doubled size) -->
+      <a-box position="-8 2 0" 
+             width="0.2" 
+             height="8" 
+             depth="32" 
+             color="#444444"
+             material="shader: standard; metalness: 0.8; roughness: 0.2"
+             grab-surface="type: static">
+      </a-box>
+      
+      <!-- Right wall (doubled size) -->
+      <a-box position="8 2 0" 
+             width="0.2" 
+             height="8" 
+             depth="32" 
+             color="#444444"
+             material="shader: standard; metalness: 0.8; roughness: 0.2"
+             grab-surface="type: static">
+      </a-box>
+      
+      <!-- Back wall (doubled size) -->
+      <a-box position="0 2 -16" 
+             width="16" 
+             height="8" 
+             depth="0.2" 
+             color="#444444"
+             material="shader: standard; metalness: 0.8; roughness: 0.2"
+             grab-surface="type: static">
+      </a-box>
+      
+      <!-- Front wall (doubled size) -->
+      <a-box position="0 2 16" 
+             width="16" 
+             height="8" 
+             depth="0.2" 
+             color="#444444"
+             material="shader: standard; metalness: 0.8; roughness: 0.2"
+             grab-surface="type: static">
+      </a-box>
+
+      <!-- Randomly positioned 1m cubes throughout the space -->
+      <a-box position="-5 1 -10" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="3 4 -5" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="-2 3 8" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="6 2 -12" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="-7 5 3" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="1 1 -8" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="-4 4 -2" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="5 3 12" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="-1 2 5" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="7 5 -6" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="-6 1 -14" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="2 4 9" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+
+      <!-- Floating objects/balls (spawned at center) -->
+      <a-sphere position="0 2 0" 
+                radius="0.1"
+                color="#ff0000" 
+                material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
+                zerog-ball="player: player1">
+        <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
+      </a-sphere>
+
+      <a-sphere position="0 2 0" 
+                radius="0.1"
+                color="#0000ff" 
+                material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.5"
+                zerog-ball="player: player2">
+        <a-entity light="type: point; color: #0000ff; intensity: 1; distance: 3"></a-entity>
+      </a-sphere>
+
+      <!-- Player with zero-g physics -->
+      <a-entity id="player" position="0 2 12" zerog-player="mass: 70; thrusterForce: 0.8">
+        <a-entity id="rig" position="0 0 0">
+          <a-entity camera look-controls="pointerLockEnabled: false">
+            <!-- Player target sphere (like in original dodgeball project) -->
+            <a-sphere id="player-target" 
+                      radius="0.2" 
+                      color="#0000ff" 
+                      material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
+                      position="0 0 0"
+                      impact-effect="color: #0000ff">
+              <a-entity light="type: point; color: #0000ff; intensity: 1; distance: 3"></a-entity>
+              <!-- Impact sphere with animation component -->
+              <a-sphere id="player-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"
+                animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
+                animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
+              </a-sphere>
+            </a-sphere>
+            
+            <!-- HUD display -->
+            <a-entity id="version-display" position="0 0.3 -0.5" text="value: Zero-G v1.0; align: center; width: 2; color: #00ff00"></a-entity>
+            
+            <!-- Game Status Display -->
+            <a-entity id="hud-status" position="0 0.2 -0.5" text="value: Singleplayer; align: center; width: 1.1; color: #ffffff"></a-entity>
+            
+            <!-- Score Display in HUD -->
+            <a-entity id="hud-score" position="0 0.1 -0.5" visible="false">
+              <a-entity position="-0.15 0 0" text="value: You: 0; align: center; width: 1.5; color: #0099ff"></a-entity>
+              <a-entity position="0.15 0 0" text="value: Bot: 0; align: center; width: 1.5; color: #ff4444"></a-entity>
+            </a-entity>
+            
+            <!-- Timer Display in HUD -->
+            <a-entity id="hud-timer" position="0 0.05 -0.5" text="value: Time: 3:00; align: center; width: 1.2; color: #ffff00" visible="false"></a-entity>
+            
+            <!-- Game Messages in HUD -->
+            <a-entity id="hud-message" position="0 0 -0.5" text="value: Press A to Start; align: center; width: 1.1; color: #ffffff" visible="false"></a-entity>
+          </a-entity>
+          
+          <a-entity id="leftHand" 
+                   oculus-touch-controls="hand: left"
+                   custom-hand-controls>
+            <!-- Thruster visual effect -->
+            <a-cone class="thruster-vfx"
+                    position="0 0 0.1"
+                    radius-bottom="0.02"
+                    radius-top="0.01"
+                    height="0.1"
+                    color="#00ffff"
+                    material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
+                    visible="false">
+            </a-cone>
+          </a-entity>
+          
+          <a-entity id="rightHand" 
+                   oculus-touch-controls="hand: right"
+                   custom-hand-controls>
+            <!-- Thruster visual effect -->
+            <a-cone class="thruster-vfx"
+                    position="0 0 0.1"
+                    radius-bottom="0.02"
+                    radius-top="0.01"
+                    height="0.1"
+                    color="#00ffff"
+                    material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
+                    visible="false">
+            </a-cone>
+          </a-entity>
+        </a-entity>
+      </a-entity>
+
+      <!-- Opponent player (for multiplayer) -->
+      <a-entity id="opponent-player" position="0 2 -12" visible="false">
+        <a-sphere id="opponent-target" 
+                  radius="0.2" 
+                  color="#ff0000" 
+                  material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
+                  position="0 0 0"
+                  impact-effect="color: #ff0000">
+          <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
+          <!-- Impact sphere with animation component -->
+          <a-sphere id="opponent-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
+            animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
+            animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
+          </a-sphere>
+        </a-sphere>
+      </a-entity>
+
+      <!-- Zero-G Bot (for singleplayer) -->
+      <a-entity id="zerog-bot" position="0 2 -10" zerog-bot="enabled: true; difficulty: medium">
+        <a-sphere id="bot-target" 
+                  radius="0.2" 
+                  color="#ff0000" 
+                  material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; wireframe: false"
+                  position="0 0 0"
+                  impact-effect="color: #ff0000">
+          <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 4"></a-entity>
+          <!-- Impact sphere with animation component -->
+          <a-sphere id="bot-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
+            animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
+            animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
+          </a-sphere>
+        </a-sphere>
+      </a-entity>
+
+      <!-- Add game manager entity with score display -->
+      <a-entity id="game-manager" game-manager>
+        <!-- Version display moved closer to top -->
+        <a-entity id="version-display-override" position="0 7 0" text="value: Zero-G v1.0; align: center; width: 1.5; color: #00ff00"></a-entity>
+        
+        <!-- Large colored score display -->
+        <a-entity id="score-display" position="0 6.5 0">
+          <!-- Blue player score (left side) -->
+          <a-entity id="blue-score" position="-0.5 0 0" text="value: 0; align: center; width: 4; color: #0099ff"></a-entity>
+          <!-- Dash separator -->
+          <a-entity position="0 0 0" text="value: -; align: center; width: 4; color: #ffffff"></a-entity>
+          <!-- Red player score (right side) -->
+          <a-entity id="red-score" position="0.5 0 0" text="value: 0; align: center; width: 4; color: #ff4444"></a-entity>
+        </a-entity>
+        
+        <a-entity id="timer-display" position="0 6 0" text="value: Time: 3:00; align: center; width: 2; color: #ffff00"></a-entity>
+        <a-entity id="start-message" position="0 5.5 0" text="value: Press A to Start\nY for Multiplayer; align: center; width: 2; color: #ffffff"></a-entity>
+      </a-entity>
+
+      <!-- Ambient space lighting -->
+      <a-entity light="type: ambient; color: #404040; intensity: 0.5"></a-entity>
+      
+      <!-- Directional light simulating distant star -->
+      <a-entity light="type: directional; color: #ffffff; intensity: 0.8" position="5 5 5"></a-entity>
+
+      <!-- Add impact sound entities -->
+      <a-entity id="impact-sound" sound="src: url(audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); 
+                                        autoplay: false; 
+                                        loop: false; 
+                                        volume: 0.7;
+                                        positional: true;
+                                        distanceModel: linear;
+                                        refDistance: 1;
+                                        maxDistance: 20;
+                                        poolSize: 2;">
+      </a-entity>
+
+      <!-- Add bounce sound entity -->
+      <a-entity id="bounce-sound" sound="src: url(audio/impact-cinematic-boom-5-352465.mp3); 
+                                        autoplay: false; 
+                                        loop: false; 
+                                        volume: 0.7;
+                                        positional: true;
+                                        distanceModel: linear;
+                                        refDistance: 1;
+                                        maxDistance: 20;
+                                        poolSize: 8;
+                                        rate: 1.5;">
+      </a-entity>
+
+      <!-- Space background -->
+      <a-sky color="#000011"></a-sky>
+    </a-scene>
+  </body>
+</html> 
