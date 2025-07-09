@@ -2157,9 +2157,21 @@ function setGameplayHUD(isPlaying) {
           updateMultiplayerStatus('Multiplayer Connected');
           isSearchingForMatch = false;
           
-          // Opponent player will be created dynamically when first remote state is received
-          // No bot management needed in zerog mode - it's player vs player only
-          console.log('Multiplayer started - opponent will appear when remote player moves');
+          // Show opponent player, hide bot
+          const opponent = document.querySelector('#opponent-player');
+          const bot = document.querySelector('#zerog-bot');
+          
+          if (opponent) {
+            opponent.setAttribute('visible', true);
+            console.log('Showing opponent player for multiplayer');
+          }
+          if (bot) {
+            bot.setAttribute('visible', false);
+            if (bot.components['zerog-bot']) {
+              bot.setAttribute('zerog-bot', 'enabled', false);
+            }
+            console.log('Hiding bot and disabling for multiplayer');
+          }
           
           // Switch to multiplayer score display immediately
           multiplayerScore = { local: 0, remote: 0 };
@@ -2184,14 +2196,21 @@ function setGameplayHUD(isPlaying) {
         multiplayerScore = { local: 0, remote: 0 };
         multiplayerReady = { local: false, remote: false };
         
-        // Remove opponent player representation and show bot
+        // Hide opponent player and show bot
         const opponent = document.querySelector('#opponent-player');
-        if (opponent) {
-          opponent.remove();
-          console.log('Removed opponent player representation');
-        }
+        const bot = document.querySelector('#zerog-bot');
         
-        // No bot to show in zerog mode - this is player vs player only
+        if (opponent) {
+          opponent.setAttribute('visible', false);
+          console.log('Hiding opponent player for singleplayer');
+        }
+        if (bot) {
+          bot.setAttribute('visible', true);
+          if (bot.components['zerog-bot']) {
+            bot.setAttribute('zerog-bot', 'enabled', true);
+          }
+          console.log('Showing bot and enabling for singleplayer');
+        }
         
         // Reset the actual game manager scores
         const gameManager = document.querySelector('#game-manager');
@@ -2246,10 +2265,18 @@ function setGameplayHUD(isPlaying) {
           scene.setAttribute('multiplayer-toggle', '');
         }
         
-        // Initialize opponent visibility (hidden by default)
+        // Initialize visibility: bot visible for singleplayer, opponent hidden
         const opponent = document.querySelector('#opponent-player');
+        const bot = document.querySelector('#zerog-bot');
+        
         if (opponent) {
           opponent.setAttribute('visible', false);
+        }
+        if (bot) {
+          bot.setAttribute('visible', true);
+          if (bot.components['zerog-bot']) {
+            bot.setAttribute('zerog-bot', 'enabled', true);
+          }
         }
         
         // Initialize status display
@@ -2298,53 +2325,30 @@ function setGameplayHUD(isPlaying) {
             const mirroredZ = -remotePlayerState.z;
             const mirroredRy = -remotePlayerState.ry;
             
-            // Create or update opponent player representation
-            let opponent = document.querySelector('#opponent-player');
-            if (!opponent) {
-              // Create opponent representation
-              opponent = document.createElement('a-entity');
-              opponent.id = 'opponent-player';
+            // Use the existing opponent player entity
+            const opponent = document.querySelector('#opponent-player');
+            if (opponent) {
+              // Make sure opponent is visible and bot is hidden
+              opponent.setAttribute('visible', true);
+              const bot = document.querySelector('#zerog-bot');
+              if (bot) {
+                bot.setAttribute('visible', false);
+                if (bot.components['zerog-bot']) {
+                  bot.setAttribute('zerog-bot', 'enabled', false);
+                }
+              }
               
-              // Add visual representation of opponent
-              const opponentBody = document.createElement('a-sphere');
-              opponentBody.setAttribute('radius', '0.15');
-              opponentBody.setAttribute('color', '#ff6666');
-              opponentBody.setAttribute('material', 'opacity: 0.8; transparent: true');
-              opponentBody.setAttribute('position', '0 0 0');
-              opponent.appendChild(opponentBody);
+              // Update opponent position
+              opponent.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
+              opponent.object3D.rotation.set(remotePlayerState.rx, mirroredRy, 0);
               
-              // Add a head indicator
-              const opponentHead = document.createElement('a-sphere');
-              opponentHead.id = 'opponent-head';
-              opponentHead.setAttribute('radius', '0.1');
-              opponentHead.setAttribute('color', '#ff3333');
-              opponentHead.setAttribute('material', 'opacity: 0.9; transparent: true');
-              opponentHead.setAttribute('position', '0 0.3 0');
-              opponent.appendChild(opponentHead);
-              
-              // Add a glowing outline
-              const opponentGlow = document.createElement('a-sphere');
-              opponentGlow.setAttribute('radius', '0.18');
-              opponentGlow.setAttribute('color', '#ff0000');
-              opponentGlow.setAttribute('material', 'opacity: 0.2; transparent: true; shader: standard; emissive: #ff0000; emissiveIntensity: 0.5');
-              opponentGlow.setAttribute('position', '0 0 0');
-              opponent.appendChild(opponentGlow);
-              
-              // Add to scene
-              document.querySelector('a-scene').appendChild(opponent);
-              console.log('Created opponent player representation');
-            }
-            
-            // Update opponent position
-            opponent.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
-            opponent.object3D.rotation.set(remotePlayerState.rx, mirroredRy, 0);
-            
-            // Debug logging for received state
-            if (this.opponentFrameCount === undefined) this.opponentFrameCount = 0;
-            this.opponentFrameCount++;
-            if (this.opponentFrameCount % 30 === 0) {
-              console.log('Received remote player state:', remotePlayerState);
-              console.log('Applied opponent position:', { x: mirroredX, y: remotePlayerState.y, z: mirroredZ });
+              // Debug logging for received state
+              if (this.opponentFrameCount === undefined) this.opponentFrameCount = 0;
+              this.opponentFrameCount++;
+              if (this.opponentFrameCount % 30 === 0) {
+                console.log('Received remote player state:', remotePlayerState);
+                console.log('Applied opponent position:', { x: mirroredX, y: remotePlayerState.y, z: mirroredZ });
+              }
             }
           }
           
