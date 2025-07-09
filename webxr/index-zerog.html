@@ -2286,15 +2286,18 @@ function setGameplayHUD(isPlaying) {
       // --- MULTIPLAYER SYNC COMPONENT ---
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
-          // In multiplayer, send the local VR rig position/rotation as player state
+          // In multiplayer, send the local camera's world position/rotation as player state
           if (isMultiplayer && conn && conn.open) {
-            const rig = document.querySelector('#rig');
-            if (rig) {
-              const rigPos = rig.object3D.position;
-              const rigRot = rig.object3D.rotation;
+            const camera = document.querySelector('[camera]');
+            if (camera) {
+              const worldPos = new THREE.Vector3();
+              camera.object3D.getWorldPosition(worldPos);
+              const worldQuat = new THREE.Quaternion();
+              camera.object3D.getWorldQuaternion(worldQuat);
+              const worldRot = new THREE.Euler().setFromQuaternion(worldQuat, 'YXZ');
               const playerState = {
-                x: rigPos.x, y: rigPos.y, z: rigPos.z,
-                rx: rigRot.x, ry: rigRot.y, rz: rigRot.z
+                x: worldPos.x, y: worldPos.y, z: worldPos.z,
+                rx: worldRot.x, ry: worldRot.y, rz: worldRot.z
               };
               sendPlayerState(playerState);
               
@@ -2302,7 +2305,7 @@ function setGameplayHUD(isPlaying) {
               if (this.frameCount === undefined) this.frameCount = 0;
               this.frameCount++;
               if (this.frameCount % 30 === 0) {
-                console.log('Sending player state:', playerState);
+                console.log('Sending player state (world pos):', playerState);
               }
             }
           }
@@ -2874,7 +2877,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.02 | ${this.fps} FPS`);
+                         versionDisplay.setAttribute('text', 'value', `Zero-G v1.03 | ${this.fps} FPS`);
           }
         }
       });
