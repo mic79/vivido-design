@@ -55,6 +55,7 @@
       // Update HUD score display
       function updateHUDScore(playerScore, opponentScore, isMultiplayer = false) {
         const hudScore = document.querySelector('#hud-score');
+        
         if (hudScore) {
           const playerScoreEl = hudScore.children[0];
           const opponentScoreEl = hudScore.children[1];
@@ -63,7 +64,10 @@
             const opponentLabel = isMultiplayer ? 'Opponent' : 'Bot';
             playerScoreEl.setAttribute('text', 'value', `You: ${playerScore}`);
             opponentScoreEl.setAttribute('text', 'value', `${opponentLabel}: ${opponentScore}`);
+            console.log('📱 HUD updated - You:', playerScore, opponentLabel + ':', opponentScore, '(visible:', hudScore.getAttribute('visible') + ')');
           }
+        } else {
+          console.log('📱 ERROR: #hud-score element not found');
         }
       }
 
@@ -356,7 +360,7 @@ function setGameplayHUD(isPlaying) {
           // Only log when something is found
           if (nearestSurface) {
             const distanceCm = minDistance > 0 ? (minDistance * 100).toFixed(1) : "touching";
-            console.log(`✓ Grabbed ${nearestSurface.tagName.toLowerCase()} - ${distanceCm}cm`);
+
           }
           
           return nearestSurface;
@@ -1062,7 +1066,7 @@ function setGameplayHUD(isPlaying) {
               // Haptic feedback
               this.playHapticFeedback(hand, 0.5, 100);
               
-              console.log(`✓ Grabbed ball with ${handKey} hand (grip)`);
+
             }
           }
         },
@@ -1076,7 +1080,7 @@ function setGameplayHUD(isPlaying) {
           if (grabInfo && grabInfo.isBall) {
             this.releaseFromSurface(hand);
             this.grabbedSurface[handKey] = null;
-            console.log(`✓ Released ball with ${handKey} hand (grip)`);
+            
           }
         },
         
@@ -1426,7 +1430,7 @@ function setGameplayHUD(isPlaying) {
           // Log position info for debugging
           console.log(`Bot at: (${botPos.x.toFixed(1)}, ${botPos.y.toFixed(1)}, ${botPos.z.toFixed(1)})`);
           console.log(`Player target at: (${this.playerPos.x.toFixed(1)}, ${this.playerPos.y.toFixed(1)}, ${this.playerPos.z.toFixed(1)})`);
-          console.log(`Bot threw ball with force ${throwForce.toFixed(1)}, inaccuracy: ${inaccuracy}m`);
+
         },
         
         tick: function(time) {
@@ -1461,7 +1465,7 @@ function setGameplayHUD(isPlaying) {
                                 gameManager.components['game-manager'].matchState === 'OVERTIME');
           
           if (isMatchActive && time - this.lastThrowTime > this.data.throwInterval) {
-            console.log(`Bot preparing to throw (${((time - this.lastThrowTime)/1000).toFixed(1)}s since last throw)`);
+  
             this.throwBallAtPlayer();
             this.lastThrowTime = time;
           }
@@ -1617,6 +1621,7 @@ function setGameplayHUD(isPlaying) {
         },
 
         startMatch: function() {
+          console.log('startMatch called - isMultiplayer:', isMultiplayer, 'conn.open:', conn?.open);
           this.matchState = 'PLAYING';
           this.matchStartTime = Date.now();
           this.gameStarted = true;
@@ -1637,7 +1642,7 @@ function setGameplayHUD(isPlaying) {
           // NEW: Activate tractor beam for 2 seconds at start
           this.activateStartTractorBeam();
           
-          console.log('Zero-G match started - 3 minutes');
+          console.log('Zero-G match started - 3 minutes, matchState set to PLAYING');
         },
         
         // NEW: Activate tractor beam for player's ball at start
@@ -1771,14 +1776,40 @@ function setGameplayHUD(isPlaying) {
         },
 
         onPlayerHit: function() {
-          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          console.log('🎯 onPlayerHit called - matchState:', this.matchState, 'isMultiplayer:', isMultiplayer, 'conn.open:', conn?.open);
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') {
+            console.log('🎯 onPlayerHit: Game not in PLAYING/OVERTIME state, returning');
+            return;
+          }
+          
+          // Prevent rapid multiple hits with cooldown system
+          const now = Date.now();
+          this.lastPlayerHitTime = this.lastPlayerHitTime || 0;
+          this.playerHitCooldown = this.playerHitCooldown || 1000; // 1 second cooldown
+          
+          if (now - this.lastPlayerHitTime < this.playerHitCooldown) {
+            console.log('🎯 onPlayerHit: Blocked by cooldown - last hit was', now - this.lastPlayerHitTime, 'ms ago');
+            return;
+          }
+          
+          this.lastPlayerHitTime = now;
+          this._playerHitCount = (this._playerHitCount || 0) + 1;
+          console.log('🎯 onPlayerHit #' + this._playerHitCount + ' - processing hit');
           
           if (isMultiplayer && conn && conn.open) {
-            multiplayerScore.local += 1;
-            updateScoreDisplayMultiplayer();
-            sendScoreUpdate();
+            // HOST-AUTHORITATIVE SCORING: Only host handles scoring logic
+            if (isHost) {
+              multiplayerScore.local += 1;
+              console.log('🎯 HOST onPlayerHit: Updated multiplayer score - local:', multiplayerScore.local, 'remote:', multiplayerScore.remote);
+              updateScoreDisplayMultiplayer();
+              updateHUDScore(multiplayerScore.local, multiplayerScore.remote, true);
+              sendScoreUpdate();
+            } else {
+              console.log('🎯 CLIENT onPlayerHit: Ignoring - host handles scoring');
+            }
           } else {
             this.playerScore += 1;
+            console.log('🎯 onPlayerHit: Updated singleplayer score - player:', this.playerScore, 'opponent:', this.opponentScore);
             this.updateScore();
           }
           
@@ -1789,14 +1820,40 @@ function setGameplayHUD(isPlaying) {
         },
 
         onOpponentHit: function() {
-          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          console.log('🔴 onOpponentHit called - matchState:', this.matchState, 'isMultiplayer:', isMultiplayer, 'conn.open:', conn?.open);
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') {
+            console.log('🔴 onOpponentHit: Game not in PLAYING/OVERTIME state, returning');
+            return;
+          }
+          
+          // Prevent rapid multiple hits with cooldown system
+          const now = Date.now();
+          this.lastOpponentHitTime = this.lastOpponentHitTime || 0;
+          this.opponentHitCooldown = this.opponentHitCooldown || 1000; // 1 second cooldown
+          
+          if (now - this.lastOpponentHitTime < this.opponentHitCooldown) {
+            console.log('🔴 onOpponentHit: Blocked by cooldown - last hit was', now - this.lastOpponentHitTime, 'ms ago');
+            return;
+          }
+          
+          this.lastOpponentHitTime = now;
+          this._opponentHitCount = (this._opponentHitCount || 0) + 1;
+          console.log('🔴 onOpponentHit #' + this._opponentHitCount + ' - processing hit');
           
           if (isMultiplayer && conn && conn.open) {
-            multiplayerScore.remote += 1;
-            updateScoreDisplayMultiplayer();
-            sendScoreUpdate();
+            // HOST-AUTHORITATIVE SCORING: Only host handles scoring logic
+            if (isHost) {
+              multiplayerScore.remote += 1;
+              console.log('🔴 HOST onOpponentHit: Updated multiplayer score - local:', multiplayerScore.local, 'remote:', multiplayerScore.remote);
+              updateScoreDisplayMultiplayer();
+              updateHUDScore(multiplayerScore.local, multiplayerScore.remote, true);
+              sendScoreUpdate();
+            } else {
+              console.log('🔴 CLIENT onOpponentHit: Ignoring - host handles scoring');
+            }
           } else {
             this.opponentScore += 1;
+            console.log('🔴 onOpponentHit: Updated singleplayer score - player:', this.playerScore, 'opponent:', this.opponentScore);
             this.updateScore();
           }
           
@@ -2085,10 +2142,12 @@ function setGameplayHUD(isPlaying) {
           } else if (data.type === 'ball-state') {
             remoteBallState = data.state;
           } else if (data.type === 'score-update') {
-            // Mirror remote/local for display
+            console.log('📨 CLIENT received score-update:', data.score, '→ setting local:', data.score.remote, 'remote:', data.score.local);
+            // Mirror remote/local for display (client displays what host sends)
             multiplayerScore.remote = data.score.local;
             multiplayerScore.local = data.score.remote;
             updateScoreDisplayMultiplayer();
+            updateHUDScore(multiplayerScore.local, multiplayerScore.remote, true);
           } else if (data.type === 'ready-update') {
             // Sync ready state
             multiplayerReady.remote = data.ready;
@@ -2177,6 +2236,10 @@ function setGameplayHUD(isPlaying) {
           multiplayerScore = { local: 0, remote: 0 };
           multiplayerReady = { local: false, remote: false };
           updateScoreDisplayMultiplayer();
+          updateHUDScore(multiplayerScore.local, multiplayerScore.remote, true);
+          
+          // Make sure HUD score is visible during multiplayer
+          setGameplayHUD(true);
           
           // Set game to waiting for ready state
           const gameManager = document.querySelector('#game-manager');
@@ -2188,6 +2251,7 @@ function setGameplayHUD(isPlaying) {
       
       function endMultiplayer() {
         isMultiplayer = false;
+        isHost = false; // Reset host status when returning to singleplayer
         multiplayerStatus = 'Singleplayer';
         updateMultiplayerStatus('Singleplayer');
         cleanupMultiplayer();
@@ -2226,6 +2290,10 @@ function setGameplayHUD(isPlaying) {
           blueScore.setAttribute('text', 'value', '0');
           redScore.setAttribute('text', 'value', '0');
         }
+        
+        // Hide HUD elements when returning to singleplayer
+        setGameplayHUD(false);
+        
         isSearchingForMatch = false;
       }
       
@@ -2240,6 +2308,7 @@ function setGameplayHUD(isPlaying) {
 
       function sendScoreUpdate() {
         if (conn && conn.open) {
+          console.log('📤 Sending score-update:', multiplayerScore);
           conn.send({ type: 'score-update', score: multiplayerScore });
         }
       }
@@ -2251,12 +2320,18 @@ function setGameplayHUD(isPlaying) {
       function updateScoreDisplayMultiplayer() {
         const blueScore = document.getElementById('blue-score');
         const redScore = document.getElementById('red-score');
+        
         if (blueScore && redScore) {
           // In multiplayer, local player is always blue, remote is red
           blueScore.setAttribute('text', 'value', multiplayerScore.local.toString());
           redScore.setAttribute('text', 'value', multiplayerScore.remote.toString());
+          console.log('📊 Main display updated - Blue:', multiplayerScore.local, 'Red:', multiplayerScore.remote);
+        } else {
+          console.log('📊 ERROR: Score elements not found - blueScore:', !!blueScore, 'redScore:', !!redScore);
         }
       }
+      
+      // Removed complex patching system - scoring is now handled directly in the game-manager component
 
       // Attach multiplayer-toggle to scene
       document.addEventListener('DOMContentLoaded', () => {
@@ -2281,6 +2356,8 @@ function setGameplayHUD(isPlaying) {
         
         // Initialize status display
         updateMultiplayerStatus('Singleplayer');
+        
+        // Scoring is now handled directly in the game-manager component - no patching needed
       });
 
       // --- MULTIPLAYER SYNC COMPONENT ---
@@ -2300,13 +2377,6 @@ function setGameplayHUD(isPlaying) {
                 rx: worldRot.x, ry: worldRot.y, rz: worldRot.z
               };
               sendPlayerState(playerState);
-              
-              // Debug logging every 30 frames (~0.5 seconds at 60fps)
-              if (this.frameCount === undefined) this.frameCount = 0;
-              this.frameCount++;
-              if (this.frameCount % 30 === 0) {
-                console.log('Sending player state (world pos):', playerState);
-              }
             }
           }
           
@@ -2341,13 +2411,7 @@ function setGameplayHUD(isPlaying) {
               opponent.object3D.position.set(remotePlayerState.x, remotePlayerState.y, remotePlayerState.z);
               opponent.object3D.rotation.set(remotePlayerState.rx, remotePlayerState.ry, remotePlayerState.rz);
               
-              // Debug logging for received state
-              if (this.opponentFrameCount === undefined) this.opponentFrameCount = 0;
-              this.opponentFrameCount++;
-              if (this.opponentFrameCount % 30 === 0) {
-                console.log('Received remote player state:', remotePlayerState);
-                console.log('Applied opponent position (direct):', { x: remotePlayerState.x, y: remotePlayerState.y, z: remotePlayerState.z });
-              }
+
             }
           }
           
@@ -2458,7 +2522,7 @@ function setGameplayHUD(isPlaying) {
             // Only allow human player to control their own ball (player2's ball)
             if (this.data.player === 'player2') {
               this.tractorBeamActive = true;
-              console.log('🔥 Tractor beam activated (A button)!');
+  
             }
           });
           
@@ -2466,7 +2530,7 @@ function setGameplayHUD(isPlaying) {
             // Only for player's ball
             if (this.data.player === 'player2') {
               this.tractorBeamActive = false;
-              console.log('❄️ Tractor beam deactivated (A button)');
+  
             }
           });
         },
@@ -2488,21 +2552,27 @@ function setGameplayHUD(isPlaying) {
         checkTargetHit: function() {
           if (this.isGrabbed || !this.body) return;
           
+          // CRITICAL: Check hit cooldown FIRST to prevent multiple hits
+          const now = Date.now();
+          if (now - this.lastHitTime < this.hitCooldown) {
+            return; // Still in cooldown period - no hits allowed
+          }
+          
+          // Don't check hits during auto-return period to prevent rapid scoring
+          if (this.autoReturnActive) {
+            return; // Skip hit detection during auto-return
+          }
+          
           const ballPos = new THREE.Vector3().copy(this.body.position);
           const ballVelocity = this.body.velocity.length();
           
           // Only check hits if ball is moving
           if (ballVelocity < 0.5) return;
           
-          // Check hit cooldown to prevent multiple hits during auto-return
-          const now = Date.now();
-          if (now - this.lastHitTime < this.hitCooldown) {
-            return; // Still in cooldown period
-          }
-          
           // Check distance to player target (always target sphere inside camera)
           const playerTarget = document.querySelector('#player-target');
           if (playerTarget && this.data.player === 'player1') {
+
             const playerTargetPos = new THREE.Vector3();
             playerTarget.object3D.getWorldPosition(playerTargetPos);
             const distance = ballPos.distanceTo(playerTargetPos);
@@ -2513,14 +2583,18 @@ function setGameplayHUD(isPlaying) {
                 impactEffect.playEffect();
               }
               
-                             // Update score through game manager (bot ball hit player - bot scores)
-               const gameManager = this.el.sceneEl.querySelector('#game-manager');
-               if (gameManager && gameManager.components['game-manager']) {
-                 gameManager.components['game-manager'].onOpponentHit();
-               }
+                                             // Update score through game manager (bot ball hit player - bot scores)
+                const gameManager = this.el.sceneEl.querySelector('#game-manager');
+                if (gameManager && gameManager.components['game-manager']) {
+                  console.log('🎯 BALL HIT: Player1 ball hit player target - calling onOpponentHit');
+                  gameManager.components['game-manager'].onOpponentHit();
+                } else {
+                  console.log('ERROR: Game manager not found for onOpponentHit');
+                }
               
               // Record hit time to prevent multiple hits
               this.lastHitTime = now;
+              console.log('⏰ Hit cooldown set (opponent hit) - next hit allowed in', this.hitCooldown, 'ms');
               
               this.resetPosition(); // Reset ball after hit
               console.log('Bot ball hit player target!');
@@ -2553,17 +2627,21 @@ function setGameplayHUD(isPlaying) {
                   impactEffect.playEffect();
                 }
                 
-                                 // Update score through game manager (player ball hit opponent/bot - player scores)
-                 const gameManager = this.el.sceneEl.querySelector('#game-manager');
-                 if (gameManager && gameManager.components['game-manager']) {
-                   gameManager.components['game-manager'].onPlayerHit();
-                 }
+                                                 // Update score through game manager (player ball hit opponent/bot - player scores)
+                const gameManager = this.el.sceneEl.querySelector('#game-manager');
+                if (gameManager && gameManager.components['game-manager']) {
+                  console.log('🔵 BALL HIT: Player2 ball hit opponent target - calling onPlayerHit');
+                  gameManager.components['game-manager'].onPlayerHit();
+                } else {
+                  console.log('ERROR: Game manager not found for onPlayerHit');
+                }
                 
                 // Record hit time to prevent multiple hits
                 this.lastHitTime = now;
+                console.log('⏰ Hit cooldown set - next hit allowed in', this.hitCooldown, 'ms');
                 
                 this.startAutoReturn(); // Start auto-return instead of instant reset
-                console.log('Player ball hit target!');
+                console.log('✅ Player ball hit target - auto-return started');
                 return;
               }
             }
@@ -2578,7 +2656,7 @@ function setGameplayHUD(isPlaying) {
           // Cancel auto-return if player grabs the ball
           if (this.autoReturnActive) {
             this.autoReturnActive = false;
-            console.log('❄️ Auto-return cancelled - ball grabbed by player');
+            
           }
           
           // Start velocity tracking
@@ -2677,7 +2755,7 @@ function setGameplayHUD(isPlaying) {
               // Check auto-return timeout (turn off after 2 seconds)
               if (this.autoReturnActive && Date.now() - this.autoReturnStartTime > this.autoReturnDuration) {
                 this.autoReturnActive = false;
-                console.log('❄️ Auto-return deactivated after 2 seconds');
+                console.log('✅ Auto-return ended - hit detection re-enabled');
               }
               
               // Tractor beam logic (only for player's ball when A is held OR grip is held OR auto-return)
@@ -2740,7 +2818,7 @@ function setGameplayHUD(isPlaying) {
           if (this.data.player === 'player2') { // Only for player's ball
             this.autoReturnActive = true;
             this.autoReturnStartTime = Date.now();
-            console.log('🔥 Auto-return activated for 2 seconds after hitting target!');
+            console.log('🔥 Auto-return activated for 2 seconds (hit detection disabled during auto-return)');
           }
         },
         
@@ -2824,7 +2902,7 @@ function setGameplayHUD(isPlaying) {
               } else {
                 activationMethod = 'Grip buttons';
               }
-              console.log(`🔥 Tractor beam (${activationMethod}): ${distance.toFixed(2)}m away, force: ${forceMultiplier.toFixed(1)}`);
+  
             }
           }
         }
@@ -2868,7 +2946,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-                         versionDisplay.setAttribute('text', 'value', `Zero-G v1.04 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.14 | ${this.fps} FPS`);
           }
         }
       });
