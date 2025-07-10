@@ -33,7 +33,7 @@
       let multiplayerStartType = 'zerog';
       let sessionID = null;
       let connectionState = 'disconnected';
-      let lastMultiplayerToggle = 0;
+
       let remotePlayerState = null;
       let remoteBallState = null;
       let multiplayerCleanup = null;
@@ -43,6 +43,14 @@
       let multiplayerScore = { local: 0, remote: 0 };
       // Multiplayer ready state
       let multiplayerReady = { local: false, remote: false };
+
+      // Menu state tracking
+      let isMenuVisible = false;
+
+      // Helper: check if menu is currently visible
+      function getMenuVisibility() {
+        return isMenuVisible;
+      }
 
       // Helper: update HUD status display
       function updateMultiplayerStatus(text) {
@@ -73,6 +81,12 @@
 
       // Show/hide HUD elements during gameplay
 function setGameplayHUD(isPlaying) {
+  // Don't change HUD visibility if menu is open
+  if (isMenuVisible) {
+    console.log('🚫 HUD update blocked - menu is open');
+    return;
+  }
+  
   const hudStatus = document.querySelector('#hud-status');
   const hudScore = document.querySelector('#hud-score');
   const hudTimer = document.querySelector('#hud-timer');
@@ -82,14 +96,36 @@ function setGameplayHUD(isPlaying) {
     hudStatus.setAttribute('visible', !isPlaying);
   }
   if (hudScore) {
-    hudScore.setAttribute('visible', isPlaying);
+    // Only show score during active matches (not just when gameplay is enabled)
+    const gameManager = document.querySelector('#game-manager');
+    const isMatchActive = gameManager && gameManager.components['game-manager'] && 
+                         gameManager.components['game-manager'].gameStarted;
+    hudScore.setAttribute('visible', isPlaying && isMatchActive);
   }
   if (hudTimer) {
-    hudTimer.setAttribute('visible', isPlaying);
+    // Only show timer during active matches (not just when gameplay is enabled)
+    const gameManager = document.querySelector('#game-manager');
+    const isMatchActive = gameManager && gameManager.components['game-manager'] && 
+                         gameManager.components['game-manager'].gameStarted;
+    hudTimer.setAttribute('visible', isPlaying && isMatchActive);
   }
   if (hudMessage) {
-    hudMessage.setAttribute('visible', false); // Hide during gameplay
+    // Show "Press A to Start" when not playing, hide during active gameplay
+    if (isPlaying) {
+      hudMessage.setAttribute('visible', false); // Hide during active gameplay
+    } else {
+      hudMessage.setAttribute('visible', true); // Show in default state
+      hudMessage.setAttribute('text', 'value', 'Press A to Start');
+    }
   }
+  
+  console.log('HUD updated:', {
+    playing: isPlaying,
+    status: !isPlaying ? 'VISIBLE' : 'HIDDEN',
+    score: isPlaying ? 'CONDITIONAL' : 'HIDDEN',
+    timer: isPlaying ? 'CONDITIONAL' : 'HIDDEN',
+    message: !isPlaying ? 'VISIBLE (Press A to Start)' : 'HIDDEN'
+  });
 }
 
       // Create materials for zero-g environment
@@ -238,13 +274,20 @@ function setGameplayHUD(isPlaying) {
             this.handleGrab(hand, false);
           });
           
-          // Trigger controls for thrusters ONLY (EchoVR style)
+          // Trigger controls for thrusters ONLY when menu is not visible
           this.el.sceneEl.addEventListener('triggerdown', (evt) => {
+            if (getMenuVisibility()) {
+              console.log('🚫 Thruster blocked - menu is open');
+              return; // Don't activate thrusters when menu is visible
+            }
             const hand = evt.target;
             this.handleThruster(hand, true);
           });
           
           this.el.sceneEl.addEventListener('triggerup', (evt) => {
+            if (getMenuVisibility()) {
+              return; // Don't deactivate thrusters when menu is visible
+            }
             const hand = evt.target;
             this.handleThruster(hand, false);
           });
@@ -255,7 +298,7 @@ function setGameplayHUD(isPlaying) {
             this.handleThumbstick(hand, evt.detail);
           });
           
-          // B button unused in this system
+          // B button assigned to menu toggle (see menu-toggle component)
           
           // Thumbstick click for braking (Echo VR style)
           this.el.sceneEl.addEventListener('thumbstickdown', (evt) => {
@@ -1505,7 +1548,7 @@ function setGameplayHUD(isPlaying) {
           // Show initial message in HUD
           if (this.startMessage) {
             this.startMessage.setAttribute('visible', true);
-            this.startMessage.setAttribute('text', 'value', 'Press A to Start\nY for Multiplayer');
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
           }
           
           // Hide score and timer displays initially
@@ -1951,23 +1994,139 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // Listen for Y button to toggle multiplayer
-      AFRAME.registerComponent('multiplayer-toggle', {
+      // B button for menu system
+      AFRAME.registerComponent('menu-toggle', {
         init: function() {
-          this.el.sceneEl.addEventListener('ybuttondown', () => {
+          this.menuVisible = false;
+          this.lastBButtonPress = 0;
+          
+          // B button to toggle menu with debouncing
+          this.el.sceneEl.addEventListener('bbuttondown', () => {
             const now = Date.now();
-            if (now - lastMultiplayerToggle < 1000) return; // debounce
-            lastMultiplayerToggle = now;
-            if (!isMultiplayer) {
-              updateMultiplayerStatus('Searching for match...');
-              isSearchingForMatch = true;
-              startMultiplayerConnection();
-            } else {
-              updateMultiplayerStatus('Returning to singleplayer...');
-              isSearchingForMatch = false;
-              endMultiplayer();
+            if (now - this.lastBButtonPress < 500) return; // 500ms debounce
+            this.lastBButtonPress = now;
+            this.toggleMenu();
+          });
+        },
+
+        toggleMenu: function() {
+          this.menuVisible = !this.menuVisible;
+          isMenuVisible = this.menuVisible; // Update global state
+          
+          const menu = document.querySelector('#game-menu');
+          const leftHand = document.querySelector('#leftHand');
+          const rightHand = document.querySelector('#rightHand');
+          
+          // Toggle menu visibility
+          if (menu) {
+            menu.setAttribute('visible', this.menuVisible);
+          }
+          
+          // Toggle HUD layers - only show one at a time
+          this.toggleHUDLayers(this.menuVisible);
+          
+          // Show/hide laser pointers based on menu visibility
+          const leftRaycastSettings = `objects: .clickable; lineColor: #ffffff; lineOpacity: ${this.menuVisible ? 1 : 0}; far: 10`;
+          const rightRaycastSettings = `objects: .clickable; lineColor: #ffffff; lineOpacity: ${this.menuVisible ? 1 : 0}; far: 10`;
+          
+          if (leftHand) {
+            leftHand.setAttribute('raycaster', leftRaycastSettings);
+            console.log('Left hand raycaster set to:', leftRaycastSettings);
+            
+            // If opening menu, force disable any active thrusters
+            if (this.menuVisible) {
+              const leftThruster = leftHand.querySelector('.thruster-vfx');
+              if (leftThruster) leftThruster.setAttribute('visible', false);
+            }
+          }
+          if (rightHand) {
+            rightHand.setAttribute('raycaster', rightRaycastSettings);
+            console.log('Right hand raycaster set to:', rightRaycastSettings);
+            
+            // If opening menu, force disable any active thrusters
+            if (this.menuVisible) {
+              const rightThruster = rightHand.querySelector('.thruster-vfx');
+              if (rightThruster) rightThruster.setAttribute('visible', false);
+            }
+          }
+          
+          // Reset thruster states when menu opens
+          if (this.menuVisible) {
+            const zerogPlayer = document.querySelector('[zerog-player]');
+            if (zerogPlayer && zerogPlayer.components['zerog-player']) {
+              const player = zerogPlayer.components['zerog-player'];
+              player.thrusterActive.left = false;
+              player.thrusterActive.right = false;
+            }
+          }
+          
+          console.log('Menu toggled:', this.menuVisible ? 'ON' : 'OFF');
+          console.log('HUD layers:', this.menuVisible ? 'MENU ONLY' : 'GAME ONLY');
+          console.log('Laser pointers:', this.menuVisible ? 'VISIBLE' : 'HIDDEN');
+          console.log('Thruster mode:', this.menuVisible ? 'DISABLED' : 'ENABLED');
+          
+          // When menu closes, refresh HUD to apply any changes made during menu interaction
+          if (!this.menuVisible) {
+            this.refreshGameHUD();
+          }
+        },
+
+        toggleHUDLayers: function(showMenu) {
+          // Game HUD elements (hidden when menu is shown)
+          const gameHudElements = [
+            '#version-display',
+            '#hud-status', 
+            '#hud-score',
+            '#hud-timer',
+            '#hud-message'
+          ];
+          
+          // Toggle game HUD visibility
+          gameHudElements.forEach(selector => {
+            const element = document.querySelector(selector);
+            if (element) {
+              element.setAttribute('visible', !showMenu);
             }
           });
+          
+          // Menu HUD (the menu itself) is handled in the main toggleMenu function
+          
+          console.log('Game HUD elements:', !showMenu ? 'VISIBLE' : 'HIDDEN');
+          console.log('Menu HUD:', showMenu ? 'VISIBLE' : 'HIDDEN');
+        },
+
+        refreshGameHUD: function() {
+          // Refresh the game HUD based on current game state
+          setTimeout(() => {
+            const gameManager = document.querySelector('#game-manager');
+            const isMatchActive = gameManager && gameManager.components['game-manager'] && 
+                                 gameManager.components['game-manager'].gameStarted;
+            
+            console.log('🔄 Refreshing HUD - isMatchActive:', isMatchActive, 'isMultiplayer:', isMultiplayer, 'conn.open:', conn?.open);
+            
+            if (isMatchActive) {
+              // Match is active - show gameplay HUD
+              setGameplayHUD(true);
+            } else if (isMultiplayer && conn && conn.open) {
+              // Multiplayer connected but no match - set waiting state
+              setGameplayHUD(false);
+              if (gameManager && gameManager.components['game-manager']) {
+                gameManager.components['game-manager'].setMultiplayerWaiting();
+              }
+            } else {
+              // Singleplayer or no connection - show default state
+              setGameplayHUD(false);
+              
+              // Ensure "Press A to Start" message is visible in default state
+              const hudMessage = document.querySelector('#hud-message');
+              if (hudMessage) {
+                hudMessage.setAttribute('visible', true);
+                hudMessage.setAttribute('text', 'value', 'Press A to Start');
+              }
+            }
+            
+            console.log('🔄 Game HUD refreshed after menu close');
+          }, 100); // Small delay to ensure menu state is fully updated
         }
       });
 
@@ -2216,85 +2375,80 @@ function setGameplayHUD(isPlaying) {
           updateMultiplayerStatus('Multiplayer Connected');
           isSearchingForMatch = false;
           
-          // Show opponent player, hide bot
-          const opponent = document.querySelector('#opponent-player');
-          const bot = document.querySelector('#zerog-bot');
-          
-          if (opponent) {
-            opponent.setAttribute('visible', true);
-            console.log('Showing opponent player for multiplayer');
-          }
-          if (bot) {
-            bot.setAttribute('visible', false);
-            if (bot.components['zerog-bot']) {
-              bot.setAttribute('zerog-bot', 'enabled', false);
-            }
-            console.log('Hiding bot and disabling for multiplayer');
+          // Update menu display (always safe to update)
+          const currentModeDisplay = document.querySelector('#menu-current-mode');
+          if (currentModeDisplay) {
+            currentModeDisplay.setAttribute('text', 'value', 'Mode: Multiplayer Connected');
+            currentModeDisplay.setAttribute('text', 'color', '#ffffff');
           }
           
-          // Switch to multiplayer score display immediately
+          // Always reset multiplayer score state (safe to do)
           multiplayerScore = { local: 0, remote: 0 };
           multiplayerReady = { local: false, remote: false };
           updateScoreDisplayMultiplayer();
-          updateHUDScore(multiplayerScore.local, multiplayerScore.remote, true);
           
-          // Make sure HUD score is visible during multiplayer
-          setGameplayHUD(true);
-          
-          // Set game to waiting for ready state
-          const gameManager = document.querySelector('#game-manager');
-          if (gameManager && gameManager.components['game-manager']) {
-            gameManager.components['game-manager'].setMultiplayerWaiting();
+          // Only update game state if menu is closed
+          if (!isMenuVisible) {
+            // Set game to waiting for ready state
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].setMultiplayerWaiting();
+            }
+          } else {
+            console.log('🚫 onMultiplayerStart: Game state updates deferred - menu is open');
           }
         }
       }
       
       function endMultiplayer() {
         isMultiplayer = false;
-        isHost = false; // Reset host status when returning to singleplayer
+        isHost = false;
         multiplayerStatus = 'Singleplayer';
         updateMultiplayerStatus('Singleplayer');
         cleanupMultiplayer();
-        remotePlayerState = null;
-        remoteBallState = null;
-        multiplayerScore = { local: 0, remote: 0 };
-        multiplayerReady = { local: false, remote: false };
+        isSearchingForMatch = false;
         
-        // Hide opponent player and show bot
+        // Update menu display (always safe to update)
+        const currentModeDisplay = document.querySelector('#menu-current-mode');
+        if (currentModeDisplay) {
+          currentModeDisplay.setAttribute('text', 'value', 'Mode: Singleplayer');
+          currentModeDisplay.setAttribute('text', 'color', '#ffffff');
+        }
+        
+        // CRITICAL: Re-enable bot for singleplayer (always safe to do)
         const opponent = document.querySelector('#opponent-player');
         const bot = document.querySelector('#zerog-bot');
         
         if (opponent) {
           opponent.setAttribute('visible', false);
-          console.log('Hiding opponent player for singleplayer');
         }
         if (bot) {
           bot.setAttribute('visible', true);
           if (bot.components['zerog-bot']) {
             bot.setAttribute('zerog-bot', 'enabled', true);
           }
-          console.log('Showing bot and enabling for singleplayer');
         }
         
-        // Reset the actual game manager scores
-        const gameManager = document.querySelector('#game-manager');
-        if (gameManager && gameManager.components['game-manager']) {
-          gameManager.components['game-manager'].playerScore = 0;
-          gameManager.components['game-manager'].opponentScore = 0;
+        // Only update game HUD if menu is closed
+        if (!isMenuVisible) {
+          // Reset to singleplayer display
+          setGameplayHUD(false);
+          
+          // Reset game manager
+          const gameManager = document.querySelector('#game-manager');
+          if (gameManager && gameManager.components['game-manager']) {
+            const gm = gameManager.components['game-manager'];
+            gm.resetMatch();
+          }
+        } else {
+          console.log('🚫 endMultiplayer: Game HUD updates deferred - menu is open');
         }
         
-        // Restore singleplayer score display
-        const blueScore = document.getElementById('blue-score');
-        const redScore = document.getElementById('red-score');
-        if (blueScore && redScore) {
-          blueScore.setAttribute('text', 'value', '0');
-          redScore.setAttribute('text', 'value', '0');
-        }
+        // Always reset multiplayer score state (safe to do)
+        multiplayerScore = { local: 0, remote: 0 };
+        multiplayerReady = { local: false, remote: false };
         
-        // Hide HUD elements when returning to singleplayer
-        setGameplayHUD(false);
-        
-        isSearchingForMatch = false;
+        console.log('🔄 Multiplayer ended, returned to singleplayer - bot re-enabled');
       }
       
       function cleanupMultiplayer() {
@@ -2333,11 +2487,11 @@ function setGameplayHUD(isPlaying) {
       
       // Removed complex patching system - scoring is now handled directly in the game-manager component
 
-      // Attach multiplayer-toggle to scene
+      // Attach menu-toggle to scene
       document.addEventListener('DOMContentLoaded', () => {
         const scene = document.querySelector('a-scene');
-        if (scene && !scene.hasAttribute('multiplayer-toggle')) {
-          scene.setAttribute('multiplayer-toggle', '');
+        if (scene && !scene.hasAttribute('menu-toggle')) {
+          scene.setAttribute('menu-toggle', '');
         }
         
         // Initialize visibility: bot visible for singleplayer, opponent hidden
@@ -2412,6 +2566,20 @@ function setGameplayHUD(isPlaying) {
               opponent.object3D.rotation.set(remotePlayerState.rx, remotePlayerState.ry, remotePlayerState.rz);
               
 
+            }
+          } else if (!isMultiplayer) {
+            // CRITICAL: Ensure bot is enabled and visible in singleplayer mode
+            const opponent = document.querySelector('#opponent-player');
+            const bot = document.querySelector('#zerog-bot');
+            
+            if (opponent) {
+              opponent.setAttribute('visible', false);
+            }
+            if (bot) {
+              bot.setAttribute('visible', true);
+              if (bot.components['zerog-bot']) {
+                bot.setAttribute('zerog-bot', 'enabled', true);
+              }
             }
           }
           
@@ -2946,7 +3114,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.14 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.23 | ${this.fps} FPS`);
           }
         }
       });
@@ -2981,9 +3149,77 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
+      // Cursor listener component for menu interactions
+      AFRAME.registerComponent('cursor-listener', {
+        init: function() {
+          this.el.addEventListener('click', this.onClick.bind(this));
+          this.el.addEventListener('mouseenter', this.onHover.bind(this));
+          this.el.addEventListener('mouseleave', this.onLeave.bind(this));
+        },
+
+        onClick: function() {
+          const id = this.el.id;
+          console.log('Menu button clicked:', id);
+          
+          if (id === 'menu-singleplayer') {
+            this.switchToSingleplayer();
+          } else if (id === 'menu-multiplayer') {
+            this.switchToMultiplayer();
+          }
+        },
+
+        onHover: function() {
+          // Highlight button on hover
+          const material = this.el.getAttribute('material');
+          this.originalColor = material.color;
+          this.el.setAttribute('material', 'color', '#ffffff');
+          this.el.setAttribute('material', 'opacity', 1.0);
+        },
+
+        onLeave: function() {
+          // Restore original color
+          if (this.originalColor) {
+            this.el.setAttribute('material', 'color', this.originalColor);
+            this.el.setAttribute('material', 'opacity', 0.8);
+          }
+        },
+
+        switchToSingleplayer: function() {
+          console.log('🔘 Menu: Switching to Singleplayer (menu still open)');
+          if (isMultiplayer) {
+            // End multiplayer and switch to singleplayer
+            console.log('🔘 Menu: Ending multiplayer connection...');
+            endMultiplayer();
+          }
+          this.updateCurrentModeDisplay('Singleplayer');
+          console.log('🔘 Menu: Singleplayer mode selected (HUD updates deferred until menu closes)');
+        },
+
+        switchToMultiplayer: function() {
+          console.log('🔘 Menu: Switching to Multiplayer (menu still open)');
+          if (!isMultiplayer) {
+            // Start multiplayer connection
+            updateMultiplayerStatus('Searching for match...');
+            isSearchingForMatch = true;
+            console.log('🔘 Menu: Starting multiplayer connection...');
+            startMultiplayerConnection();
+          }
+          this.updateCurrentModeDisplay('Searching for multiplayer...');
+          console.log('🔘 Menu: Multiplayer mode selected (HUD updates deferred until menu closes)');
+        },
+
+        updateCurrentModeDisplay: function(mode) {
+          const currentModeDisplay = document.querySelector('#menu-current-mode');
+          if (currentModeDisplay) {
+            currentModeDisplay.setAttribute('text', 'value', `Mode: ${mode}`);
+            currentModeDisplay.setAttribute('text', 'color', '#ffffff');
+          }
+        }
+      });
+
     </script>
 
-    <a-scene physics-world fps-counter game-manager multiplayer-sync multiplayer-toggle
+    <a-scene physics-world fps-counter game-manager multiplayer-sync menu-toggle
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              webxr="requiredFeatures: local-floor">
       
@@ -3171,7 +3407,7 @@ function setGameplayHUD(isPlaying) {
             </a-sphere>
             
             <!-- HUD display -->
-            <a-entity id="version-display" position="0 0.3 -0.5" text="value: Zero-G v1.0; align: center; width: 2; color: #00ff00"></a-entity>
+            <a-entity id="version-display" position="0 0.3 -0.5" text="value: Zero-G v1.0; align: center; width: 0.4; color: #ffffff"></a-entity>
             
             <!-- Game Status Display -->
             <a-entity id="hud-status" position="0 0.2 -0.5" text="value: Singleplayer; align: center; width: 1.1; color: #ffffff"></a-entity>
@@ -3187,11 +3423,52 @@ function setGameplayHUD(isPlaying) {
             
             <!-- Game Messages in HUD -->
             <a-entity id="hud-message" position="0 0 -0.5" text="value: Press A to Start; align: center; width: 1.1; color: #ffffff" visible="false"></a-entity>
+            
+            <!-- Game Menu in HUD (initially hidden) -->
+            <a-entity id="game-menu" position="0 0 -0.8" visible="false">
+              <!-- Menu background panel -->
+              <a-plane width="0.8" height="0.6" color="#000000" material="opacity: 0.9; transparent: true" position="0 0 -0.01"></a-plane>
+              
+              <!-- Menu title -->
+              <a-text value="GAME MENU" position="0 0.22 0" align="center" width="1" color="#ffffff"></a-text>
+              
+              <!-- Singleplayer button -->
+              <a-entity id="menu-singleplayer" position="-0.15 0.05 0" 
+                        geometry="primitive: plane; width: 0.25; height: 0.08"
+                        material="color: #004499; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="SINGLE" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Multiplayer button -->
+              <a-entity id="menu-multiplayer" position="0.15 0.05 0"
+                        geometry="primitive: plane; width: 0.25; height: 0.08"
+                        material="color: #990044; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="MULTI" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Current mode display -->
+              <a-text id="menu-current-mode" value="Mode: Singleplayer" position="0 -0.05 0" align="center" width="0.9" color="#ffffff"></a-text>
+              
+              <!-- Instructions -->
+              <a-text value="B to close" 
+                      position="0 -0.15 0" align="center" width="0.6" color="#ffffff"></a-text>
+            </a-entity>
           </a-entity>
           
           <a-entity id="leftHand" 
+                   hand-controls="hand: left"
                    oculus-touch-controls="hand: left"
-                   custom-hand-controls>
+                   laser-controls="hand: left"
+                   raycaster="objects: .clickable; lineColor: #ffffff; lineOpacity: 0"
+                   hand-collider
+                   hand-haptics
+                   debug-controller
+                   custom-hand-controls
+                   >
             <!-- Thruster visual effect -->
             <a-cone class="thruster-vfx"
                     position="0 0 0.1"
@@ -3205,8 +3482,15 @@ function setGameplayHUD(isPlaying) {
           </a-entity>
           
           <a-entity id="rightHand" 
+                   hand-controls="hand: right"
                    oculus-touch-controls="hand: right"
-                   custom-hand-controls>
+                   laser-controls="hand: right"
+                   raycaster="objects: .clickable; lineColor: #ffffff; lineOpacity: 0"
+                   hand-collider
+                   hand-haptics
+                   debug-controller
+                   custom-hand-controls
+                   >
             <!-- Thruster visual effect -->
             <a-cone class="thruster-vfx"
                     position="0 0 0.1"
@@ -3258,7 +3542,7 @@ function setGameplayHUD(isPlaying) {
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
         <!-- Version display moved closer to top -->
-        <a-entity id="version-display-override" position="0 7 0" text="value: Zero-G v1.0; align: center; width: 1.5; color: #00ff00"></a-entity>
+        <a-entity id="version-display-override" position="0 7 0" text="value: Zero-G v1.0; align: center; width: 0.5; color: #ffffff"></a-entity>
         
         <!-- Large colored score display -->
         <a-entity id="score-display" position="0 6.5 0">
@@ -3271,7 +3555,7 @@ function setGameplayHUD(isPlaying) {
         </a-entity>
         
         <a-entity id="timer-display" position="0 6 0" text="value: Time: 3:00; align: center; width: 2; color: #ffff00"></a-entity>
-        <a-entity id="start-message" position="0 5.5 0" text="value: Press A to Start\nY for Multiplayer; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="start-message" position="0 5.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
 
       <!-- Ambient space lighting -->
