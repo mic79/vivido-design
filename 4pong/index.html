@@ -1,0 +1,1308 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>4-Player Pong</title>
+    <meta name="description" content="4-Player Pong with WebRTC multiplayer">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: #000;
+        font-family: Arial, sans-serif;
+        overflow: hidden;
+      }
+      
+      #gameCanvas {
+        height: calc(90vh - 200px);
+        display: block;
+        margin: 0 auto;
+        background: #000;
+        border: 2px solid #fff;
+      }
+      
+      #ui {
+        position: relative;
+        top: 10px;
+        left: 10px;
+        color: #fff;
+        font-size: 16px;
+        z-index: 100;
+      }
+      
+      #status {
+        color: #fff;
+        font-size: 24px;
+        text-align: center;
+        z-index: 100;
+        background: rgba(0, 0, 0, 0.8);
+        padding: 20px;
+        border-radius: 10px;
+      }
+      
+      #readyButton {
+        position: absolute;
+        top: 60%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: #4CAF50;
+        color: white;
+        border: none;
+        padding: 15px 30px;
+        font-size: 18px;
+        cursor: pointer;
+        border-radius: 5px;
+        z-index: 100;
+      }
+      
+      #readyButton:hover {
+        background: #45a049;
+      }
+      
+      #readyButton.not-ready {
+        background: #f44336;
+      }
+      
+      #readyButton.not-ready:hover {
+        background: #da190b;
+      }
+      
+      #score {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        color: #fff;
+        font-size: 20px;
+        z-index: 100;
+      }
+      
+      .player-info {
+        margin: 5px 0;
+        padding: 5px;
+        border-radius: 3px;
+      }
+      
+      .player-0 { background: rgba(255, 0, 0, 0.3); }
+      .player-1 { background: rgba(0, 255, 0, 0.3); }
+      .player-2 { background: rgba(0, 0, 255, 0.3); }
+      .player-3 { background: rgba(255, 255, 0, 0.3); }
+      
+      .bot { opacity: 0.5; }
+    </style>
+  </head>
+  <body>
+    
+          <div id="ui">
+        <div id="status">Connecting...</div>
+        <div id="lobbyInfo"></div>
+        <div id="playerInfo"></div>
+      </div>
+    
+    <canvas id="gameCanvas" width="800" height="800"></canvas>
+    
+    <button id="readyButton">Set Ready</button>
+    
+    <script>
+      // Game constants
+      const CANVAS_SIZE = 800;
+      const PADDLE_WIDTH = 20;
+      const PADDLE_HEIGHT = CANVAS_SIZE / 4;
+      const BALL_SIZE = 10;
+      const PADDLE_SPEED = 5;
+      const BALL_SPEED = 4;
+      
+      // Paddle positions and dimensions
+      const PADDLE_POSITIONS = {
+        left: { x: 0, y: CANVAS_SIZE / 2 - PADDLE_HEIGHT / 2, width: PADDLE_WIDTH, height: PADDLE_HEIGHT },
+        right: { x: CANVAS_SIZE - PADDLE_WIDTH, y: CANVAS_SIZE / 2 - PADDLE_HEIGHT / 2, width: PADDLE_WIDTH, height: PADDLE_HEIGHT },
+        top: { x: CANVAS_SIZE / 2 - PADDLE_HEIGHT / 2, y: 0, width: PADDLE_HEIGHT, height: PADDLE_WIDTH },
+        bottom: { x: CANVAS_SIZE / 2 - PADDLE_HEIGHT / 2, y: CANVAS_SIZE - PADDLE_WIDTH, width: PADDLE_HEIGHT, height: PADDLE_WIDTH }
+      };
+      
+      // Game state
+      let gameState = {
+        ball: { x: CANVAS_SIZE / 2, y: CANVAS_SIZE / 2, vx: 0, vy: 0 },
+        paddles: [
+          { x: PADDLE_POSITIONS.left.x, y: PADDLE_POSITIONS.left.y, side: 'left' },    // Player 0
+          { x: PADDLE_POSITIONS.right.x, y: PADDLE_POSITIONS.right.y, side: 'right' }, // Player 1
+          { x: PADDLE_POSITIONS.top.x, y: PADDLE_POSITIONS.top.y, side: 'top' },      // Player 2
+          { x: PADDLE_POSITIONS.bottom.x, y: PADDLE_POSITIONS.bottom.y, side: 'bottom' } // Player 3
+        ],
+        scores: [0, 0, 0, 0],
+        lastPlayerToTouch: null, // Track who last touched the ball
+        gameStarted: false,
+        countdown: 3,
+        matchState: 'WAITING' // WAITING, COUNTDOWN, PLAYING, ENDED
+      };
+      
+      // Multiplayer state
+      let isMultiplayer = false;
+      let isHost = false;
+      let peer = null;
+      let connections = new Map();
+      let players = new Map();
+      let activePlayers = new Set();
+      let botPlayers = new Set();
+      let playerSlots = [
+        { name: 'Player 0', color: '#ff0000', side: 'left' },
+        { name: 'Player 1', color: '#00ff00', side: 'right' },
+        { name: 'Player 2', color: '#0000ff', side: 'top' },
+        { name: 'Player 3', color: '#ffff00', side: 'bottom' }
+      ];
+      let sessionID = null;
+      let multiplayerSlot = null;
+      let myPlayerId = null;
+      let myReadyState = false;
+      let readyStates = [false, false, false, false];
+      let lastMultiplayerToggle = 0;
+      let MAX_LOBBIES = 10;
+      let multiplayerStartType = 'pong4p';
+      
+      // Input state
+      let keys = {};
+      
+      // Canvas and context
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      
+      // UI elements
+      const statusDiv = document.getElementById('status');
+      const lobbyInfoDiv = document.getElementById('lobbyInfo');
+      const playerInfoDiv = document.getElementById('playerInfo');
+      const readyButton = document.getElementById('readyButton');
+      
+      // Initialize players map
+      for (let i = 0; i < 4; i++) {
+        players.set(`player_${i}`, {
+          id: `player_${i}`,
+          name: playerSlots[i].name,
+          color: playerSlots[i].color,
+          side: playerSlots[i].side,
+          isConnected: false,
+          isBot: false,
+          isReady: false
+        });
+      }
+      
+      // Initialize player info display immediately
+      updatePlayerInfo();
+      
+      // If we're going to be host, mark player 0 as connected immediately
+      if (typeof window !== 'undefined') {
+        // This will be updated when host setup completes
+        setTimeout(() => {
+          if (isHost && activePlayers.has('player_0')) {
+            updatePlayerInfo();
+          }
+        }, 100);
+      }
+      
+      // Event listeners
+      document.addEventListener('keydown', (e) => {
+        keys[e.key] = true;
+      });
+      
+      document.addEventListener('keyup', (e) => {
+        keys[e.key] = false;
+      });
+      
+      readyButton.addEventListener('click', () => {
+        toggleReady();
+      });
+      
+      // Initialize multiplayer
+      initMultiplayer();
+      
+      function initMultiplayer() {
+        // Start multiplayer connection
+        startMultiplayerConnection();
+      }
+      
+      async function startMultiplayerConnection() {
+        statusDiv.textContent = 'Searching for game...';
+        
+        try {
+          // First, try to find and connect to existing hosts
+          const existingHost = await findExistingHost();
+          if (existingHost) {
+            console.log(`Found existing host in slot ${existingHost.slotNumber}, joining as peer`);
+                      multiplayerSlot = existingHost.slotNumber;
+          isHost = false;
+          updateLobbyInfo();
+          await setupPeer(multiplayerSlot);
+            return;
+          }
+          
+          // If no existing hosts found, create a new one
+          const slot = await findAvailableSlot(multiplayerStartType);
+          if (!slot) {
+            statusDiv.textContent = 'No available slots. Try again.';
+            return;
+          }
+          
+          multiplayerSlot = slot.slotNumber;
+          isHost = slot.role === 'host';
+          
+          updateLobbyInfo();
+          
+          if (isHost) {
+            await setupHost(multiplayerSlot);
+          } else {
+            await setupPeer(multiplayerSlot);
+          }
+        } catch (e) {
+          statusDiv.textContent = 'Connection failed.';
+          console.error('Connection error:', e);
+        }
+      }
+      
+      async function checkPeerAvailability(id) {
+        return new Promise((resolve) => {
+          const tempPeer = new Peer(id, { 
+            host: "0.peerjs.com", 
+            port: 443, 
+            secure: true 
+          });
+          
+          const timeout = setTimeout(() => {
+            tempPeer.destroy();
+            resolve(false);
+          }, 2000);
+          
+          tempPeer.on("open", () => {
+            clearTimeout(timeout);
+            tempPeer.destroy();
+            resolve(true);
+          });
+          
+          tempPeer.on("error", (err) => {
+            clearTimeout(timeout);
+            tempPeer.destroy();
+            if (err.type === 'unavailable-id') {
+              resolve(false);
+            } else {
+              resolve(true);
+            }
+          });
+        });
+      }
+      
+      async function findExistingHost() {
+        for (let i = 1; i <= MAX_LOBBIES; i++) {
+          const hostId = `pong4p-host-${multiplayerStartType}-${i}`;
+          
+          console.log(`Checking for existing host in slot ${i}...`);
+          
+          // Check if host ID is taken (meaning host exists)
+          const hostAvailable = await checkPeerAvailability(hostId);
+          if (!hostAvailable) {
+            console.log(`Found existing host in slot ${i}`);
+            return { slotNumber: i };
+          }
+        }
+        console.log('No existing hosts found');
+        return null;
+      }
+      
+      async function findAvailableSlot(desiredStartType) {
+        for (let i = 1; i <= MAX_LOBBIES; i++) {
+          const hostId = `pong4p-host-${desiredStartType}-${i}`;
+          
+          console.log(`Checking slot ${i}...`);
+          
+          // Check if there's already a host in this slot
+          const hostAvailable = await checkPeerAvailability(hostId);
+          console.log(`Slot ${i} host available: ${hostAvailable}`);
+          
+          if (!hostAvailable) {
+            // Host exists in this slot, we can join as peer
+            console.log(`Host exists in slot ${i}, joining as peer`);
+            return { slotNumber: i, role: 'peer' };
+          } else {
+            // No host exists in this slot, we can become host
+            console.log(`No host in slot ${i}, becoming host`);
+            return { slotNumber: i, role: 'host' };
+          }
+        }
+        return null;
+      }
+      
+      async function setupHost(slotNumber) {
+        isMultiplayer = true;
+        isHost = true;
+        myPlayerId = 'player_0';
+        sessionID = `pong4p-host-${multiplayerStartType}-${slotNumber}`;
+        
+        // Mark host as connected immediately
+        activePlayers.add('player_0');
+        players.get('player_0').isConnected = true;
+        players.get('player_0').isBot = false;
+        updatePlayerInfo();
+        
+        let iceServersConfig = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ];
+        
+        try {
+          const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev/");
+          if (response.ok) {
+            iceServersConfig = await response.json();
+          }
+        } catch (e) {}
+        
+        peer = new Peer(sessionID, {
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { 'iceServers': iceServersConfig }
+        });
+        
+        peer.on("open", function() {
+          statusDiv.textContent = 'Waiting for players...';
+          console.log(`Host started with sessionID: ${sessionID}`);
+          
+          // Host is already marked as connected in setupHost()
+          // Just ensure player info is updated
+          updatePlayerInfo();
+          
+          // Add a small delay to ensure host is fully established
+          setTimeout(() => {
+            console.log('Host fully established and ready for connections');
+          }, 1000);
+          
+          peer.on("connection", function(newConn) {
+            console.log(`Host received incoming connection from: ${newConn.peer}`);
+            
+            // Find the first available slot
+            let assignedSlot = null;
+            for (let slotNumber = 1; slotNumber < 4; slotNumber++) {
+              const playerId = `player_${slotNumber}`;
+              const player = players.get(playerId);
+              if (!player || !player.isConnected) {
+                assignedSlot = slotNumber;
+                break;
+              }
+            }
+            
+            if (assignedSlot === null) {
+              console.log('No available slots, rejecting connection');
+              newConn.close();
+              return;
+            }
+            
+            const playerId = `player_${assignedSlot}`;
+            connections.set(playerId, newConn);
+            
+            newConn.on("open", function() {
+              console.log(`Player ${playerId} connected successfully`);
+              setupConnectionHandlers(newConn, playerId);
+              
+              // Mark player as connected
+              const player = players.get(playerId);
+              if (player) {
+                player.isConnected = true;
+                player.isBot = false;
+                activePlayers.add(playerId);
+                
+                // Remove from bot players if it was filled by a bot
+                if (botPlayers.has(playerId)) {
+                  botPlayers.delete(playerId);
+                }
+                
+                console.log(`Player ${playerId} assigned to slot ${assignedSlot}`);
+              }
+              
+              // Send player assignment to the client
+              newConn.send({
+                type: 'player-assignment',
+                playerId: playerId
+              });
+              
+              // Send current player info to the new client
+              newConn.send({
+                type: 'player-info-update',
+                players: Array.from(players.entries()),
+                activePlayers: Array.from(activePlayers),
+                botPlayers: Array.from(botPlayers),
+                readyStates: readyStates,
+                scores: gameState.scores
+              });
+              
+              updatePlayerInfo();
+              sendPlayerCountUpdate();
+            });
+          });
+        });
+        
+        peer.on("error", function(err) {
+          console.log(`Host error: ${err.type}`);
+          statusDiv.textContent = `Host error: ${err.type}`;
+        });
+      }
+      
+      async function setupPeer(slotNumber) {
+        isMultiplayer = true;
+        isHost = false;
+        // Generate unique peer ID with timestamp to avoid conflicts
+        const timestamp = Date.now();
+        const randomId = Math.random().toString(36).substr(2, 9);
+        sessionID = `pong4p-peer-${multiplayerStartType}-${slotNumber}-${timestamp}-${randomId}`;
+        
+        let iceServersConfig = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ];
+        
+        try {
+          const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev");
+          if (response.ok) {
+            iceServersConfig = await response.json();
+          }
+        } catch (e) {}
+        
+        peer = new Peer(sessionID, {
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { 'iceServers': iceServersConfig }
+        });
+        
+        peer.on("open", function() {
+          statusDiv.textContent = 'Connecting to host...';
+          const hostID = `pong4p-host-${multiplayerStartType}-${slotNumber}`;
+          const conn = peer.connect(hostID);
+          connections.set('host', conn);
+          
+          conn.on("open", function() {
+            console.log('Connected to host successfully');
+            setupConnectionHandlers(conn, 'client');
+            statusDiv.textContent = 'Connected to host';
+            updatePlayerInfo();
+          });
+        });
+        
+        peer.on("error", function(err) {
+          console.log(`Peer error: ${err.type}`);
+          statusDiv.textContent = `Peer error: ${err.type}`;
+        });
+      }
+      
+      function setupConnectionHandlers(conn, playerId) {
+        conn.on('data', (data) => {
+          
+          switch(data.type) {
+            case 'player-count-update':
+              handlePlayerCountUpdate(data);
+              break;
+            case 'player-assignment':
+              handlePlayerAssignment(data);
+              break;
+            case 'ready-update':
+              handleReadyUpdate(data);
+              break;
+            case 'game-state':
+              handleGameState(data);
+              break;
+            case 'paddle-update':
+              handlePaddleUpdate(data);
+              break;
+            case 'ball-update':
+              handleBallUpdate(data);
+              break;
+            case 'score-update':
+              handleScoreUpdate(data);
+              break;
+            case 'request-player-assignment':
+              handlePlayerAssignmentRequest(conn);
+              break;
+            case 'player-info-update':
+              handlePlayerInfoUpdate(data);
+              break;
+          }
+        });
+        
+        conn.on('close', () => {
+          console.log('Connection closed');
+          handlePlayerDisconnection(conn, playerId);
+        });
+        
+        conn.on('error', (err) => {
+          console.log('Connection error:', err);
+          handlePlayerDisconnection(conn, playerId);
+        });
+      }
+      
+      function handlePlayerCountUpdate(data) {
+        // Update player count display
+        updatePlayerInfo();
+        
+        // If we're a client and don't have a player ID yet, request assignment
+        if (!isHost && !myPlayerId) {
+          const hostConn = connections.get('host');
+          if (hostConn && hostConn.open) {
+            hostConn.send({
+              type: 'request-player-assignment'
+            });
+          }
+        }
+      }
+      
+      function handlePlayerAssignment(data) {
+        myPlayerId = data.playerId;
+        console.log(`Assigned to player: ${myPlayerId}`);
+        updatePlayerInfo();
+      }
+      
+      function handlePlayerAssignmentRequest(conn) {
+        if (!isHost) return;
+        
+        // Find the first available slot
+        let assignedSlot = null;
+        for (let slotNumber = 1; slotNumber < 4; slotNumber++) {
+          const playerId = `player_${slotNumber}`;
+          const player = players.get(playerId);
+          if (!player || !player.isConnected) {
+            assignedSlot = slotNumber;
+            break;
+          }
+        }
+        
+        if (assignedSlot !== null) {
+          const playerId = `player_${assignedSlot}`;
+          conn.send({
+            type: 'player-assignment',
+            playerId: playerId
+          });
+          
+          // Mark player as connected
+          const player = players.get(playerId);
+          if (player) {
+            player.isConnected = true;
+            player.isBot = false;
+            activePlayers.add(playerId);
+            
+            // Remove from bot players if it was filled by a bot
+            if (botPlayers.has(playerId)) {
+              botPlayers.delete(playerId);
+            }
+          }
+          
+          updatePlayerInfo();
+          sendPlayerCountUpdate();
+          
+          // Send current player info to all clients
+          connections.forEach((conn, playerId) => {
+            if (conn && conn.open) {
+              conn.send({
+                type: 'player-info-update',
+                players: Array.from(players.entries()),
+                activePlayers: Array.from(activePlayers),
+                botPlayers: Array.from(botPlayers),
+                readyStates: readyStates,
+                scores: gameState.scores
+              });
+            }
+          });
+        }
+      }
+      
+      async function attemptHostMigration() {
+        statusDiv.textContent = 'Host disconnected. Attempting to become new host...';
+        
+        try {
+          // Clean up old connection
+          const oldHostConn = connections.get('host');
+          if (oldHostConn) {
+            oldHostConn.close();
+            connections.delete('host');
+          }
+          
+          // Destroy old peer
+          if (peer) {
+            peer.destroy();
+          }
+          
+          // Become the new host
+          isHost = true;
+          isMultiplayer = true;
+          
+          // Create new host peer
+          const timestamp = Date.now();
+          const randomId = Math.random().toString(36).substr(2, 9);
+          sessionID = `pong4p-host-${multiplayerStartType}-${multiplayerSlot}-migrated-${timestamp}-${randomId}`;
+          
+          let iceServersConfig = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun.cloudflare.com:3478' }
+          ];
+          
+          try {
+            const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev/");
+            if (response.ok) {
+              iceServersConfig = await response.json();
+            }
+          } catch (e) {}
+          
+          peer = new Peer(sessionID, {
+            host: "0.peerjs.com",
+            port: 443,
+            secure: true,
+            config: { 'iceServers': iceServersConfig }
+          });
+          
+          peer.on("open", function() {
+            console.log(`Host migration successful! New host ID: ${sessionID}`);
+            statusDiv.textContent = 'Host migration successful! Waiting for players...';
+            updateLobbyInfo();
+            
+            // Mark self as connected
+            if (myPlayerId) {
+              activePlayers.add(myPlayerId);
+              const player = players.get(myPlayerId);
+              if (player) {
+                player.isConnected = true;
+                player.isBot = false;
+              }
+            }
+            
+            updatePlayerInfo();
+            
+            peer.on("connection", function(newConn) {
+              console.log(`New host received connection from: ${newConn.peer}`);
+              
+              // Assign the connection to the appropriate player slot
+              const playerId = `player_${getPlayerIndex(myPlayerId) === 0 ? 1 : 0}`; // Simple assignment
+              connections.set(playerId, newConn);
+              
+              newConn.on("open", function() {
+                console.log(`Player ${playerId} connected to new host`);
+                setupConnectionHandlers(newConn, playerId);
+                
+                // Mark player as connected
+                const player = players.get(playerId);
+                if (player) {
+                  player.isConnected = true;
+                  player.isBot = false;
+                  activePlayers.add(playerId);
+                }
+                
+                updatePlayerInfo();
+                sendPlayerCountUpdate();
+              });
+            });
+          });
+          
+          peer.on("error", function(err) {
+            console.log(`Host migration failed: ${err.type}`);
+            statusDiv.textContent = 'Host migration failed. Returning to singleplayer.';
+            setTimeout(() => {
+              endMultiplayer();
+            }, 1000);
+          });
+          
+        } catch (e) {
+          console.log('Host migration failed:', e);
+          statusDiv.textContent = 'Host migration failed. Returning to singleplayer.';
+          setTimeout(() => {
+            endMultiplayer();
+          }, 1000);
+        }
+      }
+      
+      function handlePlayerDisconnection(conn, playerId) {
+        if (isHost) {
+          // Host: Mark specific player as disconnected
+          console.log(`Player ${playerId} disconnected`);
+          
+          // Remove from active players
+          activePlayers.delete(playerId);
+          
+          // Mark player as disconnected
+          const player = players.get(playerId);
+          if (player) {
+            player.isConnected = false;
+            player.isReady = false;
+          }
+          
+          // Remove from connections
+          connections.delete(playerId);
+          
+          // Reset their ready state
+          const playerIndex = getPlayerIndex(playerId);
+          if (playerIndex !== undefined) {
+            readyStates[playerIndex] = false;
+          }
+          
+          // Fill empty slot with bot if game is active
+          if (gameState.matchState === 'PLAYING' || gameState.matchState === 'OVERTIME') {
+            console.log(`Filling slot ${playerId} with bot`);
+            const player = players.get(playerId);
+            if (player) {
+              player.isBot = true;
+              player.isConnected = true;
+              botPlayers.add(playerId);
+            }
+          }
+          
+          // Update player info and notify remaining clients
+          updatePlayerInfo();
+          sendPlayerCountUpdate();
+          
+          // Send updated player info to remaining clients
+          connections.forEach((conn, remainingPlayerId) => {
+            if (conn && conn.open) {
+              conn.send({
+                type: 'player-info-update',
+                players: Array.from(players.entries()),
+                activePlayers: Array.from(activePlayers),
+                botPlayers: Array.from(botPlayers),
+                readyStates: readyStates,
+                scores: gameState.scores
+              });
+            }
+          });
+          
+          statusDiv.textContent = `Player ${playerId} disconnected`;
+        } else {
+          // Client: Handle host disconnection
+          if (playerId === 'host') {
+            console.log('Host disconnected, attempting host migration...');
+            attemptHostMigration();
+          }
+        }
+      }
+      
+      function handlePlayerInfoUpdate(data) {
+        // Update local player info from host
+        data.players.forEach(([playerId, playerData]) => {
+          players.set(playerId, playerData);
+        });
+        
+        activePlayers.clear();
+        data.activePlayers.forEach(playerId => activePlayers.add(playerId));
+        
+        botPlayers.clear();
+        data.botPlayers.forEach(playerId => botPlayers.add(playerId));
+        
+        readyStates.splice(0, readyStates.length, ...data.readyStates);
+        
+        // Update scores if provided
+        if (data.scores) {
+          gameState.scores = data.scores;
+        }
+        
+        updatePlayerInfo();
+      }
+      
+      function handleReadyUpdate(data) {
+        readyStates[data.playerIndex] = data.ready;
+        updateReadyDisplay();
+        updatePlayerInfo(); // Update player info to show ready state changes
+        checkAllReady();
+      }
+      
+      function handleGameState(data) {
+        gameState = data.state;
+        updateScoreDisplay();
+      }
+      
+      function handlePaddleUpdate(data) {
+        gameState.paddles[data.playerIndex] = data.paddle;
+      }
+      
+      function handleBallUpdate(data) {
+        gameState.ball = data.ball;
+      }
+      
+      function handleScoreUpdate(data) {
+        gameState.scores = data.scores;
+        updateScoreDisplay();
+        updatePlayerInfo(); // Update player info to show new scores
+      }
+      
+      function sendPlayerCountUpdate() {
+        if (isHost) {
+          const connectedCount = Array.from(activePlayers).length;
+          connections.forEach((conn, playerId) => {
+            if (conn && conn.open) {
+              conn.send({
+                type: 'player-count-update',
+                count: connectedCount,
+                players: Array.from(activePlayers)
+              });
+            }
+          });
+        }
+      }
+      
+      function sendReadyUpdate() {
+        if (isHost) {
+          connections.forEach((conn, playerId) => {
+            if (conn && conn.open) {
+              conn.send({
+                type: 'ready-update',
+                playerIndex: getPlayerIndex(myPlayerId),
+                ready: myReadyState
+              });
+            }
+          });
+        } else {
+          const hostConn = connections.get('host');
+          if (hostConn && hostConn.open) {
+            hostConn.send({
+              type: 'ready-update',
+              playerIndex: getPlayerIndex(myPlayerId),
+              ready: myReadyState
+            });
+          }
+        }
+      }
+      
+      function getPlayerIndex(playerId) {
+        return parseInt(playerId.split('_')[1]);
+      }
+      
+      function toggleReady() {
+        if (!myPlayerId) {
+          console.log('Cannot toggle ready - no player ID assigned yet');
+          return;
+        }
+        
+        myReadyState = !myReadyState;
+        readyStates[getPlayerIndex(myPlayerId)] = myReadyState;
+        
+        readyButton.textContent = myReadyState ? 'Set Not Ready' : 'Set Ready';
+        readyButton.classList.toggle('not-ready', !myReadyState);
+        
+        // Update player info display immediately
+        updatePlayerInfo();
+        
+        sendReadyUpdate();
+        checkAllReady();
+      }
+      
+      function checkAllReady() {
+        const connectedPlayers = Array.from(activePlayers);
+        const allReady = connectedPlayers.every(playerId => {
+          const playerIndex = getPlayerIndex(playerId);
+          return readyStates[playerIndex];
+        });
+        
+        if (allReady && connectedPlayers.length >= 2) {
+          if (isHost && gameState.matchState === 'WAITING') {
+            startCountdown();
+          }
+        }
+      }
+      
+      function startCountdown() {
+        gameState.matchState = 'COUNTDOWN';
+        gameState.countdown = 3;
+        
+        connections.forEach((conn, playerId) => {
+          if (conn && conn.open) {
+            conn.send({
+              type: 'game-state',
+              state: gameState
+            });
+          }
+        });
+        
+        const countdownInterval = setInterval(() => {
+          gameState.countdown--;
+          
+          if (gameState.countdown <= 0) {
+            clearInterval(countdownInterval);
+            startGame();
+          } else {
+            connections.forEach((conn, playerId) => {
+              if (conn && conn.open) {
+                conn.send({
+                  type: 'game-state',
+                  state: gameState
+                });
+              }
+            });
+          }
+        }, 1000);
+      }
+      
+      function startGame() {
+        gameState.matchState = 'PLAYING';
+        gameState.gameStarted = true;
+        
+        // Start ball with random direction
+        const angle = Math.random() * Math.PI * 2;
+        gameState.ball.vx = Math.cos(angle) * BALL_SPEED;
+        gameState.ball.vy = Math.sin(angle) * BALL_SPEED;
+        
+        // Fill empty slots with bots
+        for (let i = 0; i < 4; i++) {
+          const playerId = `player_${i}`;
+          if (!activePlayers.has(playerId)) {
+            players.get(playerId).isBot = true;
+            botPlayers.add(playerId);
+          }
+        }
+        
+        connections.forEach((conn, playerId) => {
+          if (conn && conn.open) {
+            conn.send({
+              type: 'game-state',
+              state: gameState
+            });
+          }
+        });
+      }
+      
+      function updateLobbyInfo() {
+        if (multiplayerSlot) {
+          lobbyInfoDiv.innerHTML = `<div style="background: rgba(0, 0, 0, 0.7); padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+            <strong>Lobby ${multiplayerSlot}</strong> - ${isHost ? 'Host' : 'Client'}
+          </div>`;
+        } else {
+          lobbyInfoDiv.innerHTML = '';
+        }
+      }
+      
+      function updatePlayerInfo() {
+        let info = '';
+        for (let i = 0; i < 4; i++) {
+          const playerId = `player_${i}`;
+          const player = players.get(playerId);
+          const isConnected = activePlayers.has(playerId);
+          const isBot = botPlayers.has(playerId);
+          const isReady = readyStates[i];
+          const score = gameState.scores[i];
+          
+          info += `<div class="player-info player-${i} ${isBot ? 'bot' : ''}">`;
+          info += `${player.name}: ${isConnected ? (isBot ? 'BOT' : 'HUMAN') : 'DISCONNECTED'}`;
+          if (isConnected) {
+            info += ` - ${isReady ? 'READY' : 'NOT READY'}`;
+          }
+          info += ` (Score: ${score})`;
+          info += '</div>';
+        }
+        playerInfoDiv.innerHTML = info;
+        
+        // Send player info update to all clients if host
+        if (isHost) {
+          connections.forEach((conn, playerId) => {
+            if (conn && conn.open) {
+              conn.send({
+                type: 'player-info-update',
+                players: Array.from(players.entries()),
+                activePlayers: Array.from(activePlayers),
+                botPlayers: Array.from(botPlayers),
+                readyStates: readyStates,
+                scores: gameState.scores
+              });
+            }
+          });
+        }
+      }
+      
+      function updateReadyDisplay() {
+        // Update ready button visibility
+        if (gameState.matchState === 'WAITING') {
+          readyButton.style.display = 'block';
+        } else {
+          readyButton.style.display = 'none';
+        }
+      }
+      
+      function updateScoreDisplay() {
+        updatePlayerInfo(); // Update player info to show new scores
+      }
+      
+      function endMultiplayer() {
+        isMultiplayer = false;
+        isHost = false;
+        
+        if (peer) {
+          peer.destroy();
+        }
+        
+        connections.clear();
+        activePlayers.clear();
+        botPlayers.clear();
+        
+        // Reset game state
+        gameState = {
+          ball: { x: CANVAS_SIZE / 2, y: CANVAS_SIZE / 2, vx: 0, vy: 0 },
+          paddles: [
+            { x: PADDLE_POSITIONS.left.x, y: PADDLE_POSITIONS.left.y, side: 'left' },
+            { x: PADDLE_POSITIONS.right.x, y: PADDLE_POSITIONS.right.y, side: 'right' },
+            { x: PADDLE_POSITIONS.top.x, y: PADDLE_POSITIONS.top.y, side: 'top' },
+            { x: PADDLE_POSITIONS.bottom.x, y: PADDLE_POSITIONS.bottom.y, side: 'bottom' }
+          ],
+          scores: [0, 0, 0, 0],
+          lastPlayerToTouch: null,
+          gameStarted: false,
+          countdown: 3,
+          matchState: 'WAITING'
+        };
+        
+        statusDiv.textContent = 'Disconnected';
+        updateLobbyInfo();
+        updatePlayerInfo();
+        updateScoreDisplay();
+      }
+      
+      // Game logic
+      function updateGame() {
+        if (gameState.matchState !== 'PLAYING') return;
+        
+        // Update ball position
+        gameState.ball.x += gameState.ball.vx;
+        gameState.ball.y += gameState.ball.vy;
+        
+        // Ball collision with walls (goals)
+        if (gameState.ball.x <= 0) {
+          // Ball hit left wall - goal
+          handleGoal(0); // Left goal
+        } else if (gameState.ball.x >= CANVAS_SIZE) {
+          // Ball hit right wall - goal
+          handleGoal(1); // Right goal
+        }
+        
+        if (gameState.ball.y <= 0) {
+          // Ball hit top wall - goal
+          handleGoal(2); // Top goal
+        } else if (gameState.ball.y >= CANVAS_SIZE) {
+          // Ball hit bottom wall - goal
+          handleGoal(3); // Bottom goal
+        }
+        
+        // Ball collision with paddles
+        for (let i = 0; i < 4; i++) {
+          const paddle = gameState.paddles[i];
+          if (checkBallPaddleCollision(gameState.ball, paddle)) {
+            // Track who last touched the ball
+            gameState.lastPlayerToTouch = i;
+            
+            // Bounce ball off paddle
+            bounceBallOffPaddle(gameState.ball, paddle);
+          }
+        }
+        
+        // Update paddles based on input
+        updatePaddles();
+        
+        // Update bots
+        updateBots();
+        
+        // Send updates to other players
+        sendGameUpdates();
+      }
+      
+      function checkBallPaddleCollision(ball, paddle) {
+        const pos = PADDLE_POSITIONS[paddle.side];
+        return ball.x < paddle.x + pos.width &&
+               ball.x + BALL_SIZE > paddle.x &&
+               ball.y < paddle.y + pos.height &&
+               ball.y + BALL_SIZE > paddle.y;
+      }
+      
+      function bounceBallOffPaddle(ball, paddle) {
+        if (paddle.side === 'left' || paddle.side === 'right') {
+          ball.vx = -ball.vx;
+          // Add some randomness to prevent infinite loops
+          ball.vy += (Math.random() - 0.5) * 2;
+        } else {
+          ball.vy = -ball.vy;
+          ball.vx += (Math.random() - 0.5) * 2;
+        }
+        
+        // Ensure minimum speed
+        const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+        if (speed < BALL_SPEED * 0.5) {
+          ball.vx = (ball.vx / speed) * BALL_SPEED;
+          ball.vy = (ball.vy / speed) * BALL_SPEED;
+        }
+      }
+      
+      function updatePaddles() {
+        if (!myPlayerId) return;
+        
+        const playerIndex = getPlayerIndex(myPlayerId);
+        if (playerIndex === undefined || playerIndex === null) return;
+        
+        const paddle = gameState.paddles[playerIndex];
+        if (!paddle) return;
+        
+        const pos = PADDLE_POSITIONS[paddle.side];
+        
+        if (paddle.side === 'left' || paddle.side === 'right') {
+          // Vertical movement
+          if (keys['ArrowUp'] || keys['w']) {
+            paddle.y = Math.max(0, paddle.y - PADDLE_SPEED);
+          }
+          if (keys['ArrowDown'] || keys['s']) {
+            paddle.y = Math.min(CANVAS_SIZE - pos.height, paddle.y + PADDLE_SPEED);
+          }
+        } else {
+          // Horizontal movement
+          if (keys['ArrowLeft'] || keys['a']) {
+            paddle.x = Math.max(0, paddle.x - PADDLE_SPEED);
+          }
+          if (keys['ArrowRight'] || keys['d']) {
+            paddle.x = Math.min(CANVAS_SIZE - pos.width, paddle.x + PADDLE_SPEED);
+          }
+        }
+      }
+      
+      function updateBots() {
+        botPlayers.forEach(playerId => {
+          const playerIndex = getPlayerIndex(playerId);
+          const paddle = gameState.paddles[playerIndex];
+          const ball = gameState.ball;
+          const pos = PADDLE_POSITIONS[paddle.side];
+          
+          // Simple AI: move towards ball
+          if (paddle.side === 'left' || paddle.side === 'right') {
+            // Vertical movement
+            if (ball.y < paddle.y + pos.height / 2) {
+              paddle.y = Math.max(0, paddle.y - PADDLE_SPEED * 0.8);
+            } else {
+              paddle.y = Math.min(CANVAS_SIZE - pos.height, paddle.y + PADDLE_SPEED * 0.8);
+            }
+          } else {
+            // Horizontal movement
+            if (ball.x < paddle.x + pos.width / 2) {
+              paddle.x = Math.max(0, paddle.x - PADDLE_SPEED * 0.8);
+            } else {
+              paddle.x = Math.min(CANVAS_SIZE - pos.width, paddle.x + PADDLE_SPEED * 0.8);
+            }
+          }
+        });
+      }
+      
+      function handleGoal(goalPlayerIndex) {
+        // goalPlayerIndex is the player whose goal was scored on (they get -1)
+        // lastPlayerToTouch is the player who last touched the ball (they get +1)
+        
+        if (gameState.lastPlayerToTouch !== null) {
+          // Award point to the player who last touched the ball
+          gameState.scores[gameState.lastPlayerToTouch]++;
+          console.log(`Goal! Player ${gameState.lastPlayerToTouch} scored (last to touch)`);
+        }
+        
+        // Penalize the player whose goal was scored on
+        gameState.scores[goalPlayerIndex]--;
+        console.log(`Player ${goalPlayerIndex} conceded goal (-1 point)`);
+        
+        resetBall();
+        updateScoreDisplay();
+      }
+      
+      function resetBall() {
+        gameState.ball.x = CANVAS_SIZE / 2;
+        gameState.ball.y = CANVAS_SIZE / 2;
+        
+        // Reset last player to touch (no point awarded on respawn)
+        gameState.lastPlayerToTouch = null;
+        
+        // Random direction
+        const angle = Math.random() * Math.PI * 2;
+        gameState.ball.vx = Math.cos(angle) * BALL_SPEED;
+        gameState.ball.vy = Math.sin(angle) * BALL_SPEED;
+      }
+      
+      function sendGameUpdates() {
+        if (isHost) {
+          connections.forEach((conn, playerId) => {
+            if (conn && conn.open) {
+              conn.send({
+                type: 'game-state',
+                state: gameState
+              });
+            }
+          });
+          
+          // Also send score updates to all clients
+          connections.forEach((conn, playerId) => {
+            if (conn && conn.open) {
+              conn.send({
+                type: 'score-update',
+                scores: gameState.scores
+              });
+            }
+          });
+        } else {
+          const hostConn = connections.get('host');
+          if (hostConn && hostConn.open && myPlayerId) {
+            const playerIndex = getPlayerIndex(myPlayerId);
+            if (playerIndex !== undefined && playerIndex !== null) {
+              hostConn.send({
+                type: 'paddle-update',
+                playerIndex: playerIndex,
+                paddle: gameState.paddles[playerIndex]
+              });
+            }
+          }
+        }
+      }
+      
+      function render() {
+        // Clear canvas
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+        
+        // Draw border
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+        
+        // Draw paddles
+        for (let i = 0; i < 4; i++) {
+          const paddle = gameState.paddles[i];
+          const player = players.get(`player_${i}`);
+          const isBot = botPlayers.has(`player_${i}`);
+          const pos = PADDLE_POSITIONS[paddle.side];
+          
+          ctx.fillStyle = isBot ? '#666' : player.color;
+          ctx.fillRect(paddle.x, paddle.y, pos.width, pos.height);
+          
+          // Draw border
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(paddle.x, paddle.y, pos.width, pos.height);
+        }
+        
+        // Draw ball
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(gameState.ball.x, gameState.ball.y, BALL_SIZE, BALL_SIZE);
+        
+        // Draw countdown
+        if (gameState.matchState === 'COUNTDOWN') {
+          ctx.fillStyle = '#fff';
+          ctx.font = '48px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(gameState.countdown.toString(), CANVAS_SIZE / 2, CANVAS_SIZE / 2);
+        }
+        
+        // Draw status
+        if (gameState.matchState === 'WAITING') {
+          ctx.fillStyle = '#fff';
+          ctx.font = '24px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText('Waiting for players to be ready...', CANVAS_SIZE / 2, CANVAS_SIZE / 2 + 50);
+        }
+      }
+      
+      // Game loop
+      function gameLoop() {
+        updateGame();
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+      
+      // Start game loop
+      gameLoop();
+    </script>
+  </body>
+</html> 
