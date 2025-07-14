@@ -16,7 +16,8 @@
       }
       
       #gameCanvas {
-        height: calc(90vh - 200px);
+        height: calc(90vh - 240px);
+        max-width: 90vw;
         display: block;
         margin: 0 auto;
         background: #000;
@@ -103,6 +104,7 @@
           <button id="autoConnectButton" style="background: #2196F3; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; margin-left: 5px;">Auto</button>
         </div>
         <div id="lobbyInfo"></div>
+        <div id="timerDisplay" style="background: rgba(0, 0, 0, 0.8); padding: 10px; border-radius: 5px; margin-bottom: 10px; color: #ffff00; font-size: 18px; text-align: center; display: none;"></div>
         <div id="playerInfo"></div>
       </div>
     
@@ -140,6 +142,8 @@
         lastPlayerToTouch: null, // Track who last touched the ball
         gameStarted: false,
         countdown: 3,
+        matchStartTime: 0,
+        matchDuration: 60, // 1 minute in seconds
         matchState: 'WAITING' // WAITING, COUNTDOWN, PLAYING, ENDED
       };
       
@@ -181,6 +185,7 @@
       const lobbyInput = document.getElementById('lobbyInput');
       const connectButton = document.getElementById('connectButton');
       const autoConnectButton = document.getElementById('autoConnectButton');
+      const timerDisplay = document.getElementById('timerDisplay');
       
       // Initialize players map
       for (let i = 0; i < 4; i++) {
@@ -425,19 +430,17 @@
           // Add a small delay to ensure host is fully established
           setTimeout(() => {
             console.log('Host fully established and ready for connections');
-            statusDiv.textContent = 'Host ready - waiting for players...';
           }, 1000);
           
           peer.on("connection", function(newConn) {
             console.log(`Host received incoming connection from: ${newConn.peer}`);
-            console.log(`Connection details:`, newConn);
             
-            // Find the first available slot
+            // Find the first available slot (including bot slots)
             let assignedSlot = null;
             for (let slotNumber = 1; slotNumber < 4; slotNumber++) {
               const playerId = `player_${slotNumber}`;
               const player = players.get(playerId);
-              if (!player || !player.isConnected) {
+              if (!player || !player.isConnected || player.isBot) {
                 assignedSlot = slotNumber;
                 break;
               }
@@ -466,6 +469,7 @@
                 // Remove from bot players if it was filled by a bot
                 if (botPlayers.has(playerId)) {
                   botPlayers.delete(playerId);
+                  console.log(`Human player replaced bot in slot ${assignedSlot}`);
                 }
                 
                 console.log(`Player ${playerId} assigned to slot ${assignedSlot}`);
@@ -536,34 +540,13 @@
             console.log('Connected to host successfully');
             setupConnectionHandlers(conn, 'client');
             statusDiv.textContent = 'Connected to host';
-            
-            // Request player assignment immediately
-            conn.send({
-              type: 'request-player-assignment'
-            });
-            
             updatePlayerInfo();
-          });
-          
-          conn.on("close", function() {
-            console.log('Connection to host closed');
-            statusDiv.textContent = 'Connection to host lost';
-          });
-          
-          conn.on("error", function(err) {
-            console.log('Connection to host error:', err);
-            statusDiv.textContent = 'Connection to host failed';
           });
         });
         
         peer.on("error", function(err) {
           console.log(`Peer error: ${err.type}`);
           statusDiv.textContent = `Peer error: ${err.type}`;
-          
-          // If it's an unavailable-id error, the host might not exist
-          if (err.type === 'unavailable-id') {
-            statusDiv.textContent = `Host not found in lobby ${slotNumber}. Try a different lobby or use Auto.`;
-          }
         });
       }
       
@@ -636,12 +619,12 @@
       function handlePlayerAssignmentRequest(conn) {
         if (!isHost) return;
         
-        // Find the first available slot
+        // Find the first available slot (including bot slots)
         let assignedSlot = null;
         for (let slotNumber = 1; slotNumber < 4; slotNumber++) {
           const playerId = `player_${slotNumber}`;
           const player = players.get(playerId);
-          if (!player || !player.isConnected) {
+          if (!player || !player.isConnected || player.isBot) {
             assignedSlot = slotNumber;
             break;
           }
@@ -664,6 +647,7 @@
             // Remove from bot players if it was filled by a bot
             if (botPlayers.has(playerId)) {
               botPlayers.delete(playerId);
+              console.log(`Human player replaced bot in slot ${assignedSlot}`);
             }
           }
           
@@ -963,12 +947,16 @@
       
       function checkAllReady() {
         const connectedPlayers = Array.from(activePlayers);
-        const allReady = connectedPlayers.every(playerId => {
+        const humanPlayers = connectedPlayers.filter(playerId => !botPlayers.has(playerId));
+        
+        // Check if all human players are ready
+        const allHumanReady = humanPlayers.every(playerId => {
           const playerIndex = getPlayerIndex(playerId);
           return readyStates[playerIndex];
         });
         
-        if (allReady && connectedPlayers.length >= 2) {
+        // Start if at least 1 human player is ready and all human players are ready
+        if (allHumanReady && humanPlayers.length >= 1) {
           if (isHost && gameState.matchState === 'WAITING') {
             startCountdown();
           }
@@ -1010,6 +998,10 @@
       function startGame() {
         gameState.matchState = 'PLAYING';
         gameState.gameStarted = true;
+        gameState.matchStartTime = Date.now();
+        
+        // Reset scores for new match
+        gameState.scores = [0, 0, 0, 0];
         
         // Start ball with random direction
         const angle = Math.random() * Math.PI * 2;
@@ -1091,6 +1083,23 @@
         }
       }
       
+      function updateTimerDisplay() {
+        if (gameState.matchState === 'PLAYING' && gameState.matchStartTime > 0) {
+          const currentTime = Date.now();
+          const elapsed = (currentTime - gameState.matchStartTime) / 1000;
+          const remaining = Math.max(0, gameState.matchDuration - elapsed);
+          
+          const minutes = Math.floor(remaining / 60);
+          const seconds = Math.floor(remaining % 60);
+          const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+          
+          timerDisplay.textContent = `Time: ${timeString}`;
+          timerDisplay.style.display = 'block';
+        } else {
+          timerDisplay.style.display = 'none';
+        }
+      }
+      
       function updateScoreDisplay() {
         updatePlayerInfo(); // Update player info to show new scores
       }
@@ -1120,6 +1129,8 @@
           lastPlayerToTouch: null,
           gameStarted: false,
           countdown: 3,
+          matchStartTime: 0,
+          matchDuration: 60,
           matchState: 'WAITING'
         };
         
@@ -1132,6 +1143,14 @@
       // Game logic
       function updateGame() {
         if (gameState.matchState !== 'PLAYING') return;
+        
+        // Check if match time is up (1 minute)
+        const currentTime = Date.now();
+        const elapsed = (currentTime - gameState.matchStartTime) / 1000;
+        if (elapsed >= gameState.matchDuration) {
+          endMatch();
+          return;
+        }
         
         // Update ball position
         gameState.ball.x += gameState.ball.vx;
@@ -1174,6 +1193,44 @@
         
         // Send updates to other players
         sendGameUpdates();
+      }
+      
+      function endMatch() {
+        console.log('Match ended - returning to lobby');
+        gameState.matchState = 'WAITING';
+        gameState.gameStarted = false;
+        
+        // Reset all ready states
+        readyStates.fill(false);
+        
+        // Reset ball to center (no respawn until ready)
+        gameState.ball.x = CANVAS_SIZE / 2;
+        gameState.ball.y = CANVAS_SIZE / 2;
+        gameState.ball.vx = 0;
+        gameState.ball.vy = 0;
+        gameState.lastPlayerToTouch = null;
+        
+        // Keep bots in place but mark them as not ready
+        for (let i = 0; i < 4; i++) {
+          const playerId = `player_${i}`;
+          if (botPlayers.has(playerId)) {
+            readyStates[i] = false;
+          }
+        }
+        
+        // Send match end to all clients
+        connections.forEach((conn, playerId) => {
+          if (conn && conn.open) {
+            conn.send({
+              type: 'game-state',
+              state: gameState
+            });
+          }
+        });
+        
+        updatePlayerInfo();
+        updateTimerDisplay(); // Hide timer
+        statusDiv.textContent = 'Match ended. Set ready to start new match.';
       }
       
       function checkBallPaddleCollision(ball, paddle) {
@@ -1374,6 +1431,7 @@
       // Game loop
       function gameLoop() {
         updateGame();
+        updateTimerDisplay();
         render();
         requestAnimationFrame(gameLoop);
       }
