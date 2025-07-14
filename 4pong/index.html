@@ -425,10 +425,12 @@
           // Add a small delay to ensure host is fully established
           setTimeout(() => {
             console.log('Host fully established and ready for connections');
+            statusDiv.textContent = 'Host ready - waiting for players...';
           }, 1000);
           
           peer.on("connection", function(newConn) {
             console.log(`Host received incoming connection from: ${newConn.peer}`);
+            console.log(`Connection details:`, newConn);
             
             // Find the first available slot
             let assignedSlot = null;
@@ -534,13 +536,34 @@
             console.log('Connected to host successfully');
             setupConnectionHandlers(conn, 'client');
             statusDiv.textContent = 'Connected to host';
+            
+            // Request player assignment immediately
+            conn.send({
+              type: 'request-player-assignment'
+            });
+            
             updatePlayerInfo();
+          });
+          
+          conn.on("close", function() {
+            console.log('Connection to host closed');
+            statusDiv.textContent = 'Connection to host lost';
+          });
+          
+          conn.on("error", function(err) {
+            console.log('Connection to host error:', err);
+            statusDiv.textContent = 'Connection to host failed';
           });
         });
         
         peer.on("error", function(err) {
           console.log(`Peer error: ${err.type}`);
           statusDiv.textContent = `Peer error: ${err.type}`;
+          
+          // If it's an unavailable-id error, the host might not exist
+          if (err.type === 'unavailable-id') {
+            statusDiv.textContent = `Host not found in lobby ${slotNumber}. Try a different lobby or use Auto.`;
+          }
         });
       }
       
