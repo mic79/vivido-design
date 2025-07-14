@@ -96,6 +96,12 @@
     
           <div id="ui">
         <div id="status">Connecting...</div>
+        <div id="lobbySelector" style="background: rgba(0, 0, 0, 0.8); padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+          <label for="lobbyInput" style="color: #fff; margin-right: 10px;">Lobby (1-10):</label>
+          <input type="number" id="lobbyInput" min="1" max="10" value="1" style="width: 60px; margin-right: 10px;">
+          <button id="connectButton" style="background: #4CAF50; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">Connect</button>
+          <button id="autoConnectButton" style="background: #2196F3; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; margin-left: 5px;">Auto</button>
+        </div>
         <div id="lobbyInfo"></div>
         <div id="playerInfo"></div>
       </div>
@@ -172,6 +178,9 @@
       const lobbyInfoDiv = document.getElementById('lobbyInfo');
       const playerInfoDiv = document.getElementById('playerInfo');
       const readyButton = document.getElementById('readyButton');
+      const lobbyInput = document.getElementById('lobbyInput');
+      const connectButton = document.getElementById('connectButton');
+      const autoConnectButton = document.getElementById('autoConnectButton');
       
       // Initialize players map
       for (let i = 0; i < 4; i++) {
@@ -212,12 +221,57 @@
         toggleReady();
       });
       
+      connectButton.addEventListener('click', () => {
+        const lobbyNumber = parseInt(lobbyInput.value);
+        if (lobbyNumber >= 1 && lobbyNumber <= 10) {
+          connectToSpecificLobby(lobbyNumber);
+        } else {
+          statusDiv.textContent = 'Please enter a lobby number between 1-10';
+        }
+      });
+      
+      autoConnectButton.addEventListener('click', () => {
+        startMultiplayerConnection();
+      });
+      
       // Initialize multiplayer
       initMultiplayer();
       
+      // Set initial status
+      statusDiv.textContent = 'Select a lobby or use Auto to find available games';
+      
       function initMultiplayer() {
-        // Start multiplayer connection
-        startMultiplayerConnection();
+        // Don't auto-start connection, let user choose lobby
+        console.log('Multiplayer initialized - waiting for user to select lobby');
+      }
+      
+            async function connectToSpecificLobby(lobbyNumber) {
+        statusDiv.textContent = `Connecting to lobby ${lobbyNumber}...`;
+        
+        try {
+          // Check if there's already a host in this specific lobby
+          const hostId = `pong4p-host-${multiplayerStartType}-${lobbyNumber}`;
+          const hostAvailable = await checkPeerAvailability(hostId);
+          
+          if (!hostAvailable) {
+            // Host exists, try to join as peer
+            console.log(`Host exists in lobby ${lobbyNumber}, joining as peer`);
+            multiplayerSlot = lobbyNumber;
+            isHost = false;
+            updateLobbyInfo();
+            await setupPeer(multiplayerSlot);
+          } else {
+            // No host exists, become host
+            console.log(`No host in lobby ${lobbyNumber}, becoming host`);
+            multiplayerSlot = lobbyNumber;
+            isHost = true;
+            updateLobbyInfo();
+            await setupHost(multiplayerSlot);
+          }
+        } catch (e) {
+          statusDiv.textContent = `Connection to lobby ${lobbyNumber} failed.`;
+          console.error('Connection error:', e);
+        }
       }
       
       async function startMultiplayerConnection() {
@@ -228,10 +282,10 @@
           const existingHost = await findExistingHost();
           if (existingHost) {
             console.log(`Found existing host in slot ${existingHost.slotNumber}, joining as peer`);
-                      multiplayerSlot = existingHost.slotNumber;
-          isHost = false;
-          updateLobbyInfo();
-          await setupPeer(multiplayerSlot);
+            multiplayerSlot = existingHost.slotNumber;
+            isHost = false;
+            updateLobbyInfo();
+            await setupPeer(multiplayerSlot);
             return;
           }
           
