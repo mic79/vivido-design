@@ -554,6 +554,14 @@
 
       function handleReadyUpdate(data) {
         readyStates[data.playerIndex] = data.ready;
+        
+        // Update the game manager's ready states
+        const gameManager = document.querySelector('#game-manager');
+        if (gameManager && gameManager.components['game-manager']) {
+          gameManager.components['game-manager'].playerReadyStates[data.playerIndex] = data.ready;
+          gameManager.components['game-manager'].updateReadyState();
+        }
+        
         updateMenuDisplay();
       }
 
@@ -570,6 +578,12 @@
           if (gameManager && gameManager.components['game-manager']) {
             gameManager.components['game-manager'].playerScores = data.scores;
             gameManager.components['game-manager'].updateMultiplayerScore();
+            
+            // Check for overtime win condition on clients
+            if (gameManager.components['game-manager'].matchState === 'OVERTIME') {
+              console.log('🔴 CLIENT: Checking overtime win condition after score update');
+              gameManager.components['game-manager'].checkOvertimeWin();
+            }
           }
         }
       }
@@ -704,7 +718,7 @@
           }
           
           // Only apply network updates if ball is NOT locally controlled
-          console.log(`✅ APPLYING network update to ball ${ballNumber} at (${data.ballState.x.toFixed(2)}, ${data.ballState.y.toFixed(2)}, ${data.ballState.z.toFixed(2)})`);
+          
           
           // Force immediate visual update
           ball.object3D.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
@@ -737,7 +751,7 @@
           // Debug: Log significant ball movement
           const ballSpeed = Math.sqrt(data.ballState.vx * data.ballState.vx + data.ballState.vy * data.ballState.vy + data.ballState.vz * data.ballState.vz);
           if (ballSpeed > 0.1) {
-            console.log(`🎾 Received remote ball ${ballNumber} movement: speed=${ballSpeed.toFixed(2)}, pos=(${data.ballState.x.toFixed(2)}, ${data.ballState.y.toFixed(2)}, ${data.ballState.z.toFixed(2)})`);
+            
           }
           
           // Debug: Log ball update confirmation (throttled)
@@ -995,10 +1009,36 @@
           const opponentScoreEl = hudScore.children[1];
           
           if (playerScoreEl && opponentScoreEl) {
-            const opponentLabel = isMultiplayer ? 'Opponent' : 'Bot';
-            playerScoreEl.setAttribute('text', 'value', `You: ${playerScore}`);
-            opponentScoreEl.setAttribute('text', 'value', `${opponentLabel}: ${opponentScore}`);
-            console.log('📱 HUD updated - You:', playerScore, opponentLabel + ':', opponentScore, '(visible:', hudScore.getAttribute('visible') + ')');
+            if (isMultiplayer && myPlayerId) {
+              // Get player names from player slots
+              const playerIndex = parseInt(myPlayerId.split('_')[1]);
+              const myPlayerName = `P${playerIndex}`;
+              const myPlayerColor = playerSlots[playerIndex].color;
+              
+              // Find the opponent (other active player)
+              let opponentName = 'Opponent';
+              let opponentIndex = -1;
+              let opponentColor = '#ff4444'; // Default red
+              for (let i = 0; i < 4; i++) {
+                if (i !== playerIndex && activePlayers.has(`player_${i}`)) {
+                  opponentIndex = i;
+                  opponentName = `P${i}`;
+                  opponentColor = playerSlots[i].color;
+                  break;
+                }
+              }
+              
+              playerScoreEl.setAttribute('text', 'value', `${myPlayerName}: ${playerScore}`);
+              playerScoreEl.setAttribute('text', 'color', myPlayerColor);
+              opponentScoreEl.setAttribute('text', 'value', `${opponentName}: ${opponentScore}`);
+              opponentScoreEl.setAttribute('text', 'color', opponentColor);
+              console.log('📱 Multiplayer HUD updated -', myPlayerName + ':', playerScore, opponentName + ':', opponentScore);
+            } else {
+              // Singleplayer mode
+              playerScoreEl.setAttribute('text', 'value', `You: ${playerScore}`);
+              opponentScoreEl.setAttribute('text', 'value', `Bot: ${opponentScore}`);
+              console.log('📱 Singleplayer HUD updated - You:', playerScore, 'Bot:', opponentScore);
+            }
           }
         } else {
           console.log('📱 ERROR: #hud-score element not found');
@@ -2921,6 +2961,13 @@ function setGameplayHUD(isPlaying) {
           }
           
           console.log(`Zero-G match ended: ${winner}`);
+          
+          // CRITICAL: Reset ready states when match ends to prevent partial starts
+          if (isMultiplayer) {
+            this.playerReadyStates = [false, false, false, false];
+            readyStates = [false, false, false, false];
+            console.log('🔄 Reset all ready states after match end');
+          }
         },
 
         resetMatch: function() {
@@ -3031,7 +3078,7 @@ function setGameplayHUD(isPlaying) {
           
           // Check for overtime win
           if (this.matchState === 'OVERTIME') {
-            this.endMatch();
+            this.checkOvertimeWin();
           }
         },
 
@@ -3077,14 +3124,14 @@ function setGameplayHUD(isPlaying) {
           
           // Check for overtime win
           if (this.matchState === 'OVERTIME') {
-            this.endMatch();
+            this.checkOvertimeWin();
           }
         },
 
         updateScore: function() {
           if (isMultiplayer && activePlayers.size > 1) {
-            updateScoreDisplayMultiplayer();
-            updateHUDScore(multiplayerScore.local, multiplayerScore.remote, true);
+            // Use the new player-based scoring system
+            this.updateMultiplayerScore();
           } else {
             // In singleplayer, player is blue, opponent is red
             const blueScore = document.getElementById('blue-score');
@@ -3095,6 +3142,22 @@ function setGameplayHUD(isPlaying) {
             }
             // Update HUD score display
             updateHUDScore(this.playerScore, this.opponentScore, false);
+          }
+        },
+
+        checkOvertimeWin: function() {
+          // Only check in overtime
+          if (this.matchState !== 'OVERTIME') return;
+          if (!isMultiplayer || activePlayers.size < 2) return;
+
+          // Find the highest score and how many players have it
+          const maxScore = Math.max(...this.playerScores);
+          const winners = this.playerScores.filter(score => score === maxScore).length;
+
+          // If only one player has the highest score, end the match
+          if (winners === 1) {
+            console.log('🏆 Overtime win detected, ending match!');
+            this.endMatch();
           }
         }
       });
