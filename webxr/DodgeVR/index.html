@@ -473,11 +473,11 @@
                 remotePlayer.setAttribute('rotation', slot.rotation);
                 remotePlayer.setAttribute('visible', true);
                 
-                // Make the sphere larger and more visible
+                // Keep the sphere at the same size as singleplayer
                 const sphere = remotePlayer.querySelector(`#remote-target-${i}`);
                 if (sphere) {
-                  sphere.setAttribute('radius', '0.5');
-                  sphere.setAttribute('material', 'emissiveIntensity: 1; opacity: 1');
+                  sphere.setAttribute('radius', '0.2');
+                  sphere.setAttribute('material', 'emissiveIntensity: 0.5; opacity: 0.7');
                 }
                 
                 console.log(`Made remote player ${i} visible at world position: ${slot.position} (hasData: ${hasReceivedData}, inActive: ${isInActivePlayers})`);
@@ -5171,12 +5171,6 @@ function setGameplayHUD(isPlaying) {
             }
           });
           
-          // Add X button for testing remote player visibility
-          this.el.sceneEl.addEventListener('xbuttondown', () => {
-            console.log('🎮 X button pressed - Testing remote player visibility');
-            testRemotePlayerVisibility();
-          });
-          
           // Add B button for testing position sync
           this.el.sceneEl.addEventListener('bbuttondown', () => {
             console.log('🎮 B button pressed - Testing position sync');
@@ -5190,30 +5184,12 @@ function setGameplayHUD(isPlaying) {
           });
           
           console.log('🎮 Y button shortcut initialized - Press Y to quick connect to lobby 1');
-          console.log('🎮 X button test initialized - Press X to test remote player visibility');
           console.log('🎮 B button test initialized - Press B to test position sync');
           console.log('🎮 A button test initialized - Press A to test connection');
         }
       });
       
-      // Test function to force show all remote players
-      function testRemotePlayerVisibility() {
-        console.log('🧪 Testing remote player visibility...');
-        for (let i = 0; i < 4; i++) {
-          const remotePlayer = document.querySelector(`#remote-player-${i}`);
-          if (remotePlayer) {
-            remotePlayer.setAttribute('visible', true);
-            const sphere = remotePlayer.querySelector(`#remote-target-${i}`);
-            if (sphere) {
-              sphere.setAttribute('radius', '1.0');
-              sphere.setAttribute('material', 'emissiveIntensity: 2; opacity: 1');
-            }
-            console.log(`🧪 Made remote player ${i} visible and large for testing`);
-          } else {
-            console.log(`❌ Remote player ${i} not found for testing`);
-          }
-        }
-      }
+
       
       // Test function to force send position data
       function testPositionSync() {
