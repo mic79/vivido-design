@@ -4665,7 +4665,10 @@ function setGameplayHUD(isPlaying) {
       
       <!-- Space Station Environment -->
       <!-- SCI-FI HALLWAY ENVIRONMENT MODEL -->
-      <a-entity gltf-model="assets/sci_fi_hallway_assetpack_free_too.glb" position="0 0 0" scale="1 1 1"></a-entity>
+      <a-assets>
+        <a-asset-item id="myModel" src="assets/sci_fi_hallway_free.glb" response-type="arraybuffer"></a-asset-item>
+      </a-assets>
+      <a-entity gltf-model="#myModel" position="0 0 0" scale="1 1 1"></a-entity>
 
       <!-- Floating objects/balls (spawned at center) -->
       <a-sphere position="0 2 0" 
