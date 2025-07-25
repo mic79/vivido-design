@@ -6380,23 +6380,115 @@ function setGameplayHUD(isPlaying) {
           }, 100);
         }
 
-        // Simple asset tracking
+        // Enhanced asset tracking with Quest 3 fallback
         setTimeout(() => {
           const assets = document.querySelector('a-assets');
+          const isQuest = navigator.userAgent.includes('Quest');
+          
           if (assets) {
+            debugLog('📦 Setting up asset loading listeners...');
+            
+            // Track individual assets
+            const myModel = document.querySelector('#myModel');
+            const collisionObj = document.querySelector('#hallway-collision-obj');
+            
+            let assetsLoaded = 0;
+            let assetsTotal = 2;
+            let assetTimeout;
+            
+            function checkAssetsComplete() {
+              debugLog(`📦 Assets loaded: ${assetsLoaded}/${assetsTotal}`);
+              if (assetsLoaded >= assetsTotal) {
+                clearTimeout(assetTimeout);
+                debugLog('🎨 All assets loaded successfully');
+                updateProgress(6, '- Assets ready');
+                
+                setTimeout(() => {
+                  updateProgress(7, '- Ready!');
+                  debugLog('✅ All systems ready! Auto-hiding debug overlay...');
+                  setTimeout(hideDebugOverlay, 2000);
+                }, 1000);
+              }
+            }
+            
+            // Set timeout for Quest 3 (shorter timeout)
+            const timeoutDuration = isQuest ? 10000 : 20000; // 10s for Quest, 20s for PC
+            assetTimeout = setTimeout(() => {
+              debugLog('⏰ Asset loading timeout - using fallback mode', true);
+              
+              if (isQuest) {
+                debugLog('🥽 Quest 3 detected - disabling heavy GLB model');
+                // Disable the GLB model for Quest 3
+                const hallwayVisual = document.querySelector('#hallway-visual');
+                if (hallwayVisual) {
+                  hallwayVisual.setAttribute('visible', 'false');
+                  debugLog('🚫 GLB model disabled for Quest 3');
+                }
+              }
+              
+              updateProgress(6, '- Assets timeout, continuing...');
+              setTimeout(() => {
+                updateProgress(7, '- Ready! (fallback mode)');
+                debugLog('✅ Systems ready in fallback mode');
+                setTimeout(hideDebugOverlay, 2000);
+              }, 1000);
+            }, timeoutDuration);
+            
+            // Listen for individual asset loading
+            if (myModel) {
+              myModel.addEventListener('loaded', () => {
+                debugLog('✅ GLB model loaded');
+                assetsLoaded++;
+                checkAssetsComplete();
+              });
+              
+              myModel.addEventListener('error', (e) => {
+                debugLog('❌ GLB model failed to load', true);
+                if (isQuest) {
+                  debugLog('🥽 Quest 3 GLB failure - expected, using fallback');
+                  const hallwayVisual = document.querySelector('#hallway-visual');
+                  if (hallwayVisual) hallwayVisual.setAttribute('visible', 'false');
+                }
+                assetsLoaded++; // Count as loaded so we can continue
+                checkAssetsComplete();
+              });
+            }
+            
+            if (collisionObj) {
+              collisionObj.addEventListener('loaded', () => {
+                debugLog('✅ Collision OBJ loaded');
+                assetsLoaded++;
+                checkAssetsComplete();
+              });
+              
+              collisionObj.addEventListener('error', () => {
+                debugLog('❌ Collision OBJ failed to load', true);
+                assetsLoaded++; // Count as loaded so we can continue
+                checkAssetsComplete();
+              });
+            }
+            
+            // Also listen for the overall assets loaded event (backup)
             assets.addEventListener('loaded', () => {
-              debugLog('🎨 All assets loaded');
+              clearTimeout(assetTimeout);
+              debugLog('🎨 Assets container reports all loaded');
               updateProgress(6, '- Assets ready');
               
-              // Scene should load after assets
               setTimeout(() => {
                 updateProgress(7, '- Ready!');
-                debugLog('✅ All systems ready! Auto-hiding debug overlay...');
+                debugLog('✅ All systems ready!');
                 setTimeout(hideDebugOverlay, 2000);
               }, 1000);
             });
+            
           } else {
             debugLog('❌ No assets element found');
+            // Skip to ready if no assets
+            updateProgress(6, '- No assets to load');
+            setTimeout(() => {
+              updateProgress(7, '- Ready!');
+              setTimeout(hideDebugOverlay, 2000);
+            }, 1000);
           }
         }, 1000);
         
