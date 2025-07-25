@@ -90,6 +90,12 @@
          debugLog(`🎬 Scene hasLoaded: ${scene.hasLoaded}`);
          debugLog(`🎬 Scene is: ${scene.is}`);
          
+         // DETAILED ROOT CAUSE ANALYSIS
+         debugLog('🔍 === ROOT CAUSE ANALYSIS ===');
+         
+         // Check what components are blocking loading
+         analyzeLoadingBlockers(scene);
+         
          // Add detailed system info for debugging
          debugLog(`🌐 WebXR supported: ${navigator.xr ? 'YES' : 'NO'}`);
          debugLog(`🎮 VR display: ${navigator.getVRDisplays ? 'Legacy API available' : 'WebXR only'}`);
@@ -101,6 +107,11 @@
          if (gl) {
            debugLog(`🎨 WebGL renderer: ${gl.getParameter(gl.RENDERER)}`);
            debugLog(`🎨 WebGL vendor: ${gl.getParameter(gl.VENDOR)}`);
+           
+           // Check WebGL limits that might cause issues
+           debugLog(`🎨 Max texture size: ${gl.getParameter(gl.MAX_TEXTURE_SIZE)}`);
+           debugLog(`🎨 Max vertex attribs: ${gl.getParameter(gl.MAX_VERTEX_ATTRIBS)}`);
+           debugLog(`🎨 Max varying vectors: ${gl.getParameter(gl.MAX_VARYING_VECTORS)}`);
          }
         
         // Check if scene is stuck in loading
@@ -260,17 +271,31 @@
          }
        }
 
-       function monitorForWhiteScreen() {
+              function monitorForWhiteScreen() {
          debugLog('👀 Monitoring for white screen issue...');
          
          const scene = document.querySelector('a-scene');
          if (!scene || !scene.renderer) {
-           debugLog('❌ No renderer found for white screen monitoring');
+           debugLog('❌ No renderer found for white screen monitoring - waiting...');
+           // Try again in 2 seconds
+           setTimeout(monitorForWhiteScreen, 2000);
            return;
          }
 
+         debugLog('✅ Renderer found - starting white screen monitoring');
+         
          let whiteScreenCount = 0;
          const maxWhiteScreenChecks = 10;
+         
+         // Monitor memory usage
+         if (navigator.deviceMemory) {
+           debugLog(`💾 Device Memory: ${navigator.deviceMemory}GB`);
+         }
+         
+         if (performance.memory) {
+           const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+           debugLog(`💾 JS Heap Used: ${memMB}MB`);
+         }
          
          const whiteScreenChecker = setInterval(() => {
            whiteScreenCount++;
@@ -279,40 +304,229 @@
              const renderer = scene.renderer;
              const gl = renderer.getContext();
              
+             // Check for WebGL context loss (main cause of white screen)
              if (gl.isContextLost()) {
                clearInterval(whiteScreenChecker);
-               debugLog('❌ WEBGL CONTEXT LOST - This causes white screen!', true);
+               debugLog('❌ WEBGL CONTEXT LOST - This is the white screen cause!', true);
                console.log('❌ WEBGL CONTEXT LOST - WHITE SCREEN DETECTED');
                
-               // Try to recover
-               setTimeout(() => {
-                 debugLog('🔄 Attempting WebGL context recovery...');
-                 location.reload(); // Nuclear option for Quest 3
-               }, 2000);
+               // Identify what might have caused context loss
+               debugLog('🔍 Investigating WebGL context loss cause...');
+               investigateContextLoss();
+               
                return;
              }
 
              // Check if canvas is actually rendering
              const canvas = renderer.domElement;
              if (canvas && canvas.width > 0 && canvas.height > 0) {
-               debugLog(`✅ Rendering OK - Canvas: ${canvas.width}x${canvas.height}`);
+               debugLog(`✅ Frame ${whiteScreenCount}: Rendering OK - Canvas: ${canvas.width}x${canvas.height}`);
+               
+               // Monitor memory growth
+               if (performance.memory) {
+                 const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+                 debugLog(`💾 Frame ${whiteScreenCount}: JS Heap: ${memMB}MB`);
+                 
+                 // Warn if memory is growing rapidly (Quest 3 has limited memory)
+                 if (memMB > 300) {
+                   debugLog(`⚠️ HIGH MEMORY USAGE: ${memMB}MB - Quest 3 may crash soon!`, true);
+                 }
+               }
+               
              } else {
-               debugLog('⚠️ Canvas issues detected', true);
+               debugLog('⚠️ Canvas rendering issues detected', true);
              }
 
            } catch (e) {
              debugLog(`❌ White screen monitor error: ${e.message}`, true);
+             
+             // This error itself might indicate the context loss
+             if (e.message.includes('context') || e.message.includes('WebGL')) {
+               clearInterval(whiteScreenChecker);
+               debugLog('❌ WebGL error detected - likely context loss!', true);
+               investigateContextLoss();
+               return;
+             }
            }
 
            if (whiteScreenCount >= maxWhiteScreenChecks) {
              clearInterval(whiteScreenChecker);
-             debugLog('✅ White screen monitoring complete - no issues detected');
+             debugLog('✅ White screen monitoring complete - 10 seconds passed without issues');
            }
-                    }, 1000);
-         }
+         }, 1000);
+       }
 
-         function createManualVRButton() {
-           debugLog('🔧 Creating manual VR button for Quest 3...');
+       function investigateContextLoss() {
+         debugLog('🔍 === WEBGL CONTEXT LOSS INVESTIGATION ===');
+         
+         try {
+           // Check what might cause context loss on Quest 3
+           const ammoPhysicsCount = document.querySelectorAll('[ammo-physics]').length;
+           debugLog(`🔍 Ammo physics bodies: ${ammoPhysicsCount}`);
+           
+           const gltfModels = document.querySelectorAll('[gltf-model]').length;
+           debugLog(`🔍 GLTF models: ${gltfModels}`);
+           
+           const objModels = document.querySelectorAll('[obj-model]').length;
+           debugLog(`🔍 OBJ models: ${objModels}`);
+           
+           // Check for large textures/models
+           const scene = document.querySelector('a-scene');
+           if (scene && scene.renderer) {
+             const gl = scene.renderer.getContext();
+             const ext = gl.getExtension('WEBGL_debug_renderer_info');
+             if (ext) {
+               debugLog(`🔍 GPU: ${gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)}`);
+             }
+           }
+           
+           debugLog('🔍 PROBABLE CAUSES:');
+           debugLog('   1. Triangle mesh collision too complex for Quest 3 GPU');
+           debugLog('   2. GLTF model too large for Quest 3 memory');
+           debugLog('   3. Too many Ammo.js physics bodies');
+           debugLog('   4. WebGL shader compilation failure');
+           
+           debugLog('💡 SOLUTION: Try disabling collision mesh or GLTF model for Quest 3');
+           
+         } catch (e) {
+           debugLog(`❌ Investigation error: ${e.message}`, true);
+         }
+       }
+
+       function identifyQuestProblems() {
+         debugLog('🔍 === PRE-LOADING QUEST 3 PROBLEM IDENTIFICATION ===');
+         
+         try {
+           // Check for the known problematic components
+           const collisionMesh = document.querySelector('#hallway-collision');
+           if (collisionMesh) {
+             const objSrc = collisionMesh.getAttribute('obj-model');
+             debugLog(`🔍 Collision mesh detected: ${objSrc ? objSrc.obj : 'no source'}`);
+             debugLog('⚠️ SUSPECTED PROBLEM: Complex triangle mesh collision may crash Quest 3 WebGL');
+           }
+           
+           const visualMesh = document.querySelector('#hallway-visual');
+           if (visualMesh) {
+             const gltfSrc = visualMesh.getAttribute('gltf-model');
+             debugLog(`🔍 Visual mesh detected: ${gltfSrc || 'no source'}`);
+             debugLog('⚠️ SUSPECTED PROBLEM: Large GLTF model may exceed Quest 3 memory');
+           }
+           
+           const ammoPhysicsElements = document.querySelectorAll('[ammo-physics]');
+           debugLog(`🔍 Ammo physics elements: ${ammoPhysicsElements.length}`);
+           if (ammoPhysicsElements.length > 10) {
+             debugLog('⚠️ SUSPECTED PROBLEM: Too many Ammo.js physics bodies for Quest 3');
+           }
+           
+           const zerogPlayer = document.querySelector('[zerog-player]');
+           if (zerogPlayer) {
+             debugLog('🔍 Zero-G player component detected');
+             debugLog('⚠️ SUSPECTED PROBLEM: Complex player physics may overload Quest 3');
+           }
+           
+           // Check memory usage before loading
+           if (performance.memory) {
+             const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+             debugLog(`💾 Current memory usage: ${memMB}MB`);
+             if (memMB > 150) {
+               debugLog('⚠️ SUSPECTED PROBLEM: High memory usage before loading heavy assets');
+             }
+           }
+           
+           debugLog('🔍 === RECOMMENDATIONS ===');
+           debugLog('💡 For Quest 3 compatibility, consider:');
+           debugLog('   1. Disable collision mesh (#hallway-collision)');
+           debugLog('   2. Use simpler GLTF model or disable visual mesh');
+           debugLog('   3. Reduce Ammo.js physics bodies');
+           debugLog('   4. Simplify player physics system');
+           
+         } catch (e) {
+           debugLog(`❌ Problem identification error: ${e.message}`, true);
+         }
+       }
+
+                   function analyzeLoadingBlockers(scene) {
+            debugLog('🔍 Analyzing what is blocking A-Frame loading...');
+            
+            try {
+              // Check all components and their loading state
+              const entities = scene.querySelectorAll('*');
+              let totalEntities = 0;
+              let loadedEntities = 0;
+              let problematicEntities = [];
+              
+              entities.forEach(entity => {
+                if (entity.hasLoaded !== undefined) {
+                  totalEntities++;
+                  if (entity.hasLoaded) {
+                    loadedEntities++;
+                  } else {
+                    problematicEntities.push({
+                      tagName: entity.tagName,
+                      id: entity.id,
+                      className: entity.className,
+                      components: Object.keys(entity.components || {})
+                    });
+                  }
+                }
+              });
+              
+              debugLog(`🔍 Entities: ${loadedEntities}/${totalEntities} loaded`);
+              
+              if (problematicEntities.length > 0) {
+                debugLog(`❌ ${problematicEntities.length} entities not loaded:`);
+                problematicEntities.slice(0, 5).forEach(entity => {
+                  debugLog(`   • ${entity.tagName}${entity.id ? '#' + entity.id : ''} - Components: ${entity.components.join(', ')}`);
+                });
+              }
+              
+              // Check specific problematic components
+              const suspiciousComponents = [
+                'ammo-physics',
+                'gltf-model', 
+                'obj-model',
+                'zerog-player',
+                'physics-world'
+              ];
+              
+              suspiciousComponents.forEach(componentName => {
+                const elements = scene.querySelectorAll(`[${componentName}]`);
+                debugLog(`🔍 ${componentName}: ${elements.length} instances`);
+                
+                elements.forEach((el, index) => {
+                  const component = el.components[componentName];
+                  if (component) {
+                    debugLog(`   • ${componentName} ${index}: ${component.initialized ? 'initialized' : 'NOT initialized'}`);
+                  }
+                });
+              });
+              
+              // Check for specific Quest 3 problematic elements
+              const collisionMesh = scene.querySelector('#hallway-collision');
+              if (collisionMesh) {
+                debugLog(`🔍 Collision mesh: ${collisionMesh.hasLoaded ? 'loaded' : 'NOT LOADED'} ⚠️`);
+                const objModel = collisionMesh.components['obj-model'];
+                if (objModel) {
+                  debugLog(`   • OBJ model component: ${objModel.initialized ? 'initialized' : 'NOT initialized'}`);
+                }
+              }
+              
+              const visualMesh = scene.querySelector('#hallway-visual');
+              if (visualMesh) {
+                debugLog(`🔍 Visual mesh: ${visualMesh.hasLoaded ? 'loaded' : 'NOT LOADED'} ⚠️`);
+                const gltfModel = visualMesh.components['gltf-model'];
+                if (gltfModel) {
+                  debugLog(`   • GLTF model component: ${gltfModel.initialized ? 'initialized' : 'NOT initialized'}`);
+                }
+              }
+              
+            } catch (e) {
+              debugLog(`❌ Error analyzing loading blockers: ${e.message}`, true);
+            }
+          }
+
+          function createManualVRButton() {
+            debugLog('🔧 Creating manual VR button for Quest 3...');
            
            const button = document.createElement('button');
            button.textContent = 'ENTER VR';
@@ -416,7 +630,26 @@
         if (gl) {
           const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
           debugLog(`🎨 Max Texture Size: ${maxTextureSize}px`);
+          debugLog(`🎨 Max Renderbuffer Size: ${gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)}`);
+          debugLog(`🎨 Max Vertex Uniforms: ${gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS)}`);
+          debugLog(`🎨 Max Fragment Uniforms: ${gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS)}`);
+          
+          // Check for problematic extensions
+          const extensions = gl.getSupportedExtensions();
+          debugLog(`🎨 WebGL Extensions: ${extensions ? extensions.length : 0} available`);
+          
+          // Test for known Quest 3 problematic features
+          const hasFloatTextures = gl.getExtension('OES_texture_float');
+          debugLog(`🎨 Float Textures: ${hasFloatTextures ? 'YES' : 'NO'}`);
+          
+          const hasInstancedArrays = gl.getExtension('ANGLE_instanced_arrays');
+          debugLog(`🎨 Instanced Arrays: ${hasInstancedArrays ? 'YES' : 'NO'}`);
         }
+        
+        // Pre-emptively identify problematic elements
+        setTimeout(() => {
+          identifyQuestProblems();
+        }, 2000);
       }
 
       // Global error handler to suppress Meta Touch Controls and physics errors
