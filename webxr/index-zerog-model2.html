@@ -194,14 +194,14 @@
           setTimeout(() => {
             const loadingScreen = document.querySelector('.a-loader-title');
             if (loadingScreen && loadingScreen.parentNode) {
-              loadingScreen.parentNode.style.display = 'none';
+              //loadingScreen.parentNode.style.display = 'none';
               debugLog('🔧 Removed A-Frame loading screen');
             }
 
             // Force remove any other loading elements
             const loaderElements = document.querySelectorAll('[class*="loader"], [class*="loading"]');
             loaderElements.forEach(el => {
-              if (el.style) el.style.display = 'none';
+              //if (el.style) el.style.display = 'none';
             });
 
                          debugLog('🚨 A-Frame force-loading complete');
