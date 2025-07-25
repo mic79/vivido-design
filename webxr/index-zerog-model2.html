@@ -3121,28 +3121,65 @@ function setGameplayHUD(isPlaying) {
         },
         
         startMovementToTarget: function(currentTime) {
-          this.isMoving = true;
-          this.moveStartTime = currentTime; // Use A-Frame time consistently
-          this.moveStartPos.copy(this.body.position);
+          // Safety check: Don't move if physics disabled or body is null
+          if (this.physicsDisabled || !this.body) {
+            debugLog('🤖 Bot movement skipped: Physics disabled or body null');
+            return;
+          }
           
-          // Calculate velocity needed to reach target
-          const direction = new THREE.Vector3()
-            .subVectors(this.targetPosition, this.moveStartPos)
-            .normalize();
+          // Additional safety check for body.position
+          if (!this.body.position) {
+            debugLog('❌ Bot body has no position property', true);
+            this.physicsDisabled = true;
+            this.body = null;
+            return;
+          }
           
-          const velocity = direction.multiplyScalar(this.data.movementSpeed);
-          
-          // Apply velocity to physics body
-          this.body.velocity.set(velocity.x, velocity.y, velocity.z);
-          
-          // console.log(`Bot moving to: ${this.targetPosition.x.toFixed(1)}, ${this.targetPosition.y.toFixed(1)}, ${this.targetPosition.z.toFixed(1)}`); // Disabled to reduce console spam
+          try {
+            this.isMoving = true;
+            this.moveStartTime = currentTime; // Use A-Frame time consistently
+            this.moveStartPos.copy(this.body.position);
+            
+            // Calculate velocity needed to reach target
+            const direction = new THREE.Vector3()
+              .subVectors(this.targetPosition, this.moveStartPos)
+              .normalize();
+            
+            const velocity = direction.multiplyScalar(this.data.movementSpeed);
+            
+            // Apply velocity to physics body
+            this.body.velocity.set(velocity.x, velocity.y, velocity.z);
+            
+            // console.log(`Bot moving to: ${this.targetPosition.x.toFixed(1)}, ${this.targetPosition.y.toFixed(1)}, ${this.targetPosition.z.toFixed(1)}`); // Disabled to reduce console spam
+          } catch (e) {
+            debugLog(`❌ Bot movement error: ${e.message}`, true);
+            // Disable physics to prevent further errors
+            this.physicsDisabled = true;
+            this.body = null;
+          }
         },
         
         stopMovement: function() {
           this.isMoving = false;
-          // Apply damping to slow down
-          this.body.velocity.scale(0.1, this.body.velocity);
-          // console.log('Bot stopped moving, generating new target...'); // Disabled to reduce console spam
+          
+          // Safety check: Don't access body if physics disabled or body is null
+          if (this.physicsDisabled || !this.body || !this.body.velocity) {
+            debugLog('🤖 Bot stop movement: Physics disabled or body null');
+            this.generateNewTargetPosition();
+            return;
+          }
+          
+          try {
+            // Apply damping to slow down
+            this.body.velocity.scale(0.1, this.body.velocity);
+            // console.log('Bot stopped moving, generating new target...'); // Disabled to reduce console spam
+          } catch (e) {
+            debugLog(`❌ Bot stop movement error: ${e.message}`, true);
+            // Disable physics to prevent further errors
+            this.physicsDisabled = true;
+            this.body = null;
+          }
+          
           this.generateNewTargetPosition();
         },
         
@@ -3153,8 +3190,18 @@ function setGameplayHUD(isPlaying) {
           this.ball.components['zerog-ball'].resetPosition();
           const ballBody = this.ball.components['zerog-ball'].body;
           
+          // Get bot position (use visual position if physics disabled)
+          let botPos;
+          if (this.physicsDisabled || !this.body || !this.body.position) {
+            // Use visual position from A-Frame entity
+            botPos = new THREE.Vector3().copy(this.el.object3D.position);
+            debugLog('🤖 Ball throw: Using visual position (physics disabled)');
+          } else {
+            // Use physics position
+            botPos = new THREE.Vector3().copy(this.body.position);
+          }
+          
           // Position ball slightly in front of bot
-          const botPos = new THREE.Vector3().copy(this.body.position);
           botPos.z += 0.5; // Slightly forward
           ballBody.position.set(botPos.x, botPos.y, botPos.z);
           
@@ -3212,45 +3259,60 @@ function setGameplayHUD(isPlaying) {
         tick: function(time) {
           if (!this.data.enabled) return;
           
+          // Quest 3 compatibility: Skip physics-based operations if disabled
+          if (this.physicsDisabled) {
+            debugLog('🤖 Bot tick: Physics disabled, using basic mode');
+            // Only do basic visual updates without physics
+            return;
+          }
+          
           // Update visual position from physics (Ammo.js)
           if (this.body && ammoInstance) {
-            const transform = new ammoInstance.btTransform();
-            this.body.getMotionState().getWorldTransform(transform);
-            const origin = transform.getOrigin();
-            const rotation = transform.getRotation();
-            
-            // Safety checks for valid transform data
-            if (origin && typeof origin.x === 'function' && rotation && typeof rotation.x === 'function') {
-              this.el.object3D.position.set(origin.x(), origin.y(), origin.z());
-              this.el.object3D.quaternion.set(rotation.x(), rotation.y(), rotation.z(), rotation.w());
+            try {
+              const transform = new ammoInstance.btTransform();
+              this.body.getMotionState().getWorldTransform(transform);
+              const origin = transform.getOrigin();
+              const rotation = transform.getRotation();
+              
+              // Safety checks for valid transform data
+              if (origin && typeof origin.x === 'function' && rotation && typeof rotation.x === 'function') {
+                this.el.object3D.position.set(origin.x(), origin.y(), origin.z());
+                this.el.object3D.quaternion.set(rotation.x(), rotation.y(), rotation.z(), rotation.w());
+              }
+              
+              ammoInstance.destroy(transform);
+            } catch (e) {
+              debugLog(`❌ Bot physics update error: ${e.message}`, true);
+              // Disable physics to prevent further errors
+              this.physicsDisabled = true;
+              this.body = null;
+              return;
             }
-            
-            ammoInstance.destroy(transform);
           }
           
           // Track player movement for predictive aiming
           this.updatePlayerTracking(time);
           
-          // Movement logic
-          if (!this.isMoving && time - this.lastMoveTime > this.moveInterval) {
+          // Movement logic - only if physics is working
+          if (this.body && !this.isMoving && time - this.lastMoveTime > this.moveInterval) {
             // console.log(`Bot preparing to move (${((time - this.lastMoveTime)/1000).toFixed(1)}s since last move)`); // Disabled to reduce console spam
             this.startMovementToTarget(time); // Pass current time
             this.lastMoveTime = time;
           }
           
           // Stop movement after duration
-          if (this.isMoving && time - this.moveStartTime > this.moveDuration) {
+          if (this.body && this.isMoving && time - this.moveStartTime > this.moveDuration) {
             this.stopMovement();
           }
           
-          // Throwing logic - only when match is active
+          // Throwing logic - only when match is active (can work without physics)
           const gameManager = this.el.sceneEl.querySelector('#game-manager');
           const isMatchActive = gameManager && gameManager.components['game-manager'] && 
                                (gameManager.components['game-manager'].matchState === 'PLAYING' || 
                                 gameManager.components['game-manager'].matchState === 'OVERTIME');
           
           if (isMatchActive && time - this.lastThrowTime > this.data.throwInterval) {
-  
+            // Ball throwing can work without bot physics
             this.throwBallAtPlayer();
             this.lastThrowTime = time;
           }
