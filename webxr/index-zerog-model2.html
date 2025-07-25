@@ -1894,6 +1894,13 @@ function setGameplayHUD(isPlaying) {
         checkPhysicsCollisionAndAdjust: function(dt) {
           if (!this.playerPhysicsBody || !ammoInstance || !physicsWorld) return;
           
+          // Debug counter to verify collision detection is running on Quest
+          if (!this.collisionCheckCount) this.collisionCheckCount = 0;
+          this.collisionCheckCount++;
+          if (this.collisionCheckCount % 300 === 0) { // Every 5 seconds at 60fps
+            debugLog(`🔍 COLLISION CHECK: Running ${this.collisionCheckCount} times - manifolds: ${physicsWorld.getDispatcher().getNumManifolds()}`, true);
+          }
+          
           // Check if physics body is colliding with environment
           const numManifolds = physicsWorld.getDispatcher().getNumManifolds();
           let isColliding = false;
@@ -1942,7 +1949,7 @@ function setGameplayHUD(isPlaying) {
             // Add small bounce in normal direction
             this.velocity.add(collisionNormal.clone().multiplyScalar(0.1));
             
-            console.log('🚫 Physics collision detected - velocity adjusted');
+            debugLog('🚫 COLLISION DETECTED! Player hit environment - velocity adjusted', true);
           }
         },
 
@@ -2708,6 +2715,11 @@ function setGameplayHUD(isPlaying) {
           const PLAYER_GROUP = 2;
           const PLAYER_MASK = 1 | 16; // Collide with environment (1) and enemy balls (16), not hands (4) or player ball (8)
           physicsWorld.addRigidBody(this.playerPhysicsBody, PLAYER_GROUP, PLAYER_MASK);
+          
+          // Verify player physics body was added properly
+          const totalBodies = physicsWorld.getCollisionWorld().getNumCollisionObjects();
+          debugLog(`👤 PLAYER: Physics body added! Total objects in world: ${totalBodies}`, true);
+          debugLog(`👤 PLAYER: Group: ${PLAYER_GROUP}, Mask: ${PLAYER_MASK} (env + enemy balls)`, true);
           
           // Add to physics objects for automatic position sync
           const playerPhysicsObject = {
@@ -5385,8 +5397,8 @@ function setGameplayHUD(isPlaying) {
           this.el.sceneEl.addEventListener('abuttondown', () => {
             // Only allow human player to control their own ball (player2's ball)
             if (this.data.player === 'player2') {
-              this.tractorBeamActive = true;
-              console.log('A button: Tractor beam ON');
+                          this.tractorBeamActive = true;
+            debugLog('🅰️ A button: Tractor beam ON for blue ball', true);
             }
           });
           
@@ -5394,7 +5406,7 @@ function setGameplayHUD(isPlaying) {
             // Only for player's ball
             if (this.data.player === 'player2') {
               this.tractorBeamActive = false;
-              console.log('A button: Tractor beam OFF');
+              debugLog('🅰️ A button: Tractor beam OFF for blue ball', true);
             }
           });
         },
@@ -5966,13 +5978,38 @@ function setGameplayHUD(isPlaying) {
           debugLog(`✅ Ball ${this.data.player}: Successfully added to Ammo.js physics world! Group: ${BALL_GROUP}, Mask: ${BALL_MASK}`);
           debugLog(`🎾 Ball ${this.data.player}: Physics body created and ready for interaction!`);
           
-          // Verify ball is visible
+          // Verify physics world state
+          const numBodies = physicsWorld.getCollisionWorld().getNumCollisionObjects();
+          debugLog(`🌍 Physics world now contains ${numBodies} collision objects`);
+          
+          // Verify ball position in physics world
+          setTimeout(() => {
+            if (this.body) {
+              const transform = new ammoInstance.btTransform();
+              this.body.getMotionState().getWorldTransform(transform);
+              const pos = transform.getOrigin();
+              debugLog(`🎾 Ball ${this.data.player}: Physics position: ${pos.x().toFixed(2)}, ${pos.y().toFixed(2)}, ${pos.z().toFixed(2)}`);
+              ammoInstance.destroy(transform);
+            }
+          }, 200);
+          
+          // Verify ball is visible and rendering
           setTimeout(() => {
             const ballEl = document.querySelector(`[zerog-ball="player: ${this.data.player}"]`);
             if (ballEl) {
               const visible = ballEl.getAttribute('visible') !== 'false';
               const position = ballEl.getAttribute('position');
-              debugLog(`🎾 Ball ${this.data.player}: Visual check - visible: ${visible}, position: ${position}`);
+              const color = ballEl.getAttribute('color');
+              const radius = ballEl.getAttribute('radius');
+              const inScene = ballEl.isConnected;
+              const hasObject3D = !!ballEl.object3D;
+              
+              debugLog(`🎾 Ball ${this.data.player}: Visual check - visible: ${visible}, position: ${position}`, true);
+              debugLog(`🎾 Ball ${this.data.player}: Color: ${color}, radius: ${radius}, inScene: ${inScene}, object3D: ${hasObject3D}`, true);
+              
+              if (ballEl.object3D && ballEl.object3D.visible !== undefined) {
+                debugLog(`🎾 Ball ${this.data.player}: Three.js object visible: ${ballEl.object3D.visible}`, true);
+              }
             } else {
               debugLog(`🎾 Ball ${this.data.player}: ❌ Element not found in DOM!`, true);
             }
@@ -6825,6 +6862,11 @@ function setGameplayHUD(isPlaying) {
             geometryType: indices ? 'indexed' : 'non-indexed',
             shapeType: 'BVH_TRIANGLE_MESH_SHAPE'
           });
+          
+          // Verify collision mesh was added properly
+          const totalBodies = physicsWorld.getCollisionWorld().getNumCollisionObjects();
+          debugLog(`🏗️ COLLISION MESH: Added to physics world! Total objects: ${totalBodies}`, true);
+          debugLog(`🏗️ COLLISION: Triangles: ${triangleCount}, Group: 1, Mask: -1 (all)`, true);
 
           // Create wireframe visualization
           this.createPhysicsWireframe(vertices, indices, entityPosition, entityRotation, entityScale);
