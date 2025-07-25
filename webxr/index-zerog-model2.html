@@ -16,10 +16,10 @@
     <script src="game-modes.js"></script>
   </head>
   <body>
-    <!-- Loading Debug Overlay for Quest 3 -->
+    <!-- Loading Debug Overlay -->
     <div id="debug-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); color: #00ff00; font-family: monospace; font-size: 14px; padding: 20px; z-index: 99999; overflow-y: auto;">
       <div style="text-align: center; margin-bottom: 20px;">
-        <h2>🔧 Quest 3 Debug Loading</h2>
+                  <h2>🔧 Debug Loading</h2>
         <div id="loading-progress" style="font-size: 18px; color: #ffff00;">Starting...</div>
       </div>
       <div id="debug-log" style="max-height: 70vh; overflow-y: auto; border: 1px solid #333; padding: 10px; background: rgba(0,0,0,0.5);">
@@ -32,7 +32,7 @@
     </div>
 
     <script>
-      // Debug logging system for Quest 3
+      // Debug logging system
       let debugStep = 0;
       const debugSteps = [
         'Loading Scripts...',
@@ -120,12 +120,11 @@
         
         const loadingChecker = setInterval(() => {
           checkCount++;
-          const isQuest = navigator.userAgent.includes('Quest');
           
           debugLog(`🎬 Check ${checkCount}/${maxChecks} - Scene hasLoaded: ${scene.hasLoaded}`);
          console.log(`🎬 A-FRAME CHECK ${checkCount}/${maxChecks} - hasLoaded: ${scene.hasLoaded}`);
          
-         // Detailed state logging for Quest vs PC comparison
+         // Detailed state logging for all platforms
          debugLog(`🔍 Scene.hasLoaded = ${scene.hasLoaded} (${typeof scene.hasLoaded})`);
          debugLog(`🔍 Scene.loaded = ${scene.loaded} (${typeof scene.loaded})`);
          debugLog(`🔍 Scene.object3D = ${scene.object3D ? 'exists' : 'missing'}`);
@@ -150,11 +149,8 @@
              debugLog('⚠️ A-Frame scene stuck loading - forcing completion', true);
              console.log('⚠️ A-FRAME STUCK - FORCING COMPLETION');
              
-             if (isQuest) {
-               debugLog('🥽 Quest 3 detected - applying aggressive loading fixes');
-               console.log('🥽 QUEST 3 - APPLYING AGGRESSIVE FIXES');
-               forceAFrameLoading();
-             }
+             // Apply loading fixes for all platforms
+             forceAFrameLoading();
            }
         }, 500);
 
@@ -321,9 +317,9 @@
                  const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
                  debugLog(`💾 Frame ${whiteScreenCount}: JS Heap: ${memMB}MB`);
                  
-                 // Warn if memory is growing rapidly (Quest 3 has limited memory)
+                 // Warn if memory is growing rapidly
                  if (memMB > 300) {
-                   debugLog(`⚠️ HIGH MEMORY USAGE: ${memMB}MB - Quest 3 may crash soon!`, true);
+                   debugLog(`⚠️ HIGH MEMORY USAGE: ${memMB}MB - may impact performance!`, true);
                  }
                }
                
@@ -387,57 +383,7 @@
          }
        }
 
-       function identifyQuestProblems() {
-         debugLog('🔍 === PRE-LOADING QUEST 3 PROBLEM IDENTIFICATION ===');
-         
-         try {
-           // Check for the known problematic components
-           const collisionMesh = document.querySelector('#hallway-collision');
-           if (collisionMesh) {
-             const objSrc = collisionMesh.getAttribute('obj-model');
-             debugLog(`🔍 Collision mesh detected: ${objSrc ? objSrc.obj : 'no source'}`);
-             debugLog('⚠️ SUSPECTED PROBLEM: Complex triangle mesh collision may crash Quest 3 WebGL');
-           }
-           
-           const visualMesh = document.querySelector('#hallway-visual');
-           if (visualMesh) {
-             const gltfSrc = visualMesh.getAttribute('gltf-model');
-             debugLog(`🔍 Visual mesh detected: ${gltfSrc || 'no source'}`);
-             debugLog('⚠️ SUSPECTED PROBLEM: Large GLTF model may exceed Quest 3 memory');
-           }
-           
-           const ammoPhysicsElements = document.querySelectorAll('[ammo-physics]');
-           debugLog(`🔍 Ammo physics elements: ${ammoPhysicsElements.length}`);
-           if (ammoPhysicsElements.length > 10) {
-             debugLog('⚠️ SUSPECTED PROBLEM: Too many Ammo.js physics bodies for Quest 3');
-           }
-           
-           const zerogPlayer = document.querySelector('[zerog-player]');
-           if (zerogPlayer) {
-             debugLog('🔍 Zero-G player component detected');
-             debugLog('⚠️ SUSPECTED PROBLEM: Complex player physics may overload Quest 3');
-           }
-           
-           // Check memory usage before loading
-           if (performance.memory) {
-             const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
-             debugLog(`💾 Current memory usage: ${memMB}MB`);
-             if (memMB > 150) {
-               debugLog('⚠️ SUSPECTED PROBLEM: High memory usage before loading heavy assets');
-             }
-           }
-           
-           debugLog('🔍 === RECOMMENDATIONS ===');
-           debugLog('💡 For Quest 3 compatibility, consider:');
-           debugLog('   1. Disable collision mesh (#hallway-collision)');
-           debugLog('   2. Use simpler GLTF model or disable visual mesh');
-           debugLog('   3. Reduce Ammo.js physics bodies');
-           debugLog('   4. Simplify player physics system');
-           
-         } catch (e) {
-           debugLog(`❌ Problem identification error: ${e.message}`, true);
-         }
-       }
+
 
                    function analyzeLoadingBlockers(scene) {
             debugLog('🔍 Analyzing what is blocking A-Frame loading...');
@@ -606,44 +552,37 @@
         }
       }, 30000);
 
-      // Quest 3 specific checks
-      if (navigator.userAgent.includes('Quest')) {
-        debugLog('🥽 Quest browser detected - watching for Quest-specific issues');
-        
-        // Monitor memory usage if available
-        if (navigator.deviceMemory) {
-          debugLog(`💾 Device Memory: ${navigator.deviceMemory}GB`);
-          if (navigator.deviceMemory < 8) {
-            debugLog('⚠️ LOW MEMORY: Quest may struggle with large 3D models', true);
-          }
+      // Universal system checks
+      debugLog('🖥️ Checking system capabilities...');
+      
+      // Monitor memory usage if available
+      if (navigator.deviceMemory) {
+        debugLog(`💾 Device Memory: ${navigator.deviceMemory}GB`);
+        if (navigator.deviceMemory < 8) {
+          debugLog('⚠️ LOW MEMORY: System may struggle with large 3D models', true);
         }
+      }
 
-        // Check for WebGL limitations
-        const canvas = document.createElement('canvas');
-        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-        if (gl) {
-          const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-          debugLog(`🎨 Max Texture Size: ${maxTextureSize}px`);
-          debugLog(`🎨 Max Renderbuffer Size: ${gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)}`);
-          debugLog(`🎨 Max Vertex Uniforms: ${gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS)}`);
-          debugLog(`🎨 Max Fragment Uniforms: ${gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS)}`);
-          
-          // Check for problematic extensions
-          const extensions = gl.getSupportedExtensions();
-          debugLog(`🎨 WebGL Extensions: ${extensions ? extensions.length : 0} available`);
-          
-          // Test for known Quest 3 problematic features
-          const hasFloatTextures = gl.getExtension('OES_texture_float');
-          debugLog(`🎨 Float Textures: ${hasFloatTextures ? 'YES' : 'NO'}`);
-          
-          const hasInstancedArrays = gl.getExtension('ANGLE_instanced_arrays');
-          debugLog(`🎨 Instanced Arrays: ${hasInstancedArrays ? 'YES' : 'NO'}`);
-        }
+      // Check for WebGL capabilities
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+      if (gl) {
+        const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+        debugLog(`🎨 Max Texture Size: ${maxTextureSize}px`);
+        debugLog(`🎨 Max Renderbuffer Size: ${gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)}`);
+        debugLog(`🎨 Max Vertex Uniforms: ${gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS)}`);
+        debugLog(`🎨 Max Fragment Uniforms: ${gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS)}`);
         
-        // Pre-emptively identify problematic elements
-        setTimeout(() => {
-          identifyQuestProblems();
-        }, 2000);
+        // Check for extensions
+        const extensions = gl.getSupportedExtensions();
+        debugLog(`🎨 WebGL Extensions: ${extensions ? extensions.length : 0} available`);
+        
+        // Test for capabilities
+        const hasFloatTextures = gl.getExtension('OES_texture_float');
+        debugLog(`🎨 Float Textures: ${hasFloatTextures ? 'YES' : 'NO'}`);
+        
+        const hasInstancedArrays = gl.getExtension('ANGLE_instanced_arrays');
+        debugLog(`🎨 Instanced Arrays: ${hasInstancedArrays ? 'YES' : 'NO'}`);
       }
 
       // Global error handler to suppress Meta Touch Controls and physics errors
@@ -6974,7 +6913,6 @@ function setGameplayHUD(isPlaying) {
         // Enhanced asset tracking with Quest 3 fallback
         setTimeout(() => {
           const assets = document.querySelector('a-assets');
-          const isQuest = navigator.userAgent.includes('Quest');
           
           if (assets) {
             debugLog('📦 Setting up asset loading listeners...');
@@ -7015,15 +6953,10 @@ function setGameplayHUD(isPlaying) {
               }
             }
             
-            // Set timeout for Quest 3 (shorter timeout)
-            const timeoutDuration = isQuest ? 10000 : 20000; // 10s for Quest, 20s for PC
+            // Set consistent timeout for all platforms
+            const timeoutDuration = 15000; // 15s for all platforms
             assetTimeout = setTimeout(() => {
               debugLog('⏰ Asset loading timeout - using fallback mode', true);
-              
-              if (isQuest) {
-                debugLog('🥽 Quest 3 detected - continuing with GLB model');
-                debugLog('✅ Quest 3 now supports GLB model (crashes fixed)');
-              }
               
               updateProgress(6, '- Assets timeout, continuing...');
                              setTimeout(() => {
@@ -7036,13 +6969,8 @@ function setGameplayHUD(isPlaying) {
                    monitorAFrameLoading();
                  }, 500);
                  
-                 // Don't auto-hide debug on Quest 3 - let user see what's happening  
-                 if (!navigator.userAgent.includes('Quest')) {
-                   setTimeout(hideDebugOverlay, 5000);
-                 } else {
-                   debugLog('🥽 Quest 3: Debug window staying open for inspection');
-                   debugLog('👁️ Click "Hide Debug" button when ready');
-                 }
+                 // Auto-hide debug overlay on all platforms
+                 setTimeout(hideDebugOverlay, 5000);
                }, 1000);
             }, timeoutDuration);
             
@@ -7056,10 +6984,8 @@ function setGameplayHUD(isPlaying) {
               
               myModel.addEventListener('error', (e) => {
                 debugLog('❌ GLB model failed to load', true);
-                if (isQuest) {
-                  debugLog('🥽 Quest 3 GLB failure - will retry or continue with basic environment');
-                  // Note: No longer auto-disabling visual mesh - let it retry or work with basic geometry
-                }
+                debugLog('🔄 Will retry or continue with basic environment');
+                // Note: No longer auto-disabling visual mesh - let it retry or work with basic geometry
                 assetsLoaded++; // Count as loaded so we can continue
                 checkAssetsComplete();
               });
@@ -7095,13 +7021,8 @@ function setGameplayHUD(isPlaying) {
                    monitorAFrameLoading();
                  }, 500);
                  
-                 // Don't auto-hide debug on Quest 3
-                 if (!navigator.userAgent.includes('Quest')) {
-                   setTimeout(hideDebugOverlay, 5000);
-                 } else {
-                   debugLog('🥽 Quest 3: Debug window staying open for inspection');
-                   debugLog('👁️ Click "Hide Debug" button when ready');
-                 }
+                 // Auto-hide debug overlay on all platforms
+                 setTimeout(hideDebugOverlay, 5000);
                }, 1000);
             });
             
@@ -7118,13 +7039,8 @@ function setGameplayHUD(isPlaying) {
                  monitorAFrameLoading();
                }, 500);
                
-               // Don't auto-hide debug on Quest 3
-               if (!navigator.userAgent.includes('Quest')) {
-                 setTimeout(hideDebugOverlay, 5000);
-               } else {
-                 debugLog('🥽 Quest 3: Debug window staying open for inspection');
-                 debugLog('👁️ Click "Hide Debug" button when ready');
-               }
+               // Auto-hide debug overlay on all platforms
+               setTimeout(hideDebugOverlay, 5000);
              }, 1000);
           }
         }, 1000);
