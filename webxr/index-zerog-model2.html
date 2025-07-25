@@ -175,7 +175,6 @@
          if (!scene) return;
 
          debugLog('🚨 FORCING A-Frame to complete loading...');
-         console.log('🚨 FORCING A-FRAME LOADING - QUEST 3 FIX ACTIVE');
 
         try {
           // Method 1: Force emit loaded event
@@ -200,16 +199,7 @@
               //if (el.style) el.style.display = 'none';
             });
 
-                         debugLog('🚨 A-Frame force-loading complete');
-             
-             // Final check - if still stuck after 3 more seconds, try nuclear option
-             setTimeout(() => {
-               if (!scene.hasLoaded) {
-                 debugLog('☢️ NUCLEAR OPTION: Disabling problematic components for Quest 3', true);
-                 console.log('☢️ NUCLEAR OPTION ACTIVATED FOR QUEST 3');
-                 nuclearQuestFix();
-               }
-             }, 3000);
+            debugLog('🚨 A-Frame force-loading complete');
              
            }, 1000);
 
@@ -218,48 +208,7 @@
          }
        }
 
-       function nuclearQuestFix() {
-         debugLog('☢️ Applying nuclear Quest 3 fixes...');
-         
-         try {
-           // Note: No longer removing collision mesh since crashes are fixed
-           const collisionMesh = document.querySelector('#hallway-collision');
-           if (collisionMesh) {
-             debugLog('✅ Collision mesh kept - crashes fixed, physics stable');
-           }
 
-           // Note: No longer disabling ammo-physics - core issues fixed
-           debugLog('✅ Ammo-physics components kept - crashes resolved');
-
-           // Force scene to loaded state
-           const scene = document.querySelector('a-scene');
-           if (scene) {
-             scene.hasLoaded = true;
-             scene.emit('loaded');
-             scene.emit('renderstart');
-             debugLog('☢️ Force emitted all scene events');
-             
-             // Force VR button to appear
-             setTimeout(() => {
-               const vrButton = document.querySelector('[vr-mode-ui]') || document.querySelector('.a-enter-vr-button');
-               if (!vrButton) {
-                 debugLog('☢️ Creating manual VR button...');
-                 createManualVRButton();
-               } else {
-                 vrButton.style.display = 'block';
-                 vrButton.style.visibility = 'visible';
-                 debugLog('☢️ Force showed existing VR button');
-               }
-             }, 1000);
-           }
-
-           debugLog('☢️ Nuclear Quest 3 fix complete - app should work in basic mode');
-           console.log('☢️ NUCLEAR FIX COMPLETE - APP SHOULD WORK IN BASIC MODE');
-           
-         } catch (e) {
-           debugLog(`❌ Nuclear fix error: ${e.message}`, true);
-         }
-       }
 
               function monitorForWhiteScreen() {
          debugLog('👀 Monitoring for white screen issue...');
@@ -350,7 +299,7 @@
          debugLog('🔍 === WEBGL CONTEXT LOSS INVESTIGATION ===');
          
          try {
-           // Check what might cause context loss on Quest 3
+           // Check what might cause context loss
            const ammoPhysicsCount = document.querySelectorAll('[ammo-physics]').length;
            debugLog(`🔍 Ammo physics bodies: ${ammoPhysicsCount}`);
            
@@ -371,12 +320,12 @@
            }
            
            debugLog('🔍 PROBABLE CAUSES:');
-           debugLog('   1. Triangle mesh collision too complex for Quest 3 GPU');
-           debugLog('   2. GLTF model too large for Quest 3 memory');
+                     debugLog('   1. Triangle mesh collision too complex for GPU');
+          debugLog('   2. GLTF model too large for memory');
            debugLog('   3. Too many Ammo.js physics bodies');
            debugLog('   4. WebGL shader compilation failure');
            
-           debugLog('💡 SOLUTION: Try disabling collision mesh or GLTF model for Quest 3');
+           debugLog('💡 SOLUTION: Try disabling collision mesh or GLTF model');
            
          } catch (e) {
            debugLog(`❌ Investigation error: ${e.message}`, true);
@@ -441,7 +390,7 @@
                 });
               });
               
-              // Check for specific Quest 3 problematic elements
+              // Check for specific problematic elements
               const collisionMesh = scene.querySelector('#hallway-collision');
               if (collisionMesh) {
                 debugLog(`🔍 Collision mesh: ${collisionMesh.hasLoaded ? 'loaded' : 'NOT LOADED'} ⚠️`);
@@ -466,7 +415,7 @@
           }
 
           function createManualVRButton() {
-            debugLog('🔧 Creating manual VR button for Quest 3...');
+                            debugLog('🔧 Creating manual VR button...');
            
            const button = document.createElement('button');
            button.textContent = 'ENTER VR';
@@ -503,7 +452,7 @@
 
         // Start debugging
       updateProgress(0);
-      debugLog('🔧 Quest 3 Debug System Active');
+      debugLog('🔧 Debug System Active');
       debugLog(`🌐 User Agent: ${navigator.userAgent}`);
       debugLog(`💾 Memory: ${navigator.deviceMemory || 'unknown'}GB`);
       debugLog(`🔗 WebAssembly Support: ${typeof WebAssembly !== 'undefined' ? 'YES' : 'NO'}`);
@@ -547,7 +496,7 @@
       setTimeout(() => {
         if (typeof Ammo === 'undefined') {
           debugLog('❌ TIMEOUT: Ammo.js failed to load after 30 seconds', true);
-          debugLog('🔗 CDN may be blocked or slow on Quest 3', true);
+          debugLog('🔗 CDN may be blocked or slow', true);
           debugLog('💡 SOLUTION: Try downloading ammo.js locally', true);
         }
       }, 30000);
@@ -558,9 +507,6 @@
       // Monitor memory usage if available
       if (navigator.deviceMemory) {
         debugLog(`💾 Device Memory: ${navigator.deviceMemory}GB`);
-        if (navigator.deviceMemory < 8) {
-          debugLog('⚠️ LOW MEMORY: System may struggle with large 3D models', true);
-        }
       }
 
       // Check for WebGL capabilities
@@ -1343,6 +1289,30 @@ function setGameplayHUD(isPlaying) {
             }
             console.log('X button: Shooting ball from camera');
             this.shootBallFromCamera();
+          });
+          
+          // Y button for debug overlay toggle (with debouncing)
+          let lastYButtonPress = 0;
+          this.el.sceneEl.addEventListener('ybuttondown', (evt) => {
+            const now = Date.now();
+            if (now - lastYButtonPress < 500) { // 500ms debounce
+              console.log('🚫 Y button: Ignoring rapid double-press');
+              return;
+            }
+            lastYButtonPress = now;
+            
+            console.log('Y button: Toggling debug overlay');
+            const debugOverlay = document.getElementById('debug-overlay');
+            if (debugOverlay) {
+              const isHidden = debugOverlay.style.display === 'none' || !debugOverlay.style.display;
+              if (isHidden) {
+                debugOverlay.style.display = 'block';
+                console.log('🐛 Debug overlay SHOWN via Y button');
+              } else {
+                hideDebugOverlay();
+                console.log('🐛 Debug overlay HIDDEN via Y button');
+              }
+            }
           });
           
           // Thumbstick controls for rotation
@@ -6945,13 +6915,8 @@ function setGameplayHUD(isPlaying) {
                   monitorAFrameLoading();
                 }, 500);
                 
-                // Don't auto-hide debug on Quest 3 - let user see what's happening
-                if (!navigator.userAgent.includes('Quest')) {
-                  setTimeout(hideDebugOverlay, 5000);
-                } else {
-                  debugLog('🥽 Quest 3: Debug window staying open for inspection');
-                  debugLog('👁️ Click "Hide Debug" button when ready');
-                }
+                // Auto-hide debug overlay on all platforms
+                setTimeout(hideDebugOverlay, 5000);
               }, 1000);
               }
             }
