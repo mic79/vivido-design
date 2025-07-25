@@ -17,7 +17,7 @@
   </head>
   <body>
     <!-- Loading Debug Overlay -->
-    <div id="debug-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); color: #00ff00; font-family: monospace; font-size: 14px; padding: 20px; z-index: 99999; overflow-y: auto;">
+    <div id="debug-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); color: #00ff00; font-family: monospace; font-size: 14px; padding: 20px; z-index: 1000; overflow-y: auto;">
       <div style="text-align: center; margin-bottom: 20px;">
                   <h2>🔧 Debug Loading</h2>
         <div id="loading-progress" style="font-size: 18px; color: #ffff00;">Starting...</div>
@@ -76,6 +76,19 @@
           debugLog('🫥 Debug overlay hidden - if you see A-Frame blue loading screen now, that is the issue');
           console.log('🫥 Debug overlay hidden - watching for A-Frame loading issues...');
         }
+        
+        // Ensure VR button is visible after hiding debug overlay
+        setTimeout(() => {
+          const vrButton = document.querySelector('.a-enter-vr-button') || document.querySelector('[vr-mode-ui] button');
+          if (vrButton) {
+            vrButton.style.display = 'block';
+            vrButton.style.zIndex = '10000';
+            vrButton.style.position = 'fixed';
+            debugLog('🥽 VR button made visible after hiding debug overlay');
+          } else {
+            debugLog('⚠️ VR button not found after hiding debug overlay');
+          }
+        }, 100);
       }
 
       // Monitor A-Frame loading and force completion if stuck
@@ -1897,9 +1910,9 @@ function setGameplayHUD(isPlaying) {
           // Debug counter to verify collision detection is running on Quest
           if (!this.collisionCheckCount) this.collisionCheckCount = 0;
           this.collisionCheckCount++;
-          if (this.collisionCheckCount % 300 === 0) { // Every 5 seconds at 60fps
-            debugLog(`🔍 COLLISION CHECK: Running ${this.collisionCheckCount} times - manifolds: ${physicsWorld.getDispatcher().getNumManifolds()}`, true);
-          }
+                     if (this.collisionCheckCount % 300 === 0) { // Every 5 seconds at 60fps
+             debugLog(`🔍 COLLISION CHECK: Running ${this.collisionCheckCount} times on Quest/PC`, true);
+           }
           
           // Check if physics body is colliding with environment
           const numManifolds = physicsWorld.getDispatcher().getNumManifolds();
@@ -2717,8 +2730,7 @@ function setGameplayHUD(isPlaying) {
           physicsWorld.addRigidBody(this.playerPhysicsBody, PLAYER_GROUP, PLAYER_MASK);
           
           // Verify player physics body was added properly
-          const totalBodies = physicsWorld.getCollisionWorld().getNumCollisionObjects();
-          debugLog(`👤 PLAYER: Physics body added! Total objects in world: ${totalBodies}`, true);
+          debugLog(`👤 PLAYER: Physics body successfully added to physics world!`, true);
           debugLog(`👤 PLAYER: Group: ${PLAYER_GROUP}, Mask: ${PLAYER_MASK} (env + enemy balls)`, true);
           
           // Add to physics objects for automatic position sync
@@ -5978,9 +5990,8 @@ function setGameplayHUD(isPlaying) {
           debugLog(`✅ Ball ${this.data.player}: Successfully added to Ammo.js physics world! Group: ${BALL_GROUP}, Mask: ${BALL_MASK}`);
           debugLog(`🎾 Ball ${this.data.player}: Physics body created and ready for interaction!`);
           
-          // Verify physics world state
-          const numBodies = physicsWorld.getCollisionWorld().getNumCollisionObjects();
-          debugLog(`🌍 Physics world now contains ${numBodies} collision objects`);
+          // Verify physics world state (simple check)
+          debugLog(`🌍 Physics world: Ball physics body successfully created and added`);
           
           // Verify ball position in physics world
           setTimeout(() => {
@@ -6864,8 +6875,7 @@ function setGameplayHUD(isPlaying) {
           });
           
           // Verify collision mesh was added properly
-          const totalBodies = physicsWorld.getCollisionWorld().getNumCollisionObjects();
-          debugLog(`🏗️ COLLISION MESH: Added to physics world! Total objects: ${totalBodies}`, true);
+          debugLog(`🏗️ COLLISION MESH: Successfully added to physics world!`, true);
           debugLog(`🏗️ COLLISION: Triangles: ${triangleCount}, Group: 1, Mask: -1 (all)`, true);
 
           // Create wireframe visualization
@@ -7152,6 +7162,7 @@ function setGameplayHUD(isPlaying) {
     <a-scene fps-counter game-manager sound-manager multiplayer-sync menu-toggle
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              webxr="requiredFeatures: local-floor"
+             vr-mode-ui="enabled: true"
              obb-collider="showColliders: true">
       
       <!-- Space Station Environment -->
