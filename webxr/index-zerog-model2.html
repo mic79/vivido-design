@@ -653,9 +653,7 @@
         if (!this.physicsStepCount) this.physicsStepCount = 0;
         this.physicsStepCount++;
         if (this.physicsStepCount % 300 === 0) { // Every 5 seconds
-          const scene = document.querySelector('a-scene');
-          const inVR = scene?.is('vr-mode') || false;
-          debugLog(`⚡ PHYSICS STEPPING: ${this.physicsStepCount} steps, delta: ${delta.toFixed(4)}s, objects: ${physicsObjects.length}, VR: ${inVR}`, true);
+          debugLog(`⚡ PHYSICS STEPPING: ${this.physicsStepCount} steps, delta: ${delta.toFixed(4)}s, objects: ${physicsObjects.length}`, true);
         }
         
         // Step physics simulation
@@ -717,22 +715,14 @@
           }
         });
         
-        // Debug physics sync in VR mode
+        // Debug physics sync
         if (this.physicsStepCount % 600 === 0 && syncedObjects > 0) { // Every 10 seconds
-          const scene = document.querySelector('a-scene');
-          const inVR = scene?.is('vr-mode') || false;
-          if (inVR) {
-            debugLog(`🔄 PHYSICS SYNC: ${syncedObjects} objects synced in VR mode`, true);
-          }
+          debugLog(`🔄 PHYSICS SYNC: ${syncedObjects} objects synced`, true);
         }
 
-        // Debug RAF continuity in VR mode
+        // Debug RAF continuity
         if (this.physicsStepCount % 600 === 0) { // Every 10 seconds
-          const scene = document.querySelector('a-scene');
-          const inVR = scene?.is('vr-mode') || false;
-          if (inVR) {
-            debugLog(`🔄 RAF: Animation frame continues in VR mode - step ${this.physicsStepCount}`, true);
-          }
+          debugLog(`🔄 RAF: Animation frame continues - step ${this.physicsStepCount}`, true);
         }
         
         requestAnimationFrame(updateAmmoPhysics);
@@ -2961,10 +2951,7 @@ function setGameplayHUD(isPlaying) {
 
         applyShotBallVelocity: function(ballEl, direction) {
           const ballComponent = ballEl.components['shot-ball'];
-          const scene = document.querySelector('a-scene');
-          const inVR = scene?.is('vr-mode') || false;
-          
-          debugLog(`🔴 SHOT BALL: Applying velocity - component exists: ${!!ballComponent}, body exists: ${!!ballComponent?.body}, VR mode: ${inVR}`, true);
+          debugLog(`🔴 SHOT BALL: Applying velocity - component exists: ${!!ballComponent}, body exists: ${!!ballComponent?.body}`, true);
           
           if (ballComponent && ballComponent.body) {
             // Apply forward velocity (10 m/s)
@@ -2979,7 +2966,7 @@ function setGameplayHUD(isPlaying) {
             );
             ballComponent.body.angularVelocity.set(spin.x, spin.y, spin.z);
             
-            debugLog(`🔴 SHOT BALL: ✅ Applied velocity: ${velocity.length().toFixed(2)} m/s in ${inVR ? 'VR' : 'browser'} mode`, true);
+            debugLog(`🔴 SHOT BALL: ✅ Applied velocity: ${velocity.length().toFixed(2)} m/s`, true);
             
             // Check velocity after application
             setTimeout(() => {
@@ -7052,47 +7039,12 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // Monitor WebXR session state changes that might affect physics
-      let vrSessionActive = false;
-      
-      function monitorVRSessionState() {
-        const scene = document.querySelector('a-scene');
-        if (!scene) return;
-        
-        scene.addEventListener('enter-vr', () => {
-          vrSessionActive = true;
-          debugLog('🥽 ENTERED VR MODE - Physics should continue running!', true);
-          debugLog('🥽 VR Session active - monitoring physics...', true);
-          
-          // Test physics immediately after entering VR
-          setTimeout(() => {
-            debugLog('🧪 VR PHYSICS TEST: Checking if physics is working in VR...', true);
-            const physicsObjCount = physicsObjects.length;
-            debugLog(`🧪 VR PHYSICS TEST: ${physicsObjCount} physics objects in world`, true);
-            
-            // Try to find a ball to test velocity
-            const ball = physicsObjects.find(obj => obj.entity && obj.entity.hasAttribute('zerog-ball'));
-            if (ball && ball.body) {
-              const vel = ball.body.getLinearVelocity();
-              const speed = Math.sqrt(vel.x() * vel.x() + vel.y() * vel.y() + vel.z() * vel.z());
-              debugLog(`🧪 VR PHYSICS TEST: Ball velocity: ${speed.toFixed(2)} m/s`, true);
-            }
-          }, 1000);
-        });
-        
-        scene.addEventListener('exit-vr', () => {
-          vrSessionActive = false;
-          debugLog('🌐 EXITED VR MODE - Back to browser mode', true);
-        });
-      }
+
 
       // Initialize Ammo.js when scene loads
       document.addEventListener('DOMContentLoaded', function() {
         debugLog('📋 DOM Content Loaded');
         debugLog('🔧 Scene loaded, initializing Ammo.js physics...');
-        
-        // Set up VR session monitoring
-        setTimeout(monitorVRSessionState, 2000);
         
         // Track A-Frame availability
         if (typeof AFRAME !== 'undefined') {
