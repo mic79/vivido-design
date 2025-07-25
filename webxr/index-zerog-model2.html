@@ -631,6 +631,11 @@
         physicsWorld.setGravity(new Ammo.btVector3(0, 0, 0)); // Zero gravity to match Cannon.js
         
         console.log('✅ Ammo.js physics world created for dual-mesh collision');
+        
+        // Verify physics world is working
+        debugLog(`🌍 PHYSICS WORLD: Successfully created`, true);
+        debugLog(`🌍 PHYSICS WORLD: Gravity set to zero (0,0,0)`, true);
+        debugLog(`🌍 PHYSICS WORLD: Type: ${physicsWorld.constructor.name}`, true);
       }
 
       // Physics simulation loop for Ammo.js (from aframe-ammo-working.html)
@@ -644,8 +649,24 @@
 
         const delta = clock.getDelta();
         
+        // Debug physics stepping
+        if (!this.physicsStepCount) this.physicsStepCount = 0;
+        this.physicsStepCount++;
+        if (this.physicsStepCount % 300 === 0) { // Every 5 seconds
+          debugLog(`⚡ PHYSICS STEPPING: ${this.physicsStepCount} steps, delta: ${delta.toFixed(4)}s, objects: ${physicsObjects.length}`, true);
+        }
+        
         // Step physics simulation
-        physicsWorld.stepSimulation(delta, 10);
+        try {
+          physicsWorld.stepSimulation(delta, 10);
+          
+          // Verify physics stepping works (occasional debug)
+          if (this.physicsStepCount % 600 === 0) { // Every 10 seconds
+            debugLog(`⚡ PHYSICS STEP: Successful step with delta ${delta.toFixed(4)}s`, true);
+          }
+        } catch (e) {
+          debugLog(`❌ PHYSICS STEP: Error stepping simulation: ${e.message}`, true);
+        }
         
         // Wake up all physics objects to ensure they respond to forces
         physicsObjects.forEach(obj => {
@@ -2918,6 +2939,8 @@ function setGameplayHUD(isPlaying) {
 
         applyShotBallVelocity: function(ballEl, direction) {
           const ballComponent = ballEl.components['shot-ball'];
+          debugLog(`🔴 SHOT BALL: Applying velocity - component exists: ${!!ballComponent}, body exists: ${!!ballComponent?.body}`, true);
+          
           if (ballComponent && ballComponent.body) {
             // Apply forward velocity (10 m/s)
             const velocity = direction.clone().multiplyScalar(10);
@@ -2931,7 +2954,9 @@ function setGameplayHUD(isPlaying) {
             );
             ballComponent.body.angularVelocity.set(spin.x, spin.y, spin.z);
             
-            console.log(`✅ Applied velocity to shot ball: ${velocity.length().toFixed(2)} m/s`);
+            debugLog(`🔴 SHOT BALL: ✅ Applied velocity: ${velocity.length().toFixed(2)} m/s`, true);
+          } else {
+            debugLog(`🔴 SHOT BALL: ❌ Cannot apply velocity - missing component or body!`, true);
           }
         }
       });
@@ -6304,14 +6329,21 @@ function setGameplayHUD(isPlaying) {
       // Shot Ball component for X button shooting
       AFRAME.registerComponent('shot-ball', {
         init: function() {
+          debugLog(`🔴 SHOT BALL: Init - ammoInstance=${!!ammoInstance}, physicsWorld=${!!physicsWorld}`, true);
+          
           // Wait for Ammo.js to be ready before creating physics body
           if (ammoInstance && physicsWorld) {
+            debugLog('🔴 SHOT BALL: Creating physics body immediately', true);
             this.createAmmoPhysicsBody();
           } else {
+            debugLog('🔴 SHOT BALL: Waiting for Ammo.js...', true);
             // Wait for Ammo.js to initialize
             setTimeout(() => {
               if (ammoInstance && physicsWorld) {
+                debugLog('🔴 SHOT BALL: Ammo.js ready, creating physics body', true);
                 this.createAmmoPhysicsBody();
+              } else {
+                debugLog('🔴 SHOT BALL: ❌ Ammo.js still not ready after 1s!', true);
               }
             }, 1000);
           }
@@ -6325,6 +6357,13 @@ function setGameplayHUD(isPlaying) {
         createAmmoPhysicsBody: function() {
           const spawnPos = this.el.getAttribute('position');
           const Ammo = ammoInstance;
+          
+          debugLog(`🔴 SHOT BALL: Creating physics body at ${spawnPos.x}, ${spawnPos.y}, ${spawnPos.z}`, true);
+          
+          if (!Ammo || !physicsWorld) {
+            debugLog('🔴 SHOT BALL: ❌ Ammo or physicsWorld not available!', true);
+            return;
+          }
           
           // Create sphere shape
           const radius = 0.1;
@@ -6351,6 +6390,8 @@ function setGameplayHUD(isPlaying) {
           
           // Add to physics world
           physicsWorld.addRigidBody(this.body);
+          
+          debugLog(`🔴 SHOT BALL: ✅ Physics body created and added to world!`, true);
           
           // Store reference for physics object sync
           physicsObjects.push({
