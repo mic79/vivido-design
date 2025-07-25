@@ -653,7 +653,9 @@
         if (!this.physicsStepCount) this.physicsStepCount = 0;
         this.physicsStepCount++;
         if (this.physicsStepCount % 300 === 0) { // Every 5 seconds
-          debugLog(`⚡ PHYSICS STEPPING: ${this.physicsStepCount} steps, delta: ${delta.toFixed(4)}s, objects: ${physicsObjects.length}`, true);
+          const scene = document.querySelector('a-scene');
+          const inVR = scene?.is('vr-mode') || false;
+          debugLog(`⚡ PHYSICS STEPPING: ${this.physicsStepCount} steps, delta: ${delta.toFixed(4)}s, objects: ${physicsObjects.length}, VR: ${inVR}`, true);
         }
         
         // Step physics simulation
@@ -676,6 +678,7 @@
         });
 
         // Update A-Frame entities based on Ammo bodies (if any)
+        let syncedObjects = 0;
         physicsObjects.forEach(obj => {
           if (!obj || !obj.body) return; // Safety check
           
@@ -705,6 +708,7 @@
                 if (pos && typeof pos.x === 'function' && quat && typeof quat.x === 'function') {
                   obj.object3D.position.set(pos.x(), pos.y(), pos.z());
                   obj.object3D.quaternion.set(quat.x(), quat.y(), quat.z(), quat.w());
+                  syncedObjects++;
                 }
               }
             } catch (e) {
@@ -712,7 +716,25 @@
             }
           }
         });
+        
+        // Debug physics sync in VR mode
+        if (this.physicsStepCount % 600 === 0 && syncedObjects > 0) { // Every 10 seconds
+          const scene = document.querySelector('a-scene');
+          const inVR = scene?.is('vr-mode') || false;
+          if (inVR) {
+            debugLog(`🔄 PHYSICS SYNC: ${syncedObjects} objects synced in VR mode`, true);
+          }
+        }
 
+        // Debug RAF continuity in VR mode
+        if (this.physicsStepCount % 600 === 0) { // Every 10 seconds
+          const scene = document.querySelector('a-scene');
+          const inVR = scene?.is('vr-mode') || false;
+          if (inVR) {
+            debugLog(`🔄 RAF: Animation frame continues in VR mode - step ${this.physicsStepCount}`, true);
+          }
+        }
+        
         requestAnimationFrame(updateAmmoPhysics);
       }
 
@@ -2939,7 +2961,10 @@ function setGameplayHUD(isPlaying) {
 
         applyShotBallVelocity: function(ballEl, direction) {
           const ballComponent = ballEl.components['shot-ball'];
-          debugLog(`🔴 SHOT BALL: Applying velocity - component exists: ${!!ballComponent}, body exists: ${!!ballComponent?.body}`, true);
+          const scene = document.querySelector('a-scene');
+          const inVR = scene?.is('vr-mode') || false;
+          
+          debugLog(`🔴 SHOT BALL: Applying velocity - component exists: ${!!ballComponent}, body exists: ${!!ballComponent?.body}, VR mode: ${inVR}`, true);
           
           if (ballComponent && ballComponent.body) {
             // Apply forward velocity (10 m/s)
@@ -2954,7 +2979,16 @@ function setGameplayHUD(isPlaying) {
             );
             ballComponent.body.angularVelocity.set(spin.x, spin.y, spin.z);
             
-            debugLog(`🔴 SHOT BALL: ✅ Applied velocity: ${velocity.length().toFixed(2)} m/s`, true);
+            debugLog(`🔴 SHOT BALL: ✅ Applied velocity: ${velocity.length().toFixed(2)} m/s in ${inVR ? 'VR' : 'browser'} mode`, true);
+            
+            // Check velocity after application
+            setTimeout(() => {
+              if (ballComponent.body) {
+                const vel = ballComponent.body.getLinearVelocity();
+                const currentSpeed = Math.sqrt(vel.x() * vel.x() + vel.y() * vel.y() + vel.z() * vel.z());
+                debugLog(`🔴 SHOT BALL: Velocity check after 100ms: ${currentSpeed.toFixed(2)} m/s`, true);
+              }
+            }, 100);
           } else {
             debugLog(`🔴 SHOT BALL: ❌ Cannot apply velocity - missing component or body!`, true);
           }
@@ -7018,10 +7052,47 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
+      // Monitor WebXR session state changes that might affect physics
+      let vrSessionActive = false;
+      
+      function monitorVRSessionState() {
+        const scene = document.querySelector('a-scene');
+        if (!scene) return;
+        
+        scene.addEventListener('enter-vr', () => {
+          vrSessionActive = true;
+          debugLog('🥽 ENTERED VR MODE - Physics should continue running!', true);
+          debugLog('🥽 VR Session active - monitoring physics...', true);
+          
+          // Test physics immediately after entering VR
+          setTimeout(() => {
+            debugLog('🧪 VR PHYSICS TEST: Checking if physics is working in VR...', true);
+            const physicsObjCount = physicsObjects.length;
+            debugLog(`🧪 VR PHYSICS TEST: ${physicsObjCount} physics objects in world`, true);
+            
+            // Try to find a ball to test velocity
+            const ball = physicsObjects.find(obj => obj.entity && obj.entity.hasAttribute('zerog-ball'));
+            if (ball && ball.body) {
+              const vel = ball.body.getLinearVelocity();
+              const speed = Math.sqrt(vel.x() * vel.x() + vel.y() * vel.y() + vel.z() * vel.z());
+              debugLog(`🧪 VR PHYSICS TEST: Ball velocity: ${speed.toFixed(2)} m/s`, true);
+            }
+          }, 1000);
+        });
+        
+        scene.addEventListener('exit-vr', () => {
+          vrSessionActive = false;
+          debugLog('🌐 EXITED VR MODE - Back to browser mode', true);
+        });
+      }
+
       // Initialize Ammo.js when scene loads
       document.addEventListener('DOMContentLoaded', function() {
         debugLog('📋 DOM Content Loaded');
         debugLog('🔧 Scene loaded, initializing Ammo.js physics...');
+        
+        // Set up VR session monitoring
+        setTimeout(monitorVRSessionState, 2000);
         
         // Track A-Frame availability
         if (typeof AFRAME !== 'undefined') {
@@ -7209,8 +7280,8 @@ function setGameplayHUD(isPlaying) {
       <!-- Space Station Environment -->
             <!-- SCI-FI HALLWAY ENVIRONMENT MODEL -->
         <a-assets>
-          <a-asset-item id="myModel" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/sci_fi_hallway_center.glb" response-type="arraybuffer"></a-asset-item>
-          <a-asset-item id="hallway-collision-obj" src="assets/sci_fi_hallway_center-simple2.obj"></a-asset-item>
+          <a-asset-item id="myModel" src="assets/wall-hole.glb" response-type="arraybuffer"></a-asset-item>
+          <a-asset-item id="hallway-collision-obj" src="assets/wall-hole.obj"></a-asset-item>
         </a-assets>
       <!-- Dual-Mesh System: Invisible collision + Visible graphics -->
       
