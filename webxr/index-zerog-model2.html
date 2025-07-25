@@ -7,8 +7,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.3/dist/aframe-physics-system.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <!--<script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.3/dist/aframe-physics-system.min.js"></script>-->
+    <!--<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>-->
     <script src="https://kripken.github.io/ammo.js/builds/ammo.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
@@ -47,11 +47,7 @@
         originalConsoleError.apply(console, args);
       };
 
-      // Cannon.js world (kept for legacy compatibility, but most physics moved to Ammo.js)
-      const world = new CANNON.World();
-      world.gravity.set(0, 0, 0); // Zero gravity for space environment
-      world.broadphase = new CANNON.NaiveBroadphase();
-      world.solver.iterations = 10;
+      // Cannon.js removed - using Ammo.js only
 
       // Ammo.js physics world for dual-mesh collision (from aframe-ammo-working.html)
       let physicsWorld;
@@ -578,41 +574,7 @@ function setGameplayHUD(isPlaying) {
   });
 }
 
-      // Create materials for zero-g environment
-      const defaultMaterial = new CANNON.Material('default');
-      const playerMaterial = new CANNON.Material('player');
-      const surfaceMaterial = new CANNON.Material('surface');
-      const ballMaterial = new CANNON.Material('ball');
-      
-      /* 
-       * COLLISION FILTERING SYSTEM:
-       * Group 1: Player (can grab surfaces, ignores balls when held)
-       * Group 2: Balls (can hit walls/surfaces, pass through player body)  
-       * Group 4: Walls/Surfaces (interact with both player and balls)
-       * 
-       * This prevents physics reactions when holding balls near your body!
-       */
-
-      // Create contact materials for realistic surface interaction
-      const playerSurfaceContact = new CANNON.ContactMaterial(
-        playerMaterial,
-        surfaceMaterial,
-        {
-          friction: 0.8,
-          restitution: 0.3
-        }
-      );
-      world.addContactMaterial(playerSurfaceContact);
-
-      const ballSurfaceContact = new CANNON.ContactMaterial(
-        ballMaterial,
-        surfaceMaterial,
-        {
-          friction: 0.1,
-          restitution: 0.9
-        }
-      );
-      world.addContactMaterial(ballSurfaceContact);
+      // Materials moved to Ammo.js - using collision filtering instead
 
       // Zero-G Player Controller - Physics-based movement
       AFRAME.registerComponent('zerog-player', {
@@ -3318,29 +3280,7 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // Physics update loop - Anti-tunneling optimized for zero-gravity
-      AFRAME.registerComponent('physics-world', {
-        init: function() {
-          this.lastTime = 0;
-        },
-        tick: function(time) {
-          const deltaTime = (time - this.lastTime) / 1000;
-          if (deltaTime > 0) {
-            // Use smaller timesteps to prevent tunneling at high speeds in zero-g
-            const maxStep = 1/240; // 240Hz timestep for better collision detection
-            const steps = Math.ceil(deltaTime / maxStep);
-            
-            // Clamp to reasonable step count to prevent performance issues
-            const clampedSteps = Math.min(steps, 8);
-            const clampedStepSize = deltaTime / clampedSteps;
-            
-            for (let i = 0; i < clampedSteps; i++) {
-              world.step(clampedStepSize);
-            }
-          }
-          this.lastTime = time;
-        }
-      });
+      // Physics update handled by Ammo.js updateAmmoPhysics() function
 
       // Impact effect component
       AFRAME.registerComponent('impact-effect', {
@@ -6371,10 +6311,10 @@ function setGameplayHUD(isPlaying) {
 
     </script>
 
-    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle
+    <a-scene fps-counter game-manager sound-manager multiplayer-sync menu-toggle
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              webxr="requiredFeatures: local-floor"
-             obb-collider="showColliders: true" physics="debug: true">
+             obb-collider="showColliders: true">
       
       <!-- Space Station Environment -->
       <!-- SCI-FI HALLWAY ENVIRONMENT MODEL -->
