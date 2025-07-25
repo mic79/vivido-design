@@ -649,24 +649,10 @@
 
         const delta = clock.getDelta();
         
-        // Debug physics stepping
-        if (!this.physicsStepCount) this.physicsStepCount = 0;
-        this.physicsStepCount++;
-        if (this.physicsStepCount % 300 === 0) { // Every 5 seconds
-          debugLog(`⚡ PHYSICS STEPPING: ${this.physicsStepCount} steps, delta: ${delta.toFixed(4)}s, objects: ${physicsObjects.length}`, true);
-        }
+
         
         // Step physics simulation
-        try {
-          physicsWorld.stepSimulation(delta, 10);
-          
-          // Verify physics stepping works (occasional debug)
-          if (this.physicsStepCount % 600 === 0) { // Every 10 seconds
-            debugLog(`⚡ PHYSICS STEP: Successful step with delta ${delta.toFixed(4)}s`, true);
-          }
-        } catch (e) {
-          debugLog(`❌ PHYSICS STEP: Error stepping simulation: ${e.message}`, true);
-        }
+        physicsWorld.stepSimulation(delta, 10);
         
         // Wake up all physics objects to ensure they respond to forces
         physicsObjects.forEach(obj => {
@@ -675,56 +661,33 @@
           }
         });
 
-        // Update A-Frame entities based on Ammo bodies (if any)
-        let syncedObjects = 0;
+                // Update A-Frame entities based on Ammo bodies
         physicsObjects.forEach(obj => {
-          if (!obj || !obj.body) return; // Safety check
+          if (!obj || !obj.body) return;
           
-          // Skip player body - it's handled manually in the VR movement component
-          if (obj.isPlayer) {
-            return; // Player physics are handled separately
-          }
+          // Skip player body - handled separately
+          if (obj.isPlayer) return;
           
-          // Handle normal objects (balls, etc.)
+          // Sync physics to visuals
           if (obj.object3D && obj.entity) {
             try {
-              // Skip grabbed balls - they're positioned manually
-              const ballComponent = obj.entity.components && obj.entity.components['zerog-ball'];
-              if (ballComponent && ballComponent.isGrabbed) {
-                return; // Don't sync physics for grabbed balls
-              }
-              
-              let ammoObject = obj.body;
-              let ms = ammoObject.getMotionState();
-
+              let ms = obj.body.getMotionState();
               if (ms) {
                 ms.getWorldTransform(tempTransform);
                 let pos = tempTransform.getOrigin();
                 let quat = tempTransform.getRotation();
                 
-                // Safety checks for valid transform data
                 if (pos && typeof pos.x === 'function' && quat && typeof quat.x === 'function') {
                   obj.object3D.position.set(pos.x(), pos.y(), pos.z());
                   obj.object3D.quaternion.set(quat.x(), quat.y(), quat.z(), quat.w());
-                  syncedObjects++;
                 }
               }
             } catch (e) {
-              // Silently handle any errors in physics sync
+              // Ignore sync errors
             }
           }
         });
-        
-        // Debug physics sync
-        if (this.physicsStepCount % 600 === 0 && syncedObjects > 0) { // Every 10 seconds
-          debugLog(`🔄 PHYSICS SYNC: ${syncedObjects} objects synced`, true);
-        }
 
-        // Debug RAF continuity
-        if (this.physicsStepCount % 600 === 0) { // Every 10 seconds
-          debugLog(`🔄 RAF: Animation frame continues - step ${this.physicsStepCount}`, true);
-        }
-        
         requestAnimationFrame(updateAmmoPhysics);
       }
 
@@ -2951,33 +2914,27 @@ function setGameplayHUD(isPlaying) {
 
         applyShotBallVelocity: function(ballEl, direction) {
           const ballComponent = ballEl.components['shot-ball'];
-          debugLog(`🔴 SHOT BALL: Applying velocity - component exists: ${!!ballComponent}, body exists: ${!!ballComponent?.body}`, true);
           
           if (ballComponent && ballComponent.body) {
             // Apply forward velocity (10 m/s)
             const velocity = direction.clone().multiplyScalar(10);
-            ballComponent.body.velocity.set(velocity.x, velocity.y, velocity.z);
             
-            // Add some random spin
+            // Use Ammo.js directly
+            const ammoVel = new ammoInstance.btVector3(velocity.x, velocity.y, velocity.z);
+            ballComponent.body.setLinearVelocity(ammoVel);
+            ballComponent.body.activate();
+            ammoInstance.destroy(ammoVel);
+            
+            // Add random spin
             const spin = new THREE.Vector3(
               (Math.random() - 0.5) * 20,
               (Math.random() - 0.5) * 20, 
               (Math.random() - 0.5) * 20
             );
-            ballComponent.body.angularVelocity.set(spin.x, spin.y, spin.z);
-            
-            debugLog(`🔴 SHOT BALL: ✅ Applied velocity: ${velocity.length().toFixed(2)} m/s`, true);
-            
-            // Check velocity after application
-            setTimeout(() => {
-              if (ballComponent.body) {
-                const vel = ballComponent.body.getLinearVelocity();
-                const currentSpeed = Math.sqrt(vel.x() * vel.x() + vel.y() * vel.y() + vel.z() * vel.z());
-                debugLog(`🔴 SHOT BALL: Velocity check after 100ms: ${currentSpeed.toFixed(2)} m/s`, true);
-              }
-            }, 100);
-          } else {
-            debugLog(`🔴 SHOT BALL: ❌ Cannot apply velocity - missing component or body!`, true);
+            const ammoSpin = new ammoInstance.btVector3(spin.x, spin.y, spin.z);
+            ballComponent.body.setAngularVelocity(ammoSpin);
+            ballComponent.body.activate();
+            ammoInstance.destroy(ammoSpin);
           }
         }
       });
@@ -6024,11 +5981,14 @@ function setGameplayHUD(isPlaying) {
           physicsWorld.addRigidBody(this.body, BALL_GROUP, BALL_MASK);
           
           // Store reference for physics object sync
-          physicsObjects.push({
+          const physicsObj = {
             entity: this.el,
             object3D: this.el.object3D,
             body: this.body
-          });
+          };
+          physicsObjects.push(physicsObj);
+          
+
           
           // Store body reference for grabbing (now that body is created)
           this.el.body = this.body;
@@ -6350,21 +6310,14 @@ function setGameplayHUD(isPlaying) {
       // Shot Ball component for X button shooting
       AFRAME.registerComponent('shot-ball', {
         init: function() {
-          debugLog(`🔴 SHOT BALL: Init - ammoInstance=${!!ammoInstance}, physicsWorld=${!!physicsWorld}`, true);
-          
           // Wait for Ammo.js to be ready before creating physics body
           if (ammoInstance && physicsWorld) {
-            debugLog('🔴 SHOT BALL: Creating physics body immediately', true);
             this.createAmmoPhysicsBody();
           } else {
-            debugLog('🔴 SHOT BALL: Waiting for Ammo.js...', true);
             // Wait for Ammo.js to initialize
             setTimeout(() => {
               if (ammoInstance && physicsWorld) {
-                debugLog('🔴 SHOT BALL: Ammo.js ready, creating physics body', true);
                 this.createAmmoPhysicsBody();
-              } else {
-                debugLog('🔴 SHOT BALL: ❌ Ammo.js still not ready after 1s!', true);
               }
             }, 1000);
           }
@@ -6379,10 +6332,7 @@ function setGameplayHUD(isPlaying) {
           const spawnPos = this.el.getAttribute('position');
           const Ammo = ammoInstance;
           
-          debugLog(`🔴 SHOT BALL: Creating physics body at ${spawnPos.x}, ${spawnPos.y}, ${spawnPos.z}`, true);
-          
           if (!Ammo || !physicsWorld) {
-            debugLog('🔴 SHOT BALL: ❌ Ammo or physicsWorld not available!', true);
             return;
           }
           
@@ -6409,10 +6359,8 @@ function setGameplayHUD(isPlaying) {
           // Add compatibility layer for velocity manipulation
           this.setupVelocityAPI();
           
-          // Add to physics world
+                    // Add to physics world
           physicsWorld.addRigidBody(this.body);
-          
-          debugLog(`🔴 SHOT BALL: ✅ Physics body created and added to world!`, true);
           
           // Store reference for physics object sync
           physicsObjects.push({
@@ -6420,6 +6368,8 @@ function setGameplayHUD(isPlaying) {
             object3D: this.el.object3D,
             body: this.body
           });
+          
+          
         },
 
         setupVelocityAPI: function() {
