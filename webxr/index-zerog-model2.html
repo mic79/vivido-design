@@ -1307,10 +1307,10 @@ function setGameplayHUD(isPlaying) {
               const isHidden = debugOverlay.style.display === 'none' || !debugOverlay.style.display;
               if (isHidden) {
                 debugOverlay.style.display = 'block';
-                console.log('🐛 Debug overlay SHOWN via Y button');
+                debugLog('🐛 Debug overlay SHOWN via Y button');
               } else {
                 hideDebugOverlay();
-                console.log('🐛 Debug overlay HIDDEN via Y button');
+                debugLog('🐛 Debug overlay HIDDEN via Y button');
               }
             }
           });
@@ -5302,15 +5302,34 @@ function setGameplayHUD(isPlaying) {
           const spawnPos = this.el.getAttribute('position');
           
           // Wait for Ammo.js to be ready before creating physics body
+          debugLog(`🎾 Ball ${this.data.player} init: ammoInstance=${!!ammoInstance}, physicsWorld=${!!physicsWorld}`);
+          
           if (ammoInstance && physicsWorld) {
+            debugLog(`🎾 Ball ${this.data.player}: Creating physics body immediately`);
             this.createAmmoPhysicsBody(spawnPos);
           } else {
-            // Wait for Ammo.js to initialize
-            setTimeout(() => {
+            debugLog(`🎾 Ball ${this.data.player}: Waiting for Ammo.js with timeout...`);
+            // Wait for Ammo.js to initialize with retry mechanism
+            let retryCount = 0;
+            const maxRetries = 10;
+            const retryInterval = 1000; // 1 second intervals
+            
+            const checkAmmoReady = () => {
+              retryCount++;
+              debugLog(`🎾 Ball ${this.data.player}: Retry ${retryCount}/${maxRetries} - ammoInstance=${!!ammoInstance}, physicsWorld=${!!physicsWorld}`);
+              
               if (ammoInstance && physicsWorld) {
+                debugLog(`🎾 Ball ${this.data.player}: ✅ Ammo.js ready! Creating physics body...`);
                 this.createAmmoPhysicsBody(spawnPos);
+              } else if (retryCount < maxRetries) {
+                debugLog(`🎾 Ball ${this.data.player}: ⏳ Still waiting... retrying in ${retryInterval}ms`);
+                setTimeout(checkAmmoReady, retryInterval);
+              } else {
+                debugLog(`🎾 Ball ${this.data.player}: ❌ FAILED - Ammo.js not ready after ${maxRetries} attempts!`, true);
               }
-            }, 2000);
+            };
+            
+            setTimeout(checkAmmoReady, retryInterval);
           }
           
           // Store body reference will be set after physics body creation
@@ -5860,8 +5879,13 @@ function setGameplayHUD(isPlaying) {
         },
 
         createAmmoPhysicsBody: function(spawnPos) {
-          console.log('🔧 Creating Ammo.js physics body for ball');
+          debugLog(`🔧 Ball ${this.data.player}: Creating Ammo.js physics body at position: ${spawnPos.x}, ${spawnPos.y}, ${spawnPos.z}`);
           const Ammo = ammoInstance;
+          
+          if (!Ammo || !physicsWorld) {
+            debugLog(`🔧 Ball ${this.data.player}: ❌ FAILED - Ammo or physicsWorld not available!`, true);
+            return;
+          }
           
           // Store initial position for reset functionality
           this.initialPosition = new THREE.Vector3(spawnPos.x, spawnPos.y, spawnPos.z);
@@ -5914,7 +5938,20 @@ function setGameplayHUD(isPlaying) {
           // Store body reference for grabbing (now that body is created)
           this.el.body = this.body;
           
-          console.log('✅ Ball added to Ammo.js physics world - Player:', this.data.player, 'Group:', BALL_GROUP, 'Mask:', BALL_MASK);
+          debugLog(`✅ Ball ${this.data.player}: Successfully added to Ammo.js physics world! Group: ${BALL_GROUP}, Mask: ${BALL_MASK}`);
+          debugLog(`🎾 Ball ${this.data.player}: Physics body created and ready for interaction!`);
+          
+          // Verify ball is visible
+          setTimeout(() => {
+            const ballEl = document.querySelector(`[zerog-ball="player: ${this.data.player}"]`);
+            if (ballEl) {
+              const visible = ballEl.getAttribute('visible') !== 'false';
+              const position = ballEl.getAttribute('position');
+              debugLog(`🎾 Ball ${this.data.player}: Visual check - visible: ${visible}, position: ${position}`);
+            } else {
+              debugLog(`🎾 Ball ${this.data.player}: ❌ Element not found in DOM!`, true);
+            }
+          }, 100);
         },
 
         setupVelocityAPI: function() {
