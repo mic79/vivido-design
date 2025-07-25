@@ -226,12 +226,10 @@
          debugLog('☢️ Applying nuclear Quest 3 fixes...');
          
          try {
-           // Disable collision mesh for Quest 3
+           // Note: No longer removing collision mesh since crashes are fixed
            const collisionMesh = document.querySelector('#hallway-collision');
            if (collisionMesh) {
-             collisionMesh.setAttribute('visible', 'false');
-             collisionMesh.remove();
-             debugLog('☢️ Removed collision mesh');
+             debugLog('✅ Collision mesh kept - crashes fixed, physics stable');
            }
 
            // Disable complex components
@@ -1043,10 +1041,32 @@
         activePlayers.clear();
         botPlayers.clear();
         
-        // Enable bot
+        // Set up singleplayer: Player (blue ball) + Bot (red ball)
+        activePlayers.add('player_0'); // Host (you) - blue ball (player2 entity)
+        activePlayers.add('player_1'); // Bot - red ball (player1 entity)
+        botPlayers.add('player_1');    // Mark player_1 as bot
+        
+        console.log('🎮 Singleplayer setup: You (blue ball) vs Bot (red ball)');
+        console.log('🔵 Player (You): Blue ball (player2)');
+        console.log('🔴 Bot: Red ball (player1)');
+        
+        // Enable bot entity
         const bot = document.querySelector('#zerog-bot');
         if (bot && bot.components['zerog-bot']) {
           bot.setAttribute('zerog-bot', 'enabled', true);
+        }
+        
+        // Make sure both balls are visible and active
+        const redBall = document.querySelector('[zerog-ball="player: player1"]'); // Bot's red ball
+        const blueBall = document.querySelector('[zerog-ball="player: player2"]'); // Your blue ball
+        
+        if (redBall) {
+          redBall.setAttribute('visible', true);
+          console.log('🔴 Red ball (bot) made visible');
+        }
+        if (blueBall) {
+          blueBall.setAttribute('visible', true);
+          console.log('🔵 Blue ball (player) made visible');
         }
         
         // Initialize game manager
