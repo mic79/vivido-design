@@ -5,18 +5,146 @@
     <title>WebXR Zero-G Environment v2.0 - Dual-Mesh Collision</title>
     <meta name="description" content="Enhanced zero-gravity WebXR environment with 4-player multiplayer support, teams, bot fill-in, and dual-mesh collision system">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js" onload="onScriptLoad('A-Frame')" onerror="debugLog('❌ A-Frame failed to load', true)"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js" onload="onScriptLoad('aframe-extras')" onerror="debugLog('❌ aframe-extras failed to load', true)"></script>
     <!--<script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.3/dist/aframe-physics-system.min.js"></script>-->
     <!--<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>-->
-    <script src="https://kripken.github.io/ammo.js/builds/ammo.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://kripken.github.io/ammo.js/builds/ammo.js" onload="debugLog('✅ Ammo.js script loaded')" onerror="debugLog('❌ Ammo.js failed to load from CDN', true)"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js" onload="onScriptLoad('PeerJS')" onerror="debugLog('❌ PeerJS failed to load', true)"></script>
 
     <script src="advanced-bot.js"></script>
     <script src="game-modes.js"></script>
   </head>
   <body>
+    <!-- Loading Debug Overlay for Quest 3 -->
+    <div id="debug-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); color: #00ff00; font-family: monospace; font-size: 14px; padding: 20px; z-index: 99999; overflow-y: auto;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h2>🔧 Quest 3 Debug Loading</h2>
+        <div id="loading-progress" style="font-size: 18px; color: #ffff00;">Starting...</div>
+      </div>
+      <div id="debug-log" style="max-height: 70vh; overflow-y: auto; border: 1px solid #333; padding: 10px; background: rgba(0,0,0,0.5);">
+        <div>🚀 Debug system initialized</div>
+      </div>
+      <div style="text-align: center; margin-top: 20px;">
+        <button onclick="hideDebugOverlay()" style="padding: 10px 20px; background: #006600; color: white; border: none; border-radius: 5px;">Hide Debug (if working)</button>
+      </div>
+    </div>
+
     <script>
+      // Debug logging system for Quest 3
+      let debugStep = 0;
+      const debugSteps = [
+        'Loading Scripts...',
+        'Ammo.js Loading...',
+        'Ammo.js Initializing...',
+        'Physics World Setup...',
+        'A-Frame Scene Loading...',
+        'Assets Loading...',
+        'Components Initializing...',
+        'Ready!'
+      ];
+
+      function debugLog(message, isError = false) {
+        const log = document.getElementById('debug-log');
+        const progress = document.getElementById('loading-progress');
+        const timestamp = new Date().toLocaleTimeString();
+        const color = isError ? '#ff0000' : '#00ff00';
+        
+        if (log) {
+          log.innerHTML += `<div style="color: ${color}">[${timestamp}] ${message}</div>`;
+          log.scrollTop = log.scrollHeight;
+        }
+        
+        console.log(`🔧 ${message}`);
+      }
+
+      function updateProgress(step, details = '') {
+        debugStep = Math.max(debugStep, step);
+        const progress = document.getElementById('loading-progress');
+        if (progress) {
+          const percentage = Math.round((step / (debugSteps.length - 1)) * 100);
+          progress.textContent = `${debugSteps[step]} (${percentage}%) ${details}`;
+        }
+        debugLog(`STEP ${step}: ${debugSteps[step]} ${details}`);
+      }
+
+      function hideDebugOverlay() {
+        const overlay = document.getElementById('debug-overlay');
+        if (overlay) overlay.style.display = 'none';
+      }
+
+      // Start debugging
+      updateProgress(0);
+      debugLog('🔧 Quest 3 Debug System Active');
+      debugLog(`🌐 User Agent: ${navigator.userAgent}`);
+      debugLog(`💾 Memory: ${navigator.deviceMemory || 'unknown'}GB`);
+      debugLog(`🔗 WebAssembly Support: ${typeof WebAssembly !== 'undefined' ? 'YES' : 'NO'}`);
+
+      // Track script loading
+      let scriptsLoaded = 0;
+      const totalScripts = 4; // A-Frame, aframe-extras, Ammo.js, PeerJS
+
+      function onScriptLoad(scriptName) {
+        scriptsLoaded++;
+        debugLog(`✅ ${scriptName} loaded (${scriptsLoaded}/${totalScripts})`);
+        if (scriptsLoaded >= totalScripts) {
+          updateProgress(1, '- All scripts loaded');
+        }
+      }
+
+      // Global error handler for debugging
+      window.addEventListener('error', (event) => {
+        debugLog(`❌ ERROR: ${event.error?.message || event.message}`, true);
+        debugLog(`📁 File: ${event.filename}:${event.lineno}`, true);
+        if (event.error?.stack) {
+          debugLog(`📚 Stack: ${event.error.stack.substring(0, 200)}...`, true);
+        }
+      });
+
+      // Track unhandled promise rejections
+      window.addEventListener('unhandledrejection', (event) => {
+        debugLog(`❌ PROMISE REJECTION: ${event.reason}`, true);
+      });
+
+      // Monitor Ammo.js loading specifically
+      let ammoCheckInterval = setInterval(() => {
+        if (typeof Ammo !== 'undefined') {
+          clearInterval(ammoCheckInterval);
+          updateProgress(2, '- Ammo.js available');
+          onScriptLoad('Ammo.js');
+        }
+      }, 100);
+
+      // Timeout for Ammo.js loading
+      setTimeout(() => {
+        if (typeof Ammo === 'undefined') {
+          debugLog('❌ TIMEOUT: Ammo.js failed to load after 30 seconds', true);
+          debugLog('🔗 CDN may be blocked or slow on Quest 3', true);
+          debugLog('💡 SOLUTION: Try downloading ammo.js locally', true);
+        }
+      }, 30000);
+
+      // Quest 3 specific checks
+      if (navigator.userAgent.includes('Quest')) {
+        debugLog('🥽 Quest browser detected - watching for Quest-specific issues');
+        
+        // Monitor memory usage if available
+        if (navigator.deviceMemory) {
+          debugLog(`💾 Device Memory: ${navigator.deviceMemory}GB`);
+          if (navigator.deviceMemory < 8) {
+            debugLog('⚠️ LOW MEMORY: Quest may struggle with large 3D models', true);
+          }
+        }
+
+        // Check for WebGL limitations
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        if (gl) {
+          const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+          debugLog(`🎨 Max Texture Size: ${maxTextureSize}px`);
+        }
+      }
+
       // Global error handler to suppress Meta Touch Controls and physics errors
       window.addEventListener('error', (event) => {
         if (event.error && event.error.message && 
@@ -47,8 +175,6 @@
         originalConsoleError.apply(console, args);
       };
 
-      // Cannon.js removed - using Ammo.js only
-
       // Ammo.js physics world for dual-mesh collision (from aframe-ammo-working.html)
       let physicsWorld;
       let ammoInstance;
@@ -59,29 +185,35 @@
       // Initialize Ammo.js physics world (exactly like aframe-ammo-working.html)
       function initAmmoPhysics() {
         if (typeof Ammo === 'undefined') {
-          console.error('❌ Ammo.js not loaded! Retrying in 1 second...');
+          debugLog('❌ Ammo.js not loaded! Retrying in 1 second...', true);
           setTimeout(initAmmoPhysics, 1000);
           return false;
         }
 
-        console.log('🔧 Ammo.js found, initializing...');
+        debugLog('🔧 Ammo.js found, initializing...');
+        updateProgress(3, '- Starting Ammo() call...');
 
         Ammo().then((Ammo) => {
+          debugLog('✅ Ammo() promise resolved successfully');
           ammoInstance = Ammo;
-          console.log('✅ Ammo.js initialized successfully');
+          updateProgress(4, '- Ammo instance created');
           
+          debugLog('🏗️ Setting up physics world...');
           setupAmmoPhysicsWorld(Ammo);
           
           // Initialize temp transform for updates
           tempTransform = new Ammo.btTransform();
+          debugLog('✅ Transform initialized');
           
           // Start physics update loop
           updateAmmoPhysics();
+          debugLog('✅ Physics update loop started');
           
-          console.log('🎯 Ammo.js physics world ready for dual-mesh collision!');
+          updateProgress(5, '- Physics world ready');
+          debugLog('🎯 Ammo.js physics world ready for dual-mesh collision!');
         }).catch((error) => {
-          console.error('❌ Failed to initialize Ammo.js:', error);
-          console.log('🔄 Retrying in 2 seconds...');
+          debugLog(`❌ Failed to initialize Ammo.js: ${error}`, true);
+          debugLog('🔄 Retrying in 2 seconds...');
           setTimeout(initAmmoPhysics, 2000);
         });
 
@@ -1380,7 +1512,6 @@ function setGameplayHUD(isPlaying) {
           this.checkBallHits(cameraWorldPos);
         },
 
-        
         // Option B: Calculate collision response for point vs geometry
         getCollisionResponse: function(point, radius, surfacePos, geometry) {
           const response = new THREE.Vector3(0, 0, 0);
@@ -1555,15 +1686,15 @@ function setGameplayHUD(isPlaying) {
             }
           }
           
-                      // Apply thrust to velocity (Option B approach)
-            if (totalThrust.length() > 0) {
-              // RESTORED: Apply thrust to velocity (original system)
-              this.velocity.add(totalThrust);
-              
-              // Apply max speed limit
-              if (this.velocity.length() > this.data.maxSpeed) {
-                this.velocity.normalize().multiplyScalar(this.data.maxSpeed);
-              }
+          // Apply thrust to velocity (Option B approach)
+          if (totalThrust.length() > 0) {
+            // RESTORED: Apply thrust to velocity (original system)
+            this.velocity.add(totalThrust);
+            
+            // Apply max speed limit
+            if (this.velocity.length() > this.data.maxSpeed) {
+              this.velocity.normalize().multiplyScalar(this.data.maxSpeed);
+            }
             
             if (this.debugMode) {
               console.log('Velocity changed by thrust:', totalThrust.toArray().map(x => x.toFixed(3)));
@@ -1576,9 +1707,9 @@ function setGameplayHUD(isPlaying) {
           // Handle pulling/pushing when grabbing STATIC surfaces (not balls)
           ['left', 'right'].forEach(handKey => {
             if (this.hands[handKey].isGrabbing && this.hands[handKey].grabInfo) {
-                        const grabInfo = this.hands[handKey].grabInfo;
-          
-          // CRITICAL: Only apply player movement for static surfaces, NEVER for balls
+              const grabInfo = this.hands[handKey].grabInfo;
+              
+              // CRITICAL: Only apply player movement for static surfaces, NEVER for balls
               if (grabInfo.isBall) {
                 return; // Balls handle their own movement, do NOT affect player
               }
@@ -1602,7 +1733,6 @@ function setGameplayHUD(isPlaying) {
               
               // Only apply movement if hand has moved significantly
               if (movementMagnitude > 0.001) { // 0.1cm minimum movement
-                
                 // Apply hand movement as velocity change in opposite direction
                 // This creates the "pulling yourself toward/away from object" effect
                 const movementStrength = 80.0; // Scale factor for responsiveness
@@ -1666,8 +1796,6 @@ function setGameplayHUD(isPlaying) {
         },
 
         // NEW: Try to grab a ball with the specified hand
-
-
         tryGrabBall: function(hand) {
           const isLeft = hand.id === 'leftHand';
           const handKey = isLeft ? 'left' : 'right';
@@ -1770,21 +1898,21 @@ function setGameplayHUD(isPlaying) {
             
             // If grip is held but not currently grabbing anything
             if (this.hands[handKey].gripHeld && !this.hands[handKey].isGrabbing) {
-                             // Check what's in range and try to grab it
-                              if (this.hands[handKey].nearbyObject === 'environment') {
-                 // Environment grabbing with proper tracking
-                 const handPos = new THREE.Vector3();
-                 hand.object3D.getWorldPosition(handPos);
-                 
-                 this.hands[handKey].isGrabbing = true;
-                 this.hands[handKey].grabInfo = {
-                   grabPoint: handPos.clone(),
-                   handPositionAtGrab: handPos.clone(),
-                   playerPositionAtGrab: this.playerPhysicsBody ? this.playerPhysicsBody.getWorldTransform().getOrigin() : handPos.clone(),
-                   grabTime: Date.now()
-                 };
-                 console.log('🏗️ Environment grab with', handKey, 'hand');
-                 // DON'T count environment grabbing for tractor beam blocker
+              // Check what's in range and try to grab it
+              if (this.hands[handKey].nearbyObject === 'environment') {
+                // Environment grabbing with proper tracking
+                const handPos = new THREE.Vector3();
+                hand.object3D.getWorldPosition(handPos);
+                
+                this.hands[handKey].isGrabbing = true;
+                this.hands[handKey].grabInfo = {
+                  grabPoint: handPos.clone(),
+                  handPositionAtGrab: handPos.clone(),
+                  playerPositionAtGrab: this.playerPhysicsBody ? this.playerPhysicsBody.getWorldTransform().getOrigin() : handPos.clone(),
+                  grabTime: Date.now()
+                };
+                console.log('🏗️ Environment grab with', handKey, 'hand');
+                // DON'T count environment grabbing for tractor beam blocker
               } else if (this.hands[handKey].nearbyObject) {
                 // Try to grab nearby ball
                 this.tryGrabBall(hand);
@@ -2254,8 +2382,6 @@ function setGameplayHUD(isPlaying) {
           }
         },
 
-        
-
         testPlayerCollision: function() {
           setTimeout(() => {
             if (this.playerPhysicsBody && ammoInstance && physicsWorld) {
@@ -2333,39 +2459,6 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // Surface Grab Points - Interactive surfaces for grabbing
-      AFRAME.registerComponent('grab-surface', {
-        schema: {
-          type: { type: 'string', default: 'static' }, // static, dynamic
-          strength: { type: 'number', default: 1.0 }
-        },
-        
-        init: function() {
-          // Add grabbable class
-          this.el.classList.add('grabbable-surface');
-          
-          // NOTE: Physics body disabled - player now collides with Ammo.js triangle mesh instead
-          console.log('🚫 grab-surface physics body disabled (using Ammo.js collision instead)');
-          
-          // Create a dummy body reference for compatibility
-          this.body = null;
-          this.el.body = null;
-          
-
-          
-          // Visual feedback for grabbable surfaces
-          this.el.addEventListener('mouseenter', () => {
-            this.el.setAttribute('material', 'color', '#00ff00');
-          });
-          
-          this.el.addEventListener('mouseleave', () => {
-            this.el.setAttribute('material', 'color', '#ffffff');
-          });
-        }
-      });
-
-
-
       // Zero-G Bot Component - AI opponent for singleplayer
       AFRAME.registerComponent('zerog-bot', {
         schema: {
@@ -2418,9 +2511,6 @@ function setGameplayHUD(isPlaying) {
             this.ball = this.el.sceneEl.querySelector('[zerog-ball="player: player1"]');
           });
           
-          // TODO: Implement Ammo.js collision detection for bot being hit
-          // (Ammo.js bodies don't have addEventListener like Cannon.js)
-          
           // Update difficulty settings
           if (this.data.difficulty === 'easy') {
             this.data.throwInterval = 6000;  // 6 seconds between throws
@@ -2433,26 +2523,6 @@ function setGameplayHUD(isPlaying) {
             this.data.accuracy = 0.9;        // 90% accuracy
           }
         },
-        
-                 checkPlayerBallHit: function(evt) {
-           if (!this.data.enabled) return;
-           
-           const otherBody = evt.target === this.body ? evt.body : evt.target;
-           
-           // Check if hit by player's ball (player2)
-           if (otherBody.el && otherBody.el.hasAttribute('zerog-ball')) {
-             const ballPlayer = otherBody.el.getAttribute('zerog-ball').player;
-             if (ballPlayer === 'player2') {
-               // Bot was hit - only trigger impact effect (scoring handled by zerog-ball component)
-               const impactEffect = this.el.components['impact-effect'];
-               if (impactEffect) {
-                 impactEffect.playEffect();
-               }
-               
-               console.log('Bot hit by player ball!');
-             }
-           }
-         },
         
         generateNewTargetPosition: function() {
           // Generate a random position in the back half of the space
@@ -2500,14 +2570,14 @@ function setGameplayHUD(isPlaying) {
           // Apply velocity to physics body
           this.body.velocity.set(velocity.x, velocity.y, velocity.z);
           
-                      // console.log(`Bot moving to: ${this.targetPosition.x.toFixed(1)}, ${this.targetPosition.y.toFixed(1)}, ${this.targetPosition.z.toFixed(1)}`); // Disabled to reduce console spam
+          // console.log(`Bot moving to: ${this.targetPosition.x.toFixed(1)}, ${this.targetPosition.y.toFixed(1)}, ${this.targetPosition.z.toFixed(1)}`); // Disabled to reduce console spam
         },
         
         stopMovement: function() {
           this.isMoving = false;
           // Apply damping to slow down
           this.body.velocity.scale(0.1, this.body.velocity);
-                      // console.log('Bot stopped moving, generating new target...'); // Disabled to reduce console spam
+          // console.log('Bot stopped moving, generating new target...'); // Disabled to reduce console spam
           this.generateNewTargetPosition();
         },
         
@@ -2790,8 +2860,6 @@ function setGameplayHUD(isPlaying) {
           }
         }
       });
-
-      // Game manager component for zero-g multiplayer
 
       // Add sound manager component
       AFRAME.registerComponent('sound-manager', {
@@ -6288,8 +6356,56 @@ function setGameplayHUD(isPlaying) {
 
       // Initialize Ammo.js when scene loads
       document.addEventListener('DOMContentLoaded', function() {
-        console.log('🔧 Scene loaded, initializing Ammo.js physics...');
+        debugLog('📋 DOM Content Loaded');
+        debugLog('🔧 Scene loaded, initializing Ammo.js physics...');
+        
+        // Track A-Frame availability
+        if (typeof AFRAME !== 'undefined') {
+          debugLog('✅ A-Frame is available');
+          onScriptLoad('A-Frame');
+        } else {
+          debugLog('⏳ Waiting for A-Frame...');
+          let aframeWait = setInterval(() => {
+            if (typeof AFRAME !== 'undefined') {
+              clearInterval(aframeWait);
+              debugLog('✅ A-Frame loaded');
+              onScriptLoad('A-Frame');
+            }
+          }, 100);
+        }
+
+        // Track scene and asset loading
         setTimeout(() => {
+          const scene = document.querySelector('a-scene');
+          if (scene) {
+            scene.addEventListener('loaded', () => {
+              debugLog('🎬 A-Frame scene loaded');
+              updateProgress(6, '- Scene ready');
+            });
+
+            scene.addEventListener('renderstart', () => {
+              debugLog('🎨 A-Frame rendering started');
+              updateProgress(7, '- Rendering started');
+              
+              // Hide debug overlay after successful load
+              setTimeout(() => {
+                debugLog('✅ All systems ready! Auto-hiding debug overlay...');
+                hideDebugOverlay();
+              }, 3000);
+            });
+          }
+
+          const assets = document.querySelector('a-assets');
+          if (assets) {
+            assets.addEventListener('loaded', () => {
+              debugLog('🎨 All assets loaded');
+              updateProgress(6, '- Assets ready');
+            });
+          }
+        }, 100);
+        
+        setTimeout(() => {
+          updateProgress(2, '- Starting physics initialization...');
           initAmmoPhysics();
         }, 1000);
       });
