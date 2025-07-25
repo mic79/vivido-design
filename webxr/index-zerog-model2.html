@@ -1512,7 +1512,12 @@ function setGameplayHUD(isPlaying) {
           // Check if this is a ball and handle differently
           if (surface.hasAttribute('zerog-ball') && surface.components['zerog-ball']) {
             // For balls, call the ball's onGrab method
-            surface.components['zerog-ball'].onGrab(hand);
+            const ballComponent = surface.components['zerog-ball'];
+            if (ballComponent && ballComponent.onGrab) {
+              ballComponent.onGrab(hand);
+            } else {
+              debugLog('⚠️ Ball grab: component not fully initialized (timing issue)', true);
+            }
             
             this.hands[handKey].grabInfo = {
               surface: surface,
@@ -1533,8 +1538,13 @@ function setGameplayHUD(isPlaying) {
           const grabInfo = this.hands[handKey].grabInfo;
           if (grabInfo) {
             // If releasing a ball, call the ball's onRelease method
-            if (grabInfo.isBall && grabInfo.surface.components['zerog-ball']) {
-              grabInfo.surface.components['zerog-ball'].onRelease();
+                      if (grabInfo.isBall && grabInfo.surface.components['zerog-ball']) {
+            const ballComponent = grabInfo.surface.components['zerog-ball'];
+            if (ballComponent && ballComponent.onRelease) {
+              ballComponent.onRelease();
+            } else {
+              debugLog('⚠️ Ball release: component not fully initialized (timing issue)', true);
+            }
             }
           }
           
@@ -2026,8 +2036,13 @@ function setGameplayHUD(isPlaying) {
                   playerTarget.components['impact-effect'].playEffect();
                   
                   // Reset ball after hit
-                  if (ball.components['zerog-ball']) {
-                    ball.components['zerog-ball'].resetPosition();
+                            if (ball.components['zerog-ball']) {
+            const ballComponent = ball.components['zerog-ball'];
+            if (ballComponent && ballComponent.resetPosition) {
+              ballComponent.resetPosition();
+            } else {
+              debugLog('⚠️ Ball reset: component not fully initialized (timing issue)', true);
+            }
                   }
                   
                   if (this.debugMode) {
@@ -3966,8 +3981,13 @@ function setGameplayHUD(isPlaying) {
             const zerogPlayer = document.querySelector('[zerog-player]');
             if (zerogPlayer && zerogPlayer.components['zerog-player']) {
               const player = zerogPlayer.components['zerog-player'];
-              player.thrusterActive.left = false;
-              player.thrusterActive.right = false;
+              // Safety check for Quest timing - thrusterActive might not be initialized yet
+              if (player.thrusterActive) {
+                player.thrusterActive.left = false;
+                player.thrusterActive.right = false;
+              } else {
+                debugLog('⚠️ Menu toggle: thrusterActive not ready yet (timing issue)');
+              }
             }
           }
           
@@ -5320,12 +5340,17 @@ function setGameplayHUD(isPlaying) {
               
               if (ammoInstance && physicsWorld) {
                 debugLog(`🎾 Ball ${this.data.player}: ✅ Ammo.js ready! Creating physics body...`);
-                this.createAmmoPhysicsBody(spawnPos);
+                try {
+                  this.createAmmoPhysicsBody(spawnPos);
+                } catch (e) {
+                  debugLog(`🎾 Ball ${this.data.player}: ❌ Physics body creation failed: ${e.message}`, true);
+                }
               } else if (retryCount < maxRetries) {
-                debugLog(`🎾 Ball ${this.data.player}: ⏳ Still waiting... retrying in ${retryInterval}ms`);
+                debugLog(`🎾 Ball ${this.data.player}: ⏳ Still waiting... (Quest timing delay) retrying in ${retryInterval}ms`);
                 setTimeout(checkAmmoReady, retryInterval);
               } else {
                 debugLog(`🎾 Ball ${this.data.player}: ❌ FAILED - Ammo.js not ready after ${maxRetries} attempts!`, true);
+                debugLog(`🎾 Ball ${this.data.player}: This will cause missing collision and interaction!`, true);
               }
             };
             
