@@ -106,14 +106,14 @@
         debugLog(`❌ PROMISE REJECTION: ${event.reason}`, true);
       });
 
-      // Monitor Ammo.js loading specifically
+      // Monitor Ammo.js loading specifically - but don't interfere with normal loading
       let ammoCheckInterval = setInterval(() => {
         if (typeof Ammo !== 'undefined') {
           clearInterval(ammoCheckInterval);
           updateProgress(2, '- Ammo.js available');
           onScriptLoad('Ammo.js');
         }
-      }, 100);
+      }, 500); // Check less frequently to avoid interference
 
       // Timeout for Ammo.js loading
       setTimeout(() => {
@@ -185,8 +185,9 @@
       // Initialize Ammo.js physics world (exactly like aframe-ammo-working.html)
       function initAmmoPhysics() {
         if (typeof Ammo === 'undefined') {
-          debugLog('❌ Ammo.js not loaded! Retrying in 1 second...', true);
-          setTimeout(initAmmoPhysics, 1000);
+          debugLog('❌ Ammo.js not loaded! Waiting longer...', true);
+          // Don't retry immediately - give it more time
+          setTimeout(initAmmoPhysics, 3000);
           return false;
         }
 
@@ -256,16 +257,18 @@
 
         // Update A-Frame entities based on Ammo bodies (if any)
         physicsObjects.forEach(obj => {
-          if (obj.body) {
-            // Skip player body - it's handled manually in the VR movement component
-            if (obj.isPlayer) {
-              return; // Player physics are handled separately
-            }
-            
-            // Handle normal objects (balls, etc.)
-            if (obj.object3D && obj.entity) {
+          if (!obj || !obj.body) return; // Safety check
+          
+          // Skip player body - it's handled manually in the VR movement component
+          if (obj.isPlayer) {
+            return; // Player physics are handled separately
+          }
+          
+          // Handle normal objects (balls, etc.)
+          if (obj.object3D && obj.entity) {
+            try {
               // Skip grabbed balls - they're positioned manually
-              const ballComponent = obj.entity.components['zerog-ball'];
+              const ballComponent = obj.entity.components && obj.entity.components['zerog-ball'];
               if (ballComponent && ballComponent.isGrabbed) {
                 return; // Don't sync physics for grabbed balls
               }
@@ -284,6 +287,8 @@
                   obj.object3D.quaternion.set(quat.x(), quat.y(), quat.z(), quat.w());
                 }
               }
+            } catch (e) {
+              // Silently handle any errors in physics sync
             }
           }
         });
@@ -2258,12 +2263,13 @@ function setGameplayHUD(isPlaying) {
           physicsWorld.addRigidBody(this.playerPhysicsBody, PLAYER_GROUP, PLAYER_MASK);
           
           // Add to physics objects for automatic position sync
-          physicsObjects.push({
-            entity: null, // We'll handle the player manually
+          const playerPhysicsObject = {
+            entity: this.el || null,
             object3D: null,
             body: this.playerPhysicsBody,
             isPlayer: true // Mark as player body
-          });
+          };
+          physicsObjects.push(playerPhysicsObject);
           
           // Create wireframe visualization
           this.createPlayerWireframe();
@@ -6374,40 +6380,39 @@ function setGameplayHUD(isPlaying) {
           }, 100);
         }
 
-        // Track scene and asset loading
+        // Simple asset tracking
         setTimeout(() => {
-          const scene = document.querySelector('a-scene');
-          if (scene) {
-            scene.addEventListener('loaded', () => {
-              debugLog('🎬 A-Frame scene loaded');
-              updateProgress(6, '- Scene ready');
-            });
-
-            scene.addEventListener('renderstart', () => {
-              debugLog('🎨 A-Frame rendering started');
-              updateProgress(7, '- Rendering started');
-              
-              // Hide debug overlay after successful load
-              setTimeout(() => {
-                debugLog('✅ All systems ready! Auto-hiding debug overlay...');
-                hideDebugOverlay();
-              }, 3000);
-            });
-          }
-
           const assets = document.querySelector('a-assets');
           if (assets) {
             assets.addEventListener('loaded', () => {
               debugLog('🎨 All assets loaded');
               updateProgress(6, '- Assets ready');
+              
+              // Scene should load after assets
+              setTimeout(() => {
+                updateProgress(7, '- Ready!');
+                debugLog('✅ All systems ready! Auto-hiding debug overlay...');
+                setTimeout(hideDebugOverlay, 2000);
+              }, 1000);
             });
+          } else {
+            debugLog('❌ No assets element found');
           }
-        }, 100);
+        }, 1000);
         
         setTimeout(() => {
           updateProgress(2, '- Starting physics initialization...');
           initAmmoPhysics();
         }, 1000);
+        
+        // Safety: Always ensure debug overlay disappears
+        setTimeout(() => {
+          if (debugStep < 7) {
+            debugLog('⏰ SAFETY: Forcing completion after 30 seconds');
+            updateProgress(7, '- Forced ready');
+            setTimeout(hideDebugOverlay, 1000);
+          }
+        }, 30000);
       });
 
       console.log('🎯 Ammo.js collision system ready! (Performance Optimized)');
@@ -6433,8 +6438,8 @@ function setGameplayHUD(isPlaying) {
              obb-collider="showColliders: true">
       
       <!-- Space Station Environment -->
-      <!-- SCI-FI HALLWAY ENVIRONMENT MODEL -->
-              <a-assets>
+            <!-- SCI-FI HALLWAY ENVIRONMENT MODEL -->
+        <a-assets>
           <a-asset-item id="myModel" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/sci_fi_hallway_center.glb" response-type="arraybuffer"></a-asset-item>
           <a-asset-item id="hallway-collision-obj" src="assets/sci_fi_hallway_center-simple2.obj"></a-asset-item>
         </a-assets>
