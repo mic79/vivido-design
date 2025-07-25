@@ -26,7 +26,8 @@
         <div>🚀 Debug system initialized</div>
       </div>
       <div style="text-align: center; margin-top: 20px;">
-        <button onclick="hideDebugOverlay()" style="padding: 10px 20px; background: #006600; color: white; border: none; border-radius: 5px;">Hide Debug (if working)</button>
+        <button onclick="hideDebugOverlay()" style="padding: 10px 20px; background: #006600; color: white; border: none; border-radius: 5px;">Hide Debug & Continue</button>
+        <button onclick="location.reload()" style="padding: 10px 20px; background: #cc6600; color: white; border: none; border-radius: 5px; margin-left: 10px;">Reload Page</button>
       </div>
     </div>
 
@@ -85,9 +86,22 @@
           return;
         }
 
-        debugLog('🎬 A-Frame scene found, checking state...');
-        debugLog(`🎬 Scene hasLoaded: ${scene.hasLoaded}`);
-        debugLog(`🎬 Scene is: ${scene.is}`);
+                 debugLog('🎬 A-Frame scene found, checking state...');
+         debugLog(`🎬 Scene hasLoaded: ${scene.hasLoaded}`);
+         debugLog(`🎬 Scene is: ${scene.is}`);
+         
+         // Add detailed system info for debugging
+         debugLog(`🌐 WebXR supported: ${navigator.xr ? 'YES' : 'NO'}`);
+         debugLog(`🎮 VR display: ${navigator.getVRDisplays ? 'Legacy API available' : 'WebXR only'}`);
+         
+         // Check WebGL context
+         const canvas = document.createElement('canvas');
+         const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+         debugLog(`🎨 WebGL context: ${gl ? 'Available' : 'FAILED'}`);
+         if (gl) {
+           debugLog(`🎨 WebGL renderer: ${gl.getParameter(gl.RENDERER)}`);
+           debugLog(`🎨 WebGL vendor: ${gl.getParameter(gl.VENDOR)}`);
+         }
         
         // Check if scene is stuck in loading
         let checkCount = 0;
@@ -99,6 +113,20 @@
           
           debugLog(`🎬 Check ${checkCount}/${maxChecks} - Scene hasLoaded: ${scene.hasLoaded}`);
          console.log(`🎬 A-FRAME CHECK ${checkCount}/${maxChecks} - hasLoaded: ${scene.hasLoaded}`);
+         
+         // Detailed state logging for Quest vs PC comparison
+         debugLog(`🔍 Scene.hasLoaded = ${scene.hasLoaded} (${typeof scene.hasLoaded})`);
+         debugLog(`🔍 Scene.loaded = ${scene.loaded} (${typeof scene.loaded})`);
+         debugLog(`🔍 Scene.object3D = ${scene.object3D ? 'exists' : 'missing'}`);
+         debugLog(`🔍 Scene.renderer = ${scene.renderer ? 'exists' : 'missing'}`);
+         debugLog(`🔍 Scene.renderStarted = ${scene.renderStarted}`);
+         
+         // Check for VR button
+         const vrButton = document.querySelector('[vr-mode-ui]') || document.querySelector('.a-enter-vr-button');
+         debugLog(`🥽 VR Button found: ${vrButton ? 'YES' : 'NO'}`);
+         if (vrButton) {
+           debugLog(`🥽 VR Button visible: ${vrButton.style.display !== 'none'}`);
+         }
           
           if (scene.hasLoaded) {
             clearInterval(loadingChecker);
@@ -119,15 +147,20 @@
            }
         }, 500);
 
-        // Also listen for actual loading events
-        scene.addEventListener('loaded', () => {
-          clearInterval(loadingChecker);
-          debugLog('✅ A-Frame scene loaded (event fired)');
-        });
+                 // Also listen for actual loading events
+         scene.addEventListener('loaded', () => {
+           clearInterval(loadingChecker);
+           debugLog('✅ A-Frame scene loaded (event fired)');
+         });
 
-        scene.addEventListener('renderstart', () => {
-          debugLog('🎨 A-Frame render started');
-        });
+         scene.addEventListener('renderstart', () => {
+           debugLog('🎨 A-Frame render started');
+           
+           // Monitor for white screen issue (WebGL context loss)
+           setTimeout(() => {
+             monitorForWhiteScreen();
+           }, 2000);
+         });
       }
 
              function forceAFrameLoading() {
@@ -204,6 +237,19 @@
              scene.emit('loaded');
              scene.emit('renderstart');
              debugLog('☢️ Force emitted all scene events');
+             
+             // Force VR button to appear
+             setTimeout(() => {
+               const vrButton = document.querySelector('[vr-mode-ui]') || document.querySelector('.a-enter-vr-button');
+               if (!vrButton) {
+                 debugLog('☢️ Creating manual VR button...');
+                 createManualVRButton();
+               } else {
+                 vrButton.style.display = 'block';
+                 vrButton.style.visibility = 'visible';
+                 debugLog('☢️ Force showed existing VR button');
+               }
+             }, 1000);
            }
 
            debugLog('☢️ Nuclear Quest 3 fix complete - app should work in basic mode');
@@ -214,7 +260,94 @@
          }
        }
 
-      // Start debugging
+       function monitorForWhiteScreen() {
+         debugLog('👀 Monitoring for white screen issue...');
+         
+         const scene = document.querySelector('a-scene');
+         if (!scene || !scene.renderer) {
+           debugLog('❌ No renderer found for white screen monitoring');
+           return;
+         }
+
+         let whiteScreenCount = 0;
+         const maxWhiteScreenChecks = 10;
+         
+         const whiteScreenChecker = setInterval(() => {
+           whiteScreenCount++;
+           
+           try {
+             const renderer = scene.renderer;
+             const gl = renderer.getContext();
+             
+             if (gl.isContextLost()) {
+               clearInterval(whiteScreenChecker);
+               debugLog('❌ WEBGL CONTEXT LOST - This causes white screen!', true);
+               console.log('❌ WEBGL CONTEXT LOST - WHITE SCREEN DETECTED');
+               
+               // Try to recover
+               setTimeout(() => {
+                 debugLog('🔄 Attempting WebGL context recovery...');
+                 location.reload(); // Nuclear option for Quest 3
+               }, 2000);
+               return;
+             }
+
+             // Check if canvas is actually rendering
+             const canvas = renderer.domElement;
+             if (canvas && canvas.width > 0 && canvas.height > 0) {
+               debugLog(`✅ Rendering OK - Canvas: ${canvas.width}x${canvas.height}`);
+             } else {
+               debugLog('⚠️ Canvas issues detected', true);
+             }
+
+           } catch (e) {
+             debugLog(`❌ White screen monitor error: ${e.message}`, true);
+           }
+
+           if (whiteScreenCount >= maxWhiteScreenChecks) {
+             clearInterval(whiteScreenChecker);
+             debugLog('✅ White screen monitoring complete - no issues detected');
+           }
+                    }, 1000);
+         }
+
+         function createManualVRButton() {
+           debugLog('🔧 Creating manual VR button for Quest 3...');
+           
+           const button = document.createElement('button');
+           button.textContent = 'ENTER VR';
+           button.style.cssText = `
+             position: fixed;
+             bottom: 20px;
+             right: 20px;
+             z-index: 9999;
+             background: #0066cc;
+             color: white;
+             border: none;
+             border-radius: 8px;
+             padding: 12px 20px;
+             font-size: 16px;
+             font-weight: bold;
+             cursor: pointer;
+             box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+           `;
+           
+           button.addEventListener('click', () => {
+             debugLog('🥽 Manual VR button clicked');
+             const scene = document.querySelector('a-scene');
+             if (scene && scene.enterVR) {
+               scene.enterVR();
+               debugLog('✅ Attempted to enter VR manually');
+             } else {
+               debugLog('❌ Scene.enterVR not available');
+             }
+           });
+           
+           document.body.appendChild(button);
+           debugLog('✅ Manual VR button created');
+         }
+
+        // Start debugging
       updateProgress(0);
       debugLog('🔧 Quest 3 Debug System Active');
       debugLog(`🌐 User Agent: ${navigator.userAgent}`);
@@ -6554,7 +6687,13 @@ function setGameplayHUD(isPlaying) {
                   monitorAFrameLoading();
                 }, 500);
                 
-                setTimeout(hideDebugOverlay, 2000);
+                // Don't auto-hide debug on Quest 3 - let user see what's happening
+                if (!navigator.userAgent.includes('Quest')) {
+                  setTimeout(hideDebugOverlay, 5000);
+                } else {
+                  debugLog('🥽 Quest 3: Debug window staying open for inspection');
+                  debugLog('👁️ Click "Hide Debug" button when ready');
+                }
               }, 1000);
               }
             }
@@ -6585,7 +6724,13 @@ function setGameplayHUD(isPlaying) {
                    monitorAFrameLoading();
                  }, 500);
                  
-                 setTimeout(hideDebugOverlay, 2000);
+                 // Don't auto-hide debug on Quest 3 - let user see what's happening  
+                 if (!navigator.userAgent.includes('Quest')) {
+                   setTimeout(hideDebugOverlay, 5000);
+                 } else {
+                   debugLog('🥽 Quest 3: Debug window staying open for inspection');
+                   debugLog('👁️ Click "Hide Debug" button when ready');
+                 }
                }, 1000);
             }, timeoutDuration);
             
@@ -6639,7 +6784,13 @@ function setGameplayHUD(isPlaying) {
                    monitorAFrameLoading();
                  }, 500);
                  
-                 setTimeout(hideDebugOverlay, 2000);
+                 // Don't auto-hide debug on Quest 3
+                 if (!navigator.userAgent.includes('Quest')) {
+                   setTimeout(hideDebugOverlay, 5000);
+                 } else {
+                   debugLog('🥽 Quest 3: Debug window staying open for inspection');
+                   debugLog('👁️ Click "Hide Debug" button when ready');
+                 }
                }, 1000);
             });
             
@@ -6656,7 +6807,13 @@ function setGameplayHUD(isPlaying) {
                  monitorAFrameLoading();
                }, 500);
                
-               setTimeout(hideDebugOverlay, 2000);
+               // Don't auto-hide debug on Quest 3
+               if (!navigator.userAgent.includes('Quest')) {
+                 setTimeout(hideDebugOverlay, 5000);
+               } else {
+                 debugLog('🥽 Quest 3: Debug window staying open for inspection');
+                 debugLog('👁️ Click "Hide Debug" button when ready');
+               }
              }, 1000);
           }
         }, 1000);
