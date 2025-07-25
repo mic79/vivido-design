@@ -70,8 +70,149 @@
 
       function hideDebugOverlay() {
         const overlay = document.getElementById('debug-overlay');
-        if (overlay) overlay.style.display = 'none';
+        if (overlay) {
+          overlay.style.display = 'none';
+          debugLog('🫥 Debug overlay hidden - if you see A-Frame blue loading screen now, that is the issue');
+          console.log('🫥 Debug overlay hidden - watching for A-Frame loading issues...');
+        }
       }
+
+      // Monitor A-Frame loading and force completion if stuck
+      function monitorAFrameLoading() {
+        const scene = document.querySelector('a-scene');
+        if (!scene) {
+          debugLog('❌ No A-Frame scene found', true);
+          return;
+        }
+
+        debugLog('🎬 A-Frame scene found, checking state...');
+        debugLog(`🎬 Scene hasLoaded: ${scene.hasLoaded}`);
+        debugLog(`🎬 Scene is: ${scene.is}`);
+        
+        // Check if scene is stuck in loading
+        let checkCount = 0;
+        const maxChecks = 20; // 10 seconds total
+        
+        const loadingChecker = setInterval(() => {
+          checkCount++;
+          const isQuest = navigator.userAgent.includes('Quest');
+          
+          debugLog(`🎬 Check ${checkCount}/${maxChecks} - Scene hasLoaded: ${scene.hasLoaded}`);
+         console.log(`🎬 A-FRAME CHECK ${checkCount}/${maxChecks} - hasLoaded: ${scene.hasLoaded}`);
+          
+          if (scene.hasLoaded) {
+            clearInterval(loadingChecker);
+            debugLog('✅ A-Frame scene loaded successfully');
+            return;
+          }
+          
+                     if (checkCount >= maxChecks) {
+             clearInterval(loadingChecker);
+             debugLog('⚠️ A-Frame scene stuck loading - forcing completion', true);
+             console.log('⚠️ A-FRAME STUCK - FORCING COMPLETION');
+             
+             if (isQuest) {
+               debugLog('🥽 Quest 3 detected - applying aggressive loading fixes');
+               console.log('🥽 QUEST 3 - APPLYING AGGRESSIVE FIXES');
+               forceAFrameLoading();
+             }
+           }
+        }, 500);
+
+        // Also listen for actual loading events
+        scene.addEventListener('loaded', () => {
+          clearInterval(loadingChecker);
+          debugLog('✅ A-Frame scene loaded (event fired)');
+        });
+
+        scene.addEventListener('renderstart', () => {
+          debugLog('🎨 A-Frame render started');
+        });
+      }
+
+             function forceAFrameLoading() {
+         const scene = document.querySelector('a-scene');
+         if (!scene) return;
+
+         debugLog('🚨 FORCING A-Frame to complete loading...');
+         console.log('🚨 FORCING A-FRAME LOADING - QUEST 3 FIX ACTIVE');
+
+        try {
+          // Method 1: Force emit loaded event
+          scene.emit('loaded');
+          debugLog('🔧 Emitted loaded event');
+
+          // Method 2: Force hasLoaded flag
+          scene.hasLoaded = true;
+          debugLog('🔧 Set hasLoaded to true');
+
+          // Method 3: Force remove loading screen
+          setTimeout(() => {
+            const loadingScreen = document.querySelector('.a-loader-title');
+            if (loadingScreen && loadingScreen.parentNode) {
+              loadingScreen.parentNode.style.display = 'none';
+              debugLog('🔧 Removed A-Frame loading screen');
+            }
+
+            // Force remove any other loading elements
+            const loaderElements = document.querySelectorAll('[class*="loader"], [class*="loading"]');
+            loaderElements.forEach(el => {
+              if (el.style) el.style.display = 'none';
+            });
+
+                         debugLog('🚨 A-Frame force-loading complete');
+             
+             // Final check - if still stuck after 3 more seconds, try nuclear option
+             setTimeout(() => {
+               if (!scene.hasLoaded) {
+                 debugLog('☢️ NUCLEAR OPTION: Disabling problematic components for Quest 3', true);
+                 console.log('☢️ NUCLEAR OPTION ACTIVATED FOR QUEST 3');
+                 nuclearQuestFix();
+               }
+             }, 3000);
+             
+           }, 1000);
+
+         } catch (e) {
+           debugLog(`❌ Error in force loading: ${e.message}`, true);
+         }
+       }
+
+       function nuclearQuestFix() {
+         debugLog('☢️ Applying nuclear Quest 3 fixes...');
+         
+         try {
+           // Disable collision mesh for Quest 3
+           const collisionMesh = document.querySelector('#hallway-collision');
+           if (collisionMesh) {
+             collisionMesh.setAttribute('visible', 'false');
+             collisionMesh.remove();
+             debugLog('☢️ Removed collision mesh');
+           }
+
+           // Disable complex components
+           const complexEntities = document.querySelectorAll('[ammo-physics]');
+           complexEntities.forEach(entity => {
+             entity.removeAttribute('ammo-physics');
+             debugLog('☢️ Removed ammo-physics from entity');
+           });
+
+           // Force scene to loaded state
+           const scene = document.querySelector('a-scene');
+           if (scene) {
+             scene.hasLoaded = true;
+             scene.emit('loaded');
+             scene.emit('renderstart');
+             debugLog('☢️ Force emitted all scene events');
+           }
+
+           debugLog('☢️ Nuclear Quest 3 fix complete - app should work in basic mode');
+           console.log('☢️ NUCLEAR FIX COMPLETE - APP SHOULD WORK IN BASIC MODE');
+           
+         } catch (e) {
+           debugLog(`❌ Nuclear fix error: ${e.message}`, true);
+         }
+       }
 
       // Start debugging
       updateProgress(0);
@@ -6403,11 +6544,18 @@ function setGameplayHUD(isPlaying) {
                 debugLog('🎨 All assets loaded successfully');
                 updateProgress(6, '- Assets ready');
                 
+                              setTimeout(() => {
+                updateProgress(7, '- Ready!');
+                debugLog('✅ All systems ready! Auto-hiding debug overlay...');
+                
+                // Add A-Frame loading monitoring
                 setTimeout(() => {
-                  updateProgress(7, '- Ready!');
-                  debugLog('✅ All systems ready! Auto-hiding debug overlay...');
-                  setTimeout(hideDebugOverlay, 2000);
-                }, 1000);
+                  debugLog('🎬 Monitoring A-Frame loading state...');
+                  monitorAFrameLoading();
+                }, 500);
+                
+                setTimeout(hideDebugOverlay, 2000);
+              }, 1000);
               }
             }
             
@@ -6427,11 +6575,18 @@ function setGameplayHUD(isPlaying) {
               }
               
               updateProgress(6, '- Assets timeout, continuing...');
-              setTimeout(() => {
-                updateProgress(7, '- Ready! (fallback mode)');
-                debugLog('✅ Systems ready in fallback mode');
-                setTimeout(hideDebugOverlay, 2000);
-              }, 1000);
+                             setTimeout(() => {
+                 updateProgress(7, '- Ready! (fallback mode)');
+                 debugLog('✅ Systems ready in fallback mode');
+                 
+                 // Monitor A-Frame loading even in fallback mode
+                 setTimeout(() => {
+                   debugLog('🎬 Monitoring A-Frame loading state (fallback)...');
+                   monitorAFrameLoading();
+                 }, 500);
+                 
+                 setTimeout(hideDebugOverlay, 2000);
+               }, 1000);
             }, timeoutDuration);
             
             // Listen for individual asset loading
@@ -6474,21 +6629,35 @@ function setGameplayHUD(isPlaying) {
               debugLog('🎨 Assets container reports all loaded');
               updateProgress(6, '- Assets ready');
               
-              setTimeout(() => {
-                updateProgress(7, '- Ready!');
-                debugLog('✅ All systems ready!');
-                setTimeout(hideDebugOverlay, 2000);
-              }, 1000);
+                             setTimeout(() => {
+                 updateProgress(7, '- Ready!');
+                 debugLog('✅ All systems ready!');
+                 
+                 // Monitor A-Frame loading
+                 setTimeout(() => {
+                   debugLog('🎬 Monitoring A-Frame loading state...');
+                   monitorAFrameLoading();
+                 }, 500);
+                 
+                 setTimeout(hideDebugOverlay, 2000);
+               }, 1000);
             });
             
           } else {
             debugLog('❌ No assets element found');
-            // Skip to ready if no assets
-            updateProgress(6, '- No assets to load');
-            setTimeout(() => {
-              updateProgress(7, '- Ready!');
-              setTimeout(hideDebugOverlay, 2000);
-            }, 1000);
+                         // Skip to ready if no assets
+             updateProgress(6, '- No assets to load');
+             setTimeout(() => {
+               updateProgress(7, '- Ready!');
+               
+               // Monitor A-Frame loading
+               setTimeout(() => {
+                 debugLog('🎬 Monitoring A-Frame loading state (no assets)...');
+                 monitorAFrameLoading();
+               }, 500);
+               
+               setTimeout(hideDebugOverlay, 2000);
+             }, 1000);
           }
         }, 1000);
         
