@@ -2985,6 +2985,8 @@ function setGameplayHUD(isPlaying) {
         },
         
         init: function() {
+          debugLog('🤖 === ZEROG-BOT INITIALIZATION START ===');
+          
           this.ball = null;
           this.lastThrowTime = 0;
           this.lastMoveTime = 0;
@@ -3001,27 +3003,75 @@ function setGameplayHUD(isPlaying) {
           this.playerVelocity = new THREE.Vector3();
           this.lastPlayerUpdate = 0;
           
+          // Quest 3 compatibility check
+          const isQuest = navigator.userAgent.includes('Quest');
+          if (isQuest) {
+            debugLog('🥽 Quest 3 detected - checking bot compatibility');
+            
+            // Check memory before creating physics body
+            if (performance.memory) {
+              const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+              debugLog(`💾 Memory before bot physics: ${memMB}MB`);
+              
+              if (memMB > 300) {
+                debugLog('❌ Quest 3 memory critical - disabling bot physics', true);
+                this.body = null; // Explicitly set to null
+                this.physicsDisabled = true;
+                debugLog('✅ Bot will use basic mode without physics');
+                
+                // Skip physics creation but continue with basic initialization
+                this.generateNewTargetPosition();
+                this.el.sceneEl.addEventListener('loaded', () => {
+                  this.ball = this.el.sceneEl.querySelector('[zerog-ball="player: player1"]');
+                  debugLog('🤖 Bot found ball reference (basic mode)');
+                });
+                
+                debugLog('🤖 === ZEROG-BOT INITIALIZATION COMPLETE (BASIC MODE) ===');
+                return; // Skip physics creation
+              }
+            }
+          }
+          
+          // Initialize body as null for safety
+          this.body = null;
+          this.physicsDisabled = false;
+          
+          debugLog('🤖 Creating bot physics body...');
+          
           // Create Ammo.js physics body for the bot
           if (ammoInstance && physicsWorld) {
-            this.createAmmoPhysicsBody();
+            try {
+              this.createAmmoPhysicsBody();
+              debugLog('✅ Bot physics body created successfully');
+            } catch (e) {
+              debugLog(`❌ Bot physics creation failed: ${e.message}`, true);
+              this.body = null;
+              this.physicsDisabled = true;
+            }
           } else {
+            debugLog('⏳ Waiting for Ammo.js to initialize bot physics...');
             // Wait for Ammo.js to initialize
             setTimeout(() => {
-              if (ammoInstance && physicsWorld) {
-                this.createAmmoPhysicsBody();
+              if (ammoInstance && physicsWorld && !this.physicsDisabled) {
+                try {
+                  this.createAmmoPhysicsBody();
+                  debugLog('✅ Bot physics body created (delayed)');
+                } catch (e) {
+                  debugLog(`❌ Bot physics creation failed (delayed): ${e.message}`, true);
+                  this.body = null;
+                  this.physicsDisabled = true;
+                }
               }
             }, 2000);
           }
           
-          // Store reference
-          this.body.el = this.el;
-          
-          // Initialize position
+          // Initialize position (don't depend on physics)
           this.generateNewTargetPosition();
           
           // Listen for game events
           this.el.sceneEl.addEventListener('loaded', () => {
             this.ball = this.el.sceneEl.querySelector('[zerog-ball="player: player1"]');
+            debugLog('🤖 Bot found ball reference');
           });
           
           // Update difficulty settings
@@ -3035,6 +3085,8 @@ function setGameplayHUD(isPlaying) {
             this.data.throwInterval = 3000;  // 3 seconds between throws
             this.data.accuracy = 0.9;        // 90% accuracy
           }
+          
+          debugLog('🤖 === ZEROG-BOT INITIALIZATION COMPLETE ===');
         },
         
         generateNewTargetPosition: function() {
@@ -3205,8 +3257,19 @@ function setGameplayHUD(isPlaying) {
         },
         
         createAmmoPhysicsBody: function() {
-          console.log('🔧 Creating Ammo.js physics body for bot');
+          debugLog('🔧 Creating Ammo.js physics body for bot');
           const Ammo = ammoInstance;
+          
+          // Check memory before creating physics body
+          if (performance.memory) {
+            const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+            debugLog(`💾 Memory before bot physics creation: ${memMB}MB`);
+            
+            if (memMB > 320) {
+              debugLog('❌ Memory too high for bot physics creation', true);
+              throw new Error('Memory limit exceeded for bot physics');
+            }
+          }
           
           // Create sphere shape
           const radius = 0.2;
@@ -3225,6 +3288,9 @@ function setGameplayHUD(isPlaying) {
           const rigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
           this.body = new Ammo.btRigidBody(rigidBodyInfo);
           
+          // Store element reference AFTER successful creation
+          this.body.el = this.el;
+          
           // Set damping
           this.body.setDamping(0.8, 0.8);
           
@@ -3241,7 +3307,13 @@ function setGameplayHUD(isPlaying) {
             body: this.body
           });
           
-          console.log('✅ Bot added to Ammo.js physics world');
+          debugLog('✅ Bot added to Ammo.js physics world');
+          
+          // Monitor memory after creation
+          if (performance.memory) {
+            const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+            debugLog(`💾 Memory after bot physics creation: ${memMB}MB`);
+          }
         },
 
         setupVelocityAPI: function() {
