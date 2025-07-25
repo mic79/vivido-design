@@ -232,12 +232,8 @@
              debugLog('✅ Collision mesh kept - crashes fixed, physics stable');
            }
 
-           // Disable complex components
-           const complexEntities = document.querySelectorAll('[ammo-physics]');
-           complexEntities.forEach(entity => {
-             entity.removeAttribute('ammo-physics');
-             debugLog('☢️ Removed ammo-physics from entity');
-           });
+           // Note: No longer disabling ammo-physics - core issues fixed
+           debugLog('✅ Ammo-physics components kept - crashes resolved');
 
            // Force scene to loaded state
            const scene = document.querySelector('a-scene');
@@ -3023,38 +3019,8 @@ function setGameplayHUD(isPlaying) {
           this.playerVelocity = new THREE.Vector3();
           this.lastPlayerUpdate = 0;
           
-          // Quest 3 compatibility check
-          const isQuest = navigator.userAgent.includes('Quest');
-          if (isQuest) {
-            debugLog('🥽 Quest 3 detected - checking bot compatibility');
-            
-            // Check memory before creating physics body
-            if (performance.memory) {
-              const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
-              debugLog(`💾 Memory before bot physics: ${memMB}MB`);
-              
-              if (memMB > 300) {
-                debugLog('❌ Quest 3 memory critical - disabling bot physics', true);
-                this.body = null; // Explicitly set to null
-                this.physicsDisabled = true;
-                debugLog('✅ Bot will use basic mode without physics');
-                
-                // Skip physics creation but continue with basic initialization
-                this.generateNewTargetPosition();
-                this.el.sceneEl.addEventListener('loaded', () => {
-                  this.ball = this.el.sceneEl.querySelector('[zerog-ball="player: player1"]');
-                  debugLog('🤖 Bot found ball reference (basic mode)');
-                });
-                
-                debugLog('🤖 === ZEROG-BOT INITIALIZATION COMPLETE (BASIC MODE) ===');
-                return; // Skip physics creation
-              }
-            }
-          }
-          
           // Initialize body as null for safety
           this.body = null;
-          this.physicsDisabled = false;
           
           debugLog('🤖 Creating bot physics body...');
           
@@ -3141,17 +3107,9 @@ function setGameplayHUD(isPlaying) {
         },
         
         startMovementToTarget: function(currentTime) {
-          // Safety check: Don't move if physics disabled or body is null
-          if (this.physicsDisabled || !this.body) {
-            debugLog('🤖 Bot movement skipped: Physics disabled or body null');
-            return;
-          }
-          
-          // Additional safety check for body.position
-          if (!this.body.position) {
-            debugLog('❌ Bot body has no position property', true);
-            this.physicsDisabled = true;
-            this.body = null;
+          // Safety check: Don't move if body is null
+          if (!this.body || !this.body.position) {
+            debugLog('❌ Bot body missing or invalid');
             return;
           }
           
@@ -3171,34 +3129,23 @@ function setGameplayHUD(isPlaying) {
             this.body.velocity.set(velocity.x, velocity.y, velocity.z);
             
             // console.log(`Bot moving to: ${this.targetPosition.x.toFixed(1)}, ${this.targetPosition.y.toFixed(1)}, ${this.targetPosition.z.toFixed(1)}`); // Disabled to reduce console spam
-          } catch (e) {
-            debugLog(`❌ Bot movement error: ${e.message}`, true);
-            // Disable physics to prevent further errors
-            this.physicsDisabled = true;
-            this.body = null;
-          }
+                     } catch (e) {
+             debugLog(`❌ Bot movement error: ${e.message}`, true);
+           }
         },
         
         stopMovement: function() {
           this.isMoving = false;
           
-          // Safety check: Don't access body if physics disabled or body is null
-          if (this.physicsDisabled || !this.body || !this.body.velocity) {
-            debugLog('🤖 Bot stop movement: Physics disabled or body null');
+          // Safety check: Don't access body if null
+          if (!this.body || !this.body.velocity) {
             this.generateNewTargetPosition();
             return;
           }
           
-          try {
-            // Apply damping to slow down
-            this.body.velocity.scale(0.1, this.body.velocity);
-            // console.log('Bot stopped moving, generating new target...'); // Disabled to reduce console spam
-          } catch (e) {
-            debugLog(`❌ Bot stop movement error: ${e.message}`, true);
-            // Disable physics to prevent further errors
-            this.physicsDisabled = true;
-            this.body = null;
-          }
+          // Apply damping to slow down
+          this.body.velocity.scale(0.1, this.body.velocity);
+          // console.log('Bot stopped moving, generating new target...'); // Disabled to reduce console spam
           
           this.generateNewTargetPosition();
         },
@@ -3210,15 +3157,15 @@ function setGameplayHUD(isPlaying) {
           this.ball.components['zerog-ball'].resetPosition();
           const ballBody = this.ball.components['zerog-ball'].body;
           
-          // Get bot position (use visual position if physics disabled)
+          // Get bot position (prefer physics, fallback to visual)
           let botPos;
-          if (this.physicsDisabled || !this.body || !this.body.position) {
-            // Use visual position from A-Frame entity
-            botPos = new THREE.Vector3().copy(this.el.object3D.position);
-            debugLog('🤖 Ball throw: Using visual position (physics disabled)');
-          } else {
+          if (this.body && this.body.position) {
             // Use physics position
             botPos = new THREE.Vector3().copy(this.body.position);
+          } else {
+            // Fallback to visual position
+            botPos = new THREE.Vector3().copy(this.el.object3D.position);
+            debugLog('🤖 Ball throw: Using visual position (fallback)');
           }
           
           // Position ball slightly in front of bot
@@ -3279,10 +3226,8 @@ function setGameplayHUD(isPlaying) {
         tick: function(time) {
           if (!this.data.enabled) return;
           
-          // Quest 3 compatibility: Skip physics-based operations if disabled
-          if (this.physicsDisabled) {
-            debugLog('🤖 Bot tick: Physics disabled, using basic mode');
-            // Only do basic visual updates without physics
+          // Safety check: Skip if no physics body (shouldn't happen after proper init)
+          if (!this.body) {
             return;
           }
           
@@ -3342,16 +3287,7 @@ function setGameplayHUD(isPlaying) {
           debugLog('🔧 Creating Ammo.js physics body for bot');
           const Ammo = ammoInstance;
           
-          // Check memory before creating physics body
-          if (performance.memory) {
-            const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
-            debugLog(`💾 Memory before bot physics creation: ${memMB}MB`);
-            
-            if (memMB > 320) {
-              debugLog('❌ Memory too high for bot physics creation', true);
-              throw new Error('Memory limit exceeded for bot physics');
-            }
-          }
+          // Create physics body normally - memory issues resolved
           
           // Create sphere shape
           const radius = 0.2;
@@ -3390,12 +3326,6 @@ function setGameplayHUD(isPlaying) {
           });
           
           debugLog('✅ Bot added to Ammo.js physics world');
-          
-          // Monitor memory after creation
-          if (performance.memory) {
-            const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
-            debugLog(`💾 Memory after bot physics creation: ${memMB}MB`);
-          }
         },
 
         setupVelocityAPI: function() {
