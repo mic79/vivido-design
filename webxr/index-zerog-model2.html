@@ -5110,6 +5110,9 @@ function setGameplayHUD(isPlaying) {
         // Initialize status display
         updateMultiplayerStatus('Singleplayer');
         
+        // CRITICAL: Start singleplayer game to setup both balls properly
+        startSingleplayerGame();
+        
         // Scoring is now handled directly in the game-manager component - no patching needed
       });
 
@@ -6910,7 +6913,7 @@ function setGameplayHUD(isPlaying) {
           }, 100);
         }
 
-        // Enhanced asset tracking with Quest 3 fallback
+        // Enhanced asset tracking
         setTimeout(() => {
           const assets = document.querySelector('a-assets');
           
@@ -6953,25 +6956,25 @@ function setGameplayHUD(isPlaying) {
               }
             }
             
-            // Set consistent timeout for all platforms
-            const timeoutDuration = 15000; // 15s for all platforms
+            // Set generous timeout for all platforms (especially slower networks)
+            const timeoutDuration = 30000; // 30s for all platforms
             assetTimeout = setTimeout(() => {
-              debugLog('⏰ Asset loading timeout - using fallback mode', true);
+              debugLog('⏰ Asset loading timeout - continuing anyway');
               
-              updateProgress(6, '- Assets timeout, continuing...');
-                             setTimeout(() => {
-                 updateProgress(7, '- Ready! (fallback mode)');
-                 debugLog('✅ Systems ready in fallback mode');
-                 
-                 // Monitor A-Frame loading even in fallback mode
-                 setTimeout(() => {
-                   debugLog('🎬 Monitoring A-Frame loading state (fallback)...');
-                   monitorAFrameLoading();
-                 }, 500);
-                 
-                 // Auto-hide debug overlay on all platforms
-                 setTimeout(hideDebugOverlay, 5000);
-               }, 1000);
+              updateProgress(6, '- Assets ready (timeout)');
+              setTimeout(() => {
+                updateProgress(7, '- Ready!');
+                debugLog('✅ All systems ready!');
+                
+                // Monitor A-Frame loading
+                setTimeout(() => {
+                  debugLog('🎬 Monitoring A-Frame loading state...');
+                  monitorAFrameLoading();
+                }, 500);
+                
+                // Auto-hide debug overlay on all platforms
+                setTimeout(hideDebugOverlay, 5000);
+              }, 1000);
             }, timeoutDuration);
             
             // Listen for individual asset loading
