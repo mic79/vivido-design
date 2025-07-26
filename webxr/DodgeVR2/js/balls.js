@@ -70,8 +70,8 @@ AFRAME.registerComponent('grabbable-ball', {
         this.el.object3D.getWorldPosition(position);
         
         // Create dynamic rigid body with proper collision groups
-        // Group 2: Balls, Mask: 4 (static surfaces only - no player collision)
-        this.physicsBody = window.PhysicsWorld.createDynamicBody(this.data.mass, shape, position, null, 2, 4);
+        // Group 2: Balls, Mask: 1 (static surfaces only - no player collision)
+        this.physicsBody = window.PhysicsWorld.createDynamicBody(this.data.mass, shape, position, null, 2, 1);
         
         // ENSURE ball starts as dynamic (not kinematic)
         const initialFlags = this.physicsBody.getCollisionFlags();

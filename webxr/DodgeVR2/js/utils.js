@@ -365,8 +365,8 @@ AFRAME.registerComponent('shot-ball-physics', {
         this.physicsBody.setRestitution(0.8);
         this.physicsBody.forceActivationState(1); // Always active
         
-        // Add to physics world (Group 2: Balls, Mask 4: Static surfaces only) 
-        window.PhysicsWorld.world.addRigidBody(this.physicsBody, 2, 4);
+                // Add to physics world (Group 2: Balls, Mask 1: Static surfaces only)
+        window.PhysicsWorld.world.addRigidBody(this.physicsBody, 2, 1);
         window.PhysicsWorld.rigidBodies.push(this.physicsBody);
         
         // Register for automatic syncing

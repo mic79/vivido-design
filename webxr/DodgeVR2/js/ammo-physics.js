@@ -163,12 +163,19 @@ AFRAME.registerComponent('ammo-physics', {
         let rigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
         this.physicsBody = new Ammo.btRigidBody(rigidBodyInfo);
 
-        // Add environment with collision group 4 (static surfaces), collides with all groups (-1)
-        window.PhysicsWorld.world.addRigidBody(this.physicsBody, 4, -1);
+        // Add environment with collision group 1 (static surfaces), collides with all groups (-1)
+        window.PhysicsWorld.world.addRigidBody(this.physicsBody, 1, -1);
         window.PhysicsWorld.rigidBodies.push(this.physicsBody);
 
         console.log('✅ COLLISION MESH: BVH triangle mesh added to Ammo.js physics world!');
         console.log('🎯 DUAL MESH SETUP: Simple collision OBJ + Detailed visual GLB!');
+        console.log('🔧 Triangle mesh collision stats:', {
+            triangles: triangleCount,
+            vertices: vertices.length,
+            hasIndices: !!indices,
+            group: 1,
+            mask: -1
+        });
         console.log('🔧 Collision mesh stats:', {
             trianglesAdded: triangleCount,
             geometryType: indices ? 'indexed' : 'non-indexed',

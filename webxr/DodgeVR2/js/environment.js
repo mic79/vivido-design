@@ -95,8 +95,8 @@ AFRAME.registerComponent('grab-surface', {
         }
 
         // Create static physics body with proper collision groups
-        // Group 4: Static surfaces, Mask: -1 (collide with everything)
-        this.physicsBody = window.PhysicsWorld.createStaticMeshBody(this.el.object3D, shape, 4, -1);
+        // Group 1: Static surfaces, Mask: -1 (collide with everything)
+        this.physicsBody = window.PhysicsWorld.createStaticMeshBody(this.el.object3D, shape, 1, -1);
         
         // Set custom surface properties
         this.physicsBody.setFriction(this.data.friction);
@@ -193,7 +193,8 @@ AFRAME.registerComponent('grab-surface', {
         if (player && player.components['zerog-player']) {
             const handKey = hand.id === 'leftHand' ? 'left' : 'right';
             DebugUtils.log('ENVIRONMENT', `Notifying player: ${handKey} hand ${isGrabbing ? 'grabbed' : 'released'} surface`);
-            player.components['zerog-player'].setGrabState(handKey, isGrabbing);
+            // FIXED: Pass the grabbed object (this.el) to the player controller
+            player.components['zerog-player'].setGrabState(handKey, isGrabbing, isGrabbing ? this.el : null);
         } else {
             DebugUtils.log('ENVIRONMENT', 'ERROR: Player component not found for grab notification!');
         }
@@ -289,8 +290,8 @@ AFRAME.registerComponent('environment-surface', {
             }
             
             // Create static body with proper collision groups
-            // Group 4: Static surfaces, Mask: -1 (collide with everything)
-            this.physicsBody = window.PhysicsWorld.createStaticMeshBody(this.el.object3D, shape, 4, -1);
+            // Group 1: Static surfaces, Mask: -1 (collide with everything)
+            this.physicsBody = window.PhysicsWorld.createStaticMeshBody(this.el.object3D, shape, 1, -1);
             
             // Set custom properties
             this.physicsBody.setFriction(this.data.friction);
@@ -307,7 +308,7 @@ AFRAME.registerComponent('environment-surface', {
             const bbox = new THREE.Box3().setFromObject(this.el.object3D);
             const size = bbox.getSize(new THREE.Vector3());
             const shape = window.PhysicsWorld.createBoxShape(size.x, size.y, size.z);
-            this.physicsBody = window.PhysicsWorld.createStaticMeshBody(this.el.object3D, shape, 4, -1);
+            this.physicsBody = window.PhysicsWorld.createStaticMeshBody(this.el.object3D, shape, 1, -1);
             
             DebugUtils.log('ENVIRONMENT', 'Used fallback box collision');
         }

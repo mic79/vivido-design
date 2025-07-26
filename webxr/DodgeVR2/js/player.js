@@ -23,6 +23,23 @@ AFRAME.registerComponent('zerog-player', {
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.thrusterStates = { left: false, right: false };
         this.isBraking = false;
+        // Hand states like reference project
+        this.hands = {
+            left: {
+                isGrabbing: false,
+                nearbyObject: null,
+                grabInfo: null,
+                gripHeld: false
+            },
+            right: {
+                isGrabbing: false,
+                nearbyObject: null,
+                grabInfo: null,
+                gripHeld: false
+            }
+        };
+        
+        // Legacy grab states for compatibility
         this.grabStates = { left: false, right: false };
         
         // Rotation state
@@ -31,10 +48,6 @@ AFRAME.registerComponent('zerog-player', {
         
         // Wireframe toggle state
         this.wireframesVisible = false;
-        
-        // Grab tracking for surface locomotion
-        this.leftGrabPosition = null;
-        this.rightGrabPosition = null;
         
         // Collision detection
         this.collisionBody = null;
@@ -94,60 +107,284 @@ AFRAME.registerComponent('zerog-player', {
         this.rig = document.querySelector('#rig');
         this.camera = document.querySelector('[camera]');
         
+        // Setup grip event handlers (like reference project)
+        this.setupHandEvents();
+        
         DebugUtils.log('PLAYER', 'Player references setup complete');
     },
 
+    setupHandEvents: function() {
+        // Grip controls for grabbing surfaces AND balls (EchoVR style)
+        this.el.sceneEl.addEventListener('gripdown', (evt) => {
+            const hand = evt.target;
+            const isLeft = hand.id === 'leftHand';
+            const handKey = isLeft ? 'left' : 'right';
+            
+            // Track grip state for continuous ball grabbing
+            this.hands[handKey].gripHeld = true;
+            
+            // Try to grab balls first (priority), then static surfaces
+            console.log(`Grip down: ${handKey} hand - trying to grab ball`);
+            this.tryGrabBall(hand);
+            
+            // If no ball was grabbed, try environment grabbing if nearby
+            if (!this.hands[handKey].isGrabbing && this.hands[handKey].nearbyObject === 'environment') {
+                console.log(`Grip down: ${handKey} hand - grabbing environment`);
+                this.grabEnvironment(handKey);
+            }
+        });
+        
+        this.el.sceneEl.addEventListener('gripup', (evt) => {
+            const hand = evt.target;
+            const isLeft = hand.id === 'leftHand';
+            const handKey = isLeft ? 'left' : 'right';
+            
+            // Track grip state
+            this.hands[handKey].gripHeld = false;
+            
+            // Release whatever is being grabbed (ball or environment)
+            if (this.hands[handKey].isGrabbing) {
+                this.releaseGrabbedObject(handKey);
+            }
+        });
+    },
+
+    tryGrabBall: function(hand) {
+        const isLeft = hand.id === 'leftHand';
+        const handKey = isLeft ? 'left' : 'right';
+        
+        // Check if there's a nearby ball
+        const nearestBall = this.findNearestBall(hand);
+        if (nearestBall) {
+            console.log(`✅ ${handKey} hand grabbing ball`);
+            this.hands[handKey].isGrabbing = true;
+            this.hands[handKey].nearbyObject = nearestBall;
+            this.hands[handKey].grabInfo = {
+                isBall: true,
+                ball: nearestBall,
+                handPositionAtGrab: new THREE.Vector3().copy(hand.object3D.position),
+                grabStartTime: performance.now()
+            };
+            
+            // Notify the ball component
+            if (nearestBall.components['grabbable-ball']) {
+                nearestBall.components['grabbable-ball'].onGrab(hand);
+            }
+        }
+    },
+
+    grabEnvironment: function(handKey) {
+        const hand = this[handKey + 'Hand'];
+        if (!hand) return;
+        
+        const handPos = new THREE.Vector3();
+        hand.object3D.getWorldPosition(handPos);
+        
+        this.hands[handKey].isGrabbing = true;
+        this.hands[handKey].grabInfo = {
+            isBall: false,
+            grabPoint: handPos.clone(),
+            handPositionAtGrab: handPos.clone(),
+            grabStartTime: performance.now()
+        };
+        
+        console.log(`✅ ${handKey} hand grabbing environment`);
+    },
+
+    releaseGrabbedObject: function(handKey) {
+        const handState = this.hands[handKey];
+        if (!handState.isGrabbing) return;
+        
+        console.log(`Release: ${handKey} hand releasing object`);
+        
+        if (handState.grabInfo && handState.grabInfo.isBall && handState.grabInfo.ball) {
+            // Release ball
+            const ball = handState.grabInfo.ball;
+            if (ball.components['grabbable-ball']) {
+                // Calculate throw velocity
+                const throwVelocity = this.calculateThrowVelocity(handKey);
+                ball.components['grabbable-ball'].onRelease(throwVelocity);
+            }
+        }
+        
+        // Clear grab state
+        handState.isGrabbing = false;
+        handState.grabInfo = null;
+        handState.nearbyObject = null;
+    },
+
+    calculateThrowVelocity: function(handKey) {
+        // Simple velocity calculation - could be enhanced
+        return new THREE.Vector3(0, 0, -2); // Default forward throw
+    },
+
     setupPhysics: function() {
-        if (!window.PhysicsWorld) {
-            DebugUtils.log('PLAYER', 'Physics world not ready, retrying...');
-            setTimeout(() => this.setupPhysics(), 100);
+        if (!window.PhysicsWorld || !Ammo) {
+            console.log('🚫 Cannot create player physics body - Ammo.js not ready');
+            setTimeout(() => {
+                if (!this.playerPhysicsBody) {
+                    this.setupPhysics();
+                }
+            }, 1000);
             return;
         }
 
-        // Create capsule collision shape for player
-        const shape = window.PhysicsWorld.createCapsuleShape(this.data.radius, this.data.height - this.data.radius * 2);
+        if (this.playerPhysicsBody) {
+            console.log('🔧 Player physics body already exists');
+            return;
+        }
+
+        console.log('🔧 Creating real physics body for player (like reference project)');
         
-        // Create rigid body at player position with proper collision groups
-        const position = this.rig ? this.rig.object3D.position : new THREE.Vector3(0, 2, 8);
-        // Group 1: Player, Mask: 4 (static surfaces only - no ball collision)
-        this.collisionBody = window.PhysicsWorld.createDynamicBody(this.data.mass, shape, position, null, 1, 4);
+        // Create sphere shape for player body (like reference project)
+        const radius = 0.4; // 40cm radius sphere for player (same as reference)
+        const shape = new Ammo.btSphereShape(radius);
         
-        // Set collision properties
-        this.collisionBody.setFriction(0.8);
-        this.collisionBody.setRestitution(0.1);
-        this.collisionBody.setDamping(this.data.damping, this.data.damping);
+        // Create DYNAMIC body with mass (like reference project)
+        const mass = 1;
+        const localInertia = new Ammo.btVector3(0, 0, 0);
+        shape.calculateLocalInertia(mass, localInertia);
         
-        // Prevent rotation (player should stay upright in zero-g)
-        this.collisionBody.setAngularFactor(new Ammo.btVector3(0, 1, 0)); // Only allow Y-axis rotation
+        const transform = new Ammo.btTransform();
+        transform.setIdentity();
+        
+        // Get current camera position to initialize physics body there
+        if (this.camera) {
+            const cameraWorldPos = new THREE.Vector3();
+            this.camera.object3D.getWorldPosition(cameraWorldPos);
+            transform.setOrigin(new Ammo.btVector3(cameraWorldPos.x, cameraWorldPos.y, cameraWorldPos.z));
+            console.log('🔧 Player physics body initialized at camera position:', cameraWorldPos.toArray().map(x => x.toFixed(2)));
+        } else {
+            transform.setOrigin(new Ammo.btVector3(0, 1.6, -2)); // Fallback position
+            console.log('🔧 Player physics body initialized at fallback position');
+        }
+        
+        const motionState = new Ammo.btDefaultMotionState(transform);
+        const rigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
+        this.playerPhysicsBody = new Ammo.btRigidBody(rigidBodyInfo);
+        
+        // Set damping (like reference project)
+        this.playerPhysicsBody.setDamping(0.01, 0.1); // Low linear damping, medium angular damping
+        
+        // Prevent rotation (player should only translate, not tumble)
+        this.playerPhysicsBody.setAngularFactor(new Ammo.btVector3(0, 0, 0));
+        
+        // Add velocity API (like reference project)
+        this.setupPlayerVelocityAPI();
+        
+        // Add player with collision filtering (same as reference project)
+        const PLAYER_GROUP = 2;
+        const PLAYER_MASK = 1 | 16; // Collide with environment (1) and enemy balls (16), not hands (4) or player ball (8)
+        window.PhysicsWorld.world.addRigidBody(this.playerPhysicsBody, PLAYER_GROUP, PLAYER_MASK);
+        
+        console.log(`👤 PLAYER: Physics body successfully added to physics world!`);
+        console.log(`👤 PLAYER: Group: ${PLAYER_GROUP}, Mask: ${PLAYER_MASK} (env + enemy balls)`);
         
         // Create collision visualization
         this.createCollisionVisualization();
         
-        DebugUtils.log('PLAYER', 'Player physics body created with capsule collision and added to world');
+        console.log('✅ Player physics body added to Ammo.js physics world (dynamic sphere, like reference)');
+        
+        // Position the physics body correctly after a delay
+        setTimeout(() => {
+            this.repositionPlayerPhysicsBody();
+        }, 2000);
+        
+        // Create hand physics bodies after environment is ready
+        setTimeout(() => {
+            this.createHandPhysicsBodies();
+        }, 3000);
+    },
+
+    setupPlayerVelocityAPI: function() {
+        // Add velocity API to player physics body (same as reference project)
+        this.playerPhysicsBody.velocity = {
+            set: (x, y, z) => {
+                const velocity = new Ammo.btVector3(x, y, z);
+                this.playerPhysicsBody.setLinearVelocity(velocity);
+                Ammo.destroy(velocity);
+            },
+            add: (x, y, z) => {
+                const currentVel = this.playerPhysicsBody.getLinearVelocity();
+                const newVel = new Ammo.btVector3(currentVel.x() + x, currentVel.y() + y, currentVel.z() + z);
+                this.playerPhysicsBody.setLinearVelocity(newVel);
+                Ammo.destroy(newVel);
+            },
+            length: () => {
+                const vel = this.playerPhysicsBody.getLinearVelocity();
+                const length = Math.sqrt(vel.x() * vel.x() + vel.y() * vel.y() + vel.z() * vel.z());
+                return length;
+            },
+            multiplyScalar: (scalar) => {
+                const vel = this.playerPhysicsBody.getLinearVelocity();
+                const newVel = new Ammo.btVector3(vel.x() * scalar, vel.y() * scalar, vel.z() * scalar);
+                this.playerPhysicsBody.setLinearVelocity(newVel);
+                Ammo.destroy(newVel);
+            }
+        };
+        
+        this.playerPhysicsBody.position = {
+            copy: (vector3) => {
+                const transform = new Ammo.btTransform();
+                this.playerPhysicsBody.getMotionState().getWorldTransform(transform);
+                const origin = transform.getOrigin();
+                
+                // Safety check for valid origin
+                if (origin && typeof origin.x === 'function') {
+                    vector3.set(origin.x(), origin.y(), origin.z());
+                }
+                Ammo.destroy(transform);
+            }
+        };
+    },
+
+    repositionPlayerPhysicsBody: function() {
+        if (!this.playerPhysicsBody || !Ammo) return;
+        
+        if (!this.camera) return;
+        
+        const cameraWorldPos = new THREE.Vector3();
+        this.camera.object3D.getWorldPosition(cameraWorldPos);
+        
+        // Move physics body to current camera position
+        const transform = new Ammo.btTransform();
+        this.playerPhysicsBody.getMotionState().getWorldTransform(transform);
+        transform.setOrigin(new Ammo.btVector3(cameraWorldPos.x, cameraWorldPos.y, cameraWorldPos.z));
+        this.playerPhysicsBody.getMotionState().setWorldTransform(transform);
+        this.playerPhysicsBody.setCenterOfMassTransform(transform);
+        this.playerPhysicsBody.activate();
+        
+        console.log('🔧 Repositioned player physics body to camera position:', cameraWorldPos.toArray().map(x => x.toFixed(2)));
+        
+        Ammo.destroy(transform);
     },
 
     createCollisionVisualization: function() {
-        if (!this.camera) return;
+        // Create wireframe sphere to visualize collision body (same as reference)
+        if (this.playerWireframe) {
+            this.playerWireframe.parentNode.removeChild(this.playerWireframe);
+        }
         
-        // Create wireframe capsule visualization
-        const capsuleGeometry = new THREE.CapsuleGeometry(this.data.radius, this.data.height - this.data.radius * 2, 8, 16);
-        const wireframeMaterial = new THREE.MeshBasicMaterial({
-            color: 0x00ff00,
-            wireframe: true,
-            transparent: true,
-            opacity: 0.5
-        });
+        this.playerWireframe = document.createElement('a-sphere');
+        this.playerWireframe.setAttribute('radius', '0.4'); // Same as physics body
+        this.playerWireframe.setAttribute('material', 'wireframe: true; color: #00ff00; opacity: 0.8');
+        this.playerWireframe.setAttribute('visible', false);
         
-        const capsuleMesh = new THREE.Mesh(capsuleGeometry, wireframeMaterial);
+        // Position wireframe at current camera position (like reference project)
+        if (this.camera) {
+            const cameraWorldPos = new THREE.Vector3();
+            this.camera.object3D.getWorldPosition(cameraWorldPos);
+            this.playerWireframe.setAttribute('position', `${cameraWorldPos.x} ${cameraWorldPos.y} ${cameraWorldPos.z}`);
+        } else {
+            this.playerWireframe.setAttribute('position', '0 1.6 0'); // Fallback position
+        }
         
-        // Create A-Frame entity for the visualization
-        this.collisionVisualization = document.createElement('a-entity');
-        this.collisionVisualization.setAttribute('position', '0 -0.9 0'); // Offset to center on camera
-        this.collisionVisualization.object3D.add(capsuleMesh);
-        this.collisionVisualization.setAttribute('visible', false);
+        this.el.sceneEl.appendChild(this.playerWireframe);
         
-        // Attach to camera so it follows player
-        this.camera.appendChild(this.collisionVisualization);
+        // Store reference for wireframe toggle
+        this.collisionVisualization = this.playerWireframe;
+        
+        console.log('✅ Player wireframe sphere created');
         
         DebugUtils.log('PLAYER', 'Collision visualization created');
     },
@@ -163,27 +400,7 @@ AFRAME.registerComponent('zerog-player', {
         DebugUtils.log('PLAYER', `Thruster ${hand}: ${active ? 'ON' : 'OFF'}`);
     },
 
-    setGrabState: function(hand, grabbing) {
-        const wasGrabbing = this.grabStates[hand];
-        this.grabStates[hand] = grabbing;
-        
-        DebugUtils.log('PLAYER', `${hand} hand grab state changed: ${wasGrabbing} -> ${grabbing}`);
-        
-        if (grabbing) {
-            // Store the initial grab position for surface pushing
-            const handElement = hand === 'left' ? this.leftHand : this.rightHand;
-            if (handElement) {
-                this[`${hand}GrabPosition`] = ControllerUtils.getWorldPosition(handElement).clone();
-                DebugUtils.log('PLAYER', `${hand} hand grabbed surface at position:`, this[`${hand}GrabPosition`].toArray());
-            } else {
-                DebugUtils.log('PLAYER', `ERROR: ${hand} hand element not found!`);
-            }
-        } else {
-            // Clear grab position when releasing
-            this[`${hand}GrabPosition`] = null;
-            DebugUtils.log('PLAYER', `${hand} hand released surface`);
-        }
-    },
+
 
     setThumbstickRotation: function(hand, value) {
         // PROPER thumbstick handling - no momentum
@@ -216,24 +433,23 @@ AFRAME.registerComponent('zerog-player', {
     applyThrusterForces: function(deltaTime) {
         if (!this.leftHand || !this.rightHand) return;
         
-        let totalForce = new THREE.Vector3(0, 0, 0);
+        let totalThrust = new THREE.Vector3(0, 0, 0);
         
         // Left hand thruster  
         if (this.thrusterStates.left) {
             const leftDirection = this.getThrusterDirection(this.leftHand);
-            totalForce.add(leftDirection.multiplyScalar(this.data.thrusterForce));
+            totalThrust.add(leftDirection.multiplyScalar(this.data.thrusterForce * deltaTime));
         }
         
         // Right hand thruster
         if (this.thrusterStates.right) {
             const rightDirection = this.getThrusterDirection(this.rightHand);
-            totalForce.add(rightDirection.multiplyScalar(this.data.thrusterForce));
+            totalThrust.add(rightDirection.multiplyScalar(this.data.thrusterForce * deltaTime));
         }
         
-        // Apply force to velocity
-        if (totalForce.length() > 0) {
-            const forceScaled = totalForce.multiplyScalar(deltaTime);
-            this.velocity.add(forceScaled);
+        // Apply thrust to velocity (like reference project)
+        if (totalThrust.length() > 0) {
+            this.velocity.add(totalThrust);
             
             // Cap maximum velocity
             if (this.velocity.length() > this.data.maxSpeed) {
@@ -251,58 +467,291 @@ AFRAME.registerComponent('zerog-player', {
         return direction;
     },
 
-    applyGrabMovement: function(deltaTime) {
-        // Handle movement from grabbing and pushing off static surfaces
-        let grabMovement = new THREE.Vector3(0, 0, 0);
-        
-        // Check for grab movement from both hands
-        ['left', 'right'].forEach(hand => {
-            if (this.grabStates[hand] && this[`${hand}GrabPosition`]) {
-                const handElement = hand === 'left' ? this.leftHand : this.rightHand;
-                if (handElement) {
-                    const currentHandPos = ControllerUtils.getWorldPosition(handElement);
-                    const initialGrabPos = this[`${hand}GrabPosition`];
+    updateEnvironmentGrabbing: function() {
+        // Real environment grabbing - track hand movement relative to grab point (like reference project)
+        ['left', 'right'].forEach(handKey => {
+            const handState = this.hands[handKey];
+            
+            if (handState.isGrabbing && handState.nearbyObject === 'environment' && handState.grabInfo) {
+                // CRITICAL: Only process if this is actually environment grabbing (not ball grabbing)
+                if (handState.grabInfo.isBall) {
+                    return; // Skip ball grabs - this function is only for environment grabbing
+                }
+                
+                const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+                if (!hand) return;
+                
+                const grabInfo = handState.grabInfo;
+                
+                // Safety check for valid grabInfo structure
+                if (!grabInfo.handPositionAtGrab) {
+                    console.log('⚠️ Invalid grabInfo structure for environment grabbing');
+                    return;
+                }
+                
+                // Calculate how much the hand has moved since grab started
+                const currentHandPos = new THREE.Vector3();
+                hand.object3D.getWorldPosition(currentHandPos);
+                
+                const handMovement = currentHandPos.clone().sub(grabInfo.handPositionAtGrab);
+                
+                // Apply opposite movement to player (if hand moves right, player moves left)
+                // Moderate amplification for natural feel without stuttering
+                const playerMovement = handMovement.clone().multiplyScalar(-1.5);
+                
+                // Limit movement speed to prevent wild flinging and stuttering
+                const maxMovementPerFrame = 0.15; // 15cm max to prevent oscillation
+                if (playerMovement.length() > maxMovementPerFrame) {
+                    playerMovement.normalize().multiplyScalar(maxMovementPerFrame);
+                }
+                
+                // Add smoothing to prevent stuttering
+                if (playerMovement.length() < 0.005) { // Ignore tiny movements (0.5cm threshold)
+                    return; // Skip very small movements that can cause jitter
+                }
+                
+                // Apply movement directly to VR rig position for immediate response
+                if (this.rig) {
+                    this.rig.object3D.position.add(playerMovement);
                     
-                    // Calculate how much the hand has moved since grabbing
-                    const handMovement = new THREE.Vector3().subVectors(currentHandPos, initialGrabPos);
+                    // Update physics body to follow the new rig position immediately
+                    this.updatePhysicsBodyToFollowRig();
                     
-                    // Apply movement for any hand motion (more sensitive)
-                    if (handMovement.length() > 0.005) {
-                        // Apply movement in opposite direction (Newton's 3rd law)
-                        // Player pulls themselves toward the static object
-                        const pullForce = handMovement.clone().negate().multiplyScalar(5.0); // Increased multiplier
-                        grabMovement.add(pullForce);
-                        
-                        // Update grab position for continuous movement
-                        this[`${hand}GrabPosition`] = currentHandPos;
-                        
-                        DebugUtils.log('PLAYER', `${hand} hand grab movement applied: ${pullForce.length().toFixed(3)}, hand moved: ${handMovement.length().toFixed(3)}`);
+                    // Track movement for momentum on release
+                    const movementVelocity = playerMovement.clone().multiplyScalar(80);
+                    this.velocity.lerp(movementVelocity, 0.2);
+                    
+                    if (Math.random() < 0.01) { // 1% chance to log
+                        DebugUtils.log('PLAYER', `Environment grab movement: ${playerMovement.length().toFixed(3)}m`);
                     }
                 }
-            } else if (this.grabStates[hand]) {
-                // If grab state is true but no position, something is wrong
-                DebugUtils.log('PLAYER', `${hand} hand grab state is true but no grab position!`);
+                
+                // CRITICAL: DON'T update the grab reference point - keep it fixed at original grab location
+            }
+        });
+    },
+
+    createHandPhysicsBodies: function() {
+        if (!Ammo || !window.PhysicsWorld) {
+            console.log('🚫 Cannot create hand physics bodies - Ammo.js not ready');
+            setTimeout(() => this.createHandPhysicsBodies(), 1000);
+            return;
+        }
+        
+        ['left', 'right'].forEach(handKey => {
+            const hand = this[handKey + 'Hand'];
+            if (!hand) return;
+            
+            // Create physics sphere for hand
+            const radius = 0.05; // 5cm radius for hand collision
+            const shape = new Ammo.btSphereShape(radius);
+            
+            const transform = new Ammo.btTransform();
+            transform.setIdentity();
+            
+            const handPos = new THREE.Vector3();
+            hand.object3D.getWorldPosition(handPos);
+            transform.setOrigin(new Ammo.btVector3(handPos.x, handPos.y, handPos.z));
+            
+            const motionState = new Ammo.btDefaultMotionState(transform);
+            const mass = 0; // Kinematic body
+            const localInertia = new Ammo.btVector3(0, 0, 0);
+            
+            const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
+            const body = new Ammo.btRigidBody(rbInfo);
+            
+            // Make it kinematic
+            body.setCollisionFlags(body.getCollisionFlags() | 2);
+            body.setActivationState(4);
+            
+            // Add hands with collision filtering - don't collide with player body or balls
+            const HAND_GROUP = 4;
+            const HAND_MASK = 1; // Only collide with environment (group 1)
+            
+            window.PhysicsWorld.world.addRigidBody(body, HAND_GROUP, HAND_MASK);
+            
+            // Store reference
+            this.hands[handKey].physicsBody = body;
+            
+            // Create physics wireframe sphere
+            const wireSphere = document.createElement('a-sphere');
+            wireSphere.setAttribute('radius', radius);
+            wireSphere.setAttribute('material', {
+                color: '#0000ff',
+                wireframe: true,
+                opacity: 0.5,
+                transparent: true
+            });
+            wireSphere.setAttribute('position', '0 0 0');
+            hand.appendChild(wireSphere);
+            this.hands[handKey].physicsWireframe = wireSphere;
+            
+            // Clean up Ammo objects
+            Ammo.destroy(transform);
+            Ammo.destroy(localInertia);
+            Ammo.destroy(rbInfo);
+        });
+        
+        console.log('✅ Created physics bodies and visualizations for hands');
+    },
+
+    updateHandPhysicsBodies: function() {
+        if (!Ammo) return;
+        
+        ['left', 'right'].forEach(handKey => {
+            const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+            const handState = this.hands[handKey];
+            if (!hand || !handState.physicsBody) return;
+            
+            // Update hand physics body position to follow actual hand
+            const handPos = new THREE.Vector3();
+            hand.object3D.getWorldPosition(handPos);
+            
+            const transform = new Ammo.btTransform();
+            handState.physicsBody.getMotionState().getWorldTransform(transform);
+            transform.setOrigin(new Ammo.btVector3(handPos.x, handPos.y, handPos.z));
+            handState.physicsBody.getMotionState().setWorldTransform(transform);
+            handState.physicsBody.setCenterOfMassTransform(transform);
+            
+            Ammo.destroy(transform);
+        });
+    },
+
+    checkHandCollisions: function() {
+        if (!Ammo || !window.PhysicsWorld) return;
+        
+        // Update hand physics body positions first
+        this.updateHandPhysicsBodies();
+        
+        ['left', 'right'].forEach(handKey => {
+            const handState = this.hands[handKey];
+            if (!handState.physicsBody) return;
+            
+            // Reset nearbyObject detection for this frame
+            handState.nearbyObject = null;
+            
+            // Check for collisions with environment
+            const numManifolds = window.PhysicsWorld.world.getDispatcher().getNumManifolds();
+            let isColliding = false;
+            let collisionNormal = new THREE.Vector3();
+            
+            for (let i = 0; i < numManifolds; i++) {
+                const contactManifold = window.PhysicsWorld.world.getDispatcher().getManifoldByIndexInternal(i);
+                const body0 = Ammo.castObject(contactManifold.getBody0(), Ammo.btRigidBody);
+                const body1 = Ammo.castObject(contactManifold.getBody1(), Ammo.btRigidBody);
+                
+                if (Ammo.compare(body0, handState.physicsBody) || Ammo.compare(body1, handState.physicsBody)) {
+                    const numContacts = contactManifold.getNumContacts();
+                    
+                    for (let j = 0; j < numContacts; j++) {
+                        const contactPoint = contactManifold.getContactPoint(j);
+                        const distance = contactPoint.getDistance();
+                        
+                        if (distance < 0.1) { // Close contact
+                            isColliding = true;
+                            const normal = contactPoint.get_m_normalWorldOnB();
+                            
+                            // Safety check for valid normal vector
+                            if (normal && typeof normal.x === 'function') {
+                                // Get normal direction (away from surface)
+                                let normalDir = new THREE.Vector3(normal.x(), normal.y(), normal.z());
+                                if (Ammo.compare(body1, handState.physicsBody)) {
+                                    normalDir.negate(); // Flip if hand is body1
+                                }
+                                
+                                collisionNormal.add(normalDir);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (isColliding) {
+                // Hand is touching environment - can push against it
+                // BUT: Don't set to 'environment' if already grabbing a ball
+                if (!handState.isGrabbing || (handState.grabInfo && !handState.grabInfo.isBall)) {
+                    handState.nearbyObject = 'environment';
+                }
+                // If grabbing a ball, keep the current nearbyObject (don't change it)
+                
+                // Environment grabbing is handled in updateEnvironmentGrabbing()
+            } else {
+                // Only check for nearby ball if not already grabbing something
+                if (!handState.isGrabbing) {
+                    const ball = this.findNearestBall(this[handKey + 'Hand']);
+                    handState.nearbyObject = ball;
+                }
+                // If already grabbing, keep the current nearbyObject
+            }
+        });
+    },
+
+    findNearestBall: function(hand) {
+        const handPos = new THREE.Vector3();
+        hand.object3D.getWorldPosition(handPos);
+        const handRadius = 0.08; // Hand collision radius
+        
+        // Look for balls only
+        const balls = document.querySelectorAll('[grabbable-ball]');
+        let nearestBall = null;
+        let minDistance = Infinity;
+        
+        balls.forEach(ball => {
+            const ballPos = new THREE.Vector3();
+            ball.object3D.getWorldPosition(ballPos);
+            const distance = handPos.distanceTo(ballPos);
+            
+            // If hand is touching or very close to ball (within 10cm for easier grabbing)
+            if (distance <= 0.10) {
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    nearestBall = ball;
+                }
             }
         });
         
-        if (grabMovement.length() > 0) {
-            const oldVelocity = this.velocity.length();
-            this.velocity.add(grabMovement.multiplyScalar(deltaTime));
+        return nearestBall;
+    },
+
+    checkHandRaycastCollision: function(handKey) {
+        const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+        if (!hand) return false;
+
+        // Get hand position
+        const handPos = new THREE.Vector3();
+        hand.object3D.getWorldPosition(handPos);
+
+        // Cast rays in multiple directions from hand position
+        const directions = [
+            new THREE.Vector3(0, 0, -1), // Forward
+            new THREE.Vector3(0, 0, 1),  // Backward
+            new THREE.Vector3(1, 0, 0),  // Right
+            new THREE.Vector3(-1, 0, 0), // Left
+            new THREE.Vector3(0, 1, 0),  // Up
+            new THREE.Vector3(0, -1, 0), // Down
+        ];
+
+        const raycaster = new THREE.Raycaster();
+        const maxDistance = 0.1; // 10cm
+
+        for (let direction of directions) {
+            raycaster.set(handPos, direction);
             
-            // Cap velocity to prevent excessive speeds
-            const maxGrabSpeed = 8.0; // Increased for better responsiveness
-            if (this.velocity.length() > maxGrabSpeed) {
-                this.velocity.normalize().multiplyScalar(maxGrabSpeed);
-            }
-            
-            DebugUtils.log('PLAYER', `GRAB MOVEMENT: Force ${grabMovement.length().toFixed(3)}, Old vel: ${oldVelocity.toFixed(3)}, New vel: ${this.velocity.length().toFixed(3)}`);
-        } else {
-            // Debug why no grab movement is being applied
-            const activeGrabs = ['left', 'right'].filter(hand => this.grabStates[hand]);
-            if (activeGrabs.length > 0) {
-                DebugUtils.log('PLAYER', `No grab movement despite active grabs: ${activeGrabs.join(', ')}`);
+            // Check collision with hallway-collision entity
+            const hallwayCollision = document.querySelector('#hallway-collision');
+            if (hallwayCollision && hallwayCollision.object3D) {
+                const intersects = raycaster.intersectObject(hallwayCollision.object3D, true);
+                if (intersects.length > 0 && intersects[0].distance < maxDistance) {
+                    if (Math.random() < 0.01) { // Debug occasionally
+                        console.log(`🎯 ${handKey} hand raycast hit at distance: ${intersects[0].distance.toFixed(3)}m`);
+                    }
+                    return true;
+                }
             }
         }
+
+        return false;
     },
 
     applyRotation: function(deltaTime) {
@@ -330,6 +779,36 @@ AFRAME.registerComponent('zerog-player', {
         if (this.isBraking) {
             this.velocity.multiplyScalar(0.9);
         }
+    },
+
+    applyVelocityToRig: function(deltaTime) {
+        if (this.velocity.length() > 0) {
+            const movement = this.velocity.clone().multiplyScalar(deltaTime);
+            this.rig.object3D.position.add(movement);
+        }
+    },
+
+    updatePhysicsBodyToFollowRig: function() {
+        if (!this.playerPhysicsBody || !Ammo || !this.camera) return;
+        
+        // Get current camera world position (like reference project)
+        const cameraWorldPos = new THREE.Vector3();
+        this.camera.object3D.getWorldPosition(cameraWorldPos);
+        
+        // Move physics body to current camera position
+        const transform = new Ammo.btTransform();
+        this.playerPhysicsBody.getMotionState().getWorldTransform(transform);
+        transform.setOrigin(new Ammo.btVector3(cameraWorldPos.x, cameraWorldPos.y, cameraWorldPos.z));
+        this.playerPhysicsBody.getMotionState().setWorldTransform(transform);
+        this.playerPhysicsBody.setCenterOfMassTransform(transform);
+        this.playerPhysicsBody.activate();
+        
+        // Update wireframe position to match physics body (at camera position)
+        if (this.playerWireframe) {
+            this.playerWireframe.setAttribute('position', `${cameraWorldPos.x} ${cameraWorldPos.y} ${cameraWorldPos.z}`);
+        }
+        
+        Ammo.destroy(transform);
     },
 
         checkCollisions: function() {
@@ -374,30 +853,116 @@ AFRAME.registerComponent('zerog-player', {
     },
 
     tick: function(time, deltaTime) {
-        if (!window.PhysicsWorld || !this.collisionBody) return;
+        if (!this.rig) return;
         
         const dt = Math.min(deltaTime / 1000, 0.033); // Cap at 30fps for stability
         
-        // Apply forces and movement
-        this.applyThrusterForces(dt);
-        this.applyGrabMovement(dt);
+        // Apply thumbstick rotation
         this.applyRotation(dt);
+        
+        // Apply thruster forces to velocity (like reference project)
+        this.applyThrusterForces(dt);
+        
+        // Apply damping to velocity
         this.applyDamping(dt);
         
-        // Check collisions
-        this.checkCollisions();
+        // Check if grabbing environment (affects multiple systems)
+        const isGrabbingEnvironment = this.hands.left.isGrabbing && this.hands.left.nearbyObject === 'environment' ||
+                                     this.hands.right.isGrabbing && this.hands.right.nearbyObject === 'environment';
         
-        // Apply movement to VR rig
-        this.applyMovement(dt);
+
         
-        // Update physics body
-        this.updatePhysicsBody();
+        // Apply velocity to move VR rig (like reference project) - but not when grabbing environment
+        if (!isGrabbingEnvironment) {
+            this.applyVelocityToRig(dt);
+        }
         
-        // Only log significant velocity changes
-        if (this.velocity.length() > 5.0 && Math.random() < 0.01) {
-            console.log(`Player velocity: ${this.velocity.length().toFixed(1)} m/s`);
+        // Update physics body to follow VR rig position (for collision detection)
+        if (!isGrabbingEnvironment) {
+            this.updatePhysicsBodyToFollowRig();
+        }
+        
+        // Handle environment grabbing movement (replaces old applyGrabMovement)
+        this.updateEnvironmentGrabbing();
+        
+        // Check for hand collisions with environment (like reference project)
+        this.checkHandCollisions();
+        
+        // Check for physics collisions and adjust velocity (like reference project)
+        this.checkPhysicsCollisionAndAdjust(dt);
+    },
+
+    checkPhysicsCollisionAndAdjust: function(dt) {
+        if (!this.playerPhysicsBody || !Ammo || !window.PhysicsWorld) return;
+        
+        // Debug counter to verify collision detection is running
+        if (!this.collisionCheckCount) this.collisionCheckCount = 0;
+        this.collisionCheckCount++;
+        if (this.collisionCheckCount % 300 === 0) { // Every 5 seconds at 60fps
+            console.log(`🔍 COLLISION CHECK: Running ${this.collisionCheckCount} times`);
+        }
+        
+        // Check if physics body is colliding with environment
+        const numManifolds = window.PhysicsWorld.world.getDispatcher().getNumManifolds();
+        let isColliding = false;
+        let collisionNormal = new THREE.Vector3();
+        
+        for (let i = 0; i < numManifolds; i++) {
+            const contactManifold = window.PhysicsWorld.world.getDispatcher().getManifoldByIndexInternal(i);
+            const body0 = Ammo.castObject(contactManifold.getBody0(), Ammo.btRigidBody);
+            const body1 = Ammo.castObject(contactManifold.getBody1(), Ammo.btRigidBody);
+            
+            // Check if one of the bodies is our physics body
+            if (Ammo.compare(body0, this.playerPhysicsBody) || Ammo.compare(body1, this.playerPhysicsBody)) {
+                const numContacts = contactManifold.getNumContacts();
+                
+                for (let j = 0; j < numContacts; j++) {
+                    const contactPoint = contactManifold.getContactPoint(j);
+                    const distance = contactPoint.getDistance();
+                    
+                    if (distance < 0.1) { // Close contact
+                        isColliding = true;
+                        const normal = contactPoint.get_m_normalWorldOnB();
+                        
+                        // Safety check for valid normal vector
+                        if (normal && typeof normal.x === 'function') {
+                            // Get normal direction (away from surface)
+                            let normalDir = new THREE.Vector3(normal.x(), normal.y(), normal.z());
+                            if (Ammo.compare(body1, this.playerPhysicsBody)) {
+                                normalDir.negate(); // Flip if player is body1
+                            }
+                            
+                            collisionNormal.add(normalDir);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (isColliding) {
+            // Normalize collision normal
+            collisionNormal.normalize();
+            
+            // SMOOTH collision response like reference project
+            // Add velocity away from collision surface instead of jumping position
+            const dotProduct = this.velocity.dot(collisionNormal);
+            if (dotProduct < 0) { // Moving into surface
+                const reflection = collisionNormal.clone().multiplyScalar(-dotProduct * 0.8); // 80% reflection
+                this.velocity.add(reflection);
+            }
+            
+            // Add gentle push away from surface to prevent clipping
+            this.velocity.add(collisionNormal.clone().multiplyScalar(0.1));
+            
+            // Debug occasionally
+            if (Math.random() < 0.1) {
+                console.log('🏗️ Player collision detected and velocity adjusted');
+            }
         }
     },
+
+
     
     shootBallFromCamera: function() {
         // Throttle shooting to prevent spam (max one shot per 300ms)
@@ -544,9 +1109,16 @@ AFRAME.registerComponent('zerog-player', {
         });
         
         // Toggle player collision wireframe
-        if (this.collisionVisualization) {
-            this.collisionVisualization.setAttribute('visible', this.wireframesVisible);
+        if (this.playerWireframe) {
+            this.playerWireframe.setAttribute('visible', this.wireframesVisible);
         }
+        
+        // Toggle hand collision wireframes
+        ['left', 'right'].forEach(handKey => {
+            if (this.hands[handKey] && this.hands[handKey].physicsWireframe) {
+                this.hands[handKey].physicsWireframe.setAttribute('visible', this.wireframesVisible);
+            }
+        });
         
         DebugUtils.log('PLAYER', `Wireframes ${this.wireframesVisible ? 'SHOWN' : 'HIDDEN'}`);
     },

@@ -100,6 +100,9 @@ AFRAME.registerComponent('hand-interaction', {
         // Release grabbed object
         if (this.grabbedObject) {
             this.releaseObject();
+            
+            // Also notify player controller about release
+            this.notifyPlayerController('grab', false);
         }
     },
 
@@ -176,13 +179,9 @@ AFRAME.registerComponent('hand-interaction', {
         
         DebugUtils.log('INTERACTION', `${this.handKey} checking ${grabbableObjects.length} grabbable objects`);
         
-        // Debug: List all grabbable objects
-        if (Math.random() < 0.1) { // 10% chance to log details
-            grabbableObjects.forEach((obj, index) => {
-                const hasGrabSurface = obj.hasAttribute('grab-surface');
-                const hasBall = obj.hasAttribute('grabbable-ball');
-                DebugUtils.log('INTERACTION', `Object ${index}: ${obj.tagName}, grab-surface: ${hasGrabSurface}, ball: ${hasBall}`);
-            });
+        // Debug: List grabbable objects occasionally  
+        if (Math.random() < 0.1) {
+            console.log(`🔍 ${this.handKey} checking ${grabbableObjects.length} grabbable objects`);
         }
         
         grabbableObjects.forEach(object => {
@@ -203,11 +202,16 @@ AFRAME.registerComponent('hand-interaction', {
         if (nearestObject) {
             DebugUtils.log('INTERACTION', `${this.handKey} grabbing nearest:`, nearestObject.tagName, `at ${nearestDistance.toFixed(2)}m`);
             this.grabObject(nearestObject);
-            // Notify player controller about grab state
-            this.notifyPlayerController('grab', true);
+            // Notify player controller about grab state with object info
+            this.notifyPlayerController('grab', true, nearestObject);
         } else {
-            DebugUtils.log('INTERACTION', `${this.handKey} no objects in grab range (${grabRadius}m)`);
+            // Check if environment grabbing is possible via hand collision detection
+            this.attemptEnvironmentGrab();
         }
+    },
+
+    attemptEnvironmentGrab: function() {
+        // No longer needed - grip handling is now done directly in player controller
     },
 
     grabObject: function(object) {
@@ -241,20 +245,25 @@ AFRAME.registerComponent('hand-interaction', {
     releaseObject: function() {
         if (!this.grabbedObject) return;
         
-        DebugUtils.log('INTERACTION', `${this.handKey} hand released:`, this.grabbedObject.tagName);
-        
-        // Calculate throw velocity from hand movement
-        const throwVelocity = ZeroGMath.calculateThrowVelocity(this.velocityHistory);
-        
-        // Notify the object it's being released
-        if (this.grabbedObject.components['grabbable-ball']) {
-            this.grabbedObject.components['grabbable-ball'].onRelease(throwVelocity);
-        } else if (this.grabbedObject.components['grab-surface']) {
-            this.grabbedObject.components['grab-surface'].onRelease(this.hand);
+        // Handle environment release differently
+        if (this.grabbedObject === 'environment') {
+            DebugUtils.log('INTERACTION', `${this.handKey} hand released environment grab`);
+        } else {
+            DebugUtils.log('INTERACTION', `${this.handKey} hand released:`, this.grabbedObject.tagName);
+            
+            // Calculate throw velocity from hand movement
+            const throwVelocity = ZeroGMath.calculateThrowVelocity(this.velocityHistory);
+            
+            // Notify the object it's being released
+            if (this.grabbedObject.components['grabbable-ball']) {
+                this.grabbedObject.components['grabbable-ball'].onRelease(throwVelocity);
+            } else if (this.grabbedObject.components['grab-surface']) {
+                this.grabbedObject.components['grab-surface'].onRelease(this.hand);
+            }
+            
+            // Visual feedback
+            this.setObjectGrabVisual(this.grabbedObject, false);
         }
-        
-        // Visual feedback
-        this.setObjectGrabVisual(this.grabbedObject, false);
         
         // Clear grabbed object reference
         this.grabbedObject = null;
@@ -303,7 +312,7 @@ AFRAME.registerComponent('hand-interaction', {
         }
     },
 
-    notifyPlayerController: function(action, state) {
+    notifyPlayerController: function(action, state, extraData = null) {
         // Find the player controller and notify it of hand actions
         const player = document.querySelector('[zerog-player]');
         if (player && player.components['zerog-player']) {
@@ -318,12 +327,12 @@ AFRAME.registerComponent('hand-interaction', {
                         playerComponent.activateBraking();
                     }
                     break;
-                                    case 'grab':
-                        playerComponent.setGrabState(this.handKey, state);
-                        break;
-                    case 'rotation':
-                        playerComponent.setThumbstickRotation(this.handKey, state);
-                        break;
+                case 'grab':
+                    playerComponent.setGrabState(this.handKey, state, extraData);
+                    break;
+                case 'rotation':
+                    playerComponent.setThumbstickRotation(this.handKey, state);
+                    break;
             }
         }
     },
