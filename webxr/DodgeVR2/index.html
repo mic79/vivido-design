@@ -19,6 +19,7 @@
     <script src="js/player.js"></script>
     <script src="js/balls.js"></script>
     <script src="js/environment.js"></script>
+    <script src="js/ammo-physics.js"></script>
 </head>
 <body>
     <a-scene 
@@ -47,10 +48,10 @@
             ammo-physics
             position="0 0 0"
             scale="1 1 1"
-            visible="true">
+            visible="false">
         </a-entity>
 
-        <a-entity gltf-model="#sci-fi-hallway" 
+        <a-entity id="hallway-visual" gltf-model="#sci-fi-hallway" 
                   position="0 0 0" 
                   scale="1 1 1">
         </a-entity>
@@ -171,24 +172,6 @@
         <a-entity light="type: ambient; color: #404040; intensity: 0.8"></a-entity>
         <a-entity light="type: directional; color: #ffffff; intensity: 1.0" position="5 10 5"></a-entity>
         <a-entity light="type: point; color: #ffffff; intensity: 0.5; distance: 20" position="0 5 0"></a-entity>
-
-        <!-- Dual-Mesh Environment System (like reference project) -->
-        
-        <!-- COLLISION MESH: OBJ file for accurate physics (invisible) -->
-        <a-entity id="environment-collision"
-                  obj-model="obj: url(assets/wall-hole.obj)"
-                  environment-surface="friction: 0.7; restitution: 0.3"
-                  position="0 0 0"
-                  scale="1 1 1"
-                  visible="false">
-        </a-entity>
-        
-        <!-- VISUAL MESH: GLB file for appearance (no physics) -->
-        <a-entity id="environment-visual"
-                  gltf-model="url(assets/sci_fi_hallway_center.glb)"
-                  position="0 0 0"
-                  scale="1 1 1">
-        </a-entity>
 
         <!-- Space Background -->
         <a-sky color="#000033"></a-sky>

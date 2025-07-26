@@ -535,6 +535,14 @@ AFRAME.registerComponent('zerog-player', {
             }
         });
         
+        // Toggle ammo-physics wireframes
+        document.querySelectorAll('[ammo-physics]').forEach(ammoEntity => {
+            const component = ammoEntity.components['ammo-physics'];
+            if (component && component.physicsWireframe) {
+                component.physicsWireframe.visible = this.wireframesVisible;
+            }
+        });
+        
         // Toggle player collision wireframe
         if (this.collisionVisualization) {
             this.collisionVisualization.setAttribute('visible', this.wireframesVisible);
