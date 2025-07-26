@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>WebXR Zero-G Environment - AmmoJS Version</title>
+    <meta name="description" content="Zero-gravity WebXR environment with AmmoJS physics">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Core Libraries -->
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://kripken.github.io/ammo.js/builds/ammo.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    
+    <!-- Modular Components -->
+    <script src="js/utils.js"></script>
+    <script src="js/physics.js"></script>
+    <script src="js/interaction.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/balls.js"></script>
+    <script src="js/environment.js"></script>
+</head>
+<body>
+    <a-scene 
+        physics-world 
+        fps-counter
+        renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
+        webxr="requiredFeatures: local-floor"
+        vr-mode-ui="enabled: true"
+        background="color: #000011">
+        
+        <!-- Assets -->
+        <a-assets>
+            <a-asset-item id="sci-fi-hallway" 
+                         src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/sci_fi_hallway_center.glb" 
+                         response-type="arraybuffer">
+            </a-asset-item>
+            <a-asset-item id="hallway-collision-obj" src="assets/sci_fi_hallway_center-simple2.obj"></a-asset-item>
+        </a-assets>
+
+        <!-- Environment -->
+        <!-- Dual-Mesh System: Invisible collision + Visible graphics -->
+        
+        <!-- COLLISION MESH: Ammo.js triangle mesh physics (invisible) -->
+        <a-entity id="hallway-collision"
+            obj-model="obj: #hallway-collision-obj"
+            ammo-physics
+            position="0 0 0"
+            scale="1 1 1"
+            visible="true">
+        </a-entity>
+
+        <a-entity gltf-model="#sci-fi-hallway" 
+                  position="0 0 0" 
+                  scale="1 1 1">
+        </a-entity>
+
+        <!-- Static Surfaces for Grabbing -->
+        <a-box position="0.075 -0.3 -6.475" 
+               width="5.25" 
+               height="0.075" 
+               depth="5.25" 
+               color="#444444"
+               material="shader: standard; opacity: 0.1; transparent: true"
+               grab-surface>
+        </a-box>
+        
+        <a-box position="-1.9 0 -4.5325" 
+               width="1" height="0.5" depth="1" 
+               color="#888888"
+               material="shader: standard; metalness: 0.7; roughness: 0.3"
+               grab-surface>
+        </a-box>
+
+        <a-box position="1.5 1.5 -8" 
+               width="0.5" height="0.5" depth="0.5" 
+               color="#666666"
+               material="shader: standard; metalness: 0.5; roughness: 0.4"
+               grab-surface>
+        </a-box>
+
+        <a-cylinder position="0 1 -10" 
+                    radius="0.3" height="2" 
+                    color="#777777"
+                    material="shader: standard; metalness: 0.6; roughness: 0.3"
+                    grab-surface>
+        </a-cylinder>
+
+        <!-- Floating Balls -->
+        <a-sphere position="0 2 -2" 
+                  radius="0.1"
+                  color="#0099ff" 
+                  material="shader: standard; emissive: #0099ff; emissiveIntensity: 1.5"
+                  grabbable-ball="player: player">
+            <a-entity light="type: point; color: #0099ff; intensity: 1.5; distance: 5; decay: 2"></a-entity>
+            <a-sphere radius="0.1" color="#0099ff" material="wireframe: true; opacity: 0.3; transparent: true"></a-sphere>
+        </a-sphere>
+
+        <a-sphere position="2 2.5 -4" 
+                  radius="0.1"
+                  color="#ff6600" 
+                  material="shader: standard; emissive: #ff6600; emissiveIntensity: 1.5"
+                  grabbable-ball="player: opponent">
+            <a-entity light="type: point; color: #ff6600; intensity: 1.5; distance: 5; decay: 2"></a-entity>
+            <a-sphere radius="0.1" color="#ff6600" material="wireframe: true; opacity: 0.3; transparent: true"></a-sphere>
+        </a-sphere>
+
+        <!-- Player with Zero-G Physics -->
+        <a-entity id="player" position="0 2 8" zerog-player>
+            <a-entity id="rig" position="0 0 0">
+                <a-entity camera look-controls="pointerLockEnabled: false">
+                    <!-- HUD Elements -->
+                    <a-entity id="version-display" 
+                              position="0 0.35 -0.6" 
+                              text="value: Zero-G v2.0 AmmoJS; align: center; width: 0.8; color: #ffffff">
+                    </a-entity>
+                    
+                    <a-entity id="instructions" 
+                              position="0 0.25 -0.6" 
+                              text="value: Grip to grab • Trigger for thrusters • C to toggle collision view; align: center; width: 0.6; color: #ffff00">
+                    </a-entity>
+                    
+                    <a-entity id="physics-info" 
+                              position="0 0.15 -0.6" 
+                              text="value: Physics: AmmoJS • Mode: Zero Gravity; align: center; width: 0.6; color: #00ff00">
+                    </a-entity>
+                </a-entity>
+
+                <!-- VR Controllers -->
+                <a-entity id="leftHand" 
+                         hand-controls="hand: left"
+                         oculus-touch-controls="hand: left"
+                         vive-controls="hand: left"
+                         windows-motion-controls="hand: left"
+                         hand-interaction="hand: left"
+                         custom-hand-controls>
+                    <!-- Thruster Effect -->
+                    <a-cone class="thruster-vfx"
+                            position="0 0 0.1"
+                            radius-bottom="0.02"
+                            radius-top="0.01"
+                            height="0.1"
+                            color="#00ffff"
+                            material="shader: standard; emissive: #00ffff; emissiveIntensity: 2; transparent: true; opacity: 0.8"
+                            visible="false">
+                    </a-cone>
+                </a-entity>
+
+                <a-entity id="rightHand" 
+                         hand-controls="hand: right"
+                         oculus-touch-controls="hand: right"
+                         vive-controls="hand: right"
+                         windows-motion-controls="hand: right"
+                         hand-interaction="hand: right"
+                         custom-hand-controls>
+                    <!-- Thruster Effect -->
+                    <a-cone class="thruster-vfx"
+                            position="0 0 0.1"
+                            radius-bottom="0.02"
+                            radius-top="0.01"
+                            height="0.1"
+                            color="#00ffff"
+                            material="shader: standard; emissive: #00ffff; emissiveIntensity: 2; transparent: true; opacity: 0.8"
+                            visible="false">
+                    </a-cone>
+                </a-entity>
+            </a-entity>
+        </a-entity>
+
+        <!-- Lighting -->
+        <a-entity light="type: ambient; color: #404040; intensity: 0.8"></a-entity>
+        <a-entity light="type: directional; color: #ffffff; intensity: 1.0" position="5 10 5"></a-entity>
+        <a-entity light="type: point; color: #ffffff; intensity: 0.5; distance: 20" position="0 5 0"></a-entity>
+
+        <!-- Dual-Mesh Environment System (like reference project) -->
+        
+        <!-- COLLISION MESH: OBJ file for accurate physics (invisible) -->
+        <a-entity id="environment-collision"
+                  obj-model="obj: url(assets/wall-hole.obj)"
+                  environment-surface="friction: 0.7; restitution: 0.3"
+                  position="0 0 0"
+                  scale="1 1 1"
+                  visible="false">
+        </a-entity>
+        
+        <!-- VISUAL MESH: GLB file for appearance (no physics) -->
+        <a-entity id="environment-visual"
+                  gltf-model="url(assets/sci_fi_hallway_center.glb)"
+                  position="0 0 0"
+                  scale="1 1 1">
+        </a-entity>
+
+        <!-- Space Background -->
+        <a-sky color="#000033"></a-sky>
+    </a-scene>
+</body>
+</html> 
