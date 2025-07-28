@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zero-G WebXR Multiplayer</title>
+    <meta name="description" content="Production-ready zero-gravity WebXR multiplayer game with realistic physics and VR support">
+    
+    <!-- Three.js Import Map - Modern CDN approach -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+        }
+    }
+    </script>
+    
+    <!-- Load Three.js and examples via ES modules, then bridge to global -->
+    <script type="module">
+        // Import Three.js and examples
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+        
+        // Bridge to global scope - create new object since THREE is not extensible
+        window.THREE = {
+            // Copy all THREE properties and methods
+            ...THREE,
+            // Add the additional classes we need
+            GLTFLoader: GLTFLoader,
+            OrbitControls: OrbitControls,
+            VRButton: VRButton
+        };
+        
+        console.log('✅ Three.js and examples loaded via import maps');
+        console.log('✅ GLTFLoader available:', typeof window.THREE.GLTFLoader === 'function');
+        console.log('✅ OrbitControls available:', typeof window.THREE.OrbitControls === 'function');
+        console.log('✅ VRButton available:', typeof window.THREE.VRButton === 'object');
+        
+        // Signal that Three.js is ready
+        window.THREE_READY = true;
+        window.dispatchEvent(new CustomEvent('threeready'));
+    </script>
+    
+    <!-- Rapier Physics - Alternative loading approach -->
+    <script src="https://cdn.skypack.dev/@dimforge/rapier3d-compat@0.11.2?min" type="module"></script>
+    <script>
+        // Bridge Rapier from ES module to global
+        import('https://cdn.skypack.dev/@dimforge/rapier3d-compat@0.11.2?min').then(RAPIER => {
+            window.RAPIER = RAPIER;
+            console.log('✅ Rapier loaded successfully via ES module bridge');
+        }).catch(error => {
+            console.error('❌ Failed to load Rapier via ES module:', error);
+            // Fallback to alternative CDN
+            loadRapierFallback();
+        });
+        
+        function loadRapierFallback() {
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/@dimforge/rapier3d-compat@0.11.2/rapier.js';
+            script.onload = () => {
+                console.log('✅ Rapier loaded via fallback CDN');
+            };
+            script.onerror = () => {
+                console.error('❌ Rapier fallback also failed');
+                // Use mock physics for demo
+                window.RAPIER = createMockRapier();
+            };
+            document.head.appendChild(script);
+        }
+        
+        function createMockRapier() {
+            // Simple mock for demonstration - basic functionality only
+            console.warn('⚠️ Using mock physics - limited functionality');
+            return {
+                init: () => Promise.resolve(),
+                World: class MockWorld {
+                    constructor() {}
+                    step() {}
+                    createRigidBody() { return { setLinvel: () => {}, translation: () => ({x:0,y:0,z:0}), rotation: () => ({x:0,y:0,z:0,w:1}) }; }
+                    createCollider() { return {}; }
+                    removeRigidBody() {}
+                    removeCollider() {}
+                    castRay() { return null; }
+                    createImpulseJoint() { return {}; }
+                    removeImpulseJoint() {}
+                },
+                Vector3: class MockVector3 {
+                    constructor(x, y, z) { this.x = x; this.y = y; this.z = z; }
+                },
+                RigidBodyDesc: {
+                    dynamic: () => ({
+                        setTranslation: () => ({}),
+                        setRotation: () => ({}),
+                        setLinearDamping: () => ({}),
+                        setAngularDamping: () => ({})
+                    })
+                },
+                ColliderDesc: {
+                    ball: () => ({ setMass: () => ({}), setCollisionGroups: () => ({}), setRestitution: () => ({}), setFriction: () => ({}) }),
+                    cuboid: () => ({ setMass: () => ({}), setCollisionGroups: () => ({}), setRestitution: () => ({}), setFriction: () => ({}) }),
+                    cylinder: () => ({ setMass: () => ({}), setCollisionGroups: () => ({}), setRestitution: () => ({}), setFriction: () => ({}) }),
+                    capsule: () => ({ setMass: () => ({}), setCollisionGroups: () => ({}), setRestitution: () => ({}), setFriction: () => ({}) })
+                },
+                JointDesc: {
+                    spherical: () => ({ setContactsEnabled: () => ({}) })
+                },
+                EventQueue: class MockEventQueue {
+                    constructor() {}
+                    drainCollisionEvents() {}
+                },
+                Ray: class MockRay {
+                    constructor() {}
+                    pointAt() { return {x:0,y:0,z:0}; }
+                }
+            };
+        }
+    </script>
+    
+    <!-- Other dependencies -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/webxr-polyfill@2.0.3/build/webxr-polyfill.js"></script>
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+        <div class="loading-content">
+            <div class="logo">🚀</div>
+            <h1>Zero-G WebXR</h1>
+            <div class="loading-bar">
+                <div class="loading-progress" id="loading-progress"></div>
+            </div>
+            <div class="loading-text" id="loading-text">Initializing physics engine...</div>
+        </div>
+    </div>
+
+    <!-- Main UI -->
+    <div id="ui-overlay">
+        <!-- Connection Status -->
+        <div id="connection-panel">
+            <div class="panel-header">🌐 Multiplayer</div>
+            <div id="connection-status">Offline</div>
+            <div class="connection-controls">
+                <input type="text" id="room-id" placeholder="Room ID" maxlength="10">
+                <button id="create-room-btn">Create Room</button>
+                <button id="join-room-btn">Join Room</button>
+            </div>
+            <div id="players-list"></div>
+        </div>
+
+        <!-- Controls Help -->
+        <div id="controls-panel">
+            <div class="panel-header">🎮 Controls</div>
+            <div class="controls-list">
+                <div><strong>Desktop:</strong></div>
+                <div>WASD - Move | Mouse - Look</div>
+                <div>Space - Up | Shift - Down</div>
+                <div>Click - Grab Objects</div>
+                <div><strong>VR:</strong></div>
+                <div>Trigger - Thrust | Grip - Grab</div>
+                <div>Thumbstick - Turn</div>
+            </div>
+        </div>
+
+        <!-- Performance Monitor -->
+        <div id="performance-panel">
+            <div class="panel-header">📊 Performance</div>
+            <div id="fps-counter">FPS: --</div>
+            <div id="physics-objects">Objects: --</div>
+            <div id="network-ping">Ping: --</div>
+        </div>
+
+        <!-- VR Button Container -->
+        <div id="vr-button-container"></div>
+    </div>
+
+    <!-- Audio Elements -->
+    <audio id="thruster-sound" preload="auto" loop>
+        <source src="audio/electric-hum.wav" type="audio/wav">
+    </audio>
+    <audio id="impact-sound" preload="auto">
+        <source src="audio/impact-cinematic-boom-5-352465.mp3" type="audio/mpeg">
+    </audio>
+    <audio id="ambient-sound" preload="auto" loop>
+        <source src="audio/submarine-sonar.mp3" type="audio/mpeg">
+    </audio>
+
+    <!-- Application Scripts - Wait for Three.js to be ready -->
+    <script>
+        // Wait for Three.js to be ready before loading application scripts
+        function waitForThreeJS() {
+            return new Promise((resolve) => {
+                if (window.THREE_READY) {
+                    resolve();
+                } else {
+                    window.addEventListener('threeready', resolve, { once: true });
+                    
+                    // Fallback timeout after 10 seconds
+                    setTimeout(() => {
+                        if (!window.THREE_READY) {
+                            console.warn('⚠️ Three.js loading timeout, proceeding anyway...');
+                            resolve();
+                        }
+                    }, 10000);
+                }
+            });
+        }
+        
+        async function loadApplicationScripts() {
+            console.log('🔄 Waiting for Three.js to be ready...');
+            await waitForThreeJS();
+            console.log('✅ Three.js ready, loading application scripts...');
+            
+            // Load application scripts in order
+            const scripts = [
+                'src/utils/Constants.js',
+                'src/utils/PerformanceMonitor.js',
+                'src/core/PhysicsManager.js',
+                'src/core/AudioManager.js',
+                'src/core/ZeroGWorld.js',
+                'src/core/NetworkManager.js',
+                'src/systems/DesktopControls.js',
+                'src/systems/VRControllerSystem.js',
+                'src/main.js'
+            ];
+            
+            scripts.forEach((src, index) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = () => console.log(`✅ Loaded: ${src}`);
+                script.onerror = () => console.error(`❌ Failed to load: ${src}`);
+                document.head.appendChild(script);
+            });
+        }
+        
+        // Start loading when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', loadApplicationScripts);
+        } else {
+            loadApplicationScripts();
+        }
+    </script>
+</body>
+</html> 

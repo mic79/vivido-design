@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Zero-G WebXR</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        #container {
+            width: 100%;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h3>Simple Zero-G WebXR</h3>
+        <p>Use thumbstick to rotate view</p>
+        <p>Player has sphere physics body</p>
+        <p>Cube floats 4m ahead</p>
+        <p><strong>Physics wireframes visible</strong></p>
+        <p>Press 'W' to toggle wireframes</p>
+        <p><strong>Debug: Magenta & Cyan cubes track controllers</strong></p>
+    </div>
+    <div id="container"></div>
+
+    <!-- Three.js Import Map -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+        import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+        // Global variables
+        let scene, camera, renderer, world;
+        let playerRigidBody, cubeRigidBody;
+        let playerMesh, cubeMesh;
+        let controller1, controller2;
+        let controllerGrip1, controllerGrip2;
+        let controllerModelFactory;
+        let dolly; // VR camera rig
+        
+        // Physics debug wireframes
+        let playerWireframe, cubeWireframe;
+        let showWireframes = true;
+        
+        // Debug cubes for controller positions
+        let debugCube1, debugCube2;
+        
+        // Rapier physics
+        let RAPIER;
+
+        // Load Rapier physics
+        import('https://cdn.skypack.dev/@dimforge/rapier3d-compat@0.11.2?min').then(rapier => {
+            RAPIER = rapier;
+            init();
+        });
+
+        async function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a2e);
+
+            // Create camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            // Create dolly for VR movement (camera parent)
+            dolly = new THREE.Group();
+            dolly.add(camera);
+            scene.add(dolly);
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // Add VR button
+            document.body.appendChild(VRButton.createButton(renderer));
+
+            // Initialize physics FIRST and wait for it
+            await initPhysics();
+
+            // Create environment
+            createEnvironment();
+
+            // Create player (now physics world is ready)
+            createPlayer();
+
+            // Create cube
+            createCube();
+
+            // Setup VR controllers
+            setupVRControllers();
+
+            // Setup lighting
+            setupLighting();
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize);
+
+            // Handle wireframe toggle
+            window.addEventListener('keydown', onKeyDown);
+
+            // Start render loop
+            renderer.setAnimationLoop(animate);
+        }
+
+        async function initPhysics() {
+            try {
+                await RAPIER.init();
+                
+                // Create physics world with zero gravity
+                let gravity = { x: 0.0, y: 0.0, z: 0.0 };
+                world = new RAPIER.World(gravity);
+                
+                console.log('✅ Physics world initialized with zero gravity');
+                
+                // Verify world was created
+                if (!world) {
+                    throw new Error('Failed to create physics world');
+                }
+            } catch (error) {
+                console.error('❌ Failed to initialize physics:', error);
+                throw error;
+            }
+        }
+
+        function createEnvironment() {
+            // Add stars
+            const starsGeometry = new THREE.BufferGeometry();
+            const starsMaterial = new THREE.PointsMaterial({ color: 0xffffff });
+            
+            const starsVertices = [];
+            for (let i = 0; i < 10000; i++) {
+                const x = (Math.random() - 0.5) * 2000;
+                const y = (Math.random() - 0.5) * 2000;
+                const z = (Math.random() - 0.5) * 2000;
+                starsVertices.push(x, y, z);
+            }
+            
+            starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+            const stars = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(stars);
+
+            // Add some ambient light
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.3);
+            scene.add(ambientLight);
+        }
+
+        function createPlayer() {
+            // Create visual representation (sphere) - positioned at torso level, not head
+            const geometry = new THREE.SphereGeometry(0.3, 32, 32);
+            const material = new THREE.MeshLambertMaterial({ 
+                color: 0x00ff00,
+                transparent: true,
+                opacity: 0.7
+            });
+            playerMesh = new THREE.Mesh(geometry, material);
+            playerMesh.position.set(0, 1.0, 0); // Torso height (0.6m below head)
+            dolly.add(playerMesh); // Add to dolly so it moves with VR headset
+
+            // Create physics body at torso level
+            const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                .setTranslation(0, 1.0, 0);
+            playerRigidBody = world.createRigidBody(rigidBodyDesc);
+
+            const colliderDesc = RAPIER.ColliderDesc.ball(0.3);
+            world.createCollider(colliderDesc, playerRigidBody);
+
+            // Create physics wireframe visualization
+            if (showWireframes) {
+                const wireframeGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+                const wireframeMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0x00ff00, 
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                playerWireframe = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
+                scene.add(playerWireframe);
+            }
+
+            console.log('✅ Player created with sphere physics body at torso level');
+        }
+
+        function createCube() {
+            // Create visual representation (1m cube)
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshLambertMaterial({ 
+                color: 0xff4444,
+                transparent: true,
+                opacity: 0.8
+            });
+            cubeMesh = new THREE.Mesh(geometry, material);
+            cubeMesh.position.set(0, 1.6, -4); // 4 meters in front, same height as player
+            scene.add(cubeMesh);
+
+            // Create physics body
+            const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                .setTranslation(0, 1.6, -4);
+            cubeRigidBody = world.createRigidBody(rigidBodyDesc);
+
+            const colliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5);
+            world.createCollider(colliderDesc, cubeRigidBody);
+
+            // Create physics wireframe visualization
+            if (showWireframes) {
+                const wireframeGeometry = new THREE.BoxGeometry(1, 1, 1);
+                const wireframeMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0xff4444, 
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                cubeWireframe = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
+                scene.add(cubeWireframe);
+            }
+
+            console.log('✅ Cube created 4 meters in front of player');
+        }
+
+        function setupVRControllers() {
+            controllerModelFactory = new XRControllerModelFactory();
+
+            // Controller 1 (Right Hand)
+            controller1 = renderer.xr.getController(0);
+            controller1.addEventListener('selectstart', onSelectStart);
+            controller1.addEventListener('selectend', onSelectEnd);
+            controller1.addEventListener('connected', function (event) {
+                console.log('✅ Controller 1 connected:', event.data);
+                // Make sure the default representation is visible
+                addDefaultControllerGeometry(controller1, 0xff0000);
+            });
+            controller1.addEventListener('disconnected', function () {
+                console.log('❌ Controller 1 disconnected');
+            });
+            
+            // Add basic controller representation immediately (for testing)
+            addDefaultControllerGeometry(controller1, 0xff0000);
+            dolly.add(controller1);
+
+            controllerGrip1 = renderer.xr.getControllerGrip(0);
+            
+            // Add official controller model
+            const controllerModel1 = controllerModelFactory.createControllerModel(controllerGrip1);
+            controllerGrip1.add(controllerModel1);
+            
+            // Add bright fallback visual for grip
+            const grip1Geo = new THREE.BoxGeometry(0.05, 0.15, 0.05);
+            const grip1Mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const grip1Mesh = new THREE.Mesh(grip1Geo, grip1Mat);
+            controllerGrip1.add(grip1Mesh);
+            
+            dolly.add(controllerGrip1);
+
+            // Controller 2 (Left Hand)
+            controller2 = renderer.xr.getController(1);
+            controller2.addEventListener('selectstart', onSelectStart);
+            controller2.addEventListener('selectend', onSelectEnd);
+            controller2.addEventListener('connected', function (event) {
+                console.log('✅ Controller 2 connected:', event.data);
+                // Make sure the default representation is visible
+                addDefaultControllerGeometry(controller2, 0x0000ff);
+            });
+            controller2.addEventListener('disconnected', function () {
+                console.log('❌ Controller 2 disconnected');
+            });
+            
+            // Add basic controller representation immediately (for testing)
+            addDefaultControllerGeometry(controller2, 0x0000ff);
+            dolly.add(controller2);
+
+            controllerGrip2 = renderer.xr.getControllerGrip(1);
+            
+            // Add official controller model
+            const controllerModel2 = controllerModelFactory.createControllerModel(controllerGrip2);
+            controllerGrip2.add(controllerModel2);
+            
+            // Add bright fallback visual for grip
+            const grip2Geo = new THREE.BoxGeometry(0.05, 0.15, 0.05);
+            const grip2Mat = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+            const grip2Mesh = new THREE.Mesh(grip2Geo, grip2Mat);
+            controllerGrip2.add(grip2Mesh);
+            
+            dolly.add(controllerGrip2);
+
+            // For testing: position controllers in visible spots in desktop mode
+            if (!renderer.xr.isPresenting) {
+                controller1.position.set(0.5, 1.5, -2);
+                controller1.rotation.set(0, -0.3, 0);
+                
+                controller2.position.set(-0.5, 1.5, -2);
+                controller2.rotation.set(0, 0.3, 0);
+                
+                controllerGrip1.position.set(0.5, 1.3, -2);
+                controllerGrip1.rotation.set(0, -0.3, 0);
+                
+                controllerGrip2.position.set(-0.5, 1.3, -2);
+                controllerGrip2.rotation.set(0, 0.3, 0);
+                
+                console.log('🖥️ Controllers positioned for desktop testing');
+            }
+
+            // Create debug cubes that will track controller positions
+            createDebugCubes();
+
+            console.log('✅ VR controllers setup complete with multiple fallback visuals');
+            console.log('📱 If you can\'t see controllers in VR, they may not be connected/tracked yet');
+        }
+
+        function addDefaultControllerGeometry(controller, color) {
+            // Remove any existing default geometry
+            const existing = controller.getObjectByName('defaultControllerGeometry');
+            if (existing) {
+                controller.remove(existing);
+            }
+
+            // Create a simple controller representation - MUCH LARGER and EMISSIVE
+            const group = new THREE.Group();
+            group.name = 'defaultControllerGeometry';
+
+            // Main body (handle) - bigger and glowing
+            const handleGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.25, 8);
+            const handleMat = new THREE.MeshStandardMaterial({ 
+                color: color,
+                emissive: color,
+                emissiveIntensity: 0.3
+            });
+            const handle = new THREE.Mesh(handleGeo, handleMat);
+            handle.position.set(0, -0.125, 0);
+            group.add(handle);
+
+            // Pointer tip - much bigger and glowing
+            const tipGeo = new THREE.SphereGeometry(0.08, 8, 8);
+            const tipMat = new THREE.MeshStandardMaterial({ 
+                color: color,
+                emissive: color,
+                emissiveIntensity: 0.5
+            });
+            const tip = new THREE.Mesh(tipGeo, tipMat);
+            tip.position.set(0, 0, 0);
+            group.add(tip);
+
+            // Pointer ray - thicker and more visible
+            const rayGeo = new THREE.CylinderGeometry(0.008, 0.008, 5, 8);
+            const rayMat = new THREE.MeshStandardMaterial({ 
+                color: color,
+                emissive: color,
+                emissiveIntensity: 0.2,
+                transparent: true,
+                opacity: 0.8
+            });
+            const ray = new THREE.Mesh(rayGeo, rayMat);
+            ray.position.set(0, 0, -2.5);
+            ray.rotateX(Math.PI / 2);
+            group.add(ray);
+
+            // Add a debug cube that's always visible
+            const debugGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            const debugMat = new THREE.MeshStandardMaterial({ 
+                color: 0xffffff,
+                emissive: 0xffffff,
+                emissiveIntensity: 1.0
+            });
+            const debugCube = new THREE.Mesh(debugGeo, debugMat);
+            debugCube.position.set(0, 0.2, 0);
+            group.add(debugCube);
+
+            controller.add(group);
+            console.log(`✅ Added LARGE emissive controller geometry (${color === 0xff0000 ? 'Red' : 'Blue'})`);
+        }
+
+        function createDebugCubes() {
+            // Create bright debug cubes that will follow controller positions
+            const debugGeo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+            
+            const debug1Mat = new THREE.MeshStandardMaterial({ 
+                color: 0xff00ff,  // Magenta
+                emissive: 0xff00ff,
+                emissiveIntensity: 1.0
+            });
+            debugCube1 = new THREE.Mesh(debugGeo, debug1Mat);
+            debugCube1.position.set(1, 2, -1); // Start position
+            scene.add(debugCube1);
+            
+            const debug2Mat = new THREE.MeshStandardMaterial({ 
+                color: 0x00ffff,  // Cyan
+                emissive: 0x00ffff,
+                emissiveIntensity: 1.0
+            });
+            debugCube2 = new THREE.Mesh(debugGeo, debug2Mat);
+            debugCube2.position.set(-1, 2, -1); // Start position
+            scene.add(debugCube2);
+            
+            console.log('✅ Created bright debug cubes (Magenta & Cyan) to track controllers');
+        }
+
+        function setupLighting() {
+            // Main directional light
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(5, 10, 5);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.camera.near = 0.1;
+            directionalLight.shadow.camera.far = 50;
+            directionalLight.shadow.camera.left = -10;
+            directionalLight.shadow.camera.right = 10;
+            directionalLight.shadow.camera.top = 10;
+            directionalLight.shadow.camera.bottom = -10;
+            scene.add(directionalLight);
+
+            // Fill light
+            const fillLight = new THREE.DirectionalLight(0x4444ff, 0.3);
+            fillLight.position.set(-5, 5, -5);
+            scene.add(fillLight);
+        }
+
+        function onSelectStart(event) {
+            console.log('Controller select start:', event);
+        }
+
+        function onSelectEnd(event) {
+            console.log('Controller select end:', event);
+        }
+
+        function handleControllerInput() {
+            const session = renderer.xr.getSession();
+            if (!session) return;
+
+            // Direct input source tracking - more reliable for Quest devices
+            let inputSourceIndex = 0;
+            for (const source of session.inputSources) {
+                if (source && source.gripSpace) {
+                    // Create or update controller visualization for this input source
+                    updateControllerFromInputSource(source, inputSourceIndex);
+                }
+
+                if (source.gamepad) {
+                    const gamepad = source.gamepad;
+                    
+                    // Check for thumbstick input (usually axes 2 and 3)
+                    if (gamepad.axes.length >= 4) {
+                        const thumbstickX = gamepad.axes[2];
+                        const thumbstickY = gamepad.axes[3];
+                        
+                        // Apply rotation based on thumbstick input
+                        if (Math.abs(thumbstickX) > 0.1 || Math.abs(thumbstickY) > 0.1) {
+                            // Rotate the dolly (camera rig) for smooth turning
+                            dolly.rotateY(-thumbstickX * 0.02);
+                            
+                            // Optional: Allow pitch control with right thumbstick Y
+                            // camera.rotateX(-thumbstickY * 0.01);
+                        }
+                    }
+                }
+                inputSourceIndex++;
+            }
+        }
+
+        // Store XR frame for controller updates
+        let currentXRFrame = null;
+
+        function updateControllerFromInputSource(inputSource, index) {
+            const session = renderer.xr.getSession();
+            if (!session || !inputSource.gripSpace || !currentXRFrame) return;
+
+            // Get the pose for this input source using the current XR frame
+            const referenceSpace = renderer.xr.getReferenceSpace();
+            
+            try {
+                const gripPose = currentXRFrame.getPose(inputSource.gripSpace, referenceSpace);
+                if (gripPose) {
+                    // Update the appropriate controller
+                    const controller = index === 0 ? controller1 : controller2;
+                    if (controller) {
+                        // Set position and rotation from the grip pose
+                        const pos = gripPose.transform.position;
+                        const ori = gripPose.transform.orientation;
+                        
+                        controller.position.set(pos.x, pos.y, pos.z);
+                        controller.quaternion.set(ori.x, ori.y, ori.z, ori.w);
+                        
+                        // Make sure it's visible
+                        controller.visible = true;
+                        
+                        // Debug log occasionally
+                        if (Math.random() < 0.01) { // 1% chance to log
+                            console.log(`🎮 Controller ${index} at:`, pos.x.toFixed(2), pos.y.toFixed(2), pos.z.toFixed(2));
+                        }
+                    }
+                }
+            } catch (error) {
+                // Pose not available, controller might not be tracked
+                if (Math.random() < 0.01) {
+                    console.log(`⚠️ Controller ${index} pose not available`);
+                }
+            }
+        }
+
+        function updatePhysics() {
+            if (world) {
+                // Step the physics simulation
+                world.step();
+
+                // Update player physics body position from VR headset/dolly position
+                if (playerRigidBody && dolly) {
+                    // Get dolly world position
+                    const dollyPosition = new THREE.Vector3();
+                    dolly.getWorldPosition(dollyPosition);
+                    
+                    // Update physics body to follow the player's VR position
+                    playerRigidBody.setTranslation({ 
+                        x: dollyPosition.x, 
+                        y: dollyPosition.y + 1.0, // Torso level
+                        z: dollyPosition.z 
+                    }, true);
+
+                    // Update player wireframe to match physics body
+                    if (playerWireframe && showWireframes) {
+                        const translation = playerRigidBody.translation();
+                        playerWireframe.position.set(translation.x, translation.y, translation.z);
+                        
+                        const rotation = playerRigidBody.rotation();
+                        playerWireframe.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+                    }
+                }
+
+                // Update cube mesh position from physics body
+                if (cubeRigidBody && cubeMesh) {
+                    const translation = cubeRigidBody.translation();
+                    cubeMesh.position.set(translation.x, translation.y, translation.z);
+                    
+                    const rotation = cubeRigidBody.rotation();
+                    cubeMesh.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+
+                    // Update cube wireframe to match physics body
+                    if (cubeWireframe && showWireframes) {
+                        cubeWireframe.position.set(translation.x, translation.y, translation.z);
+                        cubeWireframe.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+                    }
+                }
+            }
+        }
+
+        function animate(timestamp, frame) {
+            // Store current XR frame for controller updates
+            currentXRFrame = frame;
+
+            // Handle VR controller input
+            handleControllerInput();
+
+            // Force controller visibility if in VR
+            if (renderer.xr.isPresenting) {
+                forceControllerVisibility();
+            }
+
+            // Update physics
+            updatePhysics();
+
+            // Render the scene
+            renderer.render(scene, camera);
+        }
+
+        function forceControllerVisibility() {
+            // Aggressively ensure controllers are visible and large
+            if (controller1) {
+                controller1.visible = true;
+                const defaultGeom1 = controller1.getObjectByName('defaultControllerGeometry');
+                if (defaultGeom1) {
+                    defaultGeom1.visible = true;
+                    defaultGeom1.scale.set(2, 2, 2); // Make even bigger in VR
+                }
+            }
+            
+            if (controller2) {
+                controller2.visible = true;
+                const defaultGeom2 = controller2.getObjectByName('defaultControllerGeometry');
+                if (defaultGeom2) {
+                    defaultGeom2.visible = true;
+                    defaultGeom2.scale.set(2, 2, 2); // Make even bigger in VR
+                }
+            }
+
+            if (controllerGrip1) {
+                controllerGrip1.visible = true;
+            }
+            
+            if (controllerGrip2) {
+                controllerGrip2.visible = true;
+            }
+
+            // Update debug cubes to show controller positions
+            updateDebugCubes();
+        }
+
+        function updateDebugCubes() {
+            // Position debug cubes at controller locations to verify tracking
+            if (controller1 && debugCube1) {
+                // Get world position of controller1
+                const pos1 = new THREE.Vector3();
+                controller1.getWorldPosition(pos1);
+                debugCube1.position.copy(pos1);
+                debugCube1.position.y += 0.3; // Offset above controller
+            }
+            
+            if (controller2 && debugCube2) {
+                // Get world position of controller2
+                const pos2 = new THREE.Vector3();
+                controller2.getWorldPosition(pos2);
+                debugCube2.position.copy(pos2);
+                debugCube2.position.y += 0.3; // Offset above controller
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'KeyW':
+                    toggleWireframes();
+                    break;
+            }
+        }
+
+        function toggleWireframes() {
+            showWireframes = !showWireframes;
+            
+            if (playerWireframe) {
+                playerWireframe.visible = showWireframes;
+            }
+            
+            if (cubeWireframe) {
+                cubeWireframe.visible = showWireframes;
+            }
+            
+            console.log('🔧 Wireframes:', showWireframes ? 'ON' : 'OFF');
+            
+            // Update info display
+            const infoDiv = document.getElementById('info');
+            const wireframeText = infoDiv.querySelector('p:nth-child(5)');
+            if (wireframeText) {
+                wireframeText.innerHTML = showWireframes ? 
+                    '<strong>Physics wireframes visible</strong>' : 
+                    '<strong>Physics wireframes hidden</strong>';
+            }
+        }
+
+        // Debug: Add some visual feedback
+        console.log('🚀 Simple Zero-G WebXR initializing...');
+    </script>
+</body>
+</html> 

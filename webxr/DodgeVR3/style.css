@@ -1,0 +1,369 @@
+/* Zero-G WebXR Multiplayer Styles */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+    overflow: hidden;
+    height: 100vh;
+    color: #ffffff;
+    user-select: none;
+}
+
+/* Loading Screen */
+#loading-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(ellipse at center, #1a1a2e 0%, #0f0f23 70%, #000 100%);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    transition: opacity 0.8s ease-out;
+}
+
+.loading-content {
+    text-align: center;
+    max-width: 400px;
+    padding: 40px;
+}
+
+.logo {
+    font-size: 4rem;
+    margin-bottom: 20px;
+    animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+}
+
+.loading-content h1 {
+    font-size: 2.5rem;
+    font-weight: 300;
+    margin-bottom: 30px;
+    background: linear-gradient(45deg, #00d4ff, #0099cc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.loading-bar {
+    width: 100%;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 20px;
+}
+
+.loading-progress {
+    height: 100%;
+    background: linear-gradient(90deg, #00d4ff, #0099cc);
+    width: 0%;
+    transition: width 0.3s ease;
+    border-radius: 2px;
+}
+
+.loading-text {
+    font-size: 1rem;
+    color: #cccccc;
+    opacity: 0.8;
+}
+
+/* UI Overlay */
+#ui-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 100;
+}
+
+/* Panels */
+.panel {
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 10px;
+    padding: 15px;
+    margin: 10px;
+    backdrop-filter: blur(10px);
+    pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(0, 212, 255, 0.1);
+}
+
+.panel-header {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: #00d4ff;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.2);
+    padding-bottom: 5px;
+}
+
+/* Connection Panel */
+#connection-panel {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    width: 280px;
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 10px;
+    padding: 15px;
+    backdrop-filter: blur(10px);
+    pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(0, 212, 255, 0.1);
+}
+
+#connection-status {
+    font-size: 0.9rem;
+    margin-bottom: 10px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    text-align: center;
+}
+
+#connection-status.online {
+    background: rgba(0, 255, 0, 0.2);
+    color: #00ff00;
+}
+
+#connection-status.offline {
+    background: rgba(255, 0, 0, 0.2);
+    color: #ff6666;
+}
+
+.connection-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 15px;
+}
+
+#room-id {
+    padding: 8px 12px;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.5);
+    color: white;
+    font-size: 0.9rem;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+#room-id::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+button {
+    padding: 8px 16px;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    border-radius: 5px;
+    background: rgba(0, 212, 255, 0.1);
+    color: #00d4ff;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.3s ease;
+}
+
+button:hover {
+    background: rgba(0, 212, 255, 0.2);
+    transform: translateY(-1px);
+}
+
+button:active {
+    transform: translateY(0);
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#players-list {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.player-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.8rem;
+}
+
+.player-name {
+    color: #cccccc;
+}
+
+.player-status {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+.player-status.connected {
+    background: rgba(0, 255, 0, 0.2);
+    color: #00ff00;
+}
+
+/* Controls Panel */
+#controls-panel {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 250px;
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 10px;
+    padding: 15px;
+    backdrop-filter: blur(10px);
+    pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(0, 212, 255, 0.1);
+}
+
+.controls-list {
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
+.controls-list div {
+    margin-bottom: 3px;
+    color: #cccccc;
+}
+
+.controls-list strong {
+    color: #00d4ff;
+}
+
+/* Performance Panel */
+#performance-panel {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 200px;
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 10px;
+    padding: 15px;
+    backdrop-filter: blur(10px);
+    pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(0, 212, 255, 0.1);
+}
+
+#performance-panel div {
+    font-size: 0.9rem;
+    margin-bottom: 5px;
+    color: #cccccc;
+}
+
+/* VR Button */
+#vr-button-container {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: auto;
+}
+
+/* WebXR Button Styling */
+.webxr-button {
+    padding: 12px 24px;
+    font-size: 1rem;
+    font-weight: 600;
+    background: linear-gradient(45deg, #00d4ff, #0099cc);
+    color: white;
+    border: none;
+    border-radius: 25px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 20px rgba(0, 212, 255, 0.3);
+}
+
+.webxr-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 25px rgba(0, 212, 255, 0.4);
+}
+
+.webxr-button:active {
+    transform: translateY(0);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    #connection-panel,
+    #controls-panel,
+    #performance-panel {
+        width: calc(100% - 40px);
+        max-width: 300px;
+    }
+    
+    #controls-panel {
+        top: auto;
+        bottom: 120px;
+        right: 20px;
+    }
+    
+    #performance-panel {
+        bottom: 20px;
+        left: 20px;
+        right: auto;
+    }
+}
+
+/* VR Optimizations */
+@media (display-mode: standalone) {
+    body {
+        background: #000;
+    }
+    
+    #ui-overlay {
+        display: none;
+    }
+}
+
+/* Accessibility */
+button:focus,
+input:focus {
+    outline: 2px solid #00d4ff;
+    outline-offset: 2px;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(0, 212, 255, 0.5);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 212, 255, 0.7);
+}
+
+/* Hidden class for smooth transitions */
+.hidden {
+    opacity: 0;
+    pointer-events: none;
+} 
