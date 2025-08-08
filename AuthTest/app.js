@@ -3,7 +3,7 @@ const CONFIG = {
     // Default (demo) client ID - users should replace with their own
     DEFAULT_CLIENT_ID: '605518504808-fl0ft2r9htmd0mds85h4jo2hp7ase48q.apps.googleusercontent.com',
     SHEETS_API_BASE: 'https://sheets.googleapis.com/v4/spreadsheets',
-    SCOPES: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
+    SCOPES: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
     STORAGE_KEYS: {
         ACCESS_TOKEN: 'google_access_token',
         USER_INFO: 'user_info',
@@ -49,6 +49,7 @@ const     elements = {
     sheetId: document.getElementById('sheetId'),
     sheetIdHelper: document.getElementById('sheetIdHelper'),
     loadDataBtn: document.getElementById('loadDataBtn'),
+    createSheetBtn: document.getElementById('createSheetBtn'),
     addDataBtn: document.getElementById('addDataBtn'),
     recentSheets: document.getElementById('recentSheets'),
     recentSheetsList: document.getElementById('recentSheetsList'),
@@ -587,6 +588,115 @@ function showUnauthenticatedState() {
     elements.userInfo.style.display = 'none';
     elements.sheetsSection.style.display = 'none';
     clearError();
+}
+
+// Create a new Google Sheet that the app can access
+async function createNewSheet() {
+    const operation = 'createSheet';
+    
+    return executeWithRetry(async () => {
+        setLoading('createSheetBtn', 'Creating sheet...');
+        
+        const accessToken = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
+        if (!accessToken) {
+            throw new Error('No access token available');
+        }
+        
+        // Generate a unique name for the sheet
+        const timestamp = new Date().toISOString().split('T')[0];
+        const sheetName = `PWA Sheet ${timestamp}`;
+        
+        const createRequest = {
+            properties: {
+                title: sheetName
+            },
+            sheets: [
+                {
+                    properties: {
+                        title: 'Data',
+                        gridProperties: {
+                            rowCount: 1000,
+                            columnCount: 26
+                        }
+                    }
+                }
+            ]
+        };
+        
+        const response = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(createRequest)
+        });
+        
+        if (response.status === 401) {
+            throw new TokenExpiredError('Token expired while creating sheet');
+        }
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => null);
+            throw new Error(`Failed to create sheet: ${response.status} ${response.statusText}${errorData ? ` - ${errorData.error?.message || ''}` : ''}`);
+        }
+        
+        const sheetData = await response.json();
+        const sheetId = sheetData.spreadsheetId;
+        
+        // Auto-populate the sheet ID input
+        const sheetIdInput = document.getElementById('sheetId');
+        if (sheetIdInput) {
+            sheetIdInput.value = sheetId;
+            // Trigger validation
+            validateSheetId(sheetId);
+        }
+        
+        // Add some sample headers to the new sheet
+        await addInitialHeaders(sheetId, accessToken);
+        
+        // Add to recent sheets
+        RecentSheetsManager.addSheet(sheetId, sheetName);
+        
+        showStatus(`✅ New sheet created successfully: "${sheetName}"`);
+        
+        // Auto-load the new sheet data
+        setTimeout(() => loadSheetData(), 1000);
+        
+        return sheetData;
+        
+    }, operation);
+}
+
+// Add initial headers to a new sheet
+async function addInitialHeaders(sheetId, accessToken) {
+    const headers = [
+        ['Name', 'Email', 'Date', 'Status', 'Notes']
+    ];
+    
+    const updateRequest = {
+        values: headers
+    };
+    
+    try {
+        const response = await fetch(
+            `${CONFIG.SHEETS_API_BASE}/${sheetId}/values/A1:E1?valueInputOption=RAW`,
+            {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(updateRequest)
+            }
+        );
+        
+        if (response.ok) {
+            console.log('✅ Initial headers added to new sheet');
+        }
+    } catch (error) {
+        console.warn('⚠️ Failed to add initial headers:', error);
+    }
 }
 
 // Enhanced load Google Sheets data with automatic retry
@@ -1422,6 +1532,14 @@ function setupKeyboardShortcuts() {
                 }
                 break;
                 
+            case isModKey && event.key === 'n':
+                event.preventDefault();
+                if (accessToken && !UIState.isLoading) {
+                    createNewSheet();
+                    showStatus('📄 Creating new sheet via keyboard shortcut...', 'success');
+                }
+                break;
+                
             case isModKey && event.key === 'a':
                 event.preventDefault();
                 if (accessToken && !UIState.isLoading) {
@@ -1495,6 +1613,7 @@ function showKeyboardShortcuts() {
     // Add shortcuts safely
     const shortcuts = [
         'Ctrl/Cmd + L - Load sheet data',
+        'Ctrl/Cmd + N - Create new sheet',
         'Ctrl/Cmd + A - Add sample row',
         'Ctrl/Cmd + S - Sign out',
         'Ctrl/Cmd + I - Focus sheet ID field',
@@ -1558,6 +1677,9 @@ function addKeyboardShortcutHints() {
     // Add tooltips to buttons
     if (elements.loadDataBtn) {
         elements.loadDataBtn.title = 'Load sheet data (Ctrl+L)';
+    }
+    if (elements.createSheetBtn) {
+        elements.createSheetBtn.title = 'Create new sheet (Ctrl+N)';
     }
     if (elements.addDataBtn) {
         elements.addDataBtn.title = 'Add sample row (Ctrl+A)';
