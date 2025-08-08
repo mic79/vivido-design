@@ -28,6 +28,7 @@ const CONFIG = {
 // State management
 let currentUser = null;
 let accessToken = null;
+let currentSheetId = null; // Track the currently loaded sheet
 let deferredPrompt;
 let tokenClient = null;
 let isInitialized = false;
@@ -46,9 +47,7 @@ const     elements = {
     sheetsData: document.getElementById('sheetsData'),
     errorDisplay: document.getElementById('errorDisplay'),
     installPrompt: document.getElementById('installPrompt'),
-    sheetId: document.getElementById('sheetId'),
-    sheetIdHelper: document.getElementById('sheetIdHelper'),
-    loadDataBtn: document.getElementById('loadDataBtn'),
+
     createSheetBtn: document.getElementById('createSheetBtn'),
     addDataBtn: document.getElementById('addDataBtn'),
     recentSheets: document.getElementById('recentSheets'),
@@ -105,87 +104,242 @@ const UIState = {
     }
 };
 
-// Secure Sheet ID validation with XSS protection
-function validateSheetId(value) {
-    const helper = elements.sheetIdHelper;
-    const input = elements.sheetId;
+// Recent sheets management (cloud-based with localStorage fallback)
+const RecentSheetsManager = {
+    baseStorageKey: 'recent_sheets',
+    maxItems: 10, // Increased since cloud storage is more capable
     
-    // Clear previous error states
-    input.classList.remove('error');
-    helper.classList.remove('error');
+    // Get user-specific storage key (for fallback)
+    getStorageKey() {
+        const userId = currentUser?.email || 'anonymous';
+        return `${this.baseStorageKey}_${userId}`;
+    },
     
-    // Sanitize input first
-    const sanitizedValue = SecurityUtils.sanitizeSheetId(value);
+    // Get app-created sheets from Google Drive API
+    async getCloudSheets() {
+        if (!accessToken) {
+            console.warn('No access token for cloud sheets');
+            return [];
+        }
+        
+        try {
+            // List Google Sheets created by this app using Drive API
+            const response = await fetch(
+                'https://www.googleapis.com/drive/v3/files?' + new URLSearchParams({
+                    q: "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+                    orderBy: 'modifiedTime desc',
+                    pageSize: this.maxItems.toString(),
+                    fields: 'files(id,name,modifiedTime,webViewLink)'
+                }),
+                {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+            
+            if (!response.ok) {
+                if (response.status === 403) {
+                    console.warn('Google Drive API not enabled. Enable it in Google Cloud Console for cloud-based recent sheets.');
+                    throw new Error('Drive API not enabled');
+                } else {
+                    throw new Error(`Drive API error: ${response.status}`);
+                }
+            }
+            
+            const data = await response.json();
+            return data.files || [];
+            
+        } catch (error) {
+            console.warn('Failed to fetch cloud sheets:', error);
+            return [];
+        }
+    },
     
-    if (!sanitizedValue) {
-        // Create safe helper content using DOM methods
-        SecurityUtils.setSafeContent(helper, '');
+    // Get recent sheets (localStorage fallback only)
+    get() {
+        try {
+            const stored = localStorage.getItem(this.getStorageKey());
+            return stored ? JSON.parse(stored) : [];
+        } catch (error) {
+            console.warn('Failed to load recent sheets:', error);
+            return [];
+        }
+    },
+    
+    // Get recent sheets with cloud-first approach
+    async getRecent() {
+        try {
+            // Try cloud first (shows app-created sheets from any device)
+            const cloudSheets = await this.getCloudSheets();
+            if (cloudSheets.length > 0) {
+                return cloudSheets.map(file => ({
+                    id: file.id,
+                    name: file.name,
+                    lastAccessed: new Date(file.modifiedTime).getTime(),
+                    webViewLink: file.webViewLink,
+                    source: 'cloud'
+                }));
+            }
+            
+            // Fallback to localStorage for offline/error cases
+            console.log('Using localStorage fallback for recent sheets');
+            return this.get();
+            
+        } catch (error) {
+            console.warn('Error getting recent sheets, using localStorage:', error);
+            return this.get();
+        }
+    },
+    
+    add(sheetId, sheetName) {
+        if (!sheetId || !sheetName) return;
         
-        const icon = SecurityUtils.createSafeElement('span', '📋 Find the Sheet ID in your Google Sheets URL:');
-        const exampleDiv = SecurityUtils.createSafeElement('div', '', 'helper-example');
-        const exampleText = SecurityUtils.createSafeElement('span', 'docs.google.com/spreadsheets/d/');
-        const exampleId = SecurityUtils.createSafeElement('strong', '1yWl69EL9MBc-qtSV5lAOuo6PNvq5a5HSDhbxkWrHRAI');
-        const exampleEnd = SecurityUtils.createSafeElement('span', '/edit');
+        let recent = this.get();
         
-        exampleDiv.appendChild(exampleText);
-        exampleDiv.appendChild(exampleId);
-        exampleDiv.appendChild(exampleEnd);
+        // Remove existing entry if present
+        recent = recent.filter(item => item.id !== sheetId);
         
-        const instruction = SecurityUtils.createSafeElement('div', 'Make sure your sheet is either public or shared with your Google account.');
+        // Add to beginning
+        recent.unshift({
+            id: sheetId,
+            name: sheetName,
+            lastAccessed: Date.now()
+        });
         
-        helper.appendChild(icon);
-        helper.appendChild(exampleDiv);
-        helper.appendChild(instruction);
+        // Keep only max items
+        recent = recent.slice(0, this.maxItems);
         
-        return false;
+        try {
+            localStorage.setItem(this.getStorageKey(), JSON.stringify(recent));
+            this.updateDisplay().catch(err => console.warn('Display update failed:', err));
+        } catch (error) {
+            console.warn('Failed to save recent sheets:', error);
+        }
+    },
+    
+    remove(sheetId) {
+        let recent = this.get();
+        recent = recent.filter(item => item.id !== sheetId);
+        
+        try {
+            localStorage.setItem(this.getStorageKey(), JSON.stringify(recent));
+            this.updateDisplay().catch(err => console.warn('Display update failed:', err));
+        } catch (error) {
+            console.warn('Failed to update recent sheets:', error);
+        }
+    },
+    
+    clear() {
+        try {
+            localStorage.removeItem(this.getStorageKey());
+            this.updateDisplay().catch(err => console.warn('Display update failed:', err));
+        } catch (error) {
+            console.warn('Failed to clear recent sheets:', error);
+        }
+    },
+    
+    // Clear recent sheets for all users (for migration/cleanup)
+    clearAll() {
+        try {
+            const keys = Object.keys(localStorage);
+            keys.forEach(key => {
+                if (key.startsWith(this.baseStorageKey)) {
+                    localStorage.removeItem(key);
+                }
+            });
+            this.updateDisplay().catch(err => console.warn('Display update failed:', err));
+        } catch (error) {
+            console.warn('Failed to clear all recent sheets:', error);
+        }
+    },
+    
+    // Migrate old global recent_sheets to user-specific storage
+    migrateOldData() {
+        try {
+            const oldData = localStorage.getItem('recent_sheets');
+            if (oldData && currentUser?.email) {
+                // If we have old data and a current user, migrate it
+                const userKey = this.getStorageKey();
+                if (!localStorage.getItem(userKey)) {
+                    localStorage.setItem(userKey, oldData);
+                    console.log('📦 Migrated recent sheets to user-specific storage');
+                }
+            }
+            // Clean up old global storage
+            localStorage.removeItem('recent_sheets');
+        } catch (error) {
+            console.warn('⚠️ Failed to migrate recent sheets:', error);
+        }
+    },
+    
+    async updateDisplay() {
+        if (!elements.recentSheets || !elements.recentSheetsList) return;
+        
+        try {
+            const recent = await this.getRecent();
+        
+            if (recent.length === 0) {
+                elements.recentSheets.style.display = 'none';
+                return;
+            }
+            
+            elements.recentSheets.style.display = 'block';
+            
+            // Clear existing content safely
+            SecurityUtils.setSafeContent(elements.recentSheetsList, '');
+            
+            recent.forEach(item => {
+                const date = new Date(item.lastAccessed).toLocaleDateString();
+                const truncatedId = item.id.length > 20 ? item.id.substring(0, 20) + '...' : item.id;
+                
+                // Sanitize item data
+                const safeName = SecurityUtils.sanitizeText(item.name);
+                const safeId = SecurityUtils.sanitizeSheetId(item.id);
+                
+                // Create item container
+                const itemDiv = SecurityUtils.createSafeElement('div', '', 'recent-sheet-item');
+                itemDiv.onclick = () => loadRecentSheet(safeId, safeName);
+                
+                // Create info section
+                const infoDiv = SecurityUtils.createSafeElement('div', '', 'recent-sheet-info');
+                const nameDiv = SecurityUtils.createSafeElement('div', safeName, 'recent-sheet-name');
+                const idDiv = SecurityUtils.createSafeElement('div', truncatedId, 'recent-sheet-id');
+                
+                infoDiv.appendChild(nameDiv);
+                infoDiv.appendChild(idDiv);
+                
+                // Create date section
+                const dateDiv = SecurityUtils.createSafeElement('div', date, 'recent-sheet-date');
+                
+                // Create remove button (hidden for cloud-based sheets)
+                const removeBtn = SecurityUtils.createSafeElement('button', '✕', 'recent-sheet-remove');
+                removeBtn.title = 'Remove from recent';
+                removeBtn.onclick = (event) => {
+                    event.stopPropagation();
+                    removeRecentSheet(safeId);
+                };
+                
+                // Hide remove button for cloud-based sheets since they're managed by Google Drive
+                if (item.source === 'cloud') {
+                    removeBtn.style.display = 'none';
+                }
+                
+                // Assemble item
+                itemDiv.appendChild(infoDiv);
+                itemDiv.appendChild(dateDiv);
+                itemDiv.appendChild(removeBtn);
+                
+                elements.recentSheetsList.appendChild(itemDiv);
+            });
+            
+        } catch (error) {
+            console.warn('Failed to update recent sheets display:', error);
+            elements.recentSheets.style.display = 'none';
+        }
     }
-    
-    // Enhanced validation - strict pattern for Google Sheet IDs
-    const sheetIdPattern = /^[a-zA-Z0-9_-]{25,}$/;
-    
-    if (!sheetIdPattern.test(sanitizedValue)) {
-        input.classList.add('error');
-        helper.classList.add('error');
-        
-        // Create safe error content
-        SecurityUtils.setSafeContent(helper, '');
-        
-        const errorIcon = SecurityUtils.createSafeElement('span', '❌ Invalid Sheet ID format.');
-        const exampleDiv = SecurityUtils.createSafeElement('div', '', 'helper-example');
-        
-        const expectedLabel = SecurityUtils.createSafeElement('div', 'Expected: 1yWl69EL9MBc-qtSV5lAOuo6PNvq5a5HSDhbxkWrHRAI');
-        const gotLabel = SecurityUtils.createSafeElement('div', `Got: ${SecurityUtils.escapeHtml(sanitizedValue)}`);
-        
-        exampleDiv.appendChild(expectedLabel);
-        exampleDiv.appendChild(gotLabel);
-        
-        const instruction = SecurityUtils.createSafeElement('div', "Copy the ID from your Google Sheets URL between '/d/' and '/edit'.");
-        
-        helper.appendChild(errorIcon);
-        helper.appendChild(exampleDiv);
-        helper.appendChild(instruction);
-        
-        return false;
-    }
-    
-    // Valid format - create safe success content
-    helper.classList.remove('error');
-    SecurityUtils.setSafeContent(helper, '');
-    
-    const successIcon = SecurityUtils.createSafeElement('span', '✅ Valid Sheet ID format');
-    const exampleDiv = SecurityUtils.createSafeElement('div', '', 'helper-example');
-    const sheetIdLabel = SecurityUtils.createSafeElement('div', `Sheet ID: ${SecurityUtils.escapeHtml(sanitizedValue)}`);
-    
-    exampleDiv.appendChild(sheetIdLabel);
-    
-    const readyText = SecurityUtils.createSafeElement('div', 'Ready to load data from this sheet.');
-    
-    helper.appendChild(successIcon);
-    helper.appendChild(exampleDiv);
-    helper.appendChild(readyText);
-    
-    return true;
-}
+};
 
 // Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', initializeApp);
@@ -238,8 +392,9 @@ async function initializeApp() {
     // Set up keyboard shortcuts
     setupKeyboardShortcuts();
     
-    // Initialize recent sheets display
-    RecentSheetsManager.updateDisplay();
+    // Migrate old recent sheets and initialize display
+    RecentSheetsManager.migrateOldData();
+    // Note: updateDisplay() will be called when user signs in
     
     // Set up network monitoring
     setupNetworkMonitoring();
@@ -324,7 +479,7 @@ async function initializeGoogleIdentityServices() {
     try {
         // Wait for Google Identity Services to load
         if (!window.google) {
-            console.log('⏳ Waiting for Google Identity Services to load...');
+
             await new Promise((resolve) => {
                 const checkGoogle = setInterval(() => {
                     if (window.google) {
@@ -345,7 +500,7 @@ async function initializeGoogleIdentityServices() {
             },
         });
 
-        console.log('✅ Google Identity Services initialized successfully');
+
         
     } catch (error) {
         console.error('❌ Error initializing Google Identity Services:', error);
@@ -375,18 +530,16 @@ function handleTokenResponse(tokenResponse) {
             method: 'oauth'
         };
         
-        // Store all authentication data
-        localStorage.setItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN, accessToken);
-        localStorage.setItem(CONFIG.STORAGE_KEYS.TOKEN_EXPIRY, expiryTime.toString());
-        localStorage.setItem(CONFIG.STORAGE_KEYS.AUTH_STATE, JSON.stringify(authState));
+        // Store all authentication data securely
+        SecurityUtils.secureStorage.setSecureItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN, accessToken);
+        SecurityUtils.secureStorage.setSecureItem(CONFIG.STORAGE_KEYS.TOKEN_EXPIRY, expiryTime.toString());
+        SecurityUtils.secureStorage.setSecureItem(CONFIG.STORAGE_KEYS.AUTH_STATE, authState);
         
         // Update UI
         showAuthenticatedState();
         showStatus('🎉 Successfully signed in with full Google Sheets access!', 'success');
         
         console.log('✅ OAuth access token obtained and stored');
-        console.log('📊 Token expires in:', tokenResponse.expires_in, 'seconds');
-        console.log('💾 Complete auth state saved for seamless reconnection');
         
         // Set up automatic token refresh
         scheduleTokenRefresh(expiryTime);
@@ -422,7 +575,7 @@ async function getUserInfoFromToken(token) {
                 picture: userInfo.picture
             };
             
-            localStorage.setItem(CONFIG.STORAGE_KEYS.USER_INFO, JSON.stringify(currentUser));
+            SecurityUtils.secureStorage.setSecureItem(CONFIG.STORAGE_KEYS.USER_INFO, currentUser);
             
             // Update UI with user info
             if (elements.userInfo.style.display !== 'none') {
@@ -441,36 +594,37 @@ async function getUserInfoFromToken(token) {
 
 // Check for existing authentication on app load
 async function checkExistingAuth() {
-    console.log('🔍 Checking for existing authentication...');
+    // Try to migrate any unencrypted data first
+    migrateUnencryptedStorage();
     
-    const storedToken = localStorage.getItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
-    const storedUser = localStorage.getItem(CONFIG.STORAGE_KEYS.USER_INFO);
-    const tokenExpiry = localStorage.getItem(CONFIG.STORAGE_KEYS.TOKEN_EXPIRY);
-    const authState = localStorage.getItem(CONFIG.STORAGE_KEYS.AUTH_STATE);
+    const storedToken = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
+    const storedUser = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.USER_INFO);
+    const tokenExpiry = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.TOKEN_EXPIRY);
+    const authState = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.AUTH_STATE);
 
     // Check if we have a complete authentication state
     if (storedToken && tokenExpiry && authState) {
         const now = Date.now();
         const expiry = parseInt(tokenExpiry);
-        const state = JSON.parse(authState);
+        const state = authState; // Already parsed by getSecureItem
 
         if (now < expiry && state.hasFullAccess) {
             // We have valid full access - restore complete session
             accessToken = storedToken;
             
             if (storedUser) {
-                currentUser = JSON.parse(storedUser);
+                currentUser = storedUser; // Already parsed by getSecureItem
             }
             
             showAuthenticatedState();
             showStatus('🎉 Automatically reconnected with full Google Sheets access!', 'success');
-            console.log('✅ Seamless reconnection successful - user has full API access');
+
             
             // Set up automatic token refresh
             scheduleTokenRefresh(expiry);
             return;
         } else {
-            console.log('🔄 Token expired or insufficient access, clearing auth state');
+
             clearStoredAuth();
         }
     }
@@ -557,11 +711,67 @@ async function manualGoogleSignIn() {
     }
 }
 
+// Migrate unencrypted storage to encrypted storage
+function migrateUnencryptedStorage() {
+    try {
+        const keysToMigrate = [
+            CONFIG.STORAGE_KEYS.ACCESS_TOKEN,
+            CONFIG.STORAGE_KEYS.USER_INFO,
+            CONFIG.STORAGE_KEYS.TOKEN_EXPIRY,
+            CONFIG.STORAGE_KEYS.AUTH_STATE
+        ];
+        
+        let migrated = false;
+        
+        keysToMigrate.forEach(key => {
+            const unencryptedValue = localStorage.getItem(key);
+            if (unencryptedValue) {
+                // Try to determine if it's already encrypted by attempting to decrypt
+                const decryptedTest = SecurityUtils.secureStorage.getSecureItem(key);
+                
+                if (!decryptedTest) {
+                    // Not encrypted or failed to decrypt, migrate it
+                    SecurityUtils.secureStorage.setSecureItem(key, unencryptedValue);
+                    migrated = true;
+                    console.log(`📦 Migrated ${key} to secure storage`);
+                }
+            }
+        });
+        
+        if (migrated) {
+            console.log('✅ Storage migration completed');
+        }
+    } catch (error) {
+        console.warn('⚠️ Storage migration failed:', error);
+        // Clear potentially corrupted data
+        clearStoredAuth();
+    }
+}
+
 // Clear stored authentication data
 function clearStoredAuth() {
-    Object.values(CONFIG.STORAGE_KEYS).forEach(key => {
+    // Clear secure storage items (access token, user info, token expiry, auth state)
+    const secureKeys = [
+        CONFIG.STORAGE_KEYS.ACCESS_TOKEN,
+        CONFIG.STORAGE_KEYS.USER_INFO,
+        CONFIG.STORAGE_KEYS.TOKEN_EXPIRY,
+        CONFIG.STORAGE_KEYS.AUTH_STATE
+    ];
+    
+    secureKeys.forEach(key => {
+        localStorage.removeItem(key); // Remove from localStorage (both encrypted and unencrypted)
+    });
+    
+    // Clear non-secure items (API config, client ID)
+    const regularKeys = [
+        CONFIG.STORAGE_KEYS.USER_CLIENT_ID,
+        CONFIG.STORAGE_KEYS.API_CONFIG
+    ];
+    
+    regularKeys.forEach(key => {
         localStorage.removeItem(key);
     });
+    
     console.log('🗑️ Stored authentication data cleared');
 }
 
@@ -575,6 +785,14 @@ function showAuthenticatedState() {
         elements.userAvatar.src = currentUser.picture || '';
         elements.userName.textContent = currentUser.name || 'Unknown User';
         elements.userEmail.textContent = currentUser.email || '';
+        
+        // Update recent sheets display for this specific user
+                RecentSheetsManager.updateDisplay().catch(err =>
+            console.warn('Failed to update recent sheets:', err)
+        );
+        
+        // Auto-load last accessed sheet
+        autoLoadLastSheet();
     } else {
         // If we don't have user info yet, show a placeholder
         elements.userName.textContent = 'Google User';
@@ -587,85 +805,94 @@ function showUnauthenticatedState() {
     elements.loginSection.style.display = 'block';
     elements.userInfo.style.display = 'none';
     elements.sheetsSection.style.display = 'none';
+    
+    // Hide recent sheets when not authenticated
+    if (elements.recentSheets) {
+        elements.recentSheets.style.display = 'none';
+    }
+    
     clearError();
 }
 
 // Create a new Google Sheet that the app can access
 async function createNewSheet() {
-    const operation = 'createSheet';
+    const accessToken = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
     
-    return executeWithRetry(async () => {
-        setLoading('createSheetBtn', 'Creating sheet...');
-        
-        const accessToken = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
-        if (!accessToken) {
-            throw new Error('No access token available');
-        }
-        
-        // Generate a unique name for the sheet
-        const timestamp = new Date().toISOString().split('T')[0];
-        const sheetName = `PWA Sheet ${timestamp}`;
-        
-        const createRequest = {
-            properties: {
-                title: sheetName
-            },
-            sheets: [
-                {
-                    properties: {
-                        title: 'Data',
-                        gridProperties: {
-                            rowCount: 1000,
-                            columnCount: 26
+    if (!accessToken) {
+        showError('No access token available. Please sign in with Google to create sheets.');
+        return;
+    }
+
+    // Prevent multiple simultaneous requests
+    if (UIState.isLoading) {
+        showStatus('Operation in progress, please wait...', 'warning');
+        return;
+    }
+
+    try {
+        UIState.setLoading('Creating new sheet...', elements.createSheetBtn);
+        return await executeWithRetry(async () => {
+            // Generate a unique name for the sheet
+            const timestamp = new Date().toISOString().split('T')[0];
+            const sheetName = `PWA Sheet ${timestamp}`;
+            
+            const createRequest = {
+                properties: {
+                    title: sheetName
+                },
+                sheets: [
+                    {
+                        properties: {
+                            title: 'Data',
+                            gridProperties: {
+                                rowCount: 1000,
+                                columnCount: 26
+                            }
                         }
                     }
-                }
-            ]
-        };
-        
-        const response = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(createRequest)
-        });
-        
-        if (response.status === 401) {
-            throw new TokenExpiredError('Token expired while creating sheet');
-        }
-        
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => null);
-            throw new Error(`Failed to create sheet: ${response.status} ${response.statusText}${errorData ? ` - ${errorData.error?.message || ''}` : ''}`);
-        }
-        
-        const sheetData = await response.json();
-        const sheetId = sheetData.spreadsheetId;
-        
-        // Auto-populate the sheet ID input
-        const sheetIdInput = document.getElementById('sheetId');
-        if (sheetIdInput) {
-            sheetIdInput.value = sheetId;
-            // Trigger validation
-            validateSheetId(sheetId);
-        }
-        
-        // Add some sample headers to the new sheet
-        await addInitialHeaders(sheetId, accessToken);
-        
-        // Add to recent sheets
-        RecentSheetsManager.addSheet(sheetId, sheetName);
-        
-        showStatus(`✅ New sheet created successfully: "${sheetName}"`);
-        
-        // Auto-load the new sheet data
-        setTimeout(() => loadSheetData(), 1000);
-        
-        return sheetData;
-        
-    }, operation);
+                ]
+            };
+            
+            const response = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(createRequest)
+            });
+            
+            if (response.status === 401) {
+                throw new TokenExpiredError('Token expired while creating sheet');
+            }
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => null);
+                throw new Error(`Failed to create sheet: ${response.status} ${response.statusText}${errorData ? ` - ${errorData.error?.message || ''}` : ''}`);
+            }
+            
+            const sheetData = await response.json();
+            const sheetId = sheetData.spreadsheetId;
+            
+            // Track the newly created sheet as current
+            currentSheetId = sheetId;
+            
+            // Add some sample headers to the new sheet
+            await addInitialHeaders(sheetId, accessToken);
+            
+            // Add to recent sheets
+            RecentSheetsManager.add(sheetId, sheetName);
+            
+            showStatus(`✅ New sheet created successfully: "${sheetName}"`);
+            
+            // Auto-load the new sheet data
+            setTimeout(() => loadSheetData(currentSheetId), 1000);
+            
+            return sheetData;
+        }, 'createSheet');
+    } finally {
+        UIState.clearLoading(elements.createSheetBtn);
+    }
 }
 
 // Add initial headers to a new sheet
@@ -691,21 +918,49 @@ async function addInitialHeaders(sheetId, accessToken) {
             }
         );
         
-        if (response.ok) {
-            console.log('✅ Initial headers added to new sheet');
-        }
+        // Headers added successfully (silent)
     } catch (error) {
         console.warn('⚠️ Failed to add initial headers:', error);
     }
 }
 
-// Enhanced load Google Sheets data with automatic retry
-async function loadSheetData() {
-    const rawSheetId = elements.sheetId.value.trim();
+// Auto-load last accessed sheet for the current user (cloud-based)
+async function autoLoadLastSheet() {
+    if (!currentUser || !accessToken) return;
     
-    // Sanitize and validate sheet ID first
-    const sheetId = SecurityUtils.sanitizeSheetId(rawSheetId);
-    if (!sheetId || !validateSheetId(sheetId)) {
+    try {
+        console.log('🔄 Attempting to auto-load last accessed sheet...');
+        
+        // Wait a bit for the recent sheets to be populated in the DOM
+        setTimeout(() => {
+            try {
+                // Find the first recent sheet item (most recent)
+                const firstRecentSheetItem = document.querySelector('.recent-sheet-item');
+                
+                if (firstRecentSheetItem) {
+                    console.log('📄 Found recent sheet, auto-clicking to load...');
+                    // Programmatically click the first recent sheet item
+                    firstRecentSheetItem.click();
+                    showStatus('📄 Auto-loaded your most recent sheet', 'success');
+                } else {
+                    console.log('📄 No recent sheets found in DOM for auto-load');
+                }
+            } catch (error) {
+                console.warn('❌ Error clicking recent sheet for auto-load:', error);
+            }
+        }, 1000); // Wait 1 second for recent sheets to be populated
+        
+    } catch (error) {
+        console.warn('❌ Error in auto-load last sheet:', error);
+    }
+}
+
+// Enhanced load Google Sheets data with automatic retry
+async function loadSheetData(sheetId) {
+    // Sanitize the sheet ID
+    const sanitizedSheetId = SecurityUtils.sanitizeSheetId(sheetId);
+    if (!sanitizedSheetId) {
+        showError('Invalid sheet ID provided');
         return;
     }
 
@@ -722,14 +977,14 @@ async function loadSheetData() {
 
     try {
         return await executeWithRetry(async () => {
-            UIState.setLoading('Loading sheet data...', elements.loadDataBtn);
+            UIState.setLoading('Loading sheet data...');
 
             console.log('📊 Attempting to load sheet data...');
             console.log('🔑 Using access token:', accessToken.substring(0, 20) + '...');
             
             // Try to get sheet metadata first
             const sheetResponse = await fetch(
-                `${CONFIG.SHEETS_API_BASE}/${sheetId}?fields=sheets.properties`,
+                `${CONFIG.SHEETS_API_BASE}/${sanitizedSheetId}?fields=sheets.properties`,
                 {
                     headers: {
                         'Authorization': `Bearer ${accessToken}`,
@@ -757,7 +1012,7 @@ async function loadSheetData() {
 
             // Get actual data from the first sheet
             const dataResponse = await fetch(
-                `${CONFIG.SHEETS_API_BASE}/${sheetId}/values/${firstSheet}?majorDimension=ROWS`,
+                `${CONFIG.SHEETS_API_BASE}/${sanitizedSheetId}/values/${firstSheet}?majorDimension=ROWS`,
                 {
                     headers: {
                         'Authorization': `Bearer ${accessToken}`,
@@ -780,23 +1035,21 @@ async function loadSheetData() {
             const data = await dataResponse.json();
             displaySheetData(data.values || [], firstSheet, sheetData.sheets.length);
             
-            // Add to recent sheets
-            RecentSheetsManager.add(sheetId, firstSheet);
+            // Add to recent sheets and track current sheet
+            RecentSheetsManager.add(sanitizedSheetId, firstSheet);
+            currentSheetId = sanitizedSheetId; // Track the current sheet
             
             showStatus('Sheet data loaded successfully!', 'success');
         });
     } finally {
-        UIState.clearLoading(elements.loadDataBtn);
+        UIState.clearLoading();
     }
 }
 
 // Enhanced add sample data with automatic retry
 async function addSampleData() {
-    const rawSheetId = elements.sheetId.value.trim();
-    
-    // Sanitize and validate sheet ID first
-    const sheetId = SecurityUtils.sanitizeSheetId(rawSheetId);
-    if (!sheetId || !validateSheetId(sheetId)) {
+    if (!currentSheetId) {
+        showError('No sheet loaded. Please select a sheet from the recent list or create a new one.');
         return;
     }
 
@@ -815,13 +1068,36 @@ async function addSampleData() {
         return await executeWithRetry(async () => {
             UIState.setLoading('Adding sample data...', elements.addDataBtn);
 
+            // First, get the sheet metadata to find the first sheet name
+            const sheetResponse = await fetch(
+                `${CONFIG.SHEETS_API_BASE}/${currentSheetId}?fields=sheets.properties`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            if (sheetResponse.status === 401) {
+                throw new TokenExpiredError('Token expired while adding data');
+            }
+
+            if (!sheetResponse.ok) {
+                const errorData = await sheetResponse.json().catch(() => null);
+                throw new Error(`Failed to get sheet metadata: ${sheetResponse.status} ${sheetResponse.statusText}${errorData ? ` - ${errorData.error?.message || ''}` : ''}`);
+            }
+
+            const sheetData = await sheetResponse.json();
+            const firstSheet = sheetData.sheets[0].properties.title;
+
             const userName = currentUser ? currentUser.name : 'Google User';
             const sampleData = [
                 [new Date().toLocaleString(), userName, 'Sample Entry', Math.floor(Math.random() * 100)]
             ];
 
             const response = await fetch(
-                `${CONFIG.SHEETS_API_BASE}/${sheetId}/values/Sheet1!A:D:append?valueInputOption=RAW`,
+                `${CONFIG.SHEETS_API_BASE}/${currentSheetId}/values/${firstSheet}!A:D:append?valueInputOption=RAW`,
                 {
                     method: 'POST',
                     headers: {
@@ -847,7 +1123,7 @@ async function addSampleData() {
 
             showStatus('Sample data added successfully!', 'success');
             // Reload the sheet data to show the new entry
-            setTimeout(loadSheetData, 1000);
+            setTimeout(() => loadSheetData(currentSheetId), 1000);
         });
     } finally {
         UIState.clearLoading(elements.addDataBtn);
@@ -1124,7 +1400,9 @@ const SecurityUtils = {
         // Secure storage methods
         setSecureItem(key, value) {
             try {
-                const encrypted = this.encrypt(JSON.stringify(value));
+                // Handle both strings and objects properly
+                const dataToEncrypt = typeof value === 'string' ? value : JSON.stringify(value);
+                const encrypted = this.encrypt(dataToEncrypt);
                 localStorage.setItem(key, encrypted);
                 logSecurityEvent('SECURE_STORAGE_WRITE', key);
             } catch (error) {
@@ -1140,19 +1418,28 @@ const SecurityUtils = {
                 const decrypted = this.decrypt(encrypted);
                 if (!decrypted) return null;
                 
-                return JSON.parse(decrypted);
+                // Try to parse as JSON, but return as string if parsing fails
+                try {
+                    return JSON.parse(decrypted);
+                } catch {
+                    // Not JSON, return as plain string (for tokens, etc.)
+                    return decrypted;
+                }
             } catch (error) {
                 logSecurityEvent('SECURE_STORAGE_READ_FAILED', error.message);
-                return null;
+                // Fallback: try direct access for backward compatibility
+                try {
+                    const direct = localStorage.getItem(key);
+                    return direct;
+                } catch {
+                    return null;
+                }
             }
         }
     }
 };
 
-// Legacy function for backward compatibility (now secure)
-function escapeHtml(text) {
-    return SecurityUtils.escapeHtml(text);
-}
+
 
 // Sign out function
 async function signOut() {
@@ -1307,7 +1594,7 @@ const SecurityMonitoring = {
     // Tamper Detection
     setupTamperDetection() {
         // Monitor critical function modifications
-        const criticalFunctions = ['validateSheetId', 'SecurityUtils.sanitizeText', 'loadSheetData'];
+        const criticalFunctions = ['SecurityUtils.sanitizeText', 'loadSheetData'];
         
         criticalFunctions.forEach(funcName => {
             const func = this.getNestedProperty(window, funcName);
@@ -1364,13 +1651,13 @@ function clearError() {
 
 // Enhanced token refresh scheduler
 setInterval(async () => {
-    const tokenExpiry = localStorage.getItem(CONFIG.STORAGE_KEYS.TOKEN_EXPIRY);
-    const authState = localStorage.getItem(CONFIG.STORAGE_KEYS.AUTH_STATE);
+    const tokenExpiry = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.TOKEN_EXPIRY);
+    const authState = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.AUTH_STATE);
     
     if (tokenExpiry && authState) {
         const now = Date.now();
         const expiry = parseInt(tokenExpiry);
-        const state = JSON.parse(authState);
+        const state = authState; // Already parsed by getSecureItem
         
         // Auto-refresh if token expires in the next 15 minutes and we have full access
         if (state.hasFullAccess && now > (expiry - 900000)) {
@@ -1479,7 +1766,7 @@ function updateApiStatusDisplay() {
 // Check if user needs to configure API on startup
 function checkApiConfiguration() {
     // If user has existing auth but no API config, they're using demo keys
-    const hasAuth = localStorage.getItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
+    const hasAuth = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
     const hasApiConfig = localStorage.getItem(CONFIG.STORAGE_KEYS.API_CONFIG);
     
     // Always start with config screen for new users
@@ -1501,10 +1788,11 @@ function checkApiConfiguration() {
 // Make functions available globally for HTML onclick handlers
 window.manualGoogleSignIn = manualGoogleSignIn;
 window.loadSheetData = loadSheetData;
+window.createNewSheet = createNewSheet;
 window.addSampleData = addSampleData;
 window.signOut = signOut;
 window.installApp = installApp;
-window.validateSheetId = validateSheetId;
+// Note: validateSheetId removed since manual sheet ID input is no longer used
 window.loadRecentSheet = loadRecentSheet;
 window.removeRecentSheet = removeRecentSheet;
 window.showApiConfig = showApiConfig;
@@ -1526,9 +1814,11 @@ function setupKeyboardShortcuts() {
         switch (true) {
             case isModKey && event.key === 'l':
                 event.preventDefault();
-                if (accessToken && !UIState.isLoading) {
-                    loadSheetData();
+                if (accessToken && !UIState.isLoading && currentSheetId) {
+                    loadSheetData(currentSheetId);
                     showStatus('🔄 Loading data via keyboard shortcut...', 'success');
+                } else if (!currentSheetId) {
+                    showStatus('⚠️ No sheet loaded. Select a sheet first.', 'warning');
                 }
                 break;
                 
@@ -1555,12 +1845,7 @@ function setupKeyboardShortcuts() {
                 }
                 break;
                 
-            case isModKey && event.key === 'i':
-                event.preventDefault();
-                elements.sheetId.focus();
-                elements.sheetId.select();
-                showStatus('📋 Sheet ID field focused', 'success');
-                break;
+            // Note: Sheet ID focus shortcut removed since manual input is no longer used
                 
             case event.key === 'Escape':
                 event.preventDefault();
@@ -1728,133 +2013,15 @@ function addKeyboardShortcutHints() {
     document.body.appendChild(helpIndicator);
 } 
 
-// Recent sheets management
-const RecentSheetsManager = {
-    storageKey: 'recent_sheets',
-    maxItems: 5,
-    
-    get() {
-        try {
-            const stored = localStorage.getItem(this.storageKey);
-            return stored ? JSON.parse(stored) : [];
-        } catch (error) {
-            console.warn('Failed to load recent sheets:', error);
-            return [];
-        }
-    },
-    
-    add(sheetId, sheetName) {
-        if (!sheetId || !sheetName) return;
-        
-        let recent = this.get();
-        
-        // Remove existing entry if present
-        recent = recent.filter(item => item.id !== sheetId);
-        
-        // Add to beginning
-        recent.unshift({
-            id: sheetId,
-            name: sheetName,
-            lastAccessed: Date.now()
-        });
-        
-        // Keep only max items
-        recent = recent.slice(0, this.maxItems);
-        
-        try {
-            localStorage.setItem(this.storageKey, JSON.stringify(recent));
-            this.updateDisplay();
-        } catch (error) {
-            console.warn('Failed to save recent sheets:', error);
-        }
-    },
-    
-    remove(sheetId) {
-        let recent = this.get();
-        recent = recent.filter(item => item.id !== sheetId);
-        
-        try {
-            localStorage.setItem(this.storageKey, JSON.stringify(recent));
-            this.updateDisplay();
-        } catch (error) {
-            console.warn('Failed to update recent sheets:', error);
-        }
-    },
-    
-    clear() {
-        try {
-            localStorage.removeItem(this.storageKey);
-            this.updateDisplay();
-        } catch (error) {
-            console.warn('Failed to clear recent sheets:', error);
-        }
-    },
-    
-    updateDisplay() {
-        if (!elements.recentSheets || !elements.recentSheetsList) return;
-        
-        const recent = this.get();
-        
-        if (recent.length === 0) {
-            elements.recentSheets.style.display = 'none';
-            return;
-        }
-        
-        elements.recentSheets.style.display = 'block';
-        
-        // Clear existing content safely
-        SecurityUtils.setSafeContent(elements.recentSheetsList, '');
-        
-        recent.forEach(item => {
-            const date = new Date(item.lastAccessed).toLocaleDateString();
-            const truncatedId = item.id.length > 20 ? item.id.substring(0, 20) + '...' : item.id;
-            
-            // Sanitize item data
-            const safeName = SecurityUtils.sanitizeText(item.name);
-            const safeId = SecurityUtils.sanitizeSheetId(item.id);
-            
-            // Create item container
-            const itemDiv = SecurityUtils.createSafeElement('div', '', 'recent-sheet-item');
-            itemDiv.onclick = () => loadRecentSheet(safeId, safeName);
-            
-            // Create info section
-            const infoDiv = SecurityUtils.createSafeElement('div', '', 'recent-sheet-info');
-            const nameDiv = SecurityUtils.createSafeElement('div', safeName, 'recent-sheet-name');
-            const idDiv = SecurityUtils.createSafeElement('div', truncatedId, 'recent-sheet-id');
-            
-            infoDiv.appendChild(nameDiv);
-            infoDiv.appendChild(idDiv);
-            
-            // Create date section
-            const dateDiv = SecurityUtils.createSafeElement('div', date, 'recent-sheet-date');
-            
-            // Create remove button
-            const removeBtn = SecurityUtils.createSafeElement('button', '✕', 'recent-sheet-remove');
-            removeBtn.title = 'Remove from recent';
-            removeBtn.onclick = (event) => {
-                event.stopPropagation();
-                removeRecentSheet(safeId);
-            };
-            
-            // Assemble item
-            itemDiv.appendChild(infoDiv);
-            itemDiv.appendChild(dateDiv);
-            itemDiv.appendChild(removeBtn);
-            
-            elements.recentSheetsList.appendChild(itemDiv);
-        });
-    }
-};
+
 
 // Load a recent sheet
 function loadRecentSheet(sheetId, sheetName) {
-    elements.sheetId.value = sheetId;
-    validateSheetId(sheetId);
-    showStatus(`📋 Loaded recent sheet: ${sheetName}`, 'success');
+    showStatus(`📋 Loading sheet: ${sheetName}`, 'success');
     
-    // Auto-load the data if not currently loading
+    // Load the data directly if not currently loading
     if (!UIState.isLoading && accessToken) {
-        loadSheetData();
+        loadSheetData(sheetId);
     }
 }
 
@@ -1866,49 +2033,17 @@ function removeRecentSheet(sheetId) {
 
 // Enhanced user experience features
 const UXEnhancements = {
-    // Auto-save sheet ID as user types (debounced)
+    // Note: Auto-save functionality removed since manual sheet ID input is no longer used
     setupAutoSave() {
-        let saveTimeout;
-        elements.sheetId.addEventListener('input', (e) => {
-            clearTimeout(saveTimeout);
-            saveTimeout = setTimeout(() => {
-                const rawValue = e.target.value.trim();
-                const sanitizedValue = SecurityUtils.sanitizeSheetId(rawValue);
-                if (sanitizedValue && validateSheetId(sanitizedValue)) {
-                    localStorage.setItem('last_sheet_id', sanitizedValue);
-                    // Update input field with sanitized value if different
-                    if (rawValue !== sanitizedValue) {
-                        e.target.value = sanitizedValue;
-                        logSecurityEvent('INPUT_SANITIZED', `Sheet ID sanitized: ${rawValue} -> ${sanitizedValue}`);
-                    }
-                }
-            }, 1000);
-        });
-        
-        // Restore last sheet ID
-        const lastSheetId = localStorage.getItem('last_sheet_id');
-        if (lastSheetId && !elements.sheetId.value) {
-            elements.sheetId.value = lastSheetId;
-            validateSheetId(lastSheetId);
-        }
+        // This function is kept for compatibility but no longer performs any operations
+        // since we now use cloud-based recent sheets instead of manual input
     },
     
     // Smooth focus transitions
+    // Note: Focus management removed since manual sheet ID input is no longer used
     setupFocusManagement() {
-        elements.sheetId.addEventListener('focus', () => {
-            elements.sheetId.select();
-        });
-        
-        // Auto-focus sheet ID when authenticated
-        const originalShowAuth = showAuthenticatedState;
-        showAuthenticatedState = function() {
-            originalShowAuth.call(this);
-            setTimeout(() => {
-                if (!elements.sheetId.value) {
-                    elements.sheetId.focus();
-                }
-            }, 500);
-        };
+        // This function is kept for compatibility but no longer performs any operations
+        // since we now use cloud-based recent sheets instead of manual input
     },
     
     // Loading state improvements
@@ -1929,16 +2064,7 @@ const UXEnhancements = {
     
     // Error prevention
     setupErrorPrevention() {
-        // Prevent accidental form submission
-        elements.sheetId.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                const sanitizedValue = SecurityUtils.sanitizeSheetId(e.target.value.trim());
-                if (sanitizedValue && validateSheetId(sanitizedValue) && accessToken && !UIState.isLoading) {
-                    loadSheetData();
-                }
-            }
-        });
+        // Note: Sheet ID form submission prevention removed since manual input is no longer used
         
         // Confirm before leaving with unsaved changes
         window.addEventListener('beforeunload', (e) => {

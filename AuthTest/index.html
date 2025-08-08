@@ -663,37 +663,7 @@
             margin: 1rem 0;
         }
 
-        .sheet-input {
-            width: 100%;
-            padding: 0.75rem;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            margin: 0.5rem 0;
-            font-size: 1rem;
-            transition: border-color 0.3s ease;
-        }
 
-        .sheet-input:focus {
-            outline: none;
-            border-color: #4285f4;
-            box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
-        }
-
-        .sheet-input.error {
-            border-color: #d32f2f;
-            box-shadow: 0 0 0 2px rgba(211, 47, 47, 0.2);
-        }
-
-        .input-helper {
-            font-size: 0.85rem;
-            color: #666;
-            margin: 0.25rem 0 1rem 0;
-            line-height: 1.4;
-        }
-
-        .input-helper.error {
-            color: #d32f2f;
-        }
 
         .helper-example {
             background: #f5f5f5;
@@ -780,22 +750,18 @@
         <div id="apiConfigSection" class="api-config-section">
             <div class="config-container">
                 <div class="config-title">⚙️ API Configuration</div>
-                <div class="config-description">
-                    <strong>Option 1:</strong> Use your own Google Cloud API keys (recommended for independence)<br>
-                    <strong>Option 2:</strong> Use demo keys (limited usage, costs covered by developer)
-                </div>
                 
                 <div class="config-options">
-                    <label class="config-option">
-                        <input type="radio" name="apiOption" value="own" onchange="showApiConfig(true)">
-                        <span class="option-text">🔑 Use My Own API Keys (Recommended)</span>
-                        <div class="option-description">Complete independence, unlimited usage, your costs</div>
-                    </label>
-                    
                     <label class="config-option">
                         <input type="radio" name="apiOption" value="demo" checked onchange="showApiConfig(false)">
                         <span class="option-text">🎯 Use Demo Keys</span>
                         <div class="option-description">Quick start, limited usage, developer covers costs</div>
+                    </label>
+
+                    <label class="config-option">
+                        <input type="radio" name="apiOption" value="own" onchange="showApiConfig(true)">
+                        <span class="option-text">🔑 Use My Own API Keys</span>
+                        <div class="option-description">Complete independence, unlimited usage, your costs</div>
                     </label>
                 </div>
                 
@@ -857,7 +823,7 @@
                 </button>
                 
                 <div class="security-note">
-                    🔒 Your data is secure. This app only requests the minimum permissions needed to access your Google Sheets.
+                    🔒 Your data is secure. This app only requests the minimum permissions needed to access your Google Sheets that you created with this app.
                 </div>
                 
                 <div class="config-actions">
@@ -879,17 +845,6 @@
         <!-- Google Sheets Section -->
         <div id="sheetsSection" class="sheets-section">
             <h3>Google Sheets Integration</h3>
-            <input type="text" id="sheetId" class="sheet-input" 
-                   placeholder="Enter Google Sheet ID (from URL)" 
-                   value="1yWl69EL9MBc-qtSV5lAOuo6PNvq5a5HSDhbxkWrHRAI"
-                   oninput="validateSheetId(this.value)">
-            <div id="sheetIdHelper" class="input-helper">
-                📋 Find the Sheet ID in your Google Sheets URL:
-                <div class="helper-example">
-                    docs.google.com/spreadsheets/d/<strong>1yWl69EL9MBc-qtSV5lAOuo6PNvq5a5HSDhbxkWrHRAI</strong>/edit
-                </div>
-                                 Make sure your sheet is either public or shared with your Google account.
-             </div>
             
             <!-- Recent Sheets -->
             <div id="recentSheets" class="recent-sheets" style="display: none;">
@@ -898,9 +853,6 @@
             </div>
             
             <div>
-                <button id="loadDataBtn" class="btn" onclick="loadSheetData()">
-                    <span class="btn-text">📋 Load Sheet Data</span>
-                </button>
                 <button id="createSheetBtn" class="btn" onclick="createNewSheet()">
                     <span class="btn-text">📄 Create New Sheet</span>
                 </button>
