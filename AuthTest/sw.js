@@ -3,16 +3,12 @@ const CACHE_NAME = 'google-sheets-pwa-v1.0.0';
 const STATIC_CACHE_NAME = 'static-cache-v1.0.0';
 const DYNAMIC_CACHE_NAME = 'dynamic-cache-v1.0.0';
 
-// Files to cache for offline functionality
+// Files to cache for offline functionality - GitHub Pages compatible
 const STATIC_ASSETS = [
-    '/',
-    '/index.html',
-    '/app.js',
-    '/manifest.json',
-    '/icon-192.png',
-    '/icon-512.png',
-    'https://accounts.google.com/gsi/client',
-    'https://apis.google.com/js/api.js'
+    './index.html',
+    './app.js',
+    './manifest.json'
+    // Note: External scripts and non-existent icons removed for GitHub Pages
 ];
 
 // API endpoints that should be cached
@@ -21,7 +17,7 @@ const API_CACHE_PATTERNS = [
     /^https:\/\/www\.googleapis\.com\/oauth2/
 ];
 
-// Install event - cache static assets
+// Install event - cache static assets (GitHub Pages compatible)
 self.addEventListener('install', (event) => {
     console.log('🔧 Service Worker installing...');
     
@@ -29,24 +25,31 @@ self.addEventListener('install', (event) => {
         caches.open(STATIC_CACHE_NAME)
             .then((cache) => {
                 console.log('📦 Caching static assets...');
-                return cache.addAll(STATIC_ASSETS.map(url => {
-                    // Handle external URLs that might fail
-                    return fetch(url).then(response => {
-                        if (response.ok) {
-                            return cache.put(url, response);
-                        }
-                        console.warn(`⚠️ Failed to cache ${url}`);
-                    }).catch(error => {
-                        console.warn(`⚠️ Failed to fetch ${url}:`, error);
-                    });
-                }));
+                // Cache each asset individually with error handling
+                const cachePromises = STATIC_ASSETS.map(url => {
+                    return fetch(url)
+                        .then(response => {
+                            if (response.ok) {
+                                return cache.put(url, response);
+                            } else {
+                                console.warn(`⚠️ Failed to cache ${url}: ${response.status}`);
+                            }
+                        })
+                        .catch(error => {
+                            console.warn(`⚠️ Failed to fetch ${url}:`, error);
+                        });
+                });
+                
+                return Promise.allSettled(cachePromises);
             })
             .then(() => {
-                console.log('✅ Static assets cached successfully');
+                console.log('✅ Static assets caching completed');
                 return self.skipWaiting();
             })
             .catch((error) => {
-                console.error('❌ Error caching static assets:', error);
+                console.error('❌ Error during asset caching:', error);
+                // Continue anyway for GitHub Pages
+                return self.skipWaiting();
             })
     );
 });
