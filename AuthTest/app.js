@@ -341,6 +341,218 @@ const RecentSheetsManager = {
     }
 };
 
+// Notification System for Sheet Changes
+const NotificationManager = {
+    storageKey: 'sheet_notifications',
+    lastViewKey: 'sheet_last_view',
+    
+    // Get user-specific storage key
+    getUserStorageKey(suffix) {
+        const userId = currentUser?.email || 'anonymous';
+        return `${suffix}_${userId}`;
+    },
+    
+    // Get file metadata including modification time and last modifying user
+    async getFileMetadata(sheetId) {
+        try {
+            const response = await fetch(
+                `https://www.googleapis.com/drive/v3/files/${sheetId}?fields=id,name,modifiedTime,lastModifyingUser`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+            
+            if (!response.ok) {
+                throw new Error(`Failed to get file metadata: ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.warn('Failed to get file metadata:', error);
+            return null;
+        }
+    },
+    
+    // Track when user last viewed a sheet
+    trackSheetView(sheetId) {
+        const storageKey = this.getUserStorageKey(this.lastViewKey);
+        const lastViews = JSON.parse(localStorage.getItem(storageKey) || '{}');
+        lastViews[sheetId] = Date.now();
+        localStorage.setItem(storageKey, JSON.stringify(lastViews));
+    },
+    
+    // Get last view time for a sheet
+    getLastViewTime(sheetId) {
+        const storageKey = this.getUserStorageKey(this.lastViewKey);
+        const lastViews = JSON.parse(localStorage.getItem(storageKey) || '{}');
+        return lastViews[sheetId] || 0;
+    },
+    
+    // Check for changes since last view
+    async checkForChanges(sheets) {
+        const notifications = [];
+        
+        for (const sheet of sheets) {
+            const metadata = await this.getFileMetadata(sheet.id);
+            if (!metadata) continue;
+            
+            const lastViewTime = this.getLastViewTime(sheet.id);
+            const modifiedTime = new Date(metadata.modifiedTime).getTime();
+            const modifyingUser = metadata.lastModifyingUser;
+            
+            // Check if modified since last view and not by current user
+            if (modifiedTime > lastViewTime && modifyingUser?.emailAddress !== currentUser?.email) {
+                notifications.push({
+                    id: sheet.id,
+                    name: metadata.name || sheet.name,
+                    modifiedTime: modifiedTime,
+                    lastViewTime: lastViewTime,
+                    modifyingUser: modifyingUser,
+                    isUnread: true
+                });
+            }
+        }
+        
+        return notifications;
+    },
+    
+    // Get all notifications
+    async getNotifications() {
+        try {
+            // Get recent sheets
+            const sheets = await RecentSheetsManager.getRecent();
+            if (!sheets || sheets.length === 0) {
+                return [];
+            }
+            
+            // Check for changes
+            const notifications = await this.checkForChanges(sheets);
+            
+            // Sort by modified time (newest first)
+            return notifications.sort((a, b) => b.modifiedTime - a.modifiedTime);
+        } catch (error) {
+            console.warn('Failed to get notifications:', error);
+            return [];
+        }
+    },
+    
+    // Mark notification as read
+    markAsRead(sheetId) {
+        this.trackSheetView(sheetId);
+        this.updateNotificationUI();
+    },
+    
+    // Mark all notifications as read
+    markAllAsRead() {
+        const notifications = this.cachedNotifications || [];
+        notifications.forEach(notification => {
+            this.trackSheetView(notification.id);
+        });
+        this.updateNotificationUI();
+    },
+    
+    // Update notification UI
+    async updateNotificationUI() {
+        const notifications = await this.getNotifications();
+        this.cachedNotifications = notifications;
+        
+        const notificationBtn = document.getElementById('notificationBtn');
+        const notificationBadge = document.getElementById('notificationBadge');
+        const notificationsList = document.getElementById('notificationsList');
+        
+        if (!notificationBtn) return;
+        
+        const unreadCount = notifications.length;
+        
+        // Update badge
+        if (unreadCount > 0) {
+            notificationBadge.textContent = unreadCount;
+            notificationBadge.style.display = 'flex';
+        } else {
+            notificationBadge.style.display = 'none';
+        }
+        
+        // Update notification list
+        if (notifications.length === 0) {
+            notificationsList.innerHTML = `
+                <div class="notification-item no-notifications">
+                    <p>No recent changes to your sheets</p>
+                </div>
+            `;
+        } else {
+            notificationsList.innerHTML = notifications.map(notification => `
+                <div class="notification-item unread" onclick="openSheetFromNotification('${notification.id}')">
+                    <div class="notification-header">
+                        <h4 class="notification-title">${SecurityUtils.escapeHtml(notification.name)}</h4>
+                        <span class="notification-time">${this.formatTimeAgo(notification.modifiedTime)}</span>
+                    </div>
+                    <p class="notification-details">Modified by ${SecurityUtils.escapeHtml(notification.modifyingUser?.displayName || notification.modifyingUser?.emailAddress || 'Someone')}</p>
+                    <p class="notification-user">Last viewed: ${this.formatTimeAgo(notification.lastViewTime) || 'Never'}</p>
+                </div>
+            `).join('');
+        }
+        
+        // Update unread indicators in recent sheets
+        this.updateRecentSheetsIndicators(notifications);
+    },
+    
+    // Update unread indicators in recent sheets list
+    updateRecentSheetsIndicators(notifications) {
+        const unreadSheetIds = new Set(notifications.map(n => n.id));
+        
+        // Add unread class to sheets with notifications
+        const sheetItems = document.querySelectorAll('.recent-sheet-item');
+        sheetItems.forEach(item => {
+            const sheetId = item.dataset.sheetId;
+            if (unreadSheetIds.has(sheetId)) {
+                item.classList.add('unread');
+            } else {
+                item.classList.remove('unread');
+            }
+        });
+    },
+    
+    // Format time ago
+    formatTimeAgo(timestamp) {
+        if (!timestamp) return '';
+        
+        const now = Date.now();
+        const diff = now - timestamp;
+        const minutes = Math.floor(diff / 60000);
+        const hours = Math.floor(diff / 3600000);
+        const days = Math.floor(diff / 86400000);
+        
+        if (minutes < 1) return 'Just now';
+        if (minutes < 60) return `${minutes}m ago`;
+        if (hours < 24) return `${hours}h ago`;
+        if (days < 7) return `${days}d ago`;
+        
+        return new Date(timestamp).toLocaleDateString();
+    },
+    
+    // Initialize notification system
+    async initialize() {
+        if (!accessToken || !currentUser) return;
+        
+        const notificationBtn = document.getElementById('notificationBtn');
+        if (notificationBtn) {
+            notificationBtn.style.display = 'flex';
+            await this.updateNotificationUI();
+        }
+    },
+    
+    // Hide notifications when user signs out
+    hide() {
+        const notificationBtn = document.getElementById('notificationBtn');
+        if (notificationBtn) {
+            notificationBtn.style.display = 'none';
+        }
+    }
+};
+
 // Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', initializeApp);
 
@@ -380,6 +592,14 @@ async function initializeApp() {
 
     // Initialize Google Identity Services
     await initializeGoogleIdentityServices();
+    
+    // Initialize Google Picker API (will be available when gapi loads)
+    if (typeof gapi !== 'undefined') {
+        onApiLoad();
+    } else {
+        // Wait for gapi to load then initialize
+        window.onApiLoad = onApiLoad;
+    }
     
     // Check API configuration first
     const shouldProceed = checkApiConfiguration();
@@ -791,6 +1011,12 @@ function showAuthenticatedState() {
             console.warn('Failed to update recent sheets:', err)
         );
         
+        // Initialize notification system
+        NotificationManager.initialize();
+        
+        // Show shared sheet access section
+        updateSharedSheetVisibility();
+        
         // Auto-load last accessed sheet
         autoLoadLastSheet();
     } else {
@@ -809,6 +1035,15 @@ function showUnauthenticatedState() {
     // Hide recent sheets when not authenticated
     if (elements.recentSheets) {
         elements.recentSheets.style.display = 'none';
+    }
+    
+    // Hide notifications when not authenticated
+    NotificationManager.hide();
+    
+    // Hide shared sheet section when not authenticated
+    const sharedSheetSection = document.getElementById('sharedSheetSection');
+    if (sharedSheetSection) {
+        sharedSheetSection.style.display = 'none';
     }
     
     clearError();
@@ -957,22 +1192,27 @@ async function autoLoadLastSheet() {
 
 // Enhanced load Google Sheets data with automatic retry
 async function loadSheetData(sheetId) {
+    console.log('🔍 loadSheetData called with:', sheetId);
+    
     // Sanitize the sheet ID
     const sanitizedSheetId = SecurityUtils.sanitizeSheetId(sheetId);
     if (!sanitizedSheetId) {
+        console.error('❌ Sheet ID sanitization failed:', sheetId);
         showError('Invalid sheet ID provided');
-        return;
+        throw new Error('Invalid sheet ID provided');
     }
 
     if (!accessToken) {
+        console.error('❌ No access token available');
         showError('No access token available. Please sign in with Google to access your sheets.');
-        return;
+        throw new Error('No access token available');
     }
 
     // Prevent multiple simultaneous requests
     if (UIState.isLoading) {
+        console.warn('⚠️ Already loading, skipping request');
         showStatus('Operation in progress, please wait...', 'warning');
-        return;
+        throw new Error('Operation already in progress');
     }
 
     try {
@@ -1039,7 +1279,17 @@ async function loadSheetData(sheetId) {
             RecentSheetsManager.add(sanitizedSheetId, firstSheet);
             currentSheetId = sanitizedSheetId; // Track the current sheet
             
+            console.log('✅ Successfully set currentSheetId to:', currentSheetId);
+            
+            // Track sheet view for notifications
+            NotificationManager.trackSheetView(sanitizedSheetId);
+            
+            // Update shared sheet section visibility (shows test button if sheet loaded)
+            updateSharedSheetVisibility();
+            
             showStatus('Sheet data loaded successfully!', 'success');
+            
+            console.log('✅ loadSheetData completed successfully for:', sanitizedSheetId);
         });
     } finally {
         UIState.clearLoading();
@@ -1508,8 +1758,20 @@ function showError(message) {
     SecurityUtils.setSafeContent(elements.errorDisplay, displayMessage);
     elements.errorDisplay.style.display = 'block';
     
-    // Auto-hide after 10 seconds
-    setTimeout(clearError, 10000);
+    // Enhanced debugging info
+    console.error('🔍 DEBUGGING - Full error context:', {
+        originalMessage: message,
+        safeMessage: safeMessage,
+        displayMessage: displayMessage,
+        timestamp: new Date().toISOString(),
+        currentSheetId: currentSheetId,
+        hasAccessToken: !!accessToken,
+        userEmail: currentUser?.email,
+        isOnline: navigator.onLine
+    });
+    
+    // Auto-hide after 15 seconds (increased from 10)
+    setTimeout(clearError, 15000);
 }
 
 // Enhanced error reporting for production
@@ -1785,6 +2047,196 @@ function checkApiConfiguration() {
     return true;
 }
 
+// Google Picker API for Shared Sheet Access
+let pickerApiLoaded = false;
+let oauthToken = null;
+
+// Initialize Google Picker API
+function initializePicker() {
+    gapi.load('picker', () => {
+        pickerApiLoaded = true;
+        console.log('📁 Google Picker API loaded successfully');
+        
+        // Update shared sheet section visibility now that picker is available
+        updateSharedSheetVisibility();
+    });
+}
+
+// Load Google APIs and initialize picker
+function onApiLoad() {
+    gapi.load('auth2:picker', () => {
+        initializePicker();
+    });
+}
+
+// Open Google Picker to select a spreadsheet
+function openSheetPicker() {
+    if (!pickerApiLoaded) {
+        showError('Google Picker is still loading. Please try again in a moment.');
+        return;
+    }
+    
+    if (!accessToken) {
+        showError('Please sign in first to access shared sheets.');
+        return;
+    }
+    
+    console.log('📁 Opening Google Picker...');
+    console.log('🔍 Current loading state before picker:', UIState.isLoading);
+    
+    try {
+        // Create a view that shows only PWA Sheets
+        const pwaSheetView = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
+            .setQuery('title:"PWA Sheet" type:spreadsheet')
+            .setIncludeFolders(false)
+            .setSelectFolderEnabled(false)
+            .setMode(google.picker.DocsViewMode.LIST);
+        
+        // Create a fallback view for all spreadsheets (in case no PWA sheets exist)
+        const allSheetsView = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
+            .setQuery('type:spreadsheet')
+            .setIncludeFolders(false)
+            .setSelectFolderEnabled(false)
+            .setMode(google.picker.DocsViewMode.LIST);
+        
+        const picker = new google.picker.PickerBuilder()
+            .enableFeature(google.picker.Feature.NAV_HIDDEN)
+            .setAppId(CONFIG.GOOGLE_CLIENT_ID.split('-')[0]) // Extract app ID from client ID
+            .setOAuthToken(accessToken)
+            .addView(pwaSheetView)
+            .addView(allSheetsView)
+            .setCallback(pickerCallback)
+            .setOrigin(window.location.protocol + '//' + window.location.host)
+            .setTitle('Select a PWA Sheet')
+            .build();
+            
+        picker.setVisible(true);
+        
+    } catch (error) {
+        console.error('❌ Error opening picker:', error);
+        showError('Failed to open sheet picker. Please try again.');
+    }
+}
+
+// Handle picker selection
+function pickerCallback(data) {
+    console.log('📁 Picker callback data:', data);
+    
+    if (data.action === google.picker.Action.PICKED) {
+        const doc = data.docs[0];
+        const sheetId = doc.id;
+        const sheetName = doc.name;
+        
+        console.log('✅ Sheet selected:', sheetName, 'ID:', sheetId);
+        
+        // Load the selected sheet
+        loadPickedSheet(sheetId, sheetName);
+    } else if (data.action === google.picker.Action.CANCEL) {
+        console.log('❌ Picker cancelled');
+        showStatus('Sheet selection cancelled', 'info');
+    }
+}
+
+// Load a sheet selected from the picker
+async function loadPickedSheet(sheetId, sheetName) {
+    const pickerBtn = document.getElementById('openPickerBtn');
+    
+    try {
+        console.log('🚀 Loading picked sheet:', sheetName, 'ID:', sheetId);
+        
+        // CRITICAL: Clear any existing loading state first to avoid conflicts
+        UIState.clearLoading();
+        
+        // Store the current sheet ID to compare later
+        const previousSheetId = currentSheetId;
+        
+        console.log('🔄 Loading state cleared, calling loadSheetData...');
+        
+        // Call loadSheetData to load the sheet (it will manage its own loading state)
+        const result = await loadSheetData(sheetId);
+        
+        console.log('📋 LoadSheetData result:', result);
+        console.log('📊 Previous sheet ID:', previousSheetId);
+        console.log('📊 Current sheet ID after load:', currentSheetId);
+        
+        // Give a moment for the sheet to be processed
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Verify the load was successful
+        if (currentSheetId !== sheetId) {
+            // If the sheet ID wasn't updated, it means loadSheetData failed silently
+            throw new Error(`Sheet "${sheetName}" could not be accessed. This can happen when:
+            1. The sheet is shared via "Anyone with link" instead of directly with your account
+            2. The sheet requires broader permissions than the app currently has
+            3. The sheet was created outside this app and hasn't been "opened" through it before
+            
+            Try asking the sheet owner to share it directly with ${currentUser?.email || 'your Google account'}.`);
+        }
+        
+        showStatus(`✅ "${sheetName}" loaded successfully! It will now appear in your Recent Sheets.`, 'success');
+        console.log('✅ Picked sheet loaded successfully');
+        
+    } catch (error) {
+        console.error('❌ Error loading picked sheet:', error);
+        
+        if (error.message.includes('403') || error.message.includes('Forbidden')) {
+            showError(`❌ Access denied to "${sheetName}". Make sure the sheet is shared directly with ${currentUser?.email || 'your Google account'} rather than just "Anyone with link".`);
+        } else if (error.message.includes('404') || error.message.includes('Not Found')) {
+            showError(`❌ "${sheetName}" not found via Sheets API. This often happens when the sheet is shared via "Anyone with link" rather than being shared directly with your Google account (${currentUser?.email || 'your email'}).`);
+        } else if (error.message.includes('could not be accessed')) {
+            showError(error.message);
+        } else {
+            showError(`❌ Failed to load "${sheetName}": ${error.message}`);
+        }
+    }
+    // Note: No finally block needed since loadSheetData manages its own loading state
+}
+
+function updateSharedSheetVisibility() {
+    const sharedSheetSection = document.getElementById('sharedSheetSection');
+    
+    if (!sharedSheetSection) return;
+    
+    // Show shared sheet section when authenticated
+    const shouldShow = accessToken && currentUser && pickerApiLoaded;
+    
+    if (shouldShow) {
+        sharedSheetSection.style.display = 'block';
+    } else {
+        sharedSheetSection.style.display = 'none';
+    }
+}
+
+// Notification UI Functions
+function toggleNotifications() {
+    const panel = document.getElementById('notificationsPanel');
+    if (panel.style.display === 'none' || !panel.style.display) {
+        panel.style.display = 'block';
+        // Don't auto-refresh notifications when opening - this was clearing messages
+        // NotificationManager.updateNotificationUI();
+    } else {
+        panel.style.display = 'none';
+    }
+}
+
+function markAllAsRead() {
+    NotificationManager.markAllAsRead();
+    showStatus('All notifications marked as read', 'success');
+}
+
+function openSheetFromNotification(sheetId) {
+    // Mark as read
+    NotificationManager.markAsRead(sheetId);
+    
+    // Close notification panel
+    document.getElementById('notificationsPanel').style.display = 'none';
+    
+    // Load the sheet
+    loadSheetData(sheetId);
+    
+    showStatus('Loading sheet...', 'info');
+}
+
 // Make functions available globally for HTML onclick handlers
 window.manualGoogleSignIn = manualGoogleSignIn;
 window.loadSheetData = loadSheetData;
@@ -1796,6 +2248,10 @@ window.installApp = installApp;
 window.loadRecentSheet = loadRecentSheet;
 window.removeRecentSheet = removeRecentSheet;
 window.showApiConfig = showApiConfig;
+window.toggleNotifications = toggleNotifications;
+window.markAllAsRead = markAllAsRead;
+window.openSheetFromNotification = openSheetFromNotification;
+window.openSheetPicker = openSheetPicker;
 window.saveApiConfig = saveApiConfig;
 window.continueToLogin = continueToLogin;
 window.showApiConfiguration = showApiConfiguration; 
