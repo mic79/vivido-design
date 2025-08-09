@@ -3,8 +3,8 @@
   "short_name": "Sheets PWA",
   "description": "A Progressive Web App with seamless Google Authentication and Sheets integration",
   "version": "1.0.0",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "theme_color": "#2196F3",
@@ -66,7 +66,7 @@
       "name": "View Sheets",
       "short_name": "Sheets",
       "description": "View your Google Sheets",
-      "url": "/?action=sheets",
+      "url": "./?action=sheets",
       "icons": [
         {
           "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%234285f4'/><text x='50' y='65' font-size='50' text-anchor='middle' fill='white'>📊</text></svg>",
@@ -79,7 +79,7 @@
       "name": "Quick Sign In",
       "short_name": "Sign In",
       "description": "Sign in to your Google account",
-      "url": "/?action=signin",
+      "url": "./?action=signin",
       "icons": [
         {
           "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%234285f4'/><text x='50' y='65' font-size='50' text-anchor='middle' fill='white'>📊</text></svg>",
@@ -109,7 +109,7 @@
   "protocols": [
     {
       "protocol": "web+sheets",
-      "url": "/?sheet=%s"
+      "url": "./?sheet=%s"
     }
   ],
   "edge_side_panel": {
