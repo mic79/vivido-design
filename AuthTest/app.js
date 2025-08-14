@@ -10,7 +10,8 @@ const CONFIG = {
         TOKEN_EXPIRY: 'token_expiry',
         AUTH_STATE: 'auth_state',
         USER_CLIENT_ID: 'user_google_client_id',
-        API_CONFIG: 'user_api_config'
+        API_CONFIG: 'user_api_config',
+        REFRESH_TOKEN: 'google_refresh_token'
     },
     
     // Get current client ID (user's own or default demo)
@@ -714,6 +715,8 @@ async function initializeGoogleIdentityServices() {
         tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: CONFIG.GOOGLE_CLIENT_ID,
             scope: CONFIG.SCOPES,
+            include_granted_scopes: true,
+            enable_granular_consent: true,
             callback: (tokenResponse) => {
                 console.log('🔑 Received OAuth token response');
                 handleTokenResponse(tokenResponse);
@@ -843,8 +846,18 @@ async function checkExistingAuth() {
             // Set up automatic token refresh
             scheduleTokenRefresh(expiry);
             return;
+        } else if (now >= expiry && state.hasFullAccess) {
+            // Token is expired but we had full access - try silent refresh
+            console.log('🔄 Token expired, attempting silent refresh...');
+            const refreshSuccess = await attemptSilentTokenRefresh();
+            if (refreshSuccess) {
+                return; // Successfully refreshed, auth state restored
+            }
+            // If refresh failed, fall through to clear auth and show login
+            console.log('🔑 Silent refresh failed, requiring re-authentication');
+            clearStoredAuth();
         } else {
-
+            // Invalid or incomplete auth state
             clearStoredAuth();
         }
     }
@@ -909,6 +922,51 @@ async function attemptTokenRefresh(retryCallback = null) {
     }
 }
 
+// Attempt silent token refresh for expired tokens
+async function attemptSilentTokenRefresh() {
+    return new Promise((resolve) => {
+        try {
+            if (!tokenClient) {
+                console.log('⚠️ Token client not available for silent refresh');
+                resolve(false);
+                return;
+            }
+            
+            // Store original callback
+            const originalCallback = tokenClient.callback;
+            
+            // Set up a temporary callback for the refresh attempt
+            tokenClient.callback = (tokenResponse) => {
+                // Restore original callback
+                tokenClient.callback = originalCallback;
+                
+                if (tokenResponse && tokenResponse.access_token) {
+                    console.log('✅ Silent token refresh successful');
+                    handleTokenResponse(tokenResponse);
+                    resolve(true);
+                } else {
+                    console.log('❌ Silent token refresh failed - no valid response');
+                    resolve(false);
+                }
+            };
+            
+            // Try to request a new token silently
+            tokenClient.requestAccessToken({ prompt: '' });
+            
+            // Set timeout in case the request hangs
+            setTimeout(() => {
+                tokenClient.callback = originalCallback;
+                console.log('⏰ Silent refresh timeout');
+                resolve(false);
+            }, 10000); // 10 second timeout
+            
+        } catch (error) {
+            console.error('❌ Silent token refresh error:', error);
+            resolve(false);
+        }
+    });
+}
+
 // Google Sign-In using Google Identity Services
 async function manualGoogleSignIn() {
     try {
@@ -970,12 +1028,13 @@ function migrateUnencryptedStorage() {
 
 // Clear stored authentication data
 function clearStoredAuth() {
-    // Clear secure storage items (access token, user info, token expiry, auth state)
+    // Clear secure storage items (access token, user info, token expiry, auth state, refresh token)
     const secureKeys = [
         CONFIG.STORAGE_KEYS.ACCESS_TOKEN,
         CONFIG.STORAGE_KEYS.USER_INFO,
         CONFIG.STORAGE_KEYS.TOKEN_EXPIRY,
-        CONFIG.STORAGE_KEYS.AUTH_STATE
+        CONFIG.STORAGE_KEYS.AUTH_STATE,
+        CONFIG.STORAGE_KEYS.REFRESH_TOKEN
     ];
     
     secureKeys.forEach(key => {
