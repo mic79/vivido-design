@@ -896,11 +896,18 @@ async function attemptTokenRefresh(retryCallback = null) {
             pendingRetryCallback = retryCallback;
         }
         
-        // Try silent token refresh
-        tokenClient.requestAccessToken({
-            prompt: '', // Empty prompt for silent refresh
-            hint: currentUser.email
-        });
+        // Get the last used account email for better targeting
+        const lastUser = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.USER_INFO);
+        const lastUserEmail = lastUser?.email || currentUser?.email;
+        
+        // Try silent token refresh with login hint
+        const refreshOptions = { prompt: 'none' };
+        if (lastUserEmail) {
+            refreshOptions.login_hint = lastUserEmail;
+            console.log('🎯 Using login hint for token refresh:', lastUserEmail);
+        }
+        
+        tokenClient.requestAccessToken(refreshOptions);
         
         return true;
     } catch (error) {
@@ -950,8 +957,18 @@ async function attemptSilentTokenRefresh() {
                 }
             };
             
-            // Try to request a new token silently
-            tokenClient.requestAccessToken({ prompt: '' });
+            // Get the last used account email for better targeting
+            const lastUser = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.USER_INFO);
+            const lastUserEmail = lastUser?.email || currentUser?.email;
+            
+            // Try to request a new token silently with login hint
+            const refreshOptions = { prompt: 'none' };
+            if (lastUserEmail) {
+                refreshOptions.login_hint = lastUserEmail;
+                console.log('🎯 Using login hint for silent refresh:', lastUserEmail);
+            }
+            
+            tokenClient.requestAccessToken(refreshOptions);
             
             // Set timeout in case the request hangs
             setTimeout(() => {
@@ -975,13 +992,57 @@ async function manualGoogleSignIn() {
             return;
         }
 
-        showStatus('Opening Google sign-in...', 'warning');
+        // Get the last used account email from storage for smart reconnection
+        const lastUser = SecurityUtils.secureStorage.getSecureItem(CONFIG.STORAGE_KEYS.USER_INFO);
+        const lastUserEmail = lastUser?.email || currentUser?.email;
         
-        // Request access token with required scopes
-        tokenClient.requestAccessToken({
-            prompt: 'consent', // Always show consent to ensure we get all permissions
-            hint: currentUser ? currentUser.email : undefined
-        });
+        if (lastUserEmail) {
+            // We know which account was used before - try to reconnect silently first
+            console.log('🔄 Attempting automatic reconnection to:', lastUserEmail);
+            showStatus('Reconnecting to your Google account...', 'info');
+            
+            // Set up a temporary callback for the silent attempt
+            const originalCallback = tokenClient.callback;
+            tokenClient.callback = (tokenResponse) => {
+                // Restore original callback
+                tokenClient.callback = originalCallback;
+                
+                if (tokenResponse && tokenResponse.access_token) {
+                    // Silent reconnection successful
+                    console.log('✅ Silent reconnection successful');
+                    handleTokenResponse(tokenResponse);
+                } else if (tokenResponse && tokenResponse.error) {
+                    // Silent failed, try with account selection but hint the last account
+                    console.log('⚠️ Silent reconnection failed, showing account selection with hint');
+                    showStatus('Please select your Google account...', 'warning');
+                    tokenClient.requestAccessToken({
+                        login_hint: lastUserEmail,
+                        prompt: 'select_account'
+                    });
+                } else {
+                    // Unexpected response, show account selection
+                    console.log('⚠️ Unexpected response, showing account selection');
+                    showStatus('Please select your Google account...', 'warning');
+                    tokenClient.requestAccessToken({
+                        prompt: 'select_account'
+                    });
+                }
+            };
+            
+            // Try silent reconnection first
+            tokenClient.requestAccessToken({
+                login_hint: lastUserEmail,
+                prompt: 'none' // Silent attempt
+            });
+            
+        } else {
+            // First time user or no stored account - show account selection
+            console.log('🆕 First time sign-in, showing account selection');
+            showStatus('Please select your Google account...', 'warning');
+            tokenClient.requestAccessToken({
+                prompt: 'select_account'
+            });
+        }
         
     } catch (error) {
         console.error('❌ Sign-in failed:', error);
@@ -1783,6 +1844,27 @@ async function signOut() {
         // Still clear local state even if sign out fails
         showUnauthenticatedState();
         showStatus('Signed out (with errors)', 'warning');
+    }
+}
+
+// Switch to a different Google account
+async function switchAccount() {
+    try {
+        if (!tokenClient) {
+            showError('Google services not initialized. Please refresh the page and try again.');
+            return;
+        }
+
+        showStatus('Switching Google account...', 'warning');
+        
+        // Force account selection by using select_account prompt
+        tokenClient.requestAccessToken({
+            prompt: 'select_account'
+        });
+        
+    } catch (error) {
+        console.error('❌ Account switch failed:', error);
+        showError(`Account switch failed: ${error.message || 'Unknown error'}`);
     }
 }
 
