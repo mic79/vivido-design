@@ -1,684 +1,2173 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Zero-G WebXR</title>
+    <meta charset="utf-8">
+    <title>Zero-G WebXR Experience</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
         body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #fff;
             margin: 0;
-            padding: 0;
-            background: #000;
-            color: white;
-            font-family: Arial, sans-serif;
             overflow: hidden;
         }
         
         #info {
             position: absolute;
-            top: 10px;
-            left: 10px;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
             z-index: 100;
-            background: rgba(0,0,0,0.7);
-            padding: 10px;
-            border-radius: 5px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 25px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
-        #container {
-            width: 100%;
-            height: 100vh;
+        .title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        
+        .subtitle {
+            font-size: 14px;
+            opacity: 0.8;
+            margin-bottom: 5px;
+        }
+        
+        .controls {
+            font-size: 12px;
+            opacity: 0.6;
         }
     </style>
 </head>
 <body>
     <div id="info">
-        <h3>Simple Zero-G WebXR</h3>
-        <p>Use thumbstick to rotate view</p>
-        <p>Player has sphere physics body</p>
-        <p>Cube floats 4m ahead</p>
-        <p><strong>Physics wireframes visible</strong></p>
-        <p>Press 'W' to toggle wireframes</p>
-        <p><strong>Debug: Magenta & Cyan cubes track controllers</strong></p>
+        <div class="title">🚀 Zero-G WebXR</div>
+        <div class="subtitle">Convex Hull Collision • Mesh-Accurate Physics • Grabbable Environment</div>
+        <div class="controls">
+            🎮 Environment uses actual mesh shape • Convex hull collision detection<br/>
+            🚀 Player & ball collide with hallway geometry • Grab environment like cubes<br/>
+            💻 'W': Wireframes • 'L': Lasers • 'D': Debug • 'R': Reset • 'S': Stop Ball
+        </div>
     </div>
-    <div id="container"></div>
-
-    <!-- Three.js Import Map -->
+    
     <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/",
+                "@dimforge/rapier3d-compat": "https://cdn.skypack.dev/@dimforge/rapier3d-compat@0.11.2"
+            }
         }
-    }
     </script>
 
     <script type="module">
         import * as THREE from 'three';
         import { VRButton } from 'three/addons/webxr/VRButton.js';
         import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+        import RAPIER from '@dimforge/rapier3d-compat';
 
-        // Global variables
-        let scene, camera, renderer, world;
-        let playerRigidBody, cubeRigidBody;
-        let playerMesh, cubeMesh;
+        // Core Three.js components
+        let camera, scene, renderer, dolly;
         let controller1, controller2;
         let controllerGrip1, controllerGrip2;
-        let controllerModelFactory;
-        let dolly; // VR camera rig
-        
-        // Physics debug wireframes
-        let playerWireframe, cubeWireframe;
+        let raycaster;
+
+        // Physics world and objects
+        let world, playerRigidBody, cubeRigidBody, playerSphereRigidBody;
+        let playerMesh, cubeMesh, playerSphereMesh;
+        let playerWireframe, cubeWireframe, playerSphereWireframe;
         let showWireframes = true;
-        
-        // Debug cubes for controller positions
-        let debugCube1, debugCube2;
-        
-        // Rapier physics
-        let RAPIER;
 
-        // Load Rapier physics
-        import('https://cdn.skypack.dev/@dimforge/rapier3d-compat@0.11.2?min').then(rapier => {
-            RAPIER = rapier;
-            init();
-        });
+        // Player sphere control
+        let playerSphere = {
+            mesh: null,
+            rigidBody: null,
+            isGrabbed: false,
+            grabbedByHand: null, // 'left' or 'right'
+            snappedToHand: null,  // 'left' or 'right'
+            lastGrabTime: 0, // Cooldown to prevent rapid grab/release
+            grabCooldown: 200 // 200ms cooldown
+        };
 
+        // Audio system
+        let audioContext, audioListener;
+        let electricHumSound, bounceSound;
+        let electricHumSource = null;
+
+        // Controller input state
+        let controllerStates = {
+            left: { 
+                grabPressed: false, 
+                prevGrabPressed: false, 
+                triggerPressed: false, // For thrusters
+                thumbstickPressed: false, // For air brake
+                thumbstick: { x: 0, y: 0 },
+                position: new THREE.Vector3(),
+                prevPosition: new THREE.Vector3(),
+                velocity: new THREE.Vector3(),
+                quaternion: new THREE.Quaternion(),
+                prevQuaternion: new THREE.Quaternion(),
+                angularVelocity: new THREE.Vector3(),
+                grabbingObject: null, // For object grabbing
+                grabStartPosition: null, // Position when grab started (for push-off)
+                grabOffset: null, // Offset from controller to grabbed object
+                recentPositions: [], // Track recent positions for velocity calculation
+                thrusterCone: null // Visual thruster cone
+            },
+            right: { 
+                grabPressed: false, 
+                prevGrabPressed: false, 
+                triggerPressed: false, // For thrusters
+                thumbstickPressed: false, // For air brake
+                thumbstick: { x: 0, y: 0 },
+                position: new THREE.Vector3(),
+                prevPosition: new THREE.Vector3(),
+                velocity: new THREE.Vector3(),
+                quaternion: new THREE.Quaternion(),
+                prevQuaternion: new THREE.Quaternion(),
+                angularVelocity: new THREE.Vector3(),
+                grabbingObject: null, // For object grabbing
+                grabStartPosition: null, // Position when grab started (for push-off)
+                grabOffset: null, // Offset from controller to grabbed object
+                recentPositions: [], // Track recent positions for velocity calculation
+                thrusterCone: null // Visual thruster cone
+            }
+        };
+
+        // Laser pointer toggle
+        let showLaserPointers = false;
+
+        // Player physics and thruster system
+        let playerPhysicsBody = null;
+        let playerCollisionSphere = null; // Visual representation
+        let playerVelocity = new THREE.Vector3(); // Persistent velocity for momentum
+        const thrusterAcceleration = 0.00025; // Acceleration for 15 m/s max dual thruster speed
+        const velocityDamping = 0.998; // Very slight damping to prevent infinite acceleration
+        const maxPlayerSpeed = 20.0; // Maximum player speed in any direction
+        let lastHeadPosition = new THREE.Vector3(); // Track head movement for physical leaning
+        let throwEndTime = 0; // When the last throw ended (to reduce follow forces temporarily)
+
+        // Interaction management
+        const intersected = [];
+        const tempMatrix = new THREE.Matrix4();
+
+        // Static grabbable cubes for EchoVR-style movement
+        let staticCubes = [];
+        let staticCubeMeshes = [];
+        let staticCubeWireframes = [];
+
+        // 3D Environment model
+        let environmentModel = null;
+        let environmentCollisionBodies = [];
+        let environmentWireframes = [];
+
+        // Ultra-safe physics helper functions (skip on any error)
+        let physicsErrorCount = 0;
+        
+        function safeResetForces(rigidBody) {
+            if (!rigidBody || physicsErrorCount > 10) return; // Skip if too many errors
+            try {
+                rigidBody.resetForces(true);
+            } catch(e) {
+                physicsErrorCount++;
+                // Skip this operation to prevent crashes
+            }
+        }
+
+        function safeResetTorques(rigidBody) {
+            if (!rigidBody || physicsErrorCount > 10) return; // Skip if too many errors
+            try {
+                rigidBody.resetTorques(true);
+            } catch(e) {
+                physicsErrorCount++;
+                // Skip this operation to prevent crashes
+            }
+        }
+
+        // Initialize the application
+        init();
+
+        /**
+         * Initialize the WebXR scene, physics, and controls
+         */
         async function init() {
-            // Create scene
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x0a0a2e);
+            // Create container for renderer
+            const container = document.createElement('div');
+            document.body.appendChild(container);
 
-            // Create camera
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            
-            // Create dolly for VR movement (camera parent)
+            // Setup scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x101030);
+
+            // Setup camera
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 1.6, 3);
+
+            // Create VR dolly/rig for player movement and rotation
             dolly = new THREE.Group();
+            dolly.position.set(0, 0, 0);
             dolly.add(camera);
             scene.add(dolly);
 
-            // Create renderer
+            // Setup renderer with WebXR support
             renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-            document.getElementById('container').appendChild(renderer.domElement);
-
-            // Add VR button
-            document.body.appendChild(VRButton.createButton(renderer));
-
-            // Initialize physics FIRST and wait for it
-            await initPhysics();
-
-            // Create environment
-            createEnvironment();
-
-            // Create player (now physics world is ready)
-            createPlayer();
-
-            // Create cube
-            createCube();
+            renderer.xr.enabled = true;
+            container.appendChild(renderer.domElement);
 
             // Setup VR controllers
-            setupVRControllers();
+            setupControllers();
 
             // Setup lighting
             setupLighting();
 
-            // Handle window resize
+            // Initialize physics engine
+            await initPhysics();
+
+            // Initialize raycaster for object interaction
+            raycaster = new THREE.Raycaster();
+
+            // Initialize audio system
+            await initAudio();
+
+            // Create scene objects
+            createPlayer();
+            createCube();
+            createStaticCubes();
+            createPlayerSphere();
+            createPlayerPhysics();
+            
+            // Load environment model asynchronously
+            loadEnvironmentModel();
+
+            // Setup event listeners
+            window.addEventListener('keydown', onKeyDown);
             window.addEventListener('resize', onWindowResize);
 
-            // Handle wireframe toggle
-            window.addEventListener('keydown', onKeyDown);
+            // Add VR button to enter immersive mode
+            document.body.appendChild(VRButton.createButton(renderer));
 
-            // Start render loop
-            renderer.setAnimationLoop(animate);
+            // Start the animation loop
+            animate();
         }
 
+        /**
+         * Create thruster cone visual for wrist
+         */
+        function createThrusterCone() {
+            const coneGeometry = new THREE.ConeGeometry(0.02, 0.1, 8);
+            const coneMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x00ffff,
+                emissive: 0x004444,
+                transparent: true,
+                opacity: 0.7
+            });
+            
+            const cone = new THREE.Mesh(coneGeometry, coneMaterial);
+            
+            // Position cone at wrist pointing forward (thruster nozzle)
+            cone.position.set(0, 0, -0.05);
+            cone.rotation.x = 0; // No rotation (90° change from Math.PI/2 original)
+            cone.visible = false; // Start hidden
+            
+            return cone;
+        }
+
+        /**
+         * Create player collision sphere (visual debug)
+         */
+        function createPlayerCollisionSphere() {
+            const sphereGeometry = new THREE.SphereGeometry(0.3, 16, 12);
+            const sphereMaterial = new THREE.MeshStandardMaterial({
+                color: 0x00ff00,
+                transparent: true,
+                opacity: 0.3,
+                wireframe: true
+            });
+            
+            const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+            sphere.visible = showWireframes; // Initially follow wireframe setting
+            
+            return sphere;
+        }
+
+        /**
+         * Create player physics body
+         */
+        function createPlayerPhysics() {
+            if (!RAPIER || !world) return;
+
+            // Create spherical collision body for player (0.3m radius)
+            const colliderDesc = RAPIER.ColliderDesc.ball(0.3)
+                .setFriction(0.3)
+                .setRestitution(0.2);
+            const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic() // Dynamic body to respect collisions
+                .setGravityScale(0.0) // No gravity in zero-g
+                .setLinearDamping(5.0) // Moderate damping for better collision response
+                .setAngularDamping(5.0); // Prevent spinning
+            
+            // Position at initial camera location
+            rigidBodyDesc.setTranslation(0, 1.6, 0); // Standard VR height
+            
+            // Create physics body
+            playerPhysicsBody = world.createRigidBody(rigidBodyDesc);
+            const collider = world.createCollider(colliderDesc, playerPhysicsBody);
+            
+            console.log('✅ Player physics body type:', playerPhysicsBody.bodyType());
+            console.log('✅ Player collision active:', !playerPhysicsBody.isSleeping());
+            
+            // Create visual representation
+            playerCollisionSphere = createPlayerCollisionSphere();
+            scene.add(playerCollisionSphere);
+        }
+
+        /**
+         * Setup VR controllers with event handlers and 3D models
+         */
+        function setupControllers() {
+            const controllerModelFactory = new XRControllerModelFactory();
+
+            // Controller 1 (typically left hand)
+            controller1 = renderer.xr.getController(0);
+            controller1.addEventListener('selectstart', onSelectStart);
+            controller1.addEventListener('selectend', onSelectEnd);
+            controller1.addEventListener('connected', function (event) {
+                this.add(buildController(event.data));
+            });
+            controller1.addEventListener('disconnected', function () {
+                this.remove(this.children[0]);
+            });
+            dolly.add(controller1);
+
+            // Controller 2 (typically right hand)
+            controller2 = renderer.xr.getController(1);
+            controller2.addEventListener('selectstart', onSelectStart);
+            controller2.addEventListener('selectend', onSelectEnd);
+            controller2.addEventListener('connected', function (event) {
+                this.add(buildController(event.data));
+            });
+            controller2.addEventListener('disconnected', function () {
+                this.remove(this.children[0]);
+            });
+            dolly.add(controller2);
+
+            // Controller grips with 3D models and thruster cones
+            controllerGrip1 = renderer.xr.getControllerGrip(0);
+            controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+            
+            // Add thruster cone to left controller
+            const leftThrusterCone = createThrusterCone();
+            controllerGrip1.add(leftThrusterCone);
+            controllerStates.left.thrusterCone = leftThrusterCone;
+            
+            dolly.add(controllerGrip1);
+
+            controllerGrip2 = renderer.xr.getControllerGrip(1);
+            controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
+            
+            // Add thruster cone to right controller
+            const rightThrusterCone = createThrusterCone();
+            controllerGrip2.add(rightThrusterCone);
+            controllerStates.right.thrusterCone = rightThrusterCone;
+            
+            dolly.add(controllerGrip2);
+        }
+
+        /**
+         * Setup scene lighting
+         */
+        function setupLighting() {
+            // Directional light with shadows
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(0, 6, 0);
+            light.castShadow = true;
+            light.shadow.camera.top = 2;
+            light.shadow.camera.bottom = -2;
+            light.shadow.camera.right = 2;
+            light.shadow.camera.left = -2;
+            scene.add(light);
+
+            // Ambient light for overall illumination
+            scene.add(new THREE.AmbientLight(0x505050, 0.6));
+        }
+
+        /**
+         * Initialize physics engine with zero gravity
+         */
         async function initPhysics() {
             try {
                 await RAPIER.init();
                 
-                // Create physics world with zero gravity
-                let gravity = { x: 0.0, y: 0.0, z: 0.0 };
+                // Create zero-gravity world (floating in space)
+                const gravity = { x: 0.0, y: 0.0, z: 0.0 };
                 world = new RAPIER.World(gravity);
                 
-                console.log('✅ Physics world initialized with zero gravity');
-                
-                // Verify world was created
                 if (!world) {
                     throw new Error('Failed to create physics world');
                 }
             } catch (error) {
-                console.error('❌ Failed to initialize physics:', error);
+                console.error('Failed to initialize physics:', error);
                 throw error;
             }
         }
 
-        function createEnvironment() {
-            // Add stars
-            const starsGeometry = new THREE.BufferGeometry();
-            const starsMaterial = new THREE.PointsMaterial({ color: 0xffffff });
-            
-            const starsVertices = [];
-            for (let i = 0; i < 10000; i++) {
-                const x = (Math.random() - 0.5) * 2000;
-                const y = (Math.random() - 0.5) * 2000;
-                const z = (Math.random() - 0.5) * 2000;
-                starsVertices.push(x, y, z);
-            }
-            
-            starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
-            const stars = new THREE.Points(starsGeometry, starsMaterial);
-            scene.add(stars);
+        /**
+         * Initialize spatial audio system
+         */
+        async function initAudio() {
+            try {
+                // Create audio context
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Create Three.js audio listener
+                audioListener = new THREE.AudioListener();
+                camera.add(audioListener);
 
-            // Add some ambient light
-            const ambientLight = new THREE.AmbientLight(0x404040, 0.3);
-            scene.add(ambientLight);
+                // Load audio files
+                const audioLoader = new THREE.AudioLoader();
+                
+                // Load bounce sound
+                bounceSound = await new Promise((resolve, reject) => {
+                    audioLoader.load('audio/impact-cinematic-boom-5-352465.mp3', resolve, undefined, reject);
+                });
+
+                // Load electric hum sound
+                electricHumSound = await new Promise((resolve, reject) => {
+                    audioLoader.load('audio/electric-hum.wav', resolve, undefined, reject);
+                });
+
+            } catch (error) {
+                console.error('Failed to initialize audio:', error);
+                // Continue without audio if it fails
+            }
         }
 
+        /**
+         * Create player representation with physics body
+         */
         function createPlayer() {
-            // Create visual representation (sphere) - positioned at torso level, not head
-            const geometry = new THREE.SphereGeometry(0.3, 32, 32);
-            const material = new THREE.MeshLambertMaterial({ 
+            // OLD PLAYER VISUAL DISABLED - using new physics-based player collision sphere instead
+            // The playerMesh below was causing the "extra green sphere" - now hidden
+            
+            // Visual representation - semi-transparent green sphere (HIDDEN)
+            const playerGeometry = new THREE.SphereGeometry(0.3, 32, 32);
+            const playerMaterial = new THREE.MeshStandardMaterial({ 
                 color: 0x00ff00,
                 transparent: true,
-                opacity: 0.7
+                opacity: 0.7,
+                metalness: 0.3,
+                roughness: 0.4
             });
-            playerMesh = new THREE.Mesh(geometry, material);
-            playerMesh.position.set(0, 1.0, 0); // Torso height (0.6m below head)
-            dolly.add(playerMesh); // Add to dolly so it moves with VR headset
+            playerMesh = new THREE.Mesh(playerGeometry, playerMaterial);
+            playerMesh.position.set(0, 1.0, 0);
+            playerMesh.name = 'player';
+            playerMesh.visible = false; // HIDE THE OLD PLAYER VISUAL
+            scene.add(playerMesh);
 
-            // Create physics body at torso level
-            const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+            // Physics body - also not needed, using playerPhysicsBody instead
+            const playerBodyDesc = RAPIER.RigidBodyDesc.dynamic()
                 .setTranslation(0, 1.0, 0);
-            playerRigidBody = world.createRigidBody(rigidBodyDesc);
+            playerRigidBody = world.createRigidBody(playerBodyDesc);
+            const playerColliderDesc = RAPIER.ColliderDesc.ball(0.3);
+            world.createCollider(playerColliderDesc, playerRigidBody);
 
-            const colliderDesc = RAPIER.ColliderDesc.ball(0.3);
-            world.createCollider(colliderDesc, playerRigidBody);
-
-            // Create physics wireframe visualization
+            // Debug wireframe - also not needed, using playerCollisionSphere instead
             if (showWireframes) {
                 const wireframeGeometry = new THREE.SphereGeometry(0.3, 16, 16);
                 const wireframeMaterial = new THREE.MeshBasicMaterial({ 
                     color: 0x00ff00, 
                     wireframe: true,
                     transparent: true,
-                    opacity: 0.8
+                    opacity: 0.5
                 });
                 playerWireframe = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
+                playerWireframe.visible = false; // HIDE THE OLD WIREFRAME
                 scene.add(playerWireframe);
             }
-
-            console.log('✅ Player created with sphere physics body at torso level');
         }
 
+        /**
+         * Create interactive cube with physics body
+         */
         function createCube() {
-            // Create visual representation (1m cube)
-            const geometry = new THREE.BoxGeometry(1, 1, 1);
-            const material = new THREE.MeshLambertMaterial({ 
-                color: 0xff4444,
-                transparent: true,
-                opacity: 0.8
+            // Visual representation - orange cube
+            const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
+            const cubeMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xff6600,
+                metalness: 0.4,
+                roughness: 0.3
             });
-            cubeMesh = new THREE.Mesh(geometry, material);
-            cubeMesh.position.set(0, 1.6, -4); // 4 meters in front, same height as player
+            cubeMesh = new THREE.Mesh(cubeGeometry, cubeMaterial);
+            cubeMesh.position.set(0, 1.6, -4);
+            cubeMesh.castShadow = true;
+            cubeMesh.receiveShadow = true;
+            cubeMesh.name = 'interactiveCube';
             scene.add(cubeMesh);
 
-            // Create physics body
-            const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+            // Physics body with frictionless material
+            const cubeBodyDesc = RAPIER.RigidBodyDesc.dynamic()
                 .setTranslation(0, 1.6, -4);
-            cubeRigidBody = world.createRigidBody(rigidBodyDesc);
+            cubeRigidBody = world.createRigidBody(cubeBodyDesc);
+            const cubeColliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5)
+                .setFriction(0.0)        // Frictionless
+                .setRestitution(0.8);    // Bouncy
+            world.createCollider(cubeColliderDesc, cubeRigidBody);
 
-            const colliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5);
-            world.createCollider(colliderDesc, cubeRigidBody);
-
-            // Create physics wireframe visualization
+            // Debug wireframe
             if (showWireframes) {
                 const wireframeGeometry = new THREE.BoxGeometry(1, 1, 1);
                 const wireframeMaterial = new THREE.MeshBasicMaterial({ 
-                    color: 0xff4444, 
+                    color: 0xff6600, 
                     wireframe: true,
                     transparent: true,
-                    opacity: 0.8
+                    opacity: 0.5
                 });
                 cubeWireframe = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
                 scene.add(cubeWireframe);
             }
-
-            console.log('✅ Cube created 4 meters in front of player');
         }
 
-        function setupVRControllers() {
-            controllerModelFactory = new XRControllerModelFactory();
-
-            // Controller 1 (Right Hand)
-            controller1 = renderer.xr.getController(0);
-            controller1.addEventListener('selectstart', onSelectStart);
-            controller1.addEventListener('selectend', onSelectEnd);
-            controller1.addEventListener('connected', function (event) {
-                console.log('✅ Controller 1 connected:', event.data);
-                // Make sure the default representation is visible
-                addDefaultControllerGeometry(controller1, 0xff0000);
-            });
-            controller1.addEventListener('disconnected', function () {
-                console.log('❌ Controller 1 disconnected');
-            });
+        /**
+         * Create static grabbable cubes for EchoVR-style movement
+         */
+        function createStaticCubes() {
+            const cubeSize = 0.8; // Slightly smaller than main cube
+            const minDistance = 5.0; // Minimum 5 meters between cubes
+            const maxAttempts = 100; // Prevent infinite loops
             
-            // Add basic controller representation immediately (for testing)
-            addDefaultControllerGeometry(controller1, 0xff0000);
-            dolly.add(controller1);
-
-            controllerGrip1 = renderer.xr.getControllerGrip(0);
-            
-            // Add official controller model
-            const controllerModel1 = controllerModelFactory.createControllerModel(controllerGrip1);
-            controllerGrip1.add(controllerModel1);
-            
-            // Add bright fallback visual for grip
-            const grip1Geo = new THREE.BoxGeometry(0.05, 0.15, 0.05);
-            const grip1Mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-            const grip1Mesh = new THREE.Mesh(grip1Geo, grip1Mat);
-            controllerGrip1.add(grip1Mesh);
-            
-            dolly.add(controllerGrip1);
-
-            // Controller 2 (Left Hand)
-            controller2 = renderer.xr.getController(1);
-            controller2.addEventListener('selectstart', onSelectStart);
-            controller2.addEventListener('selectend', onSelectEnd);
-            controller2.addEventListener('connected', function (event) {
-                console.log('✅ Controller 2 connected:', event.data);
-                // Make sure the default representation is visible
-                addDefaultControllerGeometry(controller2, 0x0000ff);
-            });
-            controller2.addEventListener('disconnected', function () {
-                console.log('❌ Controller 2 disconnected');
-            });
-            
-            // Add basic controller representation immediately (for testing)
-            addDefaultControllerGeometry(controller2, 0x0000ff);
-            dolly.add(controller2);
-
-            controllerGrip2 = renderer.xr.getControllerGrip(1);
-            
-            // Add official controller model
-            const controllerModel2 = controllerModelFactory.createControllerModel(controllerGrip2);
-            controllerGrip2.add(controllerModel2);
-            
-            // Add bright fallback visual for grip
-            const grip2Geo = new THREE.BoxGeometry(0.05, 0.15, 0.05);
-            const grip2Mat = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-            const grip2Mesh = new THREE.Mesh(grip2Geo, grip2Mat);
-            controllerGrip2.add(grip2Mesh);
-            
-            dolly.add(controllerGrip2);
-
-            // For testing: position controllers in visible spots in desktop mode
-            if (!renderer.xr.isPresenting) {
-                controller1.position.set(0.5, 1.5, -2);
-                controller1.rotation.set(0, -0.3, 0);
+            for (let i = 0; i < 10; i++) {
+                let position;
+                let attempts = 0;
                 
-                controller2.position.set(-0.5, 1.5, -2);
-                controller2.rotation.set(0, 0.3, 0);
+                // Find a position at least 5m from existing cubes and center
+                do {
+                    position = new THREE.Vector3(
+                        (Math.random() - 0.5) * 40, // ±20m range
+                        (Math.random() - 0.5) * 20 + 2, // ±10m range, elevated
+                        (Math.random() - 0.5) * 40  // ±20m range
+                    );
+                    attempts++;
+                } while (attempts < maxAttempts && !isValidPosition(position, minDistance));
                 
-                controllerGrip1.position.set(0.5, 1.3, -2);
-                controllerGrip1.rotation.set(0, -0.3, 0);
-                
-                controllerGrip2.position.set(-0.5, 1.3, -2);
-                controllerGrip2.rotation.set(0, 0.3, 0);
-                
-                console.log('🖥️ Controllers positioned for desktop testing');
+                // Create visual cube
+                const cubeGeometry = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+                const cubeMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0xcccccc, // Light gray color for static cubes
+                    metalness: 0.3,
+                    roughness: 0.4
+                });
+                const cubeMesh = new THREE.Mesh(cubeGeometry, cubeMaterial);
+                cubeMesh.position.copy(position);
+                cubeMesh.castShadow = true;
+                cubeMesh.receiveShadow = true;
+                cubeMesh.name = `staticCube_${i}`;
+                scene.add(cubeMesh);
+                staticCubeMeshes.push(cubeMesh);
+
+                // Create wireframe for collision visualization
+                const wireframeGeometry = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+                const wireframeMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x00ff00,    // Green wireframes for static cubes
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.3
+                });
+                const wireframeMesh = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
+                wireframeMesh.position.copy(position);
+                wireframeMesh.visible = showWireframes;
+                wireframeMesh.name = `staticCubeWireframe_${i}`;
+                scene.add(wireframeMesh);
+                staticCubeWireframes.push(wireframeMesh);
+
+                // Create static physics body (fixed position for collision)
+                const cubeBodyDesc = RAPIER.RigidBodyDesc.fixed()
+                    .setTranslation(position.x, position.y, position.z);
+                const cubeRigidBody = world.createRigidBody(cubeBodyDesc);
+                const cubeColliderDesc = RAPIER.ColliderDesc.cuboid(cubeSize/2, cubeSize/2, cubeSize/2)
+                    .setFriction(0.8)            // High friction for grip
+                    .setRestitution(0.1);        // Low bounce
+                world.createCollider(cubeColliderDesc, cubeRigidBody);
+                staticCubes.push(cubeRigidBody);
             }
-
-            // Create debug cubes that will track controller positions
-            createDebugCubes();
-
-            console.log('✅ VR controllers setup complete with multiple fallback visuals');
-            console.log('📱 If you can\'t see controllers in VR, they may not be connected/tracked yet');
+            
+            console.log(`✅ Created ${staticCubeMeshes.length} grabbable static cubes with fixed physics bodies`);
         }
 
-        function addDefaultControllerGeometry(controller, color) {
-            // Remove any existing default geometry
-            const existing = controller.getObjectByName('defaultControllerGeometry');
-            if (existing) {
-                controller.remove(existing);
+        /**
+         * Load the sci-fi hallway environment model
+         */
+        async function loadEnvironmentModel() {
+            const gltfLoader = new GLTFLoader();
+            const objLoader = new OBJLoader();
+            
+            try {
+                console.log('🏗️ Loading sci-fi hallway environment...');
+                
+                // Load the visual model (GLB)
+                const gltf = await new Promise((resolve, reject) => {
+                    gltfLoader.load(
+                        'https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/sci_fi_hallway_center.glb',
+                        resolve,
+                        undefined,
+                        reject
+                    );
+                });
+                
+                environmentModel = gltf.scene;
+                environmentModel.scale.set(1, 1, 1); // Adjust scale if needed
+                environmentModel.position.set(0, 0, -10); // Position behind player
+                scene.add(environmentModel);
+                
+                console.log('✅ Environment visual model loaded');
+                
+                // Load the collision mesh (OBJ)
+                console.log('🔄 Loading collision mesh from assets/sci_fi_hallway_center-simple2.obj...');
+                const collisionMesh = await new Promise((resolve, reject) => {
+                    objLoader.load(
+                        'assets/sci_fi_hallway_center-simple2.obj',
+                        (obj) => {
+                            console.log('✅ OBJ collision mesh loaded successfully');
+                            console.log('Collision mesh children:', obj.children.length);
+                            resolve(obj);
+                        },
+                        (progress) => {
+                            console.log('Loading progress:', (progress.loaded / progress.total * 100) + '%');
+                        },
+                        (error) => {
+                            console.error('❌ Failed to load OBJ collision mesh:', error);
+                            reject(error);
+                        }
+                    );
+                });
+                
+                // Create physics bodies from the collision mesh
+                createEnvironmentPhysics(collisionMesh);
+                
+                console.log('✅ Environment collision processing complete');
+                
+            } catch (error) {
+                console.error('❌ Failed to load environment:', error);
+                console.log('⚠️ Continuing without environment model');
             }
+        }
 
-            // Create a simple controller representation - MUCH LARGER and EMISSIVE
-            const group = new THREE.Group();
-            group.name = 'defaultControllerGeometry';
-
-            // Main body (handle) - bigger and glowing
-            const handleGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.25, 8);
-            const handleMat = new THREE.MeshStandardMaterial({ 
-                color: color,
-                emissive: color,
-                emissiveIntensity: 0.3
+        /**
+         * Create physics bodies from the collision mesh using actual mesh geometry
+         */
+        function createEnvironmentPhysics(collisionMesh) {
+            if (!collisionMesh || !world) return;
+            
+            // 🧹 CLEANUP: Remove any existing environment collision bodies
+            environmentCollisionBodies.forEach(bodyInfo => {
+                if (bodyInfo.collider) {
+                    world.removeCollider(bodyInfo.collider, true);
+                }
+                if (bodyInfo.body) {
+                    world.removeRigidBody(bodyInfo.body);
+                }
             });
-            const handle = new THREE.Mesh(handleGeo, handleMat);
-            handle.position.set(0, -0.125, 0);
-            group.add(handle);
-
-            // Pointer tip - much bigger and glowing
-            const tipGeo = new THREE.SphereGeometry(0.08, 8, 8);
-            const tipMat = new THREE.MeshStandardMaterial({ 
-                color: color,
-                emissive: color,
-                emissiveIntensity: 0.5
+            environmentCollisionBodies.length = 0; // Clear array
+            console.log('🧹 Cleared all existing environment collision bodies');
+            
+            let collisionCount = 0;
+            
+            // Process each geometry in the collision mesh
+            collisionMesh.traverse((child) => {
+                if (child.isMesh && child.geometry) {
+                    const geometry = child.geometry;
+                    
+                    // Ensure geometry has position attribute
+                    if (!geometry.attributes.position) return;
+                    
+                    // Get vertices from geometry
+                    const vertices = geometry.attributes.position.array;
+                    const indices = geometry.index ? geometry.index.array : null;
+                    
+                    try {
+                        console.log(`Processing collision mesh with ${vertices.length/3} vertices, indices: ${indices ? indices.length/3 : 'none'}`);
+                        
+                        // Try TRIMESH first (most accurate for static complex geometry)
+                        console.log('🎯 Attempting TRIMESH collider (most accurate for complex static geometry)...');
+                        console.log(`Input: ${vertices.length/3} vertices, ${indices ? indices.length/3 + ' triangles' : 'no indices'}`);
+                        
+                        let colliderDesc = null;
+                        let colliderType = 'unknown';
+                        
+                        // Step 1: Try trimesh with original mesh data
+                        try {
+                            if (indices && indices.length > 0) {
+                                colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
+                                colliderType = 'trimesh_indexed';
+                                console.log('✅ SUCCESS: Trimesh created with indexed geometry');
+                            } else {
+                                // Generate indices from vertices (assuming triangles)
+                                const generatedIndices = [];
+                                for (let i = 0; i < vertices.length / 3; i++) {
+                                    generatedIndices.push(i);
+                                }
+                                colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, generatedIndices);
+                                colliderType = 'trimesh_generated_indices';
+                                console.log('✅ SUCCESS: Trimesh created with generated indices');
+                            }
+                        } catch (trimeshError) {
+                            console.warn('❌ Trimesh failed:', trimeshError.message);
+                            
+                            // Step 2: Fallback to simplified convex hull
+                            console.log('🔄 Falling back to convex hull...');
+                            
+                            const targetVertexCount = 500;
+                            const stride = Math.max(1, Math.floor(vertices.length / (3 * targetVertexCount)));
+                            const simplifiedVertices = [];
+                            
+                            for (let i = 0; i < vertices.length; i += stride * 3) {
+                                simplifiedVertices.push(vertices[i], vertices[i + 1], vertices[i + 2]);
+                            }
+                            
+                            console.log(`Simplified to ${simplifiedVertices.length/3} vertices (stride ${stride})`);
+                            
+                            try {
+                                colliderDesc = RAPIER.ColliderDesc.convexHull(simplifiedVertices);
+                                colliderType = 'convex_hull_simplified';
+                                console.log('✅ SUCCESS: Convex hull created with simplified vertices');
+                            } catch (convexError) {
+                                console.error('❌ Both trimesh and convex hull failed!');
+                                console.error('❌ Trimesh error:', trimeshError.message);
+                                console.error('❌ Convex hull error:', convexError.message);
+                                throw new Error('All collision generation methods failed');
+                            }
+                        }
+                        
+                        if (!colliderDesc) {
+                            throw new Error('No collider descriptor created');
+                        }
+                        
+                        console.log(`🎯 Final collider type: ${colliderType}`);
+                        
+                        if (colliderDesc) {
+                            // Position the collision at the environment location
+                            const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+                                .setTranslation(0, 0, -10); // Same as visual model position
+                            const rigidBody = world.createRigidBody(bodyDesc);
+                            
+                            colliderDesc.setFriction(0.8).setRestitution(0.1);
+                            const collider = world.createCollider(colliderDesc, rigidBody);
+                            environmentCollisionBodies.push({ body: rigidBody, collider: collider });
+                            
+                            // 🔍 DEBUG: Log collider details
+                            console.log('🔍 COLLIDER DEBUG INFO:');
+                            console.log('  Position:', rigidBody.translation());
+                            console.log('  Collider object:', collider);
+                            console.log('  Collider type:', typeof collider);
+                            
+                            // Try different ways to get shape info
+                            try {
+                                if (collider.shape) {
+                                    const shape = collider.shape();
+                                    console.log('  ✅ Shape via shape():', shape.type || shape.constructor.name);
+                                } else if (collider.shapeType) {
+                                    console.log('  ✅ Shape via shapeType:', collider.shapeType);
+                                } else {
+                                    console.log('  📋 Available collider properties:', Object.getOwnPropertyNames(collider));
+                                    console.log('  📋 Collider prototype:', Object.getPrototypeOf(collider).constructor.name);
+                                }
+                            } catch (shapeError) {
+                                console.log('  ⚠️ Could not get shape info:', shapeError.message);
+                            }
+                            
+                            // Create wireframe from the original mesh geometry
+                            createEnvironmentWireframe(geometry, new THREE.Vector3(0, 0, -10));
+                            
+                            // 🔍 DEBUG: Create a physics collider debug wireframe (RED) 
+                            const debugWireframeGeometry = new THREE.WireframeGeometry(geometry);
+                            const debugWireframeMaterial = new THREE.LineBasicMaterial({ 
+                                color: 0xff0000,  // RED for physics debug
+                                transparent: true, 
+                                opacity: 0.8,
+                                linewidth: 3
+                            });
+                            const debugWireframe = new THREE.LineSegments(debugWireframeGeometry, debugWireframeMaterial);
+                            debugWireframe.position.copy(rigidBody.translation()); // Position at physics body location
+                            scene.add(debugWireframe);
+                            console.log('🔍 Added RED debug wireframe at physics body position:', rigidBody.translation());
+                            
+                            collisionCount++;
+                            
+                            console.log(`✅ Successfully created environment convex hull collider ${collisionCount}`);
+                        } else {
+                            console.error('❌ Failed to create collider descriptor');
+                        }
+                    } catch (error) {
+                        console.error('❌ CRITICAL: Failed to create environment collider:', error);
+                        console.error('❌ This should not happen since trimesh was created successfully');
+                        // Continue anyway - the collider was created, just debug failed
+                    }
+                }
             });
-            const tip = new THREE.Mesh(tipGeo, tipMat);
-            tip.position.set(0, 0, 0);
-            group.add(tip);
+            
+            console.log(`✅ Created ${collisionCount} environment collision bodies with wireframes`);
+            console.log('Environment collision bodies array length:', environmentCollisionBodies.length);
+            
+            // 🔍 DEBUG: Count all collision bodies in the physics world (safe check)
+            try {
+                const colliderCount = world.colliders.len();
+                console.log(`🔍 Total colliders in physics world: ${colliderCount}`);
+            } catch (e) {
+                console.log('🔍 Could not count colliders in physics world:', e.message);
+            }
+            
+            if (environmentCollisionBodies.length > 0) {
+                console.log('✅ Environment collision setup complete');
+                console.log('  → Type: TRIMESH (exact mesh collision)');
+                console.log('  → Player collision: Dynamic body will bounce off exact mesh');
+                console.log('  → Ball collision: Physics engine + distance detection');
+                console.log('  → Environment grabbing: Distance-based like black cubes');
+            } else {
+                console.log('⚠️ No collision bodies created - check OBJ file and mesh processing');
+            }
+        }
 
-            // Pointer ray - thicker and more visible
-            const rayGeo = new THREE.CylinderGeometry(0.008, 0.008, 5, 8);
-            const rayMat = new THREE.MeshStandardMaterial({ 
-                color: color,
-                emissive: color,
-                emissiveIntensity: 0.2,
+        /**
+         * Create wireframe for mesh-based collision
+         */
+        function createEnvironmentWireframe(geometry, position) {
+            const wireframeGeometry = new THREE.WireframeGeometry(geometry);
+            const wireframeMaterial = new THREE.LineBasicMaterial({
+                color: 0xff0000, // Red wireframes for environment
                 transparent: true,
-                opacity: 0.8
+                opacity: 0.3
             });
-            const ray = new THREE.Mesh(rayGeo, rayMat);
-            ray.position.set(0, 0, -2.5);
-            ray.rotateX(Math.PI / 2);
-            group.add(ray);
-
-            // Add a debug cube that's always visible
-            const debugGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
-            const debugMat = new THREE.MeshStandardMaterial({ 
-                color: 0xffffff,
-                emissive: 0xffffff,
-                emissiveIntensity: 1.0
-            });
-            const debugCube = new THREE.Mesh(debugGeo, debugMat);
-            debugCube.position.set(0, 0.2, 0);
-            group.add(debugCube);
-
-            controller.add(group);
-            console.log(`✅ Added LARGE emissive controller geometry (${color === 0xff0000 ? 'Red' : 'Blue'})`);
+            const wireframeMesh = new THREE.LineSegments(wireframeGeometry, wireframeMaterial);
+            wireframeMesh.position.copy(position);
+            wireframeMesh.visible = showWireframes;
+            wireframeMesh.name = 'environmentWireframe';
+            scene.add(wireframeMesh);
+            environmentWireframes.push(wireframeMesh);
         }
 
-        function createDebugCubes() {
-            // Create bright debug cubes that will follow controller positions
-            const debugGeo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-            
-            const debug1Mat = new THREE.MeshStandardMaterial({ 
-                color: 0xff00ff,  // Magenta
-                emissive: 0xff00ff,
-                emissiveIntensity: 1.0
+        /**
+         * Create wireframe for box-based collision (fallback)
+         */
+        function createBoxWireframe(center, size) {
+            const wireframeGeometry = new THREE.BoxGeometry(size.x, size.y, size.z);
+            const wireframeMaterial = new THREE.MeshBasicMaterial({
+                color: 0xff0000, // Red wireframes for environment
+                wireframe: true,
+                transparent: true,
+                opacity: 0.3
             });
-            debugCube1 = new THREE.Mesh(debugGeo, debug1Mat);
-            debugCube1.position.set(1, 2, -1); // Start position
-            scene.add(debugCube1);
-            
-            const debug2Mat = new THREE.MeshStandardMaterial({ 
-                color: 0x00ffff,  // Cyan
-                emissive: 0x00ffff,
-                emissiveIntensity: 1.0
-            });
-            debugCube2 = new THREE.Mesh(debugGeo, debug2Mat);
-            debugCube2.position.set(-1, 2, -1); // Start position
-            scene.add(debugCube2);
-            
-            console.log('✅ Created bright debug cubes (Magenta & Cyan) to track controllers');
+            const wireframeMesh = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
+            wireframeMesh.position.copy(center);
+            wireframeMesh.visible = showWireframes;
+            wireframeMesh.name = 'environmentBoxWireframe';
+            scene.add(wireframeMesh);
+            environmentWireframes.push(wireframeMesh);
         }
 
-        function setupLighting() {
-            // Main directional light
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-            directionalLight.position.set(5, 10, 5);
-            directionalLight.castShadow = true;
-            directionalLight.shadow.camera.near = 0.1;
-            directionalLight.shadow.camera.far = 50;
-            directionalLight.shadow.camera.left = -10;
-            directionalLight.shadow.camera.right = 10;
-            directionalLight.shadow.camera.top = 10;
-            directionalLight.shadow.camera.bottom = -10;
-            scene.add(directionalLight);
-
-            // Fill light
-            const fillLight = new THREE.DirectionalLight(0x4444ff, 0.3);
-            fillLight.position.set(-5, 5, -5);
-            scene.add(fillLight);
+        /**
+         * Check if position is valid (far enough from existing cubes and center)
+         */
+        function isValidPosition(newPos, minDistance) {
+            // Check distance from center (0,0,0)
+            if (newPos.length() < minDistance) return false;
+            
+            // Check distance from main cube at (0, 1.6, -4)
+            const mainCubePos = new THREE.Vector3(0, 1.6, -4);
+            if (newPos.distanceTo(mainCubePos) < minDistance) return false;
+            
+            // Check distance from existing static cubes
+            for (const mesh of staticCubeMeshes) {
+                if (newPos.distanceTo(mesh.position) < minDistance) return false;
+            }
+            
+            return true;
         }
 
+        /**
+         * Create player's manipulatable sphere with physics and spatial audio
+         */
+        function createPlayerSphere() {
+            // Visual representation - bright blue sphere
+            const sphereGeometry = new THREE.SphereGeometry(0.15, 32, 32);
+            const sphereMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x0099ff,
+                metalness: 0.7,
+                roughness: 0.3,
+                emissive: 0x001144,
+                emissiveIntensity: 0.2
+            });
+            playerSphereMesh = new THREE.Mesh(sphereGeometry, sphereMaterial);
+            playerSphereMesh.position.set(1, 1.5, -2); // Start position near player
+            playerSphereMesh.castShadow = true;
+            playerSphereMesh.receiveShadow = true;
+            playerSphereMesh.name = 'playerSphere';
+            scene.add(playerSphereMesh);
+
+            // Physics body with frictionless material
+            const sphereBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                .setTranslation(1, 1.5, -2);
+            playerSphereRigidBody = world.createRigidBody(sphereBodyDesc);
+            const sphereColliderDesc = RAPIER.ColliderDesc.ball(0.15)
+                .setFriction(0.0)        // Frictionless
+                .setRestitution(0.9);    // Bouncy
+            world.createCollider(sphereColliderDesc, playerSphereRigidBody);
+
+            // Store references in playerSphere object
+            playerSphere.mesh = playerSphereMesh;
+            playerSphere.rigidBody = playerSphereRigidBody;
+
+            // Debug wireframe
+            if (showWireframes) {
+                const wireframeGeometry = new THREE.SphereGeometry(0.15, 16, 16);
+                const wireframeMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0x0099ff, 
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.5
+                });
+                playerSphereWireframe = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
+                scene.add(playerSphereWireframe);
+            }
+
+            // Add spatial audio for electric hum
+            if (electricHumSound && audioListener) {
+                const positionalAudio = new THREE.PositionalAudio(audioListener);
+                positionalAudio.setBuffer(electricHumSound);
+                positionalAudio.setLoop(true);
+                positionalAudio.setVolume(0.3);
+                positionalAudio.setRefDistance(1);
+                positionalAudio.setRolloffFactor(2);
+                playerSphereMesh.add(positionalAudio);
+                positionalAudio.play();
+                electricHumSource = positionalAudio;
+            }
+        }
+
+        /**
+         * Build controller ray visualization (toggleable laser pointers)
+         */
+        function buildController(data) {
+            let geometry, material;
+
+            switch (data.targetRayMode) {
+                case 'tracked-pointer':
+                    geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, -1], 3));
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute([0.5, 0.5, 0.5, 0, 0, 0], 3));
+
+                    material = new THREE.LineBasicMaterial({ 
+                        vertexColors: true, 
+                        blending: THREE.AdditiveBlending 
+                    });
+
+                    const line = new THREE.Line(geometry, material);
+                    line.name = 'line';
+                    line.scale.z = 5;
+                    line.visible = showLaserPointers; // Start with lasers disabled
+                    return line;
+
+                case 'gaze':
+                    geometry = new THREE.RingGeometry(0.02, 0.04, 32).translate(0, 0, -1);
+                    material = new THREE.MeshBasicMaterial({ 
+                        opacity: 0.5, 
+                        transparent: true 
+                    });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.name = 'line';
+                    mesh.visible = showLaserPointers; // Start with lasers disabled
+                    return mesh;
+            }
+        }
+
+        /**
+         * Handle object selection start
+         */
         function onSelectStart(event) {
-            console.log('Controller select start:', event);
+            // Only work if laser pointers are enabled
+            if (!showLaserPointers) return;
+            
+            const controller = event.target;
+            const intersections = getIntersections(controller);
+
+            if (intersections.length > 0) {
+                const intersection = intersections[0];
+                const object = intersection.object;
+                
+                // Highlight selected object
+                object.material.emissive.b = 1;
+                controller.attach(object);
+                controller.userData.selected = object;
+            }
         }
 
+        /**
+         * Handle object selection end
+         */
         function onSelectEnd(event) {
-            console.log('Controller select end:', event);
+            // Only work if laser pointers are enabled
+            if (!showLaserPointers) return;
+            
+            const controller = event.target;
+
+            if (controller.userData.selected !== undefined) {
+                const object = controller.userData.selected;
+                
+                // Remove highlight
+                object.material.emissive.b = 0;
+                scene.attach(object);
+                controller.userData.selected = undefined;
+            }
         }
 
-        function handleControllerInput() {
+        /**
+         * Get ray intersections with scene objects
+         */
+        function getIntersections(controller) {
+            tempMatrix.identity().extractRotation(controller.matrixWorld);
+            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+            return raycaster.intersectObjects([cubeMesh], false);
+        }
+
+        /**
+         * Update controller ray visualization and object highlighting
+         */
+        function intersectObjects(controller) {
+            if (controller.userData.selected !== undefined) return;
+
+            const line = controller.getObjectByName('line');
+            if (!line || !showLaserPointers) return;
+
+            const intersections = getIntersections(controller);
+
+            if (intersections.length > 0) {
+                const intersection = intersections[0];
+                const object = intersection.object;
+                
+                // Highlight object when targeted
+                object.material.emissive.r = 1;
+                intersected.push(object);
+                
+                // Adjust ray length to intersection distance
+                line.scale.z = intersection.distance;
+            } else {
+                // Default ray length
+                line.scale.z = 5;
+            }
+        }
+
+        /**
+         * Update controller input states (grab buttons, thumbsticks, velocity)
+         */
+        function updateControllerInputs() {
             const session = renderer.xr.getSession();
             if (!session) return;
 
-            // Direct input source tracking - more reliable for Quest devices
-            let inputSourceIndex = 0;
-            for (const source of session.inputSources) {
-                if (source && source.gripSpace) {
-                    // Create or update controller visualization for this input source
-                    updateControllerFromInputSource(source, inputSourceIndex);
-                }
+            // Update controller velocity tracking
+            const controllers = [
+                { object: controller1, hand: 'left' },
+                { object: controller2, hand: 'right' }
+            ];
 
-                if (source.gamepad) {
-                    const gamepad = source.gamepad;
+            for (const ctrl of controllers) {
+                const state = controllerStates[ctrl.hand];
+                if (state) {
+                    // Store previous position and rotation
+                    state.prevPosition.copy(state.position);
+                    state.prevQuaternion.copy(state.quaternion);
                     
-                    // Check for thumbstick input (usually axes 2 and 3)
-                    if (gamepad.axes.length >= 4) {
-                        const thumbstickX = gamepad.axes[2];
-                        const thumbstickY = gamepad.axes[3];
-                        
-                        // Apply rotation based on thumbstick input
-                        if (Math.abs(thumbstickX) > 0.1 || Math.abs(thumbstickY) > 0.1) {
-                            // Rotate the dolly (camera rig) for smooth turning
-                            dolly.rotateY(-thumbstickX * 0.02);
-                            
-                            // Optional: Allow pitch control with right thumbstick Y
-                            // camera.rotateX(-thumbstickY * 0.01);
+                    // Get current position and rotation
+                    ctrl.object.getWorldPosition(state.position);
+                    ctrl.object.getWorldQuaternion(state.quaternion);
+                    
+                    // Calculate linear velocity (position change per frame) with smoothing
+                    const frameVelocity = new THREE.Vector3();
+                    frameVelocity.subVectors(state.position, state.prevPosition);
+                    frameVelocity.multiplyScalar(60); // Scale by frame rate
+                    state.velocity.lerp(frameVelocity, 0.3); // Smooth velocity
+                    
+                    // Calculate angular velocity (rotation change per frame)
+                    const rotationDelta = new THREE.Quaternion();
+                    rotationDelta.multiplyQuaternions(state.quaternion, state.prevQuaternion.clone().invert());
+                    
+                    // Convert quaternion to angular velocity vector
+                    if (rotationDelta.w < 1.0) {
+                        const angle = 2 * Math.acos(Math.abs(rotationDelta.w));
+                        const sinHalfAngle = Math.sqrt(1 - rotationDelta.w * rotationDelta.w);
+                        if (sinHalfAngle > 0.001) {
+                            const frameAngularVel = new THREE.Vector3(
+                                rotationDelta.x / sinHalfAngle * angle * 60,
+                                rotationDelta.y / sinHalfAngle * angle * 60,
+                                rotationDelta.z / sinHalfAngle * angle * 60
+                            );
+                            state.angularVelocity.lerp(frameAngularVel, 0.3);
                         }
                     }
                 }
-                inputSourceIndex++;
+            }
+
+            for (let i = 0; i < session.inputSources.length; i++) {
+                const inputSource = session.inputSources[i];
+                const gamepad = inputSource.gamepad;
+                
+                if (gamepad && gamepad.buttons && gamepad.axes) {
+                    const handedness = inputSource.handedness;
+                    const state = controllerStates[handedness];
+                    
+                    if (state) {
+                        // Store previous grab state
+                        state.prevGrabPressed = state.grabPressed;
+                        
+                        // Update grab button (grip button - typically button 1)
+                        state.grabPressed = gamepad.buttons[1] && gamepad.buttons[1].pressed;
+                        
+                        // Update trigger button (trigger - typically button 0) for thrusters
+                        state.triggerPressed = gamepad.buttons[0] && gamepad.buttons[0].pressed;
+                        
+                        // Update thumbstick click (typically button 3) for air brake
+                        state.thumbstickPressed = gamepad.buttons[3] && gamepad.buttons[3].pressed;
+                        
+                        // Update thumbstick (axes 2,3 for most controllers)
+                        if (gamepad.axes.length >= 4) {
+                            state.thumbstick.x = gamepad.axes[2];
+                            state.thumbstick.y = gamepad.axes[3];
+                        }
+                    }
+                }
             }
         }
 
-        // Store XR frame for controller updates
-        let currentXRFrame = null;
+        /**
+         * Simple, reliable player sphere control
+         */
+        function updatePlayerSphereControl() {
+            if (!playerSphere.mesh || !playerSphere.rigidBody) return;
 
-        function updateControllerFromInputSource(inputSource, index) {
-            const session = renderer.xr.getSession();
-            if (!session || !inputSource.gripSpace || !currentXRFrame) return;
+            const spherePos = new THREE.Vector3();
+            playerSphere.mesh.getWorldPosition(spherePos);
 
-            // Get the pose for this input source using the current XR frame
-            const referenceSpace = renderer.xr.getReferenceSpace();
+            // Simple state: not grabbed, tractoring, or held
+            const leftPressed = controllerStates.left && controllerStates.left.grabPressed;
+            const rightPressed = controllerStates.right && controllerStates.right.grabPressed;
+            const anyPressed = leftPressed || rightPressed;
+
+            // ==== GRAB LOGIC ====
+            if (!playerSphere.isGrabbed && anyPressed) {
+                // Start grab - determine which hand (only if not grabbing objects)
+                let grabHand = null;
+                let grabDistance = Infinity;
+
+                if (leftPressed && !isHandGrabbingObject('left')) {
+                    const leftPos = new THREE.Vector3();
+                    controller1.getWorldPosition(leftPos);
+                    const leftDist = leftPos.distanceTo(spherePos);
+                    if (leftDist < grabDistance) {
+                        grabDistance = leftDist;
+                        grabHand = 'left';
+                    }
+                }
+                
+                if (rightPressed && !isHandGrabbingObject('right')) {
+                    const rightPos = new THREE.Vector3();
+                    controller2.getWorldPosition(rightPos);
+                    const rightDist = rightPos.distanceTo(spherePos);
+                    if (rightDist < grabDistance) {
+                        grabDistance = rightDist;
+                        grabHand = 'right';
+                    }
+                }
+
+                if (grabHand) {
+                    playerSphere.isGrabbed = true;
+                    playerSphere.grabbedByHand = grabHand;
+                    playerSphere.snappedToHand = null; // NEVER snap immediately - always start with tractor
+                }
+            }
+
+            // ==== RELEASE LOGIC ====
+            // Check if the specific hand grabbing the ball released (not ANY hand)
+            const grabbingHandPressed = playerSphere.isGrabbed && playerSphere.grabbedByHand && 
+                                       controllerStates[playerSphere.grabbedByHand] && 
+                                       controllerStates[playerSphere.grabbedByHand].grabPressed;
+            
+            if (playerSphere.isGrabbed && !grabbingHandPressed) {
+                
+                if (playerSphere.snappedToHand) {
+                    // Throw with linear and angular momentum
+                    const controllerState = controllerStates[playerSphere.grabbedByHand];
+                    if (controllerState && controllerState.velocity.length() > 0.1) {
+                        const throwVel = controllerState.velocity.clone();
+                        throwVel.multiplyScalar(2.0); // Scale up for good throw feel
+                        
+                        // Apply linear velocity
+                        playerSphere.rigidBody.setLinvel({
+                            x: throwVel.x, y: throwVel.y, z: throwVel.z
+                        }, true);
+                        
+                        // Apply angular velocity from controller rotation
+                        const angularVel = controllerState.angularVelocity.clone();
+                        const spinScale = 1.0; // Full controller rotation momentum
+                        playerSphere.rigidBody.setAngvel({
+                            x: angularVel.x * spinScale,
+                            y: angularVel.y * spinScale,
+                            z: angularVel.z * spinScale
+                        }, true);
+                    } else {
+                        // No movement - just stop
+                        playerSphere.rigidBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                        playerSphere.rigidBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+                    }
+                } else {
+                    // Ball was tractoring - keep current momentum
+                }
+                
+                // Clear state
+                playerSphere.isGrabbed = false;
+                playerSphere.grabbedByHand = null;
+                playerSphere.snappedToHand = null;
+            }
+
+            // ==== CONTROL LOGIC ====
+            if (playerSphere.isGrabbed && grabbingHandPressed) {
+                const activeController = playerSphere.grabbedByHand === 'left' ? controller1 : controller2;
+                const controllerPos = new THREE.Vector3();
+                activeController.getWorldPosition(controllerPos);
+                const distance = controllerPos.distanceTo(spherePos);
+
+                if (playerSphere.snappedToHand) {
+                    // HELD: Ball follows hand position AND rotation exactly
+                    playerSphere.rigidBody.setTranslation(controllerPos, true);
+                    playerSphere.rigidBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                    
+                    // Ball follows controller rotation exactly when held
+                    const controllerState = controllerStates[playerSphere.grabbedByHand];
+                    if (controllerState) {
+                        playerSphere.rigidBody.setRotation({
+                            x: controllerState.quaternion.x, 
+                            y: controllerState.quaternion.y, 
+                            z: controllerState.quaternion.z, 
+                            w: controllerState.quaternion.w
+                        }, true);
+                        playerSphere.rigidBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+                    }
+                } else {
+                    // TRACTOR BEAM - STRAIGHT LINE TO HAND, NO INTERFERENCE
+                    
+                    // 1. COMPLETELY ELIMINATE ALL ROTATION AND MOMENTUM - every frame
+                    try {
+                        playerSphere.rigidBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+                    } catch(e) { console.warn('Failed to set angular velocity:', e); }
+                    safeResetTorques(playerSphere.rigidBody);
+                    safeResetForces(playerSphere.rigidBody);
+                    
+                    // 2. FORCE ball to move straight toward hand - pure tractor movement
+                    const direction = controllerPos.clone().sub(spherePos).normalize();
+                    const force = direction.multiplyScalar(0.1); // 2x speed
+                    playerSphere.rigidBody.addForce({ x: force.x, y: force.y, z: force.z }, true);
+                    
+                    // 3. Snap when close (20cm)
+                    if (distance <= 0.2) {
+                        playerSphere.snappedToHand = playerSphere.grabbedByHand;
+                        playerSphere.rigidBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                        playerSphere.rigidBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+                    }
+                }
+            }
+
+            // Simple force clearing
+            if (!playerSphere.isGrabbed) {
+                safeResetForces(playerSphere.rigidBody);
+            }
+        }
+
+        /**
+         * Update thruster system and player physics (EchoVR-style momentum)
+         */
+        function updatePlayerThrusters() {
+            if (!playerPhysicsBody) return;
+
+            // Get current camera position in world space
+            const cameraWorldPos = new THREE.Vector3();
+            camera.getWorldPosition(cameraWorldPos);
+
+            // Update player collision sphere to follow physics body position
+            if (playerCollisionSphere) {
+                try {
+                    const physicsPos = playerPhysicsBody.translation();
+                    playerCollisionSphere.position.set(physicsPos.x, physicsPos.y, physicsPos.z);
+                    
+                    // Visual feedback when hitting walls (more sensitive for convex hull collision)
+                    const distance = playerCollisionSphere.position.distanceTo(cameraWorldPos);
+                    if (distance > 0.3) {
+                        playerCollisionSphere.material.color.setRGB(1, 0, 0); // Red when hitting wall
+                        playerCollisionSphere.material.opacity = 0.8;
+                    } else {
+                        playerCollisionSphere.material.color.setRGB(0, 1, 0); // Green when free
+                        playerCollisionSphere.material.opacity = 0.3;
+                    }
+                } catch(e) {
+                    // Fall back to camera position if physics fails
+                    playerCollisionSphere.position.copy(cameraWorldPos);
+                }
+                
+                // Simple collision detection with static cubes and environment
+                staticCubeMeshes.forEach((cubeMesh, index) => {
+                    const distance = cameraWorldPos.distanceTo(cubeMesh.position);
+                    const collisionDistance = 0.3 + 0.4; // Player radius + half cube size
+                    
+                    if (distance < collisionDistance) {
+                        // Player is colliding with this cube - apply simple "bounce back"
+                        const pushDirection = new THREE.Vector3();
+                        pushDirection.subVectors(cameraWorldPos, cubeMesh.position);
+                        pushDirection.normalize();
+                        
+                        // Push player away from cube
+                        const pushDistance = collisionDistance - distance;
+                        const pushVector = pushDirection.multiplyScalar(pushDistance);
+                        dolly.position.add(pushVector);
+                        
+                        // Stop any movement toward the cube
+                        if (playerVelocity.length() > 0) {
+                            const velocityDot = playerVelocity.dot(pushDirection.normalize());
+                            if (velocityDot < 0) { // Moving toward cube
+                                playerVelocity.add(pushDirection.multiplyScalar(-velocityDot * 0.5)); // Reduce velocity toward cube
+                            }
+                        }
+                    }
+                });
+                
+                // Environment collision is handled by Rapier physics engine automatically
+                // Player physics body will collide with environment collision bodies
+            }
+
+            // Simple position-based player physics (no concurrent access issues)
+            const currentTime = performance.now();
+            const timeSinceThrow = currentTime - throwEndTime;
             
             try {
-                const gripPose = currentXRFrame.getPose(inputSource.gripSpace, referenceSpace);
-                if (gripPose) {
-                    // Update the appropriate controller
-                    const controller = index === 0 ? controller1 : controller2;
-                    if (controller) {
-                        // Set position and rotation from the grip pose
-                        const pos = gripPose.transform.position;
-                        const ori = gripPose.transform.orientation;
+                let targetPos = cameraWorldPos;
+                
+                if (timeSinceThrow < 4000 && playerVelocity.length() > 0.02) {
+                    // Apply very gentle, natural momentum (EchoVR-style)
+                    const deltaTime = 1.0 / 60.0; // Assume 60fps for consistent physics
+                    dolly.position.add(playerVelocity.clone().multiplyScalar(deltaTime));
+                    
+                    // Gentle damping (like EchoVR zero-g)
+                    playerVelocity.multiplyScalar(0.99);
+                    
+                    // Visual feedback: make player collision sphere more visible during throw
+                    if (playerCollisionSphere) {
+                        playerCollisionSphere.material.opacity = 0.6;
+                        playerCollisionSphere.material.color.setRGB(1, 1, 0); // Yellow during throw
+                    }
+                } else {
+                    // Reset collision sphere appearance
+                    if (playerCollisionSphere) {
+                        playerCollisionSphere.material.opacity = 0.3;
+                        playerCollisionSphere.material.color.setRGB(0, 1, 0); // Green normally
+                    }
+                    
+                    // Update physics body to follow dolly-modified camera position
+                    const modifiedCameraPos = new THREE.Vector3();
+                    camera.getWorldPosition(modifiedCameraPos);
+                    targetPos = modifiedCameraPos;
+                }
+                
+                // 🔄 PHYSICS-BASED movement - let Rapier handle collision instead of manual positioning
+                try {
+                    const currentPos = playerPhysicsBody.translation();
+                    const movement = new THREE.Vector3(
+                        targetPos.x - currentPos.x,
+                        targetPos.y - currentPos.y, 
+                        targetPos.z - currentPos.z
+                    );
+                    const distance = movement.length();
+                    
+                    if (distance < 10.0 && distance > 0.001) {
+                        // Instead of setTranslation (which bypasses collision), use velocity-based movement
+                        const maxSpeed = 5.0; // 5 m/s max speed
+                        const moveSpeed = Math.min(distance * 10, maxSpeed); // Proportional speed, capped
                         
-                        controller.position.set(pos.x, pos.y, pos.z);
-                        controller.quaternion.set(ori.x, ori.y, ori.z, ori.w);
+                        const velocity = movement.normalize().multiplyScalar(moveSpeed);
                         
-                        // Make sure it's visible
-                        controller.visible = true;
+                        // Apply velocity for physics-based movement (will respect collisions)
+                        playerPhysicsBody.setLinvel({ 
+                            x: velocity.x, 
+                            y: velocity.y, 
+                            z: velocity.z 
+                        }, true);
                         
-                        // Debug log occasionally
-                        if (Math.random() < 0.01) { // 1% chance to log
-                            console.log(`🎮 Controller ${index} at:`, pos.x.toFixed(2), pos.y.toFixed(2), pos.z.toFixed(2));
+                        // Add damping to prevent sliding
+                        playerPhysicsBody.setLinearDamping(0.9);
+                        
+                    } else if (distance >= 10.0) {
+                        console.warn('⚠️ Large player movement detected:', distance, 'm - teleporting');
+                        // For large movements (like entering VR), still use setTranslation
+                        playerPhysicsBody.setTranslation(targetPos, true);
+                        playerPhysicsBody.setLinvel({ x: 0, y: 0, z: 0 }, true); // Stop velocity
+                    } else {
+                        // Very small movement or no movement - stop velocity
+                        playerPhysicsBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                    }
+                    
+                } catch(e) {
+                    console.warn('❌ Player physics movement failed:', e.message);
+                    // Fallback to direct positioning
+                    try {
+                        playerPhysicsBody.setTranslation(targetPos, true);
+                    } catch(e2) {
+                        // Complete fallback - do nothing
+                    }
+                }
+                
+            } catch(e) {
+                // Ignore physics errors to prevent crashes
+            }
+
+            // Check for air brake (thumbstick clicks)
+            const leftAirBrake = controllerStates.left && controllerStates.left.thumbstickPressed;
+            const rightAirBrake = controllerStates.right && controllerStates.right.thumbstickPressed;
+            
+            if (leftAirBrake || rightAirBrake) {
+                // Air brake - rapidly reduce velocity
+                playerVelocity.multiplyScalar(0.95); // Gentle braking (adjusted for very slow acceleration)
+            }
+
+            // Apply thruster forces to velocity (not direct movement)
+            const leftPressed = controllerStates.left && controllerStates.left.triggerPressed;
+            const rightPressed = controllerStates.right && controllerStates.right.triggerPressed;
+
+            // Update thruster cone visuals
+            if (controllerStates.left.thrusterCone) {
+                controllerStates.left.thrusterCone.visible = leftPressed;
+            }
+            if (controllerStates.right.thrusterCone) {
+                controllerStates.right.thrusterCone.visible = rightPressed;
+            }
+
+            // Apply thruster acceleration to velocity
+            if (leftPressed || rightPressed) {
+                const totalAcceleration = new THREE.Vector3();
+
+                if (leftPressed && controllerGrip1) {
+                    // Get thruster direction with both player rotation (dolly) AND controller rotation
+                    const leftDirection = new THREE.Vector3(0, -1, 0); // Controller local direction
+                    leftDirection.applyQuaternion(controllerGrip1.quaternion); // Apply controller rotation
+                    leftDirection.applyQuaternion(dolly.quaternion); // Apply player rotation from thumbstick
+                    leftDirection.multiplyScalar(thrusterAcceleration);
+                    totalAcceleration.add(leftDirection);
+                }
+
+                if (rightPressed && controllerGrip2) {
+                    // Get thruster direction with both player rotation (dolly) AND controller rotation
+                    const rightDirection = new THREE.Vector3(0, -1, 0); // Controller local direction
+                    rightDirection.applyQuaternion(controllerGrip2.quaternion); // Apply controller rotation
+                    rightDirection.applyQuaternion(dolly.quaternion); // Apply player rotation from thumbstick
+                    rightDirection.multiplyScalar(thrusterAcceleration);
+                    totalAcceleration.add(rightDirection);
+                }
+
+                // Add acceleration to velocity
+                playerVelocity.add(totalAcceleration);
+            }
+
+            // Apply slight damping to prevent infinite acceleration
+            playerVelocity.multiplyScalar(velocityDamping);
+
+            // Cap total player velocity at max speed (20 m/s)
+            const currentSpeed = playerVelocity.length();
+            if (currentSpeed > maxPlayerSpeed) {
+                playerVelocity.normalize().multiplyScalar(maxPlayerSpeed);
+            }
+
+            // Apply velocity to dolly position (momentum-based movement)
+            dolly.position.add(playerVelocity);
+        }
+
+        /**
+         * EchoVR-style object grabbing with anchoring mechanics
+         */
+        function updateObjectGrabbing() {
+            // Helper function to check if controller is inside cube bounds
+            function isControllerInCube(controllerPos, cubePos, cubeSize) {
+                const halfSize = cubeSize / 2;
+                const inside = (controllerPos.x >= cubePos.x - halfSize && controllerPos.x <= cubePos.x + halfSize &&
+                               controllerPos.y >= cubePos.y - halfSize && controllerPos.y <= cubePos.y + halfSize &&
+                               controllerPos.z >= cubePos.z - halfSize && controllerPos.z <= cubePos.z + halfSize);
+                return inside;
+            }
+
+            // Reset all cube hover states first
+            if (cubeMesh && !controllerStates.left?.grabbingObject && !controllerStates.right?.grabbingObject) {
+                cubeMesh.material.emissive.setRGB(0, 0, 0);
+            }
+            staticCubeMeshes.forEach(mesh => {
+                if (!controllerStates.left?.grabbingObject && !controllerStates.right?.grabbingObject) {
+                    mesh.material.emissive.setRGB(0, 0, 0);
+                }
+            });
+
+            // Check each hand for object grabbing
+            for (const [hand, state] of Object.entries(controllerStates)) {
+                const controller = hand === 'left' ? controllerGrip1 : controllerGrip2;
+                const controllerPos = new THREE.Vector3();
+                controller.getWorldPosition(controllerPos);
+
+                // Show hover effect when controller is inside any cube
+                if (!state.grabbingObject) {
+                    // Check main cube
+                    if (isControllerInCube(controllerPos, cubeMesh.position, 1.0)) {
+                        cubeMesh.material.emissive.setRGB(0.1, 0.1, 0.1); // Light gray hover
+                    }
+                    
+                    // Check static cubes
+                    staticCubeMeshes.forEach(mesh => {
+                        if (isControllerInCube(controllerPos, mesh.position, 0.8)) {
+                            mesh.material.emissive.setRGB(0.1, 0.1, 0.1); // Light gray hover
+                        }
+                    });
+                    
+                    // Check environment collision for grabbable surfaces (simple distance check)
+                    environmentWireframes.forEach((wireframe, index) => {
+                        if (wireframe.visible) {
+                            const distance = controllerPos.distanceTo(wireframe.position);
+                            if (distance <= 0.8) {
+                                wireframe.material.opacity = 0.6; // Highlight when grabbable
+                            } else {
+                                wireframe.material.opacity = 0.3; // Normal opacity
+                            }
+                        }
+                    });
+                }
+                
+                if (state.grabPressed && !state.grabbingObject) {
+                    // Try to grab objects based on controller overlap (EchoVR style)
+                    let grabbedObject = null;
+                    
+                    // Check main cube (1m size)
+                    if (isControllerInCube(controllerPos, cubeMesh.position, 1.0)) {
+                        grabbedObject = { type: 'mainCube', mesh: cubeMesh };
+                    }
+                    
+                    // Check static cubes (0.8m size) - only if main cube not grabbed
+                    if (!grabbedObject) {
+                        staticCubeMeshes.forEach((mesh, index) => {
+                            if (isControllerInCube(controllerPos, mesh.position, 0.8)) {
+                                grabbedObject = { type: 'staticCube', mesh: mesh, index: index };
+                                return; // Exit forEach early
+                            }
+                        });
+                    }
+                    
+                    // Check environment surfaces - simple distance check
+                    if (!grabbedObject && environmentWireframes.length > 0) {
+                        environmentWireframes.forEach((wireframe, index) => {
+                            const distance = controllerPos.distanceTo(wireframe.position);
+                            if (distance <= 0.8) { // Within grab range for environment
+                                grabbedObject = { type: 'environment', mesh: wireframe, index: index };
+                                return; // Exit forEach early
+                            }
+                        });
+                    }
+                    
+                    // Start grab
+                    if (grabbedObject) {
+                        state.grabbingObject = grabbedObject;
+                        state.grabStartPosition = controllerPos.clone();
+                        
+                        // Calculate offset from controller to object center (EchoVR anchor point)
+                        state.grabOffset = new THREE.Vector3();
+                        if (grabbedObject.type === 'environment') {
+                            // For environment, use the wireframe position as anchor point
+                            state.grabOffset.subVectors(grabbedObject.mesh.position, controllerPos);
+                        } else {
+                            // For cubes, use mesh position
+                            state.grabOffset.subVectors(grabbedObject.mesh.position, controllerPos);
+                        }
+                        
+                        // Initialize velocity tracking with current position
+                        state.recentPositions = [{ pos: controllerPos.clone(), time: performance.now() }];
+                        
+                                            // CLEAR ALL PLAYER MOMENTUM when grab starts (EchoVR behavior)
+                    playerVelocity.set(0, 0, 0);
+                    
+                    // Clear any throw momentum (simple approach)
+                    throwEndTime = 0; // Reset throw timing to resume normal following
+                        
+                        // Visual feedback - make object emissive
+                        if (grabbedObject.type === 'environment') {
+                            grabbedObject.mesh.material.opacity = 1.0; // Full opacity when grabbed
+                            grabbedObject.mesh.material.color.setRGB(1, 1, 0); // Yellow when grabbed
+                        } else {
+                            grabbedObject.mesh.material.emissive.setRGB(0.4, 0.4, 0.0); // Yellow when grabbed
                         }
                     }
-                }
-            } catch (error) {
-                // Pose not available, controller might not be tracked
-                if (Math.random() < 0.01) {
-                    console.log(`⚠️ Controller ${index} pose not available`);
-                }
-            }
-        }
-
-        function updatePhysics() {
-            if (world) {
-                // Step the physics simulation
-                world.step();
-
-                // Update player physics body position from VR headset/dolly position
-                if (playerRigidBody && dolly) {
-                    // Get dolly world position
-                    const dollyPosition = new THREE.Vector3();
-                    dolly.getWorldPosition(dollyPosition);
-                    
-                    // Update physics body to follow the player's VR position
-                    playerRigidBody.setTranslation({ 
-                        x: dollyPosition.x, 
-                        y: dollyPosition.y + 1.0, // Torso level
-                        z: dollyPosition.z 
-                    }, true);
-
-                    // Update player wireframe to match physics body
-                    if (playerWireframe && showWireframes) {
-                        const translation = playerRigidBody.translation();
-                        playerWireframe.position.set(translation.x, translation.y, translation.z);
+                } else if (state.grabPressed && state.grabbingObject) {
+                    // EchoVR anchoring: maintain the grab offset by moving player
+                    if (state.grabbingObject.type === 'staticCube') {
+                        // Calculate where the player should be to maintain the grab offset
+                        const targetGrabPoint = new THREE.Vector3();
+                        targetGrabPoint.addVectors(controllerPos, state.grabOffset);
                         
-                        const rotation = playerRigidBody.rotation();
-                        playerWireframe.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+                        // Move player (dolly) to maintain the grab relationship
+                        const currentObjectPos = state.grabbingObject.mesh.position;
+                        const movement = new THREE.Vector3();
+                        movement.subVectors(currentObjectPos, targetGrabPoint);
+                        
+                        // Apply movement to player
+                        dolly.position.add(movement);
+                        
+                        // Track controller positions for smooth velocity calculation
+                        const currentTime = performance.now();
+                        state.recentPositions.push({ pos: controllerPos.clone(), time: currentTime });
+                        
+                        // Keep positions for last 300ms for smoother throwing
+                        const cutoffTime = currentTime - 300; // 300ms history for smooth calculation
+                        state.recentPositions = state.recentPositions.filter(entry => entry.time > cutoffTime);
+                        
+                        // Limit array size as backup
+                        if (state.recentPositions.length > 20) {
+                            state.recentPositions = state.recentPositions.slice(-20);
+                        }
                     }
-                }
-
-                // Update cube mesh position from physics body
-                if (cubeRigidBody && cubeMesh) {
-                    const translation = cubeRigidBody.translation();
-                    cubeMesh.position.set(translation.x, translation.y, translation.z);
+                } else if (!state.grabPressed && state.grabbingObject) {
+                    // Release with EchoVR throw mechanics
+                    if ((state.grabbingObject.type === 'staticCube' || state.grabbingObject.type === 'environment') && state.recentPositions.length >= 2) {
+                        // Calculate velocity from recent controller movement
+                        const currentTime = performance.now();
+                        
+                        // Find positions from last 200ms for smooth velocity calculation
+                        let recent = state.recentPositions.filter(entry => entry.time > currentTime - 200);
+                        
+                        // Fall back to all positions if not enough recent ones
+                        if (recent.length < 3 && state.recentPositions.length >= 3) {
+                            recent = state.recentPositions;
+                        }
+                        
+                        if (recent.length >= 3) {
+                            // Calculate average velocity over recent movement
+                            const oldestPos = recent[0];
+                            const newestPos = recent[recent.length - 1];
+                            const timeDiff = (newestPos.time - oldestPos.time) / 1000; // Convert to seconds
+                            
+                            if (timeDiff > 0.01) { // Avoid division by very small numbers
+                                const movement = new THREE.Vector3();
+                                movement.subVectors(newestPos.pos, oldestPos.pos);
+                                const velocity = movement.divideScalar(timeDiff); // m/s
+                                
+                                // EchoVR-style momentum: direction of hand movement with gentle scaling
+                                const speed = velocity.length();
+                                if (speed > 0.05) { // Very low threshold for subtle movements
+                                    // Scale down velocity to feel natural (EchoVR-like)
+                                    velocity.multiplyScalar(0.3); // Much gentler momentum transfer
+                                    
+                                    // Cap max throw speed at reasonable level
+                                    const finalSpeed = velocity.length();
+                                    if (finalSpeed > 3.0) { // Much lower max speed
+                                        velocity.normalize().multiplyScalar(3.0);
+                                    }
+                                    
+                                    // Apply the momentum in the correct direction (inverted from hand movement)
+                                    playerVelocity.copy(velocity.negate());
+                                    
+                                    // Mark throw time to enable momentum-based movement
+                                    throwEndTime = performance.now();
+                                } else {
+                                    // Release too slow - no momentum applied
+                                }
+                            }
+                        }
+                    }
                     
-                    const rotation = cubeRigidBody.rotation();
-                    cubeMesh.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+                    // Remove visual feedback
+                    if (state.grabbingObject.type === 'environment') {
+                        state.grabbingObject.mesh.material.opacity = 0.3; // Back to normal opacity
+                        state.grabbingObject.mesh.material.color.setRGB(1, 0, 0); // Back to red
+                    } else {
+                        state.grabbingObject.mesh.material.emissive.setRGB(0, 0, 0);
+                    }
+                    
+                    // Clear all grab state
+                    state.grabbingObject = null;
+                    state.grabStartPosition = null;
+                    state.grabOffset = null;
+                    state.recentPositions = [];
+                }
+            }
+        }
 
-                    // Update cube wireframe to match physics body
-                    if (cubeWireframe && showWireframes) {
-                        cubeWireframe.position.set(translation.x, translation.y, translation.z);
-                        cubeWireframe.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        /**
+         * Check if any hand is grabbing an object (blocks ball tractor beam)
+         */
+        function isHandGrabbingObject(hand) {
+            return controllerStates[hand] && controllerStates[hand].grabbingObject !== null;
+        }
+
+        /**
+         * Handle player rotation with thumbstick
+         */
+        function updatePlayerRotation() {
+            const leftState = controllerStates.left;
+            const rightState = controllerStates.right;
+            
+            // Use right thumbstick for rotation (common VR convention)
+            const rotationInput = rightState ? rightState.thumbstick.x : 0;
+            
+            if (Math.abs(rotationInput) > 0.1) { // Dead zone
+                const rotationSpeed = 0.02;
+                if (dolly) {
+                    dolly.rotateY(-rotationInput * rotationSpeed);
+                }
+            }
+        }
+
+        /**
+         * Handle collision detection and effects
+         */
+        function handleCollisions() {
+            if (!playerSphere || !playerSphere.mesh) return;
+
+            // Check collision with main cube
+            if (cubeMesh) {
+                const spherePos = playerSphere.mesh.position;
+                const cubePos = cubeMesh.position;
+                const distance = spherePos.distanceTo(cubePos);
+                const collisionDistance = 0.15 + 0.5; // sphere radius + half cube size
+                
+                if (distance < collisionDistance) {
+                    // Highlight cube on collision
+                    if (cubeMesh.material.emissive.r < 0.5) {
+                        cubeMesh.material.emissive.setRGB(1, 1, 0); // Yellow highlight
+                        
+                        // Reset highlight after short delay
+                        setTimeout(() => {
+                            if (cubeMesh.material.emissive) {
+                                cubeMesh.material.emissive.setRGB(0, 0, 0);
+                            }
+                        }, 200);
+
+                        // Play bounce sound
+                        playBounceSound();
                     }
                 }
             }
+            
+            // Check collision with environment wireframes (approximate collision detection)
+            if (environmentWireframes && environmentWireframes.length > 0) {
+                const spherePos = playerSphere.mesh.position;
+                
+                environmentWireframes.forEach((wireframe) => {
+                    if (wireframe.visible) {
+                        const distance = spherePos.distanceTo(wireframe.position);
+                        const collisionDistance = 0.15 + 2.0; // sphere radius + approximate wireframe size
+                        
+                        if (distance < collisionDistance) {
+                            // Environment collision detected - play bounce sound
+                            if (!playerSphere.lastEnvironmentCollision || Date.now() - playerSphere.lastEnvironmentCollision > 500) {
+                                playBounceSound();
+                                playerSphere.lastEnvironmentCollision = Date.now();
+                            }
+                        }
+                    }
+                });
+            }
         }
 
-        function animate(timestamp, frame) {
-            // Store current XR frame for controller updates
-            currentXRFrame = frame;
+        /**
+         * Play spatial bounce sound at sphere location
+         */
+        function playBounceSound() {
+            if (!bounceSound || !audioListener || !playerSphere.mesh) return;
 
-            // Handle VR controller input
-            handleControllerInput();
+            try {
+                const positionalAudio = new THREE.PositionalAudio(audioListener);
+                positionalAudio.setBuffer(bounceSound);
+                positionalAudio.setVolume(0.5);
+                positionalAudio.setRefDistance(1);
+                positionalAudio.setRolloffFactor(3);
+                
+                playerSphere.mesh.add(positionalAudio);
+                positionalAudio.play();
 
-            // Force controller visibility if in VR
-            if (renderer.xr.isPresenting) {
-                forceControllerVisibility();
+                // Remove audio object after playing
+                positionalAudio.onEnded = () => {
+                    playerSphere.mesh.remove(positionalAudio);
+                };
+            } catch (error) {
+                console.warn('Could not play bounce sound:', error);
+            }
+        }
+
+        /**
+         * Clear object highlighting
+         */
+        function cleanIntersected() {
+            while (intersected.length) {
+                const object = intersected.pop();
+                object.material.emissive.r = 0;
+            }
+        }
+
+        /**
+         * Update physics simulation and sync visual objects
+         */
+        function updatePhysics() {
+            if (!world) return;
+
+            try {
+                if (physicsErrorCount < 20) { // Stop physics entirely if too many errors
+                    world.step();
+                }
+            } catch(e) {
+                physicsErrorCount += 5; // Heavily penalize world step errors
+                // Skip this frame and future frames if errors persist
+                return;
             }
 
-            // Update physics
-            updatePhysics();
+            // Sync player visual with physics body
+            const playerPos = playerRigidBody.translation();
+            const playerRot = playerRigidBody.rotation();
+            playerMesh.position.copy(playerPos);
+            playerMesh.quaternion.copy(playerRot);
 
-            // Render the scene
-            renderer.render(scene, camera);
-        }
+            // Sync cube visual with physics body
+            const cubePos = cubeRigidBody.translation();
+            const cubeRot = cubeRigidBody.rotation();
+            cubeMesh.position.copy(cubePos);
+            cubeMesh.quaternion.copy(cubeRot);
 
-        function forceControllerVisibility() {
-            // Aggressively ensure controllers are visible and large
-            if (controller1) {
-                controller1.visible = true;
-                const defaultGeom1 = controller1.getObjectByName('defaultControllerGeometry');
-                if (defaultGeom1) {
-                    defaultGeom1.visible = true;
-                    defaultGeom1.scale.set(2, 2, 2); // Make even bigger in VR
+            // Sync player sphere visual with physics body and apply speed limit
+            if (playerSphere.rigidBody && playerSphere.mesh) {
+                const spherePos = playerSphere.rigidBody.translation();
+                const sphereRot = playerSphere.rigidBody.rotation();
+                playerSphere.mesh.position.copy(spherePos);
+                playerSphere.mesh.quaternion.copy(sphereRot);
+                
+                // Distance-based speed limit during tractor beam
+                const currentVel = playerSphere.rigidBody.linvel();
+                const speed = Math.sqrt(currentVel.x * currentVel.x + currentVel.y * currentVel.y + currentVel.z * currentVel.z);
+                
+                let maxSpeed = 5.0; // Default speed limit
+                
+                                 // If tractor beam is active, limit speed based on distance to hand
+                 if (playerSphere.isGrabbed && !playerSphere.snappedToHand) {
+                     const activeController = playerSphere.grabbedByHand === 'left' ? controller1 : controller2;
+                     const controllerPos = new THREE.Vector3();
+                     activeController.getWorldPosition(controllerPos);
+                     const distance = controllerPos.distanceTo(spherePos);
+                     
+                     // Max speed equals 2x distance (in m/s), capped at 20m/s
+                     maxSpeed = Math.min(distance * 2.0, 20.0);
+                     // Ensure minimum speed of 0.2 to prevent total lockup
+                     maxSpeed = Math.max(maxSpeed, 0.2);
+                 }
+                
+                if (speed > maxSpeed) {
+                    const scale = maxSpeed / speed;
+                    playerSphere.rigidBody.setLinvel({
+                        x: currentVel.x * scale,
+                        y: currentVel.y * scale,
+                        z: currentVel.z * scale
+                    }, true);
+                }
+
+                // Apply Magnus effect (spin-induced curve) when ball is spinning and moving
+                if (!playerSphere.isGrabbed && speed > 0.5) {
+                    const angularVel = playerSphere.rigidBody.angvel();
+                    const angularSpeed = Math.sqrt(angularVel.x * angularVel.x + angularVel.y * angularVel.y + angularVel.z * angularVel.z);
+                    
+                    if (angularSpeed > 0.5) {
+                        // Magnus force = angular velocity × linear velocity (cross product)
+                        const magnusForce = new THREE.Vector3(
+                            angularVel.y * currentVel.z - angularVel.z * currentVel.y,
+                            angularVel.z * currentVel.x - angularVel.x * currentVel.z,
+                            angularVel.x * currentVel.y - angularVel.y * currentVel.x
+                        );
+                        
+                        // Scale Magnus effect (make it visible)
+                        const magnusStrength = 0.25;
+                        magnusForce.multiplyScalar(magnusStrength);
+                        
+                        // Apply Magnus force to create curve
+                        playerSphere.rigidBody.addForce({
+                            x: magnusForce.x,
+                            y: magnusForce.y,
+                            z: magnusForce.z
+                        }, true);
+                    }
+                }
+
+                // Safety check: if ball is moving but not being controlled, stop it
+                if (!playerSphere.isGrabbed && speed > 0.1) {
+                    // Ball shouldn't be moving in zero gravity unless being controlled
+                    const distance = Math.sqrt(spherePos.x * spherePos.x + spherePos.y * spherePos.y + spherePos.z * spherePos.z);
+                    if (distance > 20) { // If ball is more than 20m away, something is wrong
+                        try {
+                            playerSphere.rigidBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                        } catch(e) { console.warn('Failed to set ball velocity:', e); }
+                        safeResetForces(playerSphere.rigidBody);
+                    }
                 }
             }
-            
-            if (controller2) {
-                controller2.visible = true;
-                const defaultGeom2 = controller2.getObjectByName('defaultControllerGeometry');
-                if (defaultGeom2) {
-                    defaultGeom2.visible = true;
-                    defaultGeom2.scale.set(2, 2, 2); // Make even bigger in VR
+
+            // Update wireframes if visible
+            if (showWireframes) {
+                if (playerWireframe) {
+                    playerWireframe.position.copy(playerPos);
+                    playerWireframe.quaternion.copy(playerRot);
+                }
+                if (cubeWireframe) {
+                    cubeWireframe.position.copy(cubePos);
+                    cubeWireframe.quaternion.copy(cubeRot);
+                }
+                if (playerSphereWireframe && playerSphere.rigidBody) {
+                    const spherePos = playerSphere.rigidBody.translation();
+                    const sphereRot = playerSphere.rigidBody.rotation();
+                    playerSphereWireframe.position.copy(spherePos);
+                    playerSphereWireframe.quaternion.copy(sphereRot);
                 }
             }
-
-            if (controllerGrip1) {
-                controllerGrip1.visible = true;
-            }
-            
-            if (controllerGrip2) {
-                controllerGrip2.visible = true;
-            }
-
-            // Update debug cubes to show controller positions
-            updateDebugCubes();
         }
 
-        function updateDebugCubes() {
-            // Position debug cubes at controller locations to verify tracking
-            if (controller1 && debugCube1) {
-                // Get world position of controller1
-                const pos1 = new THREE.Vector3();
-                controller1.getWorldPosition(pos1);
-                debugCube1.position.copy(pos1);
-                debugCube1.position.y += 0.3; // Offset above controller
-            }
-            
-            if (controller2 && debugCube2) {
-                // Get world position of controller2
-                const pos2 = new THREE.Vector3();
-                controller2.getWorldPosition(pos2);
-                debugCube2.position.copy(pos2);
-                debugCube2.position.y += 0.3; // Offset above controller
+        /**
+         * Handle keyboard input
+         */
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'KeyW':
+                    toggleWireframes();
+                    break;
+                case 'KeyL':
+                    toggleLaserPointers();
+                    break;
+                case 'KeyD':
+                    debugSphereMovement();
+                    break;
+                case 'KeyR':
+                    resetSphere();
+                    break;
+                case 'KeyS':
+                    stopSphere();
+                    break;
             }
         }
 
+        /**
+         * Debug function to check sphere movement and forces
+         */
+        function debugSphereMovement() {
+            if (!playerSphere.rigidBody) return;
+            
+            const vel = playerSphere.rigidBody.linvel();
+            const angVel = playerSphere.rigidBody.angvel();
+            const pos = playerSphere.rigidBody.translation();
+            const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+            const angularSpeed = Math.sqrt(angVel.x * angVel.x + angVel.y * angVel.y + angVel.z * angVel.z);
+            
+            console.log('🔍 Sphere Debug:');
+            console.log('  Position:', pos.x.toFixed(2), pos.y.toFixed(2), pos.z.toFixed(2));
+            console.log('  Linear Velocity:', vel.x.toFixed(2), vel.y.toFixed(2), vel.z.toFixed(2));
+            console.log('  Linear Speed:', speed.toFixed(2), 'm/s');
+            console.log('  Angular Velocity:', angVel.x.toFixed(2), angVel.y.toFixed(2), angVel.z.toFixed(2));
+            console.log('  Angular Speed:', angularSpeed.toFixed(2), 'rad/s');
+            console.log('  Grabbed:', playerSphere.isGrabbed, 'by', playerSphere.grabbedByHand);
+            console.log('  Snapped:', playerSphere.snappedToHand);
+            
+            // Check controller positions and states
+            const leftPos = new THREE.Vector3();
+            const rightPos = new THREE.Vector3();
+            controller1.getWorldPosition(leftPos);
+            controller2.getWorldPosition(rightPos);
+            console.log('  Left controller:', leftPos.x.toFixed(2), leftPos.y.toFixed(2), leftPos.z.toFixed(2));
+            console.log('  Right controller:', rightPos.x.toFixed(2), rightPos.y.toFixed(2), rightPos.z.toFixed(2));
+            console.log('  Left grab pressed:', controllerStates.left?.grabPressed);
+            console.log('  Right grab pressed:', controllerStates.right?.grabPressed);
+            
+            // Distance check
+            const leftDist = leftPos.distanceTo(new THREE.Vector3(pos.x, pos.y, pos.z));
+            const rightDist = rightPos.distanceTo(new THREE.Vector3(pos.x, pos.y, pos.z));
+            console.log('  Distance to left:', leftDist.toFixed(2), 'm');
+            console.log('  Distance to right:', rightDist.toFixed(2), 'm');
+            
+            // Show tractor beam info if being tractored
+            if (playerSphere.isGrabbed && !playerSphere.snappedToHand) {
+                const grabbingHand = playerSphere.grabbedByHand === 'left' ? leftPos : rightPos;
+                const tractorDistance = grabbingHand.distanceTo(new THREE.Vector3(pos.x, pos.y, pos.z));
+                const maxAllowedSpeed = Math.max(Math.min(tractorDistance, 10.0), 0.1);
+                console.log('  🎯 Tractor beam - Distance:', tractorDistance.toFixed(2), 'm, Max Speed:', maxAllowedSpeed.toFixed(1), 'm/s');
+            }
+            
+            // Controller velocity info
+            if (controllerStates.left) {
+                console.log('  Left hand velocity:', controllerStates.left.velocity.x.toFixed(2), controllerStates.left.velocity.y.toFixed(2), controllerStates.left.velocity.z.toFixed(2));
+            }
+            if (controllerStates.right) {
+                console.log('  Right hand velocity:', controllerStates.right.velocity.x.toFixed(2), controllerStates.right.velocity.y.toFixed(2), controllerStates.right.velocity.z.toFixed(2));
+            }
+        }
+
+        /**
+         * Reset sphere to safe position
+         */
+        function resetSphere() {
+            if (!playerSphere.rigidBody) return;
+            
+            console.log('🔄 Resetting sphere to safe position');
+            
+            // Clear ALL forces first
+            safeResetForces(playerSphere.rigidBody);
+            safeResetTorques(playerSphere.rigidBody);
+            
+            // Stop all movement
+            try {
+                playerSphere.rigidBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                playerSphere.rigidBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+            } catch(e) { console.warn('Failed to reset ball movement:', e); }
+            
+            // Reset position
+            playerSphere.rigidBody.setTranslation({ x: 0, y: 1.5, z: -2 }, true);
+            
+            // Clear control state
+            playerSphere.isGrabbed = false;
+            playerSphere.grabbedByHand = null;
+            playerSphere.snappedToHand = null;
+            
+            // Clear controller states to prevent immediate re-grab
+            if (controllerStates.left) {
+                controllerStates.left.prevGrabPressed = controllerStates.left.grabPressed;
+            }
+            if (controllerStates.right) {
+                controllerStates.right.prevGrabPressed = controllerStates.right.grabPressed;
+            }
+            
+            console.log('✅ Sphere reset complete');
+        }
+
+        /**
+         * Emergency stop - completely stop sphere where it is
+         */
+        function stopSphere() {
+            if (!playerSphere.rigidBody) return;
+            
+            console.log('🛑 Emergency stopping sphere');
+            
+            // Stop all movement, rotation, and forces
+            safeResetForces(playerSphere.rigidBody);
+            safeResetTorques(playerSphere.rigidBody);
+            try {
+                playerSphere.rigidBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                playerSphere.rigidBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+            } catch(e) { console.warn('Failed to emergency stop ball:', e); }
+            
+            // Clear control state
+            playerSphere.isGrabbed = false;
+            playerSphere.grabbedByHand = null;
+            playerSphere.snappedToHand = null;
+            
+            console.log('✅ Sphere stopped');
+        }
+
+        /**
+         * Toggle physics wireframe visibility
+         */
+        function toggleWireframes() {
+            showWireframes = !showWireframes;
+            
+            if (playerWireframe) playerWireframe.visible = showWireframes;
+            if (cubeWireframe) cubeWireframe.visible = showWireframes;
+            if (playerSphereWireframe) playerSphereWireframe.visible = showWireframes;
+            if (playerCollisionSphere) playerCollisionSphere.visible = showWireframes;
+            
+            // Toggle static cube wireframes
+            staticCubeWireframes.forEach(wireframe => {
+                if (wireframe) wireframe.visible = showWireframes;
+            });
+            
+            // Toggle environment wireframes
+            environmentWireframes.forEach(wireframe => {
+                if (wireframe) wireframe.visible = showWireframes;
+            });
+        }
+
+        /**
+         * Toggle laser pointer visibility
+         */
+        function toggleLaserPointers() {
+            showLaserPointers = !showLaserPointers;
+            
+            // Update existing laser lines
+            const allControllers = [controller1, controller2];
+            allControllers.forEach(controller => {
+                const line = controller.getObjectByName('line');
+                if (line) {
+                    line.visible = showLaserPointers;
+                }
+            });
+        }
+
+        /**
+         * Handle window resize
+         */
         function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
 
-        function onKeyDown(event) {
-            switch (event.code) {
-                case 'KeyW':
-                    toggleWireframes();
-                    break;
-            }
+        /**
+         * Start the animation loop
+         */
+        function animate() {
+            renderer.setAnimationLoop(render);
         }
 
-        function toggleWireframes() {
-            showWireframes = !showWireframes;
+        /**
+         * Main render loop
+         */
+        function render() {
+            // Update controller inputs
+            updateControllerInputs();
             
-            if (playerWireframe) {
-                playerWireframe.visible = showWireframes;
+            // Update object grabbing (prioritized over ball tractor beam)
+            updateObjectGrabbing();
+            
+            // Handle player sphere control
+            updatePlayerSphereControl();
+            
+            // Update thruster system and player physics
+            updatePlayerThrusters();
+            
+            // Handle player rotation
+            updatePlayerRotation();
+            
+            // Handle collision detection
+            handleCollisions();
+            
+            // Clean up intersection highlighting
+            cleanIntersected();
+            
+            // Update laser pointer intersections (only if enabled)
+            if (showLaserPointers) {
+                intersectObjects(controller1);
+                intersectObjects(controller2);
             }
             
-            if (cubeWireframe) {
-                cubeWireframe.visible = showWireframes;
-            }
+            // Update physics simulation
+            updatePhysics();
             
-            console.log('🔧 Wireframes:', showWireframes ? 'ON' : 'OFF');
-            
-            // Update info display
-            const infoDiv = document.getElementById('info');
-            const wireframeText = infoDiv.querySelector('p:nth-child(5)');
-            if (wireframeText) {
-                wireframeText.innerHTML = showWireframes ? 
-                    '<strong>Physics wireframes visible</strong>' : 
-                    '<strong>Physics wireframes hidden</strong>';
-            }
+            // Render the scene
+            renderer.render(scene, camera);
         }
-
-        // Debug: Add some visual feedback
-        console.log('🚀 Simple Zero-G WebXR initializing...');
     </script>
-</body>
+  </body>
 </html> 
