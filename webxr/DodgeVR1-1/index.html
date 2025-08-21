@@ -141,18 +141,15 @@
           return 2; // default
         }
         
-        // Capture mode: assign by team
-        const team = playerTeams.get(playerId);
+        // CRITICAL FIX: In capture mode, keep consistent ball assignments
+        // Host (player_0) ALWAYS uses ball 2, regardless of team
+        // Client (player_1) ALWAYS uses ball 4, regardless of team
+        // Only the COLOR changes based on team, not the ball itself
         
-        if (team === 'red') {
-          // Red team uses red balls
-          if (playerId === 'bot-red') return 1; // Red bot gets player1 (red ball)
-          return 2; // Human on red team gets player2 (but we'll change its color to red)
-        } else if (team === 'blue') {
-          // Blue team uses blue balls  
-          if (playerId === 'bot-blue') return 3; // Blue bot gets player3 (but we'll change its color to blue)
-          return 4; // Human on blue team gets player4 (but we'll change its color to blue)
-        }
+        if (playerId === 'player_0') return 2; // Host always uses ball 2
+        if (playerId === 'player_1') return 4; // Client always uses ball 4
+        if (playerId === 'bot-red') return 1;  // Red bot uses ball 1
+        if (playerId === 'bot-blue') return 3; // Blue bot uses ball 3
         
         return 2; // fallback
       }
@@ -174,43 +171,19 @@
           
           let targetColor = '#ffffff'; // default white
           
-          // Determine color based on team assignment
+          // CRITICAL FIX: Simplified color assignment based on fixed ball ownership
           if (ball.index === 1) {
-            targetColor = '#ff0000'; // Red bot ball -> red
+            targetColor = '#ff0000'; // Red bot ball -> always red
           } else if (ball.index === 2) {
-            // Ball 2 - determine owner and their team
-            let ballOwnerTeam = null;
-            activePlayers.forEach(playerId => {
-              if (getBallForPlayer(playerId) === 2) {
-                ballOwnerTeam = playerTeams.get(playerId);
-              }
-            });
-            // If no active player owns this ball, check local player
-            if (!ballOwnerTeam) {
-              const localPlayerId = myPlayerId || 'player_0';
-              if (getBallForPlayer(localPlayerId) === 2) {
-                ballOwnerTeam = playerTeams.get(localPlayerId);
-              }
-            }
-            targetColor = ballOwnerTeam === 'red' ? '#ff0000' : '#0000ff';
+            // Ball 2 -> Host's ball, color based on host's team
+            const hostTeam = playerTeams.get('player_0');
+            targetColor = hostTeam === 'red' ? '#ff0000' : '#0000ff';
           } else if (ball.index === 3) {
-            targetColor = '#0000ff'; // Blue bot ball -> blue
+            targetColor = '#0000ff'; // Blue bot ball -> always blue
           } else if (ball.index === 4) {
-            // Ball 4 - determine owner and their team
-            let ballOwnerTeam = null;
-            activePlayers.forEach(playerId => {
-              if (getBallForPlayer(playerId) === 4) {
-                ballOwnerTeam = playerTeams.get(playerId);
-              }
-            });
-            // If no active player owns this ball, check local player
-            if (!ballOwnerTeam) {
-              const localPlayerId = myPlayerId || 'player_0';
-              if (getBallForPlayer(localPlayerId) === 4) {
-                ballOwnerTeam = playerTeams.get(localPlayerId);
-              }
-            }
-            targetColor = ballOwnerTeam === 'red' ? '#ff0000' : '#0000ff';
+            // Ball 4 -> Client's ball, color based on client's team
+            const clientTeam = playerTeams.get('player_1');
+            targetColor = clientTeam === 'red' ? '#ff0000' : '#0000ff';
           }
           
           // Update ball color
@@ -251,19 +224,9 @@
       // Helper: get the owner ID of a ball based on its player index
       function getBallOwnerId(ballPlayerIndex) {
         if (ballPlayerIndex === 1) return 'bot-red';    // Red bot ball
-        if (ballPlayerIndex === 2) {
-          // Human ball - find which human is assigned this ball
-          const humanId = myPlayerId || 'player_0';
-          const humanBallIndex = getBallForPlayer(humanId);
-          return humanBallIndex === 2 ? humanId : null;
-        }
+        if (ballPlayerIndex === 2) return 'player_0';   // Host always owns ball 2
         if (ballPlayerIndex === 3) return 'bot-blue';   // Blue bot ball
-        if (ballPlayerIndex === 4) {
-          // Second human ball - find which human is assigned this ball
-          const humanId = myPlayerId || 'player_0';
-          const humanBallIndex = getBallForPlayer(humanId);
-          return humanBallIndex === 4 ? humanId : null;
-        }
+        if (ballPlayerIndex === 4) return 'player_1';   // Client always owns ball 4
         return null;
       }
       
@@ -4614,32 +4577,34 @@ function setGameplayHUD(isPlaying) {
               return;
             }
             
-            // Only allow control of own ball or capture ball
+            // CRITICAL FIX: Use dynamic ownership check instead of hardcoded ball indices
+            const currentPlayerId = myPlayerId || 'player_0';
             const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
-            const myBallIndex = getBallForPlayer(myPlayerId || 'player_0');
+            const ballOwnerId = getBallOwnerId(ballPlayerIndex);
             
             // Allow any player to control the capture ball
             if (this.isCaptureBall) {
               this.tractorBeamActive = true;
             } 
-            // Only allow control of own assigned ball
-            else if (this.data.owner === 'human' && ballPlayerIndex === myBallIndex) {
+            // Check if this ball is owned by the current player
+            else if (this.data.owner === 'human' && ballOwnerId === currentPlayerId) {
               this.tractorBeamActive = true;
             }
             // Bots cannot be controlled by humans
           });
           
           this.el.sceneEl.addEventListener('abuttonup', () => {
-            // Only allow control of own ball or capture ball
+            // CRITICAL FIX: Use dynamic ownership check instead of hardcoded ball indices
+            const currentPlayerId = myPlayerId || 'player_0';
             const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
-            const myBallIndex = getBallForPlayer(myPlayerId || 'player_0');
+            const ballOwnerId = getBallOwnerId(ballPlayerIndex);
             
             // Allow any player to control the capture ball
             if (this.isCaptureBall) {
               this.tractorBeamActive = false;
             }
-            // Only allow control of own assigned ball
-            else if (this.data.owner === 'human' && ballPlayerIndex === myBallIndex) {
+            // Check if this ball is owned by the current player
+            else if (this.data.owner === 'human' && ballOwnerId === currentPlayerId) {
               this.tractorBeamActive = false;
             }
           });
@@ -4733,23 +4698,56 @@ function setGameplayHUD(isPlaying) {
           if (!isMultiplayer || activePlayers.size <= 1) {
             // Player2's ball hits bot target
             if (ballPlayerIndex === 2) {
-              const botTarget = document.querySelector('#bot-target');
-              if (botTarget) {
+              // CRITICAL FIX: Check both red and blue bot targets
+              const redBotTarget = document.querySelector('#bot-target');
+              const blueBotTarget = document.querySelector('#bot-blue-target');
+              
+              // Check red bot target
+              if (redBotTarget) {
                 const targetPos = new THREE.Vector3();
-                botTarget.object3D.getWorldPosition(targetPos);
+                redBotTarget.object3D.getWorldPosition(targetPos);
                 if (ballPos.distanceTo(targetPos) < 0.3) {
-                  // Play explosion/sound on bot
-                  const impactEffect = botTarget.components['impact-effect'];
+                  // Play explosion/sound on red bot
+                  const impactEffect = redBotTarget.components['impact-effect'];
                   if (impactEffect) impactEffect.playEffect();
                   
                   if (gameMode === 'capture') {
-                    // Check if ball should affect bot based on team rules
-                    const botId = 'bot-red'; // Assume red bot for now, should be determined dynamically
-                    if (!shouldBallAffectTarget(ballPlayerIndex, botId)) {
+                    // Check if ball should affect red bot based on team rules
+                    if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-red')) {
                       return; // Same team - no effect
                     }
-                    // In capture mode: stun the bot (disable its AI)
-                    this.stunBot();
+                    // In capture mode: stun the red bot
+                    this.stunBot('bot-red');
+                  } else {
+                    // In dodge mode: score for player
+                    const gameManager = this.el.sceneEl.querySelector('#game-manager');
+                    if (gameManager && gameManager.components['game-manager']) {
+                      gameManager.components['game-manager'].onPlayerHit();
+                    }
+                  }
+                  
+                  this.lastHitTime = now;
+                  this.startAutoReturn();
+                  return;
+                }
+              }
+              
+              // Check blue bot target
+              if (blueBotTarget) {
+                const targetPos = new THREE.Vector3();
+                blueBotTarget.object3D.getWorldPosition(targetPos);
+                if (ballPos.distanceTo(targetPos) < 0.3) {
+                  // Play explosion/sound on blue bot
+                  const impactEffect = blueBotTarget.components['impact-effect'];
+                  if (impactEffect) impactEffect.playEffect();
+                  
+                  if (gameMode === 'capture') {
+                    // Check if ball should affect blue bot based on team rules
+                    if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-blue')) {
+                      return; // Same team - no effect
+                    }
+                    // In capture mode: stun the blue bot
+                    this.stunBot('bot-blue');
                   } else {
                     // In dodge mode: score for player
                     const gameManager = this.el.sceneEl.querySelector('#game-manager');
@@ -5000,9 +4998,18 @@ function setGameplayHUD(isPlaying) {
           }
         },
         
-        stunBot: function() {
-          // Stun the bot for 3 seconds
-          const bot = document.querySelector('#zerog-bot-red') || document.querySelector('#zerog-bot-blue');
+        stunBot: function(botId) {
+          // CRITICAL FIX: Stun specific bot based on botId parameter
+          let bot = null;
+          if (botId === 'bot-red') {
+            bot = document.querySelector('#zerog-bot-red');
+          } else if (botId === 'bot-blue') {
+            bot = document.querySelector('#zerog-bot-blue');
+          } else {
+            // Fallback to old behavior if no botId specified
+            bot = document.querySelector('#zerog-bot-red') || document.querySelector('#zerog-bot-blue');
+          }
+          
           if (bot && bot.components['zerog-bot']) {
             const botComponent = bot.components['zerog-bot'];
             
@@ -6649,21 +6656,15 @@ function setGameplayHUD(isPlaying) {
             if (gameMode === 'capture') {
               if (humanPlayerCount >= 2) {
                 // 2+ humans: Hide bots, show human balls only
-                // CRITICAL FIX: Use dynamic ball assignments instead of hardcoded
-                activePlayers.forEach(playerId => {
-                  const playerBallIndex = getBallForPlayer(playerId);
-                  if (playerBallIndex === i) {
-                    shouldShow = true;
-                  }
-                });
+                if (i === 2) shouldShow = true; // Host's ball (always ball 2)
+                if (i === 4) shouldShow = true; // Client's ball (always ball 4)
+                // Hide bot balls when 2+ humans
               } else {
-                // 1 human: Show bot balls and human ball
+                // 1 human: Show bot balls and host's ball
                 if (i === 1) shouldShow = true; // Red bot ball
+                if (i === 2) shouldShow = true; // Host's ball (always ball 2)
                 if (i === 3) shouldShow = true; // Blue bot ball
-                // Show human ball based on dynamic assignment
-                const humanPlayerId = myPlayerId || 'player_0';
-                const humanBallIndex = getBallForPlayer(humanPlayerId);
-                if (i === humanBallIndex) shouldShow = true;
+                // Hide ball 4 when only 1 human (no client)
               }
             } else {
               // Dodgeball mode
