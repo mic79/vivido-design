@@ -111,75 +111,14 @@
       // Helper: switch game mode
       function switchGameMode(mode) {
         gameMode = mode;
-
         
-        // Update HUD based on game mode
-        const hudStatus = document.getElementById('hud-status');
-        if (hudStatus) {
-          if (mode === 'capture') {
-            hudStatus.setAttribute('text', 'value', 'Capture Mode - Get the white ball to the goal!');
-          } else {
-            hudStatus.setAttribute('text', 'value', 'Dodge Mode - Hit opponents with balls!');
-          }
+        // CRITICAL: Sync game mode change to all players in multiplayer
+        if (isMultiplayer && activePlayers.size > 1) {
+          sendGameModeUpdate(mode);
         }
         
-        // Show/hide capture ball and goals based on mode
-        const captureBall = document.querySelector('#capture-ball');
-        const redGoal = document.querySelector('#red-goal');
-        const blueGoal = document.querySelector('#blue-goal');
-        
-        
-        if (captureBall) {
-          captureBall.setAttribute('visible', mode === 'capture');
-        }
-        if (redGoal) {
-          redGoal.setAttribute('visible', mode === 'capture');
-        }
-        if (blueGoal) {
-          blueGoal.setAttribute('visible', mode === 'capture');
-        }
-        
-        // Assign bot to Red team in capture mode
-        if (mode === 'capture') {
-          playerTeams.set('bot-red', 'red');
-          playerTeams.set('bot-blue', 'blue');
-
-          
-          // Ensure player team colors are maintained
-          const currentPlayerId = myPlayerId || 'player_0';
-          const playerTeam = playerTeams.get(currentPlayerId);
-          if (playerTeam) {
-            updatePlayerTeamColor(currentPlayerId, playerTeam);
-          }
-        }
-        
-        // Update player and bot management
-        manageActivePlayersAndBots();
-        
-        // Update ball colors for team assignments
-        updateBallColors();
-        
-        // Update bot ball assignments for new game mode
-        const redBot = document.querySelector('#zerog-bot-red');
-        const blueBot = document.querySelector('#zerog-bot-blue');
-        if (redBot && redBot.components['zerog-bot']) {
-          redBot.components['zerog-bot'].updateBallAssignment();
-        }
-        if (blueBot && blueBot.components['zerog-bot']) {
-          blueBot.components['zerog-bot'].updateBallAssignment();
-        }
-        
-        // Update score display for team mode
-        if (mode === 'capture') {
-          const hudScore = document.querySelector('#hud-score');
-          if (hudScore) {
-            hudScore.setAttribute('visible', true);
-            const leftScore = hudScore.children[0];
-            const rightScore = hudScore.children[1];
-            if (leftScore) leftScore.setAttribute('text', 'value', `${teamScores.blue}`);
-            if (rightScore) rightScore.setAttribute('text', 'value', `${teamScores.red}`);
-          }
-        }
+        // Update local UI and game state
+        updateGameModeUI(mode);
       }
 
       // Helper: check if two players are on the same team
@@ -461,7 +400,8 @@
             // Don't add 'client' to activePlayers - we'll add the actual player ID when assigned
             // Only count actual players, not connection IDs
             const actualPlayerCount = activePlayers.size;
-            updateMultiplayerStatus(`Host - Lobby ${lobbyNumber} (${actualPlayerCount}/4)`);
+            const maxPlayers = gameMode === 'capture' ? 2 : 4;
+            updateMultiplayerStatus(`Host - Lobby ${lobbyNumber} (${actualPlayerCount}/${maxPlayers})`);
             updateMenuDisplay();
               
               // Send player count update to all clients
@@ -578,6 +518,12 @@
             case 'ball-state':
               handleBallState(data);
               break;
+            case 'bot-state':
+              handleBotState(data);
+              break;
+            case 'game-mode-update':
+              handleGameModeUpdate(data);
+              break;
           }
         });
         
@@ -595,7 +541,8 @@
         
         // Update status for clients to show player count from host
         if (!isHost) {
-          updateMultiplayerStatus(`Connected - Lobby ${selectedLobby} (${data.playerCount}/4)`);
+          const maxPlayers = gameMode === 'capture' ? 2 : 4;
+          updateMultiplayerStatus(`Connected - Lobby ${selectedLobby} (${data.playerCount}/${maxPlayers})`);
         }
         
         // Update local activePlayers set with the host's data
@@ -852,6 +799,135 @@
         }
       }
       
+      function handleGameModeUpdate(data) {
+        // Handle game mode changes from other players
+        const newMode = data.gameMode;
+        
+        // Only apply if different from current mode
+        if (newMode !== gameMode) {
+          // Apply the game mode change locally (without sending another update)
+          const oldGameMode = gameMode;
+          gameMode = newMode;
+          
+          // Update local UI and game state
+          updateGameModeUI(newMode);
+          
+          // Host forwards game mode updates to other clients
+          if (isHost && isMultiplayer && activePlayers.size > 1) {
+            connections.forEach((conn, connectionKey) => {
+              if (conn && conn.open) {
+                conn.send({
+                  type: 'game-mode-update',
+                  gameMode: newMode,
+                  playerId: data.playerId
+                });
+              }
+            });
+          }
+        }
+      }
+      
+      function updateGameModeUI(mode) {
+        // Update HUD based on game mode
+        const hudStatus = document.getElementById('hud-status');
+        if (hudStatus) {
+          if (mode === 'capture') {
+            hudStatus.setAttribute('text', 'value', 'Capture Mode - Get the white ball to the goal!');
+          } else {
+            hudStatus.setAttribute('text', 'value', 'Dodge Mode - Hit opponents with balls!');
+          }
+        }
+        
+        // Show/hide capture ball and goals based on mode
+        const captureBall = document.querySelector('#capture-ball');
+        const redGoal = document.querySelector('#red-goal');
+        const blueGoal = document.querySelector('#blue-goal');
+        
+        if (captureBall) {
+          captureBall.setAttribute('visible', mode === 'capture');
+        }
+        if (redGoal) {
+          redGoal.setAttribute('visible', mode === 'capture');
+        }
+        if (blueGoal) {
+          blueGoal.setAttribute('visible', mode === 'capture');
+        }
+        
+        // Assign bot teams in capture mode
+        if (mode === 'capture') {
+          playerTeams.set('bot-red', 'red');
+          playerTeams.set('bot-blue', 'blue');
+          
+          // Ensure player team colors are maintained
+          const currentPlayerId = myPlayerId || 'player_0';
+          const playerTeam = playerTeams.get(currentPlayerId);
+          if (playerTeam) {
+            updatePlayerTeamColor(currentPlayerId, playerTeam);
+          }
+        }
+        
+        // Update player and bot management
+        manageActivePlayersAndBots();
+        
+        // Update ball colors for team assignments
+        updateBallColors();
+        
+        // Update bot ball assignments for new game mode
+        const redBot = document.querySelector('#zerog-bot-red');
+        const blueBot = document.querySelector('#zerog-bot-blue');
+        if (redBot && redBot.components['zerog-bot']) {
+          redBot.components['zerog-bot'].updateBallAssignment();
+        }
+        if (blueBot && blueBot.components['zerog-bot']) {
+          blueBot.components['zerog-bot'].updateBallAssignment();
+        }
+        
+        // Update score display for team mode
+        if (mode === 'capture') {
+          const hudScore = document.querySelector('#hud-score');
+          if (hudScore) {
+            hudScore.setAttribute('visible', true);
+            const leftScore = hudScore.children[0];
+            const rightScore = hudScore.children[1];
+            if (leftScore) leftScore.setAttribute('text', 'value', `${teamScores.blue}`);
+            if (rightScore) rightScore.setAttribute('text', 'value', `${teamScores.red}`);
+          }
+        }
+      }
+      
+      function handleBotState(data) {
+        // Handle remote bot position/velocity updates from host
+        const botId = data.botState.botId;
+        const botElement = document.querySelector(`#zerog-${botId}`);
+        
+        if (botElement && botElement.components['zerog-bot']) {
+          const botComponent = botElement.components['zerog-bot'];
+          
+          // Only update bot position on clients (not on host)
+          if (!isHost && botComponent.body) {
+            // Update bot physics body position and velocity
+            botComponent.body.position.set(data.botState.x, data.botState.y, data.botState.z);
+            botComponent.body.velocity.set(data.botState.vx, data.botState.vy, data.botState.vz);
+            
+            // Update visual position
+            botElement.object3D.position.set(data.botState.x, data.botState.y, data.botState.z);
+          }
+        }
+        
+        // Host forwards bot states to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open) {
+              conn.send({
+                type: 'bot-state',
+                botState: data.botState,
+                playerId: data.playerId
+              });
+            }
+          });
+        }
+      }
+      
       function handleBallState(data) {
         // Handle remote ball position/velocity updates (throttled logging)
         if (!this.lastBallStateReceiveTime || Date.now() - this.lastBallStateReceiveTime > 30000) {
@@ -877,14 +953,31 @@
         // CRITICAL FIX: Don't update balls that belong to the current player
         // Each player should only control their own ball, not receive updates for it
         const ballNumber = data.ballState.playerId;
+        
+        // Handle capture ball separately - it can be controlled by any player
+        if (ballNumber === 'capture') {
+          const captureBall = document.querySelector('#capture-ball');
+          if (captureBall && captureBall.components['zerog-ball']) {
+            const ballComponent = captureBall.components['zerog-ball'];
+            // Don't update capture ball if it's currently being controlled locally
+            if (ballComponent.isGrabbed || ballComponent.tractorBeamActive) {
+              return;
+            }
+            // Apply network update to capture ball
+            captureBall.object3D.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
+            if (ballComponent.body) {
+              ballComponent.body.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
+              ballComponent.body.velocity.set(data.ballState.vx, data.ballState.vy, data.ballState.vz);
+            }
+          }
+          return;
+        }
+        
         const currentPlayerIndex = myPlayerId ? parseInt(myPlayerId.split('_')[1]) : -1;
         const currentPlayerBallNumber = currentPlayerIndex + 1; // player_0 -> ball 1, player_1 -> ball 2, etc.
         
         if (ballNumber === currentPlayerBallNumber) {
           // This is our own ball - don't apply network updates to it
-          if (!this.lastOwnBallSkipTime || Date.now() - this.lastOwnBallSkipTime > 30000) {
-            this.lastOwnBallSkipTime = Date.now();
-          }
           return;
         }
         
@@ -1135,7 +1228,8 @@
         
         // Update host's own status display
         if (isHost) {
-          updateMultiplayerStatus(`Host - Lobby ${selectedLobby} (${actualPlayerCount}/4)`);
+          const maxPlayers = gameMode === 'capture' ? 2 : 4;
+          updateMultiplayerStatus(`Host - Lobby ${selectedLobby} (${actualPlayerCount}/${maxPlayers})`);
         }
         
         connections.forEach((conn, playerId) => {
@@ -2898,6 +2992,12 @@ function setGameplayHUD(isPlaying) {
         tick: function(time) {
           if (!this.data.enabled) return;
           
+          // CRITICAL: In multiplayer, only the host should run bot AI
+          // Clients should only receive bot position updates
+          if (isMultiplayer && activePlayers.size > 1 && !isHost) {
+            return; // Clients don't run bot AI
+          }
+          
           // Check if stunned and disable AI
           if (this.isStunned) {
             if (Date.now() > this.stunEndTime) {
@@ -3320,9 +3420,24 @@ function setGameplayHUD(isPlaying) {
         },
 
         updateReadyState: function() {
-          if (!isMultiplayer || activePlayers.size < 2) return;
+          const minPlayers = gameMode === 'capture' ? 2 : 2; // Both modes need at least 2 players
+          const maxPlayers = gameMode === 'capture' ? 2 : 4;
           
-          const readyCount = this.playerReadyStates.filter(ready => ready).length;
+          if (!isMultiplayer || activePlayers.size < minPlayers) {
+            const needed = minPlayers - activePlayers.size;
+            this.startMessage.setAttribute('text', 'value', `Waiting for ${needed} more player(s)...`);
+            return;
+          }
+          
+          // CRITICAL FIX: Only count ready states for active players
+          let readyCount = 0;
+          activePlayers.forEach(playerId => {
+            const playerIndex = parseInt(playerId.split('_')[1]);
+            if (this.playerReadyStates[playerIndex]) {
+              readyCount++;
+            }
+          });
+          
           const totalPlayers = activePlayers.size;
           
           if (readyCount < totalPlayers) {
@@ -4185,22 +4300,52 @@ function setGameplayHUD(isPlaying) {
               const ballComponent = ball.components['zerog-ball'];
               const velocity = ballComponent?.body?.velocity || {x:0, y:0, z:0};
               
-              // Debug: Log ball movement when it's significant (throttled)
-              const ballSpeed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
-              if (ballSpeed > 0.1 && (!this.lastBallMoveLogTime || Date.now() - this.lastBallMoveLogTime > 5000)) {
-                this.lastBallMoveLogTime = Date.now();
-              }
-              
-              // Debug: Log which ball this player is sending (throttled)
-              if (!this.lastBallSendDebugTime || Date.now() - this.lastBallSendDebugTime > 30000) {
-                this.lastBallSendDebugTime = Date.now();
-              }
-              
               sendBallState({ 
                 playerId: myBallNumber,
                 x: pos.x, y: pos.y, z: pos.z, 
                 vx: velocity.x, vy: velocity.y, vz: velocity.z 
               });
+            }
+            
+            // CRITICAL: Also sync the capture ball in capture mode
+            if (gameMode === 'capture') {
+              const captureBall = document.querySelector('#capture-ball');
+              if (captureBall && captureBall.components['zerog-ball']) {
+                const pos = captureBall.object3D.position;
+                const ballComponent = captureBall.components['zerog-ball'];
+                const velocity = ballComponent?.body?.velocity || {x:0, y:0, z:0};
+                
+                // Send capture ball state with special ID
+                sendBallState({ 
+                  playerId: 'capture',
+                  x: pos.x, y: pos.y, z: pos.z, 
+                  vx: velocity.x, vy: velocity.y, vz: velocity.z 
+                });
+              }
+            }
+            
+            // CRITICAL: Host syncs bot positions to all clients
+            if (isHost) {
+              const redBot = document.querySelector('#zerog-bot-red');
+              const blueBot = document.querySelector('#zerog-bot-blue');
+              
+              if (redBot && redBot.components['zerog-bot'] && redBot.components['zerog-bot'].body) {
+                const botBody = redBot.components['zerog-bot'].body;
+                sendBotState({
+                  botId: 'bot-red',
+                  x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
+                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z
+                });
+              }
+              
+              if (blueBot && blueBot.components['zerog-bot'] && blueBot.components['zerog-bot'].body) {
+                const botBody = blueBot.components['zerog-bot'].body;
+                sendBotState({
+                  botId: 'bot-blue',
+                  x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
+                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z
+                });
+              }
             }
           }
           
@@ -6267,6 +6412,40 @@ function setGameplayHUD(isPlaying) {
             this.lastPlayerStateLog = Date.now();
           }
         }
+        
+        // Send to all connections
+        connections.forEach((conn, playerId) => {
+          if (conn && conn.open) {
+            conn.send(data);
+          }
+        });
+      }
+      
+      function sendGameModeUpdate(mode) {
+        if (!isMultiplayer || activePlayers.size <= 1) return;
+        
+        const data = {
+          type: 'game-mode-update',
+          gameMode: mode,
+          playerId: myPlayerId
+        };
+        
+        // Send to all connections
+        connections.forEach((conn, playerId) => {
+          if (conn && conn.open) {
+            conn.send(data);
+          }
+        });
+      }
+      
+      function sendBotState(botState) {
+        if (!isMultiplayer || activePlayers.size <= 1) return;
+        
+        const data = {
+          type: 'bot-state',
+          botState: botState,
+          playerId: myPlayerId
+        };
         
         // Send to all connections
         connections.forEach((conn, playerId) => {
