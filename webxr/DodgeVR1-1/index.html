@@ -178,14 +178,39 @@
           if (ball.index === 1) {
             targetColor = '#ff0000'; // Red bot ball -> red
           } else if (ball.index === 2) {
-            // Human ball - color based on human team
-            const humanTeam = playerTeams.get(myPlayerId || 'player_0');
-            targetColor = humanTeam === 'red' ? '#ff0000' : '#0000ff';
+            // Ball 2 - determine owner and their team
+            let ballOwnerTeam = null;
+            activePlayers.forEach(playerId => {
+              if (getBallForPlayer(playerId) === 2) {
+                ballOwnerTeam = playerTeams.get(playerId);
+              }
+            });
+            // If no active player owns this ball, check local player
+            if (!ballOwnerTeam) {
+              const localPlayerId = myPlayerId || 'player_0';
+              if (getBallForPlayer(localPlayerId) === 2) {
+                ballOwnerTeam = playerTeams.get(localPlayerId);
+              }
+            }
+            targetColor = ballOwnerTeam === 'red' ? '#ff0000' : '#0000ff';
           } else if (ball.index === 3) {
             targetColor = '#0000ff'; // Blue bot ball -> blue
           } else if (ball.index === 4) {
-            // Second human ball - color based on team (blue for now)
-            targetColor = '#0000ff';
+            // Ball 4 - determine owner and their team
+            let ballOwnerTeam = null;
+            activePlayers.forEach(playerId => {
+              if (getBallForPlayer(playerId) === 4) {
+                ballOwnerTeam = playerTeams.get(playerId);
+              }
+            });
+            // If no active player owns this ball, check local player
+            if (!ballOwnerTeam) {
+              const localPlayerId = myPlayerId || 'player_0';
+              if (getBallForPlayer(localPlayerId) === 4) {
+                ballOwnerTeam = playerTeams.get(localPlayerId);
+              }
+            }
+            targetColor = ballOwnerTeam === 'red' ? '#ff0000' : '#0000ff';
           }
           
           // Update ball color
@@ -622,6 +647,10 @@
         
         // Make all other remote players visible
         makeAllRemotePlayersVisible();
+        
+        // Update ball colors and visibility for new player
+        updateBallColors();
+        manageActivePlayersAndBots();
         
         updateMenuDisplay();
       }
@@ -6607,23 +6636,32 @@ function setGameplayHUD(isPlaying) {
             if (gameMode === 'capture') {
               if (humanPlayerCount >= 2) {
                 // 2+ humans: Hide bots, show human balls only
-                if (i === 2) shouldShow = true; // Human Player 0 ball
-                if (i === 4 && humanPlayerCount >= 2) shouldShow = true; // Human Player 1 ball
-                // Ball 1 (red bot) and Ball 3 (blue bot) hidden when 2+ humans
+                // CRITICAL FIX: Use dynamic ball assignments instead of hardcoded
+                activePlayers.forEach(playerId => {
+                  const playerBallIndex = getBallForPlayer(playerId);
+                  if (playerBallIndex === i) {
+                    shouldShow = true;
+                  }
+                });
               } else {
                 // 1 human: Show bot balls and human ball
                 if (i === 1) shouldShow = true; // Red bot ball
-                if (i === 2) shouldShow = true; // Human ball
                 if (i === 3) shouldShow = true; // Blue bot ball
-                // Ball 4 (human player 1) hidden in singleplayer
+                // Show human ball based on dynamic assignment
+                const humanPlayerId = myPlayerId || 'player_0';
+                const humanBallIndex = getBallForPlayer(humanPlayerId);
+                if (i === humanBallIndex) shouldShow = true;
               }
             } else {
               // Dodgeball mode
               if (isMultiplayer) {
-                // Show balls for active human players
-                if (i === 2 && humanPlayerCount >= 1) shouldShow = true; // Human Player 0
-                if (i === 4 && humanPlayerCount >= 2) shouldShow = true; // Human Player 1
-                // More players would use additional balls if we had them
+                // CRITICAL FIX: Use dynamic ball assignments for each active player
+                activePlayers.forEach(playerId => {
+                  const playerBallIndex = getBallForPlayer(playerId);
+                  if (playerBallIndex === i) {
+                    shouldShow = true;
+                  }
+                });
               } else {
                 // Singleplayer: Show red bot ball and human ball only
                 if (i === 1 || i === 2) shouldShow = true;
