@@ -954,27 +954,30 @@
         // Each player should only control their own ball, not receive updates for it
         const ballNumber = data.ballState.playerId;
         
-        // Handle capture ball separately - it can be controlled by any player
+        // Handle capture ball separately - only accept updates from host
         if (ballNumber === 'capture') {
-          const captureBall = document.querySelector('#capture-ball');
-          if (captureBall && captureBall.components['zerog-ball']) {
-            const ballComponent = captureBall.components['zerog-ball'];
-            // Don't update capture ball if it's currently being controlled locally
-            if (ballComponent.isGrabbed || ballComponent.tractorBeamActive) {
-              return;
-            }
-            // Apply network update to capture ball
-            captureBall.object3D.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
-            if (ballComponent.body) {
-              ballComponent.body.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
-              ballComponent.body.velocity.set(data.ballState.vx, data.ballState.vy, data.ballState.vz);
+          // Only accept capture ball updates if we're not the host (host is authoritative)
+          if (!isHost) {
+            const captureBall = document.querySelector('#capture-ball');
+            if (captureBall && captureBall.components['zerog-ball']) {
+              const ballComponent = captureBall.components['zerog-ball'];
+              // Don't update capture ball if it's currently being controlled locally
+              if (ballComponent.isGrabbed || ballComponent.tractorBeamActive) {
+                return;
+              }
+              // Apply network update to capture ball from host
+              captureBall.object3D.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
+              if (ballComponent.body) {
+                ballComponent.body.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
+                ballComponent.body.velocity.set(data.ballState.vx, data.ballState.vy, data.ballState.vz);
+              }
             }
           }
           return;
         }
         
-        const currentPlayerIndex = myPlayerId ? parseInt(myPlayerId.split('_')[1]) : -1;
-        const currentPlayerBallNumber = currentPlayerIndex + 1; // player_0 -> ball 1, player_1 -> ball 2, etc.
+        // CRITICAL FIX: Use dynamic ball assignment instead of hardcoded logic
+        const currentPlayerBallNumber = getBallForPlayer(myPlayerId || 'player_0');
         
         if (ballNumber === currentPlayerBallNumber) {
           // This is our own ball - don't apply network updates to it
@@ -2753,8 +2756,7 @@ function setGameplayHUD(isPlaying) {
              const ballNumber = parseInt(ballPlayer.replace('player', ''));
              let currentPlayerBallNumber = 2; // Default for singleplayer
              if (isMultiplayer && myPlayerId) {
-               const playerIndex = parseInt(myPlayerId.split('_')[1]);
-               currentPlayerBallNumber = playerIndex + 1; // player_0 -> ball 1, player_1 -> ball 2, etc.
+               currentPlayerBallNumber = getBallForPlayer(myPlayerId);
              }
              
              if (ballNumber === currentPlayerBallNumber) {
@@ -3534,8 +3536,7 @@ function setGameplayHUD(isPlaying) {
           // Get the current player's ball number
           let playerBallNumber = 2; // Default for singleplayer
           if (isMultiplayer && myPlayerId) {
-            const playerIndex = parseInt(myPlayerId.split('_')[1]);
-            playerBallNumber = playerIndex + 1; // player_0 -> ball 1, player_1 -> ball 2, etc.
+            playerBallNumber = getBallForPlayer(myPlayerId);
           }
           
           const playerBall = document.querySelector(`[zerog-ball*="player: player${playerBallNumber}"]`);
@@ -4290,9 +4291,8 @@ function setGameplayHUD(isPlaying) {
           
           // Send ball states for all players
           if (isMultiplayer && activePlayers.size > 1 && myPlayerId) {
-            // Each player only sends their own ball state
-            const playerIndex = parseInt(myPlayerId.split('_')[1]);
-            const myBallNumber = playerIndex + 1; // player_0 -> ball 1, player_1 -> ball 2, etc.
+            // CRITICAL FIX: Use dynamic ball assignment instead of hardcoded logic
+            const myBallNumber = getBallForPlayer(myPlayerId);
             
             const ball = document.querySelector(`[zerog-ball*="player: player${myBallNumber}"]`);
             if (ball) {
@@ -4307,20 +4307,25 @@ function setGameplayHUD(isPlaying) {
               });
             }
             
-            // CRITICAL: Also sync the capture ball in capture mode
-            if (gameMode === 'capture') {
+            // CRITICAL: Only HOST syncs the capture ball in capture mode
+            // This prevents multiple players from fighting over control
+            if (gameMode === 'capture' && isHost) {
               const captureBall = document.querySelector('#capture-ball');
               if (captureBall && captureBall.components['zerog-ball']) {
-                const pos = captureBall.object3D.position;
                 const ballComponent = captureBall.components['zerog-ball'];
-                const velocity = ballComponent?.body?.velocity || {x:0, y:0, z:0};
                 
-                // Send capture ball state with special ID
-                sendBallState({ 
-                  playerId: 'capture',
-                  x: pos.x, y: pos.y, z: pos.z, 
-                  vx: velocity.x, vy: velocity.y, vz: velocity.z 
-                });
+                // Only send capture ball state if it's not being controlled by any player
+                if (!ballComponent.isGrabbed && !ballComponent.tractorBeamActive) {
+                  const pos = captureBall.object3D.position;
+                  const velocity = ballComponent?.body?.velocity || {x:0, y:0, z:0};
+                  
+                  // Send capture ball state with special ID
+                  sendBallState({ 
+                    playerId: 'capture',
+                    x: pos.x, y: pos.y, z: pos.z, 
+                    vx: velocity.x, vy: velocity.y, vz: velocity.z 
+                  });
+                }
               }
             }
             
@@ -5040,8 +5045,8 @@ function setGameplayHUD(isPlaying) {
                 // Determine which ball belongs to the current player
                 let currentPlayerBall = 'player2'; // Default for singleplayer
                 if (isMultiplayer && myPlayerId) {
-                  const playerIndex = parseInt(myPlayerId.split('_')[1]);
-                  currentPlayerBall = `player${playerIndex + 1}`; // player_0 -> player1, player_1 -> player2, etc.
+                  const ballNumber = getBallForPlayer(myPlayerId);
+                  currentPlayerBall = `player${ballNumber}`;
                 }
                 
                 // Only apply tractor beam to the current player's ball
@@ -5173,8 +5178,8 @@ function setGameplayHUD(isPlaying) {
           // Determine which ball belongs to the current player
           let currentPlayerBall = 'player2'; // Default for singleplayer
           if (isMultiplayer && myPlayerId) {
-            const playerIndex = parseInt(myPlayerId.split('_')[1]);
-            currentPlayerBall = `player${playerIndex + 1}`; // player_0 -> player1, player_1 -> player2, etc.
+            const ballNumber = getBallForPlayer(myPlayerId);
+            currentPlayerBall = `player${ballNumber}`;
           }
           
           if (this.data.player === currentPlayerBall) { // Only for current player's ball
