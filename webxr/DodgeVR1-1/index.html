@@ -106,14 +106,46 @@
           const playerCount = activePlayers.size;
           menuCurrentMode.setAttribute('text', 'value', `Mode: ${mode} (${playerCount}/4 players)`);
         }
+        
+        // CRITICAL FIX: Disable game mode buttons for clients in multiplayer
+        const dodgeButton = document.querySelector('#menu-mode-dodge');
+        const captureButton = document.querySelector('#menu-mode-capture');
+        
+        if (dodgeButton && captureButton) {
+          const canChangeMode = !isMultiplayer || isHost;
+          const opacity = canChangeMode ? 1.0 : 0.3;
+          const color = canChangeMode ? '#ffffff' : '#666666';
+          
+          dodgeButton.setAttribute('material', `opacity: ${opacity}; color: ${color}`);
+          captureButton.setAttribute('material', `opacity: ${opacity}; color: ${color}`);
+          
+          // Add visual indicator for clients
+          if (isMultiplayer && !isHost) {
+            const statusText = document.getElementById('menu-mode-status');
+            if (statusText) {
+              statusText.setAttribute('text', 'value', '(Host controls game mode)');
+              statusText.setAttribute('visible', true);
+            }
+          } else {
+            const statusText = document.getElementById('menu-mode-status');
+            if (statusText) {
+              statusText.setAttribute('visible', false);
+            }
+          }
+        }
       }
 
       // Helper: switch game mode
       function switchGameMode(mode) {
+        // CRITICAL FIX: Only host can change game mode in multiplayer
+        if (isMultiplayer && !isHost) {
+          return; // Clients cannot change game mode
+        }
+        
         gameMode = mode;
         
-        // CRITICAL: Sync game mode change to all players in multiplayer
-        if (isMultiplayer && activePlayers.size > 1) {
+        // Host syncs game mode change to all clients
+        if (isMultiplayer && isHost && activePlayers.size > 1) {
           sendGameModeUpdate(mode);
         }
         
@@ -520,6 +552,9 @@
             case 'game-mode-update':
               handleGameModeUpdate(data);
               break;
+            case 'request-game-mode':
+              handleGameModeRequest(conn);
+              break;
           }
         });
         
@@ -622,6 +657,14 @@
         // Update ball colors and visibility for new player
         updateBallColors();
         manageActivePlayersAndBots();
+        
+        // CRITICAL FIX: Request current game mode from host
+        const hostConnection = connections.get('host');
+        if (hostConnection && hostConnection.open) {
+          hostConnection.send({
+            type: 'request-game-mode'
+          });
+        }
         
         updateMenuDisplay();
       }
@@ -800,30 +843,35 @@
       }
       
       function handleGameModeUpdate(data) {
-        // Handle game mode changes from other players
+        // CRITICAL FIX: Only clients should receive game mode updates from host
+        if (isHost) {
+          return; // Host doesn't receive game mode updates, only sends them
+        }
+        
         const newMode = data.gameMode;
         
         // Only apply if different from current mode
         if (newMode !== gameMode) {
-          // Apply the game mode change locally (without sending another update)
-          const oldGameMode = gameMode;
+          // Apply the game mode change locally (clients receive only)
           gameMode = newMode;
           
           // Update local UI and game state
           updateGameModeUI(newMode);
-          
-          // Host forwards game mode updates to other clients
-          if (isHost && isMultiplayer && activePlayers.size > 1) {
-            connections.forEach((conn, connectionKey) => {
-              if (conn && conn.open) {
-                conn.send({
-                  type: 'game-mode-update',
-                  gameMode: newMode,
-                  playerId: data.playerId
-                });
-              }
-            });
-          }
+        }
+      }
+      
+      function handleGameModeRequest(conn) {
+        // CRITICAL FIX: Host responds to game mode requests from clients
+        if (!isHost) {
+          return; // Only host can respond to game mode requests
+        }
+        
+        // Send current game mode to requesting client
+        if (conn && conn.open) {
+          conn.send({
+            type: 'game-mode-update',
+            gameMode: gameMode
+          });
         }
       }
       
