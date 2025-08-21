@@ -4992,6 +4992,28 @@ function setGameplayHUD(isPlaying) {
           // Apply velocity to physics body
           this.body.velocity.set(velocity.x, velocity.y, velocity.z);
           
+          // CRITICAL FIX: Immediately send ball state for multiplayer sync when throwing
+          if (isMultiplayer && activePlayers.size > 1) {
+            // Send immediate ball state with throw velocity for capture ball
+            if (this.isCaptureBall) {
+              const pos = this.el.object3D.position;
+              sendBallState({ 
+                playerId: 'capture',
+                x: pos.x, y: pos.y, z: pos.z, 
+                vx: velocity.x, vy: velocity.y, vz: velocity.z 
+              });
+            } else {
+              // Send immediate ball state for regular player balls
+              const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
+              const pos = this.el.object3D.position;
+              sendBallState({ 
+                playerId: ballPlayerIndex,
+                x: pos.x, y: pos.y, z: pos.z, 
+                vx: velocity.x, vy: velocity.y, vz: velocity.z 
+              });
+            }
+          }
+          
           // Calculate angular velocity based on hand rotation change
           let angularVelocity = new THREE.Vector3(0, 0, 0);
           if (this.lastRotation && this.grabbingHand) {
