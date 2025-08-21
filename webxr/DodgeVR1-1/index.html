@@ -374,6 +374,14 @@
               player.isBot = false;
             }
             
+            // CRITICAL FIX: Assign host to default team (red) for capture mode
+            if (gameMode === 'capture') {
+              playerTeams.set('player_0', 'red');
+              // Update ball colors and visibility for host
+              updateBallColors();
+              manageActivePlayersAndBots();
+            }
+            
             // Position host at corner
             const rig = document.querySelector('#rig');
             if (rig) {
@@ -889,10 +897,15 @@
           
           // Ensure player team colors are maintained
           const currentPlayerId = myPlayerId || 'player_0';
-          const playerTeam = playerTeams.get(currentPlayerId);
-          if (playerTeam) {
-            updatePlayerTeamColor(currentPlayerId, playerTeam);
+          let playerTeam = playerTeams.get(currentPlayerId);
+          
+          // CRITICAL FIX: Assign default team if player doesn't have one
+          if (!playerTeam) {
+            playerTeam = 'red'; // Default to red team
+            playerTeams.set(currentPlayerId, playerTeam);
           }
+          
+          updatePlayerTeamColor(currentPlayerId, playerTeam);
         }
         
         // Update player and bot management
