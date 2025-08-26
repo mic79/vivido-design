@@ -6080,9 +6080,12 @@ function setGameplayHUD(isPlaying) {
               
               <!-- Menu title -->
               <a-text value="DODGE VR MENU" position="0 0.3 0" align="center" width="1.2" color="#ffffff"></a-text>
+
+              <!-- Current mode display -->
+              <a-text id="menu-current-mode" value="Mode: Singleplayer" position="0 0.25 0" align="center" width="1.1" color="#ffffff"></a-text>
               
               <!-- Singleplayer button -->
-              <a-entity id="menu-singleplayer" position="-0.4 0.15 0" 
+              <a-entity id="menu-singleplayer" position="-0.2 0.15 0" 
                         geometry="primitive: plane; width: 0.25; height: 0.08"
                         material="color: #004499; transparent: true; opacity: 0.8"
                         cursor-listener
@@ -6091,7 +6094,7 @@ function setGameplayHUD(isPlaying) {
               </a-entity>
               
               <!-- Multiplayer button -->
-              <a-entity id="menu-multiplayer" position="-0.1 0.15 0"
+              <a-entity id="menu-multiplayer" position="0.2 0.15 0"
                         geometry="primitive: plane; width: 0.25; height: 0.08"
                         material="color: #990044; transparent: true; opacity: 0.8"
                         cursor-listener
@@ -6100,25 +6103,25 @@ function setGameplayHUD(isPlaying) {
               </a-entity>
               
               <!-- Lobby selection (only visible in multiplayer) -->
-              <a-entity id="menu-lobby-section" position="0.2 0.15 0" visible="false">
-                <a-text value="Lobby:" position="0 0.05 0" align="center" width="0.3" color="#ffffff"></a-text>
-                <a-entity id="menu-lobby-minus" position="-0.05 -0.05 0"
+              <a-entity id="menu-lobby-section" position="0 0.05 0" visible="false">
+                <a-text value="Lobby:" position="-0.4 0 0" align="center" width="0.3" color="#ffffff"></a-text>
+                <a-entity id="menu-lobby-minus" position="-0.075 0 0"
                           geometry="primitive: plane; width: 0.04; height: 0.04"
                           material="color: #ff4444; transparent: true; opacity: 0.8"
                           cursor-listener
                           class="clickable">
                   <a-text value="-" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
                 </a-entity>
-                <a-text id="menu-lobby-number" value="1" position="0.02 -0.05 0" align="center" width="0.2" color="#ffffff"></a-text>
-                <a-entity id="menu-lobby-plus" position="0.09 -0.05 0"
+                <a-text id="menu-lobby-number" value="1" position="-0.02 0 0" align="center" width="1" color="#ffffff"></a-text>
+                <a-entity id="menu-lobby-plus" position="0.05 0 0"
                           geometry="primitive: plane; width: 0.04; height: 0.04"
                           material="color: #44ff44; transparent: true; opacity: 0.8"
                           cursor-listener
                           class="clickable">
                   <a-text value="+" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
                 </a-entity>
-                <a-entity id="menu-connect" position="0.15 -0.05 0"
-                          geometry="primitive: plane; width: 0.08; height: 0.04"
+                <a-entity id="menu-connect" position="0.15 0 0"
+                          geometry="primitive: plane; width: 0.1; height: 0.04"
                           material="color: #4444ff; transparent: true; opacity: 0.8"
                           cursor-listener
                           class="clickable">
@@ -6127,42 +6130,40 @@ function setGameplayHUD(isPlaying) {
               </a-entity>
               
               <!-- Auto connect button -->
-              <a-entity id="menu-auto-connect" position="0.2 0.05 0"
+              <!--<a-entity id="menu-auto-connect" position="0.2 0.05 0"
                         geometry="primitive: plane; width: 0.25; height: 0.08"
                         material="color: #44aa44; transparent: true; opacity: 0.8"
                         cursor-listener
                         class="clickable"
                         visible="false">
                 <a-text value="AUTO JOIN" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
-              </a-entity>
-              
-              <!-- Current mode display -->
-              <a-text id="menu-current-mode" value="Mode: Singleplayer" position="0 0.05 0" align="center" width="1.1" color="#ffffff"></a-text>
+              </a-entity>-->
               
               <!-- Player slots display -->
-              <a-entity id="menu-player-slots" position="0 -0.05 0">
+              <!--<a-entity id="menu-player-slots" position="0 0 0">
                 <a-text value="Players:" position="-0.4 0 0" align="center" width="0.3" color="#ffffff"></a-text>
-                <a-entity id="menu-slot-0" position="-0.2 0 0">
+                <a-entity id="menu-slot-0" position="-0.1 0 0">
                   <a-sphere radius="0.02" color="#ff0000" material="opacity: 0.5; transparent: true"></a-sphere>
                   <a-text value="P0" position="0 -0.04 0" align="center" width="0.2" color="#ffffff"></a-text>
                 </a-entity>
-                <a-entity id="menu-slot-1" position="-0.1 0 0">
+                <a-entity id="menu-slot-1" position="-0 0 0">
                   <a-sphere radius="0.02" color="#00ff00" material="opacity: 0.5; transparent: true"></a-sphere>
                   <a-text value="P1" position="0 -0.04 0" align="center" width="0.2" color="#ffffff"></a-text>
                 </a-entity>
-                <a-entity id="menu-slot-2" position="0 0 0">
+                <a-entity id="menu-slot-2" position="0.1 0 0">
                   <a-sphere radius="0.02" color="#ff00ff" material="opacity: 0.5; transparent: true"></a-sphere>
                   <a-text value="P2" position="0 -0.04 0" align="center" width="0.2" color="#ffffff"></a-text>
                 </a-entity>
-                <a-entity id="menu-slot-3" position="0.1 0 0">
+                <a-entity id="menu-slot-3" position="0.2 0 0">
                   <a-sphere radius="0.02" color="#ffff00" material="opacity: 0.5; transparent: true"></a-sphere>
                   <a-text value="P3" position="0 -0.04 0" align="center" width="0.2" color="#ffffff"></a-text>
                 </a-entity>
-              </a-entity>
+              </a-entity>-->
               
               <!-- Game Mode Selection -->
               <a-entity id="menu-game-mode" position="0 -0.12 0">
                 <a-text value="Game Mode:" position="0 0.05 0" align="center" width="0.4" color="#ffffff"></a-text>
+                <a-text id="menu-current-mode-game" value="Mode: Dodge" position="0 0.03 0" align="center" width="0.4" color="#ff8800"></a-text>
                 <a-entity id="menu-mode-dodge" position="-0.12 -0.02 0"
                           geometry="primitive: plane; width: 0.1; height: 0.04"
                           material="color: #ff8800; transparent: true; opacity: 1.0"
@@ -6177,12 +6178,12 @@ function setGameplayHUD(isPlaying) {
                           class="clickable">
                   <a-text value="CAPTURE" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
                 </a-entity>
-                <a-text id="menu-current-mode-game" value="Mode: Dodge" position="0 -0.08 0" align="center" width="0.4" color="#ff8800"></a-text>
               </a-entity>
               
               <!-- Team Selection -->
-              <a-entity id="menu-team-selection" position="0 -0.22 0">
+              <a-entity id="menu-team-selection" position="0 -0.25 0">
                 <a-text value="Your Team:" position="0 0.05 0" align="center" width="0.4" color="#ffffff"></a-text>
+                <a-text id="menu-current-team" value="Team: None" position="0 0.03 0" align="center" width="0.4" color="#ffff00"></a-text>
                 <a-entity id="menu-team-red" position="-0.1 -0.02 0"
                           geometry="primitive: plane; width: 0.08; height: 0.04"
                           material="color: #ff0000; transparent: true; opacity: 0.8"
@@ -6197,12 +6198,11 @@ function setGameplayHUD(isPlaying) {
                           class="clickable">
                   <a-text value="BLUE" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
                 </a-entity>
-                <a-text id="menu-current-team" value="Team: None" position="0 -0.08 0" align="center" width="0.4" color="#ffff00"></a-text>
               </a-entity>
               
               <!-- Instructions -->
               <a-text value="B to close" 
-                      position="0 -0.25 0" align="center" width="0.6" color="#ffffff"></a-text>
+                      position="0 -0.35 0" align="center" width="0.6" color="#ffffff"></a-text>
             </a-entity>
           </a-entity>
           
@@ -6371,7 +6371,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Ambient space lighting -->
-      <a-entity light="type: ambient; color: #404040; intensity: 0.5"></a-entity>
+      <a-entity light="type: ambient; color: #404040; intensity: 0.75"></a-entity>
       
       <!-- Directional light simulating distant star -->
       <a-entity light="type: directional; color: #ffffff; intensity: 0.8" position="5 5 5"></a-entity>
