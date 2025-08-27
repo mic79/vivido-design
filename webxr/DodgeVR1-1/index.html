@@ -1049,8 +1049,20 @@
         // CRITICAL FIX: Use dynamic ball assignment instead of hardcoded logic
         const currentPlayerBallNumber = getBallForPlayer(myPlayerId || 'player_0');
         
-        // CRITICAL FIX: Allow network updates for all balls except when locally controlled
-        // This ensures host can see client balls and vice versa
+        // CRITICAL FIX: Don't apply network updates to our own ball if we're controlling it
+        if (ballNumber === currentPlayerBallNumber) {
+          // This is our own ball - check if we're controlling it locally
+          const ball = document.querySelector(`[zerog-ball*="player: player${ballNumber}"]`);
+          if (ball && ball.components['zerog-ball']) {
+            const ballComponent = ball.components['zerog-ball'];
+            const isLocallyControlled = ballComponent.isGrabbed || ballComponent.tractorBeamActive || ballComponent.autoReturnActive;
+            
+            if (isLocallyControlled) {
+              // We're controlling our own ball - don't apply network updates
+              return;
+            }
+          }
+        }
         
         // Also check if this ball is currently being controlled by the local player
         const ball = document.querySelector(`[zerog-ball*="player: player${ballNumber}"]`);
@@ -1074,16 +1086,7 @@
         
         // Update the corresponding ball entity for OTHER players' balls
         
-        // Debug: Log ball selection (throttled)
-        if (!this.lastBallSelectionDebugTime || Date.now() - this.lastBallSelectionDebugTime > 30000) {
-          if (!ball) {
-            const allBalls = document.querySelectorAll('[zerog-ball]');
-            allBalls.forEach((b, index) => {
-              const player = b.getAttribute('zerog-ball')?.player;
-            });
-          }
-          this.lastBallSelectionDebugTime = Date.now();
-        }
+
         
         if (ball && ball.components['zerog-ball']) {
           const ballComponent = ball.components['zerog-ball'];
@@ -4271,8 +4274,8 @@ function setGameplayHUD(isPlaying) {
           scene.setAttribute('menu-toggle', '');
         }
         
-        // Initialize visibility using the new management system
-        manageActivePlayersAndBots();
+        // Initialize visibility - but don't call manageActivePlayersAndBots yet
+        // It will be called when multiplayer is properly initialized
         
         // Hide all remote players initially
         for (let i = 1; i < 4; i++) {
@@ -4332,6 +4335,8 @@ function setGameplayHUD(isPlaying) {
               const pos = ball.object3D.position;
               const ballComponent = ball.components['zerog-ball'];
               const velocity = ballComponent?.body?.velocity || {x:0, y:0, z:0};
+              
+
               
               sendBallState({ 
                 playerId: myBallNumber,
