@@ -556,6 +556,9 @@
             case 'request-game-mode':
               handleGameModeRequest(conn);
               break;
+            case 'capture-ball-grabbed':
+              handleCaptureBallGrabbed(data);
+              break;
           }
         });
         
@@ -627,26 +630,14 @@
         } else {
         }
         
-        // Update player target color to match player's assigned color
+        // CRITICAL FIX: Don't set hardcoded player colors here - let team colors take precedence
+        // Player colors will be set by updatePlayerTeamColor when teams are assigned
+        // Just ensure the target exists for now
         const playerTarget = document.querySelector('#player-target');
-        const playerImpact = document.querySelector('#player-impact');
-        if (playerTarget && playerSlots[playerIndex]) {
-          const playerColor = playerSlots[playerIndex].color;
-          playerTarget.setAttribute('color', playerColor);
-          playerTarget.setAttribute('material', 'emissive: ' + playerColor + '; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
-          playerTarget.setAttribute('impact-effect', 'color: ' + playerColor);
-          
-          // Update the light color
-          const playerLight = playerTarget.querySelector('a-entity[light]');
-          if (playerLight) {
-            playerLight.setAttribute('light', 'color: ' + playerColor + '; intensity: 1; distance: 3');
-          }
-          
-          // Update impact sphere color
-          if (playerImpact) {
-            playerImpact.setAttribute('color', playerColor);
-          }
-          
+        if (playerTarget) {
+          // Set a default neutral color that will be overridden by team selection
+          playerTarget.setAttribute('color', '#888888');
+          playerTarget.setAttribute('material', 'emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
         }
         
         // Update status to show player count - use the count from the host
@@ -861,6 +852,33 @@
         }
       }
       
+      function handleCaptureBallGrabbed(data) {
+        // Force release capture ball if another player grabbed it
+        if (data.grabberId !== myPlayerId) {
+          const captureBall = document.querySelector('#capture-ball');
+          if (captureBall && captureBall.components['zerog-ball']) {
+            const ballComponent = captureBall.components['zerog-ball'];
+            if (ballComponent.isGrabbed) {
+              // Force release the ball locally
+              ballComponent.onRelease();
+              
+              // Also release from player component
+              const zerogPlayer = document.querySelector('[zerog-player]');
+              if (zerogPlayer && zerogPlayer.components['zerog-player']) {
+                const playerComponent = zerogPlayer.components['zerog-player'];
+                ['left', 'right'].forEach(handKey => {
+                  if (playerComponent.grabInfo[handKey] && 
+                      playerComponent.grabInfo[handKey].surface === captureBall) {
+                    playerComponent.grabInfo[handKey] = null;
+                    playerComponent.isGrabbing[handKey] = false;
+                  }
+                });
+              }
+            }
+          }
+        }
+      }
+      
       function handleGameModeRequest(conn) {
         // CRITICAL FIX: Host responds to game mode requests from clients
         if (!isHost) {
@@ -1031,10 +1049,8 @@
         // CRITICAL FIX: Use dynamic ball assignment instead of hardcoded logic
         const currentPlayerBallNumber = getBallForPlayer(myPlayerId || 'player_0');
         
-        if (ballNumber === currentPlayerBallNumber) {
-          // This is our own ball - don't apply network updates to it
-          return;
-        }
+        // CRITICAL FIX: Allow network updates for all balls except when locally controlled
+        // This ensures host can see client balls and vice versa
         
         // Also check if this ball is currently being controlled by the local player
         const ball = document.querySelector(`[zerog-ball*="player: player${ballNumber}"]`);
@@ -4878,26 +4894,20 @@ function setGameplayHUD(isPlaying) {
         },
         
         onGrab: function(hand) {
-          // For capture ball, handle grab transfer
-          if (this.isCaptureBall && this.isGrabbed && this.grabbingHand !== hand) {
-            // Transfer from previous grabber to new grabber
+          // CRITICAL FIX: For capture ball, send network message to force release on other players
+          if (this.isCaptureBall && isMultiplayer && activePlayers.size > 1) {
+            // Send capture ball grab message to all other players
+            const data = {
+              type: 'capture-ball-grabbed',
+              grabberId: myPlayerId,
+              timestamp: Date.now()
+            };
             
-            // Release from previous hand first
-            if (this.grabbingHand) {
-              // Find the previous grabbing player and release their grip
-              const zerogPlayer = document.querySelector('[zerog-player]');
-              if (zerogPlayer && zerogPlayer.components['zerog-player']) {
-                const playerComponent = zerogPlayer.components['zerog-player'];
-                // Release both hands to be safe
-                ['left', 'right'].forEach(handKey => {
-                  if (playerComponent.grabInfo[handKey] && 
-                      playerComponent.grabInfo[handKey].surface === this.el) {
-                    playerComponent.grabInfo[handKey] = null;
-                    playerComponent.isGrabbing[handKey] = false;
-                  }
-                });
+            connections.forEach((conn, playerId) => {
+              if (conn && conn.open) {
+                conn.send(data);
               }
-            }
+            });
           }
           
           this.isGrabbed = true;
