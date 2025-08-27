@@ -264,11 +264,12 @@
       
       // Helper: get player ID from ball index
       function getPlayerIdFromBallIndex(ballPlayerIndex) {
-        if (ballPlayerIndex === 1) {
-          return 'bot'; // Ball 1 belongs to bot
-        } else {
-          return `player_${ballPlayerIndex - 1}`; // Ball 2 -> player_1, Ball 3 -> player_2, etc.
-        }
+        // Use the same logic as getBallOwnerId but return the correct format
+        if (ballPlayerIndex === 1) return 'bot-red';    // Red bot ball
+        if (ballPlayerIndex === 2) return 'player_0';   // Host always owns ball 2
+        if (ballPlayerIndex === 3) return 'bot-blue';   // Blue bot ball
+        if (ballPlayerIndex === 4) return 'player_1';   // Client always owns ball 4
+        return 'player_0'; // fallback
       }
       
       // Helper: update player color based on team
@@ -6575,48 +6576,8 @@ function setGameplayHUD(isPlaying) {
         const currentPlayerIndex = myPlayerId ? parseInt(myPlayerId.split('_')[1]) : -1;
         const currentPlayerBallNumber = getBallForPlayer(myPlayerId || 'player_0'); // Use dynamic ball assignment
         
-        if (ballNumber === currentPlayerBallNumber) {
-          // This is our own ball - check if it's being controlled locally
-          const ball = document.querySelector(`[zerog-ball*="player: player${ballNumber}"]`);
-          if (ball && ball.components['zerog-ball']) {
-            const ballComponent = ball.components['zerog-ball'];
-            const isLocallyControlled = ballComponent.isGrabbed || ballComponent.tractorBeamActive || ballComponent.autoReturnActive;
-            
-            // For grabbed balls, we still want to send position updates to other players
-            // but we don't want to apply incoming network updates to grabbed balls
-            if (ballComponent.isGrabbed) {
-              // Still send position updates for grabbed balls so other players can see them
-              const pos = ball.object3D.position;
-              const velocity = ballComponent.body?.velocity || {x:0, y:0, z:0};
-              
-              const data = {
-                type: 'ball-state',
-                ballState: {
-                  playerId: ballNumber,
-                  x: pos.x, y: pos.y, z: pos.z, 
-                  vx: velocity.x, vy: velocity.y, vz: velocity.z 
-                },
-                playerId: myPlayerId
-              };
-              
-              // Send to all connections
-              connections.forEach((conn, playerId) => {
-                if (conn && conn.open) {
-                  conn.send(data);
-                }
-              });
-              return;
-            }
-            
-            if (isLocallyControlled) {
-              // Don't send network updates for locally controlled balls (tractor beam, auto-return)
-              if (!this.lastLocalBallSkipLog || Date.now() - this.lastLocalBallSkipLog > 30000) {
-                this.lastLocalBallSkipLog = Date.now();
-              }
-              return;
-            }
-          }
-        }
+        // CRITICAL FIX: Always send ball state for our own ball - other players need to see it!
+        // The receiving end (handleBallState) will decide whether to apply the update or not
         
         const data = {
           type: 'ball-state',
