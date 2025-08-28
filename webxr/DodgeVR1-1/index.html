@@ -5458,7 +5458,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.28 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.29 | ${this.fps} FPS`);
           }
         }
       });
@@ -6696,10 +6696,14 @@ function setGameplayHUD(isPlaying) {
             
             if (gameMode === 'capture') {
               if (humanPlayerCount >= 2) {
-                // 2+ humans: Hide bots, show human balls only
-                if (i === 2) shouldShow = true; // Host's ball (always ball 2)
-                if (i === 4) shouldShow = true; // Client's ball (always ball 4)
-                // Hide bot balls when 2+ humans
+                // 2+ humans: Show all human player balls dynamically
+                activePlayers.forEach(playerId => {
+                  const playerBallIndex = getBallForPlayer(playerId);
+                  if (playerBallIndex === i) {
+                    shouldShow = true;
+                  }
+                });
+                // Hide bot balls when 2+ humans (bots don't get added to activePlayers)
               } else {
                 // 1 human: Show bot balls and host's ball
                 if (i === 1) shouldShow = true; // Red bot ball
