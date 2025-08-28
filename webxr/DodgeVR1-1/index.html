@@ -170,18 +170,20 @@
           // Dodgeball mode: use original assignments
           if (playerId === 'player_0') return 2;
           if (playerId === 'player_1') return 4;
+          if (playerId === 'player_2') return 1; // FIXED: player_2 gets ball 1
+          if (playerId === 'player_3') return 3; // FIXED: player_3 gets ball 3
           return 2; // default
         }
         
-        // CRITICAL FIX: In capture mode, keep consistent ball assignments
-        // Host (player_0) ALWAYS uses ball 2, regardless of team
-        // Client (player_1) ALWAYS uses ball 4, regardless of team
-        // Only the COLOR changes based on team, not the ball itself
+        // CRITICAL FIX: In capture mode, all 4 players get unique balls
+        // Ball assignments are fixed regardless of team - only colors change
         
         if (playerId === 'player_0') return 2; // Host always uses ball 2
-        if (playerId === 'player_1') return 4; // Client always uses ball 4
-        if (playerId === 'bot-red') return 1;  // Red bot uses ball 1
-        if (playerId === 'bot-blue') return 3; // Blue bot uses ball 3
+        if (playerId === 'player_1') return 4; // Client 1 always uses ball 4
+        if (playerId === 'player_2') return 1; // FIXED: Client 2 gets ball 1 (was bot-red)
+        if (playerId === 'player_3') return 3; // FIXED: Client 3 gets ball 3 (was bot-blue)
+        if (playerId === 'bot-red') return 1;  // Red bot uses ball 1 (only when no player_2)
+        if (playerId === 'bot-blue') return 3; // Blue bot uses ball 3 (only when no player_3)
         
         return 2; // fallback
       }
@@ -203,19 +205,19 @@
           
           let targetColor = '#ffffff'; // default white
           
-          // CRITICAL FIX: Simplified color assignment based on fixed ball ownership
-          if (ball.index === 1) {
-            targetColor = '#ff0000'; // Red bot ball -> always red
-          } else if (ball.index === 2) {
-            // Ball 2 -> Host's ball, color based on host's team
-            const hostTeam = playerTeams.get('player_0');
-            targetColor = hostTeam === 'red' ? '#ff0000' : '#0000ff';
-          } else if (ball.index === 3) {
-            targetColor = '#0000ff'; // Blue bot ball -> always blue
-          } else if (ball.index === 4) {
-            // Ball 4 -> Client's ball, color based on client's team
-            const clientTeam = playerTeams.get('player_1');
-            targetColor = clientTeam === 'red' ? '#ff0000' : '#0000ff';
+          // CRITICAL FIX: Dynamic color assignment based on current ball ownership
+          const ballOwnerId = getBallOwnerId(ball.index);
+          
+          if (ballOwnerId) {
+            if (ballOwnerId === 'bot-red') {
+              targetColor = '#ff0000'; // Red bot -> always red
+            } else if (ballOwnerId === 'bot-blue') {
+              targetColor = '#0000ff'; // Blue bot -> always blue
+            } else {
+              // Human player - color based on their team
+              const playerTeam = playerTeams.get(ballOwnerId);
+              targetColor = playerTeam === 'red' ? '#ff0000' : '#0000ff';
+            }
           }
           
           // Update ball color
@@ -255,21 +257,26 @@
       
       // Helper: get the owner ID of a ball based on its player index
       function getBallOwnerId(ballPlayerIndex) {
-        if (ballPlayerIndex === 1) return 'bot-red';    // Red bot ball
+        // CRITICAL FIX: Handle all 4 players + bots dynamically
+        // Check if human players are using these balls first
+        
+        if (ballPlayerIndex === 1) {
+          // Ball 1: player_2 takes priority, otherwise bot-red
+          return activePlayers.has('player_2') ? 'player_2' : 'bot-red';
+        }
         if (ballPlayerIndex === 2) return 'player_0';   // Host always owns ball 2
-        if (ballPlayerIndex === 3) return 'bot-blue';   // Blue bot ball
-        if (ballPlayerIndex === 4) return 'player_1';   // Client always owns ball 4
+        if (ballPlayerIndex === 3) {
+          // Ball 3: player_3 takes priority, otherwise bot-blue  
+          return activePlayers.has('player_3') ? 'player_3' : 'bot-blue';
+        }
+        if (ballPlayerIndex === 4) return 'player_1';   // Client 1 always owns ball 4
         return null;
       }
       
       // Helper: get player ID from ball index
       function getPlayerIdFromBallIndex(ballPlayerIndex) {
-        // Use the same logic as getBallOwnerId but return the correct format
-        if (ballPlayerIndex === 1) return 'bot-red';    // Red bot ball
-        if (ballPlayerIndex === 2) return 'player_0';   // Host always owns ball 2
-        if (ballPlayerIndex === 3) return 'bot-blue';   // Blue bot ball
-        if (ballPlayerIndex === 4) return 'player_1';   // Client always owns ball 4
-        return 'player_0'; // fallback
+        // CRITICAL FIX: Use the same dynamic logic as getBallOwnerId
+        return getBallOwnerId(ballPlayerIndex) || 'player_0'; // fallback
       }
       
       // Helper: update player color based on team
@@ -1007,12 +1014,12 @@
         }
         remoteBallStates.set(data.playerId, data.ballState);
         
-        // CRITICAL: Host forwards ball states to other clients
+        // CRITICAL: Host forwards ball states to other clients (but NOT back to sender)
         if (isHost && isMultiplayer && activePlayers.size > 1) {
-          // Forward this ball state to all other clients
+          // Forward this ball state to all other clients EXCEPT the sender
           connections.forEach((conn, connectionKey) => {
-            if (conn && conn.open) {
-              // Forward to all connections (the sender will ignore their own data)
+            if (conn && conn.open && connectionKey !== data.playerId) {
+              // Only forward to connections that are NOT the original sender
               conn.send({
                 type: 'ball-state',
                 ballState: data.ballState,
