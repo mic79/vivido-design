@@ -377,13 +377,15 @@
               player.isBot = false;
             }
             
-            // CRITICAL FIX: Assign host to default team (red) for capture mode
-            if (gameMode === 'capture') {
-              playerTeams.set('player_0', 'red');
-              // Update ball colors and visibility for host
-              updateBallColors();
-              manageActivePlayersAndBots();
-            }
+                      // CRITICAL FIX: Assign host to default team (red) for capture mode
+          if (gameMode === 'capture') {
+            playerTeams.set('player_0', 'red');
+            // Update ball colors and visibility for host
+            updateBallColors();
+            manageActivePlayersAndBots();
+            // Send team assignments to all clients
+            sendTeamAssignments();
+          }
             
             // Position host at corner
             const rig = document.querySelector('#rig');
@@ -562,6 +564,9 @@
               break;
             case 'request-game-mode':
               handleGameModeRequest(conn);
+              break;
+            case 'team-assignments':
+              handleTeamAssignments(data);
               break;
             case 'capture-ball-grabbed':
               handleCaptureBallGrabbed(data);
@@ -752,6 +757,11 @@
           
           updateMenuDisplay();
           sendPlayerCountUpdate();
+          
+          // Send current team assignments to new client
+          setTimeout(() => {
+            sendTeamAssignments();
+          }, 100);
         } else {
         }
       }
@@ -951,6 +961,11 @@
         // Update ball colors for team assignments
         updateBallColors();
         
+        // Send team assignments to clients if host
+        if (isHost) {
+          sendTeamAssignments();
+        }
+        
         // Update bot ball assignments for new game mode
         const redBot = document.querySelector('#zerog-bot-red');
         const blueBot = document.querySelector('#zerog-bot-blue');
@@ -1056,19 +1071,11 @@
         // CRITICAL FIX: Use dynamic ball assignment instead of hardcoded logic
         const currentPlayerBallNumber = getBallForPlayer(myPlayerId || 'player_0');
         
-        // CRITICAL FIX: Don't apply network updates to our own ball if we're controlling it
+        // CRITICAL FIX: NEVER apply network updates to our own ball
         if (ballNumber === currentPlayerBallNumber) {
-          // This is our own ball - check if we're controlling it locally
-          const ball = document.querySelector(`[zerog-ball*="player: player${ballNumber}"]`);
-          if (ball && ball.components['zerog-ball']) {
-            const ballComponent = ball.components['zerog-ball'];
-            const isLocallyControlled = ballComponent.isGrabbed || ballComponent.tractorBeamActive || ballComponent.autoReturnActive;
-            
-            if (isLocallyControlled) {
-              // We're controlling our own ball - don't apply network updates
-              return;
-            }
-          }
+          // This is our own ball - we have full authority over it
+          // Don't apply any network updates regardless of control state
+          return;
         }
         
         // Also check if this ball is currently being controlled by the local player
@@ -1091,10 +1098,7 @@
           }
         }
         
-        // Update the corresponding ball entity for OTHER players' balls
-        
-
-        
+        // Apply network updates to OTHER players' balls
         if (ball && ball.components['zerog-ball']) {
           const ballComponent = ball.components['zerog-ball'];
           
@@ -5458,7 +5462,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.29 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.30 | ${this.fps} FPS`);
           }
         }
       });
@@ -5640,6 +5644,11 @@ function setGameplayHUD(isPlaying) {
           
           // Update ball colors for team assignments
           updateBallColors();
+          
+          // Send team assignments to clients if host
+          if (isHost) {
+            sendTeamAssignments();
+          }
           
           // Update bot ball assignments for team change
           const redBot = document.querySelector('#zerog-bot-red');
@@ -6590,6 +6599,39 @@ function setGameplayHUD(isPlaying) {
         });
       }
       
+      function sendTeamAssignments() {
+        if (!isHost || !isMultiplayer) return;
+        
+        // Send current team assignments to all clients
+        const teamData = {};
+        playerTeams.forEach((team, playerId) => {
+          teamData[playerId] = team;
+        });
+        
+        const data = {
+          type: 'team-assignments',
+          teams: teamData
+        };
+        
+        connections.forEach((conn, playerId) => {
+          if (conn && conn.open) {
+            conn.send(data);
+          }
+        });
+      }
+      
+      function handleTeamAssignments(data) {
+        // Update local team assignments from host
+        if (data.teams) {
+          Object.entries(data.teams).forEach(([playerId, team]) => {
+            playerTeams.set(playerId, team);
+          });
+          
+          // Update ball colors based on new team assignments
+          updateBallColors();
+        }
+      }
+
       function sendBallState(ballState) {
         if (!isMultiplayer || activePlayers.size <= 1) return;
         
