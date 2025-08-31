@@ -826,7 +826,7 @@
                 if (sphere) {
                   sphere.setAttribute('radius', '0.2');
                   
-                  // Hide only if this is the client's own remote target, otherwise show it
+                  // Show remote targets for other players, hide only own remote target
                   if (myPlayerId === playerId) {
                     sphere.setAttribute('visible', false);
                   } else {
@@ -5118,30 +5118,10 @@ function setGameplayHUD(isPlaying) {
             const targetPos = new THREE.Vector3();
             targetEntity.object3D.getWorldPosition(targetPos);
             if (ballPos.distanceTo(targetPos) < 0.3) {
-              // NUCLEAR FIX: Play impact effect on ALL representations of this player
-              const targetPlayerId = `player_${i}`;
-              const playerIndex = parseInt(targetPlayerId.split('_')[1]);
-              
-              // Play on the original target that was hit
+              // Play explosion/sound on hit target
               const impactEffect = targetEntity.components['impact-effect'];
               if (impactEffect) {
                 impactEffect.playEffect();
-              }
-              
-              // FORCE play on ALL possible target representations for this player
-              // 1. Local player target (if this is the local player)
-              const currentPlayerIndex = myPlayerId ? parseInt(myPlayerId.split('_')[1]) : -1;
-              if (playerIndex === currentPlayerIndex) {
-                const localTarget = document.querySelector('#player-target');
-                if (localTarget && localTarget.components['impact-effect']) {
-                  localTarget.components['impact-effect'].playEffect();
-                }
-              }
-              
-              // 2. Remote target for this player index
-              const remoteTarget = document.querySelector(`#remote-target-${playerIndex}`);
-              if (remoteTarget && remoteTarget.components['impact-effect']) {
-                remoteTarget.components['impact-effect'].playEffect();
               }
               
               if (gameMode === 'capture') {
