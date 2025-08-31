@@ -80,7 +80,7 @@
         players.set(`player_${i}`, {
           id: `player_${i}`,
           name: playerSlots[i].name,
-          color: playerSlots[i].color,
+          color: '#888888', // CRITICAL FIX: Use neutral color, team colors will override
           position: playerSlots[i].position,
           rotation: playerSlots[i].rotation,
           isConnected: false,
@@ -190,7 +190,10 @@
 
       // Helper: update ball colors based on team assignments
       function updateBallColors() {
-        if (gameMode !== 'capture') return;
+        if (gameMode !== 'capture') {
+          // In dodge mode, balls keep their default colors
+          return;
+        }
         
         // Update ball colors to match team assignments
         const balls = [
@@ -207,6 +210,8 @@
           
           // CRITICAL FIX: Dynamic color assignment based on current ball ownership
           const ballOwnerId = getBallOwnerId(ball.index);
+          
+
           
           if (ballOwnerId) {
             if (ballOwnerId === 'bot-red') {
@@ -279,25 +284,48 @@
         return getBallOwnerId(ballPlayerIndex) || 'player_0'; // fallback
       }
       
-      // Helper: update player color based on team
-      function updatePlayerTeamColor(playerId, team) {
-        const teamColors = {
-          red: '#ff0000',
-          blue: '#0000ff'
-        };
-        
-        const color = teamColors[team];
-        if (!color) return;
-        
-        
-        // Update player target color
+      // Update local player color and ensure proper visibility
+      function updateLocalPlayerColor(color) {
         const playerTarget = document.querySelector('#player-target');
         const playerImpact = document.querySelector('#player-impact');
         
         if (playerTarget) {
-          playerTarget.setAttribute('color', color);
-          playerTarget.setAttribute('material', `shader: standard; emissive: ${color}; emissiveIntensity: 0.5; transparent: true; opacity: 0.7`);
-          playerTarget.setAttribute('impact-effect', `color: ${color}`);
+          // CRITICAL: Ensure local player target is always visible
+          playerTarget.setAttribute('visible', true);
+          
+          // Reset all color attributes to ensure clean state
+          playerTarget.removeAttribute('color');
+          playerTarget.removeAttribute('material');
+          playerTarget.removeAttribute('impact-effect');
+          
+          // Ensure corresponding remote player is hidden to prevent interference
+          if (myPlayerId) {
+            const playerIndex = parseInt(myPlayerId.split('_')[1]);
+            const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
+            if (remotePlayer) {
+              remotePlayer.setAttribute('visible', false);
+            }
+          }
+          
+          // Apply color changes after clearing previous attributes
+          setTimeout(() => {
+            // Set color using direct Three.js material access for reliability
+            if (playerTarget.object3D && playerTarget.object3D.children[0] && playerTarget.object3D.children[0].material) {
+              const material = playerTarget.object3D.children[0].material;
+              const threeColor = new THREE.Color(color);
+              material.color.copy(threeColor);
+              material.emissive.set(0, 0, 0); // No emissive to prevent color mixing
+              material.emissiveIntensity = 0;
+              material.transparent = true;
+              material.opacity = 0.7;
+              material.needsUpdate = true;
+            }
+            
+            // Set A-Frame attributes as backup
+            playerTarget.setAttribute('color', color);
+            playerTarget.setAttribute('material', `shader: standard; color: ${color}; emissive: #000000; emissiveIntensity: 0; transparent: true; opacity: 0.7`);
+            playerTarget.setAttribute('impact-effect', `color: ${color}`);
+          }, 10);
           
           // Update the light color
           const playerLight = playerTarget.querySelector('a-entity[light]');
@@ -310,6 +338,44 @@
             playerImpact.setAttribute('color', color);
           }
           
+          // Store the current color to prevent overrides
+          playerTarget.dataset.teamColor = color;
+          
+          // Update thruster VFX colors to match team color
+          const leftThruster = document.querySelector('#leftHand .thruster-vfx');
+          const rightThruster = document.querySelector('#rightHand .thruster-vfx');
+          if (leftThruster) {
+            leftThruster.setAttribute('color', color);
+            leftThruster.setAttribute('material', `shader: standard; emissive: ${color}; emissiveIntensity: 1; transparent: true; opacity: 0.8`);
+          }
+          if (rightThruster) {
+            rightThruster.setAttribute('color', color);
+            rightThruster.setAttribute('material', `shader: standard; emissive: ${color}; emissiveIntensity: 1; transparent: true; opacity: 0.8`);
+          }
+          
+          // Ensure all remote players are hidden to prevent visual interference
+          for (let i = 0; i < 4; i++) {
+            const remotePlayer = document.querySelector(`#remote-player-${i}`);
+            if (remotePlayer) {
+              remotePlayer.setAttribute('visible', false);
+            }
+          }
+        }
+      }
+      
+      // Helper: update player color based on team
+      function updatePlayerTeamColor(playerId, team) {
+        const teamColors = {
+          red: '#ff0000',
+          blue: '#0000ff'
+        };
+        
+        const color = teamColors[team];
+        if (!color) return;
+        
+        // CRITICAL FIX: Only update LOCAL player target if this is for the current player
+        if (playerId === myPlayerId) {
+          updateLocalPlayerColor(color);
         }
         
         // Also update remote player colors if this is for a remote player
@@ -385,7 +451,7 @@
             manageActivePlayersAndBots();
             // Send team assignments to all clients
             sendTeamAssignments();
-          }
+            }
             
             // Position host at corner
             const rig = document.querySelector('#rig');
@@ -394,11 +460,12 @@
               rig.setAttribute('rotation', playerSlots[0].rotation);
             }
             
-            // Update player target color to match host's assigned color (player_0 = red)
+            // CRITICAL FIX: Don't use hardcoded playerSlots colors - use team colors instead
             const playerTarget = document.querySelector('#player-target');
             const playerImpact = document.querySelector('#player-impact');
             if (playerTarget) {
-              const playerColor = playerSlots[0].color; // Red for player_0
+              // Set neutral color initially - team colors will be applied later
+              const playerColor = '#888888'; // Neutral gray
               playerTarget.setAttribute('color', playerColor);
               playerTarget.setAttribute('material', 'emissive: ' + playerColor + '; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
               playerTarget.setAttribute('impact-effect', 'color: ' + playerColor);
@@ -565,11 +632,17 @@
             case 'request-game-mode':
               handleGameModeRequest(conn);
               break;
+            case 'request-team-assignments':
+              handleTeamAssignmentsRequest(conn);
+              break;
             case 'team-assignments':
               handleTeamAssignments(data);
               break;
             case 'capture-ball-grabbed':
               handleCaptureBallGrabbed(data);
+              break;
+            case 'client-team-selection':
+              handleClientTeamSelection(data);
               break;
           }
         });
@@ -642,14 +715,23 @@
         } else {
         }
         
-        // CRITICAL FIX: Don't set hardcoded player colors here - let team colors take precedence
-        // Player colors will be set by updatePlayerTeamColor when teams are assigned
-        // Just ensure the target exists for now
+        // CRITICAL FIX: Ensure local player target is visible and remote is hidden
         const playerTarget = document.querySelector('#player-target');
         if (playerTarget) {
-          // Set a default neutral color that will be overridden by team selection
-          playerTarget.setAttribute('color', '#888888');
-          playerTarget.setAttribute('material', 'emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
+          // Ensure local player target is always visible
+          playerTarget.setAttribute('visible', true);
+          
+          // CRITICAL FIX: Only set neutral color if no team color is already set
+          if (!playerTarget.dataset.teamColor) {
+            playerTarget.setAttribute('color', '#888888');
+            playerTarget.setAttribute('material', 'emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
+          }
+        }
+        
+        // CRITICAL: Hide the corresponding remote player representation (reuse playerIndex)
+        const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
+        if (remotePlayer) {
+          remotePlayer.setAttribute('visible', false);
         }
         
         // Update status to show player count - use the count from the host
@@ -669,6 +751,23 @@
             type: 'request-game-mode'
           });
         }
+        
+        // CRITICAL FIX: Request team assignments from host to get proper colors
+        if (hostConnection && hostConnection.open) {
+          hostConnection.send({
+            type: 'request-team-assignments'
+          });
+        }
+        
+        // CRITICAL FIX: Also request current team assignments after a delay to ensure we get them
+        setTimeout(() => {
+          const hostConnection = connections.get('host');
+          if (hostConnection && hostConnection.open) {
+            hostConnection.send({
+              type: 'request-team-assignments'
+            });
+          }
+        }, 500);
         
         updateMenuDisplay();
       }
@@ -911,7 +1010,47 @@
         }
       }
       
+      function handleTeamAssignmentsRequest(conn) {
+        // Host responds to team assignments request from client
+        if (!isHost) {
+          return; // Only host can respond to team assignment requests
+        }
+        
+        console.log('DEBUG: Sending team assignments to client');
+        const teamData = {};
+        playerTeams.forEach((team, playerId) => {
+          teamData[playerId] = team;
+        });
+        
+        if (conn && conn.open) {
+          conn.send({
+            type: 'team-assignments',
+            teams: teamData
+          });
+        }
+      }
+      
+      function handleClientTeamSelection(data) {
+        // Host receives team selection from client
+        if (!isHost) {
+          return; // Only host should handle client team selections
+        }
+        
+        // Update the team assignment
+        playerTeams.set(data.playerId, data.team);
+        
+        // Update the remote player's color
+        updatePlayerTeamColor(data.playerId, data.team);
+        
+        // Update ball colors
+        updateBallColors();
+        
+        // Send updated team assignments to all OTHER clients (not back to sender)
+        sendTeamAssignmentsExcept(data.playerId);
+      }
+      
       function updateGameModeUI(mode) {
+        
         // Update HUD based on game mode
         const hudStatus = document.getElementById('hud-status');
         if (hudStatus) {
@@ -920,6 +1059,34 @@
           } else {
             hudStatus.setAttribute('text', 'value', 'Dodge Mode - Hit opponents with balls!');
           }
+        }
+        
+        // CRITICAL FIX: Update menu UI to show current game mode
+        const currentModeDisplay = document.querySelector('#menu-current-mode-game');
+        if (currentModeDisplay) {
+          const displayText = mode === 'capture' ? 'Capture' : 'Dodge';
+          currentModeDisplay.setAttribute('text', 'value', `Mode: ${displayText}`);
+          currentModeDisplay.setAttribute('text', 'color', mode === 'capture' ? '#8800ff' : '#ff8800');
+        }
+        
+        // Update button highlighting
+        const dodgeButton = document.querySelector('#menu-mode-dodge');
+        const captureButton = document.querySelector('#menu-mode-capture');
+        
+        if (dodgeButton && captureButton) {
+          if (mode === 'capture') {
+            captureButton.setAttribute('material', 'opacity', 1.0);
+            dodgeButton.setAttribute('material', 'opacity', 0.5);
+          } else {
+            dodgeButton.setAttribute('material', 'opacity', 1.0);
+            captureButton.setAttribute('material', 'opacity', 0.5);
+          }
+        }
+        
+        // Show/hide team selection based on mode
+        const teamSelection = document.querySelector('#menu-team-selection');
+        if (teamSelection) {
+          teamSelection.setAttribute('visible', mode === 'capture');
         }
         
         // Show/hide capture ball and goals based on mode
@@ -953,6 +1120,11 @@
           }
           
           updatePlayerTeamColor(currentPlayerId, playerTeam);
+          
+          // CRITICAL FIX: Send team assignments to all clients when host gets team assigned
+          if (isHost) {
+            sendTeamAssignments();
+          }
         }
         
         // Update player and bot management
@@ -1023,6 +1195,8 @@
       }
       
       function handleBallState(data) {
+
+        
         // Handle remote ball position/velocity updates (throttled logging)
         if (!this.lastBallStateReceiveTime || Date.now() - this.lastBallStateReceiveTime > 30000) {
           this.lastBallStateReceiveTime = Date.now();
@@ -1105,13 +1279,10 @@
           // CRITICAL: Check if ball is locally controlled BEFORE applying any network updates
           const isLocallyControlled = ballComponent.isGrabbed || ballComponent.tractorBeamActive || ballComponent.autoReturnActive;
           
-          // DEBUG: Log every network update attempt for locally controlled balls
+          // Skip network updates if ball is locally controlled
           if (isLocallyControlled) {
             return; // Exit early - don't apply any network updates
           }
-          
-          // Only apply network updates if ball is NOT locally controlled
-          
           
           // Force immediate visual update
           ball.object3D.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
@@ -1232,12 +1403,22 @@
                     rig.setAttribute('rotation', '0 0 0');
                   }
                   
-                  // Reset player target color to default
+                  // CRITICAL FIX: Reset player target color to neutral, let team colors take over
                   const playerTarget = document.querySelector('#player-target');
                   if (playerTarget) {
-                    playerTarget.setAttribute('color', '#ff0000');
-                    playerTarget.setAttribute('material', 'emissive: #ff0000; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
-                    playerTarget.setAttribute('impact-effect', 'color: #ff0000');
+                    const currentPlayerId = myPlayerId || 'player_0';
+                    const playerTeam = playerTeams.get(currentPlayerId);
+                    if (playerTeam) {
+                      // Use team color if available
+                      updatePlayerTeamColor(currentPlayerId, playerTeam);
+                    } else {
+                      // CRITICAL FIX: Only set neutral color if no team color is set
+                      if (!playerTarget.dataset.teamColor) {
+                        playerTarget.setAttribute('color', '#888888');
+                        playerTarget.setAttribute('material', 'emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
+                        playerTarget.setAttribute('impact-effect', 'color: #888888');
+                      }
+                    }
                   }
                   
                   updateMultiplayerStatus('Singleplayer Mode');
@@ -1270,12 +1451,22 @@
                       rig.setAttribute('rotation', '0 0 0');
                     }
                     
-                    // Reset player target color to default
+                    // CRITICAL FIX: Reset player target color to neutral, let team colors take over
                     const playerTarget = document.querySelector('#player-target');
                     if (playerTarget) {
-                      playerTarget.setAttribute('color', '#ff0000');
-                      playerTarget.setAttribute('material', 'emissive: #ff0000; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
-                      playerTarget.setAttribute('impact-effect', 'color: #ff0000');
+                      const currentPlayerId = myPlayerId || 'player_0';
+                      const playerTeam = playerTeams.get(currentPlayerId);
+                      if (playerTeam) {
+                        // Use team color if available
+                        updatePlayerTeamColor(currentPlayerId, playerTeam);
+                      } else {
+                        // CRITICAL FIX: Only set neutral color if no team color is set
+                        if (!playerTarget.dataset.teamColor) {
+                          playerTarget.setAttribute('color', '#888888');
+                          playerTarget.setAttribute('material', 'emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
+                          playerTarget.setAttribute('impact-effect', 'color: #888888');
+                        }
+                      }
                     }
                     
                     updateMultiplayerStatus('Singleplayer Mode');
@@ -1376,7 +1567,9 @@
               // Get player names from player slots
               const playerIndex = parseInt(myPlayerId.split('_')[1]);
               const myPlayerName = `P${playerIndex}`;
-              const myPlayerColor = playerSlots[playerIndex].color;
+              // CRITICAL FIX: Use team colors instead of hardcoded playerSlots colors
+              const myPlayerTeam = playerTeams.get(myPlayerId);
+              const myPlayerColor = myPlayerTeam === 'red' ? '#ff0000' : (myPlayerTeam === 'blue' ? '#0000ff' : '#ffffff');
               
               // Find the opponent (other active player)
               let opponentName = 'Opponent';
@@ -1386,7 +1579,10 @@
                 if (i !== playerIndex && activePlayers.has(`player_${i}`)) {
                   opponentIndex = i;
                   opponentName = `P${i}`;
-                  opponentColor = playerSlots[i].color;
+                  // CRITICAL FIX: Use team colors for opponent too
+                  const opponentPlayerId = `player_${i}`;
+                  const opponentTeam = playerTeams.get(opponentPlayerId);
+                  opponentColor = opponentTeam === 'red' ? '#ff0000' : (opponentTeam === 'blue' ? '#0000ff' : '#ffffff');
                   break;
                 }
               }
@@ -2051,29 +2247,29 @@ function setGameplayHUD(isPlaying) {
           
           // Skip movement processing if stunned
           if (!this.isStunned) {
-            // Apply thruster forces to velocity
-            this.applyThrusterForces(dt);
-            
-            // Apply movement from grabbed surfaces
-            this.applyGrabMovement(dt);
-            
-            // Apply gradual braking if active
-            this.applyGradualBraking(dt);
-            
-            // Apply damping to velocity
-            this.applyDamping(dt);
-            
-            // Check for collisions and apply responses
-            this.checkAndResolveCollisions(dt);
-            
-            // Apply velocity to move VR rig
-            this.applyVelocityToRig(dt);
-            
-            // Update grab visual feedback
-            this.updateGrabFeedback();
-            
-            // NEW: Continuous ball grabbing while grip is held
-            this.updateGripBallGrabbing();
+          // Apply thruster forces to velocity
+          this.applyThrusterForces(dt);
+          
+          // Apply movement from grabbed surfaces
+          this.applyGrabMovement(dt);
+          
+          // Apply gradual braking if active
+          this.applyGradualBraking(dt);
+          
+          // Apply damping to velocity
+          this.applyDamping(dt);
+          
+          // Check for collisions and apply responses
+          this.checkAndResolveCollisions(dt);
+          
+          // Apply velocity to move VR rig
+          this.applyVelocityToRig(dt);
+          
+          // Update grab visual feedback
+          this.updateGrabFeedback();
+          
+          // NEW: Continuous ball grabbing while grip is held
+          this.updateGripBallGrabbing();
           }
         },
 
@@ -2857,7 +3053,7 @@ function setGameplayHUD(isPlaying) {
 
           if (this.data.team === 'red') {
             // Red team: stay near red goal (Z: -14.8), move in 4x4 area around -12.8
-            this.targetPosition.set(
+          this.targetPosition.set(
               (Math.random() - 0.5) * 4,  // X: -2 to 2 (4m wide)
               Math.random() * 2 + 1.5,    // Y: 1.5 to 3.5 (2m high)
               -12.8 + (Math.random() - 0.5) * 4  // Z: -14.8 to -10.8 (4m deep, centered on -12.8)
@@ -3138,7 +3334,7 @@ function setGameplayHUD(isPlaying) {
                 return;
               }
             }
-            
+  
             this.throwBallAtPlayer();
             this.lastThrowTime = time;
           }
@@ -3661,12 +3857,12 @@ function setGameplayHUD(isPlaying) {
               score2 = teamScores.blue;
             } else {
               // In dodge mode, use player scores
-              if (isMultiplayer && activePlayers.size > 1) {
-                score1 = this.playerScores[0];
-                score2 = this.playerScores[1];
-              } else {
-                score1 = this.playerScore;
-                score2 = this.opponentScore;
+            if (isMultiplayer && activePlayers.size > 1) {
+              score1 = this.playerScores[0];
+              score2 = this.playerScores[1];
+            } else {
+              score1 = this.playerScore;
+              score2 = this.opponentScore;
               }
             }
             
@@ -3714,18 +3910,18 @@ function setGameplayHUD(isPlaying) {
             }
           } else {
             // In dodge mode, use original logic
-            if (isMultiplayer && activePlayers.size > 1) {
-              if (myPlayerId) {
-                const playerIndex = parseInt(myPlayerId.split('_')[1]);
-                const myScore = this.playerScores[playerIndex];
-                const otherScores = this.playerScores.filter((score, index) => index !== playerIndex);
-                const maxOtherScore = Math.max(...otherScores);
-                winner = myScore > maxOtherScore ? 'You win!' : 'Opponent wins!';
-              } else {
-                winner = 'Game ended';
-              }
+          if (isMultiplayer && activePlayers.size > 1) {
+            if (myPlayerId) {
+              const playerIndex = parseInt(myPlayerId.split('_')[1]);
+              const myScore = this.playerScores[playerIndex];
+              const otherScores = this.playerScores.filter((score, index) => index !== playerIndex);
+              const maxOtherScore = Math.max(...otherScores);
+              winner = myScore > maxOtherScore ? 'You win!' : 'Opponent wins!';
             } else {
-              winner = this.playerScore > this.opponentScore ? 'Player wins!' : 'Opponent wins!';
+              winner = 'Game ended';
+            }
+          } else {
+            winner = this.playerScore > this.opponentScore ? 'Player wins!' : 'Opponent wins!';
             }
           }
           
@@ -3933,15 +4129,15 @@ function setGameplayHUD(isPlaying) {
             }
           } else {
             // In dodge mode, check player scores (multiplayer only)
-            if (!isMultiplayer || activePlayers.size < 2) return;
+          if (!isMultiplayer || activePlayers.size < 2) return;
 
-            // Find the highest score and how many players have it
-            const maxScore = Math.max(...this.playerScores);
-            const winners = this.playerScores.filter(score => score === maxScore).length;
+          // Find the highest score and how many players have it
+          const maxScore = Math.max(...this.playerScores);
+          const winners = this.playerScores.filter(score => score === maxScore).length;
 
-            // If only one player has the highest score, end the match
-            if (winners === 1) {
-              this.endMatch();
+          // If only one player has the highest score, end the match
+          if (winners === 1) {
+            this.endMatch();
             }
           }
         }
@@ -3987,7 +4183,6 @@ function setGameplayHUD(isPlaying) {
         
         playEffect: function() {
           if (!this.impactSphere) {
-            console.warn('Cannot play effect - impact sphere not found');
             return;
           }
           
@@ -4125,7 +4320,14 @@ function setGameplayHUD(isPlaying) {
               const sphere = slot.querySelector('a-sphere');
               if (sphere) {
                 sphere.setAttribute('material', 'opacity', isOccupied ? 1 : 0.3);
-                sphere.setAttribute('color', isOccupied ? playerSlots[i].color : '#666666');
+                // CRITICAL FIX: Use team colors instead of hardcoded playerSlots colors
+                let playerColor = '#666666'; // Default gray for unoccupied
+                if (isOccupied) {
+                  const playerId = `player_${i}`;
+                  const playerTeam = playerTeams.get(playerId);
+                  playerColor = playerTeam === 'red' ? '#ff0000' : (playerTeam === 'blue' ? '#0000ff' : '#888888');
+                }
+                sphere.setAttribute('color', playerColor);
               }
             }
           }
@@ -4639,7 +4841,7 @@ function setGameplayHUD(isPlaying) {
             // Allow any player to control the capture ball
             if (this.isCaptureBall) {
               this.tractorBeamActive = true;
-            } 
+            }
             // Check if this ball is owned by the current player
             else if (this.data.owner === 'human' && ballOwnerId === currentPlayerId) {
               this.tractorBeamActive = true;
@@ -4748,7 +4950,7 @@ function setGameplayHUD(isPlaying) {
           // Dynamic ball assignment based on team in capture mode
           const myBallIndex = getBallForPlayer(myPlayerId || 'player_0');
 
-                    // --- SINGLEPLAYER LOGIC ---
+          // --- SINGLEPLAYER LOGIC ---
           if (!isMultiplayer || activePlayers.size <= 1) {
             // Player2's ball hits bot target
             if (ballPlayerIndex === 2) {
@@ -4774,10 +4976,10 @@ function setGameplayHUD(isPlaying) {
                     this.stunBot('bot-red');
                   } else {
                     // In dodge mode: score for player
-                    const gameManager = this.el.sceneEl.querySelector('#game-manager');
-                    if (gameManager && gameManager.components['game-manager']) {
-                      gameManager.components['game-manager'].onPlayerHit();
-                    }
+                  const gameManager = this.el.sceneEl.querySelector('#game-manager');
+                  if (gameManager && gameManager.components['game-manager']) {
+                    gameManager.components['game-manager'].onPlayerHit();
+                  }
                   }
                   
                   this.lastHitTime = now;
@@ -4837,10 +5039,10 @@ function setGameplayHUD(isPlaying) {
                     this.stunPlayer();
                   } else {
                     // In dodge mode: score for bot
-                    const gameManager = this.el.sceneEl.querySelector('#game-manager');
-                    if (gameManager && gameManager.components['game-manager']) {
-                      gameManager.components['game-manager'].onOpponentHit();
-                    }
+                  const gameManager = this.el.sceneEl.querySelector('#game-manager');
+                  if (gameManager && gameManager.components['game-manager']) {
+                    gameManager.components['game-manager'].onOpponentHit();
+                  }
                   }
                   
                   this.lastHitTime = now;
@@ -4854,28 +5056,41 @@ function setGameplayHUD(isPlaying) {
 
           // --- MULTIPLAYER LOGIC ---
           // Only score if this ball hits another player's target (not own target)
+          const currentPlayerIndex = myPlayerId ? parseInt(myPlayerId.split('_')[1]) : -1;
+          
           for (let i = 0; i < 4; i++) {
-            if (ballPlayerIndex === i + 1) continue; // skip own target
+            // CRITICAL FIX: Use proper ownership check instead of hardcoded ball numbers
+            const targetPlayerId = `player_${i}`;
+            const ballOwnerId = getBallOwnerId(ballPlayerIndex);
+            
+            // Skip if this ball belongs to the target player (prevent self-hits)
+            if (ballOwnerId === targetPlayerId) {
+              continue;
+            }
+            
             // Only check active players
-            if (!activePlayers.has(`player_${i}`)) continue;
+            if (!activePlayers.has(targetPlayerId)) continue;
             // Find the correct target entity
             let targetEntity = null;
-            if (myPlayerId && i === myPlayerIndex) {
+            if (myPlayerId && i === currentPlayerIndex) {
               targetEntity = document.querySelector('#player-target');
             } else {
               targetEntity = document.querySelector(`#remote-target-${i}`);
             }
-            if (!targetEntity) continue;
+            if (!targetEntity) {
+              continue;
+            }
             const targetPos = new THREE.Vector3();
             targetEntity.object3D.getWorldPosition(targetPos);
             if (ballPos.distanceTo(targetPos) < 0.3) {
               // Play explosion/sound on hit target
               const impactEffect = targetEntity.components['impact-effect'];
-              if (impactEffect) impactEffect.playEffect();
+              if (impactEffect) {
+                impactEffect.playEffect();
+              }
               
               if (gameMode === 'capture') {
                 // Check if thrower and target are teammates
-                const throwerId = getPlayerIdFromBallIndex(ballPlayerIndex);
                 const targetId = `player_${i}`;
                 
                 if (!shouldBallAffectTarget(ballPlayerIndex, targetId)) {
@@ -4883,7 +5098,7 @@ function setGameplayHUD(isPlaying) {
                 }
                 
                 // In capture mode: stun the hit player
-                if (myPlayerId && i === myPlayerIndex) {
+                if (myPlayerId && i === currentPlayerIndex) {
                   // Local player was hit - stun them
                   this.stunPlayer();
                 } else {
@@ -4891,15 +5106,15 @@ function setGameplayHUD(isPlaying) {
                 }
               } else {
                 // In dodge mode: score for the thrower
-                const gameManager = this.el.sceneEl.querySelector('#game-manager');
-                if (gameManager && gameManager.components['game-manager']) {
-                  if (isHost) {
-                    // Score for the thrower (ballPlayerIndex-1)
-                    gameManager.components['game-manager'].playerScores[ballPlayerIndex-1] += 1;
-                    gameManager.components['game-manager'].updateMultiplayerScore();
-                    gameManager.components['game-manager'].sendScoreUpdate();
-                  }
+              const gameManager = this.el.sceneEl.querySelector('#game-manager');
+              if (gameManager && gameManager.components['game-manager']) {
+                if (isHost) {
+                  // Score for the thrower (ballPlayerIndex-1)
+                  gameManager.components['game-manager'].playerScores[ballPlayerIndex-1] += 1;
+                  gameManager.components['game-manager'].updateMultiplayerScore();
+                  gameManager.components['game-manager'].sendScoreUpdate();
                 }
+              }
               }
               
               this.lastHitTime = now;
@@ -5462,7 +5677,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.30 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.34 | ${this.fps} FPS`);
           }
         }
       });
@@ -5639,16 +5854,43 @@ function setGameplayHUD(isPlaying) {
           const currentPlayerId = myPlayerId || 'player_0';
           playerTeams.set(currentPlayerId, team);
           
-          // Update player visual color
-          updatePlayerTeamColor(currentPlayerId, team);
+          // CRITICAL FIX: Use proper team colors now that green glow is eliminated
+          const teamColor = team === 'red' ? '#ff0000' : '#0000ff';  // Pure red and blue
+          updateLocalPlayerColor(teamColor);
+          
+          // CRITICAL: Force immediate visibility of local player target
+          const playerTarget = document.querySelector('#player-target');
+          if (playerTarget) {
+            playerTarget.setAttribute('visible', true);
+          }
+          
+          // Ensure all remote players are hidden for clean client display
+          for (let i = 0; i < 4; i++) {
+            const remotePlayer = document.querySelector(`#remote-player-${i}`);
+            if (remotePlayer) {
+              remotePlayer.setAttribute('visible', false);
+            }
+          }
           
           // Update ball colors for team assignments
           updateBallColors();
           
-          // Send team assignments to clients if host
+          // CRITICAL FIX: Send team change to host if client, or to all clients if host
           if (isHost) {
             sendTeamAssignments();
+          } else {
+            // Client sends their team selection to host
+            const hostConnection = connections.get('host');
+            if (hostConnection && hostConnection.open) {
+              hostConnection.send({
+                type: 'client-team-selection',
+                playerId: currentPlayerId,
+                team: team
+              });
+            }
           }
+          
+
           
           // Update bot ball assignments for team change
           const redBot = document.querySelector('#zerog-bot-red');
@@ -6075,13 +6317,13 @@ function setGameplayHUD(isPlaying) {
             <!-- Player target sphere (like in original dodgeball project) -->
             <a-sphere id="player-target" 
                       radius="0.2" 
-                      color="#ff0000" 
-                      material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
+                      color="#888888" 
+                      material="shader: standard; emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
                       position="0 0 0"
-                      impact-effect="color: #ff0000">
-              <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
+                      impact-effect="color: #888888">
+              <a-entity light="type: point; color: #888888; intensity: 1; distance: 3"></a-entity>
               <!-- Impact sphere with animation component -->
-              <a-sphere id="player-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
+              <a-sphere id="player-impact" radius="0.1" color="#888888" opacity="0" visible="false" material="side: double; transparent: true"
                 animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
                 animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
               </a-sphere>
@@ -6584,19 +6826,19 @@ function setGameplayHUD(isPlaying) {
       
       function sendBotState(botState) {
         if (!isMultiplayer || activePlayers.size <= 1) return;
-        
-        const data = {
+              
+              const data = {
           type: 'bot-state',
           botState: botState,
-          playerId: myPlayerId
-        };
-        
-        // Send to all connections
-        connections.forEach((conn, playerId) => {
-          if (conn && conn.open) {
-            conn.send(data);
-          }
-        });
+                playerId: myPlayerId
+              };
+              
+              // Send to all connections
+              connections.forEach((conn, playerId) => {
+                if (conn && conn.open) {
+                  conn.send(data);
+                }
+              });
       }
       
       function sendTeamAssignments() {
@@ -6620,15 +6862,46 @@ function setGameplayHUD(isPlaying) {
         });
       }
       
+      function sendTeamAssignmentsExcept(excludePlayerId) {
+        if (!isHost || !isMultiplayer) return;
+        
+        // Send current team assignments to all clients except the specified one
+        const teamData = {};
+        playerTeams.forEach((team, playerId) => {
+          teamData[playerId] = team;
+        });
+        
+        const data = {
+          type: 'team-assignments',
+          teams: teamData
+        };
+        
+        connections.forEach((conn, connectionKey) => {
+          // Skip the connection that corresponds to the excluded player
+          const connPlayerId = connectionToPlayer.get(conn);
+          if (conn && conn.open && connPlayerId !== excludePlayerId) {
+            conn.send(data);
+          }
+        });
+      }
+      
       function handleTeamAssignments(data) {
         // Update local team assignments from host
         if (data.teams) {
           Object.entries(data.teams).forEach(([playerId, team]) => {
-            playerTeams.set(playerId, team);
+            // CRITICAL FIX: Completely ignore team assignments for self
+            // Only process team assignments for other players
+            if (playerId !== myPlayerId) {
+              playerTeams.set(playerId, team);
+              updatePlayerTeamColor(playerId, team);
+            }
           });
           
           // Update ball colors based on new team assignments
           updateBallColors();
+          
+          // Update menu display colors
+          updateMenuDisplay();
         }
       }
 
@@ -6730,6 +7003,16 @@ function setGameplayHUD(isPlaying) {
           captureBall.setAttribute('visible', gameMode === 'capture');
         }
         
+        // TEMPORARY DEBUG: Show ALL balls to debug visibility issues
+        for (let i = 1; i <= 4; i++) {
+          const ball = document.querySelector(`[zerog-ball*="player: player${i}"]`);
+          if (ball) {
+            ball.setAttribute('visible', true);
+          }
+        }
+        
+        // ORIGINAL LOGIC (commented out for debugging)
+        /*
         // Manage regular balls (all 4 balls exist, show/hide based on context)
         for (let i = 1; i <= 4; i++) {
           const ball = document.querySelector(`[zerog-ball*="player: player${i}"]`);
@@ -6772,6 +7055,7 @@ function setGameplayHUD(isPlaying) {
             ball.setAttribute('visible', shouldShow);
           }
         }
+        */
       }
 
     </script>
