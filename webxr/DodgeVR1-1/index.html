@@ -298,12 +298,14 @@
           playerTarget.removeAttribute('material');
           playerTarget.removeAttribute('impact-effect');
           
-          // Ensure corresponding remote player is hidden to prevent interference
+          // Hide only the client's own remote player to prevent self-interference
           if (myPlayerId) {
             const playerIndex = parseInt(myPlayerId.split('_')[1]);
-            const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
-            if (remotePlayer) {
-              remotePlayer.setAttribute('visible', false);
+            const remoteTarget = document.querySelector(`#remote-target-${playerIndex}`);
+            if (remoteTarget) {
+              remoteTarget.setAttribute('visible', false);
+              remoteTarget.setAttribute('material', 'emissive: #000000; emissiveIntensity: 0; opacity: 0');
+              remoteTarget.parentElement.setAttribute('visible', false);
             }
           }
           
@@ -353,13 +355,7 @@
             rightThruster.setAttribute('material', `shader: standard; emissive: ${color}; emissiveIntensity: 1; transparent: true; opacity: 0.8`);
           }
           
-          // Ensure all remote players are hidden to prevent visual interference
-          for (let i = 0; i < 4; i++) {
-            const remotePlayer = document.querySelector(`#remote-player-${i}`);
-            if (remotePlayer) {
-              remotePlayer.setAttribute('visible', false);
-            }
-          }
+          // Note: Remote players should remain visible so attackers can see hit effects on opponents
         }
       }
       
@@ -483,10 +479,19 @@
               
             }
             
-            // Make all remote players visible for host
-            setTimeout(() => {
-              makeAllRemotePlayersVisible();
-            }, 100);
+                      // Make all remote players visible for host, but hide own remote player
+          setTimeout(() => {
+            makeAllRemotePlayersVisible();
+            
+            // Immediately hide own remote player to prevent color interference
+            if (myPlayerId) {
+              const playerIndex = parseInt(myPlayerId.split('_')[1]);
+              const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
+              if (remotePlayer) {
+                remotePlayer.setAttribute('visible', false);
+              }
+            }
+          }, 100);
             
             resolve();
           });
@@ -512,9 +517,18 @@
               // Send player count update to all clients
               sendPlayerCountUpdate();
               
-              // Make all remote players visible
+              // Make all remote players visible but hide own remote player
               setTimeout(() => {
                 makeAllRemotePlayersVisible();
+                
+                // Immediately hide own remote player to prevent color interference
+                if (myPlayerId) {
+                  const playerIndex = parseInt(myPlayerId.split('_')[1]);
+                  const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
+                  if (remotePlayer) {
+                    remotePlayer.setAttribute('visible', false);
+                  }
+                }
               }, 200);
               
                         // Automatically assign player slot to the new client (only if not already assigned)
@@ -643,6 +657,9 @@
               break;
             case 'client-team-selection':
               handleClientTeamSelection(data);
+              break;
+            case 'impact-effect':
+              handleImpactEffect(data);
               break;
           }
         });
@@ -804,11 +821,29 @@
                 remotePlayer.setAttribute('rotation', slot.rotation);
                 remotePlayer.setAttribute('visible', true);
                 
-                // Keep the sphere at the same size as singleplayer
+                // Keep the sphere at the same size but HIDDEN by default to prevent color interference
                 const sphere = remotePlayer.querySelector(`#remote-target-${i}`);
                 if (sphere) {
                   sphere.setAttribute('radius', '0.2');
-                  sphere.setAttribute('material', 'emissiveIntensity: 0.5; opacity: 0.7');
+                  
+                  // Hide only if this is the client's own remote target, otherwise show it
+                  if (myPlayerId === playerId) {
+                    sphere.setAttribute('visible', false);
+                  } else {
+                    sphere.setAttribute('visible', true);
+                  }
+                  
+                  // Set team color for when they do appear during hits
+                  const playerTeam = playerTeams.get(playerId);
+                  if (playerTeam) {
+                    const teamColor = playerTeam === 'red' ? '#ff0000' : '#0000ff';
+                    sphere.setAttribute('material', `shader: standard; emissive: ${teamColor}; emissiveIntensity: 0.5; transparent: true; opacity: 0.7`);
+                    sphere.setAttribute('color', teamColor);
+                    sphere.setAttribute('impact-effect', `color: ${teamColor}`);
+                  } else {
+                    // No team assigned yet - use neutral material
+                    sphere.setAttribute('material', 'emissiveIntensity: 0.5; opacity: 0.7');
+                  }
                 }
                 
               } else {
@@ -5089,6 +5124,12 @@ function setGameplayHUD(isPlaying) {
                 impactEffect.playEffect();
               }
               
+              // CRITICAL FIX: Send network message so all players see the impact effect
+              if (isMultiplayer && (isHost || connections.size > 0)) {
+                const targetPlayerId = `player_${i}`;
+                sendImpactEffect(targetPlayerId);
+              }
+              
               if (gameMode === 'capture') {
                 // Check if thrower and target are teammates
                 const targetId = `player_${i}`;
@@ -5864,9 +5905,10 @@ function setGameplayHUD(isPlaying) {
             playerTarget.setAttribute('visible', true);
           }
           
-          // Ensure all remote players are hidden for clean client display
-          for (let i = 0; i < 4; i++) {
-            const remotePlayer = document.querySelector(`#remote-player-${i}`);
+          // Hide only the client's own remote player to prevent self-interference
+          if (myPlayerId) {
+            const playerIndex = parseInt(myPlayerId.split('_')[1]);
+            const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
             if (remotePlayer) {
               remotePlayer.setAttribute('visible', false);
             }
@@ -6546,13 +6588,13 @@ function setGameplayHUD(isPlaying) {
       <a-entity id="remote-player-1" position="2 0 -2" visible="false">
         <a-sphere id="remote-target-1" 
                   radius="0.2" 
-                  color="#00ff00" 
-                  material="shader: standard; emissive: #00ff00; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
+                  color="#ff0000" 
+                  material="shader: standard; emissive: #000000; emissiveIntensity: 0; transparent: true; opacity: 0.7"
                   position="0 0 0"
-                  impact-effect="color: #00ff00">
-          <a-entity light="type: point; color: #00ff00; intensity: 1; distance: 3"></a-entity>
+                  impact-effect="color: #ff0000">
+          <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
-          <a-sphere id="remote-impact-1" radius="0.1" color="#00ff00" opacity="0" visible="false" material="side: double; transparent: true"
+          <a-sphere id="remote-impact-1" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
             animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
             animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
           </a-sphere>
@@ -6885,6 +6927,28 @@ function setGameplayHUD(isPlaying) {
         });
       }
       
+      function handleImpactEffect(data) {
+        if (!data.targetPlayerId) return;
+        
+        const targetPlayerId = data.targetPlayerId;
+        const playerIndex = parseInt(targetPlayerId.split('_')[1]);
+        
+        // Play impact effect on the appropriate target for this viewer
+        let targetToAnimate = null;
+        
+        if (targetPlayerId === myPlayerId) {
+          // This is the local player being hit - animate local target
+          targetToAnimate = document.querySelector('#player-target');
+        } else {
+          // This is a remote player being hit - animate remote target
+          targetToAnimate = document.querySelector(`#remote-target-${playerIndex}`);
+        }
+        
+        if (targetToAnimate && targetToAnimate.components['impact-effect']) {
+          targetToAnimate.components['impact-effect'].playEffect();
+        }
+      }
+
       function handleTeamAssignments(data) {
         // Update local team assignments from host
         if (data.teams) {
@@ -6902,6 +6966,41 @@ function setGameplayHUD(isPlaying) {
           
           // Update menu display colors
           updateMenuDisplay();
+          
+          // Ensure remote players are visible for hit effects (but hide own remote player)
+          makeAllRemotePlayersVisible();
+          
+          // Re-apply team colors after making remote players visible (to prevent color override)
+          Object.entries(data.teams).forEach(([playerId, team]) => {
+            if (playerId !== myPlayerId) {
+              updatePlayerTeamColor(playerId, team);
+            }
+          });
+        }
+      }
+
+      function sendImpactEffect(targetPlayerId) {
+        if (!isMultiplayer || activePlayers.size <= 1) return;
+        
+        const impactData = {
+          type: 'impact-effect',
+          targetPlayerId: targetPlayerId,
+          timestamp: Date.now()
+        };
+        
+        // Send to all connected players
+        if (isHost) {
+          connections.forEach(conn => {
+            if (conn.open) {
+              conn.send(impactData);
+            }
+          });
+        } else {
+          // Client sends to host
+          const hostConnection = connections.get('host');
+          if (hostConnection && hostConnection.open) {
+            hostConnection.send(impactData);
+          }
         }
       }
 
