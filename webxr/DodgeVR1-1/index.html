@@ -5118,16 +5118,30 @@ function setGameplayHUD(isPlaying) {
             const targetPos = new THREE.Vector3();
             targetEntity.object3D.getWorldPosition(targetPos);
             if (ballPos.distanceTo(targetPos) < 0.3) {
-              // Play explosion/sound on hit target
+              // NUCLEAR FIX: Play impact effect on ALL representations of this player
+              const targetPlayerId = `player_${i}`;
+              const playerIndex = parseInt(targetPlayerId.split('_')[1]);
+              
+              // Play on the original target that was hit
               const impactEffect = targetEntity.components['impact-effect'];
               if (impactEffect) {
                 impactEffect.playEffect();
               }
               
-              // CRITICAL FIX: Send network message so all players see the impact effect
-              if (isMultiplayer && (isHost || connections.size > 0)) {
-                const targetPlayerId = `player_${i}`;
-                sendImpactEffect(targetPlayerId);
+              // FORCE play on ALL possible target representations for this player
+              // 1. Local player target (if this is the local player)
+              const currentPlayerIndex = myPlayerId ? parseInt(myPlayerId.split('_')[1]) : -1;
+              if (playerIndex === currentPlayerIndex) {
+                const localTarget = document.querySelector('#player-target');
+                if (localTarget && localTarget.components['impact-effect']) {
+                  localTarget.components['impact-effect'].playEffect();
+                }
+              }
+              
+              // 2. Remote target for this player index
+              const remoteTarget = document.querySelector(`#remote-target-${playerIndex}`);
+              if (remoteTarget && remoteTarget.components['impact-effect']) {
+                remoteTarget.components['impact-effect'].playEffect();
               }
               
               if (gameMode === 'capture') {
