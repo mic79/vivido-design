@@ -1198,8 +1198,8 @@
             hudScore.setAttribute('visible', true);
             const leftScore = hudScore.children[0];
             const rightScore = hudScore.children[1];
-            if (leftScore) leftScore.setAttribute('text', 'value', `${teamScores.blue}`);
-            if (rightScore) rightScore.setAttribute('text', 'value', `${teamScores.red}`);
+            if (leftScore) leftScore.setAttribute('text', 'value', `${teamScores.red}`);
+            if (rightScore) rightScore.setAttribute('text', 'value', `${teamScores.blue}`);
           }
         }
       }
@@ -3461,9 +3461,10 @@ function setGameplayHUD(isPlaying) {
           
           if (isCaptureBallById || isCaptureBallBySize) {
             
-            // Score for the OPPOSING team (the one that scored in this goal)
-            const opposingTeam = this.data.team === 'red' ? 'blue' : 'red';
-            teamScores[opposingTeam] += 1;
+            // Score for the team that got the ball into the opponent's goal
+            // If ball goes into red goal, blue team scores (and vice versa)
+            const scoringTeam = this.data.team === 'red' ? 'blue' : 'red';
+            teamScores[scoringTeam] += 1;
             
             // Update score display
             this.updateTeamScores();
@@ -3492,8 +3493,8 @@ function setGameplayHUD(isPlaying) {
             hudScore.setAttribute('visible', true);
             const leftScore = hudScore.children[0];
             const rightScore = hudScore.children[1];
-            if (leftScore) leftScore.setAttribute('text', 'value', `${teamScores.blue}`);
-            if (rightScore) rightScore.setAttribute('text', 'value', `${teamScores.red}`);
+            if (leftScore) leftScore.setAttribute('text', 'value', `${teamScores.red}`);
+            if (rightScore) rightScore.setAttribute('text', 'value', `${teamScores.blue}`);
           }
         },
         
