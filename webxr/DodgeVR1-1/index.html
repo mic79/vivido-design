@@ -1204,13 +1204,21 @@
         
         // Update score display for team mode
         if (mode === 'capture') {
-          const hudScore = document.querySelector('#hud-score');
-          if (hudScore) {
-            hudScore.setAttribute('visible', true);
-            const leftScore = hudScore.children[0];
-            const rightScore = hudScore.children[1];
-            if (leftScore) leftScore.setAttribute('text', 'value', `${teamScores.red}`);
-            if (rightScore) rightScore.setAttribute('text', 'value', `${teamScores.blue}`);
+          // Use the dedicated blue/red score elements for consistent display
+          const blueScore = document.querySelector('#blue-score');
+          const redScore = document.querySelector('#red-score');
+          
+          if (blueScore) {
+            blueScore.setAttribute('text', 'value', teamScores.blue);
+          }
+          if (redScore) {
+            redScore.setAttribute('text', 'value', teamScores.red);
+          }
+          
+          // Also make the score display visible
+          const scoreDisplay = document.querySelector('#score-display');
+          if (scoreDisplay) {
+            scoreDisplay.setAttribute('visible', true);
           }
         }
       }
@@ -3503,13 +3511,21 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateTeamScores: function() {
-          const hudScore = document.querySelector('#hud-score');
-          if (hudScore) {
-            hudScore.setAttribute('visible', true);
-            const leftScore = hudScore.children[0];
-            const rightScore = hudScore.children[1];
-            if (leftScore) leftScore.setAttribute('text', 'value', `${teamScores.red}`);
-            if (rightScore) rightScore.setAttribute('text', 'value', `${teamScores.blue}`);
+          // Use the dedicated blue/red score elements for consistent display
+          const blueScore = document.querySelector('#blue-score');
+          const redScore = document.querySelector('#red-score');
+          
+          if (blueScore) {
+            blueScore.setAttribute('text', 'value', teamScores.blue);
+          }
+          if (redScore) {
+            redScore.setAttribute('text', 'value', teamScores.red);
+          }
+          
+          // Also make the score display visible
+          const scoreDisplay = document.querySelector('#score-display');
+          if (scoreDisplay) {
+            scoreDisplay.setAttribute('visible', true);
           }
         },
         
