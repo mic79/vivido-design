@@ -952,6 +952,17 @@
             }
           }
         }
+        
+        // Handle team scores for capture mode
+        if (data.teamScores) {
+          teamScores = data.teamScores;
+          
+          // Update team score display
+          const redGoal = document.querySelector('[goal="team: red"]');
+          if (redGoal && redGoal.components.goal) {
+            redGoal.components.goal.updateTeamScores();
+          }
+        }
       }
       
       function handlePlayerState(data) {
@@ -3461,27 +3472,31 @@ function setGameplayHUD(isPlaying) {
           
           if (isCaptureBallById || isCaptureBallBySize) {
             
-            // Score for the team that got the ball into the opponent's goal
-            // If ball goes into red goal, blue team scores (and vice versa)
-            const scoringTeam = this.data.team === 'red' ? 'blue' : 'red';
-            teamScores[scoringTeam] += 1;
-            
-            // Update score display
-            this.updateTeamScores();
-            
-            // Check for overtime win in capture mode
-            const gameManager = document.querySelector('#game-manager');
-            if (gameManager && gameManager.components['game-manager']) {
-              gameManager.components['game-manager'].checkOvertimeWin();
+            // HOST-AUTHORITATIVE SCORING: Only host updates team scores
+            if (isHost) {
+              // Score for the team that got the ball into the opponent's goal
+              // If ball goes into red goal, blue team scores (and vice versa)
+              const scoringTeam = this.data.team === 'red' ? 'blue' : 'red';
+              teamScores[scoringTeam] += 1;
+              
+              // Update score display
+              this.updateTeamScores();
+              
+              // Send score update to all clients
+              const gameManager = document.querySelector('#game-manager');
+              if (gameManager && gameManager.components['game-manager']) {
+                gameManager.components['game-manager'].sendScoreUpdate();
+                gameManager.components['game-manager'].checkOvertimeWin();
+              }
             }
             
-            // Reset capture ball to center
+            // Reset capture ball to center (all players do this for immediate feedback)
             const captureBall = document.querySelector('#capture-ball');
             if (captureBall && captureBall.components['zerog-ball']) {
               captureBall.components['zerog-ball'].resetPosition();
             }
             
-            // Play goal sound/effect
+            // Play goal sound/effect (all players do this)
             this.playGoalEffect();
           } else {
           }
@@ -4061,10 +4076,17 @@ function setGameplayHUD(isPlaying) {
           // Send score update to all connected players
           connections.forEach((conn, playerId) => {
             if (conn && conn.open) {
-              conn.send({
+              const scoreData = {
                 type: 'score-update',
                 scores: this.playerScores
-              });
+              };
+              
+              // Also send team scores for capture mode
+              if (gameMode === 'capture') {
+                scoreData.teamScores = teamScores;
+              }
+              
+              conn.send(scoreData);
             }
           });
         },
