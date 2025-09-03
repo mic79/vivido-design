@@ -3610,8 +3610,9 @@ function setGameplayHUD(isPlaying) {
             // Set global cooldown timestamp to prevent any other goal from scoring
             window.lastGlobalGoalTime = now;
             
-            // HOST-AUTHORITATIVE SCORING: Only host updates team scores
-            if (isHost) {
+            // HOST-AUTHORITATIVE SCORING: Only host updates team scores in multiplayer
+            // In single player, always allow scoring
+            if (isHost || !isMultiplayer) {
               // Score for the team that got the ball into the opponent's goal
               // If ball goes into red goal, blue team scores (and vice versa)
               const scoringTeam = this.data.team === 'red' ? 'blue' : 'red';
@@ -3919,6 +3920,12 @@ function setGameplayHUD(isPlaying) {
                 });
               }
             });
+          } else {
+            // Fallback: if myPlayerId is not set but we're the host, assume player_0
+            if (isHost) {
+              this.playerReadyStates[0] = true;
+              readyStates[0] = true;
+            }
           }
           this.updateReadyState();
         },
@@ -3937,6 +3944,9 @@ function setGameplayHUD(isPlaying) {
             const needed = minPlayers - activePlayers.size;
             this.startMessage.setAttribute('text', 'value', `Press A to start solo or wait for ${needed} more player(s)...`);
             // Don't return - allow solo start to proceed
+          } else {
+            // Enough players for normal multiplayer
+            this.startMessage.setAttribute('text', 'value', `Press A when ready...`);
           }
           
           // CRITICAL FIX: Only count ready states for active players
