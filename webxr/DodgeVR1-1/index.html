@@ -5302,8 +5302,42 @@ function setGameplayHUD(isPlaying) {
                 }
               }
             }
-            // Player1's ball hits player target
+            // Red bot's ball (ballPlayerIndex 1) hits player target
             if (ballPlayerIndex === 1) {
+              const playerTarget = document.querySelector('#player-target');
+              if (playerTarget) {
+                const targetPos = new THREE.Vector3();
+                playerTarget.object3D.getWorldPosition(targetPos);
+                if (ballPos.distanceTo(targetPos) < 0.3) {
+                  // Play explosion/sound on player
+                  const impactEffect = playerTarget.components['impact-effect'];
+                  if (impactEffect) impactEffect.playEffect();
+                  
+                  if (gameMode === 'capture') {
+                    // Check if ball should affect player based on team rules
+                    const playerId = myPlayerId || 'player_0';
+                    if (!shouldBallAffectTarget(ballPlayerIndex, playerId)) {
+                      return; // Same team - no effect
+                    }
+                    // In capture mode: stun the player
+                    this.stunPlayer();
+                  } else {
+                    // In dodge mode: score for bot
+                  const gameManager = this.el.sceneEl.querySelector('#game-manager');
+                  if (gameManager && gameManager.components['game-manager']) {
+                    gameManager.components['game-manager'].onOpponentHit();
+                  }
+                  }
+                  
+                  this.lastHitTime = now;
+                  this.resetPosition();
+                  return;
+                }
+              }
+            }
+            
+            // Blue bot's ball (ballPlayerIndex 3) hits player target
+            if (ballPlayerIndex === 3) {
               const playerTarget = document.querySelector('#player-target');
               if (playerTarget) {
                 const targetPos = new THREE.Vector3();
