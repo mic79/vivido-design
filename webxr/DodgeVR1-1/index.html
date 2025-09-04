@@ -1897,6 +1897,12 @@ function setGameplayHUD(isPlaying) {
           this.grabInfo = { left: null, right: null };
           this.thrusterActive = { left: false, right: false };
           
+          // NEW: Anti-stuttering system
+          this.velocityHistory = [];
+          this.maxVelocityHistorySize = 10; // Track last 10 frames
+          this.lastCollisionTime = 0;
+          this.lastGrabTime = 0; // Track when grabs happen
+          
           // Stunning state
           this.isStunned = false;
           this.stunEndTime = 0;
@@ -2159,6 +2165,8 @@ function setGameplayHUD(isPlaying) {
             return this.distanceToSphere(handPos, handRadius, elementPos, geometry);
           } else if (geometry.primitive === 'cylinder') {
             return this.distanceToCylinder(handPos, handRadius, elementPos, geometry);
+          } else if (geometry.primitive === 'octahedron') {
+            return this.distanceToOctahedron(handPos, handRadius, elementPos, geometry);
           } else {
             // Fallback
             return handPos.distanceTo(elementPos) - handRadius;
@@ -2227,6 +2235,14 @@ function setGameplayHUD(isPlaying) {
           // Subtract hand radius
           return Math.max(0, distance - handRadius);
         },
+
+        distanceToOctahedron: function(handPos, handRadius, octahedronPos, geometry) {
+          const octahedronRadius = geometry.radius;
+          const centerDistance = handPos.distanceTo(octahedronPos);
+          
+          // Distance to octahedron surface minus hand radius
+          return Math.max(0, centerDistance - octahedronRadius - handRadius);
+        },
         
         attachToSurface: function(hand, surface) {
           const handPos = new THREE.Vector3();
@@ -2273,6 +2289,9 @@ function setGameplayHUD(isPlaying) {
           // Set grabbing flag
           this.isGrabbing[handKey] = true;
           
+          // Record grab time for settling period
+          this.lastGrabTime = Date.now();
+          
 
         },
         
@@ -2285,6 +2304,14 @@ function setGameplayHUD(isPlaying) {
             // If releasing a ball, call the ball's onRelease method
             if (grabInfo.isBall && grabInfo.surface.components['zerog-ball']) {
               grabInfo.surface.components['zerog-ball'].onRelease();
+            } else if (!grabInfo.isBall) {
+              // For static surfaces, apply velocity clamping to prevent explosive release
+              const maxReleaseVelocity = 2.5; // Reduced from 3.0 for safer release
+              if (this.velocity.length() > maxReleaseVelocity) {
+                // Smooth the velocity reduction instead of hard clamping
+                const reductionFactor = maxReleaseVelocity / this.velocity.length();
+                this.velocity.multiplyScalar(reductionFactor);
+              }
             }
           }
           
@@ -2455,6 +2482,9 @@ function setGameplayHUD(isPlaying) {
           
           // NEW: Continuous ball grabbing while grip is held
           this.updateGripBallGrabbing();
+          
+          // NEW: Validate grab distances to prevent visual disconnection
+          this.validateGrabDistances();
           }
         },
 
@@ -2496,8 +2526,8 @@ function setGameplayHUD(isPlaying) {
           // Check collision points (head, body center, feet)
           const collisionPoints = [
             { pos: cameraWorldPos.clone(), radius: 0.25, name: 'head' }, // Head level
-            { pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.4, 0)), radius: 0.25, name: 'body' }, // Body center
-            { pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.8, 0)), radius: 0.25, name: 'feet' } // Feet level
+            //{ pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.4, 0)), radius: 0.25, name: 'body' }, // Body center
+            //{ pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.8, 0)), radius: 0.25, name: 'feet' } // Feet level
           ];
           
           let totalCollisionResponse = new THREE.Vector3(0, 0, 0);
@@ -2518,13 +2548,108 @@ function setGameplayHUD(isPlaying) {
           
           // Apply collision response by moving rig and dampening velocity
           if (totalCollisionResponse.length() > 0) {
-            // Move rig away from collision
-            this.rig.object3D.position.add(totalCollisionResponse);
+            // NEW: Smart collision response based on grab context
+            const leftGrabbing = this.isGrabbing.left && this.grabInfo.left && !this.grabInfo.left.isBall;
+            const rightGrabbing = this.isGrabbing.right && this.grabInfo.right && !this.grabInfo.right.isBall;
+            const totalStaticGrabs = (leftGrabbing ? 1 : 0) + (rightGrabbing ? 1 : 0);
             
-            // Dampen velocity in collision direction
+            let collisionStrength = 1.0;
+            
+            if (totalStaticGrabs > 0) {
+              // More aggressive reduction for dual grabs to prevent three-way conflicts
+              if (totalStaticGrabs === 2) {
+                collisionStrength = 0.4; // Very reduced for dual grabs
+              } else {
+                collisionStrength = 0.7; // Moderately reduced for single grab
+              }
+              
+              // Also check if we're colliding with a grabbed surface - if so, reduce even more
+              const grabbedSurfaces = [];
+              if (this.isGrabbing.left && this.grabInfo.left && !this.grabInfo.left.isBall) {
+                grabbedSurfaces.push(this.grabInfo.left.surface);
+              }
+              if (this.isGrabbing.right && this.grabInfo.right && !this.grabInfo.right.isBall) {
+                grabbedSurfaces.push(this.grabInfo.right.surface);
+              }
+              
+              // Check if collision is with a grabbed surface
+              const surfaces = document.querySelectorAll('[grab-surface]');
+              let collidingWithGrabbedSurface = false;
+              surfaces.forEach(surface => {
+                if (grabbedSurfaces.includes(surface)) {
+                  const surfacePos = new THREE.Vector3();
+                  surface.object3D.getWorldPosition(surfacePos);
+                  const distanceToSurface = cameraWorldPos.distanceTo(surfacePos);
+                  
+                  // If we're very close to a grabbed surface, it's likely the collision source
+                  if (distanceToSurface < 1.5) { // Within 1.5m of grabbed surface
+                    collidingWithGrabbedSurface = true;
+                  }
+                }
+              });
+              
+              if (collidingWithGrabbedSurface) {
+                // Use distance-based collision strength for grabbed surfaces
+                const surfaces = document.querySelectorAll('[grab-surface]');
+                let minDistanceToGrabbedSurface = Infinity;
+                
+                surfaces.forEach(surface => {
+                  if (grabbedSurfaces.includes(surface)) {
+                    const surfacePos = new THREE.Vector3();
+                    surface.object3D.getWorldPosition(surfacePos);
+                    const distance = cameraWorldPos.distanceTo(surfacePos);
+                    minDistanceToGrabbedSurface = Math.min(minDistanceToGrabbedSurface, distance);
+                  }
+                });
+                
+                // Gradually reduce collision strength as player gets closer to grabbed surface
+                // Scale based on number of grabs and distance
+                const baseStrength = totalStaticGrabs === 2 ? 0.15 : 0.25; // Lower base for dual grabs
+                const maxStrength = totalStaticGrabs === 2 ? 0.4 : 0.7;   // Lower max for dual grabs
+                const distanceRatio = Math.max(0, Math.min(1, (minDistanceToGrabbedSurface - 0.5) / 1.0));
+                collisionStrength = baseStrength + ((maxStrength - baseStrength) * distanceRatio);
+              }
+            }
+            
+            // Apply scaled collision response
+            const scaledResponse = totalCollisionResponse.clone().multiplyScalar(collisionStrength);
+            this.rig.object3D.position.add(scaledResponse);
+            
+            // Dampen velocity in collision direction (also scaled)
             const collisionNormal = totalCollisionResponse.clone().normalize();
             const velocityInCollisionDirection = this.velocity.clone().projectOnVector(collisionNormal);
-            this.velocity.sub(velocityInCollisionDirection.multiplyScalar(1.2)); // Remove + a bit extra
+            const dampingStrength = 1.2 * collisionStrength; // Scale damping too
+            this.velocity.sub(velocityInCollisionDirection.multiplyScalar(dampingStrength));
+            
+            // NEW: Smart anti-stuttering - only limit velocity if oscillating
+            if (totalStaticGrabs > 0) {
+              this.lastCollisionTime = Date.now();
+              
+              // Track velocity history for oscillation detection
+              this.velocityHistory.push(this.velocity.clone());
+              if (this.velocityHistory.length > this.maxVelocityHistorySize) {
+                this.velocityHistory.shift();
+              }
+              
+              // Allow settling period after grabbing before checking for oscillation
+              const timeSinceGrab = Date.now() - this.lastGrabTime;
+              const isInSettlingPeriod = timeSinceGrab < 500; // 500ms settling period
+              
+              if (!isInSettlingPeriod) {
+                // Check if we're oscillating (rapid direction changes)
+                const isOscillating = this.detectVelocityOscillation();
+                
+                if (isOscillating) {
+                  // Only limit velocity if we detect unwanted oscillation
+                  console.log('Oscillation detected - limiting velocity from', this.velocity.length().toFixed(2), 'to 2.0 m/s');
+                  const maxVelocityWhenOscillating = 2.0; // Further reduced for better stability
+                  if (this.velocity.length() > maxVelocityWhenOscillating) {
+                    this.velocity.normalize().multiplyScalar(maxVelocityWhenOscillating);
+                  }
+                }
+              }
+              // Otherwise, allow full velocity for intentional rapid movements
+            }
             
             if (this.debugMode) {
             }
@@ -2596,6 +2721,47 @@ function setGameplayHUD(isPlaying) {
             
             if (penetration > 0) {
               const direction = point.clone().sub(surfacePos).normalize();
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'octahedron') {
+            // Octahedron collision - FIXED implementation
+            const octahedronRadius = geometry.radius || 1.0; // A-Frame default is 1.0
+            
+            // Get point relative to octahedron center
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Calculate distance to octahedron surface
+            // An octahedron surface is defined by |x| + |y| + |z| = radius
+            const absX = Math.abs(relativePos.x);
+            const absY = Math.abs(relativePos.y);
+            const absZ = Math.abs(relativePos.z);
+            const manhattanDistance = absX + absY + absZ;
+            
+            // FIXED: Proper distance calculation
+            // If inside octahedron: distance is negative (how far inside)
+            // If outside octahedron: distance is positive (how far from surface)
+            const distanceToSurface = manhattanDistance - octahedronRadius;
+            
+            // FIXED: Only collide if the player's collision sphere intersects the octahedron
+            // This means: distanceToSurface < (radius + margin)
+            const penetration = (radius + this.collisionMargin) - distanceToSurface;
+            
+            if (penetration > 0) {
+              // Calculate proper push-out direction
+              let direction = new THREE.Vector3();
+              
+              if (manhattanDistance > 0.001) { // Avoid division by zero
+                // Push away from octahedron surface
+                // The gradient of |x| + |y| + |z| gives us the surface normal direction
+                direction.x = relativePos.x >= 0 ? 1 : -1;
+                direction.y = relativePos.y >= 0 ? 1 : -1;
+                direction.z = relativePos.z >= 0 ? 1 : -1;
+                direction.normalize();
+              } else {
+                // Point is at center, push up
+                direction.set(0, 1, 0);
+              }
+              
               response.copy(direction.multiplyScalar(penetration));
             }
           }
@@ -2841,59 +3007,90 @@ function setGameplayHUD(isPlaying) {
           }
         },
         
-        // Option B: Apply grab movement to velocity
+        // Option B: Apply grab movement to velocity - UNIFIED SYSTEM
         applyGrabMovement: function(dt) {
-          // Handle pulling/pushing when grabbing STATIC surfaces (not balls)
+          // Count active static grabs
+          const activeGrabs = [];
           ['left', 'right'].forEach(handKey => {
-            if (this.isGrabbing[handKey] && this.grabInfo[handKey]) {
+            if (this.isGrabbing[handKey] && this.grabInfo[handKey] && !this.grabInfo[handKey].isBall) {
               const grabInfo = this.grabInfo[handKey];
-              
-              // CRITICAL: Only apply player movement for static surfaces, NEVER for balls
-              if (grabInfo.isBall) {
-                return; // Balls handle their own movement, do NOT affect player
+              if (!grabInfo.surface || !grabInfo.surface.hasAttribute('zerog-ball')) {
+                activeGrabs.push({ handKey, grabInfo });
               }
-              
-              // Double-check: Ensure surface is not a ball by checking for zerog-ball attribute
-              if (grabInfo.surface && grabInfo.surface.hasAttribute('zerog-ball')) {
-                return; // Additional safety check
-              }
-              
-              const hand = handKey === 'left' ? this.leftHand : this.rightHand;
-              if (!hand) return;
-              
-              const currentHandPos = new THREE.Vector3();
-              hand.object3D.getWorldPosition(currentHandPos);
-              
-              // Calculate how much the hand has moved since last frame
-              const handMovement = new THREE.Vector3()
-                .subVectors(currentHandPos, grabInfo.lastHandPos);
-              
-              const movementMagnitude = handMovement.length();
-              
-              // Only apply movement if hand has moved significantly
-              if (movementMagnitude > 0.001) { // 0.1cm minimum movement
-                
-                // Apply hand movement as velocity change in opposite direction
-                // This creates the "pulling yourself toward/away from object" effect
-                const movementStrength = 80.0; // Scale factor for responsiveness
-                const velocityChange = handMovement.clone().negate().multiplyScalar(movementStrength / dt);
-                
-                // Add to velocity (Option B approach)
-                this.velocity.add(velocityChange.multiplyScalar(dt));
-                
-                // Cap maximum velocity
-                if (this.velocity.length() > this.data.maxSpeed) {
-                  this.velocity.normalize().multiplyScalar(this.data.maxSpeed);
-                }
-                
-                if (this.debugMode) {
-                }
-              }
-              
-              // Update last hand position for next frame
-              grabInfo.lastHandPos.copy(currentHandPos);
             }
           });
+          
+          if (activeGrabs.length === 0) return;
+          
+          // Calculate combined movement from all active grabs
+          let totalVelocityChange = new THREE.Vector3(0, 0, 0);
+          let totalMovement = 0;
+          
+          activeGrabs.forEach(({ handKey, grabInfo }) => {
+            const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+            if (!hand) return;
+            
+            const currentHandPos = new THREE.Vector3();
+            hand.object3D.getWorldPosition(currentHandPos);
+            
+            // Calculate how much the hand has moved since last frame
+            const handMovement = new THREE.Vector3()
+              .subVectors(currentHandPos, grabInfo.lastHandPos);
+            
+            const movementMagnitude = handMovement.length();
+            
+            // Only apply movement if hand has moved significantly
+            if (movementMagnitude > 0.001) {
+              // For multiple grabs, average the movements to prevent conflicts
+              const weight = activeGrabs.length > 1 ? 0.6 : 1.0; // Reduce individual influence when multiple grabs
+              const velocityChange = handMovement.clone().negate().multiplyScalar(weight);
+              
+              totalVelocityChange.add(velocityChange);
+              totalMovement += movementMagnitude;
+            }
+            
+            // Update last hand position for next frame
+            grabInfo.lastHandPos.copy(currentHandPos);
+          });
+          
+          // Apply the combined movement if there was significant motion
+          if (totalMovement > 0.001) {
+            // NEW: Realistic grab strength that can't exceed natural human movement speeds
+            const baseMovementStrength = activeGrabs.length > 1 ? 45.0 : 55.0; // Much more realistic
+            
+            // Scale down strength based on current velocity to prevent runaway acceleration
+            const currentSpeed = this.velocity.length();
+            const speedRatio = Math.max(0.1, Math.min(1.0, (4.0 - currentSpeed) / 4.0)); // Reduce strength as speed increases
+            const adjustedStrength = baseMovementStrength * speedRatio;
+            
+            const finalVelocityChange = totalVelocityChange.multiplyScalar(adjustedStrength / dt);
+            
+            // Add to velocity
+            this.velocity.add(finalVelocityChange.multiplyScalar(dt));
+            
+            // Smart velocity limiting based on context
+            const timeSinceCollision = Date.now() - this.lastCollisionTime;
+            const isNearCollision = timeSinceCollision < 100;
+            
+            // NEW: Realistic grab velocity limits based on human movement capabilities
+            let maxVelocity;
+            if (activeGrabs.length > 1 && isNearCollision) {
+              maxVelocity = 2.5; // Very conservative for dual grabs near collision
+            } else if (isNearCollision) {
+              maxVelocity = 3.0; // Conservative for single grab near collision  
+            } else if (activeGrabs.length > 1) {
+              maxVelocity = 3.5; // Realistic for dual grabs (human arm speed)
+            } else {
+              maxVelocity = 4.5; // Realistic for single grab (fast human arm movement)
+            }
+            
+            // Allow higher speeds only for thruster-based movement, not grab-based
+            const thrusterMaxSpeed = this.data.maxSpeed; // 8.0 m/s for thrusters/throwing
+            
+            if (this.velocity.length() > maxVelocity) {
+              this.velocity.normalize().multiplyScalar(maxVelocity);
+            }
+          }
         },
         
         startBraking: function(hand) {
@@ -3025,6 +3222,85 @@ function setGameplayHUD(isPlaying) {
             }
           });
         },
+        
+        // NEW: Detect if velocity is oscillating (stuttering)
+        detectVelocityOscillation: function() {
+          if (this.velocityHistory.length < 6) return false; // Need more history for accuracy
+          
+          // Check for rapid direction changes in recent history
+          let directionChanges = 0;
+          let significantVelocityChanges = 0;
+          const recentHistory = this.velocityHistory.slice(-6); // Last 6 frames
+          
+          for (let i = 1; i < recentHistory.length; i++) {
+            const prev = recentHistory[i - 1];
+            const curr = recentHistory[i];
+            
+            // Skip if either velocity is very small (avoid false positives)
+            if (prev.length() < 0.3 || curr.length() < 0.3) continue;
+            
+            // Check if direction changed significantly (more restrictive)
+            const dotProduct = prev.clone().normalize().dot(curr.clone().normalize());
+            if (dotProduct < 0.2) { // Much more restrictive - nearly opposite directions
+              directionChanges++;
+            }
+            
+            // Check for significant velocity magnitude changes (higher threshold)
+            const velocityChange = Math.abs(curr.length() - prev.length());
+            if (velocityChange > 2.0 && prev.length() > 1.0 && curr.length() > 1.0) {
+              significantVelocityChanges++;
+            }
+          }
+          
+          // Much more restrictive criteria - need multiple clear oscillations
+          return directionChanges >= 3 && significantVelocityChanges >= 2;
+        },
+        
+        // NEW: Validate that grabbed surfaces are still within reach
+        validateGrabDistances: function() {
+          // RE-ENABLED with improved logic
+          
+          ['left', 'right'].forEach(handKey => {
+            if (this.isGrabbing[handKey] && this.grabInfo[handKey]) {
+              const grabInfo = this.grabInfo[handKey];
+              const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+              
+              if (!hand || !grabInfo.surface) return;
+              
+              // Skip validation for balls - they follow the hand
+              if (grabInfo.isBall) return;
+              
+              // Get current hand position
+              const handPos = new THREE.Vector3();
+              hand.object3D.getWorldPosition(handPos);
+              
+              // Get surface position
+              const surfacePos = new THREE.Vector3();
+              grabInfo.surface.object3D.getWorldPosition(surfacePos);
+              
+              // Use the same distance calculation as the original grab detection
+              const distance = this.getDistanceToSurface(handPos, 0.08, grabInfo.surface);
+              
+              // More generous distance for validation than initial grab
+              // Initial grab: 5cm, Validation: 18cm (allows for collision displacement)
+              const maxGrabDistance = 0.18;
+              
+              // If hand is too far from surface, release the grab
+              if (distance > maxGrabDistance) {
+                console.log(`Auto-releasing ${handKey} hand grab - distance: ${distance.toFixed(3)}m > ${maxGrabDistance}m`);
+                
+                // Gentle velocity reduction to prevent jarring release
+                this.velocity.multiplyScalar(0.8); // Reduce velocity by 20% (less aggressive)
+                
+                // Release the grab
+                this.releaseFromSurface(hand);
+                
+                // Haptic feedback to indicate auto-release
+                this.playHapticFeedback(hand, 0.15, 80);
+              }
+            }
+          });
+        },
 
         remove: function() {
           // Option B: No physics body to remove
@@ -3072,6 +3348,33 @@ function setGameplayHUD(isPlaying) {
             ));
           } else if (geometry && geometry.primitive === 'sphere') {
             shape = new CANNON.Sphere(geometry.radius);
+          } else if (geometry && geometry.primitive === 'octahedron') {
+            // Octahedron: create accurate ConvexPolyhedron collision shape
+            const radius = geometry.radius || 1.0; // A-Frame default is 1.0
+            
+            // Define octahedron vertices (6 vertices at ±radius on each axis)
+            const vertices = [
+              new CANNON.Vec3(radius, 0, 0),   // +X
+              new CANNON.Vec3(-radius, 0, 0),  // -X
+              new CANNON.Vec3(0, radius, 0),   // +Y
+              new CANNON.Vec3(0, -radius, 0),  // -Y
+              new CANNON.Vec3(0, 0, radius),   // +Z
+              new CANNON.Vec3(0, 0, -radius)   // -Z
+            ];
+            
+            // Define octahedron faces (8 triangular faces)
+            const faces = [
+              [0, 2, 4],  // +X, +Y, +Z
+              [2, 1, 4],  // +Y, -X, +Z
+              [1, 3, 4],  // -X, -Y, +Z
+              [3, 0, 4],  // -Y, +X, +Z
+              [0, 5, 2],  // +X, -Z, +Y
+              [2, 5, 1],  // +Y, -Z, -X
+              [1, 5, 3],  // -X, -Z, -Y
+              [3, 5, 0]   // -Y, -Z, +X
+            ];
+            
+            shape = new CANNON.ConvexPolyhedron(vertices, faces);
           } else {
             // Fallback for unknown geometry
             shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
@@ -6332,7 +6635,15 @@ function setGameplayHUD(isPlaying) {
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              webxr="requiredFeatures: local-floor">
       
-      <!-- Space Station Environment -->
+      <a-assets>
+        <img id="boxTexture" src="assets/blue-rounded-neon-border.jpg">
+        <img id="panelAlbedo" src="assets/TCom_Scifi_Panel_4K_albedo.jpg">
+        <img id="panelHeightmap" src="assets/TCom_Scifi_Panel_4K_height.jpg">
+        <img id="panelNormal" src="assets/TCom_Scifi_Panel_4K_normal.jpg">
+        <img id="panelMetallic" src="assets/TCom_Scifi_Panel_4K_metallic.jpg">
+        <img id="panelRoughness" src="assets/TCom_Scifi_Panel_4K_roughness.jpg">
+        <img id="panelAo" src="assets/TCom_Scifi_Panel_4K_ao.jpg">
+      </a-assets>
       
       <!-- Main chamber floor (doubled size) -->
       <a-box position="0 -2 0" 
@@ -6355,13 +6666,14 @@ function setGameplayHUD(isPlaying) {
       </a-box>
 
       <!-- Left wall (doubled size) -->
-      <a-box position="-8 2 0" 
-             width="0.2" 
-             height="8" 
-             depth="32" 
-             color="#444444"
-             material="shader: standard; metalness: 0.8; roughness: 0.2"
-             grab-surface="type: static">
+      <a-box position="-8 2 0"
+             width="0.2"
+             height="8"
+             depth="32"
+             src="#panelAlbedo"
+             material="repeat: 16 4; ambientOcclusionMap: #panelAo; ambientOcclusionTextureRepeat: 16 4; color: #00ff00; displacementMap: #panelHeightmap; displacementScale: 0; displacementBias: 0; displacementTextureRepeat: 16 4; metalness: 0.5; metalnessMap: #panelMetallic; metalnessTextureRepeat: 16 4; normalMap: #panelNormal; normalScale: -1 1; normalTextureRepeat: 16 4; roughness: 1; roughnessMap: #panelRoughness; roughnessTextureRepeat: 16 4"
+             grab-surface=""
+             class="grabbable-surface">
       </a-box>
       
       <!-- Right wall (doubled size) -->
@@ -6369,9 +6681,10 @@ function setGameplayHUD(isPlaying) {
              width="0.2" 
              height="8" 
              depth="32" 
-             color="#444444"
-             material="shader: standard; metalness: 0.8; roughness: 0.2"
-             grab-surface="type: static">
+             src="#panelAlbedo"
+             material="repeat: 16 4; ambientOcclusionMap: #panelAo; ambientOcclusionTextureRepeat: 16 4; color: #00ff00; displacementMap: #panelHeightmap; displacementScale: 0; displacementBias: 0; displacementTextureRepeat: 16 4; metalness: 0.5; metalnessMap: #panelMetallic; metalnessTextureRepeat: 16 4; normalMap: #panelNormal; normalScale: -1 1; normalTextureRepeat: 16 4; roughness: 1; roughnessMap: #panelRoughness; roughnessTextureRepeat: 16 4"
+             grab-surface=""
+             class="grabbable-surface">
       </a-box>
       
       <!-- Back wall (doubled size) -->
@@ -6405,7 +6718,6 @@ function setGameplayHUD(isPlaying) {
                   goal="team: red"
                   visible="false">
         <a-entity light="type: point; color: #ff0000; intensity: 2; distance: 8"></a-entity>
-        <a-text value="RED GOAL" position="0 0 0.1" align="center" width="4" color="#ffffff"></a-text>
       </a-cylinder>
 
       <!-- Blue Team Goal (front side, 1m from wall) -->
@@ -6419,13 +6731,12 @@ function setGameplayHUD(isPlaying) {
                   goal="team: blue"
                   visible="false">
         <a-entity light="type: point; color: #0000ff; intensity: 2; distance: 8"></a-entity>
-        <a-text value="BLUE GOAL" position="0 0 -0.1" align="center" width="4" color="#ffffff"></a-text>
       </a-cylinder>
 
       <!-- Randomly positioned 1m cubes throughout the space -->
       <a-box position="-5 1 -10" 
              width="1" height="1" depth="1" 
-             color="#888888"
+             src="#boxTexture"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static">
       </a-box>
@@ -6479,12 +6790,12 @@ function setGameplayHUD(isPlaying) {
              grab-surface="type: static">
       </a-box>
       
-      <a-box position="-1 2 5" 
+      <a-octahedron position="-1 2 5" 
              width="1" height="1" depth="1" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static">
-      </a-box>
+      </a-octahedron>
       
       <a-box position="7 5 -6" 
              width="1" height="1" depth="1" 
