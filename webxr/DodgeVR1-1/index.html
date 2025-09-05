@@ -2552,6 +2552,20 @@ function setGameplayHUD(isPlaying) {
           
           // NEW: Validate grab distances to prevent visual disconnection
           this.validateGrabDistances();
+          
+          // Update speed display in HUD
+          this.updateSpeedDisplay();
+          }
+        },
+        
+        updateSpeedDisplay: function() {
+          // Calculate current speed from velocity vector
+          const speed = this.velocity.length();
+          
+          // Update HUD speed display (limit to 1 decimal place)
+          const speedDisplay = document.querySelector('#hud-speed');
+          if (speedDisplay) {
+            speedDisplay.setAttribute('text', 'value', `${speed.toFixed(1)} m/s`);
           }
         },
 
@@ -5188,13 +5202,21 @@ function setGameplayHUD(isPlaying) {
       AFRAME.registerComponent('menu-toggle', {
         init: function() {
           this.menuVisible = false;
-          this.lastBButtonPress = 0;
+          this.lastMenuButtonPress = 0;
           
           // B button to toggle menu with debouncing
           this.el.sceneEl.addEventListener('bbuttondown', () => {
             const now = Date.now();
-            if (now - this.lastBButtonPress < 500) return; // 500ms debounce
-            this.lastBButtonPress = now;
+            if (now - this.lastMenuButtonPress < 500) return; // 500ms debounce
+            this.lastMenuButtonPress = now;
+            this.toggleMenu();
+          });
+          
+          // Quest left menu button to toggle menu with debouncing
+          this.el.sceneEl.addEventListener('menudown', () => {
+            const now = Date.now();
+            if (now - this.lastMenuButtonPress < 500) return; // 500ms debounce
+            this.lastMenuButtonPress = now;
             this.toggleMenu();
           });
         },
@@ -5313,6 +5335,7 @@ function setGameplayHUD(isPlaying) {
             '#hud-status', 
             '#hud-score',
             '#hud-timer',
+            '#hud-speed',
             '#hud-message'
           ];
           
@@ -7368,7 +7391,7 @@ function setGameplayHUD(isPlaying) {
         
         <!-- Launcher Torus (exact copy of goal border structure) -->
         <a-torus id="tube-launcher"
-                 radius="0.8"
+                 radius="0.7"
                  radius-tubular="0.05"
                  rotation="90 0 0"
                  color="#ff8800"
@@ -7694,7 +7717,7 @@ function setGameplayHUD(isPlaying) {
                 radius="0.2"
                 color="#ffffff" 
                 glow="color: #ffffff; intensity: 2.0"
-                zerog-ball="player: capture; maxVelocity: 4"
+                zerog-ball="player: capture; maxVelocity: 8"
                 visible="false">
         <a-entity light="type: point; 
                        color: #ffffff;
@@ -7750,6 +7773,9 @@ function setGameplayHUD(isPlaying) {
             
             <!-- Timer Display in HUD -->
             <a-entity id="hud-timer" position="0 0.05 -0.5" text="value: Time: 3:00; align: center; width: 1.2; color: #ffff00" visible="false"></a-entity>
+            
+            <!-- Speed Display in HUD -->
+            <a-entity id="hud-speed" position="0 -0.15 -0.5" text="value: 0.0 m/s; align: center; width: 0.5; color: #ffffff" visible="true"></a-entity>
             
             <!-- Game Messages in HUD -->
             <a-entity id="hud-message" position="0 0 -0.5" text="value: Press A to Start; align: center; width: 1.1; color: #ffffff" visible="false"></a-entity>
