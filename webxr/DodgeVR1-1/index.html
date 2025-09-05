@@ -2826,7 +2826,7 @@ function setGameplayHUD(isPlaying) {
             // FIXED: Only collide if the player's collision sphere intersects the octahedron
             // This means: distanceToSurface < (radius + margin)
             const penetration = (radius + this.collisionMargin) - distanceToSurface;
-            
+          
             if (penetration > 0) {
               // Calculate proper push-out direction
               let direction = new THREE.Vector3();
@@ -3178,19 +3178,19 @@ function setGameplayHUD(isPlaying) {
           let totalMovement = 0;
           
           activeGrabs.forEach(({ handKey, grabInfo }) => {
-            const hand = handKey === 'left' ? this.leftHand : this.rightHand;
-            if (!hand) return;
-            
-            const currentHandPos = new THREE.Vector3();
-            hand.object3D.getWorldPosition(currentHandPos);
-            
-            // Calculate how much the hand has moved since last frame
-            const handMovement = new THREE.Vector3()
-              .subVectors(currentHandPos, grabInfo.lastHandPos);
-            
-            const movementMagnitude = handMovement.length();
-            
-            // Only apply movement if hand has moved significantly
+              const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+              if (!hand) return;
+              
+              const currentHandPos = new THREE.Vector3();
+              hand.object3D.getWorldPosition(currentHandPos);
+              
+              // Calculate how much the hand has moved since last frame
+              const handMovement = new THREE.Vector3()
+                .subVectors(currentHandPos, grabInfo.lastHandPos);
+              
+              const movementMagnitude = handMovement.length();
+              
+              // Only apply movement if hand has moved significantly
             if (movementMagnitude > 0.001) {
               // For multiple grabs, average the movements to prevent conflicts
               const weight = activeGrabs.length > 1 ? 0.6 : 1.0; // Reduce individual influence when multiple grabs
@@ -5212,13 +5212,38 @@ function setGameplayHUD(isPlaying) {
             this.toggleMenu();
           });
           
-          // Quest left menu button to toggle menu with debouncing
-          this.el.sceneEl.addEventListener('menudown', () => {
-            const now = Date.now();
-            if (now - this.lastMenuButtonPress < 500) return; // 500ms debounce
-            this.lastMenuButtonPress = now;
-            this.toggleMenu();
+          // Quest left menu button to toggle menu with debouncing (try multiple event names)
+          const menuEvents = ['menudown', 'menubuttondown', 'leftmenubuttondown', 'systemdown'];
+          
+          menuEvents.forEach(eventName => {
+            this.el.sceneEl.addEventListener(eventName, () => {
+              const now = Date.now();
+              if (now - this.lastMenuButtonPress < 500) return; // 500ms debounce
+              this.lastMenuButtonPress = now;
+              console.log(`Menu toggled via ${eventName} event`);
+              this.toggleMenu();
+            });
           });
+          
+          // Also try listening on hand controllers directly
+          setTimeout(() => {
+            const leftHand = document.querySelector('#leftHand');
+            const rightHand = document.querySelector('#rightHand');
+            
+            [leftHand, rightHand].forEach(hand => {
+              if (hand) {
+                menuEvents.forEach(eventName => {
+                  hand.addEventListener(eventName, () => {
+                    const now = Date.now();
+                    if (now - this.lastMenuButtonPress < 500) return;
+                    this.lastMenuButtonPress = now;
+                    console.log(`Menu toggled via ${eventName} on ${hand.id}`);
+                    this.toggleMenu();
+                  });
+                });
+              }
+            });
+          }, 1000); // Wait for hands to be initialized
         },
 
         toggleMenu: function() {
