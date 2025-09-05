@@ -5244,6 +5244,28 @@ function setGameplayHUD(isPlaying) {
               }
             });
           }, 1000); // Wait for hands to be initialized
+
+          // WebXR controller access
+          setTimeout(() => {
+            const leftHand = document.querySelector('#leftHand');
+            if (leftHand && leftHand.components['meta-touch-controls']) {
+              const controller = leftHand.components['meta-touch-controls'].controller;
+              if (controller) {
+                controller.addEventListener('selectstart', (evt) => {
+                  const now = Date.now();
+                  if (now - this.lastMenuButtonPress < 500) return;
+                  this.lastMenuButtonPress = now;
+                  console.log('WebXR selectstart on left controller');
+                  this.toggleMenu();
+                });
+                controller.addEventListener('inputsourceschange', (evt) => {
+                  console.log('Input sources change:', evt.detail);
+                });
+              } else {
+                console.error('Left controller not found');
+              }
+            }
+          }, 1000);
         },
 
         toggleMenu: function() {
@@ -7940,7 +7962,7 @@ function setGameplayHUD(isPlaying) {
           
           <a-entity id="leftHand" 
                    hand-controls="hand: left"
-                   meta-touch-controls="hand: left"
+                   meta-touch-controls="hand: left; model: true"
                    laser-controls="hand: left"
                    raycaster="objects: .clickable; lineColor: #ffffff; lineOpacity: 0"
                    hand-collider
