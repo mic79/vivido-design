@@ -1194,7 +1194,6 @@
           return; // Only host can respond to team assignment requests
         }
         
-        console.log('DEBUG: Sending team assignments to client');
         const teamData = {};
         playerTeams.forEach((team, playerId) => {
           teamData[playerId] = team;
@@ -2240,10 +2239,22 @@ function setGameplayHUD(isPlaying) {
 
         distanceToOctahedron: function(handPos, handRadius, octahedronPos, geometry) {
           const octahedronRadius = geometry.radius;
-          const centerDistance = handPos.distanceTo(octahedronPos);
           
-          // Distance to octahedron surface minus hand radius
-          return Math.max(0, centerDistance - octahedronRadius - handRadius);
+          // Get point relative to octahedron center
+          const relativePos = handPos.clone().sub(octahedronPos);
+          
+          // Calculate distance to octahedron surface using Manhattan distance
+          // An octahedron surface is defined by |x| + |y| + |z| = radius
+          const absX = Math.abs(relativePos.x);
+          const absY = Math.abs(relativePos.y);
+          const absZ = Math.abs(relativePos.z);
+          const manhattanDistance = absX + absY + absZ;
+          
+          // Distance to octahedron surface
+          const distanceToSurface = manhattanDistance - octahedronRadius;
+          
+          // Return distance to surface minus hand radius (minimum 0)
+          return Math.max(0, distanceToSurface - handRadius);
         },
         
         distanceToTorus: function(handPos, handRadius, torusPos, geometry, element) {
@@ -2255,11 +2266,29 @@ function setGameplayHUD(isPlaying) {
           const relativePos = handPos.clone().sub(torusPos);
           
           // Check if torus is rotated (rotation="90 0 0" makes it vertical)
-          const rotation = element ? element.getAttribute('rotation') : null;
+          // Check both element and parent for 90-degree rotation
+          let rotation = element ? element.getAttribute('rotation') : null;
+          let isVertical = false;
+          
+          // Check element's own rotation
+          if (rotation && (rotation.x === 90 || rotation.x === "90")) {
+            isVertical = true;
+          }
+          
+          // Check parent rotation if element doesn't have vertical rotation
+          if (!isVertical) {
+            const parent = element ? element.parentElement : null;
+            if (parent) {
+              const parentRotation = parent.getAttribute('rotation');
+              if (parentRotation && (parentRotation.x === 90 || parentRotation.x === "90")) {
+                isVertical = true;
+              }
+            }
+          }
           
           let distanceFromAxis, distanceToTubeCenter;
           
-          if (rotation && (rotation.x === 90 || rotation.x === "90")) {
+          if (isVertical) {
             // Vertical torus (rotated 90° around X): ring in XY plane, Z is axis
             distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.y * relativePos.y);
             distanceToTubeCenter = Math.sqrt(
@@ -4256,6 +4285,148 @@ function setGameplayHUD(isPlaying) {
               node.material.emissiveIntensity = data.intensity;
             }
           });
+        }
+      });
+
+      // Component for tube launcher
+      AFRAME.registerComponent('tube-launcher', {
+        init: function() {
+          this.container = this.el.parentElement;
+          this.startPosition = {x: 0, y: 2, z: 3};
+          this.isLaunching = false;
+          this.isReturning = false;
+          this.launchSpeed = 10;
+          this.returnTime = 3000;
+          this.wasGrabbed = false;
+        },
+        
+        tick: function() {
+          const player = document.querySelector('[zerog-player]');
+          let isCurrentlyGrabbed = false;
+          
+          if (player && player.components['zerog-player']) {
+            const playerComponent = player.components['zerog-player'];
+            ['left', 'right'].forEach(handKey => {
+              if (playerComponent.grabInfo[handKey] && 
+                  playerComponent.grabInfo[handKey].surface === this.el) {
+                isCurrentlyGrabbed = true;
+              }
+            });
+          }
+          
+          if (isCurrentlyGrabbed && !this.wasGrabbed && !this.isLaunching && !this.isReturning) {
+            this.wasGrabbed = true;
+            if (player) {
+              this.launchPlayer(player);
+            }
+          } else if (!isCurrentlyGrabbed) {
+            this.wasGrabbed = false;
+          }
+        },
+        
+        onGrabStart: function(event) {
+          if (this.isLaunching || this.isReturning) {
+            return;
+          }
+          
+          let player = null;
+          
+          if (event.detail && event.detail.hand) {
+            player = event.detail.hand.el.closest('[zerog-player]');
+          }
+          
+          if (!player) {
+            player = document.querySelector('#player');
+          }
+          
+          if (!player) {
+            player = document.querySelector('[zerog-player]');
+          }
+          
+          if (player) {
+            this.launchPlayer(player);
+          }
+        },
+        
+        launchPlayer: function(player) {
+          this.isLaunching = true;
+          
+          const currentPosStr = this.container.getAttribute('position');
+          let currentPos;
+          
+          if (typeof currentPosStr === 'string') {
+            const parts = currentPosStr.split(' ');
+            currentPos = {
+              x: parseFloat(parts[0]) || 0,
+              y: parseFloat(parts[1]) || 0,
+              z: parseFloat(parts[2]) || 0
+            };
+          } else {
+            currentPos = currentPosStr || this.startPosition;
+          }
+          
+          const targetZ = currentPos.z > 0 ? -3 : 3;
+          const launchDirection = new THREE.Vector3(0, 0, targetZ - currentPos.z).normalize();
+          
+          let playerComponent = null;
+          if (player && player.components && player.components['zerog-player']) {
+            playerComponent = player.components['zerog-player'];
+          }
+          
+          // Force release player from grab system
+          if (playerComponent) {
+            ['left', 'right'].forEach(handKey => {
+              if (playerComponent.grabInfo[handKey] && 
+                  playerComponent.grabInfo[handKey].surface === this.el) {
+                playerComponent.grabInfo[handKey] = null;
+              }
+            });
+          }
+          
+          // Apply launch velocity to player
+          if (playerComponent && playerComponent.velocity) {
+            playerComponent.velocity.set(
+              launchDirection.x * this.launchSpeed,
+              launchDirection.y * this.launchSpeed,
+              launchDirection.z * this.launchSpeed
+            );
+          }
+          
+          // Animate ring to target position
+          const newPos = {
+            x: currentPos.x,
+            y: currentPos.y,
+            z: targetZ
+          };
+          
+          this.container.removeAttribute('animation');
+          this.container.setAttribute('animation', {
+            property: 'position',
+            to: `${newPos.x} ${newPos.y} ${newPos.z}`,
+            dur: 500,
+            easing: 'easeOutQuad'
+          });
+          
+          setTimeout(() => {
+            this.returnToStart();
+          }, 500);
+        },
+        
+        returnToStart: function() {
+          this.isReturning = true;
+          
+          this.container.removeAttribute('animation');
+          this.container.setAttribute('animation', {
+            property: 'position',
+            to: `${this.startPosition.x} ${this.startPosition.y} ${this.startPosition.z}`,
+            dur: this.returnTime,
+            easing: 'easeInOutQuad'
+          });
+          
+          setTimeout(() => {
+            this.isLaunching = false;
+            this.isReturning = false;
+          }, this.returnTime);
         }
       });
 
@@ -7042,62 +7213,62 @@ function setGameplayHUD(isPlaying) {
         <img id="panelAo" src="assets/TCom_Scifi_Panel_4K_ao.jpg">
       </a-assets>
       
-      <!-- Main chamber floor (doubled size) -->
-      <a-box position="0 -2 0" 
-             width="16" 
+      <!-- Main chamber floor (Echo Arena size) -->
+      <a-box position="0 -10 0" 
+             width="30" 
              height="0.2" 
-             depth="32" 
+             depth="80" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
              grab-surface="type: static">
       </a-box>
 
-      <!-- Main chamber ceiling (doubled size) -->
-      <a-box position="0 6 0" 
-             width="16" 
+      <!-- Main chamber ceiling (Echo Arena size) -->
+      <a-box position="0 10 0" 
+             width="30" 
              height="0.2" 
-             depth="32" 
+             depth="80" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
              grab-surface="type: static">
       </a-box>
 
-      <!-- Left wall (doubled size) -->
-      <a-box position="-8 2 0"
+      <!-- Left wall (Echo Arena size) -->
+      <a-box position="-15 0 0"
              width="0.2"
-             height="8"
-             depth="32"
+             height="20"
+             depth="80"
              src="#panelAlbedo"
-             material="repeat: 16 4; ambientOcclusionMap: #panelAo; ambientOcclusionTextureRepeat: 16 4; color: #00ff00; displacementMap: #panelHeightmap; displacementScale: 0; displacementBias: 0; displacementTextureRepeat: 16 4; metalness: 0.5; metalnessMap: #panelMetallic; metalnessTextureRepeat: 16 4; normalMap: #panelNormal; normalScale: -1 1; normalTextureRepeat: 16 4; roughness: 1; roughnessMap: #panelRoughness; roughnessTextureRepeat: 16 4"
+             material="repeat: 20 5; ambientOcclusionMap: #panelAo; ambientOcclusionTextureRepeat: 20 5; color: #00ff00; displacementMap: #panelHeightmap; displacementScale: 0; displacementBias: 0; displacementTextureRepeat: 20 5; metalness: 0.5; metalnessMap: #panelMetallic; metalnessTextureRepeat: 20 5; normalMap: #panelNormal; normalScale: -1 1; normalTextureRepeat: 20 5; roughness: 1; roughnessMap: #panelRoughness; roughnessTextureRepeat: 20 5"
              grab-surface=""
              class="grabbable-surface">
       </a-box>
       
-      <!-- Right wall (doubled size) -->
-      <a-box position="8 2 0" 
+      <!-- Right wall (Echo Arena size) -->
+      <a-box position="15 0 0" 
              width="0.2" 
-             height="8" 
-             depth="32" 
+             height="20" 
+             depth="80" 
              src="#panelAlbedo"
-             material="repeat: 16 4; ambientOcclusionMap: #panelAo; ambientOcclusionTextureRepeat: 16 4; color: #00ff00; displacementMap: #panelHeightmap; displacementScale: 0; displacementBias: 0; displacementTextureRepeat: 16 4; metalness: 0.5; metalnessMap: #panelMetallic; metalnessTextureRepeat: 16 4; normalMap: #panelNormal; normalScale: -1 1; normalTextureRepeat: 16 4; roughness: 1; roughnessMap: #panelRoughness; roughnessTextureRepeat: 16 4"
+             material="repeat: 20 5; ambientOcclusionMap: #panelAo; ambientOcclusionTextureRepeat: 20 5; color: #00ff00; displacementMap: #panelHeightmap; displacementScale: 0; displacementBias: 0; displacementTextureRepeat: 20 5; metalness: 0.5; metalnessMap: #panelMetallic; metalnessTextureRepeat: 20 5; normalMap: #panelNormal; normalScale: -1 1; normalTextureRepeat: 20 5; roughness: 1; roughnessMap: #panelRoughness; roughnessTextureRepeat: 20 5"
              grab-surface=""
              class="grabbable-surface">
       </a-box>
       
-      <!-- Back wall (doubled size) -->
-      <a-box position="0 2 -16" 
-             width="16" 
-             height="8" 
+      <!-- Back wall (Echo Arena size) -->
+      <a-box position="0 0 -40" 
+             width="30" 
+             height="20" 
              depth="0.2" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
              grab-surface="type: static">
       </a-box>
       
-      <!-- Front wall (doubled size) -->
-      <a-box position="0 2 16" 
-             width="16" 
-             height="8" 
+      <!-- Front wall (Echo Arena size) -->
+      <a-box position="0 0 40" 
+             width="30" 
+             height="20" 
              depth="0.2" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
@@ -7106,7 +7277,7 @@ function setGameplayHUD(isPlaying) {
 
       <!-- Red Team Goal (back side, 1m from wall) -->
       <a-cylinder id="red-goal"
-                  position="0 2 -14.8"
+                  position="0 0 -38.8"
                   radius="1"
                   height="0.1"
                   rotation="90 0 0"
@@ -7129,7 +7300,7 @@ function setGameplayHUD(isPlaying) {
 
       <!-- Blue Team Goal (front side, 1m from wall) -->
       <a-cylinder id="blue-goal"
-                  position="0 2 14.8"
+                  position="0 0 38.8"
                   radius="1"
                   height="0.1"
                   rotation="90 0 0"
@@ -7145,6 +7316,64 @@ function setGameplayHUD(isPlaying) {
                  rotation="90 0 0"
                  color="#444444"
                  material="shader: standard; metalness: 0.8; roughness: 0.2"
+                 grab-surface="type: static"
+                 class="grabbable-surface">
+        </a-torus>
+      </a-cylinder>
+
+      <!-- Central Circular Tube Structure (2m diameter, 4m length, made from 16 cubes) -->
+      <!-- First Group of 8 blocks - positioned at 1m radius from center (0,2,0) -->
+      <!-- 0° - Top/Bottom pair (horizontal blocks) -->
+      <a-box position="0 3 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0 1 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 45° - Diagonal pair -->
+      <a-box position="0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 90° - Left/Right pair (vertical blocks) -->
+      <a-box position="1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 135° - Diagonal pair -->
+      <a-box position="-0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- Second Group of 8 blocks - filling the gaps -->
+      <!-- 22.5° - Between 0° and 45° -->
+      <a-box position="0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 67.5° - Between 45° and 90° -->
+      <a-box position="0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 112.5° - Between 90° and 135° -->
+      <a-box position="0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 157.5° - Between 135° and 180° -->
+      <a-box position="-0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+
+      <!-- Tube Launcher (based on goal structure) -->
+      <a-cylinder id="tube-launcher-container"
+                  position="0 2 3"
+                  radius="0.95"
+                  height="0.01"
+                  rotation="90 0 0"
+                  color="#ff8800"
+                  material="shader: standard; transparent: true; opacity: 0"
+                  visible="true">
+        
+        <!-- Launcher Torus (exact copy of goal border structure) -->
+        <a-torus id="tube-launcher"
+                 radius="0.8"
+                 radius-tubular="0.05"
+                 rotation="90 0 0"
+                 color="#ff8800"
+                 material="shader: standard; emissive: #ff8800; emissiveIntensity: 0.3; metalness: 0.8; roughness: 0.2"
+                 tube-launcher
                  grab-surface="type: static"
                  class="grabbable-surface">
         </a-torus>
@@ -7207,8 +7436,125 @@ function setGameplayHUD(isPlaying) {
              grab-surface="type: static">
       </a-box>
       
-      <a-octahedron position="-1 2 5" 
-             width="1" height="1" depth="1" 
+      <a-octahedron position="-15 10 40" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Duplicate octahedron at floor corner -->
+      <a-octahedron position="-15 -10 40" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Center left wall octahedrons -->
+      <a-octahedron position="-15 10 0" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <a-octahedron position="-15 -10 0" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Blue side left wall - vertically centered octahedron -->
+      <a-octahedron position="-15 0 20" 
+             radius="10" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Red side back wall corner octahedrons -->
+      <a-octahedron position="-15 10 -40" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <a-octahedron position="-15 -10 -40" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Right wall octahedrons (mirroring left wall) -->
+      
+      <!-- Blue side corner (front wall) -->
+      <a-octahedron position="15 10 40" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <a-octahedron position="15 -10 40" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Center right wall octahedrons -->
+      <a-octahedron position="15 10 0" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <a-octahedron position="15 -10 0" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Red side corner (back wall) -->
+      <a-octahedron position="15 10 -40" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <a-octahedron position="15 -10 -40" 
+             radius="20" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Blue side right wall - vertically centered octahedron -->
+      <a-octahedron position="15 0 20" 
+             radius="10" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Red side left wall - vertically centered octahedron -->
+      <a-octahedron position="-15 0 -20" 
+             radius="10" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-octahedron>
+      
+      <!-- Red side right wall - vertically centered octahedron -->
+      <a-octahedron position="15 0 -20" 
+             radius="10" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static">
