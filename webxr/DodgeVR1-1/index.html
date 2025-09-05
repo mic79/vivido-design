@@ -2167,6 +2167,8 @@ function setGameplayHUD(isPlaying) {
             return this.distanceToCylinder(handPos, handRadius, elementPos, geometry);
           } else if (geometry.primitive === 'octahedron') {
             return this.distanceToOctahedron(handPos, handRadius, elementPos, geometry);
+          } else if (geometry.primitive === 'torus') {
+            return this.distanceToTorus(handPos, handRadius, elementPos, geometry, element);
           } else {
             // Fallback
             return handPos.distanceTo(elementPos) - handRadius;
@@ -2242,6 +2244,42 @@ function setGameplayHUD(isPlaying) {
           
           // Distance to octahedron surface minus hand radius
           return Math.max(0, centerDistance - octahedronRadius - handRadius);
+        },
+        
+        distanceToTorus: function(handPos, handRadius, torusPos, geometry, element) {
+          // Calculate distance from hand sphere to torus surface
+          const torusRadius = geometry.radius || 1.0;
+          const tubeRadius = geometry.radiusTubular || 0.2;
+          
+          // Get hand position relative to torus center
+          const relativePos = handPos.clone().sub(torusPos);
+          
+          // Check if torus is rotated (rotation="90 0 0" makes it vertical)
+          const rotation = element ? element.getAttribute('rotation') : null;
+          
+          let distanceFromAxis, distanceToTubeCenter;
+          
+          if (rotation && (rotation.x === 90 || rotation.x === "90")) {
+            // Vertical torus (rotated 90° around X): ring in XY plane, Z is axis
+            distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.y * relativePos.y);
+            distanceToTubeCenter = Math.sqrt(
+              Math.pow(distanceFromAxis - torusRadius, 2) + 
+              Math.pow(relativePos.z, 2)
+            );
+          } else {
+            // Horizontal torus: ring in XZ plane, Y is axis
+            distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z);
+            distanceToTubeCenter = Math.sqrt(
+              Math.pow(distanceFromAxis - torusRadius, 2) + 
+              Math.pow(relativePos.y, 2)
+            );
+          }
+          
+          // Distance to torus surface
+          const distanceToSurface = distanceToTubeCenter - tubeRadius;
+          
+          // Return distance from hand surface to torus surface
+          return Math.max(0, distanceToSurface - handRadius);
         },
         
         attachToSurface: function(hand, surface) {
@@ -2669,7 +2707,7 @@ function setGameplayHUD(isPlaying) {
             
             if (!geometry) return;
             
-            const collision = this.getCollisionResponse(point, radius, surfacePos, geometry);
+            const collision = this.getCollisionResponse(point, radius, surfacePos, geometry, surface);
             if (collision.length() > 0) {
               response.add(collision);
               if (this.debugMode) {
@@ -2681,7 +2719,7 @@ function setGameplayHUD(isPlaying) {
         },
         
         // Option B: Calculate collision response for point vs geometry
-        getCollisionResponse: function(point, radius, surfacePos, geometry) {
+        getCollisionResponse: function(point, radius, surfacePos, geometry, element) {
           const response = new THREE.Vector3(0, 0, 0);
           
           if (geometry.primitive === 'box') {
@@ -2763,6 +2801,76 @@ function setGameplayHUD(isPlaying) {
               }
               
               response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'torus') {
+            // Torus collision (check rotation to determine orientation)
+            const torusRadius = geometry.radius || 1.0;
+            const tubeRadius = geometry.radiusTubular || 0.2;
+            
+            // Get point relative to torus center
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Check if torus is rotated (rotation="90 0 0" makes it vertical)
+            const rotation = element ? element.getAttribute('rotation') : null;
+            
+            let distanceFromAxis, distanceToTubeCenter, tubeCenter;
+            
+            if (rotation && (rotation.x === 90 || rotation.x === "90")) {
+              // Vertical torus (rotated 90° around X): ring in XY plane, Z is axis
+              distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.y * relativePos.y);
+              distanceToTubeCenter = Math.sqrt(
+                Math.pow(distanceFromAxis - torusRadius, 2) + 
+                Math.pow(relativePos.z, 2)
+              );
+              
+              const penetration = radius + this.collisionMargin + tubeRadius - distanceToTubeCenter;
+              
+              if (penetration > 0) {
+                let direction = new THREE.Vector3();
+                
+                if (distanceToTubeCenter > 0.001) {
+                  // Direction from tube center to point (vertical torus - XY plane)
+                  tubeCenter = new THREE.Vector3(
+                    relativePos.x * (torusRadius / Math.max(0.001, distanceFromAxis)),
+                    relativePos.y * (torusRadius / Math.max(0.001, distanceFromAxis)),
+                    0
+                  );
+                  direction = relativePos.clone().sub(tubeCenter).normalize();
+                } else {
+                  // Point is at tube center, push along Z axis
+                  direction.set(0, 0, 1);
+                }
+                
+                response.copy(direction.multiplyScalar(penetration));
+              }
+            } else {
+              // Horizontal torus: ring in XZ plane, Y is axis
+              distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z);
+              distanceToTubeCenter = Math.sqrt(
+                Math.pow(distanceFromAxis - torusRadius, 2) + 
+                Math.pow(relativePos.y, 2)
+              );
+              
+              const penetration = radius + this.collisionMargin + tubeRadius - distanceToTubeCenter;
+              
+              if (penetration > 0) {
+                let direction = new THREE.Vector3();
+                
+                if (distanceToTubeCenter > 0.001) {
+                  // Direction from tube center to point (horizontal torus)
+                  tubeCenter = new THREE.Vector3(
+                    relativePos.x * (torusRadius / Math.max(0.001, distanceFromAxis)),
+                    0,
+                    relativePos.z * (torusRadius / Math.max(0.001, distanceFromAxis))
+                  );
+                  direction = relativePos.clone().sub(tubeCenter).normalize();
+                } else {
+                  // Point is at tube center, push up
+                  direction.set(0, 1, 0);
+                }
+                
+                response.copy(direction.multiplyScalar(penetration));
+              }
             }
           }
           
@@ -3336,6 +3444,13 @@ function setGameplayHUD(isPlaying) {
           // Add grabbable class
           this.el.classList.add('grabbable-surface');
           
+          // Wait for parent transforms to be applied
+          setTimeout(() => {
+            this.createPhysicsBody();
+          }, 100);
+        },
+        
+        createPhysicsBody: function() {
           // Create physics body for surface
           const geometry = this.el.getAttribute('geometry');
           let shape;
@@ -3375,6 +3490,9 @@ function setGameplayHUD(isPlaying) {
             ];
             
             shape = new CANNON.ConvexPolyhedron(vertices, faces);
+          } else if (geometry && geometry.primitive === 'torus') {
+            // Torus: Skip CANNON.js physics body - use custom collision detection instead
+            return; // Don't create physics body for torus
           } else {
             // Fallback for unknown geometry
             shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
@@ -3389,9 +3507,18 @@ function setGameplayHUD(isPlaying) {
             collisionFilterMask: 3   // Surfaces collide with groups 1 (player) + 2 (balls) = 3
           });
           
-          const position = this.el.getAttribute('position');
+          // Get position including parent transforms
+          const position = this.el.getAttribute('position') || {x: 0, y: 0, z: 0};
+          const parentPosition = this.el.parentEl ? this.el.parentEl.getAttribute('position') : {x: 0, y: 0, z: 0};
+          
+          const finalPosition = {
+            x: position.x + (parentPosition.x || 0),
+            y: position.y + (parentPosition.y || 0), 
+            z: position.z + (parentPosition.z || 0)
+          };
+          
           const rotation = this.el.getAttribute('rotation');
-          this.body.position.set(position.x, position.y, position.z);
+          this.body.position.set(finalPosition.x, finalPosition.y, finalPosition.z);
           
           // Apply rotation if present
           if (rotation) {
@@ -3405,8 +3532,14 @@ function setGameplayHUD(isPlaying) {
           
           world.addBody(this.body);
           
+          // NEW: Add wireframe visualization for collision shape (debug)
+          this.addCollisionWireframe(geometry, shape);
+          
           // Store body reference for grabbing
           this.el.body = this.body;
+          
+          // CRITICAL: Store element reference in physics body for collision detection
+          this.body.el = this.el;
           
 
           
@@ -3418,6 +3551,53 @@ function setGameplayHUD(isPlaying) {
           this.el.addEventListener('mouseleave', () => {
             this.el.setAttribute('material', 'color', '#ffffff');
           });
+        },
+        
+        // NEW: Add wireframe visualization for collision shape
+        addCollisionWireframe: function(geometry, shape) {
+          // Only show wireframes in debug mode or when explicitly enabled
+          const showWireframes = true; // Set to false to disable
+          
+          if (!showWireframes) return;
+          
+          let wireframe;
+          
+          if (geometry && geometry.primitive === 'box') {
+            // Box wireframe
+            wireframe = document.createElement('a-box');
+            wireframe.setAttribute('width', geometry.width);
+            wireframe.setAttribute('height', geometry.height);
+            wireframe.setAttribute('depth', geometry.depth);
+            wireframe.setAttribute('material', 'wireframe: true; color: #00ffff; opacity: 0.3; transparent: true');
+          } else if (geometry && geometry.primitive === 'sphere') {
+            // Sphere wireframe
+            wireframe = document.createElement('a-sphere');
+            wireframe.setAttribute('radius', geometry.radius);
+            wireframe.setAttribute('material', 'wireframe: true; color: #00ffff; opacity: 0.3; transparent: true');
+          } else if (geometry && geometry.primitive === 'octahedron') {
+            // Octahedron wireframe (use actual octahedron)
+            wireframe = document.createElement('a-octahedron');
+            wireframe.setAttribute('radius', geometry.radius || 1.0);
+            wireframe.setAttribute('material', 'wireframe: true; color: #ff00ff; opacity: 0.3; transparent: true');
+          } else if (geometry && geometry.primitive === 'torus') {
+            // Torus wireframe (show actual torus collision shape)
+            wireframe = document.createElement('a-torus');
+            wireframe.setAttribute('radius', geometry.radius || 1.0);
+            wireframe.setAttribute('radius-tubular', geometry.radiusTubular || 0.2);
+            wireframe.setAttribute('material', 'wireframe: true; color: #ffaa00; opacity: 0.3; transparent: true');
+          } else {
+            // Fallback box wireframe
+            wireframe = document.createElement('a-box');
+            wireframe.setAttribute('width', '1');
+            wireframe.setAttribute('height', '1');
+            wireframe.setAttribute('depth', '1');
+            wireframe.setAttribute('material', 'wireframe: true; color: #ff0000; opacity: 0.3; transparent: true');
+          }
+          
+          if (wireframe) {
+            wireframe.setAttribute('position', '0 0 0'); // Relative to parent
+            this.el.appendChild(wireframe);
+          }
         }
       });
 
@@ -3855,7 +4035,7 @@ function setGameplayHUD(isPlaying) {
         
         createPhysicsBody: function() {
           
-          // Create physics body for goal detection (rotated to match visual)
+          // Create physics body for goal detection (vertical cylinder to match visual)
           const shape = new CANNON.Cylinder(1, 1, 0.1, 8); // radius, radius, height, segments
           this.body = new CANNON.Body({
             mass: 0, // Static body
@@ -3870,17 +4050,39 @@ function setGameplayHUD(isPlaying) {
           });
           
           
-          // Rotate the physics body to match the visual (90 degrees around X-axis)
-          this.body.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), Math.PI / 2);
+          // FIXED: No rotation - keep cylinder vertical to match the visual goal
+          // (The visual goal is already vertical, so the collision should match)
           
           world.addBody(this.body);
           this.el.body = this.body;
+          
+          // NEW: Add wireframe visualization for goal collision shape (debug)
+          this.addCollisionWireframe();
           
           // Listen for ball collisions
           this.body.addEventListener('collide', (evt) => {
             this.checkGoalScore(evt);
           });
           
+        },
+        
+        // NEW: Add wireframe visualization for collision shape
+        addCollisionWireframe: function() {
+          // Only show wireframes in debug mode or when explicitly enabled
+          const showWireframes = true; // Set to false to disable
+          
+          if (!showWireframes) return;
+          
+          // Create wireframe cylinder to match the collision shape (vertical)
+          const wireframe = document.createElement('a-cylinder');
+          wireframe.setAttribute('radius', '1');
+          wireframe.setAttribute('height', '0.1');
+          wireframe.setAttribute('rotation', '0 0 0'); // FIXED: No rotation - vertical like the visual
+          wireframe.setAttribute('material', 'wireframe: true; color: #ffff00; opacity: 0.3; transparent: true');
+          wireframe.setAttribute('position', '0 0 0'); // Relative to goal
+          
+          // Add to goal element
+          this.el.appendChild(wireframe);
         },
         
         checkGoalScore: function(evt) {
@@ -5350,6 +5552,12 @@ function setGameplayHUD(isPlaying) {
           const mass = this.isCaptureBall ? 2 : 1; // Heavier capture ball
           
           const shape = new CANNON.Sphere(radius);
+          
+          // Different collision masks for capture ball vs regular balls
+          const collisionMask = this.isCaptureBall 
+            ? 4 | 8  // Capture ball collides with walls (4) AND goals (8)
+            : 4;     // Regular balls collide with walls (4) only, NOT goals
+          
           this.body = new CANNON.Body({
             mass: mass,
             shape: shape,
@@ -5357,8 +5565,8 @@ function setGameplayHUD(isPlaying) {
             linearDamping: 0.02, // Slight damping for realistic movement
             angularDamping: 0.02,
             position: this.initialPosition,
-            collisionFilterGroup: 2, // Balls are in group 2
-            collisionFilterMask: 4 | 8   // Balls collide with group 4 (walls/surfaces) and group 8 (goals)
+            collisionFilterGroup: 2, // All balls are in group 2
+            collisionFilterMask: collisionMask
           });
           
           if (this.isCaptureBall) {
@@ -6019,6 +6227,11 @@ function setGameplayHUD(isPlaying) {
                 this.el.object3D.quaternion.copy(this.body.quaternion);
               }
               
+              // CUSTOM COLLISION DETECTION (like player collision system)
+              if (!this.isGrabbed) {
+                this.checkCustomCollision();
+              }
+              
               // Check auto-return timeout (turn off after 2 seconds)
               if (this.autoReturnActive && Date.now() - this.autoReturnStartTime > this.autoReturnDuration) {
                 this.autoReturnActive = false;
@@ -6155,6 +6368,190 @@ function setGameplayHUD(isPlaying) {
           }
           
           return false;
+        },
+        
+        // CUSTOM COLLISION DETECTION (identical to player collision system)
+        checkCustomCollision: function() {
+          // Convert CANNON.Vec3 to THREE.Vector3 for collision math
+          const ballPos = new THREE.Vector3(this.body.position.x, this.body.position.y, this.body.position.z);
+          const ballRadius = this.isCaptureBall ? 0.2 : 0.1; // Use actual ball radius
+          const ballVelocity = new THREE.Vector3(this.body.velocity.x, this.body.velocity.y, this.body.velocity.z);
+          
+          // Use EXACT same selector as player collision system
+          const surfaces = document.querySelectorAll('[grab-surface]');
+          surfaces.forEach(surface => {
+            const surfacePos = new THREE.Vector3();
+            surface.object3D.getWorldPosition(surfacePos);
+            const geometry = surface.getAttribute('geometry');
+            
+            if (!geometry) return;
+            
+            // Use the EXACT same collision response function as player
+            const collision = this.getCollisionResponse(ballPos, ballRadius, surfacePos, geometry, surface);
+            if (collision.length() > 0) {
+              // Apply collision response to ball physics
+              const newPos = ballPos.clone().add(collision);
+              this.body.position.set(newPos.x, newPos.y, newPos.z);
+              
+              // Reflect velocity (bounce)
+              const normal = collision.clone().normalize();
+              const reflectedVelocity = ballVelocity.sub(normal.multiplyScalar(2 * ballVelocity.dot(normal)));
+              
+              // Apply some damping to the bounce
+              reflectedVelocity.multiplyScalar(0.8);
+              
+              this.body.velocity.set(reflectedVelocity.x, reflectedVelocity.y, reflectedVelocity.z);
+            }
+          });
+        },
+        
+        // Collision response math (identical to player collision system)
+        getCollisionResponse: function(point, radius, surfacePos, geometry, element) {
+          const response = new THREE.Vector3(0, 0, 0);
+          const collisionMargin = 0.02; // Same as player collision margin
+          
+          if (geometry.primitive === 'box') {
+            // Box collision
+            const halfWidth = geometry.width / 2;
+            const halfHeight = geometry.height / 2;
+            const halfDepth = geometry.depth / 2;
+            
+            // Get point relative to box center
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Find closest point on box surface
+            const closestPoint = new THREE.Vector3(
+              Math.max(-halfWidth, Math.min(halfWidth, relativePos.x)),
+              Math.max(-halfHeight, Math.min(halfHeight, relativePos.y)),
+              Math.max(-halfDepth, Math.min(halfDepth, relativePos.z))
+            );
+            
+            // Distance from point to closest point on box
+            const distance = relativePos.distanceTo(closestPoint);
+            const penetration = radius + collisionMargin - distance;
+            
+            if (penetration > 0) {
+              // Calculate push-out direction
+              const direction = relativePos.clone().sub(closestPoint).normalize();
+              if (direction.length() === 0) {
+                // Point is exactly on surface, push up
+                direction.set(0, 1, 0);
+              }
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'sphere') {
+            // Sphere collision
+            const sphereRadius = geometry.radius;
+            const distance = point.distanceTo(surfacePos);
+            const penetration = radius + sphereRadius + collisionMargin - distance;
+            
+            if (penetration > 0) {
+              const direction = point.clone().sub(surfacePos).normalize();
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'octahedron') {
+            // Octahedron collision
+            const octahedronRadius = geometry.radius || 1.0;
+            
+            // Get point relative to octahedron center
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Calculate distance to octahedron surface
+            const absX = Math.abs(relativePos.x);
+            const absY = Math.abs(relativePos.y);
+            const absZ = Math.abs(relativePos.z);
+            const manhattanDistance = absX + absY + absZ;
+            
+            const distanceToSurface = manhattanDistance - octahedronRadius;
+            const penetration = (radius + collisionMargin) - distanceToSurface;
+            
+            if (penetration > 0) {
+              let direction = new THREE.Vector3();
+              
+              if (manhattanDistance > 0.001) {
+                direction.x = relativePos.x >= 0 ? 1 : -1;
+                direction.y = relativePos.y >= 0 ? 1 : -1;
+                direction.z = relativePos.z >= 0 ? 1 : -1;
+                direction.normalize();
+              } else {
+                direction.set(0, 1, 0);
+              }
+              
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'torus') {
+            // Torus collision (exact copy from player system)
+            const torusRadius = geometry.radius || 1.0;
+            const tubeRadius = geometry.radiusTubular || 0.2;
+            
+            // Get point relative to torus center
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Check if torus is rotated (rotation="90 0 0" makes it vertical)
+            const rotation = element ? element.getAttribute('rotation') : null;
+            
+            let distanceFromAxis, distanceToTubeCenter, tubeCenter;
+            
+            if (rotation && (rotation.x === 90 || rotation.x === "90")) {
+              // Vertical torus (rotated 90° around X): ring in XY plane, Z is axis
+              distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.y * relativePos.y);
+              distanceToTubeCenter = Math.sqrt(
+                Math.pow(distanceFromAxis - torusRadius, 2) + 
+                Math.pow(relativePos.z, 2)
+              );
+              
+              const penetration = radius + collisionMargin - (distanceToTubeCenter - tubeRadius);
+              
+              if (penetration > 0) {
+                let direction = new THREE.Vector3();
+                
+                if (distanceToTubeCenter > 0.001) {
+                  // Direction from tube center to point (vertical torus - XY plane)
+                  tubeCenter = new THREE.Vector3(
+                    relativePos.x * (torusRadius / Math.max(0.001, distanceFromAxis)),
+                    relativePos.y * (torusRadius / Math.max(0.001, distanceFromAxis)),
+                    0
+                  );
+                  direction = relativePos.clone().sub(tubeCenter).normalize();
+                } else {
+                  // Point is at tube center, push along Z axis
+                  direction.set(0, 0, 1);
+                }
+                
+                response.copy(direction.multiplyScalar(penetration));
+              }
+            } else {
+              // Horizontal torus: ring in XZ plane, Y is axis
+              distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z);
+              distanceToTubeCenter = Math.sqrt(
+                Math.pow(distanceFromAxis - torusRadius, 2) + 
+                Math.pow(relativePos.y, 2)
+              );
+              
+              const penetration = radius + collisionMargin - (distanceToTubeCenter - tubeRadius);
+              
+              if (penetration > 0) {
+                let direction = new THREE.Vector3();
+                
+                if (distanceToTubeCenter > 0.001) {
+                  // Direction from tube center to point (horizontal torus)
+                  tubeCenter = new THREE.Vector3(
+                    relativePos.x * (torusRadius / Math.max(0.001, distanceFromAxis)),
+                    0,
+                    relativePos.z * (torusRadius / Math.max(0.001, distanceFromAxis))
+                  );
+                  direction = relativePos.clone().sub(tubeCenter).normalize();
+                } else {
+                  // Point is at tube center, push up
+                  direction.set(0, 1, 0);
+                }
+                
+                response.copy(direction.multiplyScalar(penetration));
+              }
+            }
+          }
+          
+          return response;
         },
         
         // NEW: Start auto-return mode (called when ball hits target)
@@ -6718,6 +7115,16 @@ function setGameplayHUD(isPlaying) {
                   goal="team: red"
                   visible="false">
         <a-entity light="type: point; color: #ff0000; intensity: 2; distance: 8"></a-entity>
+        
+        <!-- Torus border for goal (7.5cm thick donut) -->
+        <a-torus radius="1"
+                 radius-tubular="0.0375"
+                 rotation="90 0 0"
+                 color="#444444"
+                 material="shader: standard; metalness: 0.8; roughness: 0.2"
+                 grab-surface="type: static"
+                 class="grabbable-surface">
+        </a-torus>
       </a-cylinder>
 
       <!-- Blue Team Goal (front side, 1m from wall) -->
@@ -6731,6 +7138,16 @@ function setGameplayHUD(isPlaying) {
                   goal="team: blue"
                   visible="false">
         <a-entity light="type: point; color: #0000ff; intensity: 2; distance: 8"></a-entity>
+        
+        <!-- Torus border for goal (7.5cm thick donut) -->
+        <a-torus radius="1"
+                 radius-tubular="0.0375"
+                 rotation="90 0 0"
+                 color="#444444"
+                 material="shader: standard; metalness: 0.8; roughness: 0.2"
+                 grab-surface="type: static"
+                 class="grabbable-surface">
+        </a-torus>
       </a-cylinder>
 
       <!-- Randomly positioned 1m cubes throughout the space -->
