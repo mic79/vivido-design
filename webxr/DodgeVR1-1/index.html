@@ -4306,7 +4306,19 @@ function setGameplayHUD(isPlaying) {
       AFRAME.registerComponent('tube-launcher', {
         init: function() {
           this.container = this.el.parentElement;
-          this.startPosition = {x: 0, y: 2, z: 3};
+          
+          // Determine launcher position and direction based on container ID
+          const containerId = this.container.id;
+          if (containerId === 'tube-launcher-container-2') {
+            // Back launcher (negative Z)
+            this.startPosition = {x: 0, y: 2, z: -3};
+            this.launchDirection = 1; // Launch toward positive Z
+          } else {
+            // Front launcher (original, positive Z)
+            this.startPosition = {x: 0, y: 2, z: 3};
+            this.launchDirection = -1; // Launch toward negative Z
+          }
+          
           this.isLaunching = false;
           this.isReturning = false;
           this.launchSpeed = 10;
@@ -4379,8 +4391,8 @@ function setGameplayHUD(isPlaying) {
             currentPos = currentPosStr || this.startPosition;
           }
           
-          const targetZ = currentPos.z > 0 ? -3 : 3;
-          const launchDirection = new THREE.Vector3(0, 0, targetZ - currentPos.z).normalize();
+          const targetZ = currentPos.z + (this.launchDirection * 6); // Launch 6m in the determined direction
+          const launchDirectionVector = new THREE.Vector3(0, 0, this.launchDirection);
           
           let playerComponent = null;
           if (player && player.components && player.components['zerog-player']) {
@@ -4400,9 +4412,9 @@ function setGameplayHUD(isPlaying) {
           // Apply launch velocity to player
           if (playerComponent && playerComponent.velocity) {
             playerComponent.velocity.set(
-              launchDirection.x * this.launchSpeed,
-              launchDirection.y * this.launchSpeed,
-              launchDirection.z * this.launchSpeed
+              launchDirectionVector.x * this.launchSpeed,
+              launchDirectionVector.y * this.launchSpeed,
+              launchDirectionVector.z * this.launchSpeed
             );
           }
           
@@ -5202,70 +5214,15 @@ function setGameplayHUD(isPlaying) {
       AFRAME.registerComponent('menu-toggle', {
         init: function() {
           this.menuVisible = false;
-          this.lastMenuButtonPress = 0;
+          this.lastBButtonPress = 0;
           
           // B button to toggle menu with debouncing
           this.el.sceneEl.addEventListener('bbuttondown', () => {
             const now = Date.now();
-            if (now - this.lastMenuButtonPress < 500) return; // 500ms debounce
-            this.lastMenuButtonPress = now;
+            if (now - this.lastBButtonPress < 500) return; // 500ms debounce
+            this.lastBButtonPress = now;
             this.toggleMenu();
           });
-          
-          // Quest left menu button to toggle menu with debouncing (try multiple event names)
-          const menuEvents = ['menudown', 'menubuttondown', 'leftmenubuttondown', 'systemdown'];
-          
-          menuEvents.forEach(eventName => {
-            this.el.sceneEl.addEventListener(eventName, () => {
-              const now = Date.now();
-              if (now - this.lastMenuButtonPress < 500) return; // 500ms debounce
-              this.lastMenuButtonPress = now;
-              console.log(`Menu toggled via ${eventName} event`);
-              this.toggleMenu();
-            });
-          });
-          
-          // Also try listening on hand controllers directly
-          setTimeout(() => {
-            const leftHand = document.querySelector('#leftHand');
-            const rightHand = document.querySelector('#rightHand');
-            
-            [leftHand, rightHand].forEach(hand => {
-              if (hand) {
-                menuEvents.forEach(eventName => {
-                  hand.addEventListener(eventName, () => {
-                    const now = Date.now();
-                    if (now - this.lastMenuButtonPress < 500) return;
-                    this.lastMenuButtonPress = now;
-                    console.log(`Menu toggled via ${eventName} on ${hand.id}`);
-                    this.toggleMenu();
-                  });
-                });
-              }
-            });
-          }, 1000); // Wait for hands to be initialized
-
-          // WebXR controller access
-          setTimeout(() => {
-            const leftHand = document.querySelector('#leftHand');
-            if (leftHand && leftHand.components['meta-touch-controls']) {
-              const controller = leftHand.components['meta-touch-controls'].controller;
-              if (controller) {
-                controller.addEventListener('selectstart', (evt) => {
-                  const now = Date.now();
-                  if (now - this.lastMenuButtonPress < 500) return;
-                  this.lastMenuButtonPress = now;
-                  console.log('WebXR selectstart on left controller');
-                  this.toggleMenu();
-                });
-                controller.addEventListener('inputsourceschange', (evt) => {
-                  console.log('Input sources change:', evt.detail);
-                });
-              } else {
-                console.error('Left controller not found');
-              }
-            }
-          }, 1000);
         },
 
         toggleMenu: function() {
@@ -7448,6 +7405,29 @@ function setGameplayHUD(isPlaying) {
                  class="grabbable-surface">
         </a-torus>
       </a-cylinder>
+      
+      <!-- Tube Launcher 2 (opposite side) -->
+      <a-cylinder id="tube-launcher-container-2"
+                  position="0 2 -3"
+                  radius="0.95"
+                  height="0.01"
+                  rotation="90 0 0"
+                  color="#ff8800"
+                  material="shader: standard; transparent: true; opacity: 0"
+                  visible="true">
+        
+        <!-- Launcher Torus (exact copy of goal border structure) -->
+        <a-torus id="tube-launcher-2"
+                 radius="0.7"
+                 radius-tubular="0.05"
+                 rotation="90 0 0"
+                 color="#ff8800"
+                 material="shader: standard; emissive: #ff8800; emissiveIntensity: 0.3; metalness: 0.8; roughness: 0.2"
+                 tube-launcher
+                 grab-surface="type: static"
+                 class="grabbable-surface">
+        </a-torus>
+      </a-cylinder>
 
       <!-- Randomly positioned 1m cubes throughout the space -->
       <a-box position="-5 1 -10" 
@@ -7962,7 +7942,7 @@ function setGameplayHUD(isPlaying) {
           
           <a-entity id="leftHand" 
                    hand-controls="hand: left"
-                   meta-touch-controls="hand: left; model: true"
+                   oculus-touch-controls="hand: left"
                    laser-controls="hand: left"
                    raycaster="objects: .clickable; lineColor: #ffffff; lineOpacity: 0"
                    hand-collider
@@ -7984,7 +7964,7 @@ function setGameplayHUD(isPlaying) {
           
           <a-entity id="rightHand" 
                    hand-controls="hand: right"
-                   meta-touch-controls="hand: right"
+                   oculus-touch-controls="hand: right"
                    laser-controls="hand: right"
                    raycaster="objects: .clickable; lineColor: #ffffff; lineOpacity: 0"
                    hand-collider
