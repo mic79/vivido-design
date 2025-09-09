@@ -68,7 +68,7 @@
       // Team system
       let playerTeams = new Map(); // playerId -> 'red' or 'blue'
       let teamScores = { red: 0, blue: 0 };
-      let gameMode = 'capture'; // 'dodgeball' or 'capture'
+      let gameMode = 'dodgeball'; // 'dodgeball' or 'capture'
 
       // Helper: check if menu is currently visible
       function getMenuVisibility() {
@@ -102,13 +102,9 @@
       function updateMenuDisplay() {
         const menuCurrentMode = document.getElementById('menu-current-mode');
         if (menuCurrentMode) {
-          if (isMultiplayer) {
+          const mode = isMultiplayer ? `Multiplayer (Lobby ${selectedLobby})` : 'Singleplayer';
           const playerCount = activePlayers.size;
-            const maxPlayers = 4; // Always 4 players in both modes
-            menuCurrentMode.setAttribute('text', 'value', `Mode: Multiplayer (Lobby ${selectedLobby}) (${playerCount}/${maxPlayers})`);
-          } else {
-            menuCurrentMode.setAttribute('text', 'value', 'Mode: Singleplayer');
-          }
+          menuCurrentMode.setAttribute('text', 'value', `Mode: ${mode} (${playerCount}/4 players)`);
         }
         
         // CRITICAL FIX: Disable game mode buttons for clients in multiplayer
@@ -188,73 +184,14 @@
         if (playerId === 'player_3') return 3; // FIXED: Client 3 gets ball 3 (was bot-blue)
         if (playerId === 'bot-red') return 1;  // Red bot uses ball 1 (only when no player_2)
         if (playerId === 'bot-blue') return 3; // Blue bot uses ball 3 (only when no player_3)
-        if (playerId === 'bot-green') return 4; // Green bot uses ball 4 (only when no player_1)
         
         return 2; // fallback
       }
 
-      // Helper: update team display in menu UI
-      function updateTeamDisplay() {
-        const currentPlayerId = myPlayerId || 'player_0';
-        let currentTeam = playerTeams.get(currentPlayerId);
-        
-        // If no team is set, default to red for singleplayer
-        if (!currentTeam) {
-          currentTeam = 'red';
-          playerTeams.set(currentPlayerId, 'red');
-        }
-        
-        // Update the team display text
-        const currentTeamDisplay = document.querySelector('#menu-current-team');
-        if (currentTeamDisplay) {
-          currentTeamDisplay.setAttribute('text', 'value', `Team: ${currentTeam.toUpperCase()}`);
-          currentTeamDisplay.setAttribute('text', 'color', currentTeam === 'red' ? '#ff0000' : '#0000ff');
-        }
-
-        // Update button highlighting
-        const redButton = document.querySelector('#menu-team-red');
-        const blueButton = document.querySelector('#menu-team-blue');
-
-        if (redButton && blueButton) {
-          if (currentTeam === 'red') {
-            redButton.setAttribute('material', 'opacity', 1.0);
-            blueButton.setAttribute('material', 'opacity', 0.5);
-          } else {
-            redButton.setAttribute('material', 'opacity', 0.5);
-            blueButton.setAttribute('material', 'opacity', 1.0);
-          }
-        }
-      }
-
       // Helper: update ball colors based on team assignments
       function updateBallColors() {
-        if (gameMode === 'dodgeball') {
-          // In dodge mode, update player ball color based on team selection
-          const humanPlayerId = myPlayerId || 'player_0';
-          const humanTeam = playerTeams.get(humanPlayerId);
-          
-          if (humanTeam) {
-            const humanBallIndex = getBallForPlayer(humanPlayerId);
-            const humanBall = document.querySelector(`[zerog-ball*="player: player${humanBallIndex}"]`);
-            
-            if (humanBall) {
-              const teamColor = humanTeam === 'red' ? '#ff0000' : '#0000ff';
-              
-              // Update ball color
-              humanBall.setAttribute('color', teamColor);
-              humanBall.setAttribute('glow', `color: ${teamColor}; intensity: 1.5`);
-              
-              // Update light color
-              const light = humanBall.querySelector('[light]');
-              if (light) {
-                light.setAttribute('light', `color: ${teamColor}; intensity: 1.5; distance: 5; decay: 2`);
-              }
-            }
-          }
-          return;
-        }
-        
         if (gameMode !== 'capture') {
+          // In dodge mode, balls keep their default colors
           return;
         }
         
@@ -313,21 +250,14 @@
         
         // Get the owner of the ball
         const ballOwnerId = getBallOwnerId(ballPlayerIndex);
-        if (!ballOwnerId) {
-          console.log(`shouldBallAffectTarget: Unknown ball owner for ballPlayerIndex ${ballPlayerIndex}`);
-          return false; // Unknown ball owner
-        }
+        if (!ballOwnerId) return false; // Unknown ball owner
         
         // Get teams of ball owner and target
         const ballOwnerTeam = playerTeams.get(ballOwnerId);
         const targetTeam = playerTeams.get(targetId);
         
-        const canAffect = ballOwnerTeam && targetTeam && ballOwnerTeam !== targetTeam;
-        
-        console.log(`shouldBallAffectTarget: ball${ballPlayerIndex} (owner: ${ballOwnerId}, team: ${ballOwnerTeam}) vs target: ${targetId} (team: ${targetTeam}) = ${canAffect}`);
-        
         // Ball should only affect opponents (different team)
-        return canAffect;
+        return ballOwnerTeam && targetTeam && ballOwnerTeam !== targetTeam;
       }
       
       // Helper: get the owner ID of a ball based on its player index
@@ -344,10 +274,7 @@
           // Ball 3: player_3 takes priority, otherwise bot-blue  
           return activePlayers.has('player_3') ? 'player_3' : 'bot-blue';
         }
-        if (ballPlayerIndex === 4) {
-          // Ball 4: player_1 takes priority, otherwise bot-green
-          return activePlayers.has('player_1') ? 'player_1' : 'bot-green';
-        }
+        if (ballPlayerIndex === 4) return 'player_1';   // Client 1 always owns ball 4
         return null;
       }
       
@@ -442,10 +369,8 @@
         const color = teamColors[team];
         if (!color) return;
         
-        // CRITICAL FIX: Update LOCAL player target if this is for the current player
-        // In singleplayer, myPlayerId might be null but we still want to update player_0
-        const isLocalPlayer = (playerId === myPlayerId) || (playerId === 'player_0' && !isMultiplayer);
-        if (isLocalPlayer) {
+        // CRITICAL FIX: Only update LOCAL player target if this is for the current player
+        if (playerId === myPlayerId) {
           updateLocalPlayerColor(color);
         }
         
@@ -520,19 +445,13 @@
               player.isBot = false;
             }
             
-            // Update bot management for new player count
-            manageActivePlayersAndBots();
-            
-            // CRITICAL FIX: Assign host to default team (red) for all modes
+                      // CRITICAL FIX: Assign host to default team (red) for capture mode
+          if (gameMode === 'capture') {
             playerTeams.set('player_0', 'red');
-            // Update ball colors, player body color, and visibility for host
+            // Update ball colors and visibility for host
             updateBallColors();
-            updatePlayerTeamColor('player_0', 'red');
             manageActivePlayersAndBots();
-            // Update team display in menu
-            updateTeamDisplay();
             // Send team assignments to all clients
-            if (isMultiplayer) {
             sendTeamAssignments();
             }
             
@@ -543,7 +462,28 @@
               rig.setAttribute('rotation', playerSlots[0].rotation);
             }
             
-            // Team colors are already applied by updatePlayerTeamColor above
+            // CRITICAL FIX: Don't use hardcoded playerSlots colors - use team colors instead
+            const playerTarget = document.querySelector('#player-target');
+            const playerImpact = document.querySelector('#player-impact');
+            if (playerTarget) {
+              // Set neutral color initially - team colors will be applied later
+              const playerColor = '#888888'; // Neutral gray
+              playerTarget.setAttribute('color', playerColor);
+              playerTarget.setAttribute('material', 'emissive: ' + playerColor + '; emissiveIntensity: 0.5; transparent: true; opacity: 0.7');
+              playerTarget.setAttribute('impact-effect', 'color: ' + playerColor);
+              
+              // Update the light color
+              const playerLight = playerTarget.querySelector('a-entity[light]');
+              if (playerLight) {
+                playerLight.setAttribute('light', 'color: ' + playerColor + '; intensity: 1; distance: 3');
+              }
+              
+              // Update impact sphere color
+              if (playerImpact) {
+                playerImpact.setAttribute('color', playerColor);
+              }
+              
+            }
             
                       // Make all remote players visible for host, but hide own remote player
             setTimeout(() => {
@@ -576,7 +516,7 @@
             // Don't add 'client' to activePlayers - we'll add the actual player ID when assigned
             // Only count actual players, not connection IDs
             const actualPlayerCount = activePlayers.size;
-            const maxPlayers = 4; // Always 4 players in both modes
+            const maxPlayers = gameMode === 'capture' ? 2 : 4;
             updateMultiplayerStatus(`Host - Lobby ${lobbyNumber} (${actualPlayerCount}/${maxPlayers})`);
             updateMenuDisplay();
               
@@ -698,9 +638,6 @@
             case 'game-state':
               handleGameState(data);
               break;
-            case 'match-start-sync':
-              handleMatchStartSync(data);
-              break;
             case 'player-update':
               handlePlayerUpdate(data);
               break;
@@ -736,53 +673,6 @@
               break;
             case 'capture-ball-grabbed':
               handleCaptureBallGrabbed(data);
-              // If host receives capture-ball-grabbed from client, broadcast to all other clients
-              if (isHost) {
-                connections.forEach(otherConn => {
-                  if (otherConn !== conn && otherConn.open) {
-                    otherConn.send(data);
-                  }
-                });
-              }
-              break;
-            case 'capture-ball-steal-ack':
-              handleCaptureBallStealAck(data);
-              break;
-            case 'ball-shield-state':
-              handleBallShieldState(data);
-              // If host receives shield state from client, broadcast to all other clients
-              if (isHost) {
-                connections.forEach(otherConn => {
-                  if (otherConn !== conn && otherConn.open) {
-                    otherConn.send(data);
-                  }
-                });
-              }
-              break;
-            case 'player-grab':
-              handlePlayerGrab(data);
-              // If host receives player grab from client, broadcast to all other clients
-              if (isHost) {
-                connections.forEach(otherConn => {
-                  if (otherConn !== conn && otherConn.open) {
-                    otherConn.send(data);
-                  }
-                });
-              }
-              break;
-            case 'player-grab-force-release':
-              handlePlayerGrabForceRelease(data);
-              // If host receives force release from client, broadcast to all other clients
-              if (isHost) {
-                connections.forEach(otherConn => {
-                  if (otherConn !== conn && otherConn.open) {
-                    otherConn.send(data);
-                  }
-                });
-              }
-              break;
-            case 'match-start':
-              handleMatchStart(data);
               break;
                           case 'client-team-selection':
                 handleClientTeamSelection(data);
@@ -808,12 +698,10 @@
         });
         
         conn.on('close', () => {
-          console.log('🔌 Connection closed for player:', playerId);
           handlePlayerDisconnection(conn, playerId);
         });
         
         conn.on('error', (err) => {
-          console.log('❌ Connection error for player:', playerId, 'Error:', err);
           handlePlayerDisconnection(conn, playerId);
         });
       }
@@ -823,7 +711,7 @@
         
         // Update status for clients to show player count from host
         if (!isHost) {
-          const maxPlayers = 4; // Always 4 players in both modes
+          const maxPlayers = gameMode === 'capture' ? 2 : 4;
           updateMultiplayerStatus(`Connected - Lobby ${selectedLobby} (${data.playerCount}/${maxPlayers})`);
         }
         
@@ -859,66 +747,8 @@
         
         myPlayerId = data.playerId;
         
-        // Set team assignment from host
-        if (data.team) {
-          playerTeams.set(myPlayerId, data.team);
-          
-          // CRITICAL FIX: Update client's own body color immediately
-          updatePlayerTeamColor(myPlayerId, data.team);
-        }
-        
         // Add self to active players
         activePlayers.add(myPlayerId);
-        
-        // Update bot management for new player count
-        manageActivePlayersAndBots();
-        
-        // Update ball colors for new team assignment
-        updateBallColors();
-        
-        // Update team display in menu
-        updateTeamDisplay();
-        
-        // Update start message for new multiplayer state
-        const gameManager = document.querySelector('[game-manager]');
-        if (gameManager && gameManager.components['game-manager']) {
-          gameManager.components['game-manager'].updateStartMessage();
-          
-          // CRITICAL FIX: Refresh HUD after player assignment to ensure proper state
-          setTimeout(() => {
-            const menuToggle = document.querySelector('[menu-toggle]');
-            if (menuToggle && menuToggle.components['menu-toggle']) {
-              menuToggle.components['menu-toggle'].refreshGameHUD();
-              
-              // CRITICAL FIX: Auto-close menu for clients when they successfully join a lobby
-              if (!isHost && menuToggle.components['menu-toggle'].menuVisible) {
-                console.log('🎮 Auto-closing menu for client after successful lobby join');
-                console.log('🔍 Client state before auto-close:', {
-                  isMultiplayer: isMultiplayer,
-                  isHost: isHost,
-                  myPlayerId: myPlayerId,
-                  activePlayers: activePlayers.size,
-                  connections: connections.size
-                });
-                
-                // Add extra delay to ensure connection is fully stable
-                setTimeout(() => {
-                  // Double-check that we're still in multiplayer mode before closing
-                  if (isMultiplayer && !isHost && myPlayerId) {
-                    menuToggle.components['menu-toggle'].toggleMenu();
-                    console.log('✅ Menu auto-closed successfully for client');
-                  } else {
-                    console.log('❌ Skipping auto-close - client state changed:', {
-                      isMultiplayer: isMultiplayer,
-                      isHost: isHost,
-                      myPlayerId: myPlayerId
-                    });
-                  }
-                }, 500); // Extra delay to ensure stability
-              }
-            }
-          }, 200);
-        }
         
         // Track this connection for the client side
         const hostConn = connections.get('host');
@@ -935,12 +765,9 @@
         } else {
         }
         
-        // CRITICAL FIX: Update local player target's data-player-id for clients
+        // CRITICAL FIX: Ensure local player target is visible and remote is hidden
         const playerTarget = document.querySelector('#player-target');
         if (playerTarget) {
-          // Update the local player target's ID to match the client's assigned ID
-          playerTarget.setAttribute('data-player-id', myPlayerId);
-          
           // Ensure local player target is always visible
           playerTarget.setAttribute('visible', true);
           
@@ -1083,14 +910,9 @@
         if (assignedSlot !== null) {
           const playerId = `player_${assignedSlot}`;
           
-          // Assign alternating teams: player_1 = blue, player_2 = red, player_3 = blue
-          const playerTeam = (assignedSlot % 2 === 1) ? 'blue' : 'red';
-          playerTeams.set(playerId, playerTeam);
-          
           conn.send({
             type: 'player-assignment',
-            playerId: playerId,
-            team: playerTeam
+            playerId: playerId
           });
           
           const player = players.get(playerId);
@@ -1099,9 +921,6 @@
             player.isBot = false;
             activePlayers.add(playerId);
           }
-          
-          // Update bot management for new player count
-          manageActivePlayersAndBots();
           
           // Track which connection this player is assigned to
           connectionToPlayer.set(conn, playerId);
@@ -1113,60 +932,23 @@
           setTimeout(() => {
             sendTeamAssignments();
             
-            // CRITICAL FIX: Always send current game state to new joiner (including WAITING)
-            // Check for multiple game managers and find the active one
-            const allGameManagers = document.querySelectorAll('[game-manager]');
-            console.log('🔍 HOST found', allGameManagers.length, 'game managers');
-            
-            let gameManagerComp = null;
-            let gameManager = null;
-            
-            // Find the game manager with active state or the first valid one
-            for (let i = 0; i < allGameManagers.length; i++) {
-              const gm = allGameManagers[i];
-              if (gm.components && gm.components['game-manager']) {
-                const comp = gm.components['game-manager'];
-                console.log(`🎮 Game Manager ${i}:`, {
-                  matchState: comp.matchState,
-                  gameStarted: comp.gameStarted,
-                  matchStartTime: comp.matchStartTime
-                });
-                
-                // Prefer the one with active match or use first valid one
-                if (!gameManagerComp || comp.gameStarted || comp.matchState !== 'WAITING') {
-                  gameManagerComp = comp;
-                  gameManager = gm;
-                }
-              }
-            }
-            
-            if (gameManager && gameManagerComp) {
-              const matchState = gameManagerComp.matchState;
-              
-              console.log('🏠 HOST sending game-state to new client:', {
-                state: matchState,
-                gameStarted: gameManagerComp.gameStarted,
-                matchStartTime: gameManagerComp.matchStartTime,
-                playerScores: gameManagerComp.playerScores,
-                teamScores: teamScores
-              });
-              
-              // Send game state for all states, not just active matches
-              conn.send({
+            // Send current game state if match is active
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              const matchState = gameManager.components['game-manager'].matchState;
+              if (matchState === 'PLAYING' || matchState === 'COUNTDOWN' || matchState === 'OVERTIME') {
+                // Send current match state to new joiner
+                conn.send({
                   type: 'game-state',
                   state: matchState,
-                gameStarted: gameManagerComp.gameStarted,
-                matchStartTime: gameManagerComp.matchStartTime,
-                matchDuration: gameManagerComp.matchDuration,
-                playerScores: gameManagerComp.playerScores,
+                  gameStarted: gameManager.components['game-manager'].gameStarted,
+                  matchStartTime: gameManager.components['game-manager'].matchStartTime,
+                  matchDuration: gameManager.components['game-manager'].matchDuration,
+                  playerScores: gameManager.components['game-manager'].playerScores,
                   teamScores: teamScores,
-                gameMode: gameMode,
-                // CRITICAL FIX: Send current time for proper timer sync
-                currentTime: Date.now(),
-                // Send countdown info if in countdown state
-                countdownStartTime: gameManagerComp.countdownStartTime,
-                countdownDuration: gameManagerComp.countdownDuration
-              });
+                  gameMode: gameMode
+                });
+              }
             }
           }, 100);
         } else {
@@ -1182,19 +964,7 @@
         }
       }
 
-      function handleMatchStartSync(data) {
-        console.log('🚀 CLIENT received match-start-sync:', data);
-        // Handle match start synchronization from host
-        const gameManager = document.querySelector('#game-manager');
-        if (gameManager && gameManager.components['game-manager']) {
-          const gameManagerComponent = gameManager.components['game-manager'];
-          // Start match with host's exact match start time
-          gameManagerComponent.startMatch(data.matchStartTime);
-        }
-      }
-
       function handleGameState(data) {
-        console.log('📨 CLIENT received game-state:', data);
         // Handle game state updates from host
         const gameManager = document.querySelector('#game-manager');
         if (gameManager && gameManager.components['game-manager']) {
@@ -1218,15 +988,6 @@
             gameManagerComponent.matchDuration = data.matchDuration;
           }
           
-          // Handle countdown timing
-          if (data.countdownStartTime) {
-            gameManagerComponent.countdownStartTime = data.countdownStartTime;
-          }
-          
-          if (data.countdownDuration) {
-            gameManagerComponent.countdownDuration = data.countdownDuration;
-          }
-          
           // Update scores
           if (data.playerScores) {
             gameManagerComponent.playerScores = data.playerScores;
@@ -1243,68 +1004,17 @@
             gameManagerComponent.updateGameModeUI();
           }
           
-          // Update UI based on current state - but respect menu visibility
+          // Update UI based on current state
           if (data.state === 'PLAYING' || data.state === 'OVERTIME') {
-            // Only update HUD if menu is not visible
-            if (!isMenuVisible) {
-              setGameplayHUD(true);
-              if (gameManagerComponent.startMessage) {
-                gameManagerComponent.startMessage.setAttribute('visible', false);
-              }
+            // Show game HUD and hide start message
+            setGameplayHUD(true);
+            if (gameManagerComponent.startMessage) {
+              gameManagerComponent.startMessage.setAttribute('visible', false);
             }
             
-            // Always update score and timer data (even if not visible due to menu)
+            // Update score display
             gameManagerComponent.updateMultiplayerScore();
-            gameManagerComponent.updateTimer();
-          } else if (data.state === 'COUNTDOWN') {
-            // Only update HUD if menu is not visible
-            if (!isMenuVisible) {
-              setGameplayHUD(true);
-              if (gameManagerComponent.startMessage) {
-                gameManagerComponent.startMessage.setAttribute('visible', false);
-              }
-              
-              // Start countdown display if not already running
-              if (gameManagerComponent.countdownDisplay) {
-                gameManagerComponent.countdownDisplay.setAttribute('visible', true);
-              }
-            }
-            
-            // Always update score data (even if not visible due to menu)
-            gameManagerComponent.updateMultiplayerScore();
-          } else if (data.state === 'ENDED') {
-            // Only update HUD if menu is not visible
-            if (!isMenuVisible) {
-              setGameplayHUD(true);
-              if (gameManagerComponent.startMessage) {
-                gameManagerComponent.startMessage.setAttribute('visible', false);
-              }
-            }
-            
-            // Always update final score data
-            gameManagerComponent.updateMultiplayerScore();
-          } else if (data.state === 'WAITING') {
-            // Only update HUD if menu is not visible
-            if (!isMenuVisible) {
-              setGameplayHUD(false);
-              if (gameManagerComponent.startMessage) {
-                gameManagerComponent.startMessage.setAttribute('visible', true);
-              }
-            }
           }
-          
-          // CRITICAL FIX: Update menu display to hide Start Match button for clients
-          updateMenuDisplay();
-          
-          // CRITICAL FIX: Refresh HUD after game state sync to ensure proper display
-          setTimeout(() => {
-            const menuToggle = document.querySelector('[menu-toggle]');
-            if (menuToggle && menuToggle.components['menu-toggle']) {
-              menuToggle.components['menu-toggle'].refreshGameHUD();
-            }
-          }, 150);
-          
-          // DO NOT call updateStartMessage during matches - it interferes with HUD
         }
       }
 
@@ -1353,15 +1063,13 @@
           // FALLBACK: Also directly update HUD in case game manager method doesn't work
           const hudScore = document.querySelector('#hud-score');
           if (hudScore) {
-            // Ensure HUD is visible and update content
             hudScore.setAttribute('visible', true);
-            
             const leftScoreEl = hudScore.children[0];
             const rightScoreEl = hudScore.children[1];
             
             if (leftScoreEl && rightScoreEl) {
-              leftScoreEl.setAttribute('text', 'value', `${teamScores.blue}`);
-              rightScoreEl.setAttribute('text', 'value', `${teamScores.red}`);
+              leftScoreEl.setAttribute('text', 'value', `Blue: ${teamScores.blue}`);
+              rightScoreEl.setAttribute('text', 'value', `Red: ${teamScores.red}`);
             }
           }
           
@@ -1438,32 +1146,12 @@
         }
       }
       
-      // Debounce mechanism to prevent spam
-      let lastCaptureBallGrabTime = 0;
-      const captureBallGrabDebounce = 500; // 500ms debounce
-      
       function handleCaptureBallGrabbed(data) {
-        // Debounce to prevent spam
-        const now = Date.now();
-        if (now - lastCaptureBallGrabTime < captureBallGrabDebounce) {
-          console.log('🚫 Ignoring duplicate capture ball grab message');
-          return;
-        }
-        lastCaptureBallGrabTime = now;
-        
         // Force release capture ball if another player grabbed it
         if (data.grabberId !== myPlayerId) {
-          console.log('🔍 Processing steal message from', data.grabberId, 'to', myPlayerId);
           const captureBall = document.querySelector('#capture-ball');
           if (captureBall && captureBall.components['zerog-ball']) {
             const ballComponent = captureBall.components['zerog-ball'];
-            
-            console.log('🔄 Capture ball stolen by', data.grabberId, '- acknowledging steal');
-            
-            // CRITICAL FIX: Set ball authority to the stealer
-            ballComponent.currentOwner = data.grabberId;
-            ballComponent.lastOwnerChangeTime = now;
-            
             if (ballComponent.isGrabbed) {
               // Force release the ball locally
               ballComponent.onRelease();
@@ -1479,140 +1167,9 @@
                     playerComponent.isGrabbing[handKey] = false;
                   }
                 });
-                
-                // CRITICAL FIX: Set timeout to prevent immediate re-grab when ball was stolen
-                // Only applies when ball was forcibly taken, not when voluntarily released
-                playerComponent.ballStealTimeout = Date.now() + 5000; // Increased to 5 seconds for more stable stealing
-                console.log('⏰ Ball steal timeout set for 5 seconds');
-              }
-            }
-            
-            // CRITICAL FIX: If we're the host, send acknowledgment back to confirm the steal
-            if (isHost) {
-              const ackData = {
-                type: 'capture-ball-steal-ack',
-                originalGrabberId: data.grabberId,
-                timestamp: now
-              };
-              
-              connections.forEach((conn, playerId) => {
-                if (conn && conn.open) {
-                  conn.send(ackData);
-                }
-              });
-              console.log('✅ HOST acknowledged ball steal by', data.grabberId);
-            }
-          }
-        }
-      }
-      
-      function handleCaptureBallStealAck(data) {
-        // Handle acknowledgment from host that steal was successful
-        if (data.originalGrabberId === myPlayerId) {
-          console.log('✅ CLIENT received steal acknowledgment from host');
-          
-          const captureBall = document.querySelector('#capture-ball');
-          if (captureBall && captureBall.components['zerog-ball']) {
-            const ballComponent = captureBall.components['zerog-ball'];
-            ballComponent.currentOwner = myPlayerId;
-            ballComponent.lastOwnerChangeTime = Date.now();
-            console.log('🎯 Ball ownership confirmed for client');
-          }
-        }
-      }
-      
-      function handleBallShieldState(data) {
-        // Update shield state for remote player's ball
-        if (data.playerId !== myPlayerId) {
-          const ball = document.querySelector(`[zerog-ball*="player: ${data.ballId}"]`);
-          if (ball && ball.components['zerog-ball']) {
-            const shieldElement = ball.querySelector('.ball-shield');
-            if (shieldElement && shieldElement.components['ball-shield']) {
-              const shieldComponent = shieldElement.components['ball-shield'];
-              if (data.shieldActive) {
-                shieldComponent.isActive = true;
-                shieldElement.setAttribute('visible', true);
-              } else {
-                shieldComponent.isActive = false;
-                shieldElement.setAttribute('visible', false);
               }
             }
           }
-        }
-      }
-      
-      function handlePlayerGrab(data) {
-        const player = document.querySelector('[zerog-player]');
-        if (!player || !player.components['zerog-player']) return;
-        
-        const playerComponent = player.components['zerog-player'];
-        
-        // If this player is being grabbed
-        if (data.targetPlayerId === myPlayerId) {
-          if (data.isGrabbing) {
-            // Check for mutual grab (counter-grab)
-            const isGrabbingBack = playerComponent.grabbingPlayer.left === data.grabberId || 
-                                   playerComponent.grabbingPlayer.right === data.grabberId;
-            
-            if (isGrabbingBack) {
-              // Mutual grab detected - force release and set timeout
-              console.log(`Mutual grab detected! ${myPlayerId} and ${data.grabberId} grabbing each other`);
-              
-              // Force release the grabber's grab on this player
-              playerComponent.forceReleaseGrabberTimeout(data.grabberId);
-              
-              // Send force release message back
-              const forceReleaseData = {
-                type: 'player-grab-force-release',
-                grabberId: myPlayerId,
-                targetPlayerId: data.grabberId,
-                timestamp: Date.now()
-              };
-              
-              if (isHost) {
-                connections.forEach(conn => {
-                  if (conn && conn.open) {
-                    conn.send(forceReleaseData);
-                  }
-                });
-              } else {
-                const hostConn = connections.get('host');
-                if (hostConn && hostConn.open) {
-                  hostConn.send(forceReleaseData);
-                }
-              }
-            } else {
-              // Normal grab - set grabbed state
-              playerComponent.grabbedByPlayer = data.grabberId;
-              console.log(`Player ${myPlayerId} is being grabbed by ${data.grabberId}`);
-            }
-          } else {
-            // Release grab
-            playerComponent.grabbedByPlayer = null;
-            console.log(`Player ${myPlayerId} released by ${data.grabberId}`);
-          }
-        }
-      }
-      
-      function handlePlayerGrabForceRelease(data) {
-        const player = document.querySelector('[zerog-player]');
-        if (!player || !player.components['zerog-player']) return;
-        
-        const playerComponent = player.components['zerog-player'];
-        
-        // If this player is the target of the force release
-        if (data.targetPlayerId === myPlayerId) {
-          // Force release any grabs on the grabber and set timeout
-          playerComponent.forceReleaseGrabberTimeout(data.grabberId);
-          console.log(`Force released grab on ${data.grabberId} and set 3-second timeout`);
-        }
-      }
-      
-      function handleMatchStart(data) {
-        // Client receives match start command from host
-        const gameManager = document.querySelector('[game-manager]');
-        if (gameManager && gameManager.components['game-manager']) {
-          gameManager.components['game-manager'].startMatchWithBots();
         }
       }
       
@@ -1670,8 +1227,16 @@
       }
       
       function updateGameModeUI(mode) {
-        // DO NOT TOUCH HUD DURING MATCHES - only update menu UI
-        // The HUD should only show score, timer, speed during matches
+        
+        // Update HUD based on game mode
+        const hudStatus = document.getElementById('hud-status');
+        if (hudStatus) {
+          if (mode === 'capture') {
+            hudStatus.setAttribute('text', 'value', 'Capture Mode - Get the white ball to the goal!');
+          } else {
+            hudStatus.setAttribute('text', 'value', 'Dodge Mode - Hit opponents with balls!');
+          }
+        }
         
         // CRITICAL FIX: Update menu UI to show current game mode
         const currentModeDisplay = document.querySelector('#menu-current-mode-game');
@@ -1695,10 +1260,10 @@
           }
         }
         
-        // Team selection is always visible since we're always in capture mode
+        // Show/hide team selection based on mode
         const teamSelection = document.querySelector('#menu-team-selection');
         if (teamSelection) {
-          teamSelection.setAttribute('visible', true);
+          teamSelection.setAttribute('visible', mode === 'capture');
         }
         
         // Show/hide capture ball and goals based on mode
@@ -1720,7 +1285,6 @@
         if (mode === 'capture') {
           playerTeams.set('bot-red', 'red');
           playerTeams.set('bot-blue', 'blue');
-          playerTeams.set('bot-green', 'blue'); // Green bot is on blue team
           
           // Ensure player team colors are maintained
           const currentPlayerId = myPlayerId || 'player_0';
@@ -1754,15 +1318,11 @@
         // Update bot ball assignments for new game mode
         const redBot = document.querySelector('#zerog-bot-red');
         const blueBot = document.querySelector('#zerog-bot-blue');
-        const greenBot = document.querySelector('#zerog-bot-green');
         if (redBot && redBot.components['zerog-bot']) {
           redBot.components['zerog-bot'].updateBallAssignment();
         }
         if (blueBot && blueBot.components['zerog-bot']) {
           blueBot.components['zerog-bot'].updateBallAssignment();
-        }
-        if (greenBot && greenBot.components['zerog-bot']) {
-          greenBot.components['zerog-bot'].updateBallAssignment();
         }
         
         // Update score display for team mode
@@ -1952,14 +1512,6 @@
       }
 
       function handlePlayerDisconnection(conn, playerId) {
-        console.log('🚨 handlePlayerDisconnection called:', {
-          playerId: playerId,
-          actualPlayerId: connectionToPlayer.get(conn),
-          isHost: isHost,
-          isMultiplayer: isMultiplayer,
-          myPlayerId: myPlayerId,
-          connectionsSize: connections.size
-        });
         
         // Find the actual player ID assigned to this connection
         const actualPlayerId = connectionToPlayer.get(conn);
@@ -1983,9 +1535,6 @@
         const playerToRemove = actualPlayerId || playerId;
         if (playerToRemove) {
           activePlayers.delete(playerToRemove);
-          
-          // Update bot management for new player count
-          manageActivePlayersAndBots();
           
           // If this was a client disconnecting, also remove them from the players map
           if (playerToRemove && playerToRemove.startsWith('player_')) {
@@ -2015,7 +1564,6 @@
               // Add a timeout to the reconnection attempt
               const reconnectionTimeout = setTimeout(() => {
                 if (window.isReconnecting) {
-                  console.log('⏰ Reconnection timeout - switching to singleplayer mode');
                   window.isReconnecting = false;
                   
                   // Switch to singleplayer mode
@@ -2134,7 +1682,7 @@
         
         // Update host's own status display
         if (isHost) {
-          const maxPlayers = 4; // Always 4 players in both modes
+          const maxPlayers = gameMode === 'capture' ? 2 : 4;
           updateMultiplayerStatus(`Host - Lobby ${selectedLobby} (${actualPlayerCount}/${maxPlayers})`);
         }
         
@@ -2199,20 +1747,23 @@
           const opponentScoreEl = hudScore.children[1];
           
           if (playerScoreEl && opponentScoreEl) {
-            // Always use clean number-only format (colors indicate teams)
-            playerScoreEl.setAttribute('text', 'value', `${playerScore}`);
-            opponentScoreEl.setAttribute('text', 'value', `${opponentScore}`);
-            
             if (isMultiplayer && myPlayerId) {
-              // Set team colors for multiplayer
+              // Get player names from player slots
+              const playerIndex = parseInt(myPlayerId.split('_')[1]);
+              const myPlayerName = `P${playerIndex}`;
+              // CRITICAL FIX: Use team colors instead of hardcoded playerSlots colors
               const myPlayerTeam = playerTeams.get(myPlayerId);
               const myPlayerColor = myPlayerTeam === 'red' ? '#ff0000' : (myPlayerTeam === 'blue' ? '#0000ff' : '#ffffff');
               
               // Find the opponent (other active player)
+              let opponentName = 'Opponent';
+              let opponentIndex = -1;
               let opponentColor = '#ff4444'; // Default red
               for (let i = 0; i < 4; i++) {
-                const playerIndex = parseInt(myPlayerId.split('_')[1]);
                 if (i !== playerIndex && activePlayers.has(`player_${i}`)) {
+                  opponentIndex = i;
+                  opponentName = `P${i}`;
+                  // CRITICAL FIX: Use team colors for opponent too
                   const opponentPlayerId = `player_${i}`;
                   const opponentTeam = playerTeams.get(opponentPlayerId);
                   opponentColor = opponentTeam === 'red' ? '#ff0000' : (opponentTeam === 'blue' ? '#0000ff' : '#ffffff');
@@ -2220,8 +1771,15 @@
                 }
               }
               
+              playerScoreEl.setAttribute('text', 'value', `${myPlayerName}: ${playerScore}`);
               playerScoreEl.setAttribute('text', 'color', myPlayerColor);
+              opponentScoreEl.setAttribute('text', 'value', `${opponentName}: ${opponentScore}`);
               opponentScoreEl.setAttribute('text', 'color', opponentColor);
+            } else {
+              // Singleplayer mode
+              playerScoreEl.setAttribute('text', 'value', `You: ${playerScore}`);
+              opponentScoreEl.setAttribute('text', 'value', `Bot: ${opponentScore}`);
+              // Singleplayer HUD updated silently
             }
           }
         } else {
@@ -2239,82 +1797,31 @@ function setGameplayHUD(isPlaying) {
   const hudScore = document.querySelector('#hud-score');
   const hudTimer = document.querySelector('#hud-timer');
   const hudMessage = document.querySelector('#hud-message');
-  const versionDisplay = document.querySelector('#version-display');
-  
-  // ALWAYS keep version display visible (game version + FPS)
-  if (versionDisplay) {
-    versionDisplay.setAttribute('visible', true);
-  }
   
   if (hudStatus) {
     hudStatus.setAttribute('visible', !isPlaying);
   }
   if (hudScore) {
-    // Show score when playing (isPlaying = true means match is active)
-    hudScore.setAttribute('visible', isPlaying);
+    // Only show score during active matches (not just when gameplay is enabled)
+    const gameManager = document.querySelector('#game-manager');
+    const isMatchActive = gameManager && gameManager.components['game-manager'] && 
+                         gameManager.components['game-manager'].gameStarted;
+    hudScore.setAttribute('visible', isPlaying && isMatchActive);
   }
   if (hudTimer) {
-    // Show timer only during active matches (PLAYING and OVERTIME states)
-    // CRITICAL FIX: Find the correct game manager instance
-    const allGameManagers = document.querySelectorAll('[game-manager]');
-    let gameManagerComponent = null;
-    
-    for (let i = 0; i < allGameManagers.length; i++) {
-      const gm = allGameManagers[i];
-      if (gm.components && gm.components['game-manager']) {
-        const comp = gm.components['game-manager'];
-        if (!gameManagerComponent || comp.gameStarted || comp.matchState !== 'WAITING') {
-          gameManagerComponent = comp;
-        }
-      }
-    }
-    
-    const shouldShowTimer = gameManagerComponent && 
-                           (gameManagerComponent.matchState === 'PLAYING' || 
-                            gameManagerComponent.matchState === 'OVERTIME');
-    hudTimer.setAttribute('visible', shouldShowTimer);
+    // Only show timer during active matches (not just when gameplay is enabled)
+    const gameManager = document.querySelector('#game-manager');
+    const isMatchActive = gameManager && gameManager.components['game-manager'] && 
+                         gameManager.components['game-manager'].gameStarted;
+    hudTimer.setAttribute('visible', isPlaying && isMatchActive);
   }
   if (hudMessage) {
-    // Handle message display based on multiplayer state and match status
+    // Show "Press A to Start" when not playing, hide during active gameplay
     if (isPlaying) {
       hudMessage.setAttribute('visible', false); // Hide during active gameplay
     } else {
-      // Check if we're in multiplayer and what state we're in
-      // CRITICAL FIX: Find the correct game manager instance
-      const allGameManagers = document.querySelectorAll('[game-manager]');
-      let gameManagerComponent = null;
-      
-      for (let i = 0; i < allGameManagers.length; i++) {
-        const gm = allGameManagers[i];
-        if (gm.components && gm.components['game-manager']) {
-          const comp = gm.components['game-manager'];
-          if (!gameManagerComponent || comp.gameStarted || comp.matchState !== 'WAITING') {
-            gameManagerComponent = comp;
-          }
-        }
-      }
-      
-      if (isMultiplayer && gameManagerComponent) {
-        // In multiplayer, show appropriate message based on role and state
-        if (gameManagerComponent.matchState === 'WAITING') {
-          hudMessage.setAttribute('visible', true);
-          if (isHost) {
-            hudMessage.setAttribute('text', 'value', 'Press X to open menu and start match');
-          } else {
-            hudMessage.setAttribute('text', 'value', 'Waiting for host to start match...');
-          }
-        } else if (gameManagerComponent.matchState === 'COUNTDOWN') {
-          // During countdown, keep message visible for countdown numbers
-          hudMessage.setAttribute('visible', true);
-          // Don't change the text - let the game manager tick function handle it
-        } else {
-          hudMessage.setAttribute('visible', false);
-        }
-      } else {
-        // Singleplayer - show default message
-        hudMessage.setAttribute('visible', true);
-        hudMessage.setAttribute('text', 'value', 'Press X to open menu');
-      }
+      hudMessage.setAttribute('visible', true); // Show in default state
+      hudMessage.setAttribute('text', 'value', 'Press A to Start');
     }
   }
   
@@ -2400,28 +1907,8 @@ function setGameplayHUD(isPlaying) {
           this.stunEndTime = 0;
           this.stunImmunityEndTime = 0; // 10-second immunity after being stunned
           
-          // Ball steal timeout (prevents immediate re-grab after ball is stolen)
-          this.ballStealTimeout = null;
-          
-          // Global steal cooldown to prevent rapid back-and-forth stealing
-          this.lastStealTime = 0;
-          this.stealCooldown = 1000; // 1 second between steal attempts
-          
           // NEW: Track grip state for continuous ball grabbing
           this.gripHeld = { left: false, right: false };
-          
-          // Speed boost system
-          this.speedBoostAvailable = true;
-          this.speedBoostCooldown = 5000; // 5 seconds
-          this.speedBoostForce = 5; // Boost strength
-          this.lastSpeedBoostTime = 0;
-          this.captureBallReleaseTimeout = 0; // 2 second timeout after releasing capture ball
-          
-          // Player-to-player grabbing system
-          this.playerGrabTimeouts = new Map(); // playerId -> timeout timestamp
-          this.grabbedByPlayer = null; // which player is grabbing this player
-          this.grabbingPlayer = { left: null, right: null }; // which players this player is grabbing
-          this.playerGrabConstraints = { left: null, right: null }; // physics constraints for player grabs
           
           // Rotation state
           this.rotationY = 0;
@@ -2475,18 +1962,12 @@ function setGameplayHUD(isPlaying) {
             // Track grip state for continuous ball grabbing
             this.gripHeld[handKey] = true;
             
-            // Try to grab balls first (priority)
-            const ballGrabbed = this.tryGrabBall(hand);
+            // Try to grab balls first (priority), then static surfaces
+            this.tryGrabBall(hand);
             
-            // If no ball was grabbed, try players, then static surfaces
-            if (!ballGrabbed) {
-              const nearestPlayer = this.findNearestPlayer(hand);
-              if (nearestPlayer) {
-                const playerId = nearestPlayer.getAttribute('data-player-id');
-                this.grabPlayer(hand, nearestPlayer, playerId);
-              } else if (!this.isGrabbing[handKey]) {
+            // If no ball was grabbed, try static surfaces
+            if (!this.isGrabbing[handKey]) {
               this.handleGrab(hand, true);
-              }
             }
           });
           
@@ -2504,20 +1985,13 @@ function setGameplayHUD(isPlaying) {
             // Track grip state
             this.gripHeld[handKey] = false;
             
-            // Release whatever is being grabbed (ball, player, or surface)
+            // Release whatever is being grabbed (ball or surface)
             this.releaseGrabbedBall(hand);
-            
-            // Release player grab if active
-            if (this.grabbingPlayer[handKey]) {
-              this.releasePlayerGrab(hand);
-            }
-            
             this.handleGrab(hand, false);
           });
           
-          
-          // B button controls for thrusters (same as triggers) ONLY when menu is not visible
-          this.el.sceneEl.addEventListener('bbuttondown', (evt) => {
+          // Trigger controls for thrusters ONLY when menu is not visible
+          this.el.sceneEl.addEventListener('triggerdown', (evt) => {
             // Safety check for controller state
             if (!evt.target || !evt.target.object3D) {
               return;
@@ -2530,34 +2004,7 @@ function setGameplayHUD(isPlaying) {
             this.handleThruster(hand, true);
           });
           
-          this.el.sceneEl.addEventListener('bbuttonup', (evt) => {
-            // Safety check for controller state
-            if (!evt.target || !evt.target.object3D) {
-              return;
-            }
-            
-            if (getMenuVisibility()) {
-              return; // Don't deactivate thrusters when menu is visible
-            }
-            const hand = evt.target;
-            this.handleThruster(hand, false);
-          });
-          
-          // Y button controls for thrusters (same as left trigger) ONLY when menu is not visible
-          this.el.sceneEl.addEventListener('ybuttondown', (evt) => {
-            // Safety check for controller state
-            if (!evt.target || !evt.target.object3D) {
-              return;
-            }
-            
-            if (getMenuVisibility()) {
-              return; // Don't activate thrusters when menu is visible
-            }
-            const hand = evt.target;
-            this.handleThruster(hand, true);
-          });
-          
-          this.el.sceneEl.addEventListener('ybuttonup', (evt) => {
+          this.el.sceneEl.addEventListener('triggerup', (evt) => {
             // Safety check for controller state
             if (!evt.target || !evt.target.object3D) {
               return;
@@ -2583,7 +2030,7 @@ function setGameplayHUD(isPlaying) {
           
           // B button assigned to menu toggle (see menu-toggle component)
           
-          // Thumbstick click controls
+          // Thumbstick click for braking (Echo VR style)
           this.el.sceneEl.addEventListener('thumbstickdown', (evt) => {
             // Safety check for controller state
             if (!evt.target || !evt.target.object3D) {
@@ -2591,15 +2038,7 @@ function setGameplayHUD(isPlaying) {
             }
             
             const hand = evt.target;
-            const isLeftHand = hand.id === 'leftHand';
-            
-            if (isLeftHand) {
-              // Left thumbstick click: Speed boost
-              this.activateSpeedBoost();
-            } else {
-              // Right thumbstick click: Air brake
             this.startBraking(hand);
-            }
           });
           
           this.el.sceneEl.addEventListener('thumbstickup', (evt) => {
@@ -2609,13 +2048,7 @@ function setGameplayHUD(isPlaying) {
             }
             
             const hand = evt.target;
-            const isLeftHand = hand.id === 'leftHand';
-            
-            if (!isLeftHand) {
-              // Right thumbstick click: Stop air brake
             this.stopBraking(hand);
-            }
-            // Left thumbstick: Speed boost is instant, no need to handle up event
           });
         },
         
@@ -2651,16 +2084,7 @@ function setGameplayHUD(isPlaying) {
 
           
           if (isDown) {
-            // First check for nearby players to grab
-            const nearestPlayer = this.findNearestPlayer(hand);
-
-            if (nearestPlayer) {
-              const playerId = nearestPlayer.getAttribute('data-player-id');
-              this.grabPlayer(hand, nearestPlayer, playerId);
-              return;
-            }
-
-            // If no player found, check for nearby surfaces to grab
+            // Check for nearby surfaces to grab
             const surface = this.findNearestGrabbableSurface(hand);
             
             if (surface) {
@@ -2671,12 +2095,6 @@ function setGameplayHUD(isPlaying) {
               this.playHapticFeedback(hand, 0.5, 100);
             }
           } else {
-            // Release player grab if active
-            if (this.grabbingPlayer[handKey]) {
-              this.releasePlayerGrab(hand);
-            }
-            
-            // Release surface grab if active
             if (this.isGrabbing[handKey]) {
               this.releaseFromSurface(hand);
               this.grabbedSurface[handKey] = null;
@@ -2687,13 +2105,6 @@ function setGameplayHUD(isPlaying) {
         handleThruster: function(hand, isActive) {
           const isLeft = hand.id === 'leftHand';
           const handKey = isLeft ? 'left' : 'right';
-          
-          // Disable thrusters while grabbing players/bots
-          if (this.grabbingPlayer.left || this.grabbingPlayer.right) {
-            this.thrusterActive[handKey] = false;
-            this.hideThrusterEffect(hand);
-            return; // Don't allow thruster use while grabbing players
-          }
           
           this.thrusterActive[handKey] = isActive;
           
@@ -2957,11 +2368,6 @@ function setGameplayHUD(isPlaying) {
           
           const grabInfo = this.grabInfo[handKey];
           if (grabInfo) {
-            // Check if releasing the capture ball - set 2 second boost timeout
-            if (grabInfo.isBall && grabInfo.surface.id === 'capture-ball') {
-              this.captureBallReleaseTimeout = Date.now() + 2000; // 2 second timeout
-            }
-            
             // If releasing a ball, call the ball's onRelease method
             if (grabInfo.isBall && grabInfo.surface.components['zerog-ball']) {
               grabInfo.surface.components['zerog-ball'].onRelease();
@@ -3144,19 +2550,11 @@ function setGameplayHUD(isPlaying) {
           // NEW: Continuous ball grabbing while grip is held
           this.updateGripBallGrabbing();
           
-          // NEW: Update physics constraints for player grabs
-          this.updatePlayerGrabConstraints();
-          
           // NEW: Validate grab distances to prevent visual disconnection
           this.validateGrabDistances();
           
           // Update speed display in HUD
           this.updateSpeedDisplay();
-          
-          // Check speed boost cooldown
-          if (!this.speedBoostAvailable && Date.now() - this.lastSpeedBoostTime >= this.speedBoostCooldown) {
-            this.speedBoostAvailable = true;
-          }
           }
         },
         
@@ -3168,451 +2566,6 @@ function setGameplayHUD(isPlaying) {
           const speedDisplay = document.querySelector('#hud-speed');
           if (speedDisplay) {
             speedDisplay.setAttribute('text', 'value', `${speed.toFixed(1)} m/s`);
-          }
-        },
-        
-        isHoldingCaptureBall: function() {
-          // Check if either hand is holding the capture ball
-          const captureBall = document.querySelector('#capture-ball');
-          if (!captureBall) return false;
-          
-          return (this.grabbedSurface.left === captureBall) || (this.grabbedSurface.right === captureBall);
-        },
-        
-        findNearestPlayer: function(hand) {
-          const handPos = new THREE.Vector3();
-          hand.object3D.getWorldPosition(handPos);
-          const handRadius = 0.08; // Hand collision radius
-          
-          let nearestPlayer = null;
-          let nearestDistance = Infinity;
-          
-          // Look for grabbable players (remote targets and bots)
-          const grabbablePlayers = document.querySelectorAll('.grabbable-player');
-          
-          for (const playerTarget of grabbablePlayers) {
-            const playerId = playerTarget.getAttribute('data-player-id');
-            
-            // Skip if this is the player's own body (check this first)
-            const currentPlayerId = myPlayerId || 'player_0';
-            if (playerId === currentPlayerId) {
-              continue; // Can't grab yourself
-            }
-            
-            // Skip if player is not visible (not active)
-            // For remote players, check parent visibility; for local player target, it's always visible
-            if (playerId !== 'player_0') {
-              // For remote players, check if their parent entity is visible
-              const isVisible = playerTarget.parentElement.getAttribute('visible');
-              if (!isVisible || isVisible === 'false') {
-                continue;
-              }
-            }
-            // Local player target (player_0) is always considered visible
-            
-            // Skip if this player is in timeout
-            const currentTime = Date.now();
-            if (this.playerGrabTimeouts.has(playerId) && currentTime < this.playerGrabTimeouts.get(playerId)) {
-              continue;
-            }
-            
-            // Calculate distance to player target
-            const targetPos = new THREE.Vector3();
-            playerTarget.object3D.getWorldPosition(targetPos);
-            const distance = handPos.distanceTo(targetPos);
-            const targetRadius = parseFloat(playerTarget.getAttribute('radius')) || 0.2;
-            
-            // Check if within grab range
-            if (distance <= handRadius + targetRadius && distance < nearestDistance) {
-              nearestPlayer = playerTarget;
-              nearestDistance = distance;
-            }
-          }
-          
-          return nearestPlayer;
-        },
-        
-        grabPlayer: function(hand, playerTarget, playerId) {
-          const isLeft = hand.id === 'leftHand';
-          const handKey = isLeft ? 'left' : 'right';
-          
-          // Set up player grab state
-          this.grabbingPlayer[handKey] = playerId;
-          
-          // Get positions for constraint setup
-          const handPos = new THREE.Vector3();
-          hand.object3D.getWorldPosition(handPos);
-          
-          const targetPos = new THREE.Vector3();
-          playerTarget.object3D.getWorldPosition(targetPos);
-          
-          // Get the physics body of the grabbed entity
-          let grabbedBody = null;
-          
-          if (playerId.startsWith('bot_')) {
-            // For bots, get their physics body
-            let botId;
-            if (playerId === 'bot_red') {
-              botId = '#zerog-bot-red';
-            } else if (playerId === 'bot_blue') {
-              botId = '#zerog-bot-blue';
-            } else if (playerId === 'bot_green') {
-              botId = '#zerog-bot-green';
-            }
-            
-            if (botId) {
-              const botEntity = document.querySelector(botId);
-              if (botEntity && botEntity.components['zerog-bot']) {
-                grabbedBody = botEntity.components['zerog-bot'].body;
-              }
-            }
-          } else {
-          // For remote human players, create a temporary physics body for tether system
-          // This allows the same "hitch a ride" behavior as with bots
-            
-            // Create a temporary physics body at the player's position for the tether system
-            const playerShape = new CANNON.Sphere(0.3); // Larger sphere for player body
-            grabbedBody = new CANNON.Body({
-              mass: 70, // Human mass
-              shape: playerShape,
-              position: new CANNON.Vec3(targetPos.x, targetPos.y, targetPos.z),
-              type: CANNON.Body.KINEMATIC // Kinematic so it follows the remote player
-            });
-            
-            // Add to physics world
-            world.addBody(grabbedBody);
-          }
-          
-          // Create physics constraint if we have a physics body to grab
-          if (grabbedBody) {
-            // Create a temporary physics body for the grabbing player's hand
-            const handShape = new CANNON.Sphere(0.05);
-            const handBody = new CANNON.Body({
-              mass: 1, // Light mass for the hand
-              shape: handShape,
-              position: new CANNON.Vec3(handPos.x, handPos.y, handPos.z),
-              type: CANNON.Body.KINEMATIC // Kinematic so it follows hand movement
-            });
-            
-            // Add hand body to physics world
-            world.addBody(handBody);
-            
-            // Instead of physics constraint, use custom tether system
-            // This allows bot to move freely while dragging player along
-            const constraint = {
-              type: 'custom-tether',
-              handBody: handBody,
-              grabbedBody: grabbedBody,
-              maxDistance: 1.0,
-              springStrength: 15.0  // Much stronger for immediate attachment feel
-            };
-            
-            // Don't add to physics world - we'll handle this manually
-            
-            // Store constraint and hand body for cleanup
-            this.playerGrabConstraints[handKey] = {
-              constraint: constraint,
-              handBody: handBody,
-              grabbedBody: grabbedBody,
-              playerId: playerId,
-              handKey: handKey // Store hand key for tether break functionality
-            };
-          }
-          
-          // Set up grab info for visual feedback and tracking
-          this.grabInfo[handKey] = {
-            surface: playerTarget,
-            isBall: false,
-            isPlayer: true,
-            playerId: playerId,
-            initialHandPos: handPos.clone(),
-            lastHandPos: handPos.clone(),
-            initialSurfacePos: targetPos.clone(),
-            lastSurfacePos: targetPos.clone(),
-            grabPoint: targetPos.clone()
-          };
-          
-          // Mark as grabbing
-          this.isGrabbing[handKey] = true;
-          this.grabbedSurface[handKey] = playerTarget;
-          
-          // Visual feedback - make target glow green
-          playerTarget.setAttribute('material', 'emissive: #00ff00; emissiveIntensity: 0.3');
-          
-          // Haptic feedback
-          this.playHapticFeedback(hand, 0.7, 150);
-          
-          // Send multiplayer message about player grab
-          if (isMultiplayer) {
-            this.sendPlayerGrabMessage(playerId, true);
-          }
-        },
-        
-        releasePlayerGrab: function(hand) {
-          const isLeft = hand.id === 'leftHand';
-          const handKey = isLeft ? 'left' : 'right';
-          
-          const grabbedPlayerId = this.grabbingPlayer[handKey];
-          if (!grabbedPlayerId) return;
-          
-          // Clean up constraint (physics or custom tether)
-          const constraintInfo = this.playerGrabConstraints[handKey];
-          if (constraintInfo) {
-            // Only remove from physics world if it's a real physics constraint
-            if (constraintInfo.constraint.type !== 'custom-tether') {
-              world.removeConstraint(constraintInfo.constraint);
-            }
-            
-            // Remove temporary hand physics body
-            world.removeBody(constraintInfo.handBody);
-            
-            // For human players, also remove the temporary grabbed body
-            if (!grabbedPlayerId.startsWith('bot_') && constraintInfo.grabbedBody) {
-              world.removeBody(constraintInfo.grabbedBody);
-            }
-            
-            // Clear constraint info
-            this.playerGrabConstraints[handKey] = null;
-          }
-          
-          // Find the player target to reset visual feedback
-          const playerTarget = document.querySelector(`[data-player-id="${grabbedPlayerId}"]`);
-          if (playerTarget) {
-            // Reset visual feedback
-            playerTarget.setAttribute('material', 'emissive: #000000; emissiveIntensity: 0');
-          }
-          
-          // Clear grab state
-          this.isGrabbing[handKey] = false;
-          this.grabbedSurface[handKey] = null;
-          this.grabInfo[handKey] = null;
-          this.grabbingPlayer[handKey] = null;
-          
-          // Send multiplayer message about player release
-          if (isMultiplayer) {
-            this.sendPlayerGrabMessage(grabbedPlayerId, false);
-          }
-        },
-        
-        updatePlayerGrabConstraints: function() {
-          // Update physics constraints to follow hand movement
-          ['left', 'right'].forEach(handKey => {
-            const constraintInfo = this.playerGrabConstraints[handKey];
-            if (constraintInfo && constraintInfo.handBody) {
-              const hand = handKey === 'left' ? this.leftHand : this.rightHand;
-              if (hand) {
-                // Update hand physics body position to match actual hand position
-                const handPos = new THREE.Vector3();
-                hand.object3D.getWorldPosition(handPos);
-                constraintInfo.handBody.position.set(handPos.x, handPos.y, handPos.z);
-                
-                // Handle custom tether system for bot grabs
-                if (constraintInfo.constraint.type === 'custom-tether') {
-                  this.updateCustomTether(constraintInfo, handPos);
-                }
-              }
-            }
-          });
-        },
-        
-        updateCustomTether: function(constraintInfo, handPos) {
-          const grabbedBody = constraintInfo.grabbedBody;
-          const playerId = constraintInfo.playerId;
-          
-          // Store previous position for velocity calculation
-          if (!constraintInfo.prevGrabbedPos) {
-            constraintInfo.prevGrabbedPos = new THREE.Vector3();
-          }
-          const prevGrabbedPos = constraintInfo.prevGrabbedPos.clone();
-          
-          // Update physics body position to match the actual player/bot position
-          let grabbedVelocity = new THREE.Vector3();
-          if (playerId.startsWith('bot_')) {
-            // For bots, get velocity from physics body
-            if (grabbedBody.velocity) {
-              grabbedVelocity.set(grabbedBody.velocity.x, grabbedBody.velocity.y, grabbedBody.velocity.z);
-            }
-          } else {
-            // For human players, update the temporary physics body to match remote player position
-            const playerTarget = document.querySelector(`[data-player-id="${playerId}"]`);
-            if (playerTarget) {
-              const currentPos = new THREE.Vector3();
-              playerTarget.object3D.getWorldPosition(currentPos);
-              grabbedBody.position.set(currentPos.x, currentPos.y, currentPos.z);
-              
-              // Calculate grabbed player's velocity from position change
-              if (constraintInfo.prevGrabbedPos.length() > 0) {
-                const deltaTime = 1/60; // Assume 60fps for velocity calculation
-                grabbedVelocity.subVectors(currentPos, prevGrabbedPos).divideScalar(deltaTime);
-              }
-              constraintInfo.prevGrabbedPos.copy(currentPos);
-            }
-          }
-          
-          const grabbedPos = new THREE.Vector3(grabbedBody.position.x, grabbedBody.position.y, grabbedBody.position.z);
-          const distance = handPos.distanceTo(grabbedPos);
-          
-          // Improved tether system with damping and velocity matching
-          const targetDistance = 0.15; // Desired distance to maintain (15cm)
-          const maxTetherDistance = 1.5; // Maximum allowed distance before breaking
-          
-          if (distance > targetDistance) {
-            const direction = new THREE.Vector3().subVectors(grabbedPos, handPos).normalize();
-            const distanceError = distance - targetDistance;
-            
-            // Break tether if too far (prevents infinite stretching)
-            if (distance > maxTetherDistance) {
-              // Force release the grab
-              const handKey = constraintInfo.handKey || 'left'; // Fallback
-              this.releasePlayerGrab(handKey);
-              return;
-            }
-            
-            // Calculate desired velocity to reach target position
-            const springForce = Math.min(distanceError * 8.0, 15.0); // Capped spring force
-            const targetVelocity = direction.clone().multiplyScalar(springForce);
-            
-            // Add the grabbed player's velocity for smooth following
-            targetVelocity.add(grabbedVelocity.clone().multiplyScalar(0.8));
-            
-            // Apply damping to current velocity to reduce oscillation
-            const dampingFactor = 0.85; // Reduce existing velocity by 15%
-            this.velocity.multiplyScalar(dampingFactor);
-            
-            // Smoothly blend toward target velocity instead of adding force
-            const blendFactor = 0.3; // How quickly to adjust velocity
-            const velocityCorrection = targetVelocity.clone().sub(this.velocity).multiplyScalar(blendFactor);
-            
-            // Apply the smooth velocity correction
-            this.velocity.add(velocityCorrection);
-            
-            // Limit maximum tether velocity to prevent extreme movements
-            const maxTetherVelocity = 20.0; // m/s
-            if (this.velocity.length() > maxTetherVelocity) {
-              this.velocity.normalize().multiplyScalar(maxTetherVelocity);
-            }
-          }
-        },
-        
-        sendPlayerGrabMessage: function(targetPlayerId, isGrabbing) {
-          const data = {
-            type: 'player-grab',
-            grabberId: myPlayerId,
-            targetPlayerId: targetPlayerId,
-            isGrabbing: isGrabbing,
-            timestamp: Date.now()
-          };
-          
-          // Send to all other players
-          if (isHost) {
-            connections.forEach(conn => {
-              if (conn && conn.open) {
-                conn.send(data);
-              }
-            });
-          } else {
-            // Send to host
-            const hostConn = connections.get('host');
-            if (hostConn && hostConn.open) {
-              hostConn.send(data);
-            }
-          }
-        },
-        
-        forceReleaseGrabberTimeout: function(grabberId) {
-          // Force release any grabs on the specified player
-          ['left', 'right'].forEach(handKey => {
-            if (this.grabbingPlayer[handKey] === grabberId) {
-              // Clean up physics constraint
-              const constraintInfo = this.playerGrabConstraints[handKey];
-              if (constraintInfo) {
-                world.removeConstraint(constraintInfo.constraint);
-                world.removeBody(constraintInfo.handBody);
-                this.playerGrabConstraints[handKey] = null;
-              }
-              
-              // Find the player target to reset visual feedback
-              const playerTarget = document.querySelector(`[data-player-id="${grabberId}"]`);
-              if (playerTarget) {
-                playerTarget.setAttribute('material', 'emissive: #000000; emissiveIntensity: 0');
-              }
-              
-              // Clear grab state
-              this.isGrabbing[handKey] = false;
-              this.grabbedSurface[handKey] = null;
-              this.grabInfo[handKey] = null;
-              this.grabbingPlayer[handKey] = null;
-            }
-          });
-          
-          // Set 3-second timeout for grabbing this player again
-          const timeoutEnd = Date.now() + 3000; // 3 seconds
-          this.playerGrabTimeouts.set(grabberId, timeoutEnd);
-        },
-        
-        activateSpeedBoost: function() {
-          // Check if speed boost is available
-          if (!this.speedBoostAvailable) {
-            return; // Still on cooldown
-          }
-          
-          // Check if player is holding capture ball (no boost allowed)
-          if (this.isHoldingCaptureBall()) {
-            return; // Cannot boost while holding capture ball
-          }
-          
-          // Check if grabbing players/bots (no boost allowed)
-          if (this.grabbingPlayer.left || this.grabbingPlayer.right) {
-            return; // Cannot boost while grabbing players/bots
-          }
-          
-          // Check if still in capture ball release timeout
-          const currentTime = Date.now();
-          if (currentTime < this.captureBallReleaseTimeout) {
-            return; // Still in 2-second timeout after releasing capture ball
-          }
-          
-          // Always boost in the direction the player is looking (head rotation)
-          const camera = document.querySelector('[camera]');
-          let boostDirection = new THREE.Vector3(0, 0, -1); // Forward direction
-          
-          if (camera) {
-            // Use the same method as thrusters - get world quaternion and apply it
-            const worldQuat = new THREE.Quaternion();
-            camera.object3D.getWorldQuaternion(worldQuat);
-            boostDirection.applyQuaternion(worldQuat);
-          }
-          
-          // Apply the boost force as an additive force (mixes with existing velocity)
-          const boostForce = boostDirection.multiplyScalar(this.speedBoostForce);
-          this.velocity.add(boostForce);
-          
-          // Start cooldown
-          this.speedBoostAvailable = false;
-          this.lastSpeedBoostTime = Date.now();
-        },
-        
-        applyCollisionForce: function(force, sourceHand) {
-          // Apply force to player velocity (Newton's third law - equal and opposite reaction)
-          const forceScale = 0.5; // Scale down the force for comfortable gameplay
-          this.velocity.add(force.clone().multiplyScalar(forceScale));
-          
-          // Check if force is strong enough to break grabs
-          const forceStrength = force.length();
-          const forceThreshold = 0.3; // Lower threshold - release before deep penetration
-          
-          if (forceStrength > forceThreshold) {
-            // Force release the other hand if it's grabbing a static surface
-            const otherHandKey = sourceHand.id === 'leftHand' ? 'right' : 'left';
-            
-            if (this.isGrabbing[otherHandKey] && this.grabInfo[otherHandKey] && !this.grabInfo[otherHandKey].isBall) {
-              // Release the other hand's grab on static surface
-              this.grabInfo[otherHandKey] = null;
-              this.isGrabbing[otherHandKey] = false;
-              
-              // Apply extra force since we broke the grab
-              this.velocity.add(force.clone().multiplyScalar(0.3));
-            }
           }
         },
 
@@ -4044,7 +2997,7 @@ function setGameplayHUD(isPlaying) {
               
               if (distance < 0.5) { // Close enough for melee hit
                 const playerId = myPlayerId || 'player_0';
-                if (areTeammates(playerId, 'bot-red') || areTeammates(playerId, 'bot-blue') || areTeammates(playerId, 'bot-green')) {
+                if (areTeammates(playerId, 'bot-red') || areTeammates(playerId, 'bot-blue')) {
                   return;
                 }
                 
@@ -4334,7 +3287,7 @@ function setGameplayHUD(isPlaying) {
           const handKey = isLeft ? 'left' : 'right';
           
           // Don't grab if already grabbing something
-          if (this.isGrabbing[handKey]) return false;
+          if (this.isGrabbing[handKey]) return;
           
           // Look for nearby balls only (not static surfaces)
           const ball = this.findNearestBall(hand);
@@ -4343,60 +3296,10 @@ function setGameplayHUD(isPlaying) {
             // Only grab player's own ball or capture ball
             const ballPlayer = ball.getAttribute('zerog-ball')?.player;
             
-            // CRITICAL FIX: Check for ball steal timeout before allowing capture ball grab
-            if (ballPlayer === 'capture' && this.ballStealTimeout && Date.now() < this.ballStealTimeout) {
-              console.log('⏰ Ball grab blocked - steal timeout active for', Math.ceil((this.ballStealTimeout - Date.now()) / 1000), 'more seconds');
-              return false;
-            }
-            
-            // CRITICAL FIX: Check for global steal cooldown to prevent rapid back-and-forth stealing
-            if (ballPlayer === 'capture') {
-              const timeSinceLastSteal = Date.now() - this.lastStealTime;
-              if (timeSinceLastSteal < this.stealCooldown) {
-                console.log('🔄 Ball grab blocked - steal cooldown active for', Math.ceil((this.stealCooldown - timeSinceLastSteal) / 1000), 'more seconds');
-                return false;
-              }
-              
-              // Check ball ownership and stealing rules
-              const ballComponent = ball.components['zerog-ball'];
-              if (ballComponent) {
-                // Check if someone else currently owns the ball
-                if (ballComponent.currentOwner && ballComponent.currentOwner !== myPlayerId) {
-                  const timeSinceOwnerChange = Date.now() - (ballComponent.lastOwnerChangeTime || 0);
-                  
-                  // Prevent stealing for 2 seconds after ownership change to allow stable control
-                  if (timeSinceOwnerChange < 2000) {
-                    console.log('🛡️ Ball grab blocked - owner protection active for', Math.ceil((2000 - timeSinceOwnerChange) / 1000), 'more seconds (owner:', ballComponent.currentOwner, ')');
-                    return false;
-                  }
-                  
-                  console.log('🔍 Attempting to steal ball from owner:', ballComponent.currentOwner);
-                }
-                
-                // Check if ball is currently held by another player and require close proximity
-                if (ballComponent.isGrabbed) {
-                  const ballPos = new THREE.Vector3();
-                  ball.object3D.getWorldPosition(ballPos);
-                  const handPos = new THREE.Vector3();
-                  hand.object3D.getWorldPosition(handPos);
-                  const distance = handPos.distanceTo(ballPos);
-                  
-                  // Require closer proximity to steal (0.3m instead of normal grab range)
-                  if (distance > 0.3) {
-                    console.log('🤏 Ball grab blocked - too far to steal (distance:', distance.toFixed(2), 'm)');
-                    return false;
-                  }
-                  
-                  console.log('💪 Attempting to steal capture ball from', ballComponent.currentOwner || 'unknown player');
-                  this.lastStealTime = Date.now(); // Set cooldown for this player
-                }
-              }
-            }
-            
             // Determine which ball this player should grab
             let shouldGrabThisBall = false;
             
-            // Always allow grabbing the capture ball (if not in timeout)
+            // Always allow grabbing the capture ball
             if (ballPlayer === 'capture') {
               shouldGrabThisBall = true;
             } else {
@@ -4405,28 +3308,16 @@ function setGameplayHUD(isPlaying) {
               const myBallIndex = getBallForPlayer(currentPlayerId);
               const expectedBallPlayer = `player${myBallIndex}`;
               shouldGrabThisBall = (ballPlayer === expectedBallPlayer);
-              
-              console.log(`Ball grab attempt: currentPlayerId=${currentPlayerId}, myBallIndex=${myBallIndex}, expectedBallPlayer=${expectedBallPlayer}, ballPlayer=${ballPlayer}, shouldGrab=${shouldGrabThisBall}`);
             }
             
             if (shouldGrabThisBall) {
-              // Clear the timeout when successfully grabbing (for future steals)
-              if (ballPlayer === 'capture' && this.ballStealTimeout) {
-                console.log('✅ Ball steal timeout cleared - successful grab');
-                this.ballStealTimeout = null;
-              }
-              
               this.grabbedSurface[handKey] = ball;
               this.attachToSurface(hand, ball);
               
               // Haptic feedback
               this.playHapticFeedback(hand, 0.5, 100);
-              
-              return true; // Ball was successfully grabbed
             }
           }
-          
-          return false; // No ball was grabbed
         },
         
         // NEW: Release grabbed ball  
@@ -4468,7 +3359,7 @@ function setGameplayHUD(isPlaying) {
           return nearestBall;
         },
         
-        // NEW: Continuous grabbing while grip is held (balls and static objects)
+        // NEW: Continuous ball grabbing while grip is held
         updateGripBallGrabbing: function() {
           // Check each hand
           ['left', 'right'].forEach(handKey => {
@@ -4476,28 +3367,9 @@ function setGameplayHUD(isPlaying) {
             if (!hand) return;
             
             // If grip is held but not currently grabbing anything
-            if (this.gripHeld[handKey] && !this.isGrabbing[handKey] && !this.grabbingPlayer[handKey]) {
-              // CRITICAL FIX: Check if we're in steal timeout before trying to grab balls
-              if (this.ballStealTimeout && Date.now() < this.ballStealTimeout) {
-                console.log('⏰ Skipping ball grab attempt - in steal timeout for', Math.ceil((this.ballStealTimeout - Date.now()) / 1000), 'more seconds');
-                return; // Skip ball grabbing while in timeout
-              }
-              
-              // Try to grab balls first (priority)
-              const ballGrabbed = this.tryGrabBall(hand);
-
-              if (!ballGrabbed) {
-                // Try to grab players second (priority over static surfaces)
-                const nearestPlayer = this.findNearestPlayer(hand);
-                if (nearestPlayer) {
-                  const playerId = nearestPlayer.getAttribute('data-player-id');
-                  this.grabPlayer(hand, nearestPlayer, playerId);
-                  return;
-                }
-
-                // If no ball or player found, try static surfaces
-                this.handleGrab(hand, true);
-              }
+            if (this.gripHeld[handKey] && !this.isGrabbing[handKey]) {
+              // Continuously try to grab nearby balls
+              this.tryGrabBall(hand);
             }
           });
         },
@@ -4548,9 +3420,6 @@ function setGameplayHUD(isPlaying) {
               
               // Skip validation for balls - they follow the hand
               if (grabInfo.isBall) return;
-              
-              // Skip validation for player grabs - custom tether system handles distance
-              if (grabInfo.isPlayer) return;
               
               // Get current hand position
               const handPos = new THREE.Vector3();
@@ -4839,8 +3708,6 @@ function setGameplayHUD(isPlaying) {
           // Initialize ball assignment - will be updated when game mode changes
           this.updateBallAssignment();
           
-          console.log(`Bot ${this.el.id} initialized with team: ${this.data.team}`);
-          
           // Add collision detection for bot being hit
           this.body.addEventListener('collide', (evt) => {
             this.checkPlayerBallHit(evt);
@@ -4860,24 +3727,11 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateBallAssignment: function() {
-          // Get ball assignment based on bot element ID
-          let botId;
-          if (this.el.id === 'zerog-bot-red') {
-            botId = 'bot-red';
-          } else if (this.el.id === 'zerog-bot-blue') {
-            botId = 'bot-blue';
-          } else if (this.el.id === 'zerog-bot-green') {
-            botId = 'bot-green';
-          } else {
-            console.error(`Unknown bot ID: ${this.el.id}`);
-            return;
-          }
-          
+          // Get ball assignment based on current game mode and team
+          const botId = this.data.team === 'red' ? 'bot-red' : 'bot-blue';
           const ballIndex = getBallForPlayer(botId);
           const ballPlayer = `player${ballIndex}`;
           this.ball = this.el.sceneEl.querySelector(`[zerog-ball*="player: ${ballPlayer}"]`);
-          
-          console.log(`Bot ${this.el.id} ball assignment: botId=${botId}, ballIndex=${ballIndex}, ballPlayer=${ballPlayer}, ball=${!!this.ball}`);
         },
         
                  checkPlayerBallHit: function(evt) {
@@ -5056,11 +3910,8 @@ function setGameplayHUD(isPlaying) {
         
         throwBallAtPlayer: function() {
           if (!this.ball || !this.ball.components['zerog-ball']) {
-            console.log(`Bot ${this.el.id} cannot throw: ball=${!!this.ball}, ballComponent=${this.ball ? !!this.ball.components['zerog-ball'] : false}`);
             return;
           }
-          
-          console.log(`Bot ${this.el.id} throwing ball at player!`);
           
           // Find the best target (closest opponent)
           const bestTarget = this.findBestTarget();
@@ -5138,9 +3989,6 @@ function setGameplayHUD(isPlaying) {
             return; // Clients don't run bot AI
           }
           
-          // Bot AI continues even when grabbed - this allows players to "hitch a ride"
-          // The physics constraint will drag the player along with the bot's movement
-          
           // Check if stunned and disable AI
           if (this.isStunned) {
             if (Date.now() > this.stunEndTime) {
@@ -5183,23 +4031,16 @@ function setGameplayHUD(isPlaying) {
                                (gameManager.components['game-manager'].matchState === 'PLAYING' || 
                                 gameManager.components['game-manager'].matchState === 'OVERTIME');
           
-          const timeSinceLastThrow = time - this.lastThrowTime;
-          const throwIntervalMet = timeSinceLastThrow > this.data.throwInterval;
 
-          // Debug bot throwing conditions every 5 seconds (removed for cleaner logs)
           
-          if (isMatchActive && throwIntervalMet) {
+          if (isMatchActive && time - this.lastThrowTime > this.data.throwInterval) {
 
             
             // In capture mode, only throw at opponents
             if (gameMode === 'capture') {
               const playerId = myPlayerId || 'player_0';
               const botId = this.data.team === 'red' ? 'bot-red' : 'bot-blue';
-              const isTeammate = areTeammates(botId, playerId);
-              
-              console.log(`Bot throw check: botId=${botId}, playerId=${playerId}, isTeammate=${isTeammate}, bot.data.team=${this.data.team}`);
-              
-              if (isTeammate) {
+              if (areTeammates(botId, playerId)) {
                 this.lastThrowTime = time;
                 return;
               }
@@ -5716,69 +4557,32 @@ function setGameplayHUD(isPlaying) {
           // Show initial message in HUD
           if (this.startMessage) {
             this.startMessage.setAttribute('visible', true);
-            this.updateStartMessage();
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
           }
           
           // Hide score and timer displays initially
           if (this.scoreDisplay) this.scoreDisplay.setAttribute('visible', false);
           if (this.timerDisplay) this.timerDisplay.setAttribute('visible', false);
           
-          // A button no longer controls match start - host controls via menu
-          // Keep A button for other interactions if needed in the future
-        },
-        
-        startMatchWithBots: function() {
-          // Start match immediately with current players + bots to fill to correct total based on game mode
-          const humanPlayerCount = isMultiplayer ? activePlayers.size : 1;
-          
-          // Ensure we have the correct number of total players (humans + bots) based on game mode
-          manageActivePlayersAndBots();
-          
-          // Start countdown immediately
-                this.startCountdown();
-          
-          // Send match start message to all connected players
-          if (isMultiplayer && isHost) {
-            const data = {
-              type: 'match-start',
-              timestamp: Date.now()
-            };
-            
-            connections.forEach(conn => {
-              if (conn && conn.open) {
-                conn.send(data);
-              }
-            });
-          }
-        },
-        
-        updateStartMessage: function() {
-          if (!this.startMessage) return;
-          
-          // CRITICAL: NEVER show HUD messages when menu is open
-          const menuVisible = getMenuVisibility();
-          if (menuVisible) {
-            this.startMessage.setAttribute('visible', false);
-            return;
-          }
-          
-          // Only show messages when waiting and menu is closed
-          if (this.matchState === 'WAITING') {
-            if (isMultiplayer) {
-              if (isHost) {
-                this.startMessage.setAttribute('text', 'value', 'Press X to open menu and start match');
+          // Listen for A button press on both controllers
+          this.el.sceneEl.addEventListener('abuttondown', (evt) => {
+                        if (this.matchState === 'WAITING') {
+              if (isMultiplayer) {
+                // Always use multiplayer ready system if lobby is open
+                this.handleMultiplayerReady();
               } else {
-                this.startMessage.setAttribute('text', 'value', 'Waiting for host to start match...');
+                this.startCountdown();
               }
-            } else {
-              // Singleplayer
-              this.startMessage.setAttribute('text', 'value', 'Press X to open menu and start match');
+            } else if (this.matchState === 'ENDED') {
+              if (isMultiplayer) {
+                // Always use multiplayer ready system if lobby is open
+                this.handleMultiplayerReady();
+              } else {
+                // Single player can restart immediately
+                this.resetMatch();
+              }
             }
-            this.startMessage.setAttribute('visible', true);
-          } else {
-            // Hide message during ANY active match state
-            this.startMessage.setAttribute('visible', false);
-          }
+          });
         },
 
         tick: function() {
@@ -5792,34 +4596,9 @@ function setGameplayHUD(isPlaying) {
               this.startMessage.setAttribute('text', 'value', remaining.toString());
             } else {
               this.startMessage.setAttribute('text', 'value', 'GO!');
-              
-              // CRITICAL FIX: Prevent multiple setTimeout calls by using a flag
-              if (!this.matchStartScheduled) {
-                this.matchStartScheduled = true;
-                console.log('🎯 Scheduling match start (only once)');
-                
-                setTimeout(() => {
-                  // CRITICAL FIX: Only host should call startMatch and sync to clients
-                  if (!isMultiplayer || isHost) {
-                    const matchStartTime = Date.now();
-                    this.startMatch(matchStartTime);
-                    
-                    // Send match start sync to all clients
-                    if (isMultiplayer && isHost) {
-                      console.log('📡 HOST sending match-start-sync to', connections.size, 'clients');
-                      connections.forEach((conn, playerId) => {
-                        if (conn && conn.open) {
-                          conn.send({ 
-                            type: 'match-start-sync', 
-                            matchStartTime: matchStartTime 
-                          });
-                        }
-                      });
-                    }
-                  }
-                  // Clients will receive match-start-sync message and start their match
-                }, 500);
-              }
+              setTimeout(() => {
+                this.startMatch();
+              }, 500);
             }
           } else if (this.matchState === 'PLAYING') {
             this.updateTimer();
@@ -5854,8 +4633,8 @@ function setGameplayHUD(isPlaying) {
         },
 
         updateReadyState: function() {
-          const minPlayers = 2; // Both modes need at least 2 players
-          const maxPlayers = 4; // Both modes use 4 players total
+          const minPlayers = gameMode === 'capture' ? 2 : 2; // Both modes need at least 2 players
+          const maxPlayers = gameMode === 'capture' ? 2 : 4;
           
           if (!isMultiplayer) {
             // Single player mode - shouldn't reach here
@@ -5907,11 +4686,10 @@ function setGameplayHUD(isPlaying) {
           multiplayerReady.local = false;
           multiplayerReady.remote = false;
           
-          // Show start message only if menu is not visible
+          // Show start message
           if (this.startMessage) {
-            const menuVisible = getMenuVisibility();
-            this.startMessage.setAttribute('visible', !menuVisible);
-            this.updateStartMessage();
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
           }
           if (this.scoreDisplay) this.scoreDisplay.setAttribute('visible', false);
           if (this.timerDisplay) this.timerDisplay.setAttribute('visible', false);
@@ -5921,7 +4699,6 @@ function setGameplayHUD(isPlaying) {
         syncedStartCountdown: function(startTime) {
           this.matchState = 'COUNTDOWN';
           this.countdownStartTime = startTime;
-          this.matchStartScheduled = false; // Reset flag for new countdown
           if (this.startMessage) {
             this.startMessage.setAttribute('visible', true);
             this.startMessage.setAttribute('text', 'value', '3');
@@ -5939,7 +4716,6 @@ function setGameplayHUD(isPlaying) {
         startCountdown: function() {
           this.matchState = 'COUNTDOWN';
           this.countdownStartTime = Date.now();
-          this.matchStartScheduled = false; // Reset flag for new countdown
           if (this.startMessage) {
             this.startMessage.setAttribute('visible', true);
             this.startMessage.setAttribute('text', 'value', '3');
@@ -5951,13 +4727,10 @@ function setGameplayHUD(isPlaying) {
           // Match countdown started
         },
 
-        startMatch: function(matchStartTime) {
+        startMatch: function() {
           this.matchState = 'PLAYING';
-          this.matchStartTime = matchStartTime || Date.now(); // Use provided time or current time as fallback
+          this.matchStartTime = Date.now();
           this.gameStarted = true;
-          
-          // Immediately update timer to show initial time
-          this.updateTimer();
           
           // Hide start message, show game UI
           if (this.startMessage) this.startMessage.setAttribute('visible', false);
@@ -5974,21 +4747,6 @@ function setGameplayHUD(isPlaying) {
           // Reset team scores for capture mode
           teamScores.red = 0;
           teamScores.blue = 0;
-          
-          // Update score display to show 0-0 at match start
-          this.updateMultiplayerScore();
-          
-          // Ensure HUD elements are properly shown during match
-          setTimeout(() => {
-            setGameplayHUD(true);
-            this.updateMultiplayerScore();
-            // Explicitly ensure timer is visible during match
-            if (this.timerDisplay) {
-              this.timerDisplay.setAttribute('visible', true);
-              // Update timer immediately to show current time
-              this.updateTimer();
-            }
-          }, 100);
           
           // Reset multiplayer scores
           if (isMultiplayer) {
@@ -6165,14 +4923,12 @@ function setGameplayHUD(isPlaying) {
             readyStates = [false, false, false, false];
           }
           
-          // Hide game UI, show start message only if menu is not visible
+          // Hide game UI, show start message
           if (this.scoreDisplay) this.scoreDisplay.setAttribute('visible', false);
           if (this.timerDisplay) this.timerDisplay.setAttribute('visible', false);
           if (this.startMessage) {
-            // Only show start message if menu is not currently open
-            const menuVisible = getMenuVisibility();
-            this.startMessage.setAttribute('visible', !menuVisible);
-            this.updateStartMessage();
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
           }
           
         },
@@ -6212,16 +4968,14 @@ function setGameplayHUD(isPlaying) {
             // Update HUD to show team scores in capture mode
             const hudScore = document.querySelector('#hud-score');
             if (hudScore) {
-              // Ensure HUD is visible during match and update content
               hudScore.setAttribute('visible', true);
-              
               const leftScoreEl = hudScore.children[0];
               const rightScoreEl = hudScore.children[1];
               
               if (leftScoreEl && rightScoreEl) {
                 // Show team scores: Blue (left) - Red (right)
-                leftScoreEl.setAttribute('text', 'value', `${teamScores.blue}`);
-                rightScoreEl.setAttribute('text', 'value', `${teamScores.red}`);
+                leftScoreEl.setAttribute('text', 'value', `Blue: ${teamScores.blue}`);
+                rightScoreEl.setAttribute('text', 'value', `Red: ${teamScores.red}`);
               }
             }
           } else {
@@ -6461,10 +5215,9 @@ function setGameplayHUD(isPlaying) {
         init: function() {
           this.menuVisible = false;
           this.lastBButtonPress = 0;
-          this.lastMenuToggle = 0; // Track menu toggle time to prevent accidental clicks
           
-          // X button to toggle menu with debouncing
-          this.el.sceneEl.addEventListener('xbuttondown', () => {
+          // B button to toggle menu with debouncing
+          this.el.sceneEl.addEventListener('bbuttondown', () => {
             const now = Date.now();
             if (now - this.lastBButtonPress < 500) return; // 500ms debounce
             this.lastBButtonPress = now;
@@ -6475,7 +5228,6 @@ function setGameplayHUD(isPlaying) {
         toggleMenu: function() {
           this.menuVisible = !this.menuVisible;
           isMenuVisible = this.menuVisible; // Update global state
-          this.lastMenuToggle = Date.now(); // Track when menu was toggled
           
           const menu = document.querySelector('#game-menu');
           const leftHand = document.querySelector('#leftHand');
@@ -6486,29 +5238,7 @@ function setGameplayHUD(isPlaying) {
             menu.setAttribute('visible', this.menuVisible);
           }
           
-          // Show/hide start/restart button for hosts and update button text
-          if (this.menuVisible) {
-            const restartButton = document.querySelector('#menu-restart-match');
-            const restartText = document.querySelector('#menu-restart-text');
-            if (restartButton && restartText) {
-              const gameManager = document.querySelector('[game-manager]');
-              const matchState = gameManager && gameManager.components['game-manager'] ? 
-                                gameManager.components['game-manager'].matchState : 'WAITING';
-              
-              // Show button only for hosts in multiplayer, or in singleplayer
-              const shouldShowButton = !isMultiplayer || isHost;
-              restartButton.setAttribute('visible', shouldShowButton);
-              
-              // Update button text based on match state
-              if (matchState === 'WAITING') {
-                restartText.setAttribute('text', 'value', 'START MATCH');
-              } else {
-                restartText.setAttribute('text', 'value', 'RESTART MATCH');
-              }
-            }
-          }
-          
-          // Toggle HUD layers - simple and clean
+          // Toggle HUD layers - only show one at a time
           this.toggleHUDLayers(this.menuVisible);
           
           // Show/hide laser pointers based on menu visibility
@@ -6551,12 +5281,12 @@ function setGameplayHUD(isPlaying) {
             this.updateMenuDisplay();
           }
           
-          // When menu closes, refresh HUD to show proper state
+          // Menu toggled
+          
+          // When menu closes, refresh HUD to apply any changes made during menu interaction
           if (!this.menuVisible) {
             this.refreshGameHUD();
           }
-          
-          // Menu toggled
         },
 
         updateMenuDisplay: function() {
@@ -6603,202 +5333,57 @@ function setGameplayHUD(isPlaying) {
         },
 
         toggleHUDLayers: function(showMenu) {
-          if (showMenu) {
-            // Hide HUD elements when menu is shown, but KEEP version display visible
-            const hiddenHudElements = [
+          // Game HUD elements (hidden when menu is shown)
+          const gameHudElements = [
+            '#version-display',
             '#hud-status', 
             '#hud-score',
             '#hud-timer',
-              '#hud-speed',
+            '#hud-speed',
             '#hud-message'
           ];
           
-            hiddenHudElements.forEach(selector => {
+          // Toggle game HUD visibility
+          gameHudElements.forEach(selector => {
             const element = document.querySelector(selector);
             if (element) {
-                element.setAttribute('visible', false);
-              }
-            });
-            
-            // ALWAYS keep version display visible (game version + FPS)
-            const versionElement = document.querySelector('#version-display');
-            if (versionElement) {
-              versionElement.setAttribute('visible', true);
+              element.setAttribute('visible', !showMenu);
             }
-          } else {
-            // Menu closed - restore HUD based on match state
-            // CRITICAL FIX: Find the correct game manager instance (there are multiple due to component re-initialization)
-            let gameManagerComponent = null;
-            
-            // Try to find the game manager with the correct state
-            const allGameManagers = document.querySelectorAll('[game-manager]');
-            
-            for (let i = 0; i < allGameManagers.length; i++) {
-              const gm = allGameManagers[i];
-              if (gm.components && gm.components['game-manager']) {
-                const comp = gm.components['game-manager'];
-                
-                // Prefer the one that has gameStarted=true or is not in WAITING state
-                if (comp.gameStarted === true || comp.matchState !== 'WAITING') {
-                  gameManagerComponent = comp;
-                  break;
-                }
-              }
-            }
-            
-            // Fallback to first one if none found with correct state
-            if (!gameManagerComponent && allGameManagers.length > 0) {
-              const gm = allGameManagers[0];
-              if (gm.components && gm.components['game-manager']) {
-                gameManagerComponent = gm.components['game-manager'];
-              }
-            }
-            
-            // Always show speed and version display
-            const speedElement = document.querySelector('#hud-speed');
-            if (speedElement) speedElement.setAttribute('visible', true);
-            
-            // ALWAYS show version display (game version + FPS)
-            const versionElement = document.querySelector('#version-display');
-            if (versionElement) versionElement.setAttribute('visible', true);
-            
-            if (gameManagerComponent) {
-              const matchState = gameManagerComponent.matchState;
-              
-              // Show score and timer during active match states (but NOT during countdown)
-              const showGameHUD = (matchState === 'PLAYING' || matchState === 'OVERTIME' || 
-                                 matchState === 'ENDED') ||
-                                 (gameManagerComponent.gameStarted === true && matchState !== 'COUNTDOWN');
-              
-              const scoreElement = document.querySelector('#hud-score');
-              const timerElement = document.querySelector('#hud-timer');
-              
-              
-              if (scoreElement) scoreElement.setAttribute('visible', showGameHUD);
-              if (timerElement) timerElement.setAttribute('visible', showGameHUD);
-              
-              if (showGameHUD) {
-                gameManagerComponent.updateMultiplayerScore();
-                gameManagerComponent.updateTimer();
-              }
-            }
-            
-            // Handle message visibility based on match state
-            const messageElement = document.querySelector('#hud-message');
-            const statusElement = document.querySelector('#hud-status');
-            
-            if (gameManagerComponent) {
-              const matchState = gameManagerComponent.matchState;
-              
-              // Handle message visibility carefully to avoid showing "GO!" during matches
-              if (messageElement) {
-                if (matchState === 'COUNTDOWN') {
-                  // Show countdown numbers during COUNTDOWN state
-                  messageElement.setAttribute('visible', true);
-                } else if (matchState === 'WAITING') {
-                  // Only show message in WAITING if it's not "GO!" (which means countdown just finished)
-                  const currentText = messageElement.getAttribute('text').value;
-                  if (currentText !== 'GO!') {
-                    messageElement.setAttribute('visible', true);
-                  } else {
-                    messageElement.setAttribute('visible', false);
-                  }
-                } else {
-                  // During PLAYING, OVERTIME, ENDED - always hide
-                  messageElement.setAttribute('visible', false);
-                }
-              }
-            }
-            
-            // Always keep status hidden during matches
-            if (statusElement) statusElement.setAttribute('visible', false);
-          }
+          });
+          
+          // Menu HUD (the menu itself) is handled in the main toggleMenu function
+          
+          // HUD visibility updated
         },
 
         refreshGameHUD: function() {
           // Refresh the game HUD based on current game state
           setTimeout(() => {
-            // CRITICAL FIX: Find the correct game manager instance (same logic as host connection handler)
-            const allGameManagers = document.querySelectorAll('[game-manager]');
-            let gameManagerComponent = null;
-            let gameManager = null;
-            
-            // Find the game manager with active state or the first valid one
-            for (let i = 0; i < allGameManagers.length; i++) {
-              const gm = allGameManagers[i];
-              if (gm.components && gm.components['game-manager']) {
-                const comp = gm.components['game-manager'];
-                
-                // Prefer the one with active match or use first valid one
-                if (!gameManagerComponent || comp.gameStarted || comp.matchState !== 'WAITING') {
-                  gameManagerComponent = comp;
-                  gameManager = gm;
-                }
-              }
-            }
-            
-            // ALWAYS ensure version display is visible
-            const versionDisplay = document.querySelector('#version-display');
-            if (versionDisplay) {
-              versionDisplay.setAttribute('visible', true);
-            }
-            
-            // Don't update HUD if menu is currently visible
-            if (isMenuVisible) {
-              return;
-            }
+            const gameManager = document.querySelector('#game-manager');
+            const isMatchActive = gameManager && gameManager.components['game-manager'] && 
+                                 gameManager.components['game-manager'].gameStarted;
             
             // Refreshing HUD
             
-            if (gameManagerComponent) {
-              const matchState = gameManagerComponent.matchState;
-              const isMatchActive = gameManagerComponent.gameStarted || 
-                                   matchState === 'PLAYING' || 
-                                   matchState === 'OVERTIME' || 
-                                   matchState === 'COUNTDOWN' ||
-                                   matchState === 'ENDED';
-              
-              if (isMatchActive) {
-                // Handle different match states appropriately
-                if (matchState === 'COUNTDOWN') {
-                  // During countdown, show HUD but keep message visible for countdown numbers
-                  setGameplayHUD(true);
-                  
-                  // CRITICAL: Re-enable the HUD message for countdown display
-                  const hudMessage = document.querySelector('#hud-message');
-                  if (hudMessage) {
-                    hudMessage.setAttribute('visible', true);
-                  }
-                } else {
-                  // Match is active (PLAYING/OVERTIME/ENDED) - show gameplay HUD with score and timer
-                  setGameplayHUD(true);
-                }
-                
-                // For clients joining active matches, ensure score and timer are updated
-                gameManagerComponent.updateMultiplayerScore();
-                gameManagerComponent.updateTimer();
-              } else if (isMultiplayer && activePlayers.size > 1) {
-                // Multiplayer connected but no match - set waiting state
-                setGameplayHUD(false);
-                
-                // Only set waiting state if not already in an active match
-                if (matchState === 'WAITING' || !matchState) {
-                  gameManagerComponent.setMultiplayerWaiting();
-                }
-              } else {
-                // Singleplayer or no connection - show default state
-                setGameplayHUD(false);
-                
-                // Ensure "Press X to open menu" message is visible in default state
-                const hudMessage = document.querySelector('#hud-message');
-                if (hudMessage) {
-                  hudMessage.setAttribute('visible', true);
-                  hudMessage.setAttribute('text', 'value', 'Press X to open menu');
-                }
+            if (isMatchActive) {
+              // Match is active - show gameplay HUD
+              setGameplayHUD(true);
+            } else if (isMultiplayer && activePlayers.size > 1) {
+              // Multiplayer connected but no match - set waiting state
+              setGameplayHUD(false);
+              if (gameManager && gameManager.components['game-manager']) {
+                gameManager.components['game-manager'].setMultiplayerWaiting();
               }
             } else {
-              // No game manager - show default state
+              // Singleplayer or no connection - show default state
               setGameplayHUD(false);
+              
+              // Ensure "Press A to Start" message is visible in default state
+              const hudMessage = document.querySelector('#hud-message');
+              if (hudMessage) {
+                hudMessage.setAttribute('visible', true);
+                hudMessage.setAttribute('text', 'value', 'Press A to Start');
+              }
             }
             
             // Game HUD refreshed
@@ -6913,41 +5498,8 @@ function setGameplayHUD(isPlaying) {
         // Initialize status display
         updateMultiplayerStatus('Singleplayer');
         
-        // Wait for A-Frame scene to be fully loaded before setting team colors
-        const aframeScene = document.querySelector('a-scene');
-        if (aframeScene) {
-          if (aframeScene.hasLoaded) {
-            // Scene already loaded, initialize immediately
-            initializeDefaultTeam();
-          } else {
-            // Wait for scene to load
-            aframeScene.addEventListener('loaded', initializeDefaultTeam);
-          }
-        }
-        
         // Scoring is now handled directly in the game-manager component - no patching needed
       });
-
-      // Initialize default team assignment for singleplayer
-      function initializeDefaultTeam() {
-        // Set default team for singleplayer
-        playerTeams.set('player_0', 'red');
-        
-        // Update player body color
-        updatePlayerTeamColor('player_0', 'red');
-        
-        // Update ball colors
-        updateBallColors();
-        
-        // Update team display in menu
-        updateTeamDisplay();
-        
-        // Update game mode UI for capture mode
-        updateGameModeUI('capture');
-        
-        // Manage bot and ball visibility for capture mode
-        manageActivePlayersAndBots();
-      }
 
       // --- MULTIPLAYER SYNC COMPONENT ---
       AFRAME.registerComponent('multiplayer-sync', {
@@ -7080,9 +5632,17 @@ function setGameplayHUD(isPlaying) {
               }
             }
             
-            // CRITICAL FIX: Use proper bot management instead of hiding all bots
-            // Always maintain 4 total players (humans + bots)
-            manageActivePlayersAndBots();
+            // Hide both bots in multiplayer
+            const redBot = document.querySelector('#zerog-bot-red');
+            const blueBot = document.querySelector('#zerog-bot-blue');
+            if (redBot) {
+              redBot.setAttribute('visible', false);
+              if (redBot.components['zerog-bot']) redBot.setAttribute('zerog-bot', 'enabled', false);
+            }
+            if (blueBot) {
+              blueBot.setAttribute('visible', false);
+              if (blueBot.components['zerog-bot']) blueBot.setAttribute('zerog-bot', 'enabled', false);
+            }
           } else if (!isMultiplayer) {
             // CRITICAL: Ensure bot is enabled and visible in singleplayer mode
             for (let i = 1; i < 4; i++) {
@@ -7136,9 +5696,7 @@ function setGameplayHUD(isPlaying) {
           this.isGrabbed = false;
           this.grabbingHand = null;
           
-          // Network authority tracking for capture ball
-          this.currentOwner = null; // Player ID who currently owns the ball
-          this.lastOwnerChangeTime = 0; // When ownership last changed
+
           
           // Check if this is the special capture ball
           this.isCaptureBall = (this.data.player === 'capture');
@@ -7196,7 +5754,7 @@ function setGameplayHUD(isPlaying) {
           // Different collision masks for capture ball vs regular balls
           const collisionMask = this.isCaptureBall 
             ? 4 | 8  // Capture ball collides with walls (4) AND goals (8)
-            : 4 | 2; // Regular balls collide with walls (4) AND other balls (2)
+            : 4;     // Regular balls collide with walls (4) only, NOT goals
           
           this.body = new CANNON.Body({
             mass: mass,
@@ -7271,7 +5829,7 @@ function setGameplayHUD(isPlaying) {
           this.lastHitTime = 0;
           this.hitCooldown = 2000; // 2 seconds cooldown
           
-          this.el.sceneEl.addEventListener('triggerdown', (evt) => {
+          this.el.sceneEl.addEventListener('abuttondown', () => {
             // Check if player is stunned
             const player = document.querySelector('[zerog-player]');
             if (player && player.components['zerog-player'] && player.components['zerog-player'].isStunned) {
@@ -7283,23 +5841,29 @@ function setGameplayHUD(isPlaying) {
             const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
             const ballOwnerId = getBallOwnerId(ballPlayerIndex);
             
-            // FIXED: Only allow tractor beam on player's own ball, NOT capture ball
-            // Check if this ball is owned by the current player (excludes capture ball)
-            if (this.data.owner === 'human' && ballOwnerId === currentPlayerId && !this.isCaptureBall) {
+            // Allow any player to control the capture ball
+            if (this.isCaptureBall) {
+              this.tractorBeamActive = true;
+            }
+            // Check if this ball is owned by the current player
+            else if (this.data.owner === 'human' && ballOwnerId === currentPlayerId) {
               this.tractorBeamActive = true;
             }
             // Bots cannot be controlled by humans
           });
           
-          this.el.sceneEl.addEventListener('triggerup', (evt) => {
+          this.el.sceneEl.addEventListener('abuttonup', () => {
             // CRITICAL FIX: Use dynamic ownership check instead of hardcoded ball indices
             const currentPlayerId = myPlayerId || 'player_0';
             const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
             const ballOwnerId = getBallOwnerId(ballPlayerIndex);
             
-            // FIXED: Only allow tractor beam on player's own ball, NOT capture ball
-            // Check if this ball is owned by the current player (excludes capture ball)
-            if (this.data.owner === 'human' && ballOwnerId === currentPlayerId && !this.isCaptureBall) {
+            // Allow any player to control the capture ball
+            if (this.isCaptureBall) {
+              this.tractorBeamActive = false;
+            }
+            // Check if this ball is owned by the current player
+            else if (this.data.owner === 'human' && ballOwnerId === currentPlayerId) {
               this.tractorBeamActive = false;
             }
           });
@@ -7402,20 +5966,19 @@ function setGameplayHUD(isPlaying) {
                 const targetPos = new THREE.Vector3();
                 redBotTarget.object3D.getWorldPosition(targetPos);
                 if (ballPos.distanceTo(targetPos) < 0.3) {
+                  // Play explosion/sound on red bot
+                  const impactEffect = redBotTarget.components['impact-effect'];
+                  if (impactEffect) impactEffect.playEffect();
+                  
                   if (gameMode === 'capture') {
                     // Check if ball should affect red bot based on team rules
                     if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-red')) {
-                      return; // Same team - no effect (no explosion/sound)
+                      return; // Same team - no effect
                     }
-                    // Play explosion/sound on red bot (only if different teams)
-                    const impactEffect = redBotTarget.components['impact-effect'];
-                    if (impactEffect) impactEffect.playEffect();
                     // In capture mode: stun the red bot
                     this.stunBot('bot-red');
                   } else {
-                    // In dodge mode: always play effect and score
-                    const impactEffect = redBotTarget.components['impact-effect'];
-                    if (impactEffect) impactEffect.playEffect();
+                    // In dodge mode: score for player
                   const gameManager = this.el.sceneEl.querySelector('#game-manager');
                   if (gameManager && gameManager.components['game-manager']) {
                     gameManager.components['game-manager'].onPlayerHit();
@@ -7433,52 +5996,19 @@ function setGameplayHUD(isPlaying) {
                 const targetPos = new THREE.Vector3();
                 blueBotTarget.object3D.getWorldPosition(targetPos);
                 if (ballPos.distanceTo(targetPos) < 0.3) {
+                  // Play explosion/sound on blue bot
+                  const impactEffect = blueBotTarget.components['impact-effect'];
+                  if (impactEffect) impactEffect.playEffect();
+                  
                   if (gameMode === 'capture') {
                     // Check if ball should affect blue bot based on team rules
                     if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-blue')) {
-                      return; // Same team - no effect (no explosion/sound)
+                      return; // Same team - no effect
                     }
-                    // Play explosion/sound on blue bot (only if different teams)
-                    const impactEffect = blueBotTarget.components['impact-effect'];
-                    if (impactEffect) impactEffect.playEffect();
                     // In capture mode: stun the blue bot
                     this.stunBot('bot-blue');
                   } else {
-                    // In dodge mode: always play effect and score
-                    const impactEffect = blueBotTarget.components['impact-effect'];
-                    if (impactEffect) impactEffect.playEffect();
-                    const gameManager = this.el.sceneEl.querySelector('#game-manager');
-                    if (gameManager && gameManager.components['game-manager']) {
-                      gameManager.components['game-manager'].onPlayerHit();
-                    }
-                  }
-                  
-                  this.lastHitTime = now;
-                  this.startAutoReturn();
-                  return;
-                }
-              }
-              
-              // Check green bot target
-              const greenBotTarget = document.querySelector('#bot-green-target');
-              if (greenBotTarget) {
-                const targetPos = new THREE.Vector3();
-                greenBotTarget.object3D.getWorldPosition(targetPos);
-                if (ballPos.distanceTo(targetPos) < 0.3) {
-                  if (gameMode === 'capture') {
-                    // Check if ball should affect green bot based on team rules
-                    if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-green')) {
-                      return; // Same team - no effect (no explosion/sound)
-                    }
-                    // Play explosion/sound on green bot (only if different teams)
-                    const impactEffect = greenBotTarget.components['impact-effect'];
-                    if (impactEffect) impactEffect.playEffect();
-                    // In capture mode: stun the green bot
-                    this.stunBot('bot-green');
-                  } else {
-                    // In dodge mode: always play effect and score
-                    const impactEffect = greenBotTarget.components['impact-effect'];
-                    if (impactEffect) impactEffect.playEffect();
+                    // In dodge mode: score for player
                     const gameManager = this.el.sceneEl.querySelector('#game-manager');
                     if (gameManager && gameManager.components['game-manager']) {
                       gameManager.components['game-manager'].onPlayerHit();
@@ -7633,157 +6163,28 @@ function setGameplayHUD(isPlaying) {
               return;
             }
           }
-          
-          // --- MULTIPLAYER BOT COLLISION LOGIC ---
-          // Check collisions with bots in multiplayer mode
-          const redBotTarget = document.querySelector('#bot-target');
-          const blueBotTarget = document.querySelector('#bot-blue-target');
-          const greenBotTarget = document.querySelector('#bot-green-target');
-          
-          // Check red bot target
-          if (redBotTarget) {
-            const targetPos = new THREE.Vector3();
-            redBotTarget.object3D.getWorldPosition(targetPos);
-            if (ballPos.distanceTo(targetPos) < 0.3) {
-              if (gameMode === 'capture') {
-                // Check if ball should affect red bot based on team rules
-                if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-red')) {
-                  return; // Same team - no effect (no explosion/sound)
-                }
-                // Play explosion/sound on red bot (only if different teams)
-                const impactEffect = redBotTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                // In capture mode: stun the red bot
-                this.stunBot('bot-red');
-              } else {
-                // In dodge mode: always play effect and score
-                const impactEffect = redBotTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                const gameManager = this.el.sceneEl.querySelector('#game-manager');
-                if (gameManager && gameManager.components['game-manager']) {
-                  gameManager.components['game-manager'].onPlayerHit();
-                }
-              }
-              
-              this.lastHitTime = now;
-              this.startAutoReturn();
-              return;
-            }
-          }
-          
-          // Check blue bot target
-          if (blueBotTarget) {
-            const targetPos = new THREE.Vector3();
-            blueBotTarget.object3D.getWorldPosition(targetPos);
-            if (ballPos.distanceTo(targetPos) < 0.3) {
-              if (gameMode === 'capture') {
-                // Check if ball should affect blue bot based on team rules
-                if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-blue')) {
-                  return; // Same team - no effect (no explosion/sound)
-                }
-                // Play explosion/sound on blue bot (only if different teams)
-                const impactEffect = blueBotTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                // In capture mode: stun the blue bot
-                this.stunBot('bot-blue');
-              } else {
-                // In dodge mode: always play effect and score
-                const impactEffect = blueBotTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                const gameManager = this.el.sceneEl.querySelector('#game-manager');
-                if (gameManager && gameManager.components['game-manager']) {
-                  gameManager.components['game-manager'].onPlayerHit();
-                }
-              }
-              
-              this.lastHitTime = now;
-              this.startAutoReturn();
-              return;
-            }
-          }
-          
-          // Check green bot target
-          if (greenBotTarget) {
-            const targetPos = new THREE.Vector3();
-            greenBotTarget.object3D.getWorldPosition(targetPos);
-            if (ballPos.distanceTo(targetPos) < 0.3) {
-              if (gameMode === 'capture') {
-                // Check if ball should affect green bot based on team rules
-                if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-green')) {
-                  return; // Same team - no effect (no explosion/sound)
-                }
-                // Play explosion/sound on green bot (only if different teams)
-                const impactEffect = greenBotTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                // In capture mode: stun the green bot
-                this.stunBot('bot-green');
-              } else {
-                // In dodge mode: always play effect and score
-                const impactEffect = greenBotTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                const gameManager = this.el.sceneEl.querySelector('#game-manager');
-                if (gameManager && gameManager.components['game-manager']) {
-                  gameManager.components['game-manager'].onPlayerHit();
-              }
-              }
-              
-              this.lastHitTime = now;
-              this.startAutoReturn();
-              return;
-            }
-          }
         },
         
         onGrab: function(hand) {
           // CRITICAL FIX: For capture ball, send network message to force release on other players
           if (this.isCaptureBall && isMultiplayer && activePlayers.size > 1) {
-            // Debounce network messages to prevent spam
-            const now = Date.now();
-            if (!this.lastGrabMessageTime || now - this.lastGrabMessageTime > 500) {
-              this.lastGrabMessageTime = now;
-              
-              // Send capture ball grab message to all other players
-              const data = {
-                type: 'capture-ball-grabbed',
-                grabberId: myPlayerId,
-                timestamp: now
-              };
-              
-              console.log('📡 Sending capture ball grab message to', connections.size, 'players');
-              connections.forEach((conn, playerId) => {
-                if (conn && conn.open) {
-                  conn.send(data);
-                }
-              });
-            } else {
-              console.log('🚫 Skipping duplicate grab message (debounced)');
-            }
+            // Send capture ball grab message to all other players
+            const data = {
+              type: 'capture-ball-grabbed',
+              grabberId: myPlayerId,
+              timestamp: Date.now()
+            };
+            
+            connections.forEach((conn, playerId) => {
+              if (conn && conn.open) {
+                conn.send(data);
+              }
+            });
           }
           
           this.isGrabbed = true;
           this.grabbingHand = hand;
           this.body.gravity.set(0, 0, 0);
-          
-          // CRITICAL FIX: Set ownership when ball is grabbed
-          if (this.isCaptureBall) {
-            this.currentOwner = myPlayerId;
-            this.lastOwnerChangeTime = Date.now();
-            console.log('🎯 Ball ownership set to', myPlayerId);
-          }
-          
-          // Activate shield for player balls when grabbed (if available and not capture ball)
-          if (!this.isCaptureBall) {
-            const shieldElement = this.el.querySelector('.ball-shield');
-            if (shieldElement && shieldElement.components['ball-shield']) {
-              const activated = shieldElement.components['ball-shield'].activateShield();
-              console.log(`Ball shield activation: ${activated ? 'SUCCESS' : 'FAILED (cooldown)'}`);
-            } else {
-              console.log('Ball shield element or component not found:', {
-                shieldElement: !!shieldElement,
-                hasComponent: shieldElement ? !!shieldElement.components['ball-shield'] : false
-              });
-            }
-          }
           
           // CRITICAL FIX: Immediately send grab state to other players
           if (isMultiplayer && activePlayers.size > 1) {
@@ -7905,13 +6306,6 @@ function setGameplayHUD(isPlaying) {
           this.grabbingHand = null;
           this.velocityHistory = [];
           
-          // CRITICAL FIX: Clear ownership when ball is voluntarily released (not stolen)
-          if (this.isCaptureBall && this.currentOwner === myPlayerId) {
-            console.log('🎯 Ball ownership cleared - voluntary release by', myPlayerId);
-            this.currentOwner = null;
-            this.lastOwnerChangeTime = Date.now();
-          }
-          
           // NOTE: Ball state with velocity is already sent immediately above in onRelease
           // No need to send additional release state here since throw velocity sync handles it
         },
@@ -7952,11 +6346,9 @@ function setGameplayHUD(isPlaying) {
             bot = document.querySelector('#zerog-bot-red');
           } else if (botId === 'bot-blue') {
             bot = document.querySelector('#zerog-bot-blue');
-          } else if (botId === 'bot-green') {
-            bot = document.querySelector('#zerog-bot-green');
           } else {
             // Fallback to old behavior if no botId specified
-            bot = document.querySelector('#zerog-bot-red') || document.querySelector('#zerog-bot-blue') || document.querySelector('#zerog-bot-green');
+            bot = document.querySelector('#zerog-bot-red') || document.querySelector('#zerog-bot-blue');
           }
           
           if (bot && bot.components['zerog-bot']) {
@@ -7993,22 +6385,10 @@ function setGameplayHUD(isPlaying) {
               this.grabbingHand.object3D.getWorldPosition(handPos);
               this.grabbingHand.object3D.getWorldQuaternion(handQuat);
               
-              // Check for collision and apply force feedback to player
-              const ballRadius = this.isCaptureBall ? 0.2 : 0.1;
-              const collisionResult = this.checkBallCollisionWithFeedback(handPos, ballRadius);
-              
-              // Apply collision force back to player
-              if (collisionResult.force.length() > 0) {
-                const player = document.querySelector('[zerog-player]');
-                if (player && player.components['zerog-player']) {
-                  player.components['zerog-player'].applyCollisionForce(collisionResult.force, this.grabbingHand);
-                }
-              }
-              
-              // Update ball position AND rotation to match hand (with collision correction)
-              this.el.object3D.position.copy(collisionResult.position);
+              // Update ball position AND rotation to match hand
+              this.el.object3D.position.copy(handPos);
               this.el.object3D.quaternion.copy(handQuat);
-              this.body.position.copy(collisionResult.position);
+              this.body.position.copy(handPos);
               this.body.quaternion.copy(handQuat);
               this.body.velocity.set(0, 0, 0);
               this.body.angularVelocity.set(0, 0, 0);
@@ -8161,7 +6541,7 @@ function setGameplayHUD(isPlaying) {
             return false;
           }
           
-          // Always activate if trigger is held
+          // Always activate if A button is held
           if (this.tractorBeamActive) {
             return true;
           }
@@ -8171,134 +6551,21 @@ function setGameplayHUD(isPlaying) {
             return true;
           }
           
-          return false;
-        },
-        
-        checkBallCollisionWithFeedback: function(targetPos, ballRadius) {
-          const correctedPos = targetPos.clone();
-          const collisionMargin = 0.02; // 2cm safety margin like player
-          const totalRadius = ballRadius + collisionMargin;
-          let totalForce = new THREE.Vector3(0, 0, 0);
-          
-          // Check against all grab-surface objects (walls, floors, etc.)
-          const surfaces = document.querySelectorAll('[grab-surface]');
-          surfaces.forEach(surface => {
-            const surfacePos = new THREE.Vector3();
-            surface.object3D.getWorldPosition(surfacePos);
-            const geometry = surface.getAttribute('geometry');
+          // Check if player is holding grips (get from zerog-player component)
+          const player = document.querySelector('[zerog-player]');
+          if (player && player.components['zerog-player']) {
+            const playerComponent = player.components['zerog-player'];
+            const gripState = playerComponent.gripHeld;
+            const grabbingState = playerComponent.isGrabbing;
             
-            if (!geometry) return;
+            // Only allow tractor beam from hands that are holding grip BUT NOT grabbing surfaces
+            const leftHandFree = gripState.left && !grabbingState.left;
+            const rightHandFree = gripState.right && !grabbingState.right;
             
-            // Get the safe position and collision force
-            const result = this.getSafePositionAndForce(correctedPos, totalRadius, surfacePos, geometry, targetPos);
-            if (result.safePos) {
-              correctedPos.copy(result.safePos);
-              totalForce.add(result.force);
-            }
-          });
-          
-          return {
-            position: correctedPos,
-            force: totalForce
-          };
-        },
-        
-        getSafePositionAndForce: function(point, radius, surfacePos, geometry, originalTarget) {
-          const forceMultiplier = 4.0; // Higher multiplier for more sensitive force detection
-          
-          if (geometry.primitive === 'box') {
-            // Box collision - clamp to safe position outside box
-            const halfWidth = geometry.width / 2;
-            const halfHeight = geometry.height / 2;
-            const halfDepth = geometry.depth / 2;
-            
-            // Get point relative to box center
-            const relativePos = point.clone().sub(surfacePos);
-            
-            // Find closest point on box surface
-            const closestPoint = new THREE.Vector3(
-              Math.max(-halfWidth, Math.min(halfWidth, relativePos.x)),
-              Math.max(-halfHeight, Math.min(halfHeight, relativePos.y)),
-              Math.max(-halfDepth, Math.min(halfDepth, relativePos.z))
-            );
-            
-            // Distance from point to closest point on box
-            const distance = relativePos.distanceTo(closestPoint);
-            
-            if (distance < radius) {
-              // Ball is too close or inside - calculate force and safe position
-              let direction = relativePos.clone().sub(closestPoint);
-              
-              if (direction.length() === 0) {
-                // Handle edge case where point is exactly at box center
-                const distances = [
-                  Math.abs(relativePos.x) - halfWidth,
-                  Math.abs(relativePos.y) - halfHeight, 
-                  Math.abs(relativePos.z) - halfDepth
-                ];
-                const minIndex = distances.indexOf(Math.min(...distances));
-                
-                if (minIndex === 0) direction.set(relativePos.x > 0 ? 1 : -1, 0, 0);
-                else if (minIndex === 1) direction.set(0, relativePos.y > 0 ? 1 : -1, 0);
-                else direction.set(0, 0, relativePos.z > 0 ? 1 : -1);
-              }
-              
-              direction.normalize();
-              const penetration = radius - distance;
-              const force = direction.clone().multiplyScalar(penetration * forceMultiplier);
-              const safePoint = closestPoint.clone().add(direction.multiplyScalar(radius));
-              
-              return {
-                safePos: safePoint.add(surfacePos),
-                force: force
-              };
-            }
-          } else if (geometry.primitive === 'sphere') {
-            // Sphere collision - clamp to safe position outside sphere
-            const sphereRadius = geometry.radius || 1.0;
-            const distance = point.distanceTo(surfacePos);
-            const minDistance = radius + sphereRadius;
-            
-            if (distance < minDistance) {
-              const direction = point.clone().sub(surfacePos);
-              if (direction.length() === 0) {
-                direction.set(0, 1, 0); // Default up direction
-              }
-              direction.normalize();
-              const penetration = minDistance - distance;
-              const force = direction.clone().multiplyScalar(penetration * forceMultiplier);
-              
-              return {
-                safePos: surfacePos.clone().add(direction.multiplyScalar(minDistance)),
-                force: force
-              };
-            }
-          } else if (geometry.primitive === 'octahedron') {
-            // Octahedron collision - clamp to safe position outside octahedron
-            const octahedronRadius = geometry.radius || 1.0;
-            const relativePos = point.clone().sub(surfacePos);
-            const absX = Math.abs(relativePos.x);
-            const absY = Math.abs(relativePos.y);
-            const absZ = Math.abs(relativePos.z);
-            const manhattanDistance = absX + absY + absZ;
-            const minDistance = radius + octahedronRadius;
-            
-            if (manhattanDistance < minDistance) {
-              // Scale the relative position to be exactly at safe distance
-              const scale = minDistance / manhattanDistance;
-              const safeRelativePos = relativePos.clone().multiplyScalar(scale);
-              const penetration = minDistance - manhattanDistance;
-              const direction = relativePos.clone().normalize();
-              const force = direction.multiplyScalar(penetration * forceMultiplier);
-              
-              return {
-                safePos: surfacePos.clone().add(safeRelativePos),
-                force: force
-              };
-            }
+            return leftHandFree || rightHandFree;
           }
           
-          return { safePos: null, force: new THREE.Vector3(0, 0, 0) }; // No collision
+          return false;
         },
         
         // CUSTOM COLLISION DETECTION (identical to player collision system)
@@ -8590,182 +6857,14 @@ function setGameplayHUD(isPlaying) {
             if (Math.random() < 0.02) { // 2% chance per frame (~1.2 times per second at 60fps)
               let activationMethod;
               if (this.tractorBeamActive) {
-                activationMethod = 'Triggers';
+                activationMethod = 'A button';
               } else if (this.autoReturnActive) {
                 activationMethod = 'Auto-return';
               } else {
-                activationMethod = 'Unknown';
+                activationMethod = 'Grip buttons';
               }
               
             }
-          }
-        }
-        });
-
-
-        // Ball Shield Component - Activates when ball is grabbed
-        AFRAME.registerComponent('ball-shield', {
-          init: function() {
-            this.parentBall = this.el.parentElement;
-            this.ballComponent = null;
-            this.isActive = false;
-            this.isOnCooldown = false;
-            this.cooldownEndTime = 0;
-            this.cooldownDuration = 6000; // 6 seconds
-            
-            // Wait for parent ball to initialize
-            setTimeout(() => {
-              if (this.parentBall && this.parentBall.components['zerog-ball']) {
-                this.ballComponent = this.parentBall.components['zerog-ball'];
-                this.setupCollisionHandler();
-              }
-            }, 100);
-          },
-          
-          setupCollisionHandler: function() {
-            if (!this.ballComponent || !this.ballComponent.body) return;
-            
-            // Set up collision detection on the ball's physics body
-            this.ballComponent.body.addEventListener('collide', (event) => {
-              const otherBody = event.target === this.ballComponent.body ? event.body : event.target;
-              if (this.isActive) {
-                this.handleCollision(otherBody);
-              }
-            });
-          },
-          
-          handleCollision: function(otherBody) {
-            // Find the ball element that collided with us
-            const otherBallEl = otherBody.el;
-            if (!otherBallEl || !otherBallEl.components['zerog-ball']) return;
-            
-            const otherBallComponent = otherBallEl.components['zerog-ball'];
-            if (otherBallComponent.isCaptureBall) return; // Don't block capture ball
-            
-            // Check if this is an opponent ball using team logic
-            const otherBallIndex = parseInt(otherBallComponent.data.player.replace('player', ''));
-            const myPlayerId_safe = myPlayerId || 'player_0';
-            
-            if (!shouldBallAffectTarget(otherBallIndex, myPlayerId_safe)) return; // Same team
-            
-            
-            // Reflect the other ball
-            this.reflectBall(otherBody, otherBallEl);
-            
-            // Deactivate shield and start cooldown
-            this.deactivateShield();
-            this.startCooldown();
-          },
-          
-          reflectBall: function(ballBody, ballEl) {
-            // Calculate reflection direction from shield center (ball center)
-            const shieldPos = new THREE.Vector3();
-            this.parentBall.object3D.getWorldPosition(shieldPos);
-            const ballPos = new THREE.Vector3();
-            ballEl.object3D.getWorldPosition(ballPos);
-            
-            const reflectionDir = new THREE.Vector3().subVectors(ballPos, shieldPos).normalize();
-            const reflectionSpeed = 8;
-            
-            // Apply reflection velocity
-            ballBody.velocity.set(
-              reflectionDir.x * reflectionSpeed,
-              reflectionDir.y * reflectionSpeed,
-              reflectionDir.z * reflectionSpeed
-            );
-          },
-          
-          tick: function() {
-            // Check cooldown
-            if (this.isOnCooldown && Date.now() >= this.cooldownEndTime) {
-              this.isOnCooldown = false;
-              
-              // If ball is still grabbed after cooldown, reactivate shield
-              if (this.ballComponent && this.ballComponent.isGrabbed && !this.isActive) {
-                this.activateShield();
-              }
-            }
-            
-            // Check if shield should stay active based on ball being grabbed
-            if (this.isActive && this.ballComponent) {
-              // CRITICAL FIX: In multiplayer, don't rely solely on isGrabbed state due to sync issues
-              // Only deactivate if we're sure the ball is not grabbed (add delay/tolerance)
-              if (!this.ballComponent.isGrabbed) {
-                // Add a small delay before deactivating to handle sync issues
-                if (!this.deactivateTimer) {
-                  this.deactivateTimer = Date.now() + 100; // 100ms delay
-                  console.log(`Shield deactivate timer started: ball not grabbed (isGrabbed: ${this.ballComponent.isGrabbed})`);
-                } else if (Date.now() >= this.deactivateTimer) {
-                  console.log(`Shield deactivating after delay: ball not grabbed (isGrabbed: ${this.ballComponent.isGrabbed})`);
-                  this.deactivateShield();
-                  this.deactivateTimer = null;
-                }
-              } else {
-                // Ball is grabbed, cancel any pending deactivation
-                if (this.deactivateTimer) {
-                  console.log(`Shield deactivate timer cancelled: ball is grabbed`);
-                  this.deactivateTimer = null;
-                }
-              }
-            }
-          },
-          
-          activateShield: function() {
-            if (this.isOnCooldown) {
-              return false;
-            }
-            
-            this.isActive = true;
-            this.el.setAttribute('visible', true);
-            
-            // Enable ball-to-ball collisions when shield is active
-            if (this.ballComponent && this.ballComponent.body) {
-              this.ballComponent.body.collisionFilterMask = 4 | 2; // Walls (4) + Balls (2)
-            }
-            
-            // Send shield state to other players in multiplayer
-            this.sendShieldState(true);
-            
-            return true;
-          },
-          
-          deactivateShield: function() {
-            this.isActive = false;
-            this.el.setAttribute('visible', false);
-            
-            // Clear any pending deactivate timer
-            this.deactivateTimer = null;
-            
-            // Disable ball-to-ball collisions when shield is inactive
-            if (this.ballComponent && this.ballComponent.body) {
-              this.ballComponent.body.collisionFilterMask = 4; // Walls (4) only, NO balls (2)
-            }
-            
-            // Send shield state to other players in multiplayer
-            this.sendShieldState(false);
-            
-          },
-          
-          startCooldown: function() {
-            this.isOnCooldown = true;
-            this.cooldownEndTime = Date.now() + this.cooldownDuration;
-          },
-          
-          sendShieldState: function(shieldActive) {
-            if (isMultiplayer && activePlayers.size > 1 && this.ballComponent) {
-              const data = {
-                type: 'ball-shield-state',
-                playerId: myPlayerId,
-                ballId: this.ballComponent.data.player,
-                shieldActive: shieldActive,
-                timestamp: Date.now()
-              };
-              
-              connections.forEach((conn, playerId) => {
-                if (conn && conn.open) {
-                  conn.send(data);
-                }
-              });
           }
         }
       });
@@ -8852,17 +6951,6 @@ function setGameplayHUD(isPlaying) {
 
         onClick: function() {
           const id = this.el.id;
-          console.log('🖱️ Button clicked:', id);
-          
-          // Prevent accidental clicks immediately after menu toggle
-          const menuToggle = document.querySelector('[menu-toggle]');
-          if (menuToggle && menuToggle.components['menu-toggle']) {
-            const timeSinceToggle = Date.now() - menuToggle.components['menu-toggle'].lastMenuToggle;
-            if (timeSinceToggle < 300) { // 300ms debounce after menu toggle
-              console.log('Ignoring click - too soon after menu toggle:', timeSinceToggle + 'ms');
-              return;
-            }
-          }
           
           if (id === 'menu-singleplayer') {
             this.switchToSingleplayer();
@@ -8880,8 +6968,10 @@ function setGameplayHUD(isPlaying) {
             this.selectTeam('red');
           } else if (id === 'menu-team-blue') {
             this.selectTeam('blue');
-          } else if (id === 'menu-restart-match') {
-            this.restartMatch();
+          } else if (id === 'menu-mode-dodge') {
+            this.selectGameMode('dodgeball');
+          } else if (id === 'menu-mode-capture') {
+            this.selectGameMode('capture');
           }
         },
 
@@ -8930,47 +7020,29 @@ function setGameplayHUD(isPlaying) {
           activePlayers.clear();
           myPlayerId = null;
           
-          // Reset player teams and set default for singleplayer
-          playerTeams.clear();
-          playerTeams.set('player_0', 'red'); // Default to red team in singleplayer
-          
-          // Update team display, ball colors, and player body color for singleplayer
-          updateTeamDisplay();
-          updateBallColors();
-          updatePlayerTeamColor('player_0', 'red');
-          
           this.updateCurrentModeDisplay('Singleplayer');
         },
 
         switchToMultiplayer: function() {
-          console.log('🔄 switchToMultiplayer called');
-          
           // Prevent switching during reconnection
           if (window.isReconnecting) {
-            console.log('❌ Blocked switchToMultiplayer - reconnection in progress');
             return;
           }
           
           isMultiplayer = true;
-          console.log('✅ Set isMultiplayer = true');
           
-          // Show lobby section and auto connect button with a small delay to prevent accidental clicks
-          setTimeout(() => {
-            const lobbySection = document.querySelector('#menu-lobby-section');
-            const autoConnect = document.querySelector('#menu-auto-connect');
-            
-            if (lobbySection) {
-              lobbySection.setAttribute('visible', true);
-              console.log('✅ Showed lobby section (delayed)');
-            }
-            if (autoConnect) {
-              autoConnect.setAttribute('visible', true);
-              console.log('✅ Showed auto connect button (delayed)');
-            }
-          }, 200); // Small delay to prevent accidental clicks
+          // Show lobby section and auto connect button
+          const lobbySection = document.querySelector('#menu-lobby-section');
+          const autoConnect = document.querySelector('#menu-auto-connect');
+          
+          if (lobbySection) {
+            lobbySection.setAttribute('visible', true);
+          }
+          if (autoConnect) {
+            autoConnect.setAttribute('visible', true);
+          }
           
           this.updateCurrentModeDisplay('Multiplayer - Select Lobby');
-          console.log('✅ switchToMultiplayer completed - no connection initiated');
         },
 
         updateCurrentModeDisplay: function(mode) {
@@ -9054,15 +7126,11 @@ function setGameplayHUD(isPlaying) {
           // Update bot ball assignments for team change
           const redBot = document.querySelector('#zerog-bot-red');
           const blueBot = document.querySelector('#zerog-bot-blue');
-          const greenBot = document.querySelector('#zerog-bot-green');
           if (redBot && redBot.components['zerog-bot']) {
             redBot.components['zerog-bot'].updateBallAssignment();
           }
           if (blueBot && blueBot.components['zerog-bot']) {
             blueBot.components['zerog-bot'].updateBallAssignment();
-          }
-          if (greenBot && greenBot.components['zerog-bot']) {
-            greenBot.components['zerog-bot'].updateBallAssignment();
           }
           
           // Force release any currently grabbed balls that are no longer owned
@@ -9148,47 +7216,17 @@ function setGameplayHUD(isPlaying) {
             }
           }
           
-          // Team selection is always visible since we're always in capture mode
+          // Show/hide team selection based on mode
           const teamSelection = document.querySelector('#menu-team-selection');
           if (teamSelection) {
-            teamSelection.setAttribute('visible', true);
-          }
-        },
-        
-        restartMatch: function() {
-          // Only host can start/restart match
-          if (!isHost && isMultiplayer) {
-            return;
-          }
-          
-          // Get game manager and start/restart the match
-          const gameManager = document.querySelector('[game-manager]');
-          if (gameManager && gameManager.components['game-manager']) {
-            const gameManagerComponent = gameManager.components['game-manager'];
-            
-            // If match is waiting, start it; otherwise restart it
-            if (gameManagerComponent.matchState === 'WAITING') {
-              // Start match with current players + bots to fill to 4 total
-              gameManagerComponent.startMatchWithBots();
-            } else {
-              // Reset match to waiting state, then start new match
-              gameManagerComponent.resetMatch();
-              // Start new match immediately after reset
-              gameManagerComponent.startMatchWithBots();
-            }
-          }
-          
-          // Close menu after starting/restarting
-          const menuToggle = document.querySelector('[menu-toggle]');
-          if (menuToggle && menuToggle.components['menu-toggle']) {
-            menuToggle.components['menu-toggle'].toggleMenu();
+            teamSelection.setAttribute('visible', mode === 'capture');
           }
         }
       });
 
     </script>
 
-    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle
+    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle y-button-shortcut
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              webxr="requiredFeatures: local-floor">
       
@@ -9607,13 +7645,6 @@ function setGameplayHUD(isPlaying) {
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.1" color="#ff0000" material="wireframe: true; color: #ff0000; opacity: 0.5"></a-sphere>
-        <!-- Ball Shield -->
-        <a-sphere class="ball-shield" 
-                  radius="0.2" 
-                  material="transparent: true; opacity: 0.3; color: #ff0000" 
-                  visible="false"
-                  ball-shield>
-        </a-sphere>
         <a-entity id="red-ball-hum" sound="src: url(audio/electric-hum.wav); 
                         autoplay: false; 
                         loop: true; 
@@ -9640,13 +7671,6 @@ function setGameplayHUD(isPlaying) {
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.1" color="#0000ff" material="wireframe: true; color: #0000ff; opacity: 0.5"></a-sphere>
-        <!-- Ball Shield -->
-        <a-sphere class="ball-shield" 
-                  radius="0.2" 
-                  material="transparent: true; opacity: 0.3; color: #0000ff" 
-                  visible="false"
-                  ball-shield>
-        </a-sphere>
         <a-entity id="blue-ball-hum" sound="src: url(audio/electric-hum.wav); 
                         autoplay: false; 
                         loop: true; 
@@ -9674,13 +7698,6 @@ function setGameplayHUD(isPlaying) {
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.1" color="#ff00ff" material="wireframe: true; color: #ff00ff; opacity: 0.5"></a-sphere>
-        <!-- Ball Shield -->
-        <a-sphere class="ball-shield" 
-                  radius="0.2" 
-                  material="transparent: true; opacity: 0.3; color: #ff00ff" 
-                  visible="false"
-                  ball-shield>
-        </a-sphere>
         <a-entity id="purple-ball-hum" sound="src: url(audio/electric-hum.wav); 
                         autoplay: false; 
                         loop: true; 
@@ -9708,13 +7725,6 @@ function setGameplayHUD(isPlaying) {
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.1" color="#ffff00" material="wireframe: true; color: #ffff00; opacity: 0.5"></a-sphere>
-        <!-- Ball Shield -->
-        <a-sphere class="ball-shield" 
-                  radius="0.2" 
-                  material="transparent: true; opacity: 0.3; color: #ffff00" 
-                  visible="false"
-                  ball-shield>
-        </a-sphere>
         <a-entity id="yellow-ball-hum" sound="src: url(audio/electric-hum.wav); 
                         autoplay: false; 
                         loop: true; 
@@ -9767,9 +7777,7 @@ function setGameplayHUD(isPlaying) {
                       color="#888888" 
                       material="shader: standard; emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
                       position="0 0 0"
-                      impact-effect="color: #888888"
-                      class="grabbable-player"
-                      data-player-id="player_0">
+                      impact-effect="color: #888888">
               <a-entity light="type: point; color: #888888; intensity: 1; distance: 3"></a-entity>
               <!-- Impact sphere with animation component -->
               <a-sphere id="player-impact" radius="0.1" color="#888888" opacity="0" visible="false" material="side: double; transparent: true"
@@ -9782,12 +7790,12 @@ function setGameplayHUD(isPlaying) {
             <a-entity id="version-display" position="0 0.3 -0.5" text="value: Zero-G v1.0; align: center; width: 0.4; color: #ffffff"></a-entity>
             
             <!-- Game Status Display -->
-            <a-entity id="hud-status" position="0 0.2 -0.5" text="value: ; align: center; width: 1.1; color: #ffffff" visible="false"></a-entity>
+            <a-entity id="hud-status" position="0 0.2 -0.5" text="value: Singleplayer; align: center; width: 1.1; color: #ffffff"></a-entity>
             
             <!-- Score Display in HUD -->
             <a-entity id="hud-score" position="0 0.1 -0.5" visible="false">
-              <a-entity position="-0.15 0 0" text="value: 0; align: center; width: 1.5; color: #0099ff"></a-entity>
-              <a-entity position="0.15 0 0" text="value: 0; align: center; width: 1.5; color: #ff4444"></a-entity>
+              <a-entity position="-0.15 0 0" text="value: You: 0; align: center; width: 1.5; color: #0099ff"></a-entity>
+              <a-entity position="0.15 0 0" text="value: Bot: 0; align: center; width: 1.5; color: #ff4444"></a-entity>
             </a-entity>
             
             <!-- Timer Display in HUD -->
@@ -9797,7 +7805,7 @@ function setGameplayHUD(isPlaying) {
             <a-entity id="hud-speed" position="0 -0.15 -0.5" text="value: 0.0 m/s; align: center; width: 0.5; color: #ffffff" visible="true"></a-entity>
             
             <!-- Game Messages in HUD -->
-             <a-entity id="hud-message" position="0 0 -0.5" text="value: ; align: center; width: 1.1; color: #ffffff" visible="false"></a-entity>
+            <a-entity id="hud-message" position="0 0 -0.5" text="value: Press A to Start; align: center; width: 1.1; color: #ffffff" visible="false"></a-entity>
             
             <!-- Game Menu in HUD (initially hidden) -->
             <a-entity id="game-menu" position="0 0 -0.8" visible="false">
@@ -9886,26 +7894,30 @@ function setGameplayHUD(isPlaying) {
                 </a-entity>
               </a-entity>-->
               
-              <!-- Game Mode Selection (Hidden - defaults to Capture) -->
-              <a-entity id="menu-game-mode" position="0 -0.12 0" visible="false">
+              <!-- Game Mode Selection -->
+              <a-entity id="menu-game-mode" position="0 -0.12 0">
                 <a-text value="Game Mode:" position="0 0.05 0" align="center" width="0.4" color="#ffffff"></a-text>
-                <a-text id="menu-current-mode-game" value="Mode: Capture" position="0 0.03 0" align="center" width="0.4" color="#8800ff"></a-text>
+                <a-text id="menu-current-mode-game" value="Mode: Dodge" position="0 0.03 0" align="center" width="0.4" color="#ff8800"></a-text>
                 <a-entity id="menu-mode-dodge" position="-0.12 -0.02 0"
                           geometry="primitive: plane; width: 0.1; height: 0.04"
-                          material="color: #ff8800; transparent: true; opacity: 1.0">
+                          material="color: #ff8800; transparent: true; opacity: 1.0"
+                          cursor-listener
+                          class="clickable">
                   <a-text value="DODGE" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
                 </a-entity>
                 <a-entity id="menu-mode-capture" position="0.12 -0.02 0"
                           geometry="primitive: plane; width: 0.1; height: 0.04"
-                          material="color: #8800ff; transparent: true; opacity: 0.5">
+                          material="color: #8800ff; transparent: true; opacity: 0.5"
+                          cursor-listener
+                          class="clickable">
                   <a-text value="CAPTURE" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
                 </a-entity>
               </a-entity>
               
               <!-- Team Selection -->
-              <a-entity id="menu-team-selection" position="0 -0.12 0">
+              <a-entity id="menu-team-selection" position="0 -0.25 0">
                 <a-text value="Your Team:" position="0 0.05 0" align="center" width="0.4" color="#ffffff"></a-text>
-                <a-text id="menu-current-team" value="Team: RED" position="0 0.03 0" align="center" width="0.4" color="#ff0000"></a-text>
+                <a-text id="menu-current-team" value="Team: None" position="0 0.03 0" align="center" width="0.4" color="#ffff00"></a-text>
                 <a-entity id="menu-team-red" position="-0.1 -0.02 0"
                           geometry="primitive: plane; width: 0.08; height: 0.04"
                           material="color: #ff0000; transparent: true; opacity: 0.8"
@@ -9922,18 +7934,8 @@ function setGameplayHUD(isPlaying) {
                 </a-entity>
               </a-entity>
               
-              <!-- Start/Restart Match Button (only visible for host) -->
-              <a-entity id="menu-restart-match" position="0 -0.25 0"
-                        geometry="primitive: plane; width: 0.3; height: 0.06"
-                        material="color: #ff4400; transparent: true; opacity: 0.8"
-                        cursor-listener
-                        class="clickable"
-                        visible="false">
-                <a-text id="menu-restart-text" value="START MATCH" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
-              </a-entity>
-              
               <!-- Instructions -->
-               <a-text value="X to close" 
+              <a-text value="B to close" 
                       position="0 -0.35 0" align="center" width="0.6" color="#ffffff"></a-text>
             </a-entity>
           </a-entity>
@@ -9991,9 +7993,7 @@ function setGameplayHUD(isPlaying) {
                   color="#ff0000" 
                   material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
                   position="0 0 0"
-                  impact-effect="color: #ff0000"
-                  class="grabbable-player"
-                  data-player-id="player_0">
+                  impact-effect="color: #ff0000">
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-0" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -10009,9 +8009,7 @@ function setGameplayHUD(isPlaying) {
                   color="#ff0000" 
                   material="shader: standard; emissive: #000000; emissiveIntensity: 0; transparent: true; opacity: 0.7"
                   position="0 0 0"
-                   impact-effect="color: #ff0000"
-                   class="grabbable-player"
-                   data-player-id="player_1">
+                  impact-effect="color: #ff0000">
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-1" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -10027,9 +8025,7 @@ function setGameplayHUD(isPlaying) {
                   color="#ff00ff" 
                   material="shader: standard; emissive: #ff00ff; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
                   position="0 0 0"
-                   impact-effect="color: #ff00ff"
-                   class="grabbable-player"
-                   data-player-id="player_2">
+                  impact-effect="color: #ff00ff">
           <a-entity light="type: point; color: #ff00ff; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-2" radius="0.1" color="#ff00ff" opacity="0" visible="false" material="side: double; transparent: true"
@@ -10045,9 +8041,7 @@ function setGameplayHUD(isPlaying) {
                   color="#ffff00" 
                   material="shader: standard; emissive: #ffff00; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
                   position="0 0 0"
-                   impact-effect="color: #ffff00"
-                   class="grabbable-player"
-                   data-player-id="player_3">
+                  impact-effect="color: #ffff00">
           <a-entity light="type: point; color: #ffff00; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-3" radius="0.1" color="#ffff00" opacity="0" visible="false" material="side: double; transparent: true"
@@ -10064,9 +8058,7 @@ function setGameplayHUD(isPlaying) {
                   color="#ff0000" 
                   material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; wireframe: false"
                   position="0 0 0"
-                   impact-effect="color: #ff0000"
-                   class="grabbable-player"
-                   data-player-id="bot_red">
+                  impact-effect="color: #ff0000">
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 4"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="bot-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -10083,31 +8075,10 @@ function setGameplayHUD(isPlaying) {
                   color="#0000ff" 
                   material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.5; wireframe: false"
                   position="0 0 0"
-                   impact-effect="color: #0000ff"
-                   class="grabbable-player"
-                   data-player-id="bot_blue">
+                  impact-effect="color: #0000ff">
           <a-entity light="type: point; color: #0000ff; intensity: 1; distance: 4"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="bot-blue-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"
-            animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
-            animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
-          </a-sphere>
-        </a-sphere>
-      </a-entity>
-
-      <!-- Zero-G Bot Blue Team (additional bot for 4-player support) -->
-      <a-entity id="zerog-bot-green" position="2 2 0" zerog-bot="enabled: true; difficulty: medium; team: blue">
-        <a-sphere id="bot-green-target" 
-                   radius="0.2" 
-                   color="#0000ff" 
-                   material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.5; wireframe: false"
-                   position="0 0 0"
-                   impact-effect="color: #0000ff"
-                   class="grabbable-player"
-                   data-player-id="bot_green">
-          <a-entity light="type: point; color: #0000ff; intensity: 1; distance: 4"></a-entity>
-          <!-- Impact sphere with animation component -->
-          <a-sphere id="bot-green-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"
             animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
             animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
           </a-sphere>
@@ -10130,7 +8101,7 @@ function setGameplayHUD(isPlaying) {
         </a-entity>
         
         <a-entity id="timer-display" position="0 6 0" text="value: Time: 3:00; align: center; width: 2; color: #ffff00"></a-entity>
-         <a-entity id="start-message" position="0 5.5 0" text="value: Press X to open menu; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="start-message" position="0 5.5 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
       </a-entity>
 
       <!-- Ambient space lighting -->
@@ -10178,6 +8149,47 @@ function setGameplayHUD(isPlaying) {
     </a-scene>
     
     <script>
+      // Y button shortcut for quick multiplayer
+      AFRAME.registerComponent('y-button-shortcut', {
+        init: function() {
+          this.el.sceneEl.addEventListener('ybuttondown', () => {
+            
+            // If not already in multiplayer, start it and connect to lobby 1
+            if (!isMultiplayer) {
+              updateMultiplayerStatus('Quick connect to lobby 1...');
+              
+              // Try to connect to lobby 1
+              connectToLobby(1).then(() => {
+                updateMultiplayerStatus('Connected to lobby 1');
+                
+                // Close menu if it's open
+                const menu = document.querySelector('#hud-menu');
+                if (menu && menu.getAttribute('visible')) {
+                  menu.setAttribute('visible', false);
+                  isMenuVisible = false;
+                }
+              }).catch((error) => {
+                updateMultiplayerStatus('Lobby 1 unavailable');
+              });
+            } else {
+              updateMultiplayerStatus('Already in multiplayer');
+            }
+          });
+          
+          // Add B button for testing position sync
+          this.el.sceneEl.addEventListener('bbuttondown', () => {
+            // B button pressed
+            testPositionSync();
+          });
+          
+          // Add A button for testing connection
+          this.el.sceneEl.addEventListener('abuttondown', () => {
+            // A button pressed
+            testConnection();
+          });
+          
+        }
+      });
       
 
       
@@ -10401,9 +8413,6 @@ function setGameplayHUD(isPlaying) {
           // Update ball colors based on new team assignments
           updateBallColors();
           
-          // Update team display in menu
-          updateTeamDisplay();
-          
           // Update menu display colors
           updateMenuDisplay();
           
@@ -10533,32 +8542,53 @@ function setGameplayHUD(isPlaying) {
       // Function to manage active players and bots
       function manageActivePlayersAndBots() {
         const humanPlayerCount = isMultiplayer ? activePlayers.size : 1;
-        const maxPlayers = 4; // Always 4 players total in both modes
-        const botsNeeded = Math.max(0, maxPlayers - humanPlayerCount); // Aim for 4 total players
+
         
         // Get bot entities
         const redBot = document.querySelector('#zerog-bot-red');
         const blueBot = document.querySelector('#zerog-bot-blue');
-        const greenBot = document.querySelector('#zerog-bot-green');
         
-        const bots = [redBot, blueBot, greenBot].filter(bot => bot); // Filter out null bots
-        
-        // Enable/disable bots based on need
-        bots.forEach((bot, index) => {
-          const shouldEnable = index < botsNeeded;
-          if (bot) {
-            bot.setAttribute('visible', shouldEnable);
-            if (bot.components['zerog-bot']) {
-              bot.setAttribute('zerog-bot', 'enabled', shouldEnable);
+        if (gameMode === 'capture') {
+          if (humanPlayerCount >= 2) {
+            // 2+ human players: Hide both bots
+
+            if (redBot) {
+              redBot.setAttribute('visible', false);
+              if (redBot.components['zerog-bot']) redBot.setAttribute('zerog-bot', 'enabled', false);
+            }
+            if (blueBot) {
+              blueBot.setAttribute('visible', false);
+              if (blueBot.components['zerog-bot']) blueBot.setAttribute('zerog-bot', 'enabled', false);
+            }
+          } else {
+            // 1 human player: Show both bots for balanced teams
+
+            if (redBot) {
+              redBot.setAttribute('visible', true);
+              if (redBot.components['zerog-bot']) redBot.setAttribute('zerog-bot', 'enabled', true);
+            }
+            if (blueBot) {
+              blueBot.setAttribute('visible', true);
+              if (blueBot.components['zerog-bot']) blueBot.setAttribute('zerog-bot', 'enabled', true);
             }
           }
-        });
+        } else {
+          // Dodgeball mode: Only show red bot
+
+          if (redBot) {
+            redBot.setAttribute('visible', !isMultiplayer || activePlayers.size <= 1);
+            if (redBot.components['zerog-bot']) {
+              redBot.setAttribute('zerog-bot', 'enabled', !isMultiplayer || activePlayers.size <= 1);
+            }
+          }
+          if (blueBot) {
+            blueBot.setAttribute('visible', false);
+            if (blueBot.components['zerog-bot']) blueBot.setAttribute('zerog-bot', 'enabled', false);
+          }
+        }
         
         // Manage ball visibility
         manageBallVisibility();
-        
-        const actualBots = Math.min(botsNeeded, 3); // Now we have 3 bots available
-        const totalPlayers = humanPlayerCount + actualBots;
       }
 
       // Function to manage ball visibility based on active players
@@ -10571,13 +8601,59 @@ function setGameplayHUD(isPlaying) {
           captureBall.setAttribute('visible', gameMode === 'capture');
         }
         
-        // Show all player balls
+        // TEMPORARY DEBUG: Show ALL balls to debug visibility issues
         for (let i = 1; i <= 4; i++) {
           const ball = document.querySelector(`[zerog-ball*="player: player${i}"]`);
           if (ball) {
             ball.setAttribute('visible', true);
           }
         }
+        
+        // ORIGINAL LOGIC (commented out for debugging)
+        /*
+        // Manage regular balls (all 4 balls exist, show/hide based on context)
+        for (let i = 1; i <= 4; i++) {
+          const ball = document.querySelector(`[zerog-ball*="player: player${i}"]`);
+          if (ball) {
+            let shouldShow = false;
+            
+            if (gameMode === 'capture') {
+              if (humanPlayerCount >= 2) {
+                // 2+ humans: Show all human player balls dynamically
+                activePlayers.forEach(playerId => {
+                  const playerBallIndex = getBallForPlayer(playerId);
+                  if (playerBallIndex === i) {
+                    shouldShow = true;
+                  }
+                });
+                // Hide bot balls when 2+ humans (bots don't get added to activePlayers)
+              } else {
+                // 1 human: Show bot balls and host's ball
+                if (i === 1) shouldShow = true; // Red bot ball
+                if (i === 2) shouldShow = true; // Host's ball (always ball 2)
+                if (i === 3) shouldShow = true; // Blue bot ball
+                // Hide ball 4 when only 1 human (no client)
+              }
+            } else {
+              // Dodgeball mode
+              if (isMultiplayer) {
+                // CRITICAL FIX: Use dynamic ball assignments for each active player
+                activePlayers.forEach(playerId => {
+                  const playerBallIndex = getBallForPlayer(playerId);
+                  if (playerBallIndex === i) {
+                    shouldShow = true;
+                  }
+                });
+              } else {
+                // Singleplayer: Show red bot ball and human ball only
+                if (i === 1 || i === 2) shouldShow = true;
+              }
+            }
+            
+            ball.setAttribute('visible', shouldShow);
+          }
+        }
+        */
       }
 
     </script>
