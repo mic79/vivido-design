@@ -95,6 +95,24 @@
             var syncList = [];
             var time = 0;
             var vehicleRef = null; // For reset functionality
+            var raycastLines = []; // Visual debug lines for raycasting
+            
+            // Checkpoint system
+            var playerCurrentCheckpoint = 0;
+            var playerLastPassedCheckpoint = 0;
+            var nextCheckpointMarker = null;
+            var checkpointMarkers = [];
+            
+            // Road and path system
+            var racingPath = null;
+            var roadMesh = null;
+            var pathPoints = [];
+            var denseWaypoints = []; // Dense waypoints every 1-2m for bot navigation
+            
+            // Bot car system
+            var botCar = null;
+            var botVehicleRef = null;
+            var botTargetMarker = null; // Visual marker for bot's current target
 
             // Keyboard actions
             var actions = {};
@@ -312,16 +330,87 @@
 
             function resetCar() {
                 if (vehicleRef && vehicleRef.vehicle && vehicleRef.vehicleBody) {
-                    var resetTransform = new Ammo.btTransform();
-                    resetTransform.setIdentity();
-                    resetTransform.setOrigin(new Ammo.btVector3(0, 4, -20));
-                    resetTransform.setRotation(new Ammo.btQuaternion(0, 0, 0, 1));
+                    try {
+                        // Reset to last passed checkpoint
+                        var resetPosition;
+                        if (checkpointMarkers && checkpointMarkers.length > 0 && playerLastPassedCheckpoint < checkpointMarkers.length) {
+                            var checkpoint = checkpointMarkers[playerLastPassedCheckpoint];
+                            if (checkpoint && checkpoint.position) {
+                                resetPosition = checkpoint.position.clone();
+                                resetPosition.y += 10; // Spawn higher above the checkpoint
+                                console.log('Resetting to checkpoint', playerLastPassedCheckpoint, 'at position:', resetPosition);
+                            } else {
+                                console.warn('Checkpoint', playerLastPassedCheckpoint, 'has no position data, using default');
+                                resetPosition = new THREE.Vector3(0, 15, -20); // Default position (higher)
+                            }
+                        } else {
+                            console.warn('No valid checkpoints available, using default position');
+                            resetPosition = new THREE.Vector3(0, 4, -20); // Default position
+                        }
+                        
+                        var resetTransform = new Ammo.btTransform();
+                        resetTransform.setIdentity();
+                        resetTransform.setOrigin(new Ammo.btVector3(resetPosition.x, resetPosition.y, resetPosition.z));
+                        resetTransform.setRotation(new Ammo.btQuaternion(0, 0, 0, 1));
+                        
+                        vehicleRef.vehicleBody.setWorldTransform(resetTransform);
+                        vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                        vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                        
+                        console.log('✅ Car reset successfully to position:', resetPosition);
+                    } catch (error) {
+                        console.error('❌ Error during car reset:', error);
+                        // Fallback to default position
+                        try {
+                            var fallbackPosition = new THREE.Vector3(0, 15, -20);
+                            var resetTransform = new Ammo.btTransform();
+                            resetTransform.setIdentity();
+                            resetTransform.setOrigin(new Ammo.btVector3(fallbackPosition.x, fallbackPosition.y, fallbackPosition.z));
+                            resetTransform.setRotation(new Ammo.btQuaternion(0, 0, 0, 1));
+                            
+                            vehicleRef.vehicleBody.setWorldTransform(resetTransform);
+                            vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                            vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                            
+                            console.log('🔄 Fallback reset to default position successful');
+                        } catch (fallbackError) {
+                            console.error('❌ Fallback reset also failed:', fallbackError);
+                        }
+                    }
+                } else {
+                    console.warn('⚠️ Cannot reset car: vehicle reference not available');
+                }
+            }
+            
+            function checkCheckpointProgress(carPosition) {
+                if (!checkpointMarkers || checkpointMarkers.length === 0) return;
+                
+                var nextIndex = playerCurrentCheckpoint % checkpointMarkers.length;
+                var checkpoint = checkpointMarkers[nextIndex];
+                
+                // Check if player is close enough to the next checkpoint
+                var distance = carPosition.distanceTo(checkpoint.position);
+                if (distance < 15) { // 15 meter detection radius
+                    // Checkpoint passed!
+                    playerLastPassedCheckpoint = playerCurrentCheckpoint;
+                    playerCurrentCheckpoint++;
                     
-                    vehicleRef.vehicleBody.setWorldTransform(resetTransform);
-                    vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
-                    vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                    console.log('✅ Checkpoint', nextIndex, 'passed! Next:', playerCurrentCheckpoint % checkpointMarkers.length);
                     
-                    console.log('Car reset');
+                    // Update visual indicator
+                    updateNextCheckpointMarker();
+                    
+                    // Check for lap completion
+                    if (playerCurrentCheckpoint % checkpointMarkers.length === 0 && playerCurrentCheckpoint > 0) {
+                        console.log('🏁 LAP COMPLETED! Time for celebration!');
+                    }
+                }
+                
+                // Update pulsing animation for next checkpoint marker
+                if (nextCheckpointMarker && nextCheckpointMarker.userData) {
+                    nextCheckpointMarker.userData.pulseTime += 0.1;
+                    var scale = 1 + 0.3 * Math.sin(nextCheckpointMarker.userData.pulseTime);
+                    nextCheckpointMarker.scale.setScalar(scale);
                 }
             }
 
@@ -386,6 +475,830 @@
                 return mesh;
             }
 
+            function createBotVehicle(pos, quat, color) {
+                // Vehicle constants (same as player car)
+                var chassisWidth = 1.8;
+                var chassisHeight = .6;
+                var chassisLength = 4;
+                var massVehicle = 800;
+
+                var wheelAxisPositionBack = -1;
+                var wheelRadiusBack = .4;
+                var wheelWidthBack = .3;
+                var wheelHalfTrackBack = 1;
+                var wheelAxisHeightBack = .3;
+
+                var wheelAxisFrontPosition = 1.7;
+                var wheelHalfTrackFront = 1;
+                var wheelAxisHeightFront = .3;
+                var wheelRadiusFront = .35;
+                var wheelWidthFront = .2;
+
+                var friction = 1000;
+                var suspensionStiffness = 20.0;
+                var suspensionDamping = 2.3;
+                var suspensionCompression = 4.4;
+                var suspensionRestLength = 0.6;
+                var rollInfluence = 0.2;
+
+                var baseSteeringIncrement = .04;
+                var steeringClamp = .5;
+                var maxEngineForce = 2000;
+                var maxBreakingForce = 100;
+
+                // Chassis
+                var geometry = new Ammo.btBoxShape(new Ammo.btVector3(chassisWidth * .5, chassisHeight * .5, chassisLength * .5));
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+                var motionState = new Ammo.btDefaultMotionState(transform);
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                geometry.calculateLocalInertia(massVehicle, localInertia);
+                var body = new Ammo.btRigidBody(new Ammo.btRigidBodyConstructionInfo(massVehicle, motionState, geometry, localInertia));
+                body.setActivationState(DISABLE_DEACTIVATION);
+                
+                // Ensure the bot body can be detected by raycasts
+                body.setCollisionFlags(body.getCollisionFlags() & ~2); // Remove CF_NO_CONTACT_RESPONSE flag
+                
+                physicsWorld.addRigidBody(body);
+                
+                // Create bot chassis mesh with different color
+                var botMaterial = new THREE.MeshPhongMaterial({ color: color || 0x0066ff });
+                var chassisShape = new THREE.BoxGeometry(chassisWidth, chassisHeight, chassisLength);
+                var chassisMesh = new THREE.Mesh(chassisShape, botMaterial);
+                scene.add(chassisMesh);
+
+                // Raycast Vehicle
+                var engineForce = 0;
+                var vehicleSteering = 0;
+                var breakingForce = 0;
+                var tuning = new Ammo.btVehicleTuning();
+                var rayCaster = new Ammo.btDefaultVehicleRaycaster(physicsWorld);
+                var vehicle = new Ammo.btRaycastVehicle(tuning, body, rayCaster);
+                vehicle.setCoordinateSystem(0, 1, 2);
+                physicsWorld.addAction(vehicle);
+
+                // Store bot vehicle reference
+                var botRef = {
+                    vehicle: vehicle,
+                    vehicleBody: body,
+                    chassisMesh: chassisMesh,
+                    currentWaypointIndex: 0,
+                    targetSpeed: 60, // km/h
+                    waypointReachDistance: 8.0, // Distance to consider waypoint "reached" (increased)
+                    debugCounter: 0,
+                    // Predictive steering parameters
+                    lookAheadWaypoints: 5, // Number of waypoints to look ahead
+                    steeringSmoothing: 0.15, // Steering smoothing factor (0-1)
+                    previousSteering: 0, // For smooth steering transitions
+                    // Dynamic speed parameters
+                    maxCornerSpeed: 80, // km/h - maximum speed through corners
+                    brakingDistance: 25, // meters - distance to start braking before corners
+                    cornerSpeedFactor: 0.6, // Speed reduction factor for tight corners
+                    // Stuck detection parameters
+                    lastPosition: new THREE.Vector3(-5, 0, -45), // Track last position
+                    lastWaypointReached: 0, // Last successfully reached waypoint
+                    stuckCheckInterval: 180, // Check every 3 seconds (60fps * 3)
+                    stuckDistanceThreshold: 2.0, // If moved less than 2m in 3 seconds
+                    stuckSpeedThreshold: 5.0, // If speed is below 5 km/h for too long
+                    lowSpeedCounter: 0, // Counter for low speed duration
+                    stuckCounter: 0, // Counter for stuck detection
+                    lastRespawnTime: 0, // Prevent rapid respawning
+                    // Obstacle avoidance parameters
+                    avoidanceRayLength: 15, // meters - how far ahead to look for obstacles
+                    avoidanceForce: 0.8, // Steering force when avoiding obstacles
+                    sideRayAngle: 30, // degrees - angle for side detection rays
+                    obstacleAvoidanceActive: false // Track if currently avoiding
+                };
+
+                // Wheels
+                var FRONT_LEFT = 0;
+                var FRONT_RIGHT = 1;
+                var BACK_LEFT = 2;
+                var BACK_RIGHT = 3;
+                
+                var wheelMeshes = [];
+                
+                // Create visual target marker (10m high green column)
+                var markerGeometry = new THREE.CylinderGeometry(0.5, 0.5, 10, 8);
+                var markerMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0x00ff00, // Bright green
+                    transparent: true,
+                    opacity: 0.8
+                });
+                botTargetMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+                botTargetMarker.position.set(0, 5, 0); // 5m high (half of 10m cylinder)
+                scene.add(botTargetMarker);
+                var wheelDirectionCS0 = new Ammo.btVector3(0, -1, 0);
+                var wheelAxleCS = new Ammo.btVector3(-1, 0, 0);
+
+                function addWheel(isFront, pos, radius, width, index) {
+                    var wheelInfo = vehicle.addWheel(
+                        pos,
+                        wheelDirectionCS0,
+                        wheelAxleCS,
+                        suspensionRestLength,
+                        radius,
+                        tuning,
+                        isFront);
+
+                    wheelInfo.set_m_suspensionStiffness(suspensionStiffness);
+                    wheelInfo.set_m_wheelsDampingRelaxation(suspensionDamping);
+                    wheelInfo.set_m_wheelsDampingCompression(suspensionCompression);
+                    wheelInfo.set_m_frictionSlip(friction);
+                    wheelInfo.set_m_rollInfluence(rollInfluence);
+
+                    // Create wheel mesh with bot color
+                    var t = new THREE.CylinderGeometry(radius, radius, width, 24, 1);
+                    t.rotateZ(Math.PI / 2);
+                    var mesh = new THREE.Mesh(t, botMaterial);
+                    mesh.add(new THREE.Mesh(new THREE.BoxGeometry(width * 1.5, radius * 1.75, radius * .25, 1, 1, 1), botMaterial));
+                    scene.add(mesh);
+                    wheelMeshes[index] = mesh;
+                }
+
+                addWheel(true, new Ammo.btVector3(wheelHalfTrackFront, wheelAxisHeightFront, wheelAxisFrontPosition), wheelRadiusFront, wheelWidthFront, FRONT_LEFT);
+                addWheel(true, new Ammo.btVector3(-wheelHalfTrackFront, wheelAxisHeightFront, wheelAxisFrontPosition), wheelRadiusFront, wheelWidthFront, FRONT_RIGHT);
+                addWheel(false, new Ammo.btVector3(wheelHalfTrackBack, wheelAxisHeightBack, wheelAxisPositionBack), wheelRadiusBack, wheelWidthBack, BACK_LEFT);
+                addWheel(false, new Ammo.btVector3(-wheelHalfTrackBack, wheelAxisHeightBack, wheelAxisPositionBack), wheelRadiusBack, wheelWidthBack, BACK_RIGHT);
+
+                // Bot AI sync function
+                function botSync(dt) {
+                    botRef.debugCounter++;
+                    var speed = vehicle.getCurrentSpeedKmHour();
+
+                    // Get current car position
+                    var tm = vehicle.getChassisWorldTransform();
+                    var p = tm.getOrigin();
+                    var q = tm.getRotation();
+                    var carPos = new THREE.Vector3(p.x(), p.y(), p.z());
+                    var carQuat = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
+
+                    // Update chassis mesh
+                    chassisMesh.position.set(p.x(), p.y(), p.z());
+                    chassisMesh.quaternion.set(q.x(), q.y(), q.z(), q.w());
+
+                    // Update wheel meshes
+                    var n = vehicle.getNumWheels();
+                    for (var i = 0; i < n; i++) {
+                        vehicle.updateWheelTransform(i, true);
+                        var wheelTm = vehicle.getWheelTransformWS(i);
+                        var wheelP = wheelTm.getOrigin();
+                        var wheelQ = wheelTm.getRotation();
+                        wheelMeshes[i].position.set(wheelP.x(), wheelP.y(), wheelP.z());
+                        wheelMeshes[i].quaternion.set(wheelQ.x(), wheelQ.y(), wheelQ.z(), wheelQ.w());
+                    }
+
+
+                    // Initialize forces
+                    breakingForce = 0;
+                    engineForce = 0;
+
+                    // AI Navigation Logic - Advanced Predictive System
+                    if (denseWaypoints.length > 0) {
+                        // Get current target waypoint
+                        var targetWaypoint = denseWaypoints[botRef.currentWaypointIndex];
+                        var targetPoint = targetWaypoint.position;
+                        
+                        // Check if we've reached the current waypoint
+                        var distanceToWaypoint = carPos.distanceTo(targetPoint);
+                        
+                        if (distanceToWaypoint < botRef.waypointReachDistance) {
+                            // Move to next waypoint
+                            var oldIndex = botRef.currentWaypointIndex;
+                            botRef.lastWaypointReached = oldIndex; // Track last successful waypoint
+                            botRef.currentWaypointIndex = (botRef.currentWaypointIndex + 1) % denseWaypoints.length;
+                            // Only log lap completion (when reaching waypoint 0 again)
+                            if (botRef.currentWaypointIndex === 0) {
+                                console.log('🏁 Bot completed a lap!');
+                            }
+                            targetWaypoint = denseWaypoints[botRef.currentWaypointIndex];
+                            targetPoint = targetWaypoint.position;
+                            distanceToWaypoint = carPos.distanceTo(targetPoint);
+                            
+                            // Reset stuck detection counters on successful waypoint reach
+                            botRef.stuckCounter = 0;
+                            botRef.lowSpeedCounter = 0;
+                        }
+
+                        // Get car's forward direction (positive Z is forward in our coordinate system)
+                        var carForward = new THREE.Vector3(0, 0, 1);
+                        carForward.applyQuaternion(carQuat);
+
+                        // OBSTACLE AVOIDANCE: Check for obstacles and calculate avoidance steering
+                        var avoidanceResult = checkObstacles(carPos, carQuat, carForward, speed, botRef);
+                        
+                        var finalSteerAmount;
+                        if (avoidanceResult.shouldAvoid) {
+                            // SMART OBSTACLE AVOIDANCE: Check if we should reverse or steer around
+                            var distanceFromPath = findDistanceFromPath(carPos, botRef);
+                            var maxPathDeviation = 15.0; // Maximum distance allowed from racing line
+                            var obstacleDistance = avoidanceResult.closestDistance;
+                            
+                            // If obstacle is very close and we're already far from path, consider reversing
+                            if (obstacleDistance < 8.0 && distanceFromPath > maxPathDeviation) {
+                                console.log('🔄 OBSTACLE TOO CLOSE & FAR FROM PATH! Reversing to find alternate route');
+                                finalSteerAmount = 0; // Don't steer while reversing
+                                targetSpeedKmh = -20; // Reverse at 20 km/h
+                                shouldBrake = false; // Don't brake while reversing
+                                botRef.obstacleAvoidanceActive = true;
+                            }
+                            // If obstacle is blocking and we have multiple hits (surrounded), reverse
+                            else if (avoidanceResult.multipleHits && obstacleDistance < 10.0) {
+                                console.log('🚫 SURROUNDED BY OBSTACLES! Reversing to escape');
+                                finalSteerAmount = avoidanceResult.avoidanceSteer * 0.5; // Gentle steering while reversing
+                                targetSpeedKmh = -15; // Reverse slower when surrounded
+                                shouldBrake = false;
+                                botRef.obstacleAvoidanceActive = true;
+                            }
+                            // If we're close to path, try normal steering avoidance
+                            else if (distanceFromPath < maxPathDeviation) {
+                                console.log('🚧 STEERING AROUND OBSTACLE! Steer:', avoidanceResult.avoidanceSteer.toFixed(2), 'Distance:', obstacleDistance.toFixed(1) + 'm');
+                                finalSteerAmount = avoidanceResult.avoidanceSteer;
+                                targetSpeedKmh = Math.min(targetSpeedKmh, 25); // Slow down while avoiding
+                                botRef.obstacleAvoidanceActive = true;
+                            }
+            // If too far from path, return to path first
+            else {
+                console.log('📍 TOO FAR FROM PATH! Returning to racing line first');
+                try {
+                    // Calculate direction back to nearest path point
+                    var nearestPathPoint = findNearestPathPoint(carPos);
+                    if (nearestPathPoint && nearestPathPoint.point) {
+                        var backToPath = new THREE.Vector3().subVectors(nearestPathPoint.point, carPos).normalize();
+                        var cross = new THREE.Vector3().crossVectors(carForward, backToPath);
+                        finalSteerAmount = Math.max(-1.0, Math.min(1.0, cross.y * 1.5));
+                        targetSpeedKmh = Math.min(targetSpeedKmh, 30); // Moderate speed returning to path
+                        botRef.obstacleAvoidanceActive = true;
+                    } else {
+                        // Fallback: use normal path following if nearest point not found
+                        var lookAheadPoint = calculateLookAheadPoint(carPos, speed, botRef);
+                        var toTarget = new THREE.Vector3().subVectors(lookAheadPoint, carPos);
+                        var toTargetNormalized = toTarget.clone().normalize();
+                        var cross = new THREE.Vector3().crossVectors(carForward, toTargetNormalized);
+                        finalSteerAmount = Math.max(-1.0, Math.min(1.0, cross.y * 2.0));
+                        botRef.obstacleAvoidanceActive = false;
+                    }
+                } catch (e) {
+                    console.warn('Error calculating return to path:', e);
+                    // Fallback to normal navigation
+                    finalSteerAmount = 0;
+                    botRef.obstacleAvoidanceActive = false;
+                }
+            }
+                        } else {
+                            // PREDICTIVE STEERING: Look ahead multiple waypoints
+                            var lookAheadPoint = calculateLookAheadPoint(carPos, speed, botRef);
+                            
+                            // Calculate steering toward look-ahead point
+                            var toTarget = new THREE.Vector3()
+                                .subVectors(lookAheadPoint, carPos);
+                            
+                            var toTargetNormalized = toTarget.clone().normalize();
+
+                            // Calculate raw steering using cross product
+                            var cross = new THREE.Vector3().crossVectors(carForward, toTargetNormalized);
+                            var rawSteerAmount = cross.y; // Raw steering direction (fixed with correct forward vector)
+                            
+                            finalSteerAmount = Math.max(-1.0, Math.min(1.0, rawSteerAmount * 2.0));
+                            botRef.obstacleAvoidanceActive = false;
+                        }
+                        
+                        // STEERING SMOOTHING: Blend with previous steering for realistic transitions
+                        var steerAmount = botRef.previousSteering + (finalSteerAmount - botRef.previousSteering) * botRef.steeringSmoothing;
+                        botRef.previousSteering = steerAmount;
+
+                        // Apply smoothed steering
+                        vehicleSteering = steerAmount;
+                        
+                        // Update visual target marker to show where bot is heading
+                        if (botTargetMarker) {
+                            botTargetMarker.position.set(targetPoint.x, 5, targetPoint.z);
+                        }
+
+                        // DYNAMIC SPEED CONTROL: Analyze upcoming corners and adjust speed
+                        var speedAnalysis = calculateOptimalSpeed(carPos, speed, botRef);
+                        var targetSpeedKmh = speedAnalysis.targetSpeed;
+                        var shouldBrake = speedAnalysis.shouldBrake;
+
+                        // Apply throttle/brake - always try to move forward
+                        breakingForce = 0;
+                        engineForce = 0;
+
+                        var absSpeed = Math.abs(speed);
+                        
+                        // REALISTIC BRAKING AND ACCELERATION
+                        if (shouldBrake || absSpeed > targetSpeedKmh + 3) {
+                            // Brake for corners or overspeed
+                            var brakeIntensity = shouldBrake ? 0.8 : 0.6;
+                            breakingForce = maxBreakingForce * brakeIntensity;
+                            engineForce = 0;
+                        } else if (absSpeed < targetSpeedKmh - 3) {
+                            // Accelerate when under target speed
+                            var accelIntensity = (targetSpeedKmh - absSpeed) / targetSpeedKmh;
+                            engineForce = maxEngineForce * Math.min(0.9, accelIntensity + 0.3);
+                            breakingForce = 0;
+                        } else if (absSpeed < 5) {
+                            // If moving very slowly, give it a push
+                            engineForce = maxEngineForce * 0.5;
+                            breakingForce = 0;
+                        } else {
+                            // Maintain speed - slight throttle
+                            engineForce = maxEngineForce * 0.2;
+                            breakingForce = 0;
+                        }
+
+                        // STUCK DETECTION AND RECOVERY SYSTEM
+                        var stuckDetected = checkIfStuck(carPos, speed, botRef);
+                        if (stuckDetected) {
+                            respawnBot(botRef);
+                        }
+
+                        // Minimal debug output - only show important events
+                        if (botRef.debugCounter % 600 === 0) { // Every 10 seconds instead of 5
+                            var status = '🏎️ Bot: ' + speed.toFixed(0) + 'km/h | WP:' + botRef.currentWaypointIndex + '/' + denseWaypoints.length;
+                            if (botRef.stuckCounter > 0) status += ' ⚠️ STUCK:' + botRef.stuckCounter;
+                            console.log(status);
+                        }
+                    } else {
+                        // No racing path - simple forward movement for testing
+                        if (botRef.debugCounter % 180 === 0) {
+                            console.log('Bot: No racing path found, applying basic forward movement');
+                        }
+                        engineForce = maxEngineForce * 0.8; // More throttle
+                        vehicleSteering = 0; // Straight
+                    }
+
+                    // Apply forces to vehicle
+                    vehicle.applyEngineForce(engineForce, BACK_LEFT);
+                    vehicle.applyEngineForce(engineForce, BACK_RIGHT);
+
+                    vehicle.setBrake(breakingForce / 2, FRONT_LEFT);
+                    vehicle.setBrake(breakingForce / 2, FRONT_RIGHT);
+                    vehicle.setBrake(breakingForce, BACK_LEFT);
+                    vehicle.setBrake(breakingForce, BACK_RIGHT);
+
+                    vehicle.setSteeringValue(vehicleSteering, FRONT_LEFT);
+                    vehicle.setSteeringValue(vehicleSteering, FRONT_RIGHT);
+                    
+                }
+
+                // PREDICTIVE STEERING: Calculate look-ahead point based on speed and upcoming corners
+                function calculateLookAheadPoint(carPos, speed, botRef) {
+                    var currentIndex = botRef.currentWaypointIndex;
+                    var absSpeed = Math.abs(speed);
+                    
+                    // Dynamic look-ahead distance based on speed (faster = look further ahead)
+                    var baseLookAhead = Math.max(2, Math.min(8, absSpeed / 10)); // 2-8 waypoints
+                    var lookAheadCount = Math.floor(baseLookAhead);
+                    
+                    // Find the look-ahead waypoint
+                    var lookAheadIndex = (currentIndex + lookAheadCount) % denseWaypoints.length;
+                    var lookAheadWaypoint = denseWaypoints[lookAheadIndex];
+                    
+                    // RACING LINE OPTIMIZATION: Adjust target point for optimal cornering
+                    var optimizedPoint = calculateRacingLine(lookAheadWaypoint, lookAheadIndex, botRef);
+                    
+                    return optimizedPoint;
+                }
+                
+                // RACING LINE: Calculate optimal path through corners
+                function calculateRacingLine(waypoint, waypointIndex, botRef) {
+                    var basePoint = waypoint.position.clone();
+                    
+                    // Analyze corner by looking at surrounding waypoints
+                    var prevIndex = (waypointIndex - 2 + denseWaypoints.length) % denseWaypoints.length;
+                    var nextIndex = (waypointIndex + 2) % denseWaypoints.length;
+                    
+                    var prevPoint = denseWaypoints[prevIndex].position;
+                    var nextPoint = denseWaypoints[nextIndex].position;
+                    
+                    // Calculate corner direction and sharpness
+                    var inVector = new THREE.Vector3().subVectors(basePoint, prevPoint).normalize();
+                    var outVector = new THREE.Vector3().subVectors(nextPoint, basePoint).normalize();
+                    var cornerAngle = inVector.angleTo(outVector);
+                    
+                    // If it's a corner (angle > threshold), optimize the racing line
+                    if (cornerAngle > 0.3) { // ~17 degrees
+                        // Calculate corner center and radius
+                        var cornerSharpness = cornerAngle / Math.PI; // 0-1 scale
+                        var offsetDistance = Math.min(4, cornerSharpness * 6); // Max 4m offset
+                        
+                        // Determine if it's a left or right corner
+                        var cross = new THREE.Vector3().crossVectors(inVector, outVector);
+                        var isLeftCorner = cross.y > 0;
+                        
+                        // Calculate perpendicular offset for racing line
+                        var perpendicular = new THREE.Vector3(-inVector.z, 0, inVector.x);
+                        if (!isLeftCorner) perpendicular.multiplyScalar(-1);
+                        
+                        // Apply racing line offset (late apex)
+                        basePoint.add(perpendicular.multiplyScalar(offsetDistance * 0.7));
+                    }
+                    
+                    return basePoint;
+                }
+                
+                // DYNAMIC SPEED CONTROL: Calculate optimal speed based on upcoming corners
+                function calculateOptimalSpeed(carPos, currentSpeed, botRef) {
+                    var currentIndex = botRef.currentWaypointIndex;
+                    var absSpeed = Math.abs(currentSpeed);
+                    var maxSpeed = botRef.targetSpeed;
+                    var shouldBrake = false;
+                    
+                    // Look ahead for corners within braking distance
+                    var lookAheadDistance = 0;
+                    var minCornerSpeed = maxSpeed;
+                    
+                    for (var i = 0; i < 15; i++) { // Check next 15 waypoints (~30m ahead)
+                        var checkIndex = (currentIndex + i) % denseWaypoints.length;
+                        var waypoint = denseWaypoints[checkIndex];
+                        
+                        if (i > 0) {
+                            var prevWaypoint = denseWaypoints[(currentIndex + i - 1) % denseWaypoints.length];
+                            lookAheadDistance += waypoint.position.distanceTo(prevWaypoint.position);
+                        }
+                        
+                        // Analyze corner sharpness
+                        var cornerSpeed = analyzeCornerSpeed(checkIndex, botRef);
+                        
+                        if (cornerSpeed < minCornerSpeed) {
+                            minCornerSpeed = cornerSpeed;
+                            
+                            // If we need to slow down significantly and we're within braking distance
+                            if (absSpeed > cornerSpeed + 10 && lookAheadDistance < botRef.brakingDistance) {
+                                shouldBrake = true;
+                            }
+                        }
+                        
+                        // Stop looking if we're far enough ahead
+                        if (lookAheadDistance > botRef.brakingDistance) break;
+                    }
+                    
+                    // Calculate target speed
+                    var targetSpeed = Math.max(minCornerSpeed, maxSpeed * 0.4); // Minimum 40% of max speed
+                    
+                    // Smooth speed transitions
+                    if (targetSpeed < absSpeed) {
+                        targetSpeed = Math.max(targetSpeed, absSpeed - 15); // Don't brake too hard
+                    }
+                    
+                    return {
+                        targetSpeed: targetSpeed,
+                        shouldBrake: shouldBrake,
+                        cornerSpeed: minCornerSpeed
+                    };
+                }
+                
+                // Analyze corner speed based on turn radius and sharpness
+                function analyzeCornerSpeed(waypointIndex, botRef) {
+                    var prevIndex = (waypointIndex - 2 + denseWaypoints.length) % denseWaypoints.length;
+                    var nextIndex = (waypointIndex + 2) % denseWaypoints.length;
+                    
+                    var prevPoint = denseWaypoints[prevIndex].position;
+                    var currentPoint = denseWaypoints[waypointIndex].position;
+                    var nextPoint = denseWaypoints[nextIndex].position;
+                    
+                    // Calculate corner angle
+                    var inVector = new THREE.Vector3().subVectors(currentPoint, prevPoint).normalize();
+                    var outVector = new THREE.Vector3().subVectors(nextPoint, currentPoint).normalize();
+                    var cornerAngle = inVector.angleTo(outVector);
+                    
+                    // Calculate safe corner speed based on angle
+                    var cornerSharpness = cornerAngle / Math.PI; // 0-1 scale
+                    var baseCornerSpeed = botRef.maxCornerSpeed;
+                    
+                    if (cornerSharpness > 0.1) { // If it's actually a corner
+                        // Sharper corners = slower speeds
+                        var speedReduction = Math.pow(cornerSharpness, 0.7); // Smooth curve
+                        baseCornerSpeed *= (1.0 - speedReduction * botRef.cornerSpeedFactor);
+                    }
+                    
+                    return Math.max(baseCornerSpeed, 20); // Minimum 20 km/h
+                }
+                
+                // STUCK DETECTION: Check if bot is stuck and needs respawning
+                function checkIfStuck(currentPos, currentSpeed, botRef) {
+                    var absSpeed = Math.abs(currentSpeed);
+                    var currentTime = botRef.debugCounter;
+                    
+                    // Prevent rapid respawning (minimum 10 seconds between respawns)
+                    if (currentTime - botRef.lastRespawnTime < 600) {
+                        return false;
+                    }
+                    
+                    // Get target waypoint for vertical position checking
+                    var targetWaypoint = denseWaypoints[botRef.currentWaypointIndex];
+                    var stuckByElevation = false;
+                    
+                    if (targetWaypoint) {
+                        // Check if bot is at significantly wrong elevation
+                        var targetY = targetWaypoint.position.y;
+                        var currentY = currentPos.y;
+                        var verticalDistance = Math.abs(currentY - targetY);
+                        
+                        // If bot is more than 8 meters above or below target elevation
+                        if (verticalDistance > 8) {
+                            botRef.verticalStuckCounter = (botRef.verticalStuckCounter || 0) + 1;
+                            
+                            // If stuck at wrong elevation for 5 seconds
+                            if (botRef.verticalStuckCounter > 300) {
+                                console.log('🏔️ Bot stuck at wrong elevation! Current Y:', currentY.toFixed(1), 'Target Y:', targetY.toFixed(1), 'Diff:', verticalDistance.toFixed(1) + 'm');
+                                stuckByElevation = true;
+                            }
+                        } else {
+                            botRef.verticalStuckCounter = 0; // Reset if elevation is good
+                        }
+                    }
+                    
+                    // Check if speed is too low for too long
+                    if (absSpeed < botRef.stuckSpeedThreshold) {
+                        botRef.lowSpeedCounter++;
+                    } else {
+                        botRef.lowSpeedCounter = 0; // Reset if speed is good
+                    }
+                    
+                    // Check position movement every interval
+                    if (botRef.debugCounter % botRef.stuckCheckInterval === 0) {
+                        var distanceMoved = currentPos.distanceTo(botRef.lastPosition);
+                        
+                        // If bot hasn't moved much in the check interval
+                        if (distanceMoved < botRef.stuckDistanceThreshold) {
+                            botRef.stuckCounter++;
+                            // Reduced stuck detection logging
+                        } else {
+                            botRef.stuckCounter = 0; // Reset if moving well
+                        }
+                        
+                        // Update last position for next check
+                        botRef.lastPosition.copy(currentPos);
+                    }
+                    
+                    // Declare stuck if:
+                    // 1. Low speed for more than 5 seconds (300 frames)
+                    // 2. OR not moving for 2 consecutive checks (6 seconds)
+                    // 3. OR wrong elevation for more than 5 seconds
+                    var stuckBySpeed = botRef.lowSpeedCounter > 300;
+                    var stuckByPosition = botRef.stuckCounter >= 2;
+                    
+                    if (stuckBySpeed || stuckByPosition || stuckByElevation) {
+                        var reason = stuckByElevation ? 'WRONG ELEVATION' : 
+                                   stuckBySpeed ? 'LOW SPEED' : 'NO MOVEMENT';
+                        console.log('🚨 Bot STUCK (' + reason + ') - Respawning...');
+                        return true;
+                    }
+                    
+                    return false;
+                }
+                
+                // RESPAWN BOT: Teleport bot to last reached waypoint with correct orientation
+                function respawnBot(botRef) {
+                    // Get respawn waypoint (last successfully reached waypoint)
+                    var respawnWaypoint = denseWaypoints[botRef.lastWaypointReached];
+                    var respawnPos = respawnWaypoint.position.clone();
+                    
+                    // Slightly offset the respawn position to avoid getting stuck in the same spot
+                    respawnPos.y = 2; // Spawn 2m above ground
+                    
+                    // Calculate orientation toward next waypoint
+                    var nextWaypointIndex = (botRef.lastWaypointReached + 1) % denseWaypoints.length;
+                    var nextWaypoint = denseWaypoints[nextWaypointIndex];
+                    var directionToNext = new THREE.Vector3()
+                        .subVectors(nextWaypoint.position, respawnPos)
+                        .normalize();
+                    
+                    // Calculate rotation quaternion to face next waypoint
+                    // Use Y-axis rotation (yaw) to face the target direction
+                    var targetAngle = Math.atan2(directionToNext.x, directionToNext.z);
+                    var quaternion = new THREE.Quaternion();
+                    quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetAngle);
+                    
+                    // Apply respawn transform to physics body
+                    var transform = new Ammo.btTransform();
+                    transform.setIdentity();
+                    transform.setOrigin(new Ammo.btVector3(respawnPos.x, respawnPos.y, respawnPos.z));
+                    transform.setRotation(new Ammo.btQuaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
+                    
+                    // Reset physics body
+                    botRef.vehicleBody.setWorldTransform(transform);
+                    botRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                    botRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                    botRef.vehicleBody.activate(); // Wake up the physics body
+                    
+                    // Reset bot state
+                    botRef.currentWaypointIndex = nextWaypointIndex;
+                    botRef.stuckCounter = 0;
+                    botRef.lowSpeedCounter = 0;
+                    botRef.lastRespawnTime = botRef.debugCounter;
+                    botRef.previousSteering = 0; // Reset steering smoothing
+                    
+                    console.log('🔄 Bot respawned at waypoint', nextWaypointIndex);
+                }
+                
+                // HELPER FUNCTION: Calculate distance from racing path
+                function findDistanceFromPath(carPos, botRef) {
+                    if (!denseWaypoints || denseWaypoints.length === 0) return 0;
+                    
+                    try {
+                        var nearestPoint = findNearestPathPoint(carPos);
+                        if (!nearestPoint || !nearestPoint.point) return 0;
+                        return carPos.distanceTo(nearestPoint.point);
+                    } catch (e) {
+                        console.warn('Error calculating distance from path:', e);
+                        return 0;
+                    }
+                }
+                
+                // VISUAL RAYCAST DEBUG: Create visible lines to show raycast directions
+                function createRaycastVisuals() {
+                    // Clear existing raycast lines
+                    raycastLines.forEach(line => {
+                        scene.remove(line);
+                    });
+                    raycastLines = [];
+                }
+                
+                function addRaycastLine(start, end, color, hit) {
+                    var geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
+                    var material = new THREE.LineBasicMaterial({ 
+                        color: color,
+                        linewidth: hit ? 3 : 1,
+                        transparent: true,
+                        opacity: hit ? 0.9 : 0.5
+                    });
+                    var line = new THREE.Line(geometry, material);
+                    scene.add(line);
+                    raycastLines.push(line);
+                    
+                    // Add a small sphere at hit point if there's a hit
+                    if (hit) {
+                        var sphereGeometry = new THREE.SphereGeometry(0.3, 8, 6);
+                        var sphereMaterial = new THREE.MeshBasicMaterial({ color: color });
+                        var sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+                        sphere.position.copy(end);
+                        scene.add(sphere);
+                        raycastLines.push(sphere);
+                    }
+                }
+
+                // OBSTACLE AVOIDANCE: Raycast-based obstacle detection
+                function checkObstacles(carPos, carQuat, carForward, speed, botRef) {
+                    var rayLength = botRef.avoidanceRayLength;
+                    var shouldAvoid = false;
+                    var avoidanceSteer = 0;
+                    var closestDistance = rayLength;
+                    
+                    // Clear previous raycast visuals
+                    createRaycastVisuals();
+                    
+                    // Create rays: forward, left, right
+                    var rays = [
+                        { direction: carForward.clone(), weight: 1.0, name: 'forward' },
+                        { direction: carForward.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -botRef.sideRayAngle * Math.PI / 180), weight: 0.7, name: 'left' },
+                        { direction: carForward.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), botRef.sideRayAngle * Math.PI / 180), weight: 0.7, name: 'right' }
+                    ];
+                    
+                    var obstacleDetected = false;
+                    var avoidanceDirection = 0; // -1 = left, +1 = right
+                    var debugInfo = [];
+                    var totalHits = 0;
+                    
+                    // Cast rays and check for collisions
+                    for (var i = 0; i < rays.length; i++) {
+                        var ray = rays[i];
+                        var rayStart = new Ammo.btVector3(carPos.x, carPos.y, carPos.z);
+                        var rayEnd = new Ammo.btVector3(
+                            carPos.x + ray.direction.x * rayLength,
+                            carPos.y,
+                            carPos.z + ray.direction.z * rayLength
+                        );
+                        
+                        var rayCallback = new Ammo.ClosestRayResultCallback(rayStart, rayEnd);
+                        physicsWorld.rayTest(rayStart, rayEnd, rayCallback);
+                        
+                        var hitDetected = rayCallback.hasHit();
+                        
+                        // Visual debugging - create lines for each ray
+                        var startPos = new THREE.Vector3(carPos.x, carPos.y, carPos.z);
+                        var endPos = new THREE.Vector3(
+                            carPos.x + ray.direction.x * rayLength,
+                            carPos.y,
+                            carPos.z + ray.direction.z * rayLength
+                        );
+                        
+                        var rayColor = 0x00ff00; // Green for no hit
+                        var actualHitPos = endPos;
+                        
+                        if (hitDetected) {
+                            totalHits++;
+                            var hitPoint = rayCallback.get_m_hitPointWorld();
+                            var hitDistance = Math.sqrt(
+                                Math.pow(hitPoint.x() - carPos.x, 2) + 
+                                Math.pow(hitPoint.y() - carPos.y, 2) + 
+                                Math.pow(hitPoint.z() - carPos.z, 2)
+                            );
+                            
+                            // Update visual end position to hit point
+                            actualHitPos = new THREE.Vector3(hitPoint.x(), hitPoint.y(), hitPoint.z());
+                            
+                            debugInfo.push(ray.name + ':' + hitDistance.toFixed(1) + 'm');
+                            
+                            // Ignore hits that are too close (probably the car itself)
+                            if (hitDistance > 1.5 && hitDistance < rayLength) {
+                                obstacleDetected = true;
+                                shouldAvoid = true;
+                                rayColor = 0xff0000; // Red for obstacle hit
+                                
+                                // Calculate avoidance based on which ray hit
+                                if (ray.name === 'forward') {
+                                    avoidanceDirection += (Math.random() > 0.5) ? 1 : -1;
+                                } else if (ray.name === 'left') {
+                                    avoidanceDirection += 1.0;
+                                } else if (ray.name === 'right') {
+                                    avoidanceDirection -= 1.0;
+                                }
+                                
+                                if (hitDistance < closestDistance) {
+                                    closestDistance = hitDistance;
+                                }
+                            } else {
+                                rayColor = 0xffff00; // Yellow for hit but ignored (too close/far)
+                            }
+                        }
+                        
+                        // Add visual ray line
+                        addRaycastLine(startPos, actualHitPos, rayColor, hitDetected);
+                        
+                        // Clean up Ammo objects
+                        Ammo.destroy(rayStart);
+                        Ammo.destroy(rayEnd);
+                        Ammo.destroy(rayCallback);
+                    }
+                    
+                    // Debug raycast hits every 300 frames
+                    if (botRef.debugCounter % 300 === 0) {
+                        if (totalHits > 0) {
+                            console.log('🎯 Raycast hits detected:', debugInfo.join(', '));
+                        } else {
+                            console.log('🔍 No raycast hits detected - all rays clear');
+                        }
+                        
+                        // Check if player car is nearby but not detected
+                        if (vehicleRef && vehicleRef.chassisMesh) {
+                            var playerPos = vehicleRef.chassisMesh.position;
+                            var distanceToPlayer = carPos.distanceTo(playerPos);
+                            if (distanceToPlayer < rayLength) {
+                                console.log('⚠️ Player car nearby at', distanceToPlayer.toFixed(1) + 'm but not detected by raycast!');
+                                
+                                // Test if we can raycast directly to player
+                                var dirToPlayer = new THREE.Vector3().subVectors(playerPos, carPos).normalize();
+                                var testStart = new Ammo.btVector3(carPos.x, carPos.y, carPos.z);
+                                var testEnd = new Ammo.btVector3(
+                                    carPos.x + dirToPlayer.x * distanceToPlayer,
+                                    carPos.y,
+                                    carPos.z + dirToPlayer.z * distanceToPlayer
+                                );
+                                
+                                var testCallback = new Ammo.ClosestRayResultCallback(testStart, testEnd);
+                                physicsWorld.rayTest(testStart, testEnd, testCallback);
+                                
+                                if (testCallback.hasHit()) {
+                                    console.log('✅ Direct raycast TO player: HIT detected');
+                                } else {
+                                    console.log('❌ Direct raycast TO player: NO HIT - player car has no physics body for raycast!');
+                                }
+                                
+                                Ammo.destroy(testStart);
+                                Ammo.destroy(testEnd);
+                                Ammo.destroy(testCallback);
+                            }
+                        }
+                    }
+                    
+                    // Calculate final avoidance steering
+                    if (shouldAvoid) {
+                        var urgency = Math.max(0.3, 1.0 - (closestDistance / rayLength));
+                        avoidanceSteer = Math.sign(avoidanceDirection) * botRef.avoidanceForce * urgency;
+                        avoidanceSteer = Math.max(-1.0, Math.min(1.0, avoidanceSteer));
+                        
+                        console.log('🚧 OBSTACLE DETECTED! Distance:', closestDistance.toFixed(1) + 'm, Steer:', avoidanceSteer.toFixed(2), '|', debugInfo.join(', '));
+                    }
+                    
+                    return {
+                        shouldAvoid: shouldAvoid,
+                        avoidanceSteer: avoidanceSteer,
+                        closestDistance: closestDistance,
+                        obstacleDetected: obstacleDetected,
+                        multipleHits: totalHits >= 2 // True if multiple rays hit obstacles
+                    };
+                }
+                
+
+                syncList.push(botSync);
+                return botRef;
+            }
+
             function createVehicle(pos, quat) {
                 // Vehicle constants
                 var chassisWidth = 1.8;
@@ -412,7 +1325,7 @@
                 var suspensionRestLength = 0.6;
                 var rollInfluence = 0.2;
 
-                var steeringIncrement = .04;
+                var baseSteeringIncrement = .04;
                 var steeringClamp = .5;
                 var maxEngineForce = 2000;
                 var maxBreakingForce = 100;
@@ -428,6 +1341,10 @@
                 geometry.calculateLocalInertia(massVehicle, localInertia);
                 var body = new Ammo.btRigidBody(new Ammo.btRigidBodyConstructionInfo(massVehicle, motionState, geometry, localInertia));
                 body.setActivationState(DISABLE_DEACTIVATION);
+                
+                // Ensure the player body can be detected by raycasts
+                body.setCollisionFlags(body.getCollisionFlags() & ~2); // Remove CF_NO_CONTACT_RESPONSE flag
+                
                 physicsWorld.addRigidBody(body);
                 var chassisMesh = createChassisMesh(chassisWidth, chassisHeight, chassisLength);
 
@@ -484,6 +1401,11 @@
                 function sync(dt) {
                     var speed = vehicle.getCurrentSpeedKmHour();
                     speedometer.innerHTML = (speed < 0 ? '(R) ' : '') + Math.abs(speed).toFixed(1) + ' km/h';
+                    
+                    // Check for checkpoint progress
+                    if (chassisMesh) {
+                        checkCheckpointProgress(chassisMesh.position);
+                    }
 
                     breakingForce = 0;
                     engineForce = 0;
@@ -545,6 +1467,14 @@
                     var left = actions.left || (vrSteering < -0.1);
                     var right = actions.right || (vrSteering > 0.1);
 
+                    // Calculate speed-dependent steering - less responsive at high speeds
+                    var absSpeed = Math.abs(speed);
+                    var speedFactor = Math.max(0.2, 1.0 - (absSpeed / 80)); // Reduce steering at speeds above 80 km/h
+                    var steeringIncrement = baseSteeringIncrement * speedFactor;
+                    
+                    // Also reduce steering clamp at high speeds for more realistic handling
+                    var dynamicSteeringClamp = steeringClamp * speedFactor;
+
                     if (acceleration) {
                         if (speed < -1)
                             breakingForce = maxBreakingForce;
@@ -555,25 +1485,25 @@
                             breakingForce = maxBreakingForce;
                         else engineForce = -maxEngineForce / 2;
                     }
+                    
+                    // Improved steering logic with speed-dependent response
                     if (left) {
-                        if (vehicleSteering < steeringClamp)
+                        if (vehicleSteering < dynamicSteeringClamp)
                             vehicleSteering += steeringIncrement;
                     }
+                    else if (right) {
+                        if (vehicleSteering > -dynamicSteeringClamp)
+                            vehicleSteering -= steeringIncrement;
+                    }
                     else {
-                        if (right) {
-                            if (vehicleSteering > -steeringClamp)
-                                vehicleSteering -= steeringIncrement;
-                        }
-                        else {
-                            if (vehicleSteering < -steeringIncrement)
-                                vehicleSteering += steeringIncrement;
-                            else {
-                                if (vehicleSteering > steeringIncrement)
-                                    vehicleSteering -= steeringIncrement;
-                                else {
-                                    vehicleSteering = 0;
-                                }
-                            }
+                        // Return to center more gradually for better control
+                        var returnRate = steeringIncrement * 1.5; // Slightly faster return to center
+                        if (vehicleSteering < -returnRate) {
+                            vehicleSteering += returnRate;
+                        } else if (vehicleSteering > returnRate) {
+                            vehicleSteering -= returnRate;
+                        } else {
+                            vehicleSteering = 0;
                         }
                     }
 
@@ -657,9 +1587,500 @@
                 syncList.push(sync);
             }
 
+            function createRacingPath() {
+                // Define control points using the reference track layout
+                const curvePoints = [
+                    -6, 0, 10,
+                    -1, 0, 10,
+                     3, 0,  4,
+                     6, 0,  1,
+                    11, 0,  2,
+                    13, 0,  6,
+                     9, 1,  9,
+                     4, 1,  7,
+                     1, 1,  1,
+                     0, 1, -5,
+                     2, 0, -9,
+                     8, 0,-10,
+                    13, 0, -5,
+                    14, 1,  2,
+                    10, 3,  7,
+                     2, 1,  8,
+                    -4, 3,  7,
+                    -8, 1,  1,
+                    -9, 1, -4,
+                    -6, 1, -9,
+                     0, 1,-10,
+                     7, 1, -7,
+                     5, 2,  0,
+                     0, 2,  2,
+                    -5, 1,  0,
+                    -7, 2, -5,
+                    -8, 2, -9,
+                   -11, 2,-10,
+                   -14, 1, -7,
+                   -13, 1, -2,
+                   -14, 0,  3,
+                   -11, 0, 10,
+                    -6, 0, 10
+                ];
+                
+                // Convert curvePoints array to Vector3 points with elevation smoothing
+                var rawPoints = [];
+                for (let i = 0; i < curvePoints.length; i += 3) {
+                    rawPoints.push(new THREE.Vector3(
+                        curvePoints[i] * 4,     // Scale up X by 4x
+                        curvePoints[i + 1] * 6, // 6x Y for dramatic but manageable elevation
+                        curvePoints[i + 2] * 4  // Scale up Z by 4x
+                    ));
+                }
+                
+                // Apply elevation smoothing to prevent overly steep sections
+                pathPoints = [];
+                for (let i = 0; i < rawPoints.length; i++) {
+                    var point = rawPoints[i].clone();
+                    
+                    // Smooth elevation using weighted average with neighbors
+                    if (i > 0 && i < rawPoints.length - 1) {
+                        var prevY = rawPoints[i - 1].y;
+                        var currentY = rawPoints[i].y;
+                        var nextY = rawPoints[i + 1].y;
+                        
+                        // Calculate maximum allowed slope (in meters per horizontal unit)
+                        var maxSlope = 0.3; // 30% grade maximum
+                        var prevDist = rawPoints[i].distanceTo(rawPoints[i - 1]);
+                        var nextDist = rawPoints[i].distanceTo(rawPoints[i + 1]);
+                        
+                        // Limit elevation change based on horizontal distance
+                        var maxPrevChange = prevDist * maxSlope;
+                        var maxNextChange = nextDist * maxSlope;
+                        
+                        // Clamp elevation changes
+                        if (Math.abs(currentY - prevY) > maxPrevChange) {
+                            currentY = prevY + Math.sign(currentY - prevY) * maxPrevChange;
+                        }
+                        if (Math.abs(nextY - currentY) > maxNextChange) {
+                            currentY = nextY - Math.sign(nextY - currentY) * maxNextChange;
+                        }
+                        
+                        // Apply additional smoothing (weighted average)
+                        point.y = currentY * 0.6 + (prevY + nextY) * 0.2;
+                    }
+                    
+                    pathPoints.push(point);
+                }
+
+                // Create smooth racing path using CatmullRom curve
+                racingPath = new THREE.CatmullRomCurve3(pathPoints, true); // true = closed loop
+
+                // Generate dense waypoints for bot navigation
+                createDenseWaypoints();
+
+                // Create visual road mesh
+                createRoadMesh();
+                
+                // Create path markers for debugging/visualization (HIDDEN)
+                // createPathMarkers();
+                
+                // Create checkpoint system (HIDDEN VISUALS, DATA ONLY)
+                createCheckpointData();
+                
+                console.log('Racing path created with', pathPoints.length, 'control points and', denseWaypoints.length, 'dense waypoints');
+            }
+
+            function createDenseWaypoints() {
+                denseWaypoints = [];
+                
+                // Calculate total path length
+                var pathLength = racingPath.getLength();
+                var waypointSpacing = 2.0; // 2 meters between waypoints
+                var numWaypoints = Math.floor(pathLength / waypointSpacing);
+                
+                console.log('Creating', numWaypoints, 'waypoints with', waypointSpacing, 'm spacing along', pathLength.toFixed(1), 'm track');
+                
+                // Generate waypoints at regular intervals
+                for (var i = 0; i < numWaypoints; i++) {
+                    var t = i / numWaypoints; // Parameter from 0 to 1
+                    var point = racingPath.getPoint(t);
+                    var tangent = racingPath.getTangent(t);
+                    
+                    denseWaypoints.push({
+                        position: point,
+                        direction: tangent,
+                        index: i,
+                        t: t
+                    });
+                }
+                
+                // Add visual markers for waypoints (every 10th waypoint to avoid clutter) - HIDDEN
+                /*
+                for (var i = 0; i < denseWaypoints.length; i += 10) {
+                    var waypoint = denseWaypoints[i];
+                    var markerGeometry = new THREE.SphereGeometry(0.5, 6, 6);
+                    var markerMaterial = new THREE.MeshBasicMaterial({ 
+                        color: 0x00ffff // Cyan for waypoints
+                    });
+                    var marker = new THREE.Mesh(markerGeometry, markerMaterial);
+                    marker.position.copy(waypoint.position);
+                    marker.position.y = 1; // Above ground
+                    scene.add(marker);
+                }
+                */
+                
+                // Debug first few waypoints
+                console.log('First 5 waypoints:');
+                for (var i = 0; i < Math.min(5, denseWaypoints.length); i++) {
+                    var wp = denseWaypoints[i];
+                    console.log('Waypoint', i + ':', 
+                        '(' + wp.position.x.toFixed(1) + ', ' + wp.position.z.toFixed(1) + ')',
+                        'direction:', '(' + wp.direction.x.toFixed(2) + ', ' + wp.direction.z.toFixed(2) + ')'
+                    );
+                }
+            }
+
+            function createRoadMesh() {
+                var roadWidth = 14; // 14 meter wide road as requested
+                var segments = 200; // Number of segments along the path
+                
+                // Get points along the curve
+                var pathPoints = [];
+                var pathDirections = [];
+                
+                for (var i = 0; i <= segments; i++) {
+                    var t = i / segments;
+                    var point = racingPath.getPoint(t);
+                    var tangent = racingPath.getTangent(t);
+                    
+                    pathPoints.push(point);
+                    pathDirections.push(tangent);
+                }
+                
+                // Create road geometry as a flat surface
+                var roadGeometry = new THREE.BufferGeometry();
+                var vertices = [];
+                var indices = [];
+                var uvs = [];
+                
+                // Generate vertices for road surface
+                for (var i = 0; i < pathPoints.length; i++) {
+                    var point = pathPoints[i];
+                    var direction = pathDirections[i];
+                    
+                    // Calculate perpendicular vector (road width direction)
+                    var perpendicular = new THREE.Vector3(-direction.z, 0, direction.x).normalize();
+                    
+                    // Create left and right edge points
+                    var leftPoint = point.clone().add(perpendicular.clone().multiplyScalar(roadWidth / 2));
+                    var rightPoint = point.clone().add(perpendicular.clone().multiplyScalar(-roadWidth / 2));
+                    
+                    // Add vertices (left side) - at ground level
+                    vertices.push(leftPoint.x, leftPoint.y + 0.05, leftPoint.z);
+                    // Add vertices (right side) - at ground level
+                    vertices.push(rightPoint.x, rightPoint.y + 0.05, rightPoint.z);
+                    
+                    // Add UV coordinates
+                    uvs.push(0, i / (pathPoints.length - 1)); // Left edge
+                    uvs.push(1, i / (pathPoints.length - 1)); // Right edge
+                }
+                
+                // Create triangular faces
+                for (var i = 0; i < pathPoints.length - 1; i++) {
+                    var base = i * 2;
+                    
+                    // First triangle
+                    indices.push(base, base + 1, base + 2);
+                    // Second triangle  
+                    indices.push(base + 1, base + 3, base + 2);
+                }
+                
+                // Set geometry attributes
+                roadGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                roadGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+                roadGeometry.setIndex(indices);
+                roadGeometry.computeVertexNormals();
+                
+                // Create road material - make it more visible
+                var roadMaterial = new THREE.MeshLambertMaterial({ 
+                    color: 0x333333,
+                    side: THREE.DoubleSide,
+                    transparent: false,
+                    wireframe: false
+                });
+                
+                // Create road mesh and add to scene
+                roadMesh = new THREE.Mesh(roadGeometry, roadMaterial);
+                scene.add(roadMesh);
+                
+                // Create physics collision for the road surface
+                createRoadPhysics(roadGeometry);
+                
+                console.log('Road mesh created with', vertices.length / 3, 'vertices and', indices.length / 3, 'triangles');
+                console.log('Road width:', roadWidth + 'm, Road segments:', segments);
+                
+                // Create center line as a thin strip
+                var centerLineGeometry = new THREE.BufferGeometry();
+                var centerVertices = [];
+                var centerIndices = [];
+                var centerUvs = [];
+                
+                var lineWidth = 0.3; // 30cm wide center line
+                
+                for (var i = 0; i < pathPoints.length; i++) {
+                    var point = pathPoints[i];
+                    var direction = pathDirections[i];
+                    var perpendicular = new THREE.Vector3(-direction.z, 0, direction.x).normalize();
+                    
+                    var leftPoint = point.clone().add(perpendicular.clone().multiplyScalar(lineWidth / 2));
+                    var rightPoint = point.clone().add(perpendicular.clone().multiplyScalar(-lineWidth / 2));
+                    
+                    centerVertices.push(leftPoint.x, leftPoint.y + 0.02, leftPoint.z);
+                    centerVertices.push(rightPoint.x, rightPoint.y + 0.02, rightPoint.z);
+                    
+                    centerUvs.push(0, i / (pathPoints.length - 1));
+                    centerUvs.push(1, i / (pathPoints.length - 1));
+                }
+                
+                for (var i = 0; i < pathPoints.length - 1; i++) {
+                    var base = i * 2;
+                    centerIndices.push(base, base + 1, base + 2);
+                    centerIndices.push(base + 1, base + 3, base + 2);
+                }
+                
+                centerLineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(centerVertices, 3));
+                centerLineGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(centerUvs, 2));
+                centerLineGeometry.setIndex(centerIndices);
+                centerLineGeometry.computeVertexNormals();
+                
+                var centerLineMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0xffff00,
+                    side: THREE.DoubleSide
+                });
+                var centerLine = new THREE.Mesh(centerLineGeometry, centerLineMaterial);
+                scene.add(centerLine);
+                
+                console.log('Created flat road surface with', roadWidth + 'm width');
+                
+                // DEBUG: Create a simple test rectangle to verify road positioning
+                var testGeometry = new THREE.PlaneGeometry(roadWidth, 20);
+                var testMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0xff0000, 
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.5
+                });
+                var testPlane = new THREE.Mesh(testGeometry, testMaterial);
+                testPlane.rotation.x = -Math.PI / 2; // Rotate to lie flat
+                testPlane.position.set(0, 0.1, 0); // Position at origin, slightly above ground
+                scene.add(testPlane);
+                console.log('Added red test plane for road visibility debugging');
+            }
+            
+            // CREATE ROAD PHYSICS: Add collision mesh for elevated road surface
+            function createRoadPhysics(roadGeometry) {
+                // Get vertices and indices from the road geometry
+                var vertices = roadGeometry.attributes.position.array;
+                var indices = roadGeometry.index.array;
+                
+                // Create Ammo triangle mesh
+                var mesh = new Ammo.btTriangleMesh(true, true);
+                
+                // Add triangles to the mesh
+                for (var i = 0; i < indices.length; i += 3) {
+                    var i1 = indices[i] * 3;
+                    var i2 = indices[i + 1] * 3;
+                    var i3 = indices[i + 2] * 3;
+                    
+                    var v1 = new Ammo.btVector3(vertices[i1], vertices[i1 + 1], vertices[i1 + 2]);
+                    var v2 = new Ammo.btVector3(vertices[i2], vertices[i2 + 1], vertices[i2 + 2]);
+                    var v3 = new Ammo.btVector3(vertices[i3], vertices[i3 + 1], vertices[i3 + 2]);
+                    
+                    mesh.addTriangle(v1, v2, v3, false);
+                    
+                    // Clean up vectors
+                    Ammo.destroy(v1);
+                    Ammo.destroy(v2);
+                    Ammo.destroy(v3);
+                }
+                
+                // Create collision shape from triangle mesh
+                var roadShape = new Ammo.btBvhTriangleMeshShape(mesh, true, true);
+                
+                // Create rigid body (static, mass = 0)
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(0, 0, 0));
+                
+                var motionState = new Ammo.btDefaultMotionState(transform);
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                
+                var rbInfo = new Ammo.btRigidBodyConstructionInfo(0, motionState, roadShape, localInertia);
+                var roadBody = new Ammo.btRigidBody(rbInfo);
+                
+                // Set friction for good driving feel
+                roadBody.setFriction(0.8);
+                roadBody.setRestitution(0.1);
+                
+                // Add to physics world
+                physicsWorld.addRigidBody(roadBody);
+                
+                console.log('Road physics collision mesh created with', indices.length / 3, 'triangles');
+            }
+
+            function createPathMarkers() {
+                // Create visual markers at each control point
+                for (var i = 0; i < pathPoints.length; i++) {
+                    var markerGeometry = new THREE.SphereGeometry(2, 8, 8);
+                    var markerMaterial = new THREE.MeshBasicMaterial({
+                        color: i === 0 ? 0x00ff00 : 0xff0000 // Green for start, red for others
+                    });
+                    var marker = new THREE.Mesh(markerGeometry, markerMaterial);
+                    marker.position.copy(pathPoints[i]);
+                    marker.position.y = pathPoints[i].y + 3; // Above road surface
+                    scene.add(marker);
+                }
+            }
+            
+            function createCheckpoints() {
+                // Create checkpoint markers at each path point
+                checkpointMarkers = [];
+                
+                for (var i = 0; i < pathPoints.length - 1; i++) { // -1 because last point is same as first
+                    // Create checkpoint ring/gate
+                    var ringGeometry = new THREE.RingGeometry(8, 12, 16);
+                    var ringMaterial = new THREE.MeshBasicMaterial({
+                        color: 0x00ffff,
+                        side: THREE.DoubleSide,
+                        transparent: true,
+                        opacity: 0.6
+                    });
+                    var ring = new THREE.Mesh(ringGeometry, ringMaterial);
+                    
+                    // Position at path point
+                    ring.position.copy(pathPoints[i]);
+                    ring.position.y += 5; // Above the road
+                    
+                    // Rotate to face along the path
+                    if (i < pathPoints.length - 2) {
+                        var direction = new THREE.Vector3().subVectors(pathPoints[i + 1], pathPoints[i]);
+                        ring.lookAt(ring.position.clone().add(direction));
+                    }
+                    
+                    // Add checkpoint number
+                    var numberGeometry = new THREE.SphereGeometry(3, 8, 8);
+                    var numberMaterial = new THREE.MeshBasicMaterial({
+                        color: i === 0 ? 0x00ff00 : 0xffffff
+                    });
+                    var numberSphere = new THREE.Mesh(numberGeometry, numberMaterial);
+                    numberSphere.position.copy(ring.position);
+                    numberSphere.position.y += 2;
+                    
+                    scene.add(ring);
+                    scene.add(numberSphere);
+                    
+                    checkpointMarkers.push({
+                        ring: ring,
+                        sphere: numberSphere,
+                        position: pathPoints[i].clone(),
+                        index: i
+                    });
+                }
+                
+                // Create next checkpoint indicator
+                updateNextCheckpointMarker();
+                
+                console.log('Created', checkpointMarkers.length, 'checkpoints');
+            }
+            
+            function createCheckpointData() {
+                // Create checkpoint data without visual elements
+                checkpointMarkers = [];
+                
+                for (var i = 0; i < pathPoints.length - 1; i++) { // -1 because last point is same as first
+                    checkpointMarkers.push({
+                        position: pathPoints[i].clone(),
+                        index: i
+                    });
+                }
+                
+                // Initialize the next checkpoint marker (yellow pulsing sphere)
+                updateNextCheckpointMarker();
+                
+                console.log('Created', checkpointMarkers.length, 'checkpoint data points with next checkpoint marker');
+            }
+            
+            function updateNextCheckpointMarker() {
+                // Remove old marker
+                if (nextCheckpointMarker) {
+                    scene.remove(nextCheckpointMarker);
+                }
+                
+                // Create glowing marker for next checkpoint
+                var nextIndex = playerCurrentCheckpoint % checkpointMarkers.length;
+                var checkpoint = checkpointMarkers[nextIndex];
+                
+                if (checkpoint && checkpoint.position) {
+                    var glowGeometry = new THREE.SphereGeometry(4, 16, 16);
+                    var glowMaterial = new THREE.MeshBasicMaterial({
+                        color: 0xffff00,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+                    nextCheckpointMarker = new THREE.Mesh(glowGeometry, glowMaterial);
+                    nextCheckpointMarker.position.copy(checkpoint.position);
+                    nextCheckpointMarker.position.y += 15; // Higher above the track
+                    
+                    scene.add(nextCheckpointMarker);
+                    
+                    // Make it pulse
+                    nextCheckpointMarker.userData = { pulseTime: 0 };
+                    
+                    console.log('📍 Next checkpoint marker updated at:', checkpoint.position);
+                }
+            }
+
+            // Bot pathfinding utilities
+            function getPathPosition(t) {
+                // Get position along path (t = 0 to 1)
+                return racingPath.getPoint(t);
+            }
+
+            function getPathDirection(t) {
+                // Get direction vector at position t
+                return racingPath.getTangent(t);
+            }
+
+            function findNearestPathPoint(position) {
+                // Find closest point on path to given position
+                var closestT = 0;
+                var closestDistance = Infinity;
+                
+                // Sample path at regular intervals
+                for (var t = 0; t <= 1; t += 0.01) {
+                    var pathPoint = racingPath.getPoint(t);
+                    var distance = position.distanceTo(pathPoint);
+                    
+                    if (distance < closestDistance) {
+                        closestDistance = distance;
+                        closestT = t;
+                    }
+                }
+                
+                return {
+                    t: closestT,
+                    point: racingPath.getPoint(closestT),
+                    distance: closestDistance,
+                    direction: racingPath.getTangent(closestT)
+                };
+            }
+
             function createObjects() {
-                // Ground (4x bigger)
-                createBox(new THREE.Vector3(0, -0.5, 0), ZERO_QUATERNION, 300, 1, 300, 0, 2);
+                // Create racing path first
+                console.log('Creating racing path...');
+                createRacingPath();
+                console.log('Racing path created:', !!racingPath, 'Points:', pathPoints.length);
+                
+                // Ground (4x bigger) - lowered to not interfere with elevated road
+                createBox(new THREE.Vector3(0, -5, 0), ZERO_QUATERNION, 300, 1, 300, 0, 2);
 
                 // Walls around the driving area
                 createBox(new THREE.Vector3(0, 5, -150), ZERO_QUATERNION, 300, 10, 2, 0, 2);
@@ -672,26 +2093,38 @@
                 quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 18);
                 createBox(new THREE.Vector3(0, -1.5, 0), quaternion, 8, 4, 10, 0);
 
-                // Stack of boxes
+                // Stack of boxes (moved away from track)
                 var size = .75;
                 var nw = 8;
                 var nh = 6;
                 for (var j = 0; j < nw; j++)
                     for (var i = 0; i < nh; i++)
-                        createBox(new THREE.Vector3(size * j - (size * (nw - 1)) / 2, size * i, 10), ZERO_QUATERNION, size, size, size, 10);
+                        createBox(new THREE.Vector3(size * j - (size * (nw - 1)) / 2 + 120, size * i, 10), ZERO_QUATERNION, size, size, size, 10);
 
-                // Random cones - 50 cones, 4m high, 1m diameter
-                for (var c = 0; c < 50; c++) {
+                // Random cones - fewer and away from track
+                for (var c = 0; c < 25; c++) {
                     var x, z;
                     do {
                         x = (Math.random() - 0.5) * 280;
                         z = (Math.random() - 0.5) * 280;
-                    } while (Math.abs(x) < 30 && Math.abs(z) < 30);
+                        
+                        // Check if too close to racing path (only if path exists)
+                        var testPos = new THREE.Vector3(x, 0, z);
+                        var pathInfo = racingPath ? findNearestPathPoint(testPos) : {distance: 100};
+                        
+                    } while ((Math.abs(x) < 30 && Math.abs(z) < 30) || pathInfo.distance < 20);
                     
                     createBox(new THREE.Vector3(x, 2, z), ZERO_QUATERNION, 1, 4, 1, 10, 1);
                 }
 
-                createVehicle(new THREE.Vector3(0, 4, -20), ZERO_QUATERNION);
+                // Create player car at start line
+                console.log('Creating player car...');
+                createVehicle(new THREE.Vector3(0, 15, -50), ZERO_QUATERNION);
+                
+                // Create bot car slightly behind and to the side
+                console.log('Creating bot car...');
+                botVehicleRef = createBotVehicle(new THREE.Vector3(-5, 4, -45), ZERO_QUATERNION, 0x0066ff);
+                console.log('Bot car created, racing path available:', !!racingPath);
             }
 
             // - Init -
