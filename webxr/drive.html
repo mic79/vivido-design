@@ -229,6 +229,7 @@
             var playerEngineSound = null;
             var botEngineSound = null;
             var backgroundMusic = null;
+            var vrAudioStarted = false; // Track if VR audio has been started
             
             // Road and path system
             var racingPath = null;
@@ -352,10 +353,18 @@
                             // Hide desktop HUD in VR mode
                             document.body.classList.add('vr-mode');
                             
+                            // Start audio in VR session (VR counts as user interaction)
+                            // Add a small delay to ensure audio system is ready
+                            setTimeout(() => {
+                                startEngineAudio();
+                                console.log('🎵 VR audio started');
+                            }, 100);
+                            
                             // Listen for VR session end to restore desktop HUD
                             session.addEventListener('end', () => {
                                 console.log('VR session ended');
                                 document.body.classList.remove('vr-mode');
+                                vrAudioStarted = false; // Reset for next VR session
                             });
                         } catch (error) {
                             console.error('VR not supported:', error);
@@ -674,37 +683,6 @@
                     
                     console.log('🔊 Audio system initialized');
                     
-                    // Resume audio context and start engine sounds (requires user interaction)
-                    function startEngineAudio() {
-                        if (audioContext.state === 'suspended') {
-                            audioContext.resume().then(() => {
-                                playerEngineSound.start();
-                                botEngineSound.start();
-                                console.log('🔊 Engine sounds started');
-                                // Start background music
-                                if (backgroundMusic) {
-                                    backgroundMusic.play().then(() => {
-                                        console.log('🎵 Background music started');
-                                    }).catch(error => {
-                                        console.warn('Background music failed to start:', error);
-                                    });
-                                }
-                            });
-                        } else {
-                            playerEngineSound.start();
-                            botEngineSound.start();
-                            console.log('🔊 Engine sounds started');
-                            // Start background music
-                            if (backgroundMusic) {
-                                backgroundMusic.play().then(() => {
-                                    console.log('🎵 Background music started');
-                                }).catch(error => {
-                                    console.warn('Background music failed to start:', error);
-                                });
-                            }
-                        }
-                    }
-                    
                     // Start audio on first user interaction
                     var startAudioOnInteraction = function() {
                         startEngineAudio();
@@ -719,6 +697,44 @@
                     
                 } catch (error) {
                     console.warn('Audio system not available:', error);
+                }
+            }
+
+            // GLOBAL AUDIO CONTROL: Resume audio context and start engine sounds (requires user interaction)
+            function startEngineAudio() {
+                if (!audioContext || !playerEngineSound || !botEngineSound) {
+                    console.warn('Audio system not initialized yet');
+                    return;
+                }
+                
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume().then(() => {
+                        playerEngineSound.start();
+                        botEngineSound.start();
+                        console.log('🔊 Engine sounds started (resumed context)');
+                        // Start background music
+                        if (backgroundMusic) {
+                            backgroundMusic.play().then(() => {
+                                console.log('🎵 Background music started');
+                            }).catch(error => {
+                                console.warn('Background music failed to start:', error);
+                            });
+                        }
+                    }).catch(error => {
+                        console.warn('Failed to resume audio context:', error);
+                    });
+                } else {
+                    playerEngineSound.start();
+                    botEngineSound.start();
+                    console.log('🔊 Engine sounds started');
+                    // Start background music
+                    if (backgroundMusic) {
+                        backgroundMusic.play().then(() => {
+                            console.log('🎵 Background music started');
+                        }).catch(error => {
+                            console.warn('Background music failed to start:', error);
+                        });
+                    }
                 }
             }
 
@@ -2067,6 +2083,18 @@
                                 const gamepad = inputSource.gamepad;
                                 
                                 if (gamepad && inputSource.handedness === 'right') {
+                                    // Start audio on first VR controller interaction
+                                    if (!vrAudioStarted && gamepad.buttons) {
+                                        for (let j = 0; j < gamepad.buttons.length; j++) {
+                                            if (gamepad.buttons[j] && gamepad.buttons[j].pressed) {
+                                                startEngineAudio();
+                                                vrAudioStarted = true;
+                                                console.log('🎵 VR audio started via controller button press');
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
                                     // Thumbstick for steering
                                     if (gamepad.axes && gamepad.axes.length >= 4) {
                                         vrSteering = gamepad.axes[2] || 0;
