@@ -50,14 +50,78 @@
         a {
             color: #a06851;
         }
+
+        /* Desktop HUD Styles */
+        #desktopHUD {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            z-index: 1000;
+            min-width: 200px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+        
+        #desktopHUD .hud-line {
+            margin: 8px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        #desktopHUD .hud-label {
+            color: #aaa;
+            margin-right: 15px;
+        }
+        
+        #desktopHUD .hud-value {
+            color: #fff;
+            font-family: 'Courier New', monospace;
+        }
+        
+        /* Hide desktop HUD in VR */
+        .vr-mode #desktopHUD {
+            display: none;
+        }
     </style>
 </head>
 
 <body>
     <div id="container"><br /><br /><br /><br /><br />Loading...</div>
     <div id="speedometer">0.0 km/h</div>
+    
+    <!-- Desktop HUD for non-VR users -->
+    <div id="desktopHUD">
+        <div class="hud-line">
+            <span class="hud-label">LAP:</span>
+            <span class="hud-value" id="desktopLapNumber">1</span>
+        </div>
+        <div class="hud-line">
+            <span class="hud-label">TIME:</span>
+            <span class="hud-value" id="desktopCurrentTime">0:00.000</span>
+        </div>
+        <div class="hud-line">
+            <span class="hud-label">BEST:</span>
+            <span class="hud-value" id="desktopBestTime">--:--.---</span>
+        </div>
+        <div class="hud-line">
+            <span class="hud-label">CHECKPOINT:</span>
+            <span class="hud-value" id="desktopCheckpoint">0/0</span>
+        </div>
+    </div>
     <div id="info">WebXR Multiplayer Driving Game<br>WASD/VR Controllers to drive<br>C = Camera, Y = Reset</div>
     <button id="vrButton" style="display: none;">Enter VR</button>
+    
+    <!-- Background Music -->
+    <audio id="backgroundMusic" loop preload="auto">
+        <source src="audio/machina-tobias-voigt-main-version-19314-02-39.mp3" type="audio/mpeg">
+        Your browser does not support the audio element.
+    </audio>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://kripken.github.io/ammo.js/builds/ammo.js"></script>
@@ -98,14 +162,78 @@
             var raycastLines = []; // Visual debug lines for raycasting
             
             // Checkpoint system
-            var playerCurrentCheckpoint = 0;
-            var playerLastPassedCheckpoint = 0;
+            var playerCurrentCheckpoint = 1; // Next checkpoint to reach (1-based)
+            var playerLastPassedCheckpoint = 0; // Last checkpoint passed (0-based)
             var nextCheckpointMarker = null;
             var checkpointMarkers = [];
+            
+            // Lap timing system
+            var currentLapNumber = 1;
+            var currentLapStartTime = 0;
+            var currentLapTime = 0;
+            var bestLapTime = null;
+            var lapTimes = [];
+            
+            // LocalStorage key for best time
+            var BEST_TIME_KEY = 'webxr-drive-best-time';
+            
+            // LOCALSTORAGE FUNCTIONS: Save and load best time
+            function loadBestTime() {
+                try {
+                    var savedTime = localStorage.getItem(BEST_TIME_KEY);
+                    if (savedTime !== null) {
+                        bestLapTime = parseFloat(savedTime);
+                        console.log('💾 Loaded best time from storage:', formatLapTime(bestLapTime));
+                        return bestLapTime;
+                    }
+                } catch (error) {
+                    console.warn('Failed to load best time from localStorage:', error);
+                }
+                return null;
+            }
+            
+            function saveBestTime(time) {
+                try {
+                    localStorage.setItem(BEST_TIME_KEY, time.toString());
+                    console.log('💾 Saved new best time to storage:', formatLapTime(time));
+                } catch (error) {
+                    console.warn('Failed to save best time to localStorage:', error);
+                }
+            }
+            
+            function clearBestTime() {
+                try {
+                    localStorage.removeItem(BEST_TIME_KEY);
+                    bestLapTime = null;
+                    console.log('🗑️ Cleared best time from storage');
+                } catch (error) {
+                    console.warn('Failed to clear best time from localStorage:', error);
+                }
+            }
+            
+            function formatLapTime(seconds) {
+                if (seconds === null || seconds === undefined) return '--:--.---';
+                var minutes = Math.floor(seconds / 60);
+                var secs = (seconds % 60).toFixed(3);
+                return minutes + ':' + (secs < 10 ? '0' : '') + secs;
+            }
+            
+            // VR HUD elements
+            var vrHUD = null;
+            var lapNumberText = null;
+            var currentTimeText = null;
+            var bestTimeText = null;
+            
+            // Engine sound system
+            var audioContext = null;
+            var playerEngineSound = null;
+            var botEngineSound = null;
+            var backgroundMusic = null;
             
             // Road and path system
             var racingPath = null;
             var roadMesh = null;
+            var roadPhysicsBody = null; // Physics body for the road surface
             var pathPoints = [];
             var denseWaypoints = []; // Dense waypoints every 1-2m for bot navigation
             
@@ -219,6 +347,16 @@
                             });
                             renderer.xr.setSession(session);
                             console.log('VR session started');
+                            // Set up VR HUD when VR starts
+                            setupVRHUD();
+                            // Hide desktop HUD in VR mode
+                            document.body.classList.add('vr-mode');
+                            
+                            // Listen for VR session end to restore desktop HUD
+                            session.addEventListener('end', () => {
+                                console.log('VR session ended');
+                                document.body.classList.remove('vr-mode');
+                            });
                         } catch (error) {
                             console.error('VR not supported:', error);
                         }
@@ -299,6 +437,384 @@
                     return false;
                 }
             }
+            
+            function setupVRHUD() {
+                if (vrHUD) return; // Already created
+                
+                // Create HUD group
+                vrHUD = new THREE.Group();
+                
+                // Position HUD in front of player (relative to camera rig)
+                vrHUD.position.set(0, 0.3, -1.5); // Above and in front
+                
+                // Create canvas for text rendering
+                var canvas = document.createElement('canvas');
+                canvas.width = 512;
+                canvas.height = 256;
+                var context = canvas.getContext('2d');
+                
+                // Create texture from canvas
+                var hudTexture = new THREE.CanvasTexture(canvas);
+                hudTexture.needsUpdate = true;
+                
+                // Create HUD plane
+                var hudGeometry = new THREE.PlaneGeometry(1, 0.5);
+                var hudMaterial = new THREE.MeshBasicMaterial({
+                    map: hudTexture,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                
+                var hudMesh = new THREE.Mesh(hudGeometry, hudMaterial);
+                vrHUD.add(hudMesh);
+                
+                // Store references for updating
+                vrHUD.userData = {
+                    canvas: canvas,
+                    context: context,
+                    texture: hudTexture
+                };
+                
+                // Add HUD to camera rig so it follows the player
+                cameraRig.add(vrHUD);
+                
+                // Initialize lap timing
+                currentLapStartTime = Date.now();
+                
+                console.log('🥽 VR HUD created');
+            }
+            
+            // ENGINE SOUND SYSTEM: Procedural engine sound generation
+            class EngineSound {
+                constructor(audioContext, baseFrequency = 80, volume = 0.3) {
+                    this.audioContext = audioContext;
+                    this.baseFrequency = baseFrequency;
+                    this.volume = volume;
+                    
+                    // Create audio nodes
+                    this.oscillator1 = null;
+                    this.oscillator2 = null;
+                    this.oscillator3 = null;
+                    this.noiseBuffer = null;
+                    this.noiseSource = null;
+                    this.gainNode = null;
+                    this.filterNode = null;
+                    
+                    this.isPlaying = false;
+                    this.currentRPM = 800; // Idle RPM
+                    
+                    this.setupAudioNodes();
+                }
+                
+                setupAudioNodes() {
+                    // Create gain node for volume control
+                    this.gainNode = this.audioContext.createGain();
+                    this.gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+                    
+                    // Create filter for engine character
+                    this.filterNode = this.audioContext.createBiquadFilter();
+                    this.filterNode.type = 'lowpass';
+                    this.filterNode.frequency.setValueAtTime(800, this.audioContext.currentTime);
+                    this.filterNode.Q.setValueAtTime(1, this.audioContext.currentTime);
+                    
+                    // Connect filter to gain to output
+                    this.filterNode.connect(this.gainNode);
+                    this.gainNode.connect(this.audioContext.destination);
+                    
+                    // Create noise buffer for engine texture
+                    this.createNoiseBuffer();
+                }
+                
+                createNoiseBuffer() {
+                    var bufferSize = this.audioContext.sampleRate * 2; // 2 seconds of noise
+                    this.noiseBuffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+                    var output = this.noiseBuffer.getChannelData(0);
+                    
+                    // Generate pink noise for engine texture
+                    for (var i = 0; i < bufferSize; i++) {
+                        output[i] = (Math.random() * 2 - 1) * 0.1;
+                    }
+                }
+                
+                start() {
+                    if (this.isPlaying) return;
+                    
+                    // Create oscillators for engine harmonics
+                    this.oscillator1 = this.audioContext.createOscillator();
+                    this.oscillator2 = this.audioContext.createOscillator();
+                    this.oscillator3 = this.audioContext.createOscillator();
+                    
+                    // Set oscillator types and frequencies
+                    this.oscillator1.type = 'sawtooth';
+                    this.oscillator2.type = 'square';
+                    this.oscillator3.type = 'triangle';
+                    
+                    // Create gain nodes for each oscillator
+                    var gain1 = this.audioContext.createGain();
+                    var gain2 = this.audioContext.createGain();
+                    var gain3 = this.audioContext.createGain();
+                    
+                    gain1.gain.setValueAtTime(0.4, this.audioContext.currentTime);
+                    gain2.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+                    gain3.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+                    
+                    // Connect oscillators
+                    this.oscillator1.connect(gain1);
+                    this.oscillator2.connect(gain2);
+                    this.oscillator3.connect(gain3);
+                    
+                    gain1.connect(this.filterNode);
+                    gain2.connect(this.filterNode);
+                    gain3.connect(this.filterNode);
+                    
+                    // Add noise source
+                    this.noiseSource = this.audioContext.createBufferSource();
+                    this.noiseSource.buffer = this.noiseBuffer;
+                    this.noiseSource.loop = true;
+                    
+                    var noiseGain = this.audioContext.createGain();
+                    noiseGain.gain.setValueAtTime(0.1, this.audioContext.currentTime);
+                    
+                    this.noiseSource.connect(noiseGain);
+                    noiseGain.connect(this.filterNode);
+                    
+                    // Start all sources
+                    this.oscillator1.start();
+                    this.oscillator2.start();
+                    this.oscillator3.start();
+                    this.noiseSource.start();
+                    
+                    // Fade in
+                    this.gainNode.gain.setTargetAtTime(this.volume, this.audioContext.currentTime, 0.1);
+                    
+                    this.isPlaying = true;
+                    this.updateFrequencies();
+                }
+                
+                stop() {
+                    if (!this.isPlaying) return;
+                    
+                    // Fade out
+                    this.gainNode.gain.setTargetAtTime(0, this.audioContext.currentTime, 0.1);
+                    
+                    // Stop sources after fade out
+                    setTimeout(() => {
+                        if (this.oscillator1) {
+                            this.oscillator1.stop();
+                            this.oscillator2.stop();
+                            this.oscillator3.stop();
+                            this.noiseSource.stop();
+                        }
+                        this.isPlaying = false;
+                    }, 200);
+                }
+                
+                updateEngine(speed, throttle, rpm) {
+                    if (!this.isPlaying) return;
+                    
+                    // Calculate RPM based on speed and throttle
+                    var targetRPM = 800 + (speed * 50) + (throttle * 2000); // Idle + speed + throttle
+                    targetRPM = Math.min(targetRPM, 6000); // Max RPM
+                    
+                    // Smooth RPM changes
+                    this.currentRPM += (targetRPM - this.currentRPM) * 0.1;
+                    
+                    this.updateFrequencies();
+                    this.updateVolume(throttle);
+                }
+                
+                updateFrequencies() {
+                    if (!this.isPlaying || !this.oscillator1) return;
+                    
+                    var baseFreq = this.baseFrequency * (this.currentRPM / 1000);
+                    
+                    // Set frequencies for harmonics
+                    this.oscillator1.frequency.setTargetAtTime(baseFreq, this.audioContext.currentTime, 0.01);
+                    this.oscillator2.frequency.setTargetAtTime(baseFreq * 2, this.audioContext.currentTime, 0.01);
+                    this.oscillator3.frequency.setTargetAtTime(baseFreq * 0.5, this.audioContext.currentTime, 0.01);
+                    
+                    // Update filter frequency based on RPM
+                    var filterFreq = 400 + (this.currentRPM / 10);
+                    this.filterNode.frequency.setTargetAtTime(filterFreq, this.audioContext.currentTime, 0.01);
+                }
+                
+                updateVolume(throttle) {
+                    if (!this.isPlaying) return;
+                    
+                    var targetVolume = this.volume * (0.3 + throttle * 0.7); // Idle + throttle volume
+                    this.gainNode.gain.setTargetAtTime(targetVolume, this.audioContext.currentTime, 0.05);
+                }
+            }
+            
+            function initAudioSystem() {
+                try {
+                    // Create audio context
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    
+                    // Create engine sounds (lowered pitch and volume for music prominence)
+                    playerEngineSound = new EngineSound(audioContext, 55, 0.15); // Player car (reduced volume from 0.4 to 0.15)
+                    botEngineSound = new EngineSound(audioContext, 60, 0.08);    // Bot car (reduced volume from 0.2 to 0.08)
+                    
+                    // Initialize background music
+                    backgroundMusic = document.getElementById('backgroundMusic');
+                    if (backgroundMusic) {
+                        backgroundMusic.volume = 0.6; // Set to 60% volume to be more prominent than engine sounds
+                        
+                        // Add error handling for audio loading
+                        backgroundMusic.addEventListener('error', function(e) {
+                            console.warn('🎵 Background music failed to load:', e);
+                        });
+                        
+                        backgroundMusic.addEventListener('canplaythrough', function() {
+                            console.log('🎵 Background music loaded successfully');
+                        });
+                        
+                        console.log('🎵 Background music initialized');
+                    }
+                    
+                    console.log('🔊 Audio system initialized');
+                    
+                    // Resume audio context and start engine sounds (requires user interaction)
+                    function startEngineAudio() {
+                        if (audioContext.state === 'suspended') {
+                            audioContext.resume().then(() => {
+                                playerEngineSound.start();
+                                botEngineSound.start();
+                                console.log('🔊 Engine sounds started');
+                                // Start background music
+                                if (backgroundMusic) {
+                                    backgroundMusic.play().then(() => {
+                                        console.log('🎵 Background music started');
+                                    }).catch(error => {
+                                        console.warn('Background music failed to start:', error);
+                                    });
+                                }
+                            });
+                        } else {
+                            playerEngineSound.start();
+                            botEngineSound.start();
+                            console.log('🔊 Engine sounds started');
+                            // Start background music
+                            if (backgroundMusic) {
+                                backgroundMusic.play().then(() => {
+                                    console.log('🎵 Background music started');
+                                }).catch(error => {
+                                    console.warn('Background music failed to start:', error);
+                                });
+                            }
+                        }
+                    }
+                    
+                    // Start audio on first user interaction
+                    var startAudioOnInteraction = function() {
+                        startEngineAudio();
+                        document.removeEventListener('click', startAudioOnInteraction);
+                        document.removeEventListener('keydown', startAudioOnInteraction);
+                        document.removeEventListener('touchstart', startAudioOnInteraction);
+                    };
+                    
+                    document.addEventListener('click', startAudioOnInteraction);
+                    document.addEventListener('keydown', startAudioOnInteraction);
+                    document.addEventListener('touchstart', startAudioOnInteraction);
+                    
+                } catch (error) {
+                    console.warn('Audio system not available:', error);
+                }
+            }
+
+            function updateVRHUD() {
+                if (!vrHUD || !vrHUD.userData) return;
+                
+                var canvas = vrHUD.userData.canvas;
+                var context = vrHUD.userData.context;
+                var texture = vrHUD.userData.texture;
+                
+                // Clear canvas
+                context.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Set up text styling
+                context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                context.fillRect(0, 0, canvas.width, canvas.height);
+                
+                context.fillStyle = '#ffffff';
+                context.font = 'bold 32px Arial';
+                context.textAlign = 'left';
+                
+                // Calculate current lap time
+                if (currentLapStartTime > 0) {
+                    currentLapTime = (Date.now() - currentLapStartTime) / 1000;
+                }
+                
+                // Format time function
+                function formatTime(seconds) {
+                    if (seconds === null || seconds === undefined) return '--:--.---';
+                    var minutes = Math.floor(seconds / 60);
+                    var secs = (seconds % 60).toFixed(3);
+                    return minutes + ':' + (secs < 10 ? '0' : '') + secs;
+                }
+                
+                // Draw lap information
+                var yPos = 50;
+                var lineHeight = 40;
+                
+                // Lap number
+                context.fillText('LAP: ' + currentLapNumber, 20, yPos);
+                yPos += lineHeight;
+                
+                // Current lap time
+                context.fillText('TIME: ' + formatTime(currentLapTime), 20, yPos);
+                yPos += lineHeight;
+                
+                // Best lap time
+                context.fillText('BEST: ' + formatTime(bestLapTime), 20, yPos);
+                yPos += lineHeight;
+                
+                // Checkpoint progress
+                var totalCheckpoints = checkpointMarkers ? checkpointMarkers.length : 0;
+                var currentCheckpoint = playerLastPassedCheckpoint + 1; // +1 because we show next checkpoint to reach
+                if (currentCheckpoint > totalCheckpoints) currentCheckpoint = totalCheckpoints;
+                context.fillText('CHECKPOINT: ' + currentCheckpoint + '/' + totalCheckpoints, 20, yPos);
+                yPos += lineHeight;
+                
+                // Update texture
+                texture.needsUpdate = true;
+            }
+
+            // DESKTOP HUD UPDATE: Update desktop HUD with same info as VR HUD
+            function updateDesktopHUD() {
+                // Calculate current lap time
+                if (currentLapStartTime > 0) {
+                    currentLapTime = (Date.now() - currentLapStartTime) / 1000;
+                } else {
+                    console.warn('⚠️ Desktop HUD: currentLapStartTime not initialized:', currentLapStartTime);
+                }
+                
+                // Format time function
+                function formatTime(seconds) {
+                    if (seconds === null || seconds === undefined) return '--:--.---';
+                    var minutes = Math.floor(seconds / 60);
+                    var secs = (seconds % 60).toFixed(3);
+                    return minutes + ':' + (secs < 10 ? '0' : '') + secs;
+                }
+                
+                // Update desktop HUD elements
+                var lapElement = document.getElementById('desktopLapNumber');
+                var timeElement = document.getElementById('desktopCurrentTime');
+                var bestElement = document.getElementById('desktopBestTime');
+                var checkpointElement = document.getElementById('desktopCheckpoint');
+                
+                if (lapElement) lapElement.textContent = currentLapNumber;
+                if (timeElement) timeElement.textContent = formatTime(currentLapTime);
+                if (bestElement) bestElement.textContent = formatTime(bestLapTime);
+                
+                // Update checkpoint progress
+                if (checkpointElement) {
+                    var totalCheckpoints = checkpointMarkers ? checkpointMarkers.length : 0;
+                    var currentCheckpoint = playerLastPassedCheckpoint + 1; // +1 because we show next checkpoint to reach
+                    if (currentCheckpoint > totalCheckpoints) currentCheckpoint = totalCheckpoints;
+                    checkpointElement.textContent = currentCheckpoint + '/' + totalCheckpoints;
+                }
+            }
 
             function switchCamera() {
                 if (cameraMode === 'orbit') {
@@ -333,27 +849,89 @@
                     try {
                         // Reset to last passed checkpoint
                         var resetPosition;
-                        if (checkpointMarkers && checkpointMarkers.length > 0 && playerLastPassedCheckpoint < checkpointMarkers.length) {
+                        console.log('🔍 Reset Debug - Checkpoints:', checkpointMarkers ? checkpointMarkers.length : 'null', 'LastPassed:', playerLastPassedCheckpoint, 'Current:', playerCurrentCheckpoint);
+                        
+                        if (checkpointMarkers && checkpointMarkers.length > 0 && playerLastPassedCheckpoint >= 0 && playerLastPassedCheckpoint < checkpointMarkers.length) {
                             var checkpoint = checkpointMarkers[playerLastPassedCheckpoint];
                             if (checkpoint && checkpoint.position) {
                                 resetPosition = checkpoint.position.clone();
-                                // Use the actual track elevation at this checkpoint and add safe clearance
-                                var trackElevation = checkpoint.position.y;
-                                resetPosition.y = trackElevation + 20; // 20m above track surface for safety
-                                console.log('Resetting to checkpoint', playerLastPassedCheckpoint, 'at track elevation:', trackElevation.toFixed(1), 'spawn height:', resetPosition.y.toFixed(1));
+                                // Get the actual road surface elevation at this X,Z position
+                                var actualRoadElevation = getRoadSurfaceElevation(resetPosition.x, resetPosition.z);
+                                
+                                // Safety check: if calculated elevation is much lower than checkpoint, use checkpoint + extra height
+                                var checkpointY = checkpoint.position.y;
+                                if (actualRoadElevation < checkpointY - 10) {
+                                    console.warn('⚠️ Calculated road elevation seems too low, using checkpoint elevation + safety margin');
+                                    resetPosition.y = checkpointY + 2; // 2m above checkpoint position for safety
+                                } else {
+                                    resetPosition.y = actualRoadElevation + 1; // 1m above calculated road surface
+                                }
+                                console.log('🚗 Resetting to checkpoint', playerLastPassedCheckpoint);
+                                console.log('   Checkpoint position:', checkpoint.position.x.toFixed(1), checkpoint.position.y.toFixed(1), checkpoint.position.z.toFixed(1));
+                                console.log('   Calculated road elevation:', actualRoadElevation.toFixed(1));
+                                console.log('   Final spawn height:', resetPosition.y.toFixed(1), '(+1m above road)');
                             } else {
                                 console.warn('Checkpoint', playerLastPassedCheckpoint, 'has no position data, using default');
-                                resetPosition = new THREE.Vector3(0, 15, -20); // Default position (higher)
+                                resetPosition = new THREE.Vector3(0, 0, -20); // Default X,Z position
+                                var defaultRoadElevation = getRoadSurfaceElevation(0, -20);
+                                resetPosition.y = defaultRoadElevation + 1; // 1m above road surface
                             }
                         } else {
-                            console.warn('No valid checkpoints available, using default position');
-                            resetPosition = new THREE.Vector3(0, 4, -20); // Default position
+                            // If checkpoints exist but playerLastPassedCheckpoint is invalid, use checkpoint 0
+                            if (checkpointMarkers && checkpointMarkers.length > 0) {
+                                console.warn('Invalid playerLastPassedCheckpoint, using checkpoint 0');
+                                var checkpoint = checkpointMarkers[0];
+                                if (checkpoint && checkpoint.position) {
+                                    resetPosition = checkpoint.position.clone();
+                                    var actualRoadElevation = getRoadSurfaceElevation(resetPosition.x, resetPosition.z);
+                                    var checkpointY = checkpoint.position.y;
+                                    if (actualRoadElevation < checkpointY - 10) {
+                                        resetPosition.y = checkpointY + 2;
+                                    } else {
+                                        resetPosition.y = actualRoadElevation + 1;
+                                    }
+                                    console.log('🚗 Resetting to checkpoint 0 (fallback)');
+                                    console.log('   Checkpoint position:', checkpoint.position.x.toFixed(1), checkpoint.position.y.toFixed(1), checkpoint.position.z.toFixed(1));
+                                    console.log('   Final spawn height:', resetPosition.y.toFixed(1), '(+1m above road)');
+                                } else {
+                                    console.warn('Checkpoint 0 has no position data, using default position');
+                                    resetPosition = new THREE.Vector3(0, 0, -20);
+                                    var defaultRoadElevation = getRoadSurfaceElevation(0, -20);
+                                    resetPosition.y = defaultRoadElevation + 1;
+                                }
+                            } else {
+                                console.warn('No valid checkpoints available, using default position');
+                                resetPosition = new THREE.Vector3(0, 0, -20); // Default X,Z position
+                                var defaultRoadElevation = getRoadSurfaceElevation(0, -20);
+                                resetPosition.y = defaultRoadElevation + 1; // 1m above road surface
+                            }
+                        }
+                        
+                        // Calculate orientation toward next checkpoint
+                        var resetRotation = new THREE.Quaternion(0, 0, 0, 1); // Default rotation
+                        if (checkpointMarkers && checkpointMarkers.length > 0) {
+                            // Use valid checkpoint index for orientation calculation
+                            var currentCheckpointIndex = (playerLastPassedCheckpoint >= 0 && playerLastPassedCheckpoint < checkpointMarkers.length) ? playerLastPassedCheckpoint : 0;
+                            var nextCheckpointIndex = (currentCheckpointIndex + 1) % checkpointMarkers.length;
+                            var nextCheckpoint = checkpointMarkers[nextCheckpointIndex];
+                            if (nextCheckpoint && nextCheckpoint.position) {
+                                // Calculate direction to next checkpoint
+                                var direction = new THREE.Vector3().subVectors(nextCheckpoint.position, resetPosition);
+                                direction.y = 0; // Keep horizontal
+                                direction.normalize();
+                                
+                                // Calculate rotation to face that direction
+                                var angle = Math.atan2(direction.x, direction.z);
+                                resetRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+                                
+                                console.log('🧭 Player respawn facing toward checkpoint', nextCheckpointIndex, 'from current', currentCheckpointIndex);
+                            }
                         }
                         
                         var resetTransform = new Ammo.btTransform();
                         resetTransform.setIdentity();
                         resetTransform.setOrigin(new Ammo.btVector3(resetPosition.x, resetPosition.y, resetPosition.z));
-                        resetTransform.setRotation(new Ammo.btQuaternion(0, 0, 0, 1));
+                        resetTransform.setRotation(new Ammo.btQuaternion(resetRotation.x, resetRotation.y, resetRotation.z, resetRotation.w));
                         
                         vehicleRef.vehicleBody.setWorldTransform(resetTransform);
                         vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
@@ -364,10 +942,13 @@
                         console.error('❌ Error during car reset:', error);
                         // Fallback to default position
                         try {
-                            var fallbackPosition = new THREE.Vector3(0, 15, -20);
+                            var fallbackPosition = new THREE.Vector3(0, 0, -20);
+                            var fallbackRoadElevation = getRoadSurfaceElevation(0, -20);
+                            fallbackPosition.y = fallbackRoadElevation + 1; // 1m above road surface
                             var resetTransform = new Ammo.btTransform();
                             resetTransform.setIdentity();
                             resetTransform.setOrigin(new Ammo.btVector3(fallbackPosition.x, fallbackPosition.y, fallbackPosition.z));
+                            // Use default forward orientation for fallback
                             resetTransform.setRotation(new Ammo.btQuaternion(0, 0, 0, 1));
                             
                             vehicleRef.vehicleBody.setWorldTransform(resetTransform);
@@ -397,14 +978,33 @@
                     playerLastPassedCheckpoint = playerCurrentCheckpoint;
                     playerCurrentCheckpoint++;
                     
-                    console.log('✅ Checkpoint', nextIndex, 'passed! Next:', playerCurrentCheckpoint % checkpointMarkers.length);
+                    console.log('✅ Checkpoint', nextIndex, 'passed! Last:', playerLastPassedCheckpoint, 'Next:', playerCurrentCheckpoint);
                     
                     // Update visual indicator
                     updateNextCheckpointMarker();
                     
-                    // Check for lap completion
-                    if (playerCurrentCheckpoint % checkpointMarkers.length === 0 && playerCurrentCheckpoint > 0) {
-                        console.log('🏁 LAP COMPLETED! Time for celebration!');
+                    // Check for lap completion (when we've passed all checkpoints)
+                    if (playerCurrentCheckpoint >= checkpointMarkers.length) {
+                        // Lap completed!
+                        var lapTime = (Date.now() - currentLapStartTime) / 1000;
+                        lapTimes.push(lapTime);
+                        
+                        // Check if it's a new best time
+                        if (bestLapTime === null || lapTime < bestLapTime) {
+                            bestLapTime = lapTime;
+                            saveBestTime(lapTime); // Save to localStorage
+                            console.log('🏆 NEW BEST LAP TIME!', formatLapTime(lapTime));
+                        } else {
+                            console.log('🏁 LAP COMPLETED!', formatLapTime(lapTime));
+                        }
+                        
+                        // Start new lap
+                        currentLapNumber++;
+                        currentLapStartTime = Date.now();
+                        playerLastPassedCheckpoint = 0; // Reset checkpoint progress for new lap
+                        playerCurrentCheckpoint = 1; // Reset current checkpoint to 1 (next checkpoint to reach)
+                        
+                        console.log('Starting lap', currentLapNumber, '- checkpoint progress reset to 0, next checkpoint: 1');
                     }
                 }
                 
@@ -413,6 +1013,13 @@
                     nextCheckpointMarker.userData.pulseTime += 0.1;
                     var scale = 1 + 0.3 * Math.sin(nextCheckpointMarker.userData.pulseTime);
                     nextCheckpointMarker.scale.setScalar(scale);
+                }
+                
+                // Update HUD displays
+                if (renderer.xr.isPresenting) {
+                    updateVRHUD(); // VR users see 3D HUD
+                } else {
+                    updateDesktopHUD(); // Desktop users see HTML HUD
                 }
             }
 
@@ -844,6 +1451,13 @@
                     vehicle.setSteeringValue(vehicleSteering, FRONT_LEFT);
                     vehicle.setSteeringValue(vehicleSteering, FRONT_RIGHT);
                     
+                    // Update bot engine sound
+                    if (botEngineSound) {
+                        var throttle = Math.abs(engineForce) / maxEngineForce; // Normalize throttle (0-1)
+                        var speedKmh = Math.abs(speed);
+                        botEngineSound.updateEngine(speedKmh, throttle);
+                    }
+                    
                 }
 
                 // PREDICTIVE STEERING: Calculate look-ahead point based on speed and upcoming corners
@@ -1060,8 +1674,17 @@
                     var respawnWaypoint = denseWaypoints[botRef.lastWaypointReached];
                     var respawnPos = respawnWaypoint.position.clone();
                     
-                    // Slightly offset the respawn position to avoid getting stuck in the same spot
-                    respawnPos.y = 2; // Spawn 2m above ground
+                    // Get the actual road surface elevation at this position
+                    var actualRoadElevation = getRoadSurfaceElevation(respawnPos.x, respawnPos.z);
+                    
+                    // Safety check: if calculated elevation is much lower than waypoint, use waypoint + extra height
+                    var waypointY = respawnWaypoint.position.y;
+                    if (actualRoadElevation < waypointY - 10) {
+                        console.warn('⚠️ Bot: Calculated road elevation seems too low, using waypoint elevation + safety margin');
+                        respawnPos.y = waypointY + 2; // 2m above waypoint position for safety
+                    } else {
+                        respawnPos.y = actualRoadElevation + 1; // 1m above calculated road surface
+                    }
                     
                     // Calculate orientation toward next waypoint
                     var nextWaypointIndex = (botRef.lastWaypointReached + 1) % denseWaypoints.length;
@@ -1075,6 +1698,8 @@
                     var targetAngle = Math.atan2(directionToNext.x, directionToNext.z);
                     var quaternion = new THREE.Quaternion();
                     quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetAngle);
+                    
+                    console.log('🧭 Bot respawn facing toward waypoint', nextWaypointIndex);
                     
                     // Apply respawn transform to physics body
                     var transform = new Ammo.btTransform();
@@ -1193,7 +1818,10 @@
                         var actualHitPos = endPos;
                         
                         if (hitDetected) {
-                            totalHits++;
+                            // Check if the hit object is the road surface
+                            var hitBody = rayCallback.get_m_collisionObject();
+                            var isRoadHit = (roadPhysicsBody && hitBody.a === roadPhysicsBody.a);
+                            
                             var hitPoint = rayCallback.get_m_hitPointWorld();
                             var hitDistance = Math.sqrt(
                                 Math.pow(hitPoint.x() - carPos.x, 2) + 
@@ -1204,10 +1832,16 @@
                             // Update visual end position to hit point
                             actualHitPos = new THREE.Vector3(hitPoint.x(), hitPoint.y(), hitPoint.z());
                             
-                            debugInfo.push(ray.name + ':' + hitDistance.toFixed(1) + 'm');
-                            
-                            // Ignore hits that are too close (probably the car itself)
-                            if (hitDistance > 1.5 && hitDistance < rayLength) {
+                            if (isRoadHit) {
+                                // Road hit - ignore for obstacle avoidance but show in debug
+                                debugInfo.push(ray.name + ':ROAD-' + hitDistance.toFixed(1) + 'm');
+                                rayColor = 0x888888; // Gray for road hits
+                            } else {
+                                totalHits++;
+                                debugInfo.push(ray.name + ':' + hitDistance.toFixed(1) + 'm');
+                                
+                                // Ignore hits that are too close (probably the car itself) or road surface
+                                if (hitDistance > 1.5 && hitDistance < rayLength) {
                                 obstacleDetected = true;
                                 shouldAvoid = true;
                                 rayColor = 0xff0000; // Red for obstacle hit
@@ -1224,8 +1858,9 @@
                                 if (hitDistance < closestDistance) {
                                     closestDistance = hitDistance;
                                 }
-                            } else {
-                                rayColor = 0xffff00; // Yellow for hit but ignored (too close/far)
+                                } else {
+                                    rayColor = 0xffff00; // Yellow for hit but ignored (too close/far)
+                                }
                             }
                         }
                         
@@ -1407,6 +2042,13 @@
                     // Check for checkpoint progress
                     if (chassisMesh) {
                         checkCheckpointProgress(chassisMesh.position);
+                    }
+                    
+                    // Update player engine sound
+                    if (playerEngineSound) {
+                        var throttle = Math.abs(engineForce) / 1500; // Normalize throttle (0-1)
+                        var speedKmh = Math.abs(speed);
+                        playerEngineSound.updateEngine(speedKmh, throttle);
                     }
 
                     breakingForce = 0;
@@ -1742,7 +2384,7 @@
 
             function createRoadMesh() {
                 var roadWidth = 14; // 14 meter wide road as requested
-                var segments = 200; // Number of segments along the path
+                var segments = 800; // Very high resolution for maximum smoothness
                 
                 // Get points along the curve
                 var pathPoints = [];
@@ -1763,22 +2405,75 @@
                 var indices = [];
                 var uvs = [];
                 
-                // Generate vertices for road surface
+                // Generate vertices for road surface with corner smoothing
                 for (var i = 0; i < pathPoints.length; i++) {
                     var point = pathPoints[i];
                     var direction = pathDirections[i];
                     
+                    // Apply aggressive direction smoothing with wider window
+                    var smoothDirection = direction.clone();
+                    if (i > 1 && i < pathPoints.length - 2) {
+                        var prevDir2 = pathDirections[i - 2];
+                        var prevDir1 = pathDirections[i - 1];
+                        var nextDir1 = pathDirections[i + 1];
+                        var nextDir2 = pathDirections[i + 2];
+                        
+                        // 5-point weighted average for ultra-smooth transitions
+                        smoothDirection = prevDir2.clone().multiplyScalar(0.1)
+                            .add(prevDir1.clone().multiplyScalar(0.2))
+                            .add(direction.clone().multiplyScalar(0.4))
+                            .add(nextDir1.clone().multiplyScalar(0.2))
+                            .add(nextDir2.clone().multiplyScalar(0.1));
+                        smoothDirection.normalize();
+                    } else if (i > 0 && i < pathPoints.length - 1) {
+                        // 3-point average for edge cases
+                        var prevDir = pathDirections[i - 1];
+                        var nextDir = pathDirections[i + 1];
+                        smoothDirection.add(prevDir).add(nextDir).divideScalar(3);
+                        smoothDirection.normalize();
+                    }
+                    
                     // Calculate perpendicular vector (road width direction)
-                    var perpendicular = new THREE.Vector3(-direction.z, 0, direction.x).normalize();
+                    var perpendicular = new THREE.Vector3(-smoothDirection.z, 0, smoothDirection.x).normalize();
                     
                     // Create left and right edge points
                     var leftPoint = point.clone().add(perpendicular.clone().multiplyScalar(roadWidth / 2));
                     var rightPoint = point.clone().add(perpendicular.clone().multiplyScalar(-roadWidth / 2));
                     
-                    // Add vertices (left side) - at ground level
-                    vertices.push(leftPoint.x, leftPoint.y + 0.05, leftPoint.z);
-                    // Add vertices (right side) - at ground level
-                    vertices.push(rightPoint.x, rightPoint.y + 0.05, rightPoint.z);
+                    // Apply aggressive elevation smoothing to eliminate bumps
+                    var smoothY = point.y;
+                    if (i > 2 && i < pathPoints.length - 3) {
+                        // 7-point smoothing for ultra-smooth elevation transitions
+                        var y_m3 = pathPoints[i - 3].y;
+                        var y_m2 = pathPoints[i - 2].y;
+                        var y_m1 = pathPoints[i - 1].y;
+                        var y_0 = point.y;
+                        var y_p1 = pathPoints[i + 1].y;
+                        var y_p2 = pathPoints[i + 2].y;
+                        var y_p3 = pathPoints[i + 3].y;
+                        
+                        // Gaussian-like weighted average for maximum smoothness
+                        smoothY = y_m3 * 0.05 + y_m2 * 0.1 + y_m1 * 0.2 + y_0 * 0.3 + y_p1 * 0.2 + y_p2 * 0.1 + y_p3 * 0.05;
+                    } else if (i > 1 && i < pathPoints.length - 2) {
+                        // 5-point smoothing for edge areas
+                        var y_m2 = pathPoints[i - 2].y;
+                        var y_m1 = pathPoints[i - 1].y;
+                        var y_0 = point.y;
+                        var y_p1 = pathPoints[i + 1].y;
+                        var y_p2 = pathPoints[i + 2].y;
+                        
+                        smoothY = y_m2 * 0.1 + y_m1 * 0.2 + y_0 * 0.4 + y_p1 * 0.2 + y_p2 * 0.1;
+                    } else if (i > 0 && i < pathPoints.length - 1) {
+                        // 3-point smoothing for corners
+                        var prevY = pathPoints[i - 1].y;
+                        var nextY = pathPoints[i + 1].y;
+                        smoothY = prevY * 0.25 + point.y * 0.5 + nextY * 0.25;
+                    }
+                    
+                    // Add vertices (left side) - using smoothed elevation
+                    vertices.push(leftPoint.x, smoothY + 0.05, leftPoint.z);
+                    // Add vertices (right side) - using smoothed elevation
+                    vertices.push(rightPoint.x, smoothY + 0.05, rightPoint.z);
                     
                     // Add UV coordinates
                     uvs.push(0, i / (pathPoints.length - 1)); // Left edge
@@ -1816,7 +2511,7 @@
                 // Create physics collision for the road surface
                 createRoadPhysics(roadGeometry);
                 
-                console.log('Road mesh created with', vertices.length / 3, 'vertices and', indices.length / 3, 'triangles');
+                console.log('🛣️ Ultra-smooth road mesh created with', vertices.length / 3, 'vertices,', indices.length / 3, 'triangles, and', segments, 'segments');
                 console.log('Road width:', roadWidth + 'm, Road segments:', segments);
                 
                 // Create center line as a thin strip
@@ -1921,6 +2616,9 @@
                 // Set friction for good driving feel
                 roadBody.setFriction(0.8);
                 roadBody.setRestitution(0.1);
+                
+                // Store globally for obstacle detection filtering
+                roadPhysicsBody = roadBody;
                 
                 // Add to physics world
                 physicsWorld.addRigidBody(roadBody);
@@ -2037,7 +2735,7 @@
                     nextCheckpointMarker.position.copy(checkpoint.position);
                     // Position marker relative to track elevation at this point
                     var trackElevation = checkpoint.position.y;
-                    nextCheckpointMarker.position.y = trackElevation + 25; // 25m above track for visibility
+                    nextCheckpointMarker.position.y = trackElevation + 8; // 8m above track for visibility
                     
                     scene.add(nextCheckpointMarker);
                     
@@ -2046,6 +2744,60 @@
                     
                     console.log('📍 Next checkpoint marker updated at:', checkpoint.position);
                 }
+            }
+
+            // ROAD SURFACE UTILITIES: Get actual road elevation at any point
+            function getRoadSurfaceElevation(x, z) {
+                if (!racingPath) {
+                    console.warn('⚠️ No racing path available for elevation detection');
+                    return 0;
+                }
+                
+                // Find the closest point on the racing path with higher resolution
+                var closestT = 0;
+                var minDistance = Infinity;
+                var samples = 200; // Increased samples for better accuracy
+                
+                for (var i = 0; i <= samples; i++) {
+                    var t = i / samples;
+                    var pathPoint = racingPath.getPoint(t);
+                    var distance = Math.sqrt(Math.pow(pathPoint.x - x, 2) + Math.pow(pathPoint.z - z, 2));
+                    
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestT = t;
+                    }
+                }
+                
+                // Get the elevation at this point and apply the same smoothing used in road mesh
+                var pathPoint = racingPath.getPoint(closestT);
+                
+                // Apply the same elevation smoothing algorithm used in createRoadMesh
+                var segments = 800; // Same as road mesh
+                var segmentIndex = Math.floor(closestT * segments);
+                
+                // Get neighboring points for smoothing (same as road mesh algorithm)
+                var smoothY = pathPoint.y;
+                if (segmentIndex > 2 && segmentIndex < segments - 3) {
+                    // Sample points around this segment
+                    var points = [];
+                    for (var i = -3; i <= 3; i++) {
+                        var sampleT = Math.max(0, Math.min(1, (segmentIndex + i) / segments));
+                        points.push(racingPath.getPoint(sampleT));
+                    }
+                    
+                    // Apply 7-point Gaussian smoothing (same as road mesh)
+                    smoothY = points[0].y * 0.05 + points[1].y * 0.1 + points[2].y * 0.2 + 
+                             points[3].y * 0.3 + points[4].y * 0.2 + points[5].y * 0.1 + points[6].y * 0.05;
+                }
+                
+                // Add safety margin - if the calculated elevation seems too low, use the original path point
+                var originalY = pathPoint.y;
+                var finalY = Math.max(smoothY, originalY - 5); // Don't go more than 5m below original
+                
+                console.log('🛣️ Elevation at (' + x.toFixed(1) + ',' + z.toFixed(1) + '): original=' + originalY.toFixed(1) + ', smoothed=' + smoothY.toFixed(1) + ', final=' + finalY.toFixed(1));
+                
+                return finalY;
             }
 
             // Bot pathfinding utilities
@@ -2127,20 +2879,69 @@
                     createBox(new THREE.Vector3(x, 2, z), ZERO_QUATERNION, 1, 4, 1, 10, 1);
                 }
 
-                // Create player car at start line (use first checkpoint elevation if available)
-                console.log('Creating player car...');
-                var startPosition = new THREE.Vector3(0, 15, -50);
+                // Create player and bot cars at the first checkpoint (start line)
+                var playerStartPosition = new THREE.Vector3(0, 0, -50); // Default X,Z fallback
+                var botStartPosition = new THREE.Vector3(-5, 0, -45); // Default X,Z fallback
+                
+                // Calculate proper Y positions for fallback
+                var playerFallbackElevation = getRoadSurfaceElevation(0, -50);
+                var botFallbackElevation = getRoadSurfaceElevation(-5, -45);
+                playerStartPosition.y = playerFallbackElevation + 1; // 1m above road
+                botStartPosition.y = botFallbackElevation + 1; // 1m above road
+                
                 if (checkpointMarkers && checkpointMarkers.length > 0) {
                     var firstCheckpoint = checkpointMarkers[0];
-                    startPosition.y = firstCheckpoint.position.y + 20; // 20m above first checkpoint
-                    console.log('🚗 Player car spawn at elevation:', startPosition.y.toFixed(1) + 'm (track:', firstCheckpoint.position.y.toFixed(1) + 'm)');
+                    
+                    // Player car at first checkpoint
+                    playerStartPosition = firstCheckpoint.position.clone();
+                    playerStartPosition.x += 2; // Slightly to the right
+                    var playerRoadElevation = getRoadSurfaceElevation(playerStartPosition.x, playerStartPosition.z);
+                    if (playerRoadElevation < firstCheckpoint.position.y - 10) {
+                        playerStartPosition.y = firstCheckpoint.position.y + 2; // Safety fallback
+                    } else {
+                        playerStartPosition.y = playerRoadElevation + 1; // 1m above actual road surface
+                    }
+                    
+                    // Bot car slightly behind and to the left
+                    botStartPosition = firstCheckpoint.position.clone();
+                    botStartPosition.x -= 2; // Slightly to the left
+                    botStartPosition.z -= 5; // 5m behind
+                    var botRoadElevation = getRoadSurfaceElevation(botStartPosition.x, botStartPosition.z);
+                    if (botRoadElevation < firstCheckpoint.position.y - 10) {
+                        botStartPosition.y = firstCheckpoint.position.y + 2; // Safety fallback
+                    } else {
+                        botStartPosition.y = botRoadElevation + 1; // 1m above actual road surface
+                    }
+                    
+                    console.log('🏁 Starting positions at first checkpoint:');
+                    console.log('🚗 Player:', playerStartPosition.x.toFixed(1), playerStartPosition.y.toFixed(1), playerStartPosition.z.toFixed(1));
+                    console.log('🤖 Bot:', botStartPosition.x.toFixed(1), botStartPosition.y.toFixed(1), botStartPosition.z.toFixed(1));
+                } else {
+                    console.warn('⚠️ No checkpoints available, using default start positions');
                 }
-                createVehicle(startPosition, ZERO_QUATERNION);
                 
-                // Create bot car slightly behind and to the side
+                // Create rotation quaternion for 90 degrees left (counter-clockwise around Y-axis)
+                var leftRotation = new THREE.Quaternion();
+                leftRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2); // 90 degrees in radians
+                console.log('🔄 Cars will be rotated 90° left at spawn');
+                
+                console.log('Creating player car...');
+                createVehicle(playerStartPosition, leftRotation);
+                
                 console.log('Creating bot car...');
-                botVehicleRef = createBotVehicle(new THREE.Vector3(-5, 4, -45), ZERO_QUATERNION, 0x0066ff);
+                botVehicleRef = createBotVehicle(botStartPosition, leftRotation, 0x0066ff);
                 console.log('Bot car created, racing path available:', !!racingPath);
+                
+                // Confirm both cars are starting at the correct positions
+                console.log('✅ Both cars positioned at first checkpoint (start line)');
+                
+                // Initialize lap timing
+                currentLapStartTime = Date.now();
+                loadBestTime(); // Load saved best time from localStorage
+                console.log('🏁 Lap timing started');
+                
+                // Initialize audio system
+                initAudioSystem();
             }
 
             // - Init -
