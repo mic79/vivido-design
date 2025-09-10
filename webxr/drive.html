@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebXR Multiplayer Driving Game</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            color: #61443e;
+            font-family: Monospace;
+            font-size: 13px;
+            text-align: center;
+            background-color: #bfd1e5;
+            margin: 0px;
+            overflow: hidden;
+        }
+
+        #speedometer {
+            color: #ffffff;
+            background-color: #990000;
+            position: absolute;
+            bottom: 0px;
+            padding: 5px;
+            z-index: 1000;
+        }
+
+        #info {
+            position: absolute;
+            top: 0px;
+            width: 100%;
+            padding: 5px;
+            z-index: 1000;
+        }
+
+        #vrButton {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: #333;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: Arial;
+            font-size: 14px;
+        }
+
+        a {
+            color: #a06851;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container"><br /><br /><br /><br /><br />Loading...</div>
+    <div id="speedometer">0.0 km/h</div>
+    <div id="info">WebXR Multiplayer Driving Game<br>WASD/VR Controllers to drive<br>C = Camera, Y = Reset</div>
+    <button id="vrButton" style="display: none;">Enter VR</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://kripken.github.io/ammo.js/builds/ammo.js"></script>
+    <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/Detector.js"></script>
+    <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/OrbitControls.js"></script>
+    <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/stats.min.js"></script>
+
+    <script>
+        Ammo().then(function (Ammo) {
+
+            // Detects webgl
+            if (!Detector.webgl) {
+                Detector.addGetWebGLMessage();
+                document.getElementById('container').innerHTML = "";
+            }
+
+            // - Global variables -
+            var DISABLE_DEACTIVATION = 4;
+            var TRANSFORM_AUX = new Ammo.btTransform();
+            var ZERO_QUATERNION = new THREE.Quaternion(0, 0, 0, 1);
+
+            // Graphics variables
+            var container, stats, speedometer;
+            var camera, controls, scene, renderer;
+            var clock = new THREE.Clock();
+            var materialDynamic, materialStatic, materialInteractive;
+
+            // Physics variables
+            var collisionConfiguration;
+            var dispatcher;
+            var broadphase;
+            var solver;
+            var physicsWorld;
+
+            var syncList = [];
+            var time = 0;
+            var vehicleRef = null; // For reset functionality
+
+            // Keyboard actions
+            var actions = {};
+            var keysActions = {
+                "KeyW": 'acceleration',
+                "KeyS": 'braking',
+                "KeyA": 'left',
+                "KeyD": 'right'
+            };
+
+            // Camera modes
+            var cameraMode = 'firstperson'; // Start in first person for VR
+            var firstPersonCamera = null;
+            var orbitCamera = null;
+            var cameraRig = null; // Container for VR camera positioning
+
+            // - Functions -
+
+            function initGraphics() {
+
+                container = document.getElementById('container');
+                speedometer = document.getElementById('speedometer');
+
+                scene = new THREE.Scene();
+
+                // Create camera rig for VR positioning
+                cameraRig = new THREE.Group();
+                scene.add(cameraRig);
+
+                // Orbit camera (backup)
+                orbitCamera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 2000);
+                orbitCamera.position.x = -4.84;
+                orbitCamera.position.y = 4.39;
+                orbitCamera.position.z = -35.11;
+                orbitCamera.lookAt(new THREE.Vector3(0.33, -0.40, 0.85));
+                
+                // First person camera
+                firstPersonCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                
+                // Add first person camera to the rig for VR
+                cameraRig.add(firstPersonCamera);
+                
+                // Start with first person camera for VR
+                camera = firstPersonCamera;
+                controls = new THREE.OrbitControls(orbitCamera);
+                controls.enabled = false; // Disabled by default
+
+                renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setClearColor(0xbfd1e5);
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                
+                // Enable WebXR
+                renderer.xr.enabled = true;
+
+                var ambientLight = new THREE.AmbientLight(0x404040);
+                scene.add(ambientLight);
+
+                var dirLight = new THREE.DirectionalLight(0xffffff, 1);
+                dirLight.position.set(10, 10, 5);
+                scene.add(dirLight);
+
+                materialDynamic = new THREE.MeshPhongMaterial({ color: 0xfca400 });
+                materialStatic = new THREE.MeshPhongMaterial({ color: 0x999999 });
+                materialInteractive = new THREE.MeshPhongMaterial({ color: 0x990000 });
+
+                container.innerHTML = "";
+                container.appendChild(renderer.domElement);
+
+                // VR Button setup
+                setupVRButton();
+
+                stats = new Stats();
+                stats.domElement.style.position = 'absolute';
+                stats.domElement.style.top = '0px';
+                stats.domElement.style.zIndex = '1000';
+                container.appendChild(stats.domElement);
+
+                window.addEventListener('resize', onWindowResize, false);
+                window.addEventListener('keydown', keydown);
+                window.addEventListener('keyup', keyup);
+            }
+
+            function setupVRButton() {
+                const vrButton = document.getElementById('vrButton');
+                
+                if (navigator.xr) {
+                    navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+                        if (supported) {
+                            vrButton.style.display = 'block';
+                            vrButton.style.background = '#006600';
+                            console.log('VR supported');
+                        }
+                    });
+                }
+                
+                vrButton.addEventListener('click', async () => {
+                    if (renderer.xr.isPresenting) {
+                        renderer.xr.getSession().end();
+                    } else {
+                        try {
+                            const session = await navigator.xr.requestSession('immersive-vr', {
+                                optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+                            });
+                            renderer.xr.setSession(session);
+                            console.log('VR session started');
+                        } catch (error) {
+                            console.error('VR not supported:', error);
+                        }
+                    }
+                });
+            }
+
+            function onWindowResize() {
+                // Update both cameras
+                orbitCamera.aspect = window.innerWidth / window.innerHeight;
+                orbitCamera.updateProjectionMatrix();
+                
+                firstPersonCamera.aspect = window.innerWidth / window.innerHeight;
+                firstPersonCamera.updateProjectionMatrix();
+
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            function initPhysics() {
+                // Physics configuration
+                collisionConfiguration = new Ammo.btDefaultCollisionConfiguration();
+                dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration);
+                broadphase = new Ammo.btDbvtBroadphase();
+                solver = new Ammo.btSequentialImpulseConstraintSolver();
+                physicsWorld = new Ammo.btDiscreteDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration);
+                physicsWorld.setGravity(new Ammo.btVector3(0, -9.82, 0));
+            }
+
+            function tick() {
+                // Use WebXR-compatible animation loop
+                renderer.setAnimationLoop(() => {
+                    var dt = clock.getDelta();
+                    for (var i = 0; i < syncList.length; i++)
+                        syncList[i](dt);
+                    physicsWorld.stepSimulation(dt, 10);
+                    
+                    // Only update orbit controls when in orbit mode
+                    if (cameraMode === 'orbit') {
+                        controls.update(dt);
+                    }
+                    
+                    renderer.render(scene, camera);
+                    time += dt;
+                    stats.update();
+                });
+            }
+
+            function keyup(e) {
+                if (keysActions[e.code]) {
+                    actions[keysActions[e.code]] = false;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+            }
+            
+            function keydown(e) {
+                if (keysActions[e.code]) {
+                    actions[keysActions[e.code]] = true;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+                
+                // Camera switching with 'C' key
+                if (e.code === 'KeyC') {
+                    switchCamera();
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+                
+                // Reset car with 'Y' key
+                if (e.code === 'KeyY') {
+                    resetCar();
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+            }
+
+            function switchCamera() {
+                if (cameraMode === 'orbit') {
+                    cameraMode = 'firstperson';
+                    camera = firstPersonCamera;
+                    controls.enabled = false; // Disable orbit controls in first person
+                    
+                    // In VR, switch the camera rig setup
+                    if (renderer.xr.isPresenting) {
+                        cameraRig.remove(orbitCamera);
+                        cameraRig.add(firstPersonCamera);
+                    }
+                    
+                    console.log('Switched to first-person camera');
+                } else {
+                    cameraMode = 'orbit';
+                    camera = orbitCamera;
+                    controls.enabled = true; // Re-enable orbit controls
+                    
+                    // In VR, switch the camera rig setup
+                    if (renderer.xr.isPresenting) {
+                        cameraRig.remove(firstPersonCamera);
+                        cameraRig.add(orbitCamera);
+                    }
+                    
+                    console.log('Switched to orbit camera');
+                }
+            }
+
+            function resetCar() {
+                if (vehicleRef && vehicleRef.vehicle && vehicleRef.vehicleBody) {
+                    var resetTransform = new Ammo.btTransform();
+                    resetTransform.setIdentity();
+                    resetTransform.setOrigin(new Ammo.btVector3(0, 4, -20));
+                    resetTransform.setRotation(new Ammo.btQuaternion(0, 0, 0, 1));
+                    
+                    vehicleRef.vehicleBody.setWorldTransform(resetTransform);
+                    vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                    vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                    
+                    console.log('Car reset');
+                }
+            }
+
+            function createBox(pos, quat, w, l, h, mass, friction) {
+                var material = mass > 0 ? materialDynamic : materialStatic;
+                var shape = new THREE.BoxGeometry(w, l, h, 1, 1, 1);
+                var geometry = new Ammo.btBoxShape(new Ammo.btVector3(w * 0.5, l * 0.5, h * 0.5));
+
+                if (!mass) mass = 0;
+                if (!friction) friction = 1;
+
+                var mesh = new THREE.Mesh(shape, material);
+                mesh.position.copy(pos);
+                mesh.quaternion.copy(quat);
+                scene.add(mesh);
+
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+                var motionState = new Ammo.btDefaultMotionState(transform);
+
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                geometry.calculateLocalInertia(mass, localInertia);
+
+                var rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, geometry, localInertia);
+                var body = new Ammo.btRigidBody(rbInfo);
+
+                body.setFriction(friction);
+                physicsWorld.addRigidBody(body);
+
+                if (mass > 0) {
+                    body.setActivationState(DISABLE_DEACTIVATION);
+                    // Sync physics and graphics
+                    function sync(dt) {
+                        var ms = body.getMotionState();
+                        if (ms) {
+                            ms.getWorldTransform(TRANSFORM_AUX);
+                            var p = TRANSFORM_AUX.getOrigin();
+                            var q = TRANSFORM_AUX.getRotation();
+                            mesh.position.set(p.x(), p.y(), p.z());
+                            mesh.quaternion.set(q.x(), q.y(), q.z(), q.w());
+                        }
+                    }
+                    syncList.push(sync);
+                }
+            }
+
+            function createWheelMesh(radius, width) {
+                var t = new THREE.CylinderGeometry(radius, radius, width, 24, 1);
+                t.rotateZ(Math.PI / 2);
+                var mesh = new THREE.Mesh(t, materialInteractive);
+                mesh.add(new THREE.Mesh(new THREE.BoxGeometry(width * 1.5, radius * 1.75, radius * .25, 1, 1, 1), materialInteractive));
+                scene.add(mesh);
+                return mesh;
+            }
+
+            function createChassisMesh(w, l, h) {
+                var shape = new THREE.BoxGeometry(w, l, h, 1, 1, 1);
+                var mesh = new THREE.Mesh(shape, materialInteractive);
+                scene.add(mesh);
+                return mesh;
+            }
+
+            function createVehicle(pos, quat) {
+                // Vehicle constants
+                var chassisWidth = 1.8;
+                var chassisHeight = .6;
+                var chassisLength = 4;
+                var massVehicle = 800;
+
+                var wheelAxisPositionBack = -1;
+                var wheelRadiusBack = .4;
+                var wheelWidthBack = .3;
+                var wheelHalfTrackBack = 1;
+                var wheelAxisHeightBack = .3;
+
+                var wheelAxisFrontPosition = 1.7;
+                var wheelHalfTrackFront = 1;
+                var wheelAxisHeightFront = .3;
+                var wheelRadiusFront = .35;
+                var wheelWidthFront = .2;
+
+                var friction = 1000;
+                var suspensionStiffness = 20.0;
+                var suspensionDamping = 2.3;
+                var suspensionCompression = 4.4;
+                var suspensionRestLength = 0.6;
+                var rollInfluence = 0.2;
+
+                var steeringIncrement = .04;
+                var steeringClamp = .5;
+                var maxEngineForce = 2000;
+                var maxBreakingForce = 100;
+
+                // Chassis
+                var geometry = new Ammo.btBoxShape(new Ammo.btVector3(chassisWidth * .5, chassisHeight * .5, chassisLength * .5));
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+                var motionState = new Ammo.btDefaultMotionState(transform);
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                geometry.calculateLocalInertia(massVehicle, localInertia);
+                var body = new Ammo.btRigidBody(new Ammo.btRigidBodyConstructionInfo(massVehicle, motionState, geometry, localInertia));
+                body.setActivationState(DISABLE_DEACTIVATION);
+                physicsWorld.addRigidBody(body);
+                var chassisMesh = createChassisMesh(chassisWidth, chassisHeight, chassisLength);
+
+                // Raycast Vehicle
+                var engineForce = 0;
+                var vehicleSteering = 0;
+                var breakingForce = 0;
+                var tuning = new Ammo.btVehicleTuning();
+                var rayCaster = new Ammo.btDefaultVehicleRaycaster(physicsWorld);
+                var vehicle = new Ammo.btRaycastVehicle(tuning, body, rayCaster);
+                vehicle.setCoordinateSystem(0, 1, 2);
+                physicsWorld.addAction(vehicle);
+
+                // Store vehicle reference for reset
+                vehicleRef = {
+                    vehicle: vehicle,
+                    vehicleBody: body
+                };
+
+                // Wheels
+                var FRONT_LEFT = 0;
+                var FRONT_RIGHT = 1;
+                var BACK_LEFT = 2;
+                var BACK_RIGHT = 3;
+                var wheelMeshes = [];
+                var wheelDirectionCS0 = new Ammo.btVector3(0, -1, 0);
+                var wheelAxleCS = new Ammo.btVector3(-1, 0, 0);
+
+                function addWheel(isFront, pos, radius, width, index) {
+                    var wheelInfo = vehicle.addWheel(
+                        pos,
+                        wheelDirectionCS0,
+                        wheelAxleCS,
+                        suspensionRestLength,
+                        radius,
+                        tuning,
+                        isFront);
+
+                    wheelInfo.set_m_suspensionStiffness(suspensionStiffness);
+                    wheelInfo.set_m_wheelsDampingRelaxation(suspensionDamping);
+                    wheelInfo.set_m_wheelsDampingCompression(suspensionCompression);
+                    wheelInfo.set_m_frictionSlip(friction);
+                    wheelInfo.set_m_rollInfluence(rollInfluence);
+
+                    wheelMeshes[index] = createWheelMesh(radius, width);
+                }
+
+                addWheel(true, new Ammo.btVector3(wheelHalfTrackFront, wheelAxisHeightFront, wheelAxisFrontPosition), wheelRadiusFront, wheelWidthFront, FRONT_LEFT);
+                addWheel(true, new Ammo.btVector3(-wheelHalfTrackFront, wheelAxisHeightFront, wheelAxisFrontPosition), wheelRadiusFront, wheelWidthFront, FRONT_RIGHT);
+                addWheel(false, new Ammo.btVector3(wheelHalfTrackBack, wheelAxisHeightBack, wheelAxisPositionBack), wheelRadiusBack, wheelWidthBack, BACK_LEFT);
+                addWheel(false, new Ammo.btVector3(-wheelHalfTrackBack, wheelAxisHeightBack, wheelAxisPositionBack), wheelRadiusBack, wheelWidthBack, BACK_RIGHT);
+
+                // Sync keyboard/VR actions and physics and graphics
+                function sync(dt) {
+                    var speed = vehicle.getCurrentSpeedKmHour();
+                    speedometer.innerHTML = (speed < 0 ? '(R) ' : '') + Math.abs(speed).toFixed(1) + ' km/h';
+
+                    breakingForce = 0;
+                    engineForce = 0;
+
+                    // Get VR controller input
+                    var vrSteering = 0;
+                    var vrAcceleration = 0;
+                    var vrBraking = 0;
+                    
+                    if (renderer.xr.isPresenting) {
+                        const session = renderer.xr.getSession();
+                        if (session && session.inputSources) {
+                            for (let i = 0; i < session.inputSources.length; i++) {
+                                const inputSource = session.inputSources[i];
+                                const gamepad = inputSource.gamepad;
+                                
+                                if (gamepad && inputSource.handedness === 'right') {
+                                    // Thumbstick for steering
+                                    if (gamepad.axes && gamepad.axes.length >= 4) {
+                                        vrSteering = gamepad.axes[2] || 0;
+                                    }
+                                    
+                                    // Trigger for acceleration
+                                    if (gamepad.buttons && gamepad.buttons[0]) {
+                                        vrAcceleration = gamepad.buttons[0].value || 0;
+                                    }
+                                    
+                                    // Grip for braking
+                                    if (gamepad.buttons && gamepad.buttons[1]) {
+                                        vrBraking = gamepad.buttons[1].value || 0;
+                                    }
+                                    
+                                    // A button (index 4) for camera switching
+                                    if (gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
+                                        // Prevent rapid switching with a simple debounce
+                                        if (!this.lastCameraSwitchTime || (Date.now() - this.lastCameraSwitchTime) > 500) {
+                                            switchCamera();
+                                            this.lastCameraSwitchTime = Date.now();
+                                        }
+                                    }
+                                    
+                                    // Y button (index 3) for car reset
+                                    if (gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed) {
+                                        if (!this.lastResetTime || (Date.now() - this.lastResetTime) > 500) {
+                                            resetCar();
+                                            this.lastResetTime = Date.now();
+                                        }
+                                    }
+                                    
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Combine keyboard and VR input
+                    var acceleration = actions.acceleration || (vrAcceleration > 0.1);
+                    var braking = actions.braking || (vrBraking > 0.1);
+                    var left = actions.left || (vrSteering < -0.1);
+                    var right = actions.right || (vrSteering > 0.1);
+
+                    if (acceleration) {
+                        if (speed < -1)
+                            breakingForce = maxBreakingForce;
+                        else engineForce = maxEngineForce;
+                    }
+                    if (braking) {
+                        if (speed > 1)
+                            breakingForce = maxBreakingForce;
+                        else engineForce = -maxEngineForce / 2;
+                    }
+                    if (left) {
+                        if (vehicleSteering < steeringClamp)
+                            vehicleSteering += steeringIncrement;
+                    }
+                    else {
+                        if (right) {
+                            if (vehicleSteering > -steeringClamp)
+                                vehicleSteering -= steeringIncrement;
+                        }
+                        else {
+                            if (vehicleSteering < -steeringIncrement)
+                                vehicleSteering += steeringIncrement;
+                            else {
+                                if (vehicleSteering > steeringIncrement)
+                                    vehicleSteering -= steeringIncrement;
+                                else {
+                                    vehicleSteering = 0;
+                                }
+                            }
+                        }
+                    }
+
+                    vehicle.applyEngineForce(engineForce, BACK_LEFT);
+                    vehicle.applyEngineForce(engineForce, BACK_RIGHT);
+
+                    vehicle.setBrake(breakingForce / 2, FRONT_LEFT);
+                    vehicle.setBrake(breakingForce / 2, FRONT_RIGHT);
+                    vehicle.setBrake(breakingForce, BACK_LEFT);
+                    vehicle.setBrake(breakingForce, BACK_RIGHT);
+
+                    vehicle.setSteeringValue(vehicleSteering, FRONT_LEFT);
+                    vehicle.setSteeringValue(vehicleSteering, FRONT_RIGHT);
+
+                    var tm, p, q, i;
+                    var n = vehicle.getNumWheels();
+                    for (i = 0; i < n; i++) {
+                        vehicle.updateWheelTransform(i, true);
+                        tm = vehicle.getWheelTransformWS(i);
+                        p = tm.getOrigin();
+                        q = tm.getRotation();
+                        wheelMeshes[i].position.set(p.x(), p.y(), p.z());
+                        wheelMeshes[i].quaternion.set(q.x(), q.y(), q.z(), q.w());
+                    }
+
+                    tm = vehicle.getChassisWorldTransform();
+                    p = tm.getOrigin();
+                    q = tm.getRotation();
+                    chassisMesh.position.set(p.x(), p.y(), p.z());
+                    chassisMesh.quaternion.set(q.x(), q.y(), q.z(), q.w());
+
+                    // Update camera position (works for both desktop and VR)
+                    if (cameraMode === 'firstperson') {
+                        if (renderer.xr.isPresenting) {
+                            // In VR: Move the camera rig (which contains the VR camera)
+                            var cameraOffset = new THREE.Vector3(0, 1.4, 1.2); // x, y(up), z(forward)
+                            var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
+                            
+                            // Rotate 180 degrees around Y axis to face forward
+                            var forwardRotation = new THREE.Quaternion();
+                            forwardRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+                            carQuaternion.multiply(forwardRotation);
+                            
+                            cameraOffset.applyQuaternion(carQuaternion);
+                            
+                            cameraRig.position.set(
+                                p.x() + cameraOffset.x,
+                                p.y() + cameraOffset.y,
+                                p.z() + cameraOffset.z
+                            );
+                            cameraRig.quaternion.copy(carQuaternion);
+                        } else {
+                            // In Desktop: Move the first person camera directly
+                            var cameraOffset = new THREE.Vector3(0, 1.4, 1.2); // x, y(up), z(forward)
+                            var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
+                            cameraOffset.applyQuaternion(carQuaternion);
+                            
+                            firstPersonCamera.position.set(
+                                p.x() + cameraOffset.x,
+                                p.y() + cameraOffset.y,
+                                p.z() + cameraOffset.z
+                            );
+                            
+                            // Make camera look forward relative to car
+                            var lookDirection = new THREE.Vector3(0, 0, 5); // Look forward
+                            lookDirection.applyQuaternion(carQuaternion);
+                            var lookTarget = firstPersonCamera.position.clone().add(lookDirection);
+                            firstPersonCamera.lookAt(lookTarget);
+                        }
+                    } else if (cameraMode === 'orbit') {
+                        if (renderer.xr.isPresenting) {
+                            // In VR: Position orbit camera in the rig
+                            cameraRig.position.set(p.x() - 4.84, p.y() + 4.39, p.z() - 35.11);
+                            var lookTarget = new THREE.Vector3(p.x(), p.y(), p.z());
+                            cameraRig.lookAt(lookTarget);
+                        }
+                        // Desktop orbit camera is handled by OrbitControls
+                    }
+                }
+
+                syncList.push(sync);
+            }
+
+            function createObjects() {
+                // Ground (4x bigger)
+                createBox(new THREE.Vector3(0, -0.5, 0), ZERO_QUATERNION, 300, 1, 300, 0, 2);
+
+                // Walls around the driving area
+                createBox(new THREE.Vector3(0, 5, -150), ZERO_QUATERNION, 300, 10, 2, 0, 2);
+                createBox(new THREE.Vector3(0, 5, 150), ZERO_QUATERNION, 300, 10, 2, 0, 2);
+                createBox(new THREE.Vector3(150, 5, 0), ZERO_QUATERNION, 2, 10, 300, 0, 2);
+                createBox(new THREE.Vector3(-150, 5, 0), ZERO_QUATERNION, 2, 10, 300, 0, 2);
+
+                // Ramp
+                var quaternion = new THREE.Quaternion(0, 0, 0, 1);
+                quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 18);
+                createBox(new THREE.Vector3(0, -1.5, 0), quaternion, 8, 4, 10, 0);
+
+                // Stack of boxes
+                var size = .75;
+                var nw = 8;
+                var nh = 6;
+                for (var j = 0; j < nw; j++)
+                    for (var i = 0; i < nh; i++)
+                        createBox(new THREE.Vector3(size * j - (size * (nw - 1)) / 2, size * i, 10), ZERO_QUATERNION, size, size, size, 10);
+
+                // Random cones - 50 cones, 4m high, 1m diameter
+                for (var c = 0; c < 50; c++) {
+                    var x, z;
+                    do {
+                        x = (Math.random() - 0.5) * 280;
+                        z = (Math.random() - 0.5) * 280;
+                    } while (Math.abs(x) < 30 && Math.abs(z) < 30);
+                    
+                    createBox(new THREE.Vector3(x, 2, z), ZERO_QUATERNION, 1, 4, 1, 10, 1);
+                }
+
+                createVehicle(new THREE.Vector3(0, 4, -20), ZERO_QUATERNION);
+            }
+
+            // - Init -
+            initGraphics();
+            initPhysics();
+            createObjects();
+            tick();
+
+        });
+    </script>
+</body>
+</html>
