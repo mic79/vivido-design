@@ -257,11 +257,6 @@
             var firstPersonCamera = null;
             var orbitCamera = null;
             var cameraRig = null; // Container for VR camera positioning
-            
-            // VR fly camera variables
-            var vrFlySpeed = 10; // meters per second
-            var vrFlyPosition = new THREE.Vector3(0, 5, -20); // Starting fly position
-            var vrFlyRotation = new THREE.Euler(0, 0, 0); // Camera rotation in fly mode
 
             // - Functions -
 
@@ -838,46 +833,30 @@
             }
 
             function switchCamera() {
-                if (renderer.xr.isPresenting) {
-                    // VR mode: cycle through firstperson -> fly -> firstperson
-                    if (cameraMode === 'firstperson') {
-                        cameraMode = 'fly';
-                        // Initialize fly camera position if not set
-                        if (vehicleRef && vehicleRef.chassisMesh) {
-                            vrFlyPosition.copy(vehicleRef.chassisMesh.position);
-                            vrFlyPosition.y += 10; // Start 10m above the car
-                        } else {
-                            // Fallback position if car not ready yet
-                            vrFlyPosition.set(0, 15, -20);
-                        }
-                        // Reset rotation when entering fly mode
-                        vrFlyRotation.set(0, 0, 0);
-                        console.log('Switched to VR fly camera');
-                    } else if (cameraMode === 'fly') {
-                        cameraMode = 'firstperson';
-                        console.log('Switched to VR first-person camera');
-                    } else {
-                        // From orbit to firstperson in VR
-                        cameraMode = 'firstperson';
+                if (cameraMode === 'orbit') {
+                    cameraMode = 'firstperson';
+                    camera = firstPersonCamera;
+                    controls.enabled = false; // Disable orbit controls in first person
+                    
+                    // In VR, switch the camera rig setup
+                    if (renderer.xr.isPresenting) {
                         cameraRig.remove(orbitCamera);
                         cameraRig.add(firstPersonCamera);
-                        console.log('Switched to VR first-person camera');
                     }
+                    
+                    console.log('Switched to first-person camera');
                 } else {
-                    // Desktop mode: cycle through firstperson -> orbit -> firstperson
-                    if (cameraMode === 'orbit') {
-                        cameraMode = 'firstperson';
-                        camera = firstPersonCamera;
-                        controls.enabled = false; // Disable orbit controls in first person
-                        
-                        console.log('Switched to first-person camera');
-                    } else {
-                        cameraMode = 'orbit';
-                        camera = orbitCamera;
-                        controls.enabled = true; // Re-enable orbit controls
-                        
-                        console.log('Switched to orbit camera');
+                    cameraMode = 'orbit';
+                    camera = orbitCamera;
+                    controls.enabled = true; // Re-enable orbit controls
+                    
+                    // In VR, switch the camera rig setup
+                    if (renderer.xr.isPresenting) {
+                        cameraRig.remove(firstPersonCamera);
+                        cameraRig.add(orbitCamera);
                     }
+                    
+                    console.log('Switched to orbit camera');
                 }
             }
 
@@ -2035,8 +2014,7 @@
                 // Store vehicle reference for reset
                 vehicleRef = {
                     vehicle: vehicle,
-                    vehicleBody: body,
-                    chassisMesh: chassisMesh
+                    vehicleBody: body
                 };
 
                 // Wheels
@@ -2147,58 +2125,6 @@
                                             resetCar();
                                             this.lastResetTime = Date.now();
                                         }
-                                    }
-                                    
-                                    // VR Fly Camera Controls (when in fly mode)
-                                    if (cameraMode === 'fly') {
-                                        var flyDelta = dt * vrFlySpeed;
-                                        var rotationSpeed = 2.0; // Rotation speed multiplier
-                                        
-                                        // Left thumbstick: X = rotation, Y = up/down movement
-                                        if (gamepad.axes && gamepad.axes.length >= 4) {
-                                            var rotateY = gamepad.axes[2] || 0; // Left thumbstick X = Y rotation
-                                            var moveY = gamepad.axes[3] || 0;   // Left thumbstick Y = vertical movement
-                                            
-                                            // Apply Y rotation (turning left/right)
-                                            vrFlyRotation.y += rotateY * rotationSpeed * dt;
-                                            
-                                            // Apply vertical movement (up/down)
-                                            vrFlyPosition.y -= moveY * flyDelta; // Inverted for natural feel
-                                        }
-                                        
-                                        // Right thumbstick: X = strafe left/right, Y = forward/back movement
-                                        if (gamepad.axes && gamepad.axes.length >= 6) {
-                                            var moveX = gamepad.axes[4] || 0; // Right thumbstick X = strafe
-                                            var moveZ = gamepad.axes[5] || 0; // Right thumbstick Y = forward/back
-                                            
-                                            // Create movement vectors relative to current rotation
-                                            var forward = new THREE.Vector3(0, 0, -1);
-                                            var right = new THREE.Vector3(1, 0, 0);
-                                            
-                                            // Apply current Y rotation to movement vectors
-                                            forward.applyEuler(vrFlyRotation);
-                                            right.applyEuler(vrFlyRotation);
-                                            
-                                            // Apply movement
-                                            vrFlyPosition.add(right.multiplyScalar(moveX * flyDelta));
-                                            vrFlyPosition.add(forward.multiplyScalar(-moveZ * flyDelta));
-                                        }
-                                        
-                                        // Trigger buttons for up/down movement
-                                        if (gamepad.buttons && gamepad.buttons[0]) {
-                                            var upMovement = gamepad.buttons[0].value || 0;
-                                            vrFlyPosition.y += upMovement * flyDelta;
-                                        }
-                                        
-                                        if (gamepad.buttons && gamepad.buttons[1]) {
-                                            var downMovement = gamepad.buttons[1].value || 0;
-                                            vrFlyPosition.y -= downMovement * flyDelta;
-                                        }
-                                        
-                                        // Apply bounds to prevent flying too far
-                                        vrFlyPosition.x = Math.max(-200, Math.min(200, vrFlyPosition.x));
-                                        vrFlyPosition.y = Math.max(1, Math.min(100, vrFlyPosition.y)); // 1m to 100m height
-                                        vrFlyPosition.z = Math.max(-200, Math.min(200, vrFlyPosition.z));
                                     }
                                     
                                     break;
@@ -2319,14 +2245,6 @@
                             var lookTarget = firstPersonCamera.position.clone().add(lookDirection);
                             firstPersonCamera.lookAt(lookTarget);
                         }
-                    } else if (cameraMode === 'fly') {
-                        if (renderer.xr.isPresenting) {
-                            // VR Fly Camera: Position camera rig at fly position
-                            cameraRig.position.copy(vrFlyPosition);
-                            // Apply fly camera rotation (Y-axis rotation from thumbstick)
-                            cameraRig.rotation.copy(vrFlyRotation);
-                        }
-                        // Fly mode is VR-only
                     } else if (cameraMode === 'orbit') {
                         if (renderer.xr.isPresenting) {
                             // In VR: Position orbit camera in the rig
