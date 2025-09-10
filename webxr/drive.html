@@ -2154,22 +2154,10 @@
                                         var flyDelta = dt * vrFlySpeed;
                                         var rotationSpeed = 2.0; // Rotation speed multiplier
                                         
-                                        // Left thumbstick: X = rotation, Y = up/down movement
+                                        // Right thumbstick: X = strafe left/right, Y = forward/back movement (KEEP WORKING)
                                         if (gamepad.axes && gamepad.axes.length >= 4) {
-                                            var rotateY = gamepad.axes[2] || 0; // Left thumbstick X = Y rotation
-                                            var moveY = gamepad.axes[3] || 0;   // Left thumbstick Y = vertical movement
-                                            
-                                            // Apply Y rotation (turning left/right)
-                                            vrFlyRotation.y += rotateY * rotationSpeed * dt;
-                                            
-                                            // Apply vertical movement (up/down)
-                                            vrFlyPosition.y -= moveY * flyDelta; // Inverted for natural feel
-                                        }
-                                        
-                                        // Right thumbstick: X = strafe left/right, Y = forward/back movement
-                                        if (gamepad.axes && gamepad.axes.length >= 6) {
-                                            var moveX = gamepad.axes[4] || 0; // Right thumbstick X = strafe
-                                            var moveZ = gamepad.axes[5] || 0; // Right thumbstick Y = forward/back
+                                            var moveX = gamepad.axes[2] || 0; // Right thumbstick X = strafe
+                                            var moveZ = gamepad.axes[3] || 0; // Right thumbstick Y = forward/back
                                             
                                             // Create movement vectors relative to current rotation
                                             var forward = new THREE.Vector3(0, 0, -1);
@@ -2200,8 +2188,32 @@
                                         vrFlyPosition.y = Math.max(1, Math.min(100, vrFlyPosition.y)); // 1m to 100m height
                                         vrFlyPosition.z = Math.max(-200, Math.min(200, vrFlyPosition.z));
                                     }
-                                    
-                                    break;
+                                }
+                                
+                                if (gamepad && inputSource.handedness === 'left') {
+                                    // LEFT CONTROLLER - VR Fly Camera Controls (rotation and up/down)
+                                    console.log('🎮 Left controller detected in fly mode');
+                                    if (cameraMode === 'fly') {
+                                        var flyDelta = dt * vrFlySpeed;
+                                        var rotationSpeed = 2.0; // Rotation speed multiplier
+                                        
+                                        // Left controller thumbstick: X = rotation, Y = up/down movement
+                                        if (gamepad.axes && gamepad.axes.length >= 4) {
+                                            var rotateY = gamepad.axes[2] || 0; // Left thumbstick X = Y rotation
+                                            var moveY = gamepad.axes[3] || 0;   // Left thumbstick Y = vertical movement
+                                            
+                                            // Debug logging
+                                            if (Math.abs(rotateY) > 0.1 || Math.abs(moveY) > 0.1) {
+                                                console.log('🎮 Left controller - Rotate:', rotateY.toFixed(2), 'MoveY:', moveY.toFixed(2));
+                                            }
+                                            
+                                            // Apply Y rotation (turning left/right) - inverted for natural feel
+                                            vrFlyRotation.y -= rotateY * rotationSpeed * dt;
+                                            
+                                            // Apply vertical movement (up/down)
+                                            vrFlyPosition.y -= moveY * flyDelta; // Inverted for natural feel
+                                        }
+                                    }
                                 }
                             }
                         }
