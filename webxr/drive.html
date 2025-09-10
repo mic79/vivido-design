@@ -337,8 +337,10 @@
                             var checkpoint = checkpointMarkers[playerLastPassedCheckpoint];
                             if (checkpoint && checkpoint.position) {
                                 resetPosition = checkpoint.position.clone();
-                                resetPosition.y += 10; // Spawn higher above the checkpoint
-                                console.log('Resetting to checkpoint', playerLastPassedCheckpoint, 'at position:', resetPosition);
+                                // Use the actual track elevation at this checkpoint and add safe clearance
+                                var trackElevation = checkpoint.position.y;
+                                resetPosition.y = trackElevation + 20; // 20m above track surface for safety
+                                console.log('Resetting to checkpoint', playerLastPassedCheckpoint, 'at track elevation:', trackElevation.toFixed(1), 'spawn height:', resetPosition.y.toFixed(1));
                             } else {
                                 console.warn('Checkpoint', playerLastPassedCheckpoint, 'has no position data, using default');
                                 resetPosition = new THREE.Vector3(0, 15, -20); // Default position (higher)
@@ -2005,7 +2007,13 @@
                 // Initialize the next checkpoint marker (yellow pulsing sphere)
                 updateNextCheckpointMarker();
                 
+                // Log checkpoint elevations for debugging
                 console.log('Created', checkpointMarkers.length, 'checkpoint data points with next checkpoint marker');
+                if (checkpointMarkers.length > 0) {
+                    var minY = Math.min(...checkpointMarkers.map(cp => cp.position.y));
+                    var maxY = Math.max(...checkpointMarkers.map(cp => cp.position.y));
+                    console.log('🏔️ Track elevation range: Min:', minY.toFixed(1) + 'm, Max:', maxY.toFixed(1) + 'm, Difference:', (maxY - minY).toFixed(1) + 'm');
+                }
             }
             
             function updateNextCheckpointMarker() {
@@ -2027,7 +2035,9 @@
                     });
                     nextCheckpointMarker = new THREE.Mesh(glowGeometry, glowMaterial);
                     nextCheckpointMarker.position.copy(checkpoint.position);
-                    nextCheckpointMarker.position.y += 15; // Higher above the track
+                    // Position marker relative to track elevation at this point
+                    var trackElevation = checkpoint.position.y;
+                    nextCheckpointMarker.position.y = trackElevation + 25; // 25m above track for visibility
                     
                     scene.add(nextCheckpointMarker);
                     
@@ -2117,9 +2127,15 @@
                     createBox(new THREE.Vector3(x, 2, z), ZERO_QUATERNION, 1, 4, 1, 10, 1);
                 }
 
-                // Create player car at start line
+                // Create player car at start line (use first checkpoint elevation if available)
                 console.log('Creating player car...');
-                createVehicle(new THREE.Vector3(0, 15, -50), ZERO_QUATERNION);
+                var startPosition = new THREE.Vector3(0, 15, -50);
+                if (checkpointMarkers && checkpointMarkers.length > 0) {
+                    var firstCheckpoint = checkpointMarkers[0];
+                    startPosition.y = firstCheckpoint.position.y + 20; // 20m above first checkpoint
+                    console.log('🚗 Player car spawn at elevation:', startPosition.y.toFixed(1) + 'm (track:', firstCheckpoint.position.y.toFixed(1) + 'm)');
+                }
+                createVehicle(startPosition, ZERO_QUATERNION);
                 
                 // Create bot car slightly behind and to the side
                 console.log('Creating bot car...');
