@@ -340,9 +340,7 @@
             let connections = new Map(); // Map of playerId -> connection
             let connectionToPlayer = new Map(); // Map of connection -> playerId
             let activePlayers = new Map(); // Map of playerId -> player data
-            let remoteCars = new Map(); // Map of playerId -> remote car mesh
-            let playerCarSlots = []; // Array of 4 pre-created player cars
-            let playerSlotAssignments = new Map(); // Map of playerId -> slot index
+            let remotePlayerStates = new Map(); // Map of playerId -> player state (like reference project)
             let myPlayerId = null;
             let sessionID = null;
             let selectedLobby = 1;
@@ -673,11 +671,11 @@
             }
 
             function tick() {
-                // Add player car slots interpolation to sync list (only once)
-                if (!this.playerCarSlotsSyncAdded) {
-                    syncList.push(updatePlayerCarSlotsInterpolation);
-                    this.playerCarSlotsSyncAdded = true;
-                    console.log('🔄 Added player car slots interpolation to sync list');
+                // Add player state sending to sync list (only once)
+                if (!this.playerStateSyncAdded) {
+                    syncList.push(sendPlayerState);
+                    this.playerStateSyncAdded = true;
+                    console.log('🔄 Added player state sending to sync list');
                 }
                 
                 // Use WebXR-compatible animation loop
@@ -2166,15 +2164,11 @@
                             updateMenuDisplay();
                             updateVRMenuDisplay();
                             
-                            // Assign player to a car slot
-                            const slotIndex = assignPlayerToSlot(playerId);
-                            
                             // Send welcome message to new player
                             conn.send({
                                 type: 'player-assignment',
                                 playerId: playerId,
-                                isHost: false,
-                                slotIndex: slotIndex
+                                isHost: false
                             });
                             
                             // Broadcast updated player list to all clients
@@ -2192,8 +2186,12 @@
                             connections.delete(playerId);
                             connectionToPlayer.delete(conn);
                             
-                            // Remove player from car slot
-                            removePlayerFromSlot(playerId);
+                            // Hide remote player car
+                            const playerIndex = parseInt(playerId.split('_')[1]);
+                            if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
+                                remotePlayerCars[playerIndex].visible = false;
+                                console.log(`Hidden remote car for ${playerId}`);
+                            }
                             
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
                             updateMenuDisplay();
@@ -2268,16 +2266,13 @@
                             connections.clear();
                             activePlayers.clear();
                             
-                            // Clean up all player car slots
-                            playerCarSlots.forEach((slot, index) => {
-                                if (slot.isActive) {
-                                    slot.isActive = false;
-                                    slot.playerId = null;
-                                    slot.mesh.visible = false;
-                                    console.log(`Deactivated player car slot ${index}`);
+                            // Hide all remote player cars
+                            remotePlayerCars.forEach((car, index) => {
+                                if (car) {
+                                    car.visible = false;
+                                    console.log(`Hidden remote car ${index}`);
                                 }
                             });
-                            playerSlotAssignments.clear();
                             
                             updateMenuDisplay();
                             updateVRMenuDisplay();
@@ -2320,13 +2315,23 @@
                         break;
                         
                     case 'car-state':
-                        // Handle remote car state updates using slot system
-                        // Throttled logging for received car states
-                        if (!this.lastReceivedCarStateLog || (Date.now() - this.lastReceivedCarStateLog) > 2000) {
-                            console.log(`🚗 Receiving car states from other players...`);
-                            this.lastReceivedCarStateLog = Date.now();
-                        }
-                        updatePlayerCarSlot(data.playerId, data.state);
+                        // Legacy car-state support - convert to player-state
+                        handlePlayerState({
+                            playerId: data.playerId,
+                            state: {
+                                x: data.state.position.x,
+                                y: data.state.position.y,
+                                z: data.state.position.z,
+                                rx: data.state.quaternion.x,
+                                ry: data.state.quaternion.y,
+                                rz: data.state.quaternion.z
+                            }
+                        });
+                        break;
+                        
+                    case 'player-state':
+                        // Handle player state updates (like reference project)
+                        handlePlayerState(data);
                         break;
                         
                     case 'bot-state':
@@ -2371,56 +2376,40 @@
                 console.log('Broadcasted player list to all clients:', playerList.length, 'players');
             }
 
-            // Old updateRemoteCarState function removed - now using updatePlayerCarSlot
-            
-            // Old createRemoteCarMesh function removed - now using createPlayerCarSlots
+            // Remote player cars (simple Three.js objects like reference project)
+            let remotePlayerCars = [];
 
-            function updateRemoteBotState(botState) {
-                // TODO: Update bot position/rotation based on host's bot state
-                console.log('Received bot state from host:', botState);
-            }
-            
-            function createPlayerCarSlots() {
-                console.log('🏗️ Creating 4 player car slots...');
+            function createRemotePlayerCars() {
+                console.log('🏗️ Creating remote player cars...');
                 
-                // Colors for each player slot
                 const playerColors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00]; // Red, Green, Blue, Yellow
-                const playerNames = ['Player 1', 'Player 2', 'Player 3', 'Player 4'];
                 
                 for (let i = 0; i < 4; i++) {
                     const carGroup = new THREE.Group();
                     
-                    // Car body
-                    const bodyGeometry = new THREE.BoxGeometry(3.6, 1.2, 8.4);
-                    const bodyMaterial = new THREE.MeshBasicMaterial({ 
-                        color: playerColors[i],
-                        transparent: false,
-                        opacity: 1.0
-                    });
+                    // Car body (normal size)
+                    const bodyGeometry = new THREE.BoxGeometry(1.8, 0.6, 4);
+                    const bodyMaterial = new THREE.MeshBasicMaterial({ color: playerColors[i] });
                     const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
-                    bodyMesh.position.y = 0.6;
+                    bodyMesh.position.y = 0.3;
                     carGroup.add(bodyMesh);
                     
-                    // White roof for visibility
-                    const topGeometry = new THREE.BoxGeometry(3.0, 0.2, 7.0);
-                    const topMaterial = new THREE.MeshBasicMaterial({ 
-                        color: 0xffffff,
-                        transparent: false,
-                        opacity: 1.0
-                    });
+                    // White roof
+                    const topGeometry = new THREE.BoxGeometry(1.5, 0.2, 3.5);
+                    const topMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
                     const topMesh = new THREE.Mesh(topGeometry, topMaterial);
-                    topMesh.position.y = 1.3;
+                    topMesh.position.y = 0.7;
                     carGroup.add(topMesh);
                     
-                    // Wheels
-                    const wheelGeometry = new THREE.CylinderGeometry(0.8, 0.8, 0.6, 8);
+                    // Wheels (normal size)
+                    const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 8);
                     const wheelMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
                     
                     const wheelPositions = [
-                        { x: -1.8, y: 0, z: 2.8 },  // Front left
-                        { x: 1.8, y: 0, z: 2.8 },   // Front right
-                        { x: -1.8, y: 0, z: -2.8 }, // Rear left
-                        { x: 1.8, y: 0, z: -2.8 }   // Rear right
+                        { x: -0.9, y: 0, z: 1.4 },   // Front left
+                        { x: 0.9, y: 0, z: 1.4 },    // Front right
+                        { x: -0.9, y: 0, z: -1.4 },  // Rear left
+                        { x: 0.9, y: 0, z: -1.4 }    // Rear right
                     ];
                     
                     wheelPositions.forEach(pos => {
@@ -2430,192 +2419,95 @@
                         carGroup.add(wheel);
                     });
                     
-                    // Tall marker for debugging
-                    const markerGeometry = new THREE.BoxGeometry(0.5, 5.0, 0.5);
-                    const markerMaterial = new THREE.MeshBasicMaterial({ 
-                        color: playerColors[i],
-                        transparent: false,
-                        opacity: 1.0
-                    });
-                    const markerMesh = new THREE.Mesh(markerGeometry, markerMaterial);
-                    markerMesh.position.y = 4.0;
-                    carGroup.add(markerMesh);
+                    // Set initial position
+                    carGroup.position.set(-22 + (i * 2), 1.0, 40);
+                    carGroup.visible = false; // Hidden by default
                     
-                    // Set initial position (spread them out)
-                    carGroup.position.set(-22 + (i * 2), 1.0, 40 + (i * 2));
-                    
-                    // Initially hide all cars
-                    carGroup.visible = false;
-                    
-                    // Store car data
-                    const carSlot = {
-                        mesh: carGroup,
-                        slotIndex: i,
-                        playerId: null,
-                        isActive: false,
-                        color: playerColors[i],
-                        name: playerNames[i],
-                        // Interpolation data
-                        targetPosition: new THREE.Vector3(),
-                        targetQuaternion: new THREE.Quaternion(),
-                        currentPosition: new THREE.Vector3(),
-                        currentQuaternion: new THREE.Quaternion(),
-                        interpolationSpeed: 10.0
-                    };
-                    
-                    playerCarSlots.push(carSlot);
+                    remotePlayerCars[i] = carGroup;
                     scene.add(carGroup);
                     
-                    console.log(`✅ Created player car slot ${i} (${playerNames[i]}) with color:`, playerColors[i].toString(16));
+                    console.log(`✅ Created remote player car ${i} with color:`, playerColors[i].toString(16));
                 }
                 
-                console.log(`🎮 Created ${playerCarSlots.length} player car slots`);
+                console.log(`🎮 Created ${remotePlayerCars.length} remote player cars`);
             }
-            
-            function assignPlayerToSlot(playerId) {
-                // Host (player_0) should never be assigned to a slot - they use physics car
-                if (playerId === 'player_0') {
-                    console.log(`🏠 Host ${playerId} uses physics car, not slot system`);
-                    return -1;
+
+            function handlePlayerState(data) {
+                // Handle remote player position/rotation updates (like reference project)
+                if (!this.lastPlayerStateReceiveTime || Date.now() - this.lastPlayerStateReceiveTime > 30000) {
+                    console.log('🚗 Receiving player states from other players...');
+                    this.lastPlayerStateReceiveTime = Date.now();
                 }
                 
-                // Clients start from slot 1 (skip slot 0 which is reserved for host representation)
-                for (let i = 1; i < playerCarSlots.length; i++) {
-                    const slot = playerCarSlots[i];
-                    if (!slot.isActive) {
-                        slot.playerId = playerId;
-                        slot.isActive = true;
-                        slot.mesh.visible = true;
-                        playerSlotAssignments.set(playerId, i);
+                remotePlayerStates.set(data.playerId, data.state);
+                
+                // CRITICAL: Host forwards player states to other clients (like reference)
+                if (isHost && isMultiplayer && activePlayers.size > 1) {
+                    connections.forEach((conn, connectionKey) => {
+                        if (conn && conn.open) {
+                            conn.send({
+                                type: 'player-state',
+                                state: data.state,
+                                playerId: data.playerId
+                            });
+                        }
+                    });
+                }
+                
+                // Update the corresponding remote player car
+                const playerIndex = parseInt(data.playerId.split('_')[1]);
+                if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
+                    const remoteCar = remotePlayerCars[playerIndex];
+                    if (remoteCar && data.playerId !== myPlayerId) { // Don't show our own remote car
+                        remoteCar.position.set(data.state.x, data.state.y, data.state.z);
+                        remoteCar.rotation.set(data.state.rx, data.state.ry, data.state.rz);
+                        remoteCar.visible = true;
                         
-                        console.log(`🎯 Assigned ${playerId} to slot ${i} (${slot.name})`);
-                        return i;
-                    }
-                }
-                
-                console.log(`⚠️ No available slots for ${playerId}`);
-                return -1;
-            }
-            
-            function removePlayerFromSlot(playerId) {
-                const slotIndex = playerSlotAssignments.get(playerId);
-                if (slotIndex !== undefined && slotIndex >= 0) {
-                    const slot = playerCarSlots[slotIndex];
-                    slot.playerId = null;
-                    slot.isActive = false;
-                    slot.mesh.visible = false;
-                    playerSlotAssignments.delete(playerId);
-                    
-                    console.log(`🚫 Removed ${playerId} from slot ${slotIndex} (${slot.name})`);
-                    return true;
-                }
-                
-                console.log(`⚠️ Player ${playerId} not found in any slot`);
-                return false;
-            }
-            
-            function updatePlayerCarSlot(playerId, state) {
-                // Skip updating our own car (host or client uses physics car, not slot)
-                if (playerId === myPlayerId) {
-                    return;
-                }
-                
-                // Special handling for host (player_0) - use slot 0 for host representation
-                if (playerId === 'player_0') {
-                    const hostSlot = playerCarSlots[0];
-                    if (hostSlot) {
-                        // Activate host slot for remote representation
-                        if (!hostSlot.isActive) {
-                            hostSlot.isActive = true;
-                            hostSlot.playerId = playerId;
-                            hostSlot.mesh.visible = true;
-                            console.log(`🏠 Activated host representation in slot 0`);
+                        if (!this.lastRemotePlayerUpdateTime || Date.now() - this.lastRemotePlayerUpdateTime > 30000) {
+                            console.log(`🎯 Updated remote player ${data.playerId} at (${data.state.x.toFixed(1)}, ${data.state.y.toFixed(1)}, ${data.state.z.toFixed(1)})`);
+                            this.lastRemotePlayerUpdateTime = Date.now();
                         }
-                        
-                        // Update host position
-                        if (state.position && state.quaternion) {
-                            hostSlot.targetPosition.set(state.position.x, state.position.y, state.position.z);
-                            hostSlot.targetQuaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
-                            
-                            if (hostSlot.currentPosition.length() === 0) {
-                                hostSlot.currentPosition.copy(hostSlot.targetPosition);
-                                hostSlot.currentQuaternion.copy(hostSlot.targetQuaternion);
-                                hostSlot.mesh.position.copy(hostSlot.currentPosition);
-                                hostSlot.mesh.quaternion.copy(hostSlot.currentQuaternion);
-                                console.log(`🎯 Initial host position set in slot 0 at (${state.position.x.toFixed(1)}, ${state.position.y.toFixed(1)}, ${state.position.z.toFixed(1)})`);
-                            }
-                        }
-                    }
-                    return;
-                }
-                
-                const slotIndex = playerSlotAssignments.get(playerId);
-                if (slotIndex === undefined || slotIndex < 0) {
-                    console.log(`⚠️ No slot assigned for ${playerId}`);
-                    return;
-                }
-                
-                const slot = playerCarSlots[slotIndex];
-                if (!slot || !slot.isActive) {
-                    console.log(`⚠️ Slot ${slotIndex} not active for ${playerId}`);
-                    return;
-                }
-                
-                // Update target position and rotation for smooth interpolation
-                if (state.position && state.quaternion) {
-                    slot.targetPosition.set(state.position.x, state.position.y, state.position.z);
-                    slot.targetQuaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
-                    
-                    // If this is the first update, set current position immediately
-                    if (slot.currentPosition.length() === 0) {
-                        slot.currentPosition.copy(slot.targetPosition);
-                        slot.currentQuaternion.copy(slot.targetQuaternion);
-                        slot.mesh.position.copy(slot.currentPosition);
-                        slot.mesh.quaternion.copy(slot.currentQuaternion);
-                        console.log(`🎯 Initial position set for ${playerId} in slot ${slotIndex} at (${state.position.x.toFixed(1)}, ${state.position.y.toFixed(1)}, ${state.position.z.toFixed(1)})`);
                     }
                 }
             }
-            
-            function updatePlayerCarSlotsInterpolation(dt) {
-                if (!playerCarSlots || playerCarSlots.length === 0) return;
+
+            function sendPlayerState() {
+                if (!isMultiplayer || activePlayers.size <= 1) return;
                 
-                // Count active slots
-                const activeSlots = playerCarSlots.filter(slot => slot.isActive);
-                if (activeSlots.length === 0) return;
-                
-                // Throttled logging for interpolation
-                if (!this.lastSlotInterpolationLog || (Date.now() - this.lastSlotInterpolationLog) > 3000) {
-                    console.log(`🔄 Interpolating ${activeSlots.length} active player car slots...`);
-                    this.lastSlotInterpolationLog = Date.now();
-                }
-                
-                playerCarSlots.forEach((slot, index) => {
-                    if (!slot.isActive) return;
+                // Get player car position and rotation (from physics car)
+                if (vehicleRef && vehicleRef.chassisMesh) {
+                    const pos = vehicleRef.chassisMesh.position;
+                    const rot = vehicleRef.chassisMesh.rotation;
                     
-                    // Smooth interpolation towards target position
-                    const lerpFactor = Math.min(1.0, slot.interpolationSpeed * dt);
+                    const playerState = {
+                        x: pos.x, y: pos.y, z: pos.z,
+                        rx: rot.x, ry: rot.y, rz: rot.z
+                    };
                     
-                    // Store old position for logging
-                    const oldPos = slot.mesh.position.clone();
+                    const data = {
+                        type: 'player-state',
+                        state: playerState,
+                        playerId: myPlayerId
+                    };
                     
-                    // Interpolate position
-                    slot.currentPosition.lerp(slot.targetPosition, lerpFactor);
-                    slot.mesh.position.copy(slot.currentPosition);
-                    
-                    // Interpolate rotation (slerp for quaternions)
-                    slot.currentQuaternion.slerp(slot.targetQuaternion, lerpFactor);
-                    slot.mesh.quaternion.copy(slot.currentQuaternion);
-                    
-                    // Log position changes occasionally
-                    if (!this.lastSlotPositionLog || (Date.now() - this.lastSlotPositionLog) > 5000) {
-                        const distance = oldPos.distanceTo(slot.mesh.position);
-                        if (distance > 0.1) { // Only log if there's significant movement
-                            console.log(`🚗 ${slot.playerId} (slot ${index}) moved ${distance.toFixed(2)}m to (${slot.mesh.position.x.toFixed(1)}, ${slot.mesh.position.y.toFixed(1)}, ${slot.mesh.position.z.toFixed(1)})`);
-                            this.lastSlotPositionLog = Date.now();
+                    // Send to all connections
+                    connections.forEach((conn, playerId) => {
+                        if (conn && conn.open) {
+                            conn.send(data);
                         }
+                    });
+                    
+                    // Throttled logging
+                    if (!this.lastPlayerStateSendTime || Date.now() - this.lastPlayerStateSendTime > 2000) {
+                        console.log(`📡 Sending car state from ${myPlayerId} to ${connections.size} players`);
+                        this.lastPlayerStateSendTime = Date.now();
                     }
-                });
+                }
+            }
+
+            function updateRemoteBotState(botState) {
+                // TODO: Update bot position/rotation based on host's bot state
+                console.log('Received bot state from host:', botState);
             }
 
             function switchCamera() {
@@ -3067,26 +2959,7 @@
                     chassisMesh.quaternion.set(q.x(), q.y(), q.z(), q.w());
                     
                     // Send car state to other players (throttled to 10Hz)
-                    if (isMultiplayer && connections.size > 0) {
-                        if (!this.lastMultiplayerSync || (Date.now() - this.lastMultiplayerSync) > 100) {
-                            const carState = {
-                                type: 'car-state',
-                                playerId: myPlayerId || 'player_0',
-                                state: {
-                                    position: { x: p.x(), y: p.y(), z: p.z() },
-                                    quaternion: { x: q.x(), y: q.y(), z: q.z(), w: q.w() },
-                                    speed: speed
-                                }
-                            };
-                            // Throttled logging for car state sending
-                            if (!this.lastCarStateLog || (Date.now() - this.lastCarStateLog) > 2000) {
-                                console.log(`📡 Sending car state from ${carState.playerId} to ${connections.size} players`);
-                                this.lastCarStateLog = Date.now();
-                            }
-                            sendToAllPlayers(carState);
-                            this.lastMultiplayerSync = Date.now();
-                        }
-                    }
+                    // Car state sending now handled by sendPlayerState() in sync list
 
                     // Update wheel meshes
                     var n = vehicle.getNumWheels();
@@ -5005,8 +4878,8 @@
                 botVehicleRef = createBotVehicle(botStartPosition, leftRotation, 0x0066ff);
                 console.log('Bot car created, racing path available:', !!racingPath);
                 
-                // Create multiplayer player car slots
-                createPlayerCarSlots();
+                // Create multiplayer remote player cars
+                createRemotePlayerCars();
                 
                 // Confirm both cars are starting at the correct positions
                 console.log('✅ Both cars positioned at first checkpoint (start line)');
@@ -5033,5 +4906,6 @@
 
         });
     </script>
-</body>
+
+    </body>
 </html>
