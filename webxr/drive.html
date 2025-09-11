@@ -2473,8 +2473,14 @@
             }
             
             function assignPlayerToSlot(playerId) {
-                // Find the first available slot
-                for (let i = 0; i < playerCarSlots.length; i++) {
+                // Host (player_0) should never be assigned to a slot - they use physics car
+                if (playerId === 'player_0') {
+                    console.log(`🏠 Host ${playerId} uses physics car, not slot system`);
+                    return -1;
+                }
+                
+                // Clients start from slot 1 (skip slot 0 which is reserved for host representation)
+                for (let i = 1; i < playerCarSlots.length; i++) {
                     const slot = playerCarSlots[i];
                     if (!slot.isActive) {
                         slot.playerId = playerId;
@@ -2511,6 +2517,35 @@
             function updatePlayerCarSlot(playerId, state) {
                 // Skip updating our own car (host or client uses physics car, not slot)
                 if (playerId === myPlayerId) {
+                    return;
+                }
+                
+                // Special handling for host (player_0) - use slot 0 for host representation
+                if (playerId === 'player_0') {
+                    const hostSlot = playerCarSlots[0];
+                    if (hostSlot) {
+                        // Activate host slot for remote representation
+                        if (!hostSlot.isActive) {
+                            hostSlot.isActive = true;
+                            hostSlot.playerId = playerId;
+                            hostSlot.mesh.visible = true;
+                            console.log(`🏠 Activated host representation in slot 0`);
+                        }
+                        
+                        // Update host position
+                        if (state.position && state.quaternion) {
+                            hostSlot.targetPosition.set(state.position.x, state.position.y, state.position.z);
+                            hostSlot.targetQuaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
+                            
+                            if (hostSlot.currentPosition.length() === 0) {
+                                hostSlot.currentPosition.copy(hostSlot.targetPosition);
+                                hostSlot.currentQuaternion.copy(hostSlot.targetQuaternion);
+                                hostSlot.mesh.position.copy(hostSlot.currentPosition);
+                                hostSlot.mesh.quaternion.copy(hostSlot.currentQuaternion);
+                                console.log(`🎯 Initial host position set in slot 0 at (${state.position.x.toFixed(1)}, ${state.position.y.toFixed(1)}, ${state.position.z.toFixed(1)})`);
+                            }
+                        }
+                    }
                     return;
                 }
                 
