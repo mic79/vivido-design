@@ -2218,13 +2218,21 @@
                             connections.delete(playerId);
                             connectionToPlayer.delete(conn);
                             
-                            // Hide remote player car
+                            // Hide remote player car and remove from physics
                             const playerIndex = parseInt(playerId.split('_')[1]);
                             if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
                                 const remoteCarData = remotePlayerCars[playerIndex];
                                 if (remoteCarData) {
                                     remoteCarData.mesh.visible = false;
                                     remoteCarData.playerId = null;
+                                    
+                                    // Remove physics body from world
+                                    if (remoteCarData.inPhysicsWorld) {
+                                        physicsWorld.removeRigidBody(remoteCarData.rigidBody);
+                                        remoteCarData.inPhysicsWorld = false;
+                                        console.log(`Removed physics body for ${playerId} from physics world`);
+                                    }
+                                    
                                     console.log(`Hidden remote car for ${playerId}`);
                                 }
                             }
@@ -2302,11 +2310,19 @@
                             connections.clear();
                             activePlayers.clear();
                             
-                            // Hide all remote player cars
+                            // Hide all remote player cars and remove from physics
                             remotePlayerCars.forEach((carData, index) => {
                                 if (carData && carData.mesh) {
                                     carData.mesh.visible = false;
                                     carData.playerId = null;
+                                    
+                                    // Remove physics body from world
+                                    if (carData.inPhysicsWorld) {
+                                        physicsWorld.removeRigidBody(carData.rigidBody);
+                                        carData.inPhysicsWorld = false;
+                                        console.log(`Removed physics body for remote car ${index} from physics world`);
+                                    }
+                                    
                                     console.log(`Hidden remote car ${index}`);
                                 }
                             });
@@ -2479,8 +2495,7 @@
                     rigidBody.setLinearFactor(new Ammo.btVector3(1, 1, 1));
                     rigidBody.setAngularFactor(new Ammo.btVector3(1, 1, 1));
                     
-                    // Add to physics world
-                    physicsWorld.addRigidBody(rigidBody);
+                    // Don't add to physics world initially - will be added when player connects
                     
                     // Set initial position
                     carGroup.position.set(-22 + (i * 2), 1.0, 40);
@@ -2490,7 +2505,8 @@
                     remotePlayerCars[i] = {
                         mesh: carGroup,
                         rigidBody: rigidBody,
-                        playerId: null
+                        playerId: null,
+                        inPhysicsWorld: false // Track if physics body is in world
                     };
                     scene.add(carGroup);
                     
@@ -2534,6 +2550,13 @@
                         remoteCar.position.set(data.state.x, data.state.y, data.state.z);
                         remoteCar.rotation.set(data.state.rx, data.state.ry, data.state.rz);
                         remoteCar.visible = true;
+                        
+                        // Add physics body to world if not already added
+                        if (!remoteCarData.inPhysicsWorld) {
+                            physicsWorld.addRigidBody(rigidBody);
+                            remoteCarData.inPhysicsWorld = true;
+                            console.log(`Added physics body for ${data.playerId} to physics world`);
+                        }
                         
                         // Update physics body position (dynamic body with controlled movement)
                         const currentTransform = rigidBody.getWorldTransform();
