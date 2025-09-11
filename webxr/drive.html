@@ -2148,8 +2148,8 @@
                         myPlayerId = 'player_0';
                         activePlayers.set(myPlayerId, { isConnected: true, isHost: true });
                         
-                        // Assign host to slot 0
-                        assignPlayerToSlot(myPlayerId);
+                        // Host uses physics car, not slot system
+                        console.log('🏠 Host uses physics car, not slot system');
                         
                         updateMenuDisplay();
                         resolve();
@@ -2509,6 +2509,11 @@
             }
             
             function updatePlayerCarSlot(playerId, state) {
+                // Skip updating our own car (host or client uses physics car, not slot)
+                if (playerId === myPlayerId) {
+                    return;
+                }
+                
                 const slotIndex = playerSlotAssignments.get(playerId);
                 if (slotIndex === undefined || slotIndex < 0) {
                     console.log(`⚠️ No slot assigned for ${playerId}`);
