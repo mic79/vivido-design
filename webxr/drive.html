@@ -2189,8 +2189,12 @@
                             // Hide remote player car
                             const playerIndex = parseInt(playerId.split('_')[1]);
                             if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
-                                remotePlayerCars[playerIndex].visible = false;
-                                console.log(`Hidden remote car for ${playerId}`);
+                                const remoteCarData = remotePlayerCars[playerIndex];
+                                if (remoteCarData) {
+                                    remoteCarData.mesh.visible = false;
+                                    remoteCarData.playerId = null;
+                                    console.log(`Hidden remote car for ${playerId}`);
+                                }
                             }
                             
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
@@ -2267,9 +2271,10 @@
                             activePlayers.clear();
                             
                             // Hide all remote player cars
-                            remotePlayerCars.forEach((car, index) => {
-                                if (car) {
-                                    car.visible = false;
+                            remotePlayerCars.forEach((carData, index) => {
+                                if (carData && carData.mesh) {
+                                    carData.mesh.visible = false;
+                                    carData.playerId = null;
                                     console.log(`Hidden remote car ${index}`);
                                 }
                             });
@@ -2380,7 +2385,7 @@
             let remotePlayerCars = [];
 
             function createRemotePlayerCars() {
-                console.log('🏗️ Creating remote player cars...');
+                console.log('🏗️ Creating remote player cars with physics...');
                 
                 const playerColors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00]; // Red, Green, Blue, Yellow
                 
@@ -2419,17 +2424,43 @@
                         carGroup.add(wheel);
                     });
                     
+                    // Create physics body for collision
+                    const chassisShape = new Ammo.btBoxShape(new Ammo.btVector3(0.9, 0.3, 2.0)); // Half extents
+                    const chassisLocalInertia = new Ammo.btVector3(0, 0, 0);
+                    const chassisMass = 800; // Same as player car
+                    chassisShape.calculateLocalInertia(chassisMass, chassisLocalInertia);
+                    
+                    const startTransform = new Ammo.btTransform();
+                    startTransform.setIdentity();
+                    startTransform.setOrigin(new Ammo.btVector3(-22 + (i * 2), 1.0, 40));
+                    
+                    const motionState = new Ammo.btDefaultMotionState(startTransform);
+                    const rbInfo = new Ammo.btRigidBodyConstructionInfo(chassisMass, motionState, chassisShape, chassisLocalInertia);
+                    const rigidBody = new Ammo.btRigidBody(rbInfo);
+                    
+                    // Make it kinematic (controlled by remote player state, but can collide)
+                    rigidBody.setCollisionFlags(rigidBody.getCollisionFlags() | 2); // KINEMATIC_OBJECT
+                    rigidBody.setActivationState(4); // DISABLE_DEACTIVATION
+                    
+                    // Add to physics world
+                    physicsWorld.addRigidBody(rigidBody);
+                    
                     // Set initial position
                     carGroup.position.set(-22 + (i * 2), 1.0, 40);
                     carGroup.visible = false; // Hidden by default
                     
-                    remotePlayerCars[i] = carGroup;
+                    // Store both mesh and physics body
+                    remotePlayerCars[i] = {
+                        mesh: carGroup,
+                        rigidBody: rigidBody,
+                        playerId: null
+                    };
                     scene.add(carGroup);
                     
-                    console.log(`✅ Created remote player car ${i} with color:`, playerColors[i].toString(16));
+                    console.log(`✅ Created remote player car ${i} with physics body and color:`, playerColors[i].toString(16));
                 }
                 
-                console.log(`🎮 Created ${remotePlayerCars.length} remote player cars`);
+                console.log(`🎮 Created ${remotePlayerCars.length} remote player cars with physics`);
             }
 
             function handlePlayerState(data) {
@@ -2457,11 +2488,31 @@
                 // Update the corresponding remote player car
                 const playerIndex = parseInt(data.playerId.split('_')[1]);
                 if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
-                    const remoteCar = remotePlayerCars[playerIndex];
-                    if (remoteCar && data.playerId !== myPlayerId) { // Don't show our own remote car
+                    const remoteCarData = remotePlayerCars[playerIndex];
+                    if (remoteCarData && data.playerId !== myPlayerId) { // Don't show our own remote car
+                        const remoteCar = remoteCarData.mesh;
+                        const rigidBody = remoteCarData.rigidBody;
+                        
+                        // Update visual mesh
                         remoteCar.position.set(data.state.x, data.state.y, data.state.z);
                         remoteCar.rotation.set(data.state.rx, data.state.ry, data.state.rz);
                         remoteCar.visible = true;
+                        
+                        // Update physics body position (kinematic body)
+                        const transform = new Ammo.btTransform();
+                        transform.setIdentity();
+                        transform.setOrigin(new Ammo.btVector3(data.state.x, data.state.y, data.state.z));
+                        
+                        // Convert Euler angles to quaternion for physics
+                        const quaternion = new THREE.Quaternion();
+                        quaternion.setFromEuler(new THREE.Euler(data.state.rx, data.state.ry, data.state.rz));
+                        transform.setRotation(new Ammo.btQuaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
+                        
+                        rigidBody.setWorldTransform(transform);
+                        rigidBody.activate(); // Wake up the physics body
+                        
+                        // Store player ID
+                        remoteCarData.playerId = data.playerId;
                         
                         if (!this.lastRemotePlayerUpdateTime || Date.now() - this.lastRemotePlayerUpdateTime > 30000) {
                             console.log(`🎯 Updated remote player ${data.playerId} at (${data.state.x.toFixed(1)}, ${data.state.y.toFixed(1)}, ${data.state.z.toFixed(1)})`);
@@ -2508,6 +2559,26 @@
             function updateRemoteBotState(botState) {
                 // TODO: Update bot position/rotation based on host's bot state
                 console.log('Received bot state from host:', botState);
+            }
+
+            function cleanupRemotePlayerCars() {
+                console.log('🧹 Cleaning up remote player cars...');
+                remotePlayerCars.forEach((carData, index) => {
+                    if (carData) {
+                        // Remove from scene
+                        if (carData.mesh) {
+                            scene.remove(carData.mesh);
+                        }
+                        
+                        // Remove from physics world
+                        if (carData.rigidBody) {
+                            physicsWorld.removeRigidBody(carData.rigidBody);
+                        }
+                        
+                        console.log(`Cleaned up remote car ${index}`);
+                    }
+                });
+                remotePlayerCars.length = 0; // Clear array
             }
 
             function switchCamera() {
@@ -3645,7 +3716,10 @@
                 }
                 
 
-                syncList.push(botSync);
+                // Only add bot sync in singleplayer mode
+                if (!isMultiplayer) {
+                    syncList.push(botSync);
+                }
                 return botRef;
             }
 
@@ -4874,9 +4948,14 @@
                 console.log('Creating player car...');
                 createVehicle(playerStartPosition, leftRotation);
                 
-                console.log('Creating bot car...');
-                botVehicleRef = createBotVehicle(botStartPosition, leftRotation, 0x0066ff);
-                console.log('Bot car created, racing path available:', !!racingPath);
+                // Only create bot in singleplayer mode
+                if (!isMultiplayer) {
+                    console.log('Creating bot car...');
+                    botVehicleRef = createBotVehicle(botStartPosition, leftRotation, 0x0066ff);
+                    console.log('Bot car created, racing path available:', !!racingPath);
+                } else {
+                    console.log('🚫 Skipping bot creation in multiplayer mode');
+                }
                 
                 // Create multiplayer remote player cars
                 createRemotePlayerCars();
