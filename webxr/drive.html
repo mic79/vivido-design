@@ -340,6 +340,7 @@
             let connections = new Map(); // Map of playerId -> connection
             let connectionToPlayer = new Map(); // Map of connection -> playerId
             let activePlayers = new Map(); // Map of playerId -> player data
+            let remoteCars = new Map(); // Map of playerId -> remote car mesh
             let myPlayerId = null;
             let sessionID = null;
             let selectedLobby = 1;
@@ -2159,6 +2160,9 @@
                                 isHost: false
                             });
                             
+                            // Broadcast updated player list to all clients
+                            broadcastPlayerList();
+                            
                             console.log('Player connected:', playerId);
                         });
                         
@@ -2170,9 +2174,22 @@
                             activePlayers.delete(playerId);
                             connections.delete(playerId);
                             connectionToPlayer.delete(conn);
+                            
+                            // Remove remote car if it exists
+                            const remoteCar = remoteCars.get(playerId);
+                            if (remoteCar) {
+                                scene.remove(remoteCar.mesh);
+                                remoteCars.delete(playerId);
+                                console.log(`Removed remote car for player ${playerId}`);
+                            }
+                            
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
                             updateMenuDisplay();
                             updateVRMenuDisplay();
+                            
+                            // Broadcast updated player list to remaining clients
+                            broadcastPlayerList();
+                            
                             console.log('Player disconnected:', playerId);
                         });
                     });
@@ -2238,6 +2255,14 @@
                             multiplayerStatus = 'Disconnected';
                             connections.clear();
                             activePlayers.clear();
+                            
+                            // Clean up all remote cars
+                            remoteCars.forEach((remoteCar, playerId) => {
+                                scene.remove(remoteCar.mesh);
+                                console.log(`Removed remote car for player ${playerId}`);
+                            });
+                            remoteCars.clear();
+                            
                             updateMenuDisplay();
                             updateVRMenuDisplay();
                             console.log('Disconnected from host');
@@ -2261,6 +2286,21 @@
                     case 'player-assignment':
                         myPlayerId = data.playerId;
                         console.log('Assigned player ID:', myPlayerId);
+                        break;
+                        
+                    case 'player-list':
+                        // Update the client's player list
+                        activePlayers.clear();
+                        if (data.players) {
+                            data.players.forEach(player => {
+                                activePlayers.set(player.id, player);
+                            });
+                        }
+                        // Update the multiplayer status display
+                        multiplayerStatus = `Connected - Lobby ${selectedLobby} (${activePlayers.size}/4)`;
+                        updateMenuDisplay();
+                        updateVRMenuDisplay();
+                        console.log('Updated player list, total players:', activePlayers.size);
                         break;
                         
                     case 'car-state':
@@ -2291,10 +2331,91 @@
                     }
                 });
             }
+            
+            function broadcastPlayerList() {
+                if (!isHost) return;
+                
+                // Convert activePlayers Map to array for transmission
+                const playerList = Array.from(activePlayers.entries()).map(([id, data]) => ({
+                    id: id,
+                    isConnected: data.isConnected,
+                    isHost: data.isHost
+                }));
+                
+                sendToAllPlayers({
+                    type: 'player-list',
+                    players: playerList
+                });
+                
+                console.log('Broadcasted player list to all clients:', playerList.length, 'players');
+            }
 
             function updateRemoteCarState(playerId, state) {
-                // TODO: Update remote car position/rotation based on received state
-                console.log(`Received car state from ${playerId}:`, state);
+                // Skip updating our own car
+                if (playerId === myPlayerId) return;
+                
+                // Get or create remote car for this player
+                if (!remoteCars) {
+                    remoteCars = new Map();
+                }
+                
+                let remoteCar = remoteCars.get(playerId);
+                if (!remoteCar) {
+                    // Create a new remote car representation
+                    remoteCar = createRemoteCarMesh(playerId);
+                    remoteCars.set(playerId, remoteCar);
+                    scene.add(remoteCar.mesh);
+                    console.log(`Created remote car for player ${playerId}`);
+                }
+                
+                // Update position and rotation
+                if (state.position && state.quaternion) {
+                    remoteCar.mesh.position.set(state.position.x, state.position.y, state.position.z);
+                    remoteCar.mesh.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
+                }
+                
+                // Update last seen time
+                remoteCar.lastUpdate = Date.now();
+            }
+            
+            function createRemoteCarMesh(playerId) {
+                // Create a simple car representation for remote players
+                const carGroup = new THREE.Group();
+                
+                // Car body (different color for each player)
+                const colors = [0xff4444, 0x44ff44, 0x4444ff, 0xffff44]; // Red, Green, Blue, Yellow
+                const playerIndex = parseInt(playerId.replace('player_', '')) || 0;
+                const carColor = colors[playerIndex % colors.length];
+                
+                const bodyGeometry = new THREE.BoxGeometry(1.8, 0.6, 4.2);
+                const bodyMaterial = new THREE.MeshLambertMaterial({ color: carColor });
+                const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
+                bodyMesh.position.y = 0.3;
+                carGroup.add(bodyMesh);
+                
+                // Add wheels
+                const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 8);
+                const wheelMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
+                
+                const wheelPositions = [
+                    { x: -0.9, y: 0, z: 1.4 },  // Front left
+                    { x: 0.9, y: 0, z: 1.4 },   // Front right
+                    { x: -0.9, y: 0, z: -1.4 }, // Rear left
+                    { x: 0.9, y: 0, z: -1.4 }   // Rear right
+                ];
+                
+                wheelPositions.forEach(pos => {
+                    const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+                    wheel.position.set(pos.x, pos.y, pos.z);
+                    wheel.rotation.z = Math.PI / 2;
+                    carGroup.add(wheel);
+                });
+                
+                return {
+                    mesh: carGroup,
+                    playerId: playerId,
+                    lastUpdate: Date.now()
+                };
             }
 
             function updateRemoteBotState(botState) {
