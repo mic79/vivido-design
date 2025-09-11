@@ -1935,6 +1935,16 @@
                 isHost = false;
                 multiplayerStatus = 'Disconnected';
                 
+                // Create bot if not already created and racing path exists
+                if (!botVehicleRef && racingPath) {
+                    console.log('Creating bot car for singleplayer...');
+                    const botStartPosition = new THREE.Vector3(-26, 1, 35);
+                    const leftRotation = new THREE.Quaternion();
+                    leftRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+                    botVehicleRef = createBotVehicle(botStartPosition, leftRotation, 0x0066ff);
+                    console.log('Bot car created for singleplayer mode');
+                }
+                
                 updateMenuDisplay();
                 updateVRMenuDisplay();
                 console.log('Switched to singleplayer mode');
@@ -1943,6 +1953,28 @@
             function switchToMultiplayer() {
                 isMultiplayer = true;
                 multiplayerStatus = 'Ready to connect';
+                
+                // Remove bot if it exists
+                if (botVehicleRef) {
+                    console.log('Removing bot car for multiplayer...');
+                    // Remove bot from physics world
+                    if (botVehicleRef.vehicle) {
+                        physicsWorld.removeAction(botVehicleRef.vehicle);
+                    }
+                    if (botVehicleRef.chassisBody) {
+                        physicsWorld.removeRigidBody(botVehicleRef.chassisBody);
+                    }
+                    // Remove bot from scene
+                    if (botVehicleRef.chassisMesh) {
+                        scene.remove(botVehicleRef.chassisMesh);
+                    }
+                    if (botVehicleRef.wheelMeshes) {
+                        botVehicleRef.wheelMeshes.forEach(wheel => scene.remove(wheel));
+                    }
+                    botVehicleRef = null;
+                    console.log('Bot car removed for multiplayer mode');
+                }
+                
                 updateMenuDisplay();
                 updateVRMenuDisplay();
                 console.log('Switched to multiplayer mode');
@@ -2438,9 +2470,14 @@
                     const rbInfo = new Ammo.btRigidBodyConstructionInfo(chassisMass, motionState, chassisShape, chassisLocalInertia);
                     const rigidBody = new Ammo.btRigidBody(rbInfo);
                     
-                    // Make it kinematic (controlled by remote player state, but can collide)
-                    rigidBody.setCollisionFlags(rigidBody.getCollisionFlags() | 2); // KINEMATIC_OBJECT
+                    // Make it dynamic but controlled (can collide properly with other dynamic bodies)
+                    rigidBody.setCollisionFlags(0); // Dynamic object (default)
                     rigidBody.setActivationState(4); // DISABLE_DEACTIVATION
+                    
+                    // Disable gravity and damping so it's controlled by remote state
+                    rigidBody.setGravity(new Ammo.btVector3(0, 0, 0));
+                    rigidBody.setLinearFactor(new Ammo.btVector3(1, 1, 1));
+                    rigidBody.setAngularFactor(new Ammo.btVector3(1, 1, 1));
                     
                     // Add to physics world
                     physicsWorld.addRigidBody(rigidBody);
@@ -2498,17 +2535,30 @@
                         remoteCar.rotation.set(data.state.rx, data.state.ry, data.state.rz);
                         remoteCar.visible = true;
                         
-                        // Update physics body position (kinematic body)
-                        const transform = new Ammo.btTransform();
-                        transform.setIdentity();
-                        transform.setOrigin(new Ammo.btVector3(data.state.x, data.state.y, data.state.z));
+                        // Update physics body position (dynamic body with controlled movement)
+                        const currentTransform = rigidBody.getWorldTransform();
+                        const currentPos = currentTransform.getOrigin();
                         
-                        // Convert Euler angles to quaternion for physics
+                        // Calculate velocity to move to target position smoothly
+                        const targetPos = new Ammo.btVector3(data.state.x, data.state.y, data.state.z);
+                        const velocity = new Ammo.btVector3(
+                            (targetPos.x() - currentPos.x()) * 10, // Multiply by factor for responsiveness
+                            (targetPos.y() - currentPos.y()) * 10,
+                            (targetPos.z() - currentPos.z()) * 10
+                        );
+                        
+                        // Set velocity instead of direct position for better collision
+                        rigidBody.setLinearVelocity(velocity);
+                        
+                        // Set rotation directly (less critical for collision)
                         const quaternion = new THREE.Quaternion();
                         quaternion.setFromEuler(new THREE.Euler(data.state.rx, data.state.ry, data.state.rz));
-                        transform.setRotation(new Ammo.btQuaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
+                        const newTransform = new Ammo.btTransform();
+                        newTransform.setIdentity();
+                        newTransform.setOrigin(targetPos);
+                        newTransform.setRotation(new Ammo.btQuaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
+                        rigidBody.setWorldTransform(newTransform);
                         
-                        rigidBody.setWorldTransform(transform);
                         rigidBody.activate(); // Wake up the physics body
                         
                         // Store player ID
@@ -4948,14 +4998,8 @@
                 console.log('Creating player car...');
                 createVehicle(playerStartPosition, leftRotation);
                 
-                // Only create bot in singleplayer mode
-                if (!isMultiplayer) {
-                    console.log('Creating bot car...');
-                    botVehicleRef = createBotVehicle(botStartPosition, leftRotation, 0x0066ff);
-                    console.log('Bot car created, racing path available:', !!racingPath);
-                } else {
-                    console.log('🚫 Skipping bot creation in multiplayer mode');
-                }
+                // Bot creation will be handled when game mode is determined
+                console.log('🤖 Bot creation deferred until game mode is set');
                 
                 // Create multiplayer remote player cars
                 createRemotePlayerCars();
