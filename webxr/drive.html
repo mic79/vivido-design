@@ -921,30 +921,48 @@
             }
             
             function updateLaserPointers() {
-                // Make laser pointers always visible for debugging
+                // Show laser pointers only when menu is visible
+                const showLasers = isMenuVisible && vrMenu && vrMenu.visible;
+                
                 vrLaserPointers.forEach((laser, index) => {
                     if (laser) {
-                        laser.visible = true; // Always visible for debugging
-                        // Make laser bright and visible
-                        if (laser.material) {
+                        laser.visible = showLasers;
+                        // Make laser bright and visible when shown
+                        if (laser.material && showLasers) {
                             laser.material.opacity = 1.0;
                             laser.material.color.setHex(0x00ff00); // Bright green
                         }
                     }
                 });
                 
-                // Add fallback visualization if no controller model loaded (only once)
+                // Show/hide controller models based on menu visibility
                 vrControllerModels.forEach((controllerGrip, index) => {
-                    if (controllerGrip && controllerGrip.children.length === 0) {
-                        const fallbackGeometry = new THREE.SphereGeometry(0.05);
-                        const fallbackMaterial = new THREE.MeshBasicMaterial({ 
-                            color: 0xff0000,
-                            transparent: true,
-                            opacity: 1.0
+                    if (controllerGrip) {
+                        controllerGrip.visible = showLasers;
+                        
+                        // Add fallback visualization if no controller model loaded (only once)
+                        if (controllerGrip.children.length === 0) {
+                            const fallbackGeometry = new THREE.SphereGeometry(0.05);
+                            const fallbackMaterial = new THREE.MeshBasicMaterial({ 
+                                color: 0xff0000,
+                                transparent: true,
+                                opacity: 1.0
+                            });
+                            const fallbackSphere = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
+                            controllerGrip.add(fallbackSphere);
+                            console.log(`Added fallback visualization for controller ${index}`);
+                        }
+                    }
+                });
+                
+                // Show/hide debug spheres and cubes on controllers
+                vrControllers.forEach((controller, index) => {
+                    if (controller) {
+                        controller.children.forEach(child => {
+                            if (child.name && child.name.startsWith('debug-controller')) {
+                                child.visible = showLasers;
+                            }
                         });
-                        const fallbackSphere = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
-                        controllerGrip.add(fallbackSphere);
-                        console.log(`Added fallback visualization for controller ${index}`);
                     }
                 });
             }
@@ -1501,13 +1519,18 @@
                 vrMenuButtons.push(botToggle);
                 vrMenu.add(botGroup);
                 
+                // Start Race button
+                const startBtn = createVRButton('START RACE', 0, -0.25, 0.25, 0.08, '#00aa00', 'start-race');
+                vrMenu.add(startBtn);
+                vrMenuButtons.push(startBtn);
+                
                 // Close button
-                const closeBtn = createVRButton('CLOSE', 0, -0.25, 0.2, 0.08, '#666666', 'close');
+                const closeBtn = createVRButton('CLOSE', 0, -0.35, 0.2, 0.08, '#666666', 'close');
                 vrMenu.add(closeBtn);
                 vrMenuButtons.push(closeBtn);
                 
                 // Status display
-                const statusDisplay = createVRText('Disconnected', 0, -0.35, 0.4);
+                const statusDisplay = createVRText('Disconnected', 0, -0.45, 0.4);
                 statusDisplay.userData = { type: 'display', id: 'status' };
                 vrMenu.add(statusDisplay);
                 
@@ -1658,12 +1681,15 @@
             function handleVRMenuClick(inputSource) {
                 if (!vrMenuRaycaster || !vrMenu || vrControllers.length === 0) return;
                 
-                // Use the first available controller
+                // Find the controller that matches this input source
                 let controller = null;
+                let controllerIndex = -1;
                 for (let i = 0; i < vrControllers.length; i++) {
                     if (vrControllers[i] && vrControllers[i].matrixWorld) {
+                        // Try to match by checking if this is the right controller
                         controller = vrControllers[i];
-                        break;
+                        controllerIndex = i;
+                        break; // For now, use any available controller
                     }
                 }
                 if (!controller) return;
@@ -1707,6 +1733,9 @@
                         case 'bot-toggle':
                             toggleBot();
                             break;
+                        case 'start-race':
+                            startRace();
+                            break;
                         case 'close':
                             toggleMenu();
                             break;
@@ -1722,43 +1751,44 @@
             function updateVRMenuHover(inputSource) {
                 if (!vrMenuRaycaster || !vrMenu || vrControllers.length === 0) return;
                 
-                // Use the first available controller
-                let controller = null;
-                for (let i = 0; i < vrControllers.length; i++) {
-                    if (vrControllers[i] && vrControllers[i].matrixWorld) {
-                        controller = vrControllers[i];
-                        break;
+                // Check hover for both controllers
+                let anyHover = false;
+                
+                for (let controllerIndex = 0; controllerIndex < vrControllers.length; controllerIndex++) {
+                    const controller = vrControllers[controllerIndex];
+                    if (!controller || !controller.matrixWorld) continue;
+                
+                    // Set raycaster from this controller
+                    const tempMatrix = new THREE.Matrix4();
+                    tempMatrix.identity().extractRotation(controller.matrixWorld);
+                    
+                    vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+                    vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+                    
+                    // Check intersections with menu buttons
+                    const intersects = vrMenuRaycaster.intersectObjects(vrMenuButtons, true);
+                    
+                    // Highlight hovered button for this controller
+                    if (intersects.length > 0) {
+                        const hoveredObject = intersects[0].object.parent;
+                        const material = hoveredObject.userData.material;
+                        if (material && !hoveredObject.userData.active) {
+                            material.color.setHex(0xffffff);
+                            material.opacity = 1.0;
+                            anyHover = true;
+                        }
                     }
                 }
-                if (!controller) return;
                 
-                // Set raycaster from controller
-                const tempMatrix = new THREE.Matrix4();
-                tempMatrix.identity().extractRotation(controller.matrixWorld);
-                
-                vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-                vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-                
-                // Check intersections with menu buttons
-                const intersects = vrMenuRaycaster.intersectObjects(vrMenuButtons, true);
-                
-                // Reset all buttons to normal state
-                vrMenuButtons.forEach(button => {
-                    const material = button.userData.material;
-                    if (!button.userData.active) {
-                        material.color.copy(button.userData.originalColor);
-                        material.opacity = 0.8;
-                    }
-                });
-                
-                // Highlight hovered button
-                if (intersects.length > 0) {
-                    const hoveredObject = intersects[0].object.parent;
-                    const material = hoveredObject.userData.material;
-                    if (!hoveredObject.userData.active) {
-                        material.color.setHex(0xffffff);
-                        material.opacity = 1.0;
-                    }
+                // Reset all buttons to normal state if no hover from any controller
+                if (!anyHover) {
+                    vrMenuButtons.forEach(button => {
+                        const material = button.userData.material;
+                        if (!button.userData.active) {
+                            material.color.copy(button.userData.originalColor);
+                            material.opacity = 0.8;
+                        }
+                    });
                 }
             }
 
@@ -1917,20 +1947,38 @@
             function connectToLobby() {
                 if (!isMultiplayer) return;
                 
+                console.log('Connecting to lobby', selectedLobby);
                 multiplayerStatus = 'Connecting...';
                 updateMenuDisplay();
                 
                 // Try to connect as host first, then as client
                 setupHost(selectedLobby).then(() => {
                     console.log('Connected as host to lobby', selectedLobby);
-                }).catch(() => {
+                    multiplayerStatus = `Hosting - Lobby ${selectedLobby}`;
+                    updateMenuDisplay();
+                }).catch((hostError) => {
+                    console.log('Host connection failed, trying as client:', hostError.message);
+                    multiplayerStatus = 'Trying as client...';
+                    updateMenuDisplay();
+                    
                     // Host failed, try as client
                     setupPeer(selectedLobby).then(() => {
                         console.log('Connected as client to lobby', selectedLobby);
-                    }).catch((error) => {
-                        console.error('Failed to connect to lobby:', error);
-                        multiplayerStatus = 'Connection failed';
+                        multiplayerStatus = `Connected - Lobby ${selectedLobby}`;
                         updateMenuDisplay();
+                    }).catch((clientError) => {
+                        console.error('Failed to connect to lobby as client:', clientError);
+                        multiplayerStatus = 'Connection failed - No host available';
+                        updateMenuDisplay();
+                        
+                        // Reset multiplayer state
+                        isMultiplayer = false;
+                        isHost = false;
+                        if (peer) {
+                            peer.destroy();
+                            peer = null;
+                        }
+                        connections.clear();
                     });
                 });
             }
@@ -1964,6 +2012,18 @@
                 
                 tryNextLobby();
             }
+            
+            function startRace() {
+                console.log('Starting/Restarting race...');
+                // Reset player position
+                resetCar();
+                // Close menu
+                toggleMenu();
+                // Reset lap timer
+                if (typeof playerLapStartTime !== 'undefined') {
+                    playerLapStartTime = Date.now();
+                }
+            }
 
             // ========== PEERJS MULTIPLAYER FUNCTIONS ==========
             async function setupHost(lobbyNumber) {
@@ -1971,6 +2031,7 @@
                     isMultiplayer = true;
                     isHost = true;
                     selectedLobby = lobbyNumber;
+                    // Use simple host ID - only one host per lobby allowed
                     sessionID = `${multiplayerStartType}-host-${lobbyNumber}`;
                     
                     const iceServersConfig = [
@@ -2029,7 +2090,9 @@
                     
                     peer.on("error", function(err) {
                         console.error('Host peer error:', err);
-                        if (err.type === 'unavailable-id') {
+                        multiplayerStatus = 'Host failed, trying client...';
+                        updateMenuDisplay();
+                        if (err.type === 'unavailable-id' || err.message.includes('taken')) {
                             reject(new Error('unavailable-id'));
                         } else {
                             reject(err);
@@ -2065,6 +2128,7 @@
                         updateMenuDisplay();
                         
                         const hostID = `${multiplayerStartType}-host-${lobbyNumber}`;
+                        console.log('Attempting to connect to host:', hostID);
                         const conn = peer.connect(hostID);
                         connections.set('host', conn);
                         
@@ -2602,7 +2666,7 @@
                                 state: {
                                     position: { x: p.x(), y: p.y(), z: p.z() },
                                     quaternion: { x: q.x(), y: q.y(), z: q.z(), w: q.w() },
-                                    speed: currentSpeed
+                                    speed: speed
                                 }
                             });
                             this.lastMultiplayerSync = Date.now();
@@ -3441,23 +3505,31 @@
                                         }
                                     }
                                     
-                                    // Thumbstick for steering
-                                    if (gamepad.axes && gamepad.axes.length >= 4) {
-                                        vrSteering = gamepad.axes[2] || 0;
+                                    // Car controls (only when menu is not visible)
+                                    if (!isMenuVisible) {
+                                        // Thumbstick for steering
+                                        if (gamepad.axes && gamepad.axes.length >= 4) {
+                                            vrSteering = gamepad.axes[2] || 0;
+                                        }
+                                        
+                                        // Trigger for acceleration
+                                        if (gamepad.buttons && gamepad.buttons[0]) {
+                                            vrAcceleration = gamepad.buttons[0].value || 0;
+                                        }
+                                        
+                                        // Grip for braking
+                                        if (gamepad.buttons && gamepad.buttons[1]) {
+                                            vrBraking = gamepad.buttons[1].value || 0;
+                                        }
+                                    } else {
+                                        // Reset car controls when menu is open
+                                        vrSteering = 0;
+                                        vrAcceleration = 0;
+                                        vrBraking = 0;
                                     }
                                     
-                                    // Trigger for acceleration
-                                    if (gamepad.buttons && gamepad.buttons[0]) {
-                                        vrAcceleration = gamepad.buttons[0].value || 0;
-                                    }
-                                    
-                                    // Grip for braking
-                                    if (gamepad.buttons && gamepad.buttons[1]) {
-                                        vrBraking = gamepad.buttons[1].value || 0;
-                                    }
-                                    
-                                    // A button (index 4) for camera switching
-                                    if (gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
+                                    // A button (index 4) for camera switching (only when menu is not visible)
+                                    if (!isMenuVisible && gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
                                         // Prevent rapid switching with a simple debounce
                                         if (!this.lastCameraSwitchTime || (Date.now() - this.lastCameraSwitchTime) > 500) {
                                             switchCamera();
@@ -3490,16 +3562,16 @@
                     // Update laser pointer visibility
                     updateLaserPointers();
                                     
-                                    // Y button (index 3) for car reset
-                                    if (gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed) {
+                                    // Y button (index 3) for car reset (only when menu is not visible)
+                                    if (!isMenuVisible && gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed) {
                                         if (!this.lastResetTime || (Date.now() - this.lastResetTime) > 500) {
                                             resetCar();
                                             this.lastResetTime = Date.now();
                                         }
                                     }
                                     
-                                    // VR Fly Camera Controls (when in fly mode)
-                                    if (cameraMode === 'fly') {
+                                    // VR Fly Camera Controls (when in fly mode and menu is not visible)
+                                    if (cameraMode === 'fly' && !isMenuVisible) {
                                         var flyDelta = dt * vrFlySpeed;
                                         var rotationSpeed = 2.0; // Rotation speed multiplier
                                         
