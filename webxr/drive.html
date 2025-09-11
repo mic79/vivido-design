@@ -740,6 +740,7 @@
                 for (let i = 0; i < 2; i++) {
                     // Controller for input events (invisible)
                     const controller = renderer.xr.getController(i);
+                    controller.userData.controllerIndex = i; // Store controller index
                     controller.addEventListener('selectstart', onSelectStart);
                     controller.addEventListener('selectend', onSelectEnd);
                     controller.addEventListener('connected', function(event) {
@@ -1497,7 +1498,8 @@
                 const lobbyMinus = createVRButton('-', -0.15, 0, 0.06, 0.06, '#ff4444', 'lobby-minus');
                 const lobbyPlus = createVRButton('+', -0.05, 0, 0.06, 0.06, '#44ff44', 'lobby-plus');
                 const lobbyNumber = createVRText('1', -0.1, 0, 0.4);
-                lobbyNumber.userData = { type: 'display', id: 'lobby-number' };
+                lobbyNumber.userData.type = 'display';
+                lobbyNumber.userData.id = 'lobby-number';
                 
                 const connectBtn = createVRButton('CONNECT', 0.1, 0, 0.2, 0.06, '#4444ff', 'connect');
                 const autoBtn = createVRButton('AUTO', 0.35, 0, 0.15, 0.06, '#44aa44', 'auto-connect');
@@ -1513,7 +1515,8 @@
                 const botLabel = createVRText('Bot:', -0.2, 0, 0.3);
                 const botToggle = createVRButton('ON', 0, 0, 0.12, 0.06, '#00aa00', 'bot-toggle');
                 const botStatus = createVRText('(Single & Host)', 0.25, 0, 0.25);
-                botStatus.userData = { type: 'display', id: 'bot-status' };
+                botStatus.userData.type = 'display';
+                botStatus.userData.id = 'bot-status';
                 
                 botGroup.add(botLabel, botToggle, botStatus);
                 vrMenuButtons.push(botToggle);
@@ -1531,7 +1534,8 @@
                 
                 // Status display
                 const statusDisplay = createVRText('Disconnected', 0, -0.45, 0.4);
-                statusDisplay.userData = { type: 'display', id: 'status' };
+                statusDisplay.userData.type = 'display';
+                statusDisplay.userData.id = 'status';
                 vrMenu.add(statusDisplay);
                 
                 // Create raycaster for VR interaction
@@ -1639,22 +1643,48 @@
                         ctx.fillText(selectedLobby.toString(), 128, 40);
                         lobbyNumber.userData.texture.needsUpdate = true;
                     }
+                } else {
+                    console.log('VR Menu - Lobby section not found');
                 }
                 
                 // Update button states
                 vrMenuButtons.forEach(button => {
                     const id = button.userData.id;
                     let active = false;
+                    let disabled = false;
                     
                     if (id === 'singleplayer') active = !isMultiplayer;
                     else if (id === 'multiplayer') active = isMultiplayer;
                     else if (id === 'bot-toggle') active = botEnabled;
+                    else if (id === 'connect') {
+                        // Update connect button based on connection state
+                        disabled = (connectionState === 'connecting');
+                        active = connectionState === 'connected';
+                        
+                        // Update button text
+                        if (button.userData.canvas) {
+                            const ctx = button.userData.canvas.getContext('2d');
+                            ctx.clearRect(0, 0, 256, 64);
+                            ctx.fillStyle = disabled ? '#666666' : (active ? '#ffffff' : '#ffffff');
+                            ctx.font = 'bold 16px Arial';
+                            ctx.textAlign = 'center';
+                            const buttonText = connectionState === 'connected' ? 'DISCONNECT' : 
+                                             connectionState === 'connecting' ? 'CONNECTING...' : 'CONNECT';
+                            ctx.fillText(buttonText, 128, 40);
+                            button.userData.texture.needsUpdate = true;
+                        }
+                    }
                     
-                    if (active !== button.userData.active) {
+                    if (active !== button.userData.active || disabled !== button.userData.disabled) {
                         button.userData.active = active;
+                        button.userData.disabled = disabled;
                         const material = button.userData.material;
-                        if (active) {
-                            material.color.setHex(0x0088ff);
+                        
+                        if (disabled) {
+                            material.color.setHex(0x666666); // Gray when disabled
+                            material.opacity = 0.5;
+                        } else if (active) {
+                            material.color.setHex(0x0088ff); // Blue when active/connected
                             material.opacity = 1.0;
                         } else {
                             material.color.copy(button.userData.originalColor);
@@ -1678,21 +1708,12 @@
                 }
             }
 
-            function handleVRMenuClick(inputSource) {
+            function handleVRMenuClick(controllerIndex) {
                 if (!vrMenuRaycaster || !vrMenu || vrControllers.length === 0) return;
                 
-                // Find the controller that matches this input source
-                let controller = null;
-                let controllerIndex = -1;
-                for (let i = 0; i < vrControllers.length; i++) {
-                    if (vrControllers[i] && vrControllers[i].matrixWorld) {
-                        // Try to match by checking if this is the right controller
-                        controller = vrControllers[i];
-                        controllerIndex = i;
-                        break; // For now, use any available controller
-                    }
-                }
-                if (!controller) return;
+                // Use the specific controller that triggered the click
+                const controller = vrControllers[controllerIndex];
+                if (!controller || !controller.matrixWorld) return;
                 
                 // Set raycaster from controller
                 const tempMatrix = new THREE.Matrix4();
@@ -1708,24 +1729,38 @@
                     const clickedObject = intersects[0].object.parent;
                     const buttonId = clickedObject.userData.id;
                     
+                    // Check if button is disabled
+                    if (clickedObject.userData.disabled) {
+                        console.log('VR Menu button clicked but disabled:', buttonId);
+                        return;
+                    }
+                    
                     console.log('VR Menu button clicked:', buttonId);
                     
                     // Handle button actions
                     switch (buttonId) {
                         case 'singleplayer':
+                            console.log('Switching to singleplayer');
                             switchToSingleplayer();
                             break;
                         case 'multiplayer':
+                            console.log('Switching to multiplayer');
                             switchToMultiplayer();
                             break;
                         case 'lobby-minus':
+                            console.log('Lobby minus clicked');
                             changeLobby(-1);
                             break;
                         case 'lobby-plus':
+                            console.log('Lobby plus clicked');
                             changeLobby(1);
                             break;
                         case 'connect':
-                            connectToLobby();
+                            if (connectionState === 'connected') {
+                                disconnectFromLobby();
+                            } else {
+                                connectToLobby();
+                            }
                             break;
                         case 'auto-connect':
                             autoConnect();
@@ -1748,47 +1783,40 @@
                 }
             }
 
-            function updateVRMenuHover(inputSource) {
+            function updateVRMenuHover(controllerIndex) {
                 if (!vrMenuRaycaster || !vrMenu || vrControllers.length === 0) return;
                 
-                // Check hover for both controllers
-                let anyHover = false;
+                // Use the specific controller for hover detection
+                const controller = vrControllers[controllerIndex];
+                if (!controller || !controller.matrixWorld) return;
                 
-                for (let controllerIndex = 0; controllerIndex < vrControllers.length; controllerIndex++) {
-                    const controller = vrControllers[controllerIndex];
-                    if (!controller || !controller.matrixWorld) continue;
-                
-                    // Set raycaster from this controller
-                    const tempMatrix = new THREE.Matrix4();
-                    tempMatrix.identity().extractRotation(controller.matrixWorld);
-                    
-                    vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-                    vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-                    
-                    // Check intersections with menu buttons
-                    const intersects = vrMenuRaycaster.intersectObjects(vrMenuButtons, true);
-                    
-                    // Highlight hovered button for this controller
-                    if (intersects.length > 0) {
-                        const hoveredObject = intersects[0].object.parent;
-                        const material = hoveredObject.userData.material;
-                        if (material && !hoveredObject.userData.active) {
-                            material.color.setHex(0xffffff);
-                            material.opacity = 1.0;
-                            anyHover = true;
-                        }
+                // Reset all buttons to normal state first
+                vrMenuButtons.forEach(button => {
+                    const material = button.userData.material;
+                    if (!button.userData.active) {
+                        material.color.copy(button.userData.originalColor);
+                        material.opacity = 0.8;
                     }
-                }
+                });
                 
-                // Reset all buttons to normal state if no hover from any controller
-                if (!anyHover) {
-                    vrMenuButtons.forEach(button => {
-                        const material = button.userData.material;
-                        if (!button.userData.active) {
-                            material.color.copy(button.userData.originalColor);
-                            material.opacity = 0.8;
-                        }
-                    });
+                // Set raycaster from this controller
+                const tempMatrix = new THREE.Matrix4();
+                tempMatrix.identity().extractRotation(controller.matrixWorld);
+                
+                vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+                vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+                
+                // Check intersections with menu buttons
+                const intersects = vrMenuRaycaster.intersectObjects(vrMenuButtons, true);
+                
+                // Highlight hovered button for this controller
+                if (intersects.length > 0) {
+                    const hoveredObject = intersects[0].object.parent;
+                    const material = hoveredObject.userData.material;
+                    if (material && !hoveredObject.userData.active && !hoveredObject.userData.disabled) {
+                        material.color.setHex(0xffffff);
+                        material.opacity = 1.0;
+                    }
                 }
             }
 
@@ -1900,6 +1928,7 @@
                 multiplayerStatus = 'Disconnected';
                 
                 updateMenuDisplay();
+                updateVRMenuDisplay();
                 console.log('Switched to singleplayer mode');
             }
 
@@ -1907,6 +1936,7 @@
                 isMultiplayer = true;
                 multiplayerStatus = 'Ready to connect';
                 updateMenuDisplay();
+                updateVRMenuDisplay();
                 console.log('Switched to multiplayer mode');
             }
 
@@ -1915,6 +1945,7 @@
                 if (selectedLobby < 1) selectedLobby = MAX_LOBBIES;
                 if (selectedLobby > MAX_LOBBIES) selectedLobby = 1;
                 updateMenuDisplay();
+                updateVRMenuDisplay(); // Also update VR menu
                 console.log('Changed to lobby:', selectedLobby);
             }
 
@@ -1926,6 +1957,7 @@
                 
                 botEnabled = !botEnabled;
                 updateMenuDisplay();
+                updateVRMenuDisplay();
                 
                 // Enable/disable bot in the scene
                 if (botCar && botCar.chassisMesh) {
@@ -1947,29 +1979,53 @@
             function connectToLobby() {
                 if (!isMultiplayer) return;
                 
+                // Prevent multiple connections
+                if (peer && !peer.destroyed) {
+                    console.log('Already connected or connecting, ignoring request');
+                    return;
+                }
+                
+                // Clean up any existing connections first
+                if (peer) {
+                    console.log('Cleaning up existing peer connection');
+                    peer.destroy();
+                    peer = null;
+                }
+                connections.clear();
+                connectionState = 'connecting';
+                
                 console.log('Connecting to lobby', selectedLobby);
                 multiplayerStatus = 'Connecting...';
+                console.log('Set multiplayerStatus to:', multiplayerStatus);
                 updateMenuDisplay();
+                updateVRMenuDisplay();
                 
                 // Try to connect as host first, then as client
                 setupHost(selectedLobby).then(() => {
                     console.log('Connected as host to lobby', selectedLobby);
+                    connectionState = 'connected';
                     multiplayerStatus = `Hosting - Lobby ${selectedLobby}`;
                     updateMenuDisplay();
+                    updateVRMenuDisplay();
                 }).catch((hostError) => {
                     console.log('Host connection failed, trying as client:', hostError.message);
                     multiplayerStatus = 'Trying as client...';
                     updateMenuDisplay();
+                    updateVRMenuDisplay();
                     
                     // Host failed, try as client
                     setupPeer(selectedLobby).then(() => {
                         console.log('Connected as client to lobby', selectedLobby);
+                        connectionState = 'connected';
                         multiplayerStatus = `Connected - Lobby ${selectedLobby}`;
                         updateMenuDisplay();
+                        updateVRMenuDisplay();
                     }).catch((clientError) => {
                         console.error('Failed to connect to lobby as client:', clientError);
+                        connectionState = 'disconnected';
                         multiplayerStatus = 'Connection failed - No host available';
                         updateMenuDisplay();
+                        updateVRMenuDisplay();
                         
                         // Reset multiplayer state
                         isMultiplayer = false;
@@ -1988,6 +2044,7 @@
                 
                 multiplayerStatus = 'Auto-connecting...';
                 updateMenuDisplay();
+                updateVRMenuDisplay();
                 
                 // Try lobbies 1-10 automatically
                 let currentLobby = 1;
@@ -1996,11 +2053,13 @@
                     if (currentLobby > MAX_LOBBIES) {
                         multiplayerStatus = 'No available lobbies';
                         updateMenuDisplay();
+                        updateVRMenuDisplay();
                         return;
                     }
                     
                     selectedLobby = currentLobby;
                     updateMenuDisplay();
+                    updateVRMenuDisplay();
                     
                     setupPeer(currentLobby).then(() => {
                         console.log('Auto-connected to lobby', currentLobby);
@@ -2023,6 +2082,34 @@
                 if (typeof playerLapStartTime !== 'undefined') {
                     playerLapStartTime = Date.now();
                 }
+            }
+            
+            function disconnectFromLobby() {
+                console.log('Disconnecting from lobby...');
+                
+                // Clean up peer connection
+                if (peer && !peer.destroyed) {
+                    peer.destroy();
+                }
+                peer = null;
+                
+                // Clear all connections
+                connections.clear();
+                activePlayers.clear();
+                
+                // Reset state
+                isMultiplayer = false;
+                isHost = false;
+                connectionState = 'disconnected';
+                multiplayerStatus = 'Disconnected';
+                myPlayerId = null;
+                sessionID = null;
+                
+                // Update display
+                updateMenuDisplay();
+                updateVRMenuDisplay();
+                
+                console.log('Disconnected from multiplayer');
             }
 
             // ========== PEERJS MULTIPLAYER FUNCTIONS ==========
@@ -2063,6 +2150,7 @@
                             activePlayers.set(playerId, { isConnected: true, isHost: false });
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
                             updateMenuDisplay();
+                            updateVRMenuDisplay();
                             
                             // Send welcome message to new player
                             conn.send({
@@ -2084,6 +2172,7 @@
                             connectionToPlayer.delete(conn);
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
                             updateMenuDisplay();
+                            updateVRMenuDisplay();
                             console.log('Player disconnected:', playerId);
                         });
                     });
@@ -2092,6 +2181,7 @@
                         console.error('Host peer error:', err);
                         multiplayerStatus = 'Host failed, trying client...';
                         updateMenuDisplay();
+                        updateVRMenuDisplay();
                         if (err.type === 'unavailable-id' || err.message.includes('taken')) {
                             reject(new Error('unavailable-id'));
                         } else {
@@ -2126,6 +2216,7 @@
                     peer.on("open", function() {
                         multiplayerStatus = 'Connecting to host...';
                         updateMenuDisplay();
+                        updateVRMenuDisplay();
                         
                         const hostID = `${multiplayerStartType}-host-${lobbyNumber}`;
                         console.log('Attempting to connect to host:', hostID);
@@ -2135,6 +2226,7 @@
                         conn.on("open", function() {
                             multiplayerStatus = `Connected - Lobby ${lobbyNumber}`;
                             updateMenuDisplay();
+                            updateVRMenuDisplay();
                             resolve();
                         });
                         
@@ -2147,6 +2239,7 @@
                             connections.clear();
                             activePlayers.clear();
                             updateMenuDisplay();
+                            updateVRMenuDisplay();
                             console.log('Disconnected from host');
                         });
                         
@@ -3549,14 +3642,40 @@
                     // VR Menu interaction with trigger (index 0)
                     if (isMenuVisible && vrMenu && vrMenu.visible && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
                         if (!this.lastMenuClickTime || (Date.now() - this.lastMenuClickTime) > 300) {
-                            handleVRMenuClick(inputSource);
+                            // Find which controller this input source belongs to
+                            let controllerIndex = -1;
+                            const session = renderer.xr.getSession();
+                            if (session && session.inputSources) {
+                                for (let i = 0; i < session.inputSources.length; i++) {
+                                    if (session.inputSources[i] === inputSource) {
+                                        controllerIndex = i;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (controllerIndex >= 0) {
+                                handleVRMenuClick(controllerIndex);
+                            }
                             this.lastMenuClickTime = Date.now();
                         }
                     }
                     
                     // VR Menu raycasting for hover effects
                     if (isMenuVisible && vrMenu && vrMenu.visible) {
-                        updateVRMenuHover(inputSource);
+                        // Find which controller this input source belongs to
+                        let controllerIndex = -1;
+                        const session = renderer.xr.getSession();
+                        if (session && session.inputSources) {
+                            for (let i = 0; i < session.inputSources.length; i++) {
+                                if (session.inputSources[i] === inputSource) {
+                                    controllerIndex = i;
+                                    break;
+                                }
+                            }
+                        }
+                        if (controllerIndex >= 0) {
+                            updateVRMenuHover(controllerIndex);
+                        }
                     }
                     
                     // Update laser pointer visibility
