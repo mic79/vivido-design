@@ -671,6 +671,13 @@
             }
 
             function tick() {
+                // Add remote car interpolation to sync list (only once)
+                if (!this.remoteCarSyncAdded) {
+                    syncList.push(updateRemoteCarInterpolation);
+                    this.remoteCarSyncAdded = true;
+                    console.log('🔄 Added remote car interpolation to sync list');
+                }
+                
                 // Use WebXR-compatible animation loop
                 renderer.setAnimationLoop(() => {
                     var dt = clock.getDelta();
@@ -2305,6 +2312,11 @@
                         
                     case 'car-state':
                         // Handle remote car state updates
+                        // Throttled logging for received car states
+                        if (!this.lastReceivedCarStateLog || (Date.now() - this.lastReceivedCarStateLog) > 2000) {
+                            console.log(`🚗 Receiving car states from other players...`);
+                            this.lastReceivedCarStateLog = Date.now();
+                        }
                         updateRemoteCarState(data.playerId, data.state);
                         break;
                         
@@ -2352,7 +2364,9 @@
 
             function updateRemoteCarState(playerId, state) {
                 // Skip updating our own car
-                if (playerId === myPlayerId) return;
+                if (playerId === myPlayerId) {
+                    return;
+                }
                 
                 // Get or create remote car for this player
                 if (!remoteCars) {
@@ -2362,16 +2376,29 @@
                 let remoteCar = remoteCars.get(playerId);
                 if (!remoteCar) {
                     // Create a new remote car representation
+                    console.log(`🏗️ Creating new remote car for player ${playerId}`);
                     remoteCar = createRemoteCarMesh(playerId);
                     remoteCars.set(playerId, remoteCar);
                     scene.add(remoteCar.mesh);
-                    console.log(`Created remote car for player ${playerId}`);
+                    console.log(`✅ Created and added remote car for player ${playerId}`);
                 }
                 
-                // Update position and rotation
+                // Update target position and rotation for smooth interpolation
                 if (state.position && state.quaternion) {
-                    remoteCar.mesh.position.set(state.position.x, state.position.y, state.position.z);
-                    remoteCar.mesh.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
+                    // Set target values for interpolation
+                    remoteCar.targetPosition.set(state.position.x, state.position.y, state.position.z);
+                    remoteCar.targetQuaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
+                    
+                    // If this is the first update, set current position immediately
+                    if (remoteCar.currentPosition.length() === 0) {
+                        remoteCar.currentPosition.copy(remoteCar.targetPosition);
+                        remoteCar.currentQuaternion.copy(remoteCar.targetQuaternion);
+                        remoteCar.mesh.position.copy(remoteCar.currentPosition);
+                        remoteCar.mesh.quaternion.copy(remoteCar.currentQuaternion);
+                        console.log(`🎯 Initial position set for ${playerId} at (${state.position.x.toFixed(1)}, ${state.position.y.toFixed(1)}, ${state.position.z.toFixed(1)})`);
+                    }
+                } else {
+                    console.log(`⚠️ Missing position or quaternion data for ${playerId}:`, state);
                 }
                 
                 // Update last seen time
@@ -2414,13 +2441,44 @@
                 return {
                     mesh: carGroup,
                     playerId: playerId,
-                    lastUpdate: Date.now()
+                    lastUpdate: Date.now(),
+                    // Interpolation data
+                    targetPosition: new THREE.Vector3(),
+                    targetQuaternion: new THREE.Quaternion(),
+                    currentPosition: new THREE.Vector3(),
+                    currentQuaternion: new THREE.Quaternion(),
+                    interpolationSpeed: 10.0 // Adjust for smoothness
                 };
             }
 
             function updateRemoteBotState(botState) {
                 // TODO: Update bot position/rotation based on host's bot state
                 console.log('Received bot state from host:', botState);
+            }
+            
+            function updateRemoteCarInterpolation(dt) {
+                if (!remoteCars || remoteCars.size === 0) return;
+                
+                remoteCars.forEach((remoteCar, playerId) => {
+                    // Smooth interpolation towards target position
+                    const lerpFactor = Math.min(1.0, remoteCar.interpolationSpeed * dt);
+                    
+                    // Interpolate position
+                    remoteCar.currentPosition.lerp(remoteCar.targetPosition, lerpFactor);
+                    remoteCar.mesh.position.copy(remoteCar.currentPosition);
+                    
+                    // Interpolate rotation (slerp for quaternions)
+                    remoteCar.currentQuaternion.slerp(remoteCar.targetQuaternion, lerpFactor);
+                    remoteCar.mesh.quaternion.copy(remoteCar.currentQuaternion);
+                    
+                    // Remove cars that haven't been updated in a while (disconnected players)
+                    const timeSinceUpdate = Date.now() - remoteCar.lastUpdate;
+                    if (timeSinceUpdate > 5000) { // 5 seconds timeout
+                        console.log(`🗑️ Removing stale remote car for ${playerId} (${timeSinceUpdate}ms since last update)`);
+                        scene.remove(remoteCar.mesh);
+                        remoteCars.delete(playerId);
+                    }
+                });
             }
 
             function switchCamera() {
@@ -2874,7 +2932,7 @@
                     // Send car state to other players (throttled to 10Hz)
                     if (isMultiplayer && connections.size > 0) {
                         if (!this.lastMultiplayerSync || (Date.now() - this.lastMultiplayerSync) > 100) {
-                            sendToAllPlayers({
+                            const carState = {
                                 type: 'car-state',
                                 playerId: myPlayerId || 'player_0',
                                 state: {
@@ -2882,7 +2940,13 @@
                                     quaternion: { x: q.x(), y: q.y(), z: q.z(), w: q.w() },
                                     speed: speed
                                 }
-                            });
+                            };
+                            // Throttled logging for car state sending
+                            if (!this.lastCarStateLog || (Date.now() - this.lastCarStateLog) > 2000) {
+                                console.log(`📡 Sending car state from ${carState.playerId} to ${connections.size} players`);
+                                this.lastCarStateLog = Date.now();
+                            }
+                            sendToAllPlayers(carState);
                             this.lastMultiplayerSync = Date.now();
                         }
                     }
