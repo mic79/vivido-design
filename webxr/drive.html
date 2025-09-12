@@ -307,6 +307,15 @@
                     </div>
                 </div>
                 
+                <!-- Music toggle section -->
+                <div class="menu-section">
+                    <div class="bot-controls">
+                        <span>Music:</span>
+                        <button id="musicToggle" class="menu-button active">ON</button>
+                        <span id="musicStatus">(Background Music)</span>
+                    </div>
+                </div>
+                
                 <!-- Close button -->
                 <div class="menu-section">
                     <button id="closeMenuBtn" class="menu-button">CLOSE</button>
@@ -314,7 +323,7 @@
             </div>
         </div>
     </div>
-    <div id="info">WebXR Multiplayer Driving Game<br>WASD/VR Controllers to drive<br>B = Menu, C = Camera, Y = Reset</div>
+    <div id="info">WebXR Multiplayer Driving Game<br>WASD/VR Controllers to drive<br>B = Menu, C = Camera, R = Reset<br>Fly Mode: WASD = Move, Mouse = Look, Q/E = Up/Down</div>
     <button id="vrButton" style="display: none;">Enter VR</button>
     
     <!-- Background Music -->
@@ -324,6 +333,8 @@
     </audio>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
     <script src="https://kripken.github.io/ammo.js/builds/ammo.js"></script>
     <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/Detector.js"></script>
     <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/OrbitControls.js"></script>
@@ -351,7 +362,8 @@
             let vrAudioStarted = false;
             
             // Bot control variables
-            let botEnabled = true; // Bot is enabled by default
+            let botEnabled = true;
+            let musicEnabled = true; // Bot is enabled by default
             
             // Menu state
             let isMenuVisible = false;
@@ -502,8 +514,205 @@
             var vrFlySpeed = 10; // meters per second
             var vrFlyPosition = new THREE.Vector3(0, 5, -20); // Starting fly position
             var vrFlyRotation = new THREE.Euler(0, 0, 0); // Camera rotation in fly mode
+            
+            // Desktop fly camera variables
+            var desktopFlySpeed = 15; // meters per second
+            var desktopFlyPosition = new THREE.Vector3(0, 5, -20); // Starting fly position
+            var desktopFlyRotation = new THREE.Euler(0, 0, 0); // Camera rotation in fly mode
+            var isMouseLocked = false;
+            
+            // WebXR Cube Layer variables
+            var cubeLayer = null;
+            var gl = null;
+            var threejsSkybox = null; // Fallback Three.js skybox
+            
+            // Materials
+            var materialDynamic, materialStatic, materialInteractive, materialTransparent;
 
             // - Functions -
+            
+            function setupCubeLayer(session) {
+                console.log('🌅 Setting up skybox...');
+                
+                // First, try to create a Three.js skybox as fallback
+                createThreeJSSkybox();
+                
+                if (!session.supportedFrameLayers || !session.supportedFrameLayers.includes('cube')) {
+                    console.log('❌ WebXR Cube layers not supported, using Three.js skybox fallback');
+                    return;
+                }
+                
+                console.log('✅ WebXR Cube layers supported, attempting to create...');
+                
+                // Get WebGL context
+                gl = renderer.getContext();
+                
+                // Create cube layer
+                cubeLayer = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_CUBE_MAP, cubeLayer);
+                
+                // Skybox image URLs - you can replace these with your own images
+                const skyboxImages = [
+                    'assets/mountains-cubemap/px.png', // Right (+X)
+                    'assets/mountains-cubemap/nx.png', // Left (-X)
+                    'assets/mountains-cubemap/py.png', // Top (+Y)
+                    'assets/mountains-cubemap/ny.png', // Bottom (-Y)
+                    'assets/mountains-cubemap/pz.png', // Front (+Z)
+                    'assets/mountains-cubemap/nz.png'  // Back (-Z)
+                ];
+                
+                const faces = [
+                    gl.TEXTURE_CUBE_MAP_POSITIVE_X, // Right
+                    gl.TEXTURE_CUBE_MAP_NEGATIVE_X, // Left  
+                    gl.TEXTURE_CUBE_MAP_POSITIVE_Y, // Top
+                    gl.TEXTURE_CUBE_MAP_NEGATIVE_Y, // Bottom
+                    gl.TEXTURE_CUBE_MAP_POSITIVE_Z, // Front
+                    gl.TEXTURE_CUBE_MAP_NEGATIVE_Z  // Back
+                ];
+                
+                let loadedImages = 0;
+                const totalImages = skyboxImages.length;
+                
+                // Load each face image
+                skyboxImages.forEach((url, index) => {
+                    const image = new Image();
+                    image.crossOrigin = 'anonymous';
+                    
+                    image.onload = function() {
+                        gl.bindTexture(gl.TEXTURE_CUBE_MAP, cubeLayer);
+                        gl.texImage2D(faces[index], 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+                        
+                        loadedImages++;
+                        console.log(`Loaded skybox face ${index + 1}/${totalImages}`);
+                        
+                        // When all images are loaded, finalize the cube layer
+                        if (loadedImages === totalImages) {
+                            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                            
+                            // Create the XR cube layer
+                            try {
+                                const cubeLayerInit = {
+                                    space: session.viewerSpace,
+                                    viewPixelWidth: 2048,
+                                    viewPixelHeight: 2048,
+                                    layout: 'mono',
+                                    isStatic: true
+                                };
+                                
+                                const xrCubeLayer = session.requestFrameLayer('cube', cubeLayerInit);
+                                if (xrCubeLayer) {
+                                    xrCubeLayer.colorTexture = cubeLayer;
+                                    session.updateRenderState({ layers: [xrCubeLayer] });
+                                    console.log('✅ Cube layer created successfully with real skybox images');
+                                }
+                            } catch (error) {
+                                console.warn('Failed to create cube layer:', error);
+                            }
+                        }
+                    };
+                    
+                    image.onerror = function() {
+                        console.warn(`Failed to load skybox image: ${url}`);
+                        // Fallback to a solid color for this face
+                        const canvas = document.createElement('canvas');
+                        canvas.width = 512;
+                        canvas.height = 512;
+                        const ctx = canvas.getContext('2d');
+                        
+                        // Create a simple gradient as fallback
+                        const gradient = ctx.createLinearGradient(0, 0, 0, 512);
+                        gradient.addColorStop(0, '#87CEEB'); // Sky blue
+                        gradient.addColorStop(1, '#98FB98'); // Pale green
+                        ctx.fillStyle = gradient;
+                        ctx.fillRect(0, 0, 512, 512);
+                        
+                        gl.bindTexture(gl.TEXTURE_CUBE_MAP, cubeLayer);
+                        gl.texImage2D(faces[index], 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+                        
+                        loadedImages++;
+                        if (loadedImages === totalImages) {
+                            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                            
+                            try {
+                                const cubeLayerInit = {
+                                    space: session.viewerSpace,
+                                    viewPixelWidth: 2048,
+                                    viewPixelHeight: 2048,
+                                    layout: 'mono',
+                                    isStatic: true
+                                };
+                                
+                                const xrCubeLayer = session.requestFrameLayer('cube', cubeLayerInit);
+                                if (xrCubeLayer) {
+                                    xrCubeLayer.colorTexture = cubeLayer;
+                                    session.updateRenderState({ layers: [xrCubeLayer] });
+                                    console.log('✅ Cube layer created with fallback images');
+                                }
+                            } catch (error) {
+                                console.warn('Failed to create cube layer:', error);
+                            }
+                        }
+                    };
+                    
+                    image.src = url;
+                });
+            }
+            
+            function createThreeJSSkybox() {
+                console.log('🎨 Creating Three.js skybox fallback...');
+                
+                // Skybox image URLs - same as WebXR cube layer
+                const skyboxImages = [
+                    'assets/mountains-cubemap/px.png', // Right (+X)
+                    'assets/mountains-cubemap/nx.png', // Left (-X)
+                    'assets/mountains-cubemap/py.png', // Top (+Y)
+                    'assets/mountains-cubemap/ny.png', // Bottom (-Y)
+                    'assets/mountains-cubemap/pz.png', // Front (+Z)
+                    'assets/mountains-cubemap/nz.png'  // Back (-Z)
+                ];
+                
+                console.log('🔍 Attempting to load skybox images:');
+                skyboxImages.forEach((url, index) => {
+                    console.log(`  ${index + 1}. ${url}`);
+                });
+                
+                // Create cube texture loader
+                const loader = new THREE.CubeTextureLoader();
+                
+                // Load the skybox
+                loader.load(
+                    skyboxImages,
+                    function(texture) {
+                        // Success - set as scene background
+                        scene.background = texture;
+                        console.log('✅ Three.js skybox loaded successfully');
+                        
+                        // Hide the WebXR cube layer if it exists (Three.js skybox takes priority)
+                        if (threejsSkybox) {
+                            scene.remove(threejsSkybox);
+                        }
+                        threejsSkybox = texture;
+                    },
+                    function(progress) {
+                        console.log('📥 Loading skybox:', Math.round((progress.loaded / progress.total) * 100) + '%');
+                    },
+                    function(error) {
+                        console.error('❌ Failed to load skybox images:', error);
+                        console.log('🔍 Make sure these files exist:');
+                        skyboxImages.forEach(url => console.log('  - ' + url));
+                        
+                        // Create a simple colored background as final fallback
+                        scene.background = new THREE.Color(0x87CEEB); // Sky blue
+                        console.log('🎨 Using solid color background as final fallback');
+                    }
+                );
+            }
 
             function initGraphics() {
 
@@ -511,6 +720,9 @@
                 speedometer = document.getElementById('speedometer');
 
                 scene = new THREE.Scene();
+                
+                // Set up skybox for both desktop and VR
+                createThreeJSSkybox();
 
                 // Create camera rig for VR positioning
                 cameraRig = new THREE.Group();
@@ -552,6 +764,14 @@
                 materialDynamic = new THREE.MeshPhongMaterial({ color: 0xfca400 });
                 materialStatic = new THREE.MeshPhongMaterial({ color: 0x999999 });
                 materialInteractive = new THREE.MeshPhongMaterial({ color: 0x990000 });
+                
+                // Transparent material for walls
+                materialTransparent = new THREE.MeshPhongMaterial({ 
+                    color: 0x999999, 
+                    transparent: true, 
+                    opacity: 0.1,
+                    side: THREE.DoubleSide
+                });
 
                 container.innerHTML = "";
                 container.appendChild(renderer.domElement);
@@ -568,6 +788,19 @@
                 window.addEventListener('resize', onWindowResize, false);
                 window.addEventListener('keydown', keydown);
                 window.addEventListener('keyup', keyup);
+                
+                // Mouse movement for desktop fly camera
+                document.addEventListener('mousemove', function(e) {
+                    if (cameraMode === 'fly' && !renderer.xr.isPresenting && document.pointerLockElement) {
+                        var sensitivity = 0.002;
+                        desktopFlyRotation.y -= e.movementX * sensitivity; // Yaw (left/right)
+                        desktopFlyRotation.x -= e.movementY * sensitivity; // Pitch (up/down)
+                        desktopFlyRotation.z = 0; // Always keep roll at 0 to prevent tilt
+                        
+                        // Clamp pitch to prevent over-rotation
+                        desktopFlyRotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, desktopFlyRotation.x));
+                    }
+                });
             }
 
             function setupVRButton() {
@@ -589,7 +822,7 @@
                     } else {
                         try {
                             const session = await navigator.xr.requestSession('immersive-vr', {
-                                optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+                                optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
                             });
                             renderer.xr.setSession(session);
                             console.log('VR session started');
@@ -597,6 +830,8 @@
                             setupVRHUD();
                             // Set up VR controllers
                             setupVRControllers();
+                            // Set up cube layer for immersive background
+                            setupCubeLayer(session);
                             // Hide desktop HUD in VR mode
                             document.body.classList.add('vr-mode');
                             
@@ -678,6 +913,20 @@
                     console.log('🔄 Added player state sending to sync list');
                 }
                 
+                // Add billboard update to sync list (only once)
+                if (!this.billboardSyncAdded) {
+                    syncList.push(updateTreeBillboards);
+                    this.billboardSyncAdded = true;
+                    console.log('🌲 Added tree billboard updates to sync list');
+                }
+                
+                // Add vehicle collision detection to sync list (only once)
+                if (!this.vehicleCollisionSyncAdded) {
+                    syncList.push(checkVehicleCollisions);
+                    this.vehicleCollisionSyncAdded = true;
+                    console.log('🚗 Added vehicle collision detection to sync list');
+                }
+                
                 // Use WebXR-compatible animation loop
                 renderer.setAnimationLoop(() => {
                     var dt = clock.getDelta();
@@ -706,6 +955,22 @@
                     e.stopPropagation();
                     return false;
                 }
+                
+                // Desktop fly camera Q/E key release
+                if (cameraMode === 'fly' && !renderer.xr.isPresenting) {
+                    if (e.code === 'KeyQ') {
+                        actions['flyDown'] = false;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                    }
+                    if (e.code === 'KeyE') {
+                        actions['flyUp'] = false;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                    }
+                }
             }
             
             function keydown(e) {
@@ -732,12 +997,36 @@
                     return false;
                 }
                 
-                // Reset car with 'Y' key
-                if (e.code === 'KeyY') {
+                // Toggle physics wireframe with 'P' key
+                if (e.code === 'KeyP') {
+                    togglePhysicsWireframe();
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+                
+                // Reset car with 'R' key
+                if (e.code === 'KeyR') {
                     resetCar();
                     e.preventDefault();
                     e.stopPropagation();
                     return false;
+                }
+                
+                // Desktop fly camera Q/E for up/down (only in fly mode)
+                if (cameraMode === 'fly' && !renderer.xr.isPresenting) {
+                    if (e.code === 'KeyQ') {
+                        actions['flyDown'] = true;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                    }
+                    if (e.code === 'KeyE') {
+                        actions['flyUp'] = true;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                    }
                 }
             }
             
@@ -776,72 +1065,16 @@
                     cameraRig.add(controllerGrip); // Add to cameraRig instead of scene
                     vrControllerModels.push(controllerGrip);
                     
-                    console.log(`VR Controller ${i} set up`);
+                    // VR controller setup logging removed
                 }
                 
-                // Add debug spheres at controller positions (always visible)
-                addDebugControllerSpheres();
-                
-                // Add test spheres to scene for debugging
-                addTestSpheres();
+                // Debug elements removed for cleaner VR experience
             }
             
-            function addDebugControllerSpheres() {
-                // Add always-visible debug spheres to track controller positions
-                for (let i = 0; i < 2; i++) {
-                    // Large, bright debug sphere
-                    const debugGeometry = new THREE.SphereGeometry(0.05);
-                    const debugMaterial = new THREE.MeshBasicMaterial({ 
-                        color: i === 0 ? 0xff0000 : 0x00ff00, // Red for controller 0, green for controller 1
-                        transparent: false,
-                        opacity: 1.0
-                    });
-                    const debugSphere = new THREE.Mesh(debugGeometry, debugMaterial);
-                    debugSphere.name = `debug-controller-${i}`;
-                    
-                    // Add to the controller for automatic position tracking
-                    if (vrControllers[i]) {
-                        vrControllers[i].add(debugSphere);
-                        console.log(`Added debug sphere for controller ${i}`);
-                        
-                        // Also add a large cube for extra visibility
-                        const cubeGeometry = new THREE.BoxGeometry(0.03, 0.03, 0.03);
-                        const cubeMaterial = new THREE.MeshBasicMaterial({ 
-                            color: i === 0 ? 0xff00ff : 0x00ffff, // Magenta for controller 0, cyan for controller 1
-                            transparent: false
-                        });
-                        const debugCube = new THREE.Mesh(cubeGeometry, cubeMaterial);
-                        debugCube.position.set(0, 0.1, 0); // Offset above the sphere
-                        vrControllers[i].add(debugCube);
-                        console.log(`Added debug cube for controller ${i}`);
-                    }
-                }
-            }
-            
-            function addTestSpheres() {
-                // Add test spheres relative to cameraRig to verify visibility
-                const testPositions = [
-                    { x: 0.3, y: 0, z: -0.5, color: 0xff0000 }, // Red sphere at right controller area
-                    { x: -0.3, y: 0, z: -0.5, color: 0x00ff00 }, // Green sphere at left controller area
-                    { x: 0, y: 0.5, z: -1, color: 0x0000ff } // Blue sphere above head
-                ];
-                
-                testPositions.forEach((pos, index) => {
-                    const geometry = new THREE.SphereGeometry(0.05);
-                    const material = new THREE.MeshBasicMaterial({ 
-                        color: pos.color,
-                        transparent: false
-                    });
-                    const sphere = new THREE.Mesh(geometry, material);
-                    sphere.position.set(pos.x, pos.y, pos.z);
-                    sphere.name = `test-sphere-${index}`;
-                    cameraRig.add(sphere); // Add to cameraRig so they move with player
-                    console.log(`Added test sphere ${index} to cameraRig at position:`, pos);
-                });
-            }
+            // Debug functions removed for cleaner code
             
             function buildController(data) {
-                console.log('Building controller with targetRayMode:', data.targetRayMode);
+                // Controller building logging removed
                 let geometry, material;
                 
                 switch (data.targetRayMode) {
@@ -964,16 +1197,7 @@
                     }
                 });
                 
-                // Show/hide debug spheres and cubes on controllers
-                vrControllers.forEach((controller, index) => {
-                    if (controller) {
-                        controller.children.forEach(child => {
-                            if (child.name && child.name.startsWith('debug-controller')) {
-                                child.visible = showLasers;
-                            }
-                        });
-                    }
-                });
+                // Debug sphere code removed
             }
 
             function setupVRHUD() {
@@ -982,8 +1206,11 @@
                 // Create HUD group
                 vrHUD = new THREE.Group();
                 
-                // Position HUD in front of player (relative to camera rig)
-                vrHUD.position.set(0, 0.3, -1.5); // Above and in front
+                // Make HUD 25% of original size (half of previous 50%)
+                vrHUD.scale.set(0.25, 0.25, 0.25);
+                
+                // Position HUD in front of player (relative to camera rig) - adjusted for new camera position
+                vrHUD.position.set(0.25, 1.3, -0.15); // 25cm to the right, 10cm closer to camera
                 
                 // Create canvas for text rendering
                 var canvas = document.createElement('canvas');
@@ -1022,108 +1249,159 @@
                 console.log('🥽 VR HUD created');
             }
             
-            // ENGINE SOUND SYSTEM: Procedural engine sound generation
+            // REALISTIC ENGINE SOUND SYSTEM: Advanced procedural engine sound generation
             class EngineSound {
-                constructor(audioContext, baseFrequency = 80, volume = 0.3) {
+                constructor(audioContext, baseFrequency = 45, volume = 0.25) {
                     this.audioContext = audioContext;
                     this.baseFrequency = baseFrequency;
                     this.volume = volume;
                     
-                    // Create audio nodes
-                    this.oscillator1 = null;
-                    this.oscillator2 = null;
-                    this.oscillator3 = null;
-                    this.noiseBuffer = null;
+                    // Engine characteristics
+                    this.idleRPM = 800;
+                    this.maxRPM = 7500;
+                    this.currentRPM = this.idleRPM;
+                    
+                    // Audio nodes for complex engine sound
+                    this.oscillators = [];
+                    this.gainNodes = [];
                     this.noiseSource = null;
-                    this.gainNode = null;
-                    this.filterNode = null;
+                    this.masterGain = null;
+                    this.lowPassFilter = null;
+                    this.highPassFilter = null;
+                    this.distortion = null;
                     
                     this.isPlaying = false;
-                    this.currentRPM = 800; // Idle RPM
-                    
                     this.setupAudioNodes();
                 }
                 
                 setupAudioNodes() {
-                    // Create gain node for volume control
-                    this.gainNode = this.audioContext.createGain();
-                    this.gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+                    // Master gain control
+                    this.masterGain = this.audioContext.createGain();
+                    this.masterGain.gain.setValueAtTime(0, this.audioContext.currentTime);
                     
-                    // Create filter for engine character
-                    this.filterNode = this.audioContext.createBiquadFilter();
-                    this.filterNode.type = 'lowpass';
-                    this.filterNode.frequency.setValueAtTime(800, this.audioContext.currentTime);
-                    this.filterNode.Q.setValueAtTime(1, this.audioContext.currentTime);
+                    // High-pass filter to remove muddy low frequencies
+                    this.highPassFilter = this.audioContext.createBiquadFilter();
+                    this.highPassFilter.type = 'highpass';
+                    this.highPassFilter.frequency.setValueAtTime(80, this.audioContext.currentTime);
+                    this.highPassFilter.Q.setValueAtTime(0.7, this.audioContext.currentTime);
                     
-                    // Connect filter to gain to output
-                    this.filterNode.connect(this.gainNode);
-                    this.gainNode.connect(this.audioContext.destination);
+                    // Low-pass filter for engine character
+                    this.lowPassFilter = this.audioContext.createBiquadFilter();
+                    this.lowPassFilter.type = 'lowpass';
+                    this.lowPassFilter.frequency.setValueAtTime(1200, this.audioContext.currentTime);
+                    this.lowPassFilter.Q.setValueAtTime(2, this.audioContext.currentTime);
+                    
+                    // Distortion for engine growl
+                    this.distortion = this.audioContext.createWaveShaper();
+                    this.distortion.curve = this.createDistortionCurve(15);
+                    this.distortion.oversample = '4x';
+                    
+                    // Connect audio chain: highpass -> lowpass -> distortion -> master gain -> output
+                    this.highPassFilter.connect(this.lowPassFilter);
+                    this.lowPassFilter.connect(this.distortion);
+                    this.distortion.connect(this.masterGain);
+                    this.masterGain.connect(this.audioContext.destination);
                     
                     // Create noise buffer for engine texture
-                    this.createNoiseBuffer();
+                    this.createAdvancedNoiseBuffer();
                 }
                 
-                createNoiseBuffer() {
-                    var bufferSize = this.audioContext.sampleRate * 2; // 2 seconds of noise
+                createDistortionCurve(amount) {
+                    var samples = 44100;
+                    var curve = new Float32Array(samples);
+                    var deg = Math.PI / 180;
+                    
+                    for (var i = 0; i < samples; i++) {
+                        var x = (i * 2) / samples - 1;
+                        curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
+                    }
+                    
+                    return curve;
+                }
+                
+                createAdvancedNoiseBuffer() {
+                    var bufferSize = this.audioContext.sampleRate * 3; // 3 seconds of noise
                     this.noiseBuffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
                     var output = this.noiseBuffer.getChannelData(0);
                     
-                    // Generate pink noise for engine texture
+                    // Generate realistic engine noise with multiple frequency components
+                    var b0, b1, b2, b3, b4, b5, b6;
+                    b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.0;
+                    
                     for (var i = 0; i < bufferSize; i++) {
-                        output[i] = (Math.random() * 2 - 1) * 0.1;
+                        var white = Math.random() * 2 - 1;
+                        
+                        // Pink noise filter (1/f noise for more natural engine sound)
+                        b0 = 0.99886 * b0 + white * 0.0555179;
+                        b1 = 0.99332 * b1 + white * 0.0750759;
+                        b2 = 0.96900 * b2 + white * 0.1538520;
+                        b3 = 0.86650 * b3 + white * 0.3104856;
+                        b4 = 0.55000 * b4 + white * 0.5329522;
+                        b5 = -0.7616 * b5 - white * 0.0168980;
+                        
+                        var pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+                        b6 = white * 0.115926;
+                        
+                        output[i] = pink * 0.08; // Reduced amplitude for mixing
                     }
                 }
                 
                 start() {
                     if (this.isPlaying) return;
                     
-                    // Create oscillators for engine harmonics
-                    this.oscillator1 = this.audioContext.createOscillator();
-                    this.oscillator2 = this.audioContext.createOscillator();
-                    this.oscillator3 = this.audioContext.createOscillator();
+                    // Create multiple oscillators for realistic engine harmonics
+                    const oscillatorCount = 6;
+                    this.oscillators = [];
+                    this.gainNodes = [];
                     
-                    // Set oscillator types and frequencies
-                    this.oscillator1.type = 'sawtooth';
-                    this.oscillator2.type = 'square';
-                    this.oscillator3.type = 'triangle';
+                    // Engine harmonic frequencies and characteristics
+                    const harmonics = [
+                        { type: 'sawtooth', gain: 0.35, detune: 0 },      // Fundamental
+                        { type: 'square', gain: 0.25, detune: -5 },       // Slightly detuned for beating
+                        { type: 'triangle', gain: 0.20, detune: 3 },      // Higher harmonic
+                        { type: 'sawtooth', gain: 0.15, detune: -2 },     // Sub-harmonic
+                        { type: 'square', gain: 0.12, detune: 7 },        // Higher frequency component
+                        { type: 'triangle', gain: 0.08, detune: -8 }      // Texture oscillator
+                    ];
                     
-                    // Create gain nodes for each oscillator
-                    var gain1 = this.audioContext.createGain();
-                    var gain2 = this.audioContext.createGain();
-                    var gain3 = this.audioContext.createGain();
+                    for (let i = 0; i < oscillatorCount; i++) {
+                        // Create oscillator and gain
+                        const osc = this.audioContext.createOscillator();
+                        const gain = this.audioContext.createGain();
+                        
+                        // Set oscillator properties
+                        osc.type = harmonics[i].type;
+                        osc.detune.setValueAtTime(harmonics[i].detune, this.audioContext.currentTime);
+                        
+                        // Set gain
+                        gain.gain.setValueAtTime(harmonics[i].gain, this.audioContext.currentTime);
+                        
+                        // Connect oscillator -> gain -> filter chain
+                        osc.connect(gain);
+                        gain.connect(this.highPassFilter);
+                        
+                        // Store references
+                        this.oscillators.push(osc);
+                        this.gainNodes.push(gain);
+                        
+                        // Start oscillator
+                        osc.start();
+                    }
                     
-                    gain1.gain.setValueAtTime(0.4, this.audioContext.currentTime);
-                    gain2.gain.setValueAtTime(0.2, this.audioContext.currentTime);
-                    gain3.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-                    
-                    // Connect oscillators
-                    this.oscillator1.connect(gain1);
-                    this.oscillator2.connect(gain2);
-                    this.oscillator3.connect(gain3);
-                    
-                    gain1.connect(this.filterNode);
-                    gain2.connect(this.filterNode);
-                    gain3.connect(this.filterNode);
-                    
-                    // Add noise source
+                    // Add realistic engine noise
                     this.noiseSource = this.audioContext.createBufferSource();
                     this.noiseSource.buffer = this.noiseBuffer;
                     this.noiseSource.loop = true;
                     
-                    var noiseGain = this.audioContext.createGain();
-                    noiseGain.gain.setValueAtTime(0.1, this.audioContext.currentTime);
+                    const noiseGain = this.audioContext.createGain();
+                    noiseGain.gain.setValueAtTime(0.15, this.audioContext.currentTime);
                     
                     this.noiseSource.connect(noiseGain);
-                    noiseGain.connect(this.filterNode);
-                    
-                    // Start all sources
-                    this.oscillator1.start();
-                    this.oscillator2.start();
-                    this.oscillator3.start();
+                    noiseGain.connect(this.highPassFilter);
                     this.noiseSource.start();
                     
-                    // Fade in
-                    this.gainNode.gain.setTargetAtTime(this.volume, this.audioContext.currentTime, 0.1);
+                    // Fade in engine sound
+                    this.masterGain.gain.setTargetAtTime(this.volume, this.audioContext.currentTime, 0.2);
                     
                     this.isPlaying = true;
                     this.updateFrequencies();
@@ -1133,54 +1411,280 @@
                     if (!this.isPlaying) return;
                     
                     // Fade out
-                    this.gainNode.gain.setTargetAtTime(0, this.audioContext.currentTime, 0.1);
+                    this.masterGain.gain.setTargetAtTime(0, this.audioContext.currentTime, 0.2);
                     
-                    // Stop sources after fade out
+                    // Stop all sources after fade out
                     setTimeout(() => {
-                        if (this.oscillator1) {
-                            this.oscillator1.stop();
-                            this.oscillator2.stop();
-                            this.oscillator3.stop();
+                        this.oscillators.forEach(osc => {
+                            if (osc) osc.stop();
+                        });
+                        if (this.noiseSource) {
                             this.noiseSource.stop();
                         }
+                        this.oscillators = [];
+                        this.gainNodes = [];
                         this.isPlaying = false;
-                    }, 200);
+                    }, 300);
                 }
                 
-                updateEngine(speed, throttle, rpm) {
+                updateEngine(speed, throttle, acceleration, braking) {
                     if (!this.isPlaying) return;
                     
-                    // Calculate RPM based on speed and throttle
-                    var targetRPM = 800 + (speed * 50) + (throttle * 2000); // Idle + speed + throttle
-                    targetRPM = Math.min(targetRPM, 6000); // Max RPM
+                    // REALISTIC RPM calculation based on actual car behavior
+                    const absSpeed = Math.abs(speed);
                     
-                    // Smooth RPM changes
-                    this.currentRPM += (targetRPM - this.currentRPM) * 0.1;
+                    // Simulate automatic transmission gear ratios
+                    let gearRatio = 1;
+                    if (absSpeed < 20) gearRatio = 1;      // 1st gear
+                    else if (absSpeed < 40) gearRatio = 0.7;  // 2nd gear  
+                    else if (absSpeed < 70) gearRatio = 0.5;  // 3rd gear
+                    else if (absSpeed < 100) gearRatio = 0.4; // 4th gear
+                    else gearRatio = 0.3;                     // 5th gear
                     
+                    // Base RPM from speed with gear simulation
+                    let speedRPM = this.idleRPM + (absSpeed * 50 * gearRatio);
+                    
+                    // Engine load based on acceleration demand vs actual acceleration
+                    let engineLoad = 0;
+                    if (throttle > 0.1) {
+                        // Under throttle - RPM rises based on demand vs speed
+                        engineLoad = Math.max(0, throttle - (absSpeed / 120)); // Less load at high speeds
+                        engineLoad = Math.min(engineLoad, 1); // Cap at 1
+                    }
+                    
+                    // RPM boost from engine load (not just throttle input)
+                    let loadRPM = engineLoad * 3500; // Max 3500 RPM from load
+                    
+                    // Combine for realistic behavior
+                    let targetRPM = speedRPM + loadRPM;
+                    
+                    // Deceleration behavior
+                    if (braking > 0.3 || throttle < 0.05) {
+                        // Engine braking or coasting - RPM follows speed more closely
+                        targetRPM = Math.max(this.idleRPM, speedRPM * 0.8);
+                    }
+                    
+                    // Rev limiter and idle
+                    targetRPM = Math.max(this.idleRPM, Math.min(targetRPM, this.maxRPM));
+                    
+                    // Realistic RPM response - faster up, slower down
+                    const rpmDiff = targetRPM - this.currentRPM;
+                    let rpmRate;
+                    if (rpmDiff > 0) {
+                        // RPM rising - faster response under load
+                        rpmRate = engineLoad > 0.3 ? 0.12 : 0.06;
+                    } else {
+                        // RPM falling - slower response (engine inertia)
+                        rpmRate = 0.04;
+                    }
+                    
+                    this.currentRPM += rpmDiff * rpmRate;
+                    
+                    // Update sound characteristics
                     this.updateFrequencies();
-                    this.updateVolume(throttle);
+                    this.updateVolume(engineLoad, absSpeed);
+                    this.updateFilters(engineLoad, absSpeed);
                 }
                 
                 updateFrequencies() {
-                    if (!this.isPlaying || !this.oscillator1) return;
+                    if (!this.isPlaying || this.oscillators.length === 0) return;
                     
-                    var baseFreq = this.baseFrequency * (this.currentRPM / 1000);
+                    // Calculate base frequency from RPM
+                    const baseFreq = this.baseFrequency * (this.currentRPM / 1000);
                     
-                    // Set frequencies for harmonics
-                    this.oscillator1.frequency.setTargetAtTime(baseFreq, this.audioContext.currentTime, 0.01);
-                    this.oscillator2.frequency.setTargetAtTime(baseFreq * 2, this.audioContext.currentTime, 0.01);
-                    this.oscillator3.frequency.setTargetAtTime(baseFreq * 0.5, this.audioContext.currentTime, 0.01);
+                    // Update each oscillator with realistic harmonic relationships
+                    const harmonicMultipliers = [1.0, 2.1, 1.5, 0.7, 3.2, 0.4];
                     
-                    // Update filter frequency based on RPM
-                    var filterFreq = 400 + (this.currentRPM / 10);
-                    this.filterNode.frequency.setTargetAtTime(filterFreq, this.audioContext.currentTime, 0.01);
+                    this.oscillators.forEach((osc, index) => {
+                        if (osc && index < harmonicMultipliers.length) {
+                            const freq = baseFreq * harmonicMultipliers[index];
+                            osc.frequency.setTargetAtTime(freq, this.audioContext.currentTime, 0.02);
+                        }
+                    });
                 }
                 
-                updateVolume(throttle) {
+                updateVolume(throttle, speed) {
                     if (!this.isPlaying) return;
                     
-                    var targetVolume = this.volume * (0.3 + throttle * 0.7); // Idle + throttle volume
+                    // Dynamic volume based on throttle and RPM
+                    const rpmFactor = (this.currentRPM - this.idleRPM) / (this.maxRPM - this.idleRPM);
+                    const throttleFactor = Math.pow(throttle, 0.7); // Non-linear throttle response
+                    
+                    // Base volume varies with RPM and throttle
+                    let targetVolume = this.volume * (0.4 + rpmFactor * 0.3 + throttleFactor * 0.5);
+                    
+                    // Add some engine load variation
+                    if (throttle > 0.8 && speed > 60) {
+                        targetVolume *= 1.2; // Louder under heavy load
+                    }
+                    
+                    this.masterGain.gain.setTargetAtTime(targetVolume, this.audioContext.currentTime, 0.08);
+                }
+                
+                updateFilters(throttle, speed) {
+                    if (!this.isPlaying) return;
+                    
+                    // Dynamic filter frequencies for realistic engine character
+                    const rpmFactor = this.currentRPM / this.maxRPM;
+                    
+                    // Low-pass filter opens up with RPM for more aggressive sound
+                    const lowPassFreq = 800 + (rpmFactor * 1200) + (throttle * 400);
+                    this.lowPassFilter.frequency.setTargetAtTime(lowPassFreq, this.audioContext.currentTime, 0.05);
+                    
+                    // High-pass filter adjusts for engine load
+                    const highPassFreq = 60 + (throttle * 40) + (rpmFactor * 30);
+                    this.highPassFilter.frequency.setTargetAtTime(highPassFreq, this.audioContext.currentTime, 0.05);
+                    
+                    // Filter Q for more aggressive sound under load
+                    const filterQ = 1.5 + (throttle * 1.0) + (rpmFactor * 0.8);
+                    this.lowPassFilter.Q.setTargetAtTime(filterQ, this.audioContext.currentTime, 0.05);
+                }
+            }
+            
+            // TIRE SCREECH SOUND SYSTEM: For drifting and hard braking
+            class TireScreechSound {
+                constructor(audioContext, volume = 0.3) {
+                    this.audioContext = audioContext;
+                    this.volume = volume;
+                    this.isPlaying = false;
+                    
+                    // Audio nodes
+                    this.oscillator = null;
+                    this.noiseSource = null;
+                    this.gainNode = null;
+                    this.filterNode = null;
+                    this.noiseBuffer = null;
+                    
+                    this.setupAudioNodes();
+                    this.createNoiseBuffer();
+                }
+                
+                setupAudioNodes() {
+                    // Master gain control
+                    this.gainNode = this.audioContext.createGain();
+                    this.gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+                    
+                    // Band-pass filter for tire screech frequency range
+                    this.filterNode = this.audioContext.createBiquadFilter();
+                    this.filterNode.type = 'bandpass';
+                    this.filterNode.frequency.setValueAtTime(2000, this.audioContext.currentTime);
+                    this.filterNode.Q.setValueAtTime(8, this.audioContext.currentTime);
+                    
+                    // Connect audio chain
+                    this.filterNode.connect(this.gainNode);
+                    this.gainNode.connect(this.audioContext.destination);
+                }
+                
+                createNoiseBuffer() {
+                    var bufferSize = this.audioContext.sampleRate * 2;
+                    this.noiseBuffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+                    var output = this.noiseBuffer.getChannelData(0);
+                    
+                    // Generate filtered white noise for tire screech
+                    for (var i = 0; i < bufferSize; i++) {
+                        output[i] = (Math.random() * 2 - 1) * 0.5;
+                    }
+                }
+                
+                start(intensity = 0.5) {
+                    if (this.isPlaying) return;
+                    
+                    // Create noise source
+                    this.noiseSource = this.audioContext.createBufferSource();
+                    this.noiseSource.buffer = this.noiseBuffer;
+                    this.noiseSource.loop = true;
+                    this.noiseSource.connect(this.filterNode);
+                    
+                    // Start with fade in
+                    this.noiseSource.start();
+                    this.gainNode.gain.setTargetAtTime(this.volume * intensity, this.audioContext.currentTime, 0.1);
+                    
+                    this.isPlaying = true;
+                }
+                
+                stop() {
+                    if (!this.isPlaying) return;
+                    
+                    // Fade out
+                    this.gainNode.gain.setTargetAtTime(0, this.audioContext.currentTime, 0.2);
+                    
+                    setTimeout(() => {
+                        if (this.noiseSource) {
+                            this.noiseSource.stop();
+                            this.noiseSource = null;
+                        }
+                        this.isPlaying = false;
+                    }, 300);
+                }
+                
+                updateIntensity(intensity, frequency = 2000) {
+                    if (!this.isPlaying) return;
+                    
+                    // Update volume based on drift intensity
+                    var targetVolume = this.volume * Math.min(intensity, 1);
                     this.gainNode.gain.setTargetAtTime(targetVolume, this.audioContext.currentTime, 0.05);
+                    
+                    // Update filter frequency based on speed/intensity
+                    this.filterNode.frequency.setTargetAtTime(frequency, this.audioContext.currentTime, 0.05);
+                }
+            }
+            
+            // IMPACT SOUND SYSTEM: For collisions and crashes
+            class ImpactSound {
+                constructor(audioContext, volume = 0.4) {
+                    this.audioContext = audioContext;
+                    this.volume = volume;
+                }
+                
+                playImpact(intensity = 1.0) {
+                    // Create a short burst of noise for impact
+                    var duration = 0.3 + (intensity * 0.2); // 0.3-0.5 seconds
+                    
+                    // Create oscillator for metallic crash sound
+                    var oscillator = this.audioContext.createOscillator();
+                    var noiseSource = this.audioContext.createBufferSource();
+                    var gainNode = this.audioContext.createGain();
+                    var filterNode = this.audioContext.createBiquadFilter();
+                    
+                    // Setup crash sound
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(200 + (intensity * 300), this.audioContext.currentTime);
+                    
+                    // Create noise buffer for crash
+                    var bufferSize = this.audioContext.sampleRate * duration;
+                    var noiseBuffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+                    var output = noiseBuffer.getChannelData(0);
+                    
+                    for (var i = 0; i < bufferSize; i++) {
+                        var decay = 1 - (i / bufferSize); // Exponential decay
+                        output[i] = (Math.random() * 2 - 1) * decay * 0.8;
+                    }
+                    
+                    noiseSource.buffer = noiseBuffer;
+                    
+                    // Setup filter for crash character
+                    filterNode.type = 'highpass';
+                    filterNode.frequency.setValueAtTime(400, this.audioContext.currentTime);
+                    
+                    // Connect and play
+                    oscillator.connect(gainNode);
+                    noiseSource.connect(filterNode);
+                    filterNode.connect(gainNode);
+                    gainNode.connect(this.audioContext.destination);
+                    
+                    // Volume envelope
+                    gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+                    gainNode.gain.setTargetAtTime(this.volume * intensity, this.audioContext.currentTime, 0.01);
+                    gainNode.gain.setTargetAtTime(0, this.audioContext.currentTime + duration * 0.7, duration * 0.3);
+                    
+                    // Start and stop
+                    oscillator.start();
+                    noiseSource.start();
+                    
+                    setTimeout(() => {
+                        oscillator.stop();
+                        noiseSource.stop();
+                    }, duration * 1000);
                 }
             }
             
@@ -1189,9 +1693,13 @@
                     // Create audio context
                     audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     
-                    // Create engine sounds (lowered pitch and volume for music prominence)
-                    playerEngineSound = new EngineSound(audioContext, 55, 0.15); // Player car (reduced volume from 0.4 to 0.15)
-                    botEngineSound = new EngineSound(audioContext, 60, 0.08);    // Bot car (reduced volume from 0.2 to 0.08)
+                    // Create realistic engine sounds with growling characteristics
+                    playerEngineSound = new EngineSound(audioContext, 42, 0.18); // Player car - deeper, more growling
+                    botEngineSound = new EngineSound(audioContext, 48, 0.12);    // Bot car - slightly higher pitch, quieter
+                    
+                    // Create additional driving sounds
+                    window.tireScreechSound = new TireScreechSound(audioContext, 0.25); // Tire screech for drifting
+                    window.impactSound = new ImpactSound(audioContext, 0.35);           // Impact sounds for crashes
                     
                     // Initialize background music
                     backgroundMusic = document.getElementById('backgroundMusic');
@@ -1241,8 +1749,8 @@
                         playerEngineSound.start();
                         botEngineSound.start();
                         console.log('🔊 Engine sounds started (resumed context)');
-                        // Start background music
-                        if (backgroundMusic) {
+                        // Start background music if enabled
+                        if (backgroundMusic && musicEnabled) {
                             backgroundMusic.play().then(() => {
                                 console.log('🎵 Background music started');
                             }).catch(error => {
@@ -1256,8 +1764,8 @@
                     playerEngineSound.start();
                     botEngineSound.start();
                     console.log('🔊 Engine sounds started');
-                    // Start background music
-                    if (backgroundMusic) {
+                    // Start background music if enabled
+                    if (backgroundMusic && musicEnabled) {
                         backgroundMusic.play().then(() => {
                             console.log('🎵 Background music started');
                         }).catch(error => {
@@ -1319,6 +1827,18 @@
                 var currentCheckpoint = playerLastPassedCheckpoint + 1; // +1 because we show next checkpoint to reach
                 if (currentCheckpoint > totalCheckpoints) currentCheckpoint = totalCheckpoints;
                 context.fillText('CHECKPOINT: ' + currentCheckpoint + '/' + totalCheckpoints, 20, yPos);
+                yPos += lineHeight;
+                
+                // FPS display
+                context.fillText('FPS: ' + currentFPS, 20, yPos);
+                yPos += lineHeight;
+                
+                // Speedometer - get current speed from vehicle
+                var currentSpeed = 0;
+                if (typeof vehicleRef !== 'undefined' && vehicleRef && vehicleRef.vehicle) {
+                    currentSpeed = Math.abs(vehicleRef.vehicle.getCurrentSpeedKmHour());
+                }
+                context.fillText('SPEED: ' + Math.round(currentSpeed) + ' km/h', 20, yPos);
                 yPos += lineHeight;
                 
                 // Update texture
@@ -1388,12 +1908,28 @@
                             console.error('Error creating VR menu:', error);
                         }
                     }
+                    
+                    // Hide/show VR HUD when menu is toggled in VR
+                    if (vrHUD) {
+                        vrHUD.visible = !isMenuVisible;
+                        console.log('VR HUD visibility set to:', !isMenuVisible);
+                    }
                 } else {
                     // Desktop Mode: Toggle HTML menu
                     const gameMenu = document.getElementById('gameMenu');
                     if (gameMenu) {
                         gameMenu.style.display = isMenuVisible ? 'flex' : 'none';
                     }
+                }
+                
+                // Hide/show desktop HUD and version display when menu is toggled
+                const desktopHUD = document.getElementById('desktopHUD');
+                const versionDisplay = document.getElementById('versionDisplay');
+                if (desktopHUD) {
+                    desktopHUD.style.display = isMenuVisible ? 'none' : 'block';
+                }
+                if (versionDisplay) {
+                    versionDisplay.style.display = isMenuVisible ? 'none' : 'block';
                 }
                 
                 console.log('Menu toggled:', isMenuVisible ? 'visible' : 'hidden');
@@ -1404,8 +1940,8 @@
                 
                 vrMenu = new THREE.Group();
                 
-                // Position menu in front of user (simple fixed position)
-                vrMenu.position.set(0, 0, -1.5); // 1.5 meters in front of camera
+                // Position menu in front of user (adjusted for new camera position)
+                vrMenu.position.set(0, 2.0, -2.0); // 2m up, right in front of camera at 2m distance
                 
                 // Add to camera rig so it follows the user's head
                 if (cameraRig) {
@@ -1439,23 +1975,6 @@
                 border.position.z = -0.02;
                 vrMenu.add(border);
                 
-                // Add bright test markers to make sure menu is visible
-                const testGeometry = new THREE.SphereGeometry(0.03);
-                const testMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-                
-                // Four corner markers
-                const markers = [
-                    { pos: [0.6, 0.4, 0.05] },   // Top right
-                    { pos: [-0.6, 0.4, 0.05] },  // Top left
-                    { pos: [0.6, -0.4, 0.05] },  // Bottom right
-                    { pos: [-0.6, -0.4, 0.05] }  // Bottom left
-                ];
-                
-                markers.forEach(marker => {
-                    const testMarker = new THREE.Mesh(testGeometry, testMaterial);
-                    testMarker.position.set(...marker.pos);
-                    vrMenu.add(testMarker);
-                });
                 
                 // Title
                 const titleGeometry = new THREE.PlaneGeometry(0.8, 0.1);
@@ -1530,18 +2049,32 @@
                 vrMenuButtons.push(botToggle);
                 vrMenu.add(botGroup);
                 
+                // Music toggle
+                const musicGroup = new THREE.Group();
+                musicGroup.position.set(0, -0.15, 0);
+                
+                const musicLabel = createVRText('Music:', -0.2, 0, 0.3);
+                const musicToggle = createVRButton('ON', 0, 0, 0.12, 0.06, '#00aa00', 'music-toggle');
+                const musicStatus = createVRText('(Background)', 0.25, 0, 0.25);
+                musicStatus.userData.type = 'display';
+                musicStatus.userData.id = 'music-status';
+                
+                musicGroup.add(musicLabel, musicToggle, musicStatus);
+                vrMenuButtons.push(musicToggle);
+                vrMenu.add(musicGroup);
+                
                 // Start Race button
-                const startBtn = createVRButton('START RACE', 0, -0.25, 0.25, 0.08, '#00aa00', 'start-race');
+                const startBtn = createVRButton('START RACE', 0, -0.35, 0.25, 0.08, '#00aa00', 'start-race');
                 vrMenu.add(startBtn);
                 vrMenuButtons.push(startBtn);
                 
                 // Close button
-                const closeBtn = createVRButton('CLOSE', 0, -0.35, 0.2, 0.08, '#666666', 'close');
+                const closeBtn = createVRButton('CLOSE', 0, -0.45, 0.2, 0.08, '#666666', 'close');
                 vrMenu.add(closeBtn);
                 vrMenuButtons.push(closeBtn);
                 
                 // Status display
-                const statusDisplay = createVRText('Disconnected', 0, -0.45, 0.4);
+                const statusDisplay = createVRText('Disconnected', 0, -0.55, 0.4);
                 statusDisplay.userData.type = 'display';
                 statusDisplay.userData.id = 'status';
                 vrMenu.add(statusDisplay);
@@ -1664,6 +2197,7 @@
                     if (id === 'singleplayer') active = !isMultiplayer;
                     else if (id === 'multiplayer') active = isMultiplayer;
                     else if (id === 'bot-toggle') active = botEnabled;
+                    else if (id === 'music-toggle') active = musicEnabled;
                     else if (id === 'connect') {
                         // Update connect button based on connection state
                         disabled = (connectionState === 'connecting');
@@ -1776,6 +2310,9 @@
                         case 'bot-toggle':
                             toggleBot();
                             break;
+                        case 'music-toggle':
+                            toggleMusic();
+                            break;
                         case 'start-race':
                             startRace();
                             break;
@@ -1835,6 +2372,8 @@
                 const multiBtn = document.getElementById('multiplayerBtn');
                 const botToggle = document.getElementById('botToggle');
                 const botStatus = document.getElementById('botStatus');
+                const musicToggle = document.getElementById('musicToggle');
+                const musicStatus = document.getElementById('musicStatus');
                 const statusText = document.getElementById('statusText');
                 const lobbyNumber = document.getElementById('lobbyNumber');
 
@@ -1869,6 +2408,12 @@
                         botToggle.disabled = false;
                         botToggle.style.opacity = '1';
                     }
+                }
+
+                if (musicToggle && musicStatus) {
+                    musicToggle.textContent = musicEnabled ? 'ON' : 'OFF';
+                    musicToggle.classList.toggle('active', musicEnabled);
+                    musicStatus.textContent = '(Background Music)';
                 }
 
                 if (statusText) {
@@ -1911,6 +2456,11 @@
                 // Bot toggle
                 document.getElementById('botToggle')?.addEventListener('click', () => {
                     toggleBot();
+                });
+
+                // Music toggle
+                document.getElementById('musicToggle')?.addEventListener('click', () => {
+                    toggleMusic();
                 });
 
                 // Close menu
@@ -2014,6 +2564,27 @@
                 }
                 
                 console.log('Bot', botEnabled ? 'enabled' : 'disabled');
+            }
+
+            function toggleMusic() {
+                musicEnabled = !musicEnabled;
+                
+                if (backgroundMusic) {
+                    if (musicEnabled) {
+                        backgroundMusic.play().then(() => {
+                            console.log('🎵 Background music enabled');
+                        }).catch(error => {
+                            console.warn('Background music failed to start:', error);
+                        });
+                    } else {
+                        backgroundMusic.pause();
+                        console.log('🎵 Background music disabled');
+                    }
+                }
+                
+                updateMenuDisplay();
+                updateVRMenuDisplay(); // Also update VR menu
+                console.log('Music', musicEnabled ? 'enabled' : 'disabled');
             }
 
             function connectToLobby() {
@@ -2230,7 +2801,7 @@
                                     if (remoteCarData.inPhysicsWorld) {
                                         physicsWorld.removeRigidBody(remoteCarData.rigidBody);
                                         remoteCarData.inPhysicsWorld = false;
-                                        console.log(`Removed physics body for ${playerId} from physics world`);
+                                        // Physics body removal logging removed
                                     }
                                     
                                     console.log(`Hidden remote car for ${playerId}`);
@@ -2320,7 +2891,7 @@
                                     if (carData.inPhysicsWorld) {
                                         physicsWorld.removeRigidBody(carData.rigidBody);
                                         carData.inPhysicsWorld = false;
-                                        console.log(`Removed physics body for remote car ${index} from physics world`);
+                                        // Physics body removal logging removed
                                     }
                                     
                                     console.log(`Hidden remote car ${index}`);
@@ -2440,42 +3011,32 @@
                 for (let i = 0; i < 4; i++) {
                     const carGroup = new THREE.Group();
                     
-                    // Car body (normal size)
-                    const bodyGeometry = new THREE.BoxGeometry(1.8, 0.6, 4);
-                    const bodyMaterial = new THREE.MeshBasicMaterial({ color: playerColors[i] });
-                    const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
-                    bodyMesh.position.y = 0.3;
-                    carGroup.add(bodyMesh);
-                    
-                    // White roof
-                    const topGeometry = new THREE.BoxGeometry(1.5, 0.2, 3.5);
-                    const topMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
-                    const topMesh = new THREE.Mesh(topGeometry, topMaterial);
-                    topMesh.position.y = 0.7;
-                    carGroup.add(topMesh);
-                    
-                    // Wheels (normal size)
-                    const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 8);
-                    const wheelMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
-                    
-                    const wheelPositions = [
-                        { x: -0.9, y: 0, z: 1.4 },   // Front left
-                        { x: 0.9, y: 0, z: 1.4 },    // Front right
-                        { x: -0.9, y: 0, z: -1.4 },  // Rear left
-                        { x: 0.9, y: 0, z: -1.4 }    // Rear right
-                    ];
-                    
-                    wheelPositions.forEach(pos => {
-                        const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
-                        wheel.position.set(pos.x, pos.y, pos.z);
-                        wheel.rotation.z = Math.PI / 2;
-                        carGroup.add(wheel);
+                    // Load dune buggy model for remote player (async)
+                    loadDuneBuggyModel(1.0).then((model) => {
+                        // Clear any existing children (temporary placeholder)
+                        while (carGroup.children.length > 0) {
+                            carGroup.remove(carGroup.children[0]);
+                        }
+                        
+                        // Add the dune buggy model to the group
+                        carGroup.add(model);
+                        console.log(`🏎️ Remote player ${i} dune buggy model loaded`);
+                    }).catch((error) => {
+                        console.error(`❌ Failed to load remote player ${i} dune buggy model:`, error);
+                        // Fallback already handled in loadDuneBuggyModel
                     });
+                    
+                    // Temporary placeholder until GLTF loads
+                    const tempBodyGeometry = new THREE.BoxGeometry(1.8, 0.6, 4);
+                    const tempBodyMaterial = new THREE.MeshBasicMaterial({ color: playerColors[i], transparent: true, opacity: 0.3 });
+                    const tempBodyMesh = new THREE.Mesh(tempBodyGeometry, tempBodyMaterial);
+                    tempBodyMesh.position.y = 0.3;
+                    carGroup.add(tempBodyMesh);
                     
                     // Create physics body for collision
                     const chassisShape = new Ammo.btBoxShape(new Ammo.btVector3(0.9, 0.3, 2.0)); // Half extents
                     const chassisLocalInertia = new Ammo.btVector3(0, 0, 0);
-                    const chassisMass = 800; // Same as player car
+                    const chassisMass = 1500; // Same as player car for consistent collisions
                     chassisShape.calculateLocalInertia(chassisMass, chassisLocalInertia);
                     
                     const startTransform = new Ammo.btTransform();
@@ -2489,6 +3050,10 @@
                     // Make it dynamic but controlled (can collide properly with other dynamic bodies)
                     rigidBody.setCollisionFlags(0); // Dynamic object (default)
                     rigidBody.setActivationState(4); // DISABLE_DEACTIVATION
+                    
+                    // Add arcade-style collision properties (same as other vehicles)
+                    rigidBody.setRestitution(0.3); // Some bounciness for fun collisions
+                    rigidBody.setFriction(0.8); // Good grip but not too sticky
                     
                     // Disable gravity and damping so it's controlled by remote state
                     rigidBody.setGravity(new Ammo.btVector3(0, 0, 0));
@@ -2510,7 +3075,7 @@
                     };
                     scene.add(carGroup);
                     
-                    console.log(`✅ Created remote player car ${i} with physics body and color:`, playerColors[i].toString(16));
+                    // Remote car creation logging removed
                 }
                 
                 console.log(`🎮 Created ${remotePlayerCars.length} remote player cars with physics`);
@@ -2555,7 +3120,7 @@
                         if (!remoteCarData.inPhysicsWorld) {
                             physicsWorld.addRigidBody(rigidBody);
                             remoteCarData.inPhysicsWorld = true;
-                            console.log(`Added physics body for ${data.playerId} to physics world`);
+                            // Physics body addition logging removed
                         }
                         
                         // Update physics body position (dynamic body with controlled movement)
@@ -2681,20 +3246,62 @@
                         console.log('Switched to VR first-person camera');
                     }
                 } else {
-                    // Desktop mode: cycle through firstperson -> orbit -> firstperson
-                    if (cameraMode === 'orbit') {
+                    // Desktop mode: cycle through firstperson -> fly -> firstperson
+                    if (cameraMode === 'firstperson') {
+                        cameraMode = 'fly';
+                        camera = firstPersonCamera; // Use first person camera for fly mode
+                        controls.enabled = false; // Disable orbit controls
+                        
+                        // Initialize fly camera position
+                        if (vehicleRef && vehicleRef.chassisMesh) {
+                            desktopFlyPosition.copy(vehicleRef.chassisMesh.position);
+                            desktopFlyPosition.y += 10; // Start 10m above the car
+                        } else {
+                            desktopFlyPosition.set(0, 15, -20);
+                        }
+                        // Reset rotation when entering fly mode
+                        desktopFlyRotation.set(0, 0, 0);
+                        
+                        // Lock mouse for free look
+                        document.body.requestPointerLock();
+                        
+                        console.log('Switched to desktop fly camera');
+                    } else if (cameraMode === 'fly') {
                         cameraMode = 'firstperson';
                         camera = firstPersonCamera;
-                        controls.enabled = false; // Disable orbit controls in first person
+                        controls.enabled = false;
+                        
+                        // Release mouse lock
+                        if (document.pointerLockElement) {
+                            document.exitPointerLock();
+                        }
                         
                         console.log('Switched to first-person camera');
-                    } else {
-                        cameraMode = 'orbit';
-                        camera = orbitCamera;
-                        controls.enabled = true; // Re-enable orbit controls
-                        
-                        console.log('Switched to orbit camera');
                     }
+                }
+            }
+            
+            function togglePhysicsWireframe() {
+                var visible = true;
+                
+                // Toggle player physics wireframe
+                if (vehicleRef && vehicleRef.physicsWireframe) {
+                    vehicleRef.physicsWireframe.visible = !vehicleRef.physicsWireframe.visible;
+                    visible = vehicleRef.physicsWireframe.visible;
+                }
+                
+                // Toggle bot physics wireframe
+                if (botRef && botRef.physicsWireframe) {
+                    botRef.physicsWireframe.visible = visible;
+                }
+                
+                console.log('🔧 Physics wireframes:', visible ? 'VISIBLE' : 'HIDDEN');
+                console.log('📏 Physics body dimensions: 2.2m x 0.4m x 4.0m (W x H x L)');
+                if (visible) {
+                    console.log('💡 Green wireframe shows exact physics body position');
+                    console.log('🎮 Press P again to hide wireframes');
+                } else {
+                    console.log('🎮 Press P to show physics wireframes again');
                 }
             }
 
@@ -2877,8 +3484,8 @@
                 }
             }
 
-            function createBox(pos, quat, w, l, h, mass, friction) {
-                var material = mass > 0 ? materialDynamic : materialStatic;
+            function createBox(pos, quat, w, l, h, mass, friction, customMaterial) {
+                var material = customMaterial || (mass > 0 ? materialDynamic : materialStatic);
                 var shape = new THREE.BoxGeometry(w, l, h, 1, 1, 1);
                 var geometry = new Ammo.btBoxShape(new Ammo.btVector3(w * 0.5, l * 0.5, h * 0.5));
 
@@ -2937,36 +3544,183 @@
                 scene.add(mesh);
                 return mesh;
             }
+            
+            // GLTF TIRE LOADER: Load the tire model for wheels
+            function loadTireModel(isRightSide = false, scale = 1.0) {
+                return new Promise((resolve, reject) => {
+                    const loader = new THREE.GLTFLoader();
+                    
+                    // Setup DRACOLoader for compressed GLTF files
+                    const dracoLoader = new THREE.DRACOLoader();
+                    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
+                    dracoLoader.setDecoderConfig({ type: 'js' });
+                    loader.setDRACOLoader(dracoLoader);
+                    
+                    loader.load(
+                        'assets/dune-buggy/dunebuggy-tire.gltf',
+                        function (gltf) {
+                            console.log('🛞 Tire GLTF loaded successfully');
+                            
+                            const model = gltf.scene.clone();
+                            
+                            // Scale the model appropriately
+                            model.scale.set(scale, scale, scale);
+                            
+                            // Preserve original textures and materials
+                            model.traverse((child) => {
+                                if (child.isMesh) {
+                                    // Keep original materials and textures - no color override
+                                    // Just enable shadows
+                                    child.castShadow = true;
+                                    child.receiveShadow = true;
+                                }
+                            });
+                            
+                            // Center the model
+                            const box = new THREE.Box3().setFromObject(model);
+                            const center = box.getCenter(new THREE.Vector3());
+                            model.position.sub(center);
+                            
+                            // Rotate for right side tires (flip 180 degrees around Y axis)
+                            if (isRightSide) {
+                                model.rotation.y = Math.PI;
+                            }
+                            
+                            // Add to scene
+                            scene.add(model);
+                            
+                            console.log('🛞 Tire model added to scene, right side:', isRightSide);
+                            
+                            // Cleanup DRACOLoader
+                            dracoLoader.dispose();
+                            
+                            resolve(model);
+                        },
+                        function (progress) {
+                            console.log('🛞 Tire loading progress:', Math.round((progress.loaded / progress.total) * 100) + '%');
+                        },
+                        function (error) {
+                            console.error('❌ Error loading tire GLTF:', error);
+                            
+                            // Fallback: create a simple cylinder tire
+                            const fallbackGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 16);
+                            fallbackGeometry.rotateZ(Math.PI / 2);
+                            const fallbackMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+                            const fallbackTire = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
+                            fallbackTire.castShadow = true;
+                            fallbackTire.receiveShadow = true;
+                            scene.add(fallbackTire);
+                            
+                            console.log('🛞 Using fallback tire model');
+                            
+                            // Cleanup DRACOLoader
+                            dracoLoader.dispose();
+                            
+                            resolve(fallbackTire);
+                        }
+                    );
+                });
+            }
+            
+            // GLTF DUNE BUGGY LOADER: Load the dune buggy model for vehicles
+            function loadDuneBuggyModel(scale = 1.0) {
+                return new Promise((resolve, reject) => {
+                    const loader = new THREE.GLTFLoader();
+                    
+                    // Setup DRACOLoader for compressed GLTF files
+                    const dracoLoader = new THREE.DRACOLoader();
+                    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
+                    dracoLoader.setDecoderConfig({ type: 'js' });
+                    loader.setDRACOLoader(dracoLoader);
+                    
+                    loader.load(
+                        'assets/dune-buggy/dunebuggy.gltf',
+                        function (gltf) {
+                            console.log('🏎️ Dune buggy GLTF loaded successfully');
+                            
+                            const model = gltf.scene.clone();
+                            
+                            // Scale the model appropriately for the physics
+                            model.scale.set(scale, scale, scale);
+                            
+                            // Preserve original textures and materials
+                            model.traverse((child) => {
+                                if (child.isMesh) {
+                                    // Keep original materials and textures - no color override
+                                    // Just enable shadows
+                                    child.castShadow = true;
+                                    child.receiveShadow = true;
+                                }
+                            });
+                            
+                            // Center the model and prepare for physics sync
+                            const box = new THREE.Box3().setFromObject(model);
+                            const center = box.getCenter(new THREE.Vector3());
+                            model.position.sub(center);
+                            
+                            // Store offset for physics sync (lower by 55cm, centered horizontally, 20cm forward)
+                            model.userData.chassisOffset = new THREE.Vector3(0, -0.55, -0.2);
+                            
+                            // Add to scene
+                            scene.add(model);
+                            
+                            console.log('🏎️ Dune buggy model added to scene with original textures');
+                            
+                            // Cleanup DRACOLoader
+                            dracoLoader.dispose();
+                            
+                            resolve(model);
+                        },
+                        function (progress) {
+                            console.log('🏎️ Dune buggy loading progress:', (progress.loaded / progress.total * 100) + '%');
+                        },
+                        function (error) {
+                            console.error('❌ Error loading dune buggy GLTF:', error);
+                            
+                            // Cleanup DRACOLoader
+                            dracoLoader.dispose();
+                            
+                            // Fallback to box geometry
+                            console.log('🔄 Falling back to box geometry for vehicle');
+                            const fallbackGeometry = new THREE.BoxGeometry(2.2, 0.4, 4);
+                            const fallbackMaterial = new THREE.MeshPhongMaterial({ color: color });
+                            const fallbackMesh = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
+                            scene.add(fallbackMesh);
+                            resolve(fallbackMesh);
+                        }
+                    );
+                });
+            }
 
             function createBotVehicle(pos, quat, color) {
-                // Vehicle constants (same as player car)
-                var chassisWidth = 1.8;
-                var chassisHeight = .6;
+                // Vehicle constants - improved for stability (same as player car)
+                var chassisWidth = 2.2;  // Wider for better stability (was 1.8)
+                var chassisHeight = .4;  // Lower center of mass (was .6)
                 var chassisLength = 4;
-                var massVehicle = 800;
+                var massVehicle = 1500; // Heavy for good collision physics (was 800)
 
-                var wheelAxisPositionBack = -1;
-                var wheelRadiusBack = .4;
+                var wheelAxisPositionBack = -1.5; // Moved 50cm backwards
+                var wheelRadiusBack = .5; // Reduced by 10cm from .6
                 var wheelWidthBack = .3;
-                var wheelHalfTrackBack = 1;
-                var wheelAxisHeightBack = .3;
+                var wheelHalfTrackBack = 1.4; // Increased by 20cm for 40cm wider total span
+                var wheelAxisHeightBack = .2; // Lower for stability (was .3)
 
                 var wheelAxisFrontPosition = 1.7;
-                var wheelHalfTrackFront = 1;
-                var wheelAxisHeightFront = .3;
-                var wheelRadiusFront = .35;
+                var wheelHalfTrackFront = 1.4; // Increased by 20cm for 40cm wider total span
+                var wheelAxisHeightFront = .2; // Lower for stability (was .3)
+                var wheelRadiusFront = .45; // Reduced by 10cm from .55
                 var wheelWidthFront = .2;
 
-                var friction = 1000;
-                var suspensionStiffness = 20.0;
-                var suspensionDamping = 2.3;
-                var suspensionCompression = 4.4;
-                var suspensionRestLength = 0.6;
-                var rollInfluence = 0.2;
+                var friction = 2.5; // Touring car grip - good control but can still slide
+                var suspensionStiffness = 25.0; // Touring car suspension - firm but comfortable
+                var suspensionDamping = 3.5;    // Balanced damping for control
+                var suspensionCompression = 5.0; // Moderate compression
+                var suspensionRestLength = 0.4;  // Shorter for lower ride height (was 0.6)
+                var rollInfluence = 0.15;        // Moderate roll influence for realistic handling (was 0.05)
 
                 var baseSteeringIncrement = .04;
                 var steeringClamp = .5;
-                var maxEngineForce = 2000;
+                var maxEngineForce = 2500; // More power for arcade-style fun
                 var maxBreakingForce = 100;
 
                 // Chassis
@@ -2981,22 +3735,78 @@
                 var body = new Ammo.btRigidBody(new Ammo.btRigidBodyConstructionInfo(massVehicle, motionState, geometry, localInertia));
                 body.setActivationState(DISABLE_DEACTIVATION);
                 
+                // Lower center of mass for better stability
+                var centerOfMass = new Ammo.btVector3(0, -0.3, 0); // Lower center of mass
+                body.setCenterOfMassTransform(transform);
+                
+                // Add stability improvements (allow more rotation for realistic handling)
+                body.setAngularFactor(new Ammo.btVector3(1, 1, 0.7)); // Allow more roll for realistic physics
+                body.setLinearFactor(new Ammo.btVector3(1, 1, 1)); // Allow all linear movement
+                
+                // Add arcade-style collision properties
+                body.setRestitution(0.3); // Some bounciness for fun collisions
+                body.setFriction(0.8); // Good grip but not too sticky
+                
                 // Ensure the bot body can be detected by raycasts
                 body.setCollisionFlags(body.getCollisionFlags() & ~2); // Remove CF_NO_CONTACT_RESPONSE flag
                 
                 physicsWorld.addRigidBody(body);
                 
-                // Create bot chassis mesh with different color
+                // Create bot chassis mesh with GLTF dune buggy model
+                var chassisMesh = null;
+                
+                // Load dune buggy model for bot (async)
+                loadDuneBuggyModel(1.0).then((model) => {
+                    // Remove temporary placeholder
+                    if (chassisMesh && chassisMesh.parent) {
+                        scene.remove(chassisMesh);
+                    }
+                    
+                    chassisMesh = model;
+                    // Update the bot reference
+                    if (botRef) {
+                        botRef.chassisMesh = chassisMesh;
+                    }
+                    console.log('🤖 Bot dune buggy model loaded and positioned');
+                }).catch((error) => {
+                    console.error('❌ Failed to load bot dune buggy model:', error);
+                    // Fallback already handled in loadDuneBuggyModel
+                });
+                
+                // Create bot material for wheels (needed for wheel creation)
                 var botMaterial = new THREE.MeshPhongMaterial({ color: color || 0x0066ff });
-                var chassisShape = new THREE.BoxGeometry(chassisWidth, chassisHeight, chassisLength);
-                var chassisMesh = new THREE.Mesh(chassisShape, botMaterial);
+                
+                // Temporary placeholder until GLTF loads
+                var tempMaterial = new THREE.MeshPhongMaterial({ color: color || 0x0066ff, transparent: true, opacity: 0.5 });
+                var tempShape = new THREE.BoxGeometry(chassisWidth, chassisHeight, chassisLength);
+                chassisMesh = new THREE.Mesh(tempShape, tempMaterial);
                 scene.add(chassisMesh);
+                
+                // Add physics body wireframe visualization (for debugging alignment)
+                var wireframeGeometry = new THREE.BoxGeometry(chassisWidth, chassisHeight, chassisLength);
+                var wireframeMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0x00ff00, 
+                    wireframe: true, 
+                    transparent: true, 
+                    opacity: 0.8 
+                });
+                var physicsWireframe = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
+                physicsWireframe.position.set(pos.x, pos.y, pos.z);
+                physicsWireframe.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+                scene.add(physicsWireframe);
 
                 // Raycast Vehicle
                 var engineForce = 0;
                 var vehicleSteering = 0;
                 var breakingForce = 0;
                 var tuning = new Ammo.btVehicleTuning();
+                // Improve stability with custom tuning
+                tuning.set_m_suspensionStiffness(suspensionStiffness);
+                tuning.set_m_suspensionCompression(suspensionCompression);
+                tuning.set_m_suspensionDamping(suspensionDamping);
+                tuning.set_m_maxSuspensionTravelCm(30); // Limit suspension travel
+                tuning.set_m_frictionSlip(2.5); // Touring car grip - forgiving but realistic
+                
                 var rayCaster = new Ammo.btDefaultVehicleRaycaster(physicsWorld);
                 var vehicle = new Ammo.btRaycastVehicle(tuning, body, rayCaster);
                 vehicle.setCoordinateSystem(0, 1, 2);
@@ -3007,6 +3817,7 @@
                     vehicle: vehicle,
                     vehicleBody: body,
                     chassisMesh: chassisMesh,
+                    physicsWireframe: physicsWireframe,
                     currentWaypointIndex: 0,
                     targetSpeed: 60, // km/h
                     waypointReachDistance: 8.0, // Distance to consider waypoint "reached" (increased)
@@ -3072,13 +3883,30 @@
                     wheelInfo.set_m_frictionSlip(friction);
                     wheelInfo.set_m_rollInfluence(rollInfluence);
 
-                    // Create wheel mesh with bot color
+                    // Determine if this is a right-side wheel (negative X position)
+                    var isRightSide = pos.x() < 0;
+                    
+                    // Create temporary placeholder wheel with bot color
                     var t = new THREE.CylinderGeometry(radius, radius, width, 24, 1);
                     t.rotateZ(Math.PI / 2);
                     var mesh = new THREE.Mesh(t, botMaterial);
                     mesh.add(new THREE.Mesh(new THREE.BoxGeometry(width * 1.5, radius * 1.75, radius * .25, 1, 1, 1), botMaterial));
                     scene.add(mesh);
                     wheelMeshes[index] = mesh;
+                    
+                    // Load GLTF tire model (async)
+                    loadTireModel(isRightSide, 1.0).then((tireModel) => {
+                        // Remove temporary placeholder
+                        if (wheelMeshes[index] && wheelMeshes[index].parent) {
+                            scene.remove(wheelMeshes[index]);
+                        }
+                        
+                        wheelMeshes[index] = tireModel;
+                        console.log('🛞 Bot tire', index, 'loaded, right side:', isRightSide);
+                    }).catch((error) => {
+                        console.error('❌ Failed to load bot tire', index, ':', error);
+                        // Keep the placeholder wheel
+                    });
                 }
 
                 addWheel(true, new Ammo.btVector3(wheelHalfTrackFront, wheelAxisHeightFront, wheelAxisFrontPosition), wheelRadiusFront, wheelWidthFront, FRONT_LEFT);
@@ -3098,9 +3926,22 @@
                     var carPos = new THREE.Vector3(p.x(), p.y(), p.z());
                     var carQuat = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
 
-                    // Update chassis mesh
-                    chassisMesh.position.set(p.x(), p.y(), p.z());
+                    // Update chassis mesh with offset for GLTF models
+                    if (chassisMesh.userData && chassisMesh.userData.chassisOffset) {
+                        const offset = chassisMesh.userData.chassisOffset.clone();
+                        const carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
+                        offset.applyQuaternion(carQuaternion); // Rotate offset by car's rotation
+                        chassisMesh.position.set(p.x() + offset.x, p.y() + offset.y, p.z() + offset.z);
+                    } else {
+                        chassisMesh.position.set(p.x(), p.y(), p.z());
+                    }
                     chassisMesh.quaternion.set(q.x(), q.y(), q.z(), q.w());
+                    
+                    // Update physics wireframe (shows exact physics body position)
+                    if (botRef && botRef.physicsWireframe) {
+                        botRef.physicsWireframe.position.set(p.x(), p.y(), p.z());
+                        botRef.physicsWireframe.quaternion.set(q.x(), q.y(), q.z(), q.w());
+                    }
                     
                     // Send car state to other players (throttled to 10Hz)
                     // Car state sending now handled by sendPlayerState() in sync list
@@ -3733,9 +4574,7 @@
                     // Debug raycast hits every 300 frames
                     if (botRef.debugCounter % 300 === 0) {
                         if (totalHits > 0) {
-                            console.log('🎯 Raycast hits detected:', debugInfo.join(', '));
-                        } else {
-                            console.log('🔍 No raycast hits detected - all rays clear');
+                            // Raycast debug logging removed for cleaner console
                         }
                         
                         // Check if player car is nearby but not detected
@@ -3743,7 +4582,7 @@
                             var playerPos = vehicleRef.chassisMesh.position;
                             var distanceToPlayer = carPos.distanceTo(playerPos);
                             if (distanceToPlayer < rayLength) {
-                                console.log('⚠️ Player car nearby at', distanceToPlayer.toFixed(1) + 'm but not detected by raycast!');
+                                // Player proximity debug logging removed
                                 
                                 // Test if we can raycast directly to player
                                 var dirToPlayer = new THREE.Vector3().subVectors(playerPos, carPos).normalize();
@@ -3757,11 +4596,7 @@
                                 var testCallback = new Ammo.ClosestRayResultCallback(testStart, testEnd);
                                 physicsWorld.rayTest(testStart, testEnd, testCallback);
                                 
-                                if (testCallback.hasHit()) {
-                                    console.log('✅ Direct raycast TO player: HIT detected');
-                                } else {
-                                    console.log('❌ Direct raycast TO player: NO HIT - player car has no physics body for raycast!');
-                                }
+                                // Direct raycast debug logging removed
                                 
                                 Ammo.destroy(testStart);
                                 Ammo.destroy(testEnd);
@@ -3797,34 +4632,34 @@
             }
 
             function createVehicle(pos, quat) {
-                // Vehicle constants
-                var chassisWidth = 1.8;
-                var chassisHeight = .6;
+                // Vehicle constants - improved for stability
+                var chassisWidth = 2.2;  // Wider for better stability (was 1.8)
+                var chassisHeight = .4;  // Lower center of mass (was .6)
                 var chassisLength = 4;
-                var massVehicle = 800;
+                var massVehicle = 1500; // Heavy for good collision physics (was 800)
 
-                var wheelAxisPositionBack = -1;
-                var wheelRadiusBack = .4;
+                var wheelAxisPositionBack = -1.5; // Moved 50cm backwards
+                var wheelRadiusBack = .5; // Reduced by 10cm from .6
                 var wheelWidthBack = .3;
-                var wheelHalfTrackBack = 1;
-                var wheelAxisHeightBack = .3;
+                var wheelHalfTrackBack = 1.4; // Increased by 20cm for 40cm wider total span
+                var wheelAxisHeightBack = .2; // Lower for stability (was .3)
 
                 var wheelAxisFrontPosition = 1.7;
-                var wheelHalfTrackFront = 1;
-                var wheelAxisHeightFront = .3;
-                var wheelRadiusFront = .35;
+                var wheelHalfTrackFront = 1.4; // Increased by 20cm for 40cm wider total span
+                var wheelAxisHeightFront = .2; // Lower for stability (was .3)
+                var wheelRadiusFront = .45; // Reduced by 10cm from .55
                 var wheelWidthFront = .2;
 
-                var friction = 1000;
-                var suspensionStiffness = 20.0;
-                var suspensionDamping = 2.3;
-                var suspensionCompression = 4.4;
-                var suspensionRestLength = 0.6;
-                var rollInfluence = 0.2;
+                var friction = 2.5; // Touring car grip - good control but can still slide
+                var suspensionStiffness = 25.0; // Touring car suspension - firm but comfortable
+                var suspensionDamping = 3.5;    // Balanced damping for control
+                var suspensionCompression = 5.0; // Moderate compression
+                var suspensionRestLength = 0.4;  // Shorter for lower ride height (was 0.6)
+                var rollInfluence = 0.15;        // Moderate roll influence for realistic handling (was 0.05)
 
                 var baseSteeringIncrement = .04;
                 var steeringClamp = .5;
-                var maxEngineForce = 2000;
+                var maxEngineForce = 2500; // More power for arcade-style fun
                 var maxBreakingForce = 100;
 
                 // Chassis
@@ -3839,17 +4674,75 @@
                 var body = new Ammo.btRigidBody(new Ammo.btRigidBodyConstructionInfo(massVehicle, motionState, geometry, localInertia));
                 body.setActivationState(DISABLE_DEACTIVATION);
                 
+                // Lower center of mass for better stability
+                var centerOfMass = new Ammo.btVector3(0, -0.3, 0); // Lower center of mass
+                body.setCenterOfMassTransform(transform);
+                
+                // Add stability improvements (allow more rotation for realistic handling)
+                body.setAngularFactor(new Ammo.btVector3(1, 1, 0.7)); // Allow more roll for realistic physics
+                body.setLinearFactor(new Ammo.btVector3(1, 1, 1)); // Allow all linear movement
+                
+                // Add arcade-style collision properties
+                body.setRestitution(0.3); // Some bounciness for fun collisions
+                body.setFriction(0.8); // Good grip but not too sticky
+                
                 // Ensure the player body can be detected by raycasts
                 body.setCollisionFlags(body.getCollisionFlags() & ~2); // Remove CF_NO_CONTACT_RESPONSE flag
                 
                 physicsWorld.addRigidBody(body);
-                var chassisMesh = createChassisMesh(chassisWidth, chassisHeight, chassisLength);
+                
+                // Create player chassis mesh with GLTF dune buggy model
+                var chassisMesh = null;
+                
+                // Load dune buggy model for player (async)
+                loadDuneBuggyModel(1.0).then((model) => {
+                    // Remove temporary placeholder
+                    if (chassisMesh && chassisMesh.parent) {
+                        scene.remove(chassisMesh);
+                    }
+                    
+                    chassisMesh = model;
+                    // Update the vehicle reference
+                    if (vehicleRef) {
+                        vehicleRef.chassisMesh = chassisMesh;
+                    }
+                    console.log('🏎️ Player dune buggy model loaded and positioned');
+                }).catch((error) => {
+                    console.error('❌ Failed to load player dune buggy model:', error);
+                    // Fallback already handled in loadDuneBuggyModel
+                });
+                
+                // Temporary placeholder until GLTF loads
+                var tempMaterial = new THREE.MeshPhongMaterial({ color: 0xff6600, transparent: true, opacity: 0.5 });
+                var tempShape = new THREE.BoxGeometry(chassisWidth, chassisHeight, chassisLength);
+                chassisMesh = new THREE.Mesh(tempShape, tempMaterial);
+                scene.add(chassisMesh);
+                
+                // Add physics body wireframe visualization (for debugging alignment)
+                var wireframeGeometry = new THREE.BoxGeometry(chassisWidth, chassisHeight, chassisLength);
+                var wireframeMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0x00ff00, 
+                    wireframe: true, 
+                    transparent: true, 
+                    opacity: 0.8 
+                });
+                var physicsWireframe = new THREE.Mesh(wireframeGeometry, wireframeMaterial);
+                physicsWireframe.position.set(pos.x, pos.y, pos.z);
+                physicsWireframe.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+                scene.add(physicsWireframe);
 
                 // Raycast Vehicle
                 var engineForce = 0;
                 var vehicleSteering = 0;
                 var breakingForce = 0;
                 var tuning = new Ammo.btVehicleTuning();
+                // Improve stability with custom tuning
+                tuning.set_m_suspensionStiffness(suspensionStiffness);
+                tuning.set_m_suspensionCompression(suspensionCompression);
+                tuning.set_m_suspensionDamping(suspensionDamping);
+                tuning.set_m_maxSuspensionTravelCm(30); // Limit suspension travel
+                tuning.set_m_frictionSlip(2.5); // Touring car grip - forgiving but realistic
+                
                 var rayCaster = new Ammo.btDefaultVehicleRaycaster(physicsWorld);
                 var vehicle = new Ammo.btRaycastVehicle(tuning, body, rayCaster);
                 vehicle.setCoordinateSystem(0, 1, 2);
@@ -3859,7 +4752,8 @@
                 vehicleRef = {
                     vehicle: vehicle,
                     vehicleBody: body,
-                    chassisMesh: chassisMesh
+                    chassisMesh: chassisMesh,
+                    physicsWireframe: physicsWireframe
                 };
 
                 // Wheels
@@ -3887,7 +4781,25 @@
                     wheelInfo.set_m_frictionSlip(friction);
                     wheelInfo.set_m_rollInfluence(rollInfluence);
 
+                    // Determine if this is a right-side wheel (negative X position)
+                    var isRightSide = pos.x() < 0;
+                    
+                    // Create temporary placeholder wheel
                     wheelMeshes[index] = createWheelMesh(radius, width);
+                    
+                    // Load GLTF tire model (async)
+                    loadTireModel(isRightSide, 1.0).then((tireModel) => {
+                        // Remove temporary placeholder
+                        if (wheelMeshes[index] && wheelMeshes[index].parent) {
+                            scene.remove(wheelMeshes[index]);
+                        }
+                        
+                        wheelMeshes[index] = tireModel;
+                        console.log('🛞 Tire', index, 'loaded, right side:', isRightSide);
+                    }).catch((error) => {
+                        console.error('❌ Failed to load tire', index, ':', error);
+                        // Keep the placeholder wheel
+                    });
                 }
 
                 addWheel(true, new Ammo.btVector3(wheelHalfTrackFront, wheelAxisHeightFront, wheelAxisFrontPosition), wheelRadiusFront, wheelWidthFront, FRONT_LEFT);
@@ -3905,11 +4817,14 @@
                         checkCheckpointProgress(chassisMesh.position);
                     }
                     
-                    // Update player engine sound
+                    // Update player engine sound with realistic parameters
                     if (playerEngineSound) {
-                        var throttle = Math.abs(engineForce) / 1500; // Normalize throttle (0-1)
+                        var throttleInput = Math.abs(engineForce) / maxEngineForce; // Normalize throttle (0-1)
+                        var brakeInput = Math.abs(breakingForce) / maxBreakingForce; // Normalize braking (0-1)
                         var speedKmh = Math.abs(speed);
-                        playerEngineSound.updateEngine(speedKmh, throttle);
+                        var isAccelerating = acceleration ? 1 : 0;
+                        
+                        playerEngineSound.updateEngine(speedKmh, throttleInput, isAccelerating, brakeInput);
                     }
 
                     breakingForce = 0;
@@ -3940,8 +4855,8 @@
                                         }
                                     }
                                     
-                                    // Car controls (only when menu is not visible)
-                                    if (!isMenuVisible) {
+                                    // Car controls (only when menu is not visible and not in fly mode)
+                                    if (!isMenuVisible && cameraMode !== 'fly') {
                                         // Thumbstick for steering
                                         if (gamepad.axes && gamepad.axes.length >= 4) {
                                             vrSteering = gamepad.axes[2] || 0;
@@ -3957,7 +4872,7 @@
                                             vrBraking = gamepad.buttons[1].value || 0;
                                         }
                                     } else {
-                                        // Reset car controls when menu is open
+                                        // Reset car controls when menu is open or in fly mode
                                         vrSteering = 0;
                                         vrAcceleration = 0;
                                         vrBraking = 0;
@@ -4074,7 +4989,7 @@
                                 
                                 if (gamepad && inputSource.handedness === 'left') {
                                     // LEFT CONTROLLER - VR Fly Camera Controls (rotation and up/down)
-                                    console.log('🎮 Left controller detected in fly mode');
+                                    // VR controller debug logging removed
                                     if (cameraMode === 'fly') {
                                         var flyDelta = dt * vrFlySpeed;
                                         var rotationSpeed = 2.0; // Rotation speed multiplier
@@ -4101,24 +5016,42 @@
                         }
                     }
 
-                    // Combine keyboard and VR input
-                    var acceleration = actions.acceleration || (vrAcceleration > 0.1);
-                    var braking = actions.braking || (vrBraking > 0.1);
-                    var left = actions.left || (vrSteering < -0.1);
-                    var right = actions.right || (vrSteering > 0.1);
+                    // Combine keyboard and VR input (but disable car controls in desktop fly mode)
+                    var isDesktopFlyMode = (cameraMode === 'fly' && !renderer.xr.isPresenting);
+                    var acceleration = (isDesktopFlyMode ? false : actions.acceleration) || (vrAcceleration > 0.1);
+                    var braking = (isDesktopFlyMode ? false : actions.braking) || (vrBraking > 0.1);
+                    var left = (isDesktopFlyMode ? false : actions.left) || (vrSteering < -0.1);
+                    var right = (isDesktopFlyMode ? false : actions.right) || (vrSteering > 0.1);
 
-                    // Calculate speed-dependent steering - less responsive at high speeds
+                    // Arcade-style steering - more responsive and forgiving
                     var absSpeed = Math.abs(speed);
-                    var speedFactor = Math.max(0.2, 1.0 - (absSpeed / 80)); // Reduce steering at speeds above 80 km/h
+                    var speedFactor = Math.max(0.6, 1.0 - (absSpeed / 120)); // Less speed penalty, kicks in later
                     var steeringIncrement = baseSteeringIncrement * speedFactor;
                     
-                    // Also reduce steering clamp at high speeds for more realistic handling
-                    var dynamicSteeringClamp = steeringClamp * speedFactor;
+                    // Keep most steering ability at high speeds for arcade feel
+                    var dynamicSteeringClamp = steeringClamp * Math.max(0.8, speedFactor);
+                    
+                    // Calculate dynamic tire friction - Touring car style (more forgiving)
+                    var baseFriction = 2.5;
+                    var speedGripFactor = Math.max(0.7, 1.0 - (Math.abs(speed) / 150)); // More grip at high speeds
+                    var steeringGripFactor = Math.max(0.8, 1.0 - (Math.abs(vehicleSteering) * 0.4)); // Less penalty for steering
+                    var dynamicFriction = baseFriction * speedGripFactor * steeringGripFactor;
 
                     if (acceleration) {
                         if (speed < -1)
                             breakingForce = maxBreakingForce;
-                        else engineForce = maxEngineForce;
+                        else {
+                            // Reduce engine force when tires are slipping (low grip)
+                            var gripFactor = dynamicFriction / baseFriction; // How much grip we have
+                            var adjustedEngineForce = maxEngineForce;
+                            
+                            // Light traction control - only kick in when really sliding
+                            if (gripFactor < 0.5 && Math.abs(speed) > 40) {
+                                adjustedEngineForce *= (0.8 + gripFactor * 0.2); // Gentle power reduction
+                            }
+                            
+                            engineForce = adjustedEngineForce;
+                        }
                     }
                     if (braking) {
                         if (speed > 1)
@@ -4157,6 +5090,97 @@
 
                     vehicle.setSteeringValue(vehicleSteering, FRONT_LEFT);
                     vehicle.setSteeringValue(vehicleSteering, FRONT_RIGHT);
+                    
+                    // Apply dynamic friction to all wheels
+                    for (var w = 0; w < vehicle.getNumWheels(); w++) {
+                        var wheelInfo = vehicle.getWheelInfo(w);
+                        wheelInfo.set_m_frictionSlip(dynamicFriction);
+                    }
+                    
+                    // DRIVING SOUND EFFECTS: Detect drifting, hard braking, etc.
+                    if (window.tireScreechSound) {
+                        var vehicleBody = vehicle.getRigidBody();
+                        var velocity = vehicleBody.getLinearVelocity();
+                        
+                        // Calculate if car is drifting (lateral velocity vs forward velocity)
+                        var transform = vehicleBody.getWorldTransform();
+                        var rotation = transform.getRotation();
+                        
+                        // Get forward direction vector
+                        var forward = new THREE.Vector3(0, 0, 1);
+                        var quaternion = new THREE.Quaternion(rotation.x(), rotation.y(), rotation.z(), rotation.w());
+                        forward.applyQuaternion(quaternion);
+                        
+                        // Calculate forward and lateral velocity components
+                        var velocityVector = new THREE.Vector3(velocity.x(), velocity.y(), velocity.z());
+                        var forwardVel = velocityVector.dot(forward);
+                        var right = new THREE.Vector3(1, 0, 0);
+                        right.applyQuaternion(quaternion);
+                        var lateralVel = Math.abs(velocityVector.dot(right));
+                        
+                        // Detect drifting conditions
+                        var isDrifting = false;
+                        var driftIntensity = 0;
+                        
+                        if (Math.abs(speed) > 30) { // Only at reasonable speeds
+                            // High lateral velocity = drifting
+                            if (lateralVel > 5) {
+                                isDrifting = true;
+                                driftIntensity = Math.min(lateralVel / 15, 1); // Normalize to 0-1
+                            }
+                            
+                            // Hard braking while turning
+                            if (braking && Math.abs(vehicleSteering) > 0.3 && Math.abs(speed) > 40) {
+                                isDrifting = true;
+                                driftIntensity = Math.max(driftIntensity, brakeInput * 0.8);
+                            }
+                            
+                            // High steering input at speed
+                            if (Math.abs(vehicleSteering) > 0.6 && Math.abs(speed) > 50) {
+                                isDrifting = true;
+                                driftIntensity = Math.max(driftIntensity, Math.abs(vehicleSteering) * 0.6);
+                            }
+                        }
+                        
+                        // Control tire screech sound
+                        if (isDrifting && driftIntensity > 0.2) {
+                            if (!window.tireScreechSound.isPlaying) {
+                                window.tireScreechSound.start(driftIntensity);
+                            } else {
+                                // Update intensity and frequency based on speed
+                                var screechFreq = 1500 + (Math.abs(speed) * 15); // Higher pitch at higher speeds
+                                window.tireScreechSound.updateIntensity(driftIntensity, screechFreq);
+                            }
+                        } else {
+                            if (window.tireScreechSound.isPlaying) {
+                                window.tireScreechSound.stop();
+                            }
+                        }
+                    }
+                    
+                    // Simplified arcade-style physics - more stable
+                    if (Math.abs(speed) > 60) { // Only at higher speeds
+                        var vehicleBody = vehicle.getRigidBody();
+                        var angularVel = vehicleBody.getAngularVelocity();
+                        
+                        // Only prevent dangerous rolling - no complex lateral velocity manipulation
+                        if (Math.abs(angularVel.z()) > 4.0) {
+                            vehicleBody.setAngularVelocity(new Ammo.btVector3(
+                                angularVel.x(),
+                                angularVel.y(), 
+                                angularVel.z() * 0.9 // Light roll damping
+                            ));
+                        }
+                        
+                        // Prevent excessive yaw spinning
+                        if (Math.abs(angularVel.y()) > 6.0) {
+                            vehicleBody.setAngularVelocity(new Ammo.btVector3(
+                                angularVel.x(),
+                                angularVel.y() * 0.95, // Light yaw damping
+                                angularVel.z()
+                            ));
+                        }
+                    }
 
                     var tm, p, q, i;
                     var n = vehicle.getNumWheels();
@@ -4172,8 +5196,23 @@
                     tm = vehicle.getChassisWorldTransform();
                     p = tm.getOrigin();
                     q = tm.getRotation();
-                    chassisMesh.position.set(p.x(), p.y(), p.z());
+                    
+                    // Update chassis mesh with offset for GLTF models
+                    if (chassisMesh.userData && chassisMesh.userData.chassisOffset) {
+                        const offset = chassisMesh.userData.chassisOffset.clone();
+                        const carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
+                        offset.applyQuaternion(carQuaternion); // Rotate offset by car's rotation
+                        chassisMesh.position.set(p.x() + offset.x, p.y() + offset.y, p.z() + offset.z);
+                    } else {
+                        chassisMesh.position.set(p.x(), p.y(), p.z());
+                    }
                     chassisMesh.quaternion.set(q.x(), q.y(), q.z(), q.w());
+                    
+                    // Update physics wireframe (shows exact physics body position)
+                    if (vehicleRef && vehicleRef.physicsWireframe) {
+                        vehicleRef.physicsWireframe.position.set(p.x(), p.y(), p.z());
+                        vehicleRef.physicsWireframe.quaternion.set(q.x(), q.y(), q.z(), q.w());
+                    }
                     
                     // Send bot state to other players (host only, throttled to 10Hz)
                     if (isMultiplayer && isHost && connections.size > 0 && botEnabled) {
@@ -4193,7 +5232,7 @@
                     if (cameraMode === 'firstperson') {
                         if (renderer.xr.isPresenting) {
                             // In VR: Move the camera rig (which contains the VR camera)
-                            var cameraOffset = new THREE.Vector3(0, 1.4, 1.2); // x, y(up), z(forward)
+                            var cameraOffset = new THREE.Vector3(-0.5, -0.6, -0.3); // x(left), y(up), z(forward) - 50cm left, 50cm lower, forward
                             var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
                             
                             // Rotate 180 degrees around Y axis to face forward
@@ -4233,8 +5272,51 @@
                             cameraRig.position.copy(vrFlyPosition);
                             // Apply fly camera rotation (Y-axis rotation from thumbstick)
                             cameraRig.rotation.copy(vrFlyRotation);
+                        } else {
+                            // Desktop Fly Camera: Handle WASD movement and Q/E for up/down
+                            var flyDelta = dt * desktopFlySpeed;
+                            
+                            // Create movement vectors - only use YAW for horizontal movement to prevent roll
+                            var yawRotation = new THREE.Euler(0, desktopFlyRotation.y, 0, 'YXZ');
+                            var forward = new THREE.Vector3(0, 0, -1);
+                            var right = new THREE.Vector3(1, 0, 0);
+                            var up = new THREE.Vector3(0, 1, 0); // World up, not camera up
+                            
+                            // Apply only yaw rotation to horizontal movement vectors
+                            forward.applyEuler(yawRotation);
+                            right.applyEuler(yawRotation);
+                            
+                            // WASD movement
+                            if (actions['acceleration']) { // W - forward
+                                desktopFlyPosition.add(forward.clone().multiplyScalar(flyDelta));
+                            }
+                            if (actions['braking']) { // S - backward
+                                desktopFlyPosition.add(forward.clone().multiplyScalar(-flyDelta));
+                            }
+                            if (actions['left']) { // A - strafe left
+                                desktopFlyPosition.add(right.clone().multiplyScalar(-flyDelta));
+                            }
+                            if (actions['right']) { // D - strafe right
+                                desktopFlyPosition.add(right.clone().multiplyScalar(flyDelta));
+                            }
+                            
+                            // Q/E for up/down movement (always world up/down)
+                            if (actions['flyUp']) { // E - up
+                                desktopFlyPosition.add(up.clone().multiplyScalar(flyDelta));
+                            }
+                            if (actions['flyDown']) { // Q - down
+                                desktopFlyPosition.add(up.clone().multiplyScalar(-flyDelta));
+                            }
+                            
+                            // Apply position and rotation to camera (prevent roll/tilt)
+                            firstPersonCamera.position.copy(desktopFlyPosition);
+                            firstPersonCamera.rotation.order = 'YXZ'; // Ensure proper rotation order
+                            firstPersonCamera.rotation.set(
+                                desktopFlyRotation.x, // Pitch (up/down)
+                                desktopFlyRotation.y, // Yaw (left/right)
+                                0                     // Roll (always 0 to prevent tilt)
+                            );
                         }
-                        // Fly mode is VR-only
                     } else if (cameraMode === 'orbit') {
                         if (renderer.xr.isPresenting) {
                             // In VR: Position orbit camera in the rig
@@ -4291,9 +5373,9 @@
                 var rawPoints = [];
                 for (let i = 0; i < curvePoints.length; i += 3) {
                     rawPoints.push(new THREE.Vector3(
-                        curvePoints[i] * 4,     // Scale up X by 4x
-                        curvePoints[i + 1] * 6, // 6x Y for dramatic but manageable elevation
-                        curvePoints[i + 2] * 4  // Scale up Z by 4x
+                        curvePoints[i] * 8,     // Scale up X by 8x (doubled from 4x)
+                        curvePoints[i + 1] * 6, // 6x Y for dramatic but manageable elevation (unchanged)
+                        curvePoints[i + 2] * 8  // Scale up Z by 8x (doubled from 4x)
                     ));
                 }
                 
@@ -4928,20 +6010,788 @@
                 };
             }
 
+            function createBasicGround() {
+                console.log('🌍 Creating basic ground (always works)...');
+                
+                // Create basic ground box - this always works (doubled for larger track)
+                createBox(new THREE.Vector3(0, -0.75, 0), ZERO_QUATERNION, 600, 1, 600, 0, 2);
+                
+                console.log('✅ Basic ground created with physics');
+            }
+
+            function loadGroundModel() {
+                console.log('🌍 Loading ground model from assets/ground/...');
+                
+                // Try different possible filenames
+                const possibleFiles = [
+                    'assets/ground/forest_ground_04_8k.gltf',
+                    'assets/ground/scene.gltf',
+                    'assets/ground/model.gltf',
+                    'assets/ground/terrain.gltf'
+                ];
+                
+                let currentFileIndex = 0;
+                
+                function tryLoadFile() {
+                    if (currentFileIndex >= possibleFiles.length) {
+                        console.log('❌ No GLTF files found, trying textured plane approach...');
+                        createTexturedGround();
+                        return;
+                    }
+                    
+                    const filename = possibleFiles[currentFileIndex];
+                    console.log(`🔍 Trying to load: ${filename}`);
+                    
+                    const loader = new THREE.GLTFLoader();
+                    loader.load(
+                        filename,
+                        function(gltf) {
+                            console.log(`✅ Ground GLTF loaded successfully: ${filename}`);
+                            
+                            const groundModel = gltf.scene;
+                            
+                            // Debug: Log model info
+                            console.log('📊 GLTF Model info:', {
+                                children: groundModel.children.length,
+                                position: groundModel.position,
+                                scale: groundModel.scale,
+                                boundingBox: new THREE.Box3().setFromObject(groundModel)
+                            });
+                            
+                            // Position and scale the ground model
+                            groundModel.position.set(0, -0.73, 0); // Slightly above basic ground
+                            
+                            // Try different scales to make it visible
+                            const scale = 50; // Make it much larger
+                            groundModel.scale.set(scale, scale, scale);
+                            
+                            // Ensure all materials are visible
+                            groundModel.traverse(function(child) {
+                                if (child.isMesh) {
+                                    console.log('🎨 Found mesh:', child.name, 'Material:', child.material?.name || 'unnamed');
+                                    if (child.material) {
+                                        child.material.side = THREE.DoubleSide; // Visible from both sides
+                                        child.castShadow = true;
+                                        child.receiveShadow = true;
+                                    }
+                                }
+                            });
+                            
+                            // Add to scene (basic ground already exists, this enhances it)
+                            scene.add(groundModel);
+                            
+                            console.log(`🌍 Enhanced GLTF ground model added at scale ${scale}x`);
+                        },
+                        function(progress) {
+                            console.log(`📥 Loading ${filename}:`, Math.round((progress.loaded / progress.total) * 100) + '%');
+                        },
+                        function(error) {
+                            console.log(`❌ Failed to load ${filename}, trying next...`);
+                            currentFileIndex++;
+                            tryLoadFile();
+                        }
+                    );
+                }
+                
+                tryLoadFile();
+            }
+            
+            function createTexturedGround() {
+                console.log('🌍 Creating forest textured ground plane...');
+                
+                // Create a large plane geometry with high detail for displacement (doubled for larger track)
+                const groundGeometry = new THREE.PlaneGeometry(600, 600, 128, 128);
+                const textureLoader = new THREE.TextureLoader();
+                
+                // Create a working ground material first (forest green-brown)
+                const groundMaterial = new THREE.MeshLambertMaterial({
+                    color: 0x4a5d23, // Forest green-brown color
+                });
+                
+                console.log('🌲 Ground created with forest color, will try to load textures...');
+                
+                // Create the ground mesh
+                const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+                groundMesh.rotation.x = -Math.PI / 2; // Make it horizontal (flat)
+                groundMesh.position.set(0, -0.75, 0);  // Ground level
+                groundMesh.receiveShadow = true;
+                
+                // Add to scene
+                scene.add(groundMesh);
+                
+                // Create physics collision box (doubled for larger track)
+                const groundPhysics = new Ammo.btBoxShape(new Ammo.btVector3(300, 0.5, 300));
+                const groundTransform = new Ammo.btTransform();
+                groundTransform.setIdentity();
+                groundTransform.setOrigin(new Ammo.btVector3(0, -0.75, 0));
+                
+                const groundMotionState = new Ammo.btDefaultMotionState(groundTransform);
+                const groundRigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(0, groundMotionState, groundPhysics, new Ammo.btVector3(0, 0, 0));
+                const groundRigidBody = new Ammo.btRigidBody(groundRigidBodyInfo);
+                groundRigidBody.setFriction(2);
+                physicsWorld.addRigidBody(groundRigidBody);
+                
+                console.log('✅ Forest ground plane created with physics');
+                
+                // Try to enhance with textures (multiple possible paths)
+                tryLoadForestTextures(groundMesh);
+            }
+            
+            function tryLoadForestTextures(groundMesh) {
+                const textureLoader = new THREE.TextureLoader();
+                
+                // Try different possible paths for your textures
+                const possiblePaths = [
+                    'assets/ground/textures/',
+                    ''
+                ];
+                
+                const textureNames = [
+                    'forest_ground_04_diff_8k.jpg',
+                    'forest_ground_04_nor_gl_8k.jpg', 
+                    'forest_ground_04_rough_8k.jpg'
+                ];
+                
+                let currentPathIndex = 0;
+                
+                function tryPath() {
+                    if (currentPathIndex >= possiblePaths.length) {
+                        console.log('ℹ️ No forest textures found at any path, keeping solid color ground');
+                        return;
+                    }
+                    
+                    const basePath = possiblePaths[currentPathIndex];
+                    console.log(`🔍 Trying texture path: ${basePath}`);
+                    
+                    // Try to load diffuse texture from current path
+                    textureLoader.load(
+                        basePath + textureNames[0],
+                        function(diffuseTexture) {
+                            console.log(`✅ Found textures at: ${basePath}`);
+                            loadAllTexturesFromPath(basePath, groundMesh);
+                        },
+                        undefined,
+                        function(error) {
+                            console.log(`❌ No textures at: ${basePath}`);
+                            currentPathIndex++;
+                            tryPath();
+                        }
+                    );
+                }
+                
+                tryPath();
+            }
+            
+            function loadAllTexturesFromPath(basePath, groundMesh) {
+                const textureLoader = new THREE.TextureLoader();
+                
+                console.log(`🌲 Loading all forest textures from: ${basePath}`);
+                
+                const diffuseTexture = textureLoader.load(basePath + 'forest_ground_04_diff_8k.jpg');
+                const normalTexture = textureLoader.load(basePath + 'forest_ground_04_nor_gl_8k.jpg');
+                const roughnessTexture = textureLoader.load(basePath + 'forest_ground_04_rough_8k.jpg');
+                
+                // Use the normal map as displacement for height variation
+                const displacementTexture = textureLoader.load(basePath + 'forest_ground_04_nor_gl_8k.jpg');
+                
+                // Configure texture tiling with aggressive pattern breaking
+                diffuseTexture.wrapS = THREE.RepeatWrapping;
+                diffuseTexture.wrapT = THREE.RepeatWrapping;
+                diffuseTexture.repeat.set(32, 32);
+                diffuseTexture.offset.set(0.1, 0.15); // Offset to break alignment
+                
+                normalTexture.wrapS = THREE.RepeatWrapping;
+                normalTexture.wrapT = THREE.RepeatWrapping;
+                normalTexture.repeat.set(29.3, 34.7); // Much more different scaling
+                normalTexture.offset.set(0.3, 0.7); // Different offset
+                normalTexture.rotation = 0.05; // Small rotation
+                
+                roughnessTexture.wrapS = THREE.RepeatWrapping;
+                roughnessTexture.wrapT = THREE.RepeatWrapping;
+                roughnessTexture.repeat.set(35.1, 28.9); // Very different scaling
+                roughnessTexture.offset.set(0.6, 0.2); // Different offset
+                roughnessTexture.rotation = -0.03; // Opposite rotation
+                
+                displacementTexture.wrapS = THREE.RepeatWrapping;
+                displacementTexture.wrapT = THREE.RepeatWrapping;
+                displacementTexture.repeat.set(27.8, 36.4); // Significantly different
+                displacementTexture.offset.set(0.8, 0.4); // Different offset
+                displacementTexture.rotation = 0.08; // Larger rotation
+                
+                // Create enhanced PBR material with displacement
+                const enhancedMaterial = new THREE.MeshStandardMaterial({
+                    map: diffuseTexture,
+                    normalMap: normalTexture,
+                    roughnessMap: roughnessTexture,
+                    displacementMap: displacementTexture,
+                    displacementScale: 0.5, // Moderate depth (halved again from 1.0)
+                    roughness: 0.8,
+                    metalness: 0.0
+                });
+                
+                // Update the ground mesh material
+                groundMesh.material = enhancedMaterial;
+                console.log('🌲 Ground enhanced with forest PBR textures!');
+                
+                // Add billboard trees for background atmosphere
+                createBillboardTrees();
+            }
+            
+            function createBillboardTrees() {
+                console.log('🌲 Creating billboard trees for background...');
+                
+                // Load real tree sprite textures
+                const treeTextures = loadTreeSprites();
+                
+                // Generate dense forest around the track
+                const treePositions = [];
+                
+                // Dense forest layers - multiple rings around the track (doubled for larger track)
+                const forestRings = [
+                    {minRadius: 140, maxRadius: 170, density: 8}, // Inner forest ring (doubled)
+                    {minRadius: 170, maxRadius: 220, density: 12}, // Middle forest ring (doubled)
+                    {minRadius: 220, maxRadius: 280, density: 16}, // Outer forest ring (doubled)
+                    {minRadius: 280, maxRadius: 340, density: 20} // Far background forest (doubled)
+                ];
+                
+                forestRings.forEach(ring => {
+                    for (let i = 0; i < ring.density; i++) {
+                        const angle = (i / ring.density) * Math.PI * 2;
+                        const radius = ring.minRadius + Math.random() * (ring.maxRadius - ring.minRadius);
+                        
+                        // Add some randomness to break perfect circles
+                        const angleOffset = (Math.random() - 0.5) * 0.3;
+                        const radiusOffset = (Math.random() - 0.5) * 10;
+                        
+                        const x = Math.cos(angle + angleOffset) * (radius + radiusOffset);
+                        const z = Math.sin(angle + angleOffset) * (radius + radiusOffset);
+                        
+                        // Scale trees based on distance (perspective) - updated for larger track
+                        const distanceScale = 0.7 + (radius / 340) * 0.8; // Far trees slightly smaller (doubled max radius)
+                        const randomScale = 0.8 + Math.random() * 0.6; // Random size variation
+                        
+                        treePositions.push({
+                            x: x,
+                            z: z,
+                            scale: distanceScale * randomScale,
+                            type: Math.floor(Math.random() * 5) // 5 tree types now
+                        });
+                    }
+                });
+                
+                // Add some scattered trees in gaps (doubled for larger track)
+                for (let i = 0; i < 30; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const radius = 120 + Math.random() * 240; // Doubled from 60 + 120
+                    const x = Math.cos(angle) * radius;
+                    const z = Math.sin(angle) * radius;
+                    
+                    // Make sure not too close to track center (doubled)
+                    if (Math.sqrt(x*x + z*z) > 110) { // Doubled from 55
+                        treePositions.push({
+                            x: x,
+                            z: z,
+                            scale: 0.6 + Math.random() * 0.8,
+                            type: Math.floor(Math.random() * 5)
+                        });
+                    }
+                }
+                
+                // Create billboard trees once textures are loaded
+                treeTextures.then(textures => {
+                    const treeBillboards = []; // Store references for manual billboard updates
+                    
+                    treePositions.forEach(pos => {
+                        // Use PlaneGeometry instead of Sprite for manual billboard control
+                        const treeGeometry = new THREE.PlaneGeometry(12 * pos.scale, 16 * pos.scale);
+                        const treeMaterial = new THREE.MeshBasicMaterial({
+                            map: textures[pos.type % textures.length],
+                            transparent: true,
+                            alphaTest: 0.1,
+                            side: THREE.DoubleSide
+                        });
+                        
+                        const treeMesh = new THREE.Mesh(treeGeometry, treeMaterial);
+                        treeMesh.position.set(pos.x, 8 * pos.scale, pos.z);
+                        
+                        // Store reference for manual billboard updates
+                        treeBillboards.push(treeMesh);
+                        scene.add(treeMesh);
+                    });
+                    
+                    // Store billboard references globally for updates
+                    window.treeBillboards = treeBillboards;
+                    
+                    console.log(`✅ Created ${treePositions.length} billboard trees with real sprites`);
+                }).catch(error => {
+                    console.log('❌ Failed to load tree sprites, falling back to procedural trees');
+                    // Fallback to procedural trees with manual billboard control
+                    const proceduralTextures = createProceduralTreeTextures();
+                    const treeBillboards = [];
+                    
+                    treePositions.forEach(pos => {
+                        const treeGeometry = new THREE.PlaneGeometry(12 * pos.scale, 16 * pos.scale);
+                        const treeMaterial = new THREE.MeshBasicMaterial({
+                            map: proceduralTextures[pos.type % proceduralTextures.length],
+                            transparent: true,
+                            alphaTest: 0.1,
+                            side: THREE.DoubleSide
+                        });
+                        
+                        const treeMesh = new THREE.Mesh(treeGeometry, treeMaterial);
+                        treeMesh.position.set(pos.x, 8 * pos.scale, pos.z);
+                        
+                        treeBillboards.push(treeMesh);
+                        scene.add(treeMesh);
+                    });
+                    
+                    // Store billboard references globally for updates
+                    window.treeBillboards = treeBillboards;
+                    console.log(`✅ Created ${treePositions.length} billboard trees with procedural fallback`);
+                });
+            }
+            
+            function checkVehicleCollisions(dt) {
+                // Arcade-style vehicle collision detection and response
+                if (!physicsWorld) return;
+                
+                // Only run collision detection in multiplayer or when bot is present
+                if (!isMultiplayer && !botEnabled) return;
+                
+                // Get all vehicles that could collide
+                const vehicles = [];
+                
+                // Add player vehicle (check if vehicleRef exists first)
+                if (typeof vehicleRef !== 'undefined' && vehicleRef && vehicleRef.vehicleBody) {
+                    vehicles.push({
+                        body: vehicleRef.vehicleBody,
+                        vehicle: vehicleRef.vehicle,
+                        type: 'player',
+                        mesh: vehicleRef.chassisMesh
+                    });
+                }
+                
+                // Add bot vehicle (check if botRef exists first)
+                if (typeof botRef !== 'undefined' && botRef && botRef.chassisBody) {
+                    vehicles.push({
+                        body: botRef.chassisBody,
+                        vehicle: botRef.vehicle,
+                        type: 'bot',
+                        mesh: botRef.chassisMesh
+                    });
+                }
+                
+                // Add remote player vehicles
+                if (remotePlayerCars) {
+                    remotePlayerCars.forEach((remoteCar, index) => {
+                        if (remoteCar && remoteCar.rigidBody && remoteCar.inPhysicsWorld) {
+                            vehicles.push({
+                                body: remoteCar.rigidBody,
+                                vehicle: null, // Remote cars don't have vehicle objects
+                                type: 'remote',
+                                mesh: remoteCar.mesh,
+                                index: index
+                            });
+                        }
+                    });
+                }
+                
+                // Check collisions between all vehicles
+                for (let i = 0; i < vehicles.length; i++) {
+                    for (let j = i + 1; j < vehicles.length; j++) {
+                        checkVehiclePairCollision(vehicles[i], vehicles[j], dt);
+                    }
+                }
+            }
+            
+            function checkVehiclePairCollision(vehicle1, vehicle2, dt) {
+                // Check if two vehicles are colliding using Bullet physics
+                const numManifolds = physicsWorld.getDispatcher().getNumManifolds();
+                
+                for (let i = 0; i < numManifolds; i++) {
+                    const contactManifold = physicsWorld.getDispatcher().getManifoldByIndexInternal(i);
+                    const body0 = Ammo.castObject(contactManifold.getBody0(), Ammo.btRigidBody);
+                    const body1 = Ammo.castObject(contactManifold.getBody1(), Ammo.btRigidBody);
+                    
+                    // Check if this manifold involves our two vehicles
+                    const isCollision = (body0 === vehicle1.body && body1 === vehicle2.body) ||
+                                       (body0 === vehicle2.body && body1 === vehicle1.body);
+                    
+                    if (isCollision && contactManifold.getNumContacts() > 0) {
+                        // Get collision details
+                        const contactPoint = contactManifold.getContactPoint(0);
+                        const impulse = contactPoint.getAppliedImpulse();
+                        
+                        // Only process significant collisions (raised threshold to reduce false positives)
+                        if (impulse > 150) { // Higher threshold for meaningful collision
+                            applyArcadeCollisionResponse(vehicle1, vehicle2, contactPoint, impulse, dt);
+                        }
+                    }
+                }
+            }
+            
+            function applyArcadeCollisionResponse(vehicle1, vehicle2, contactPoint, impulse, dt) {
+                // Arcade-style collision response - more controlled for stability
+                const collisionForce = Math.min(impulse / 200, 5); // Reduced force scaling and cap
+                
+                // Get collision normal and positions
+                const normal = contactPoint.get_m_normalWorldOnB();
+                const pos1 = vehicle1.body.getCenterOfMassPosition();
+                const pos2 = vehicle2.body.getCenterOfMassPosition();
+                
+                // Calculate relative velocity for more dramatic effects
+                const vel1 = vehicle1.body.getLinearVelocity();
+                const vel2 = vehicle2.body.getLinearVelocity();
+                const relativeSpeed = Math.sqrt(
+                    Math.pow(vel1.x() - vel2.x(), 2) + 
+                    Math.pow(vel1.z() - vel2.z(), 2)
+                );
+                
+                // Scale effects based on speed - more controlled response
+                const speedMultiplier = Math.min(relativeSpeed / 30, 2); // Reduced multiplier and cap
+                const finalForce = collisionForce * (1 + speedMultiplier * 0.5); // Reduced speed influence
+                
+                // Apply lateral forces to create spin-outs (reduced for stability)
+                const lateralForce = new Ammo.btVector3(
+                    normal.z() * finalForce * 1.2, // Reduced perpendicular force
+                    0,
+                    -normal.x() * finalForce * 1.2
+                );
+                
+                const backwardForce = new Ammo.btVector3(
+                    -normal.x() * finalForce * 0.8, // Reduced backward force
+                    0,
+                    -normal.z() * finalForce * 0.8
+                );
+                
+                // Apply forces to both vehicles (reduced torque for stability)
+                // Vehicle 1 gets pushed in collision direction
+                vehicle1.body.applyCentralImpulse(backwardForce);
+                vehicle1.body.applyTorqueImpulse(new Ammo.btVector3(0, lateralForce.x() * 0.3, 0)); // Reduced torque
+                
+                // Vehicle 2 gets pushed in opposite direction  
+                const oppositeForce = new Ammo.btVector3(
+                    normal.x() * finalForce * 0.8, // Reduced opposite force
+                    0,
+                    normal.z() * finalForce * 0.8
+                );
+                const oppositeLateral = new Ammo.btVector3(
+                    -lateralForce.x(),
+                    0,
+                    -lateralForce.z()
+                );
+                
+                vehicle2.body.applyCentralImpulse(oppositeForce);
+                vehicle2.body.applyTorqueImpulse(new Ammo.btVector3(0, oppositeLateral.x() * 0.3, 0)); // Reduced torque
+                
+                // Add some vertical bounce for dramatic effect (reduced)
+                if (finalForce > 2) {
+                    const bounceForce = new Ammo.btVector3(0, finalForce * 0.15, 0); // Reduced bounce
+                    vehicle1.body.applyCentralImpulse(bounceForce);
+                    vehicle2.body.applyCentralImpulse(bounceForce);
+                }
+                
+                // Play impact sound for collisions
+                if (window.impactSound && finalForce > 1.5) {
+                    var impactIntensity = Math.min(finalForce / 5, 1); // Normalize to 0-1
+                    window.impactSound.playImpact(impactIntensity);
+                }
+                
+                // Reduced console logging for performance
+                if (finalForce > 4) { // Only log significant collisions
+                    console.log(`🚗💥 Vehicle collision! Force: ${finalForce.toFixed(1)}, Speed: ${relativeSpeed.toFixed(1)} km/h`);
+                }
+            }
+            
+            function updateTreeBillboards(dt) {
+                // Update tree billboards to face camera (Y-axis rotation only)
+                if (window.treeBillboards && window.treeBillboards.length > 0) {
+                    // Get current camera position
+                    const cameraPosition = camera.position.clone();
+                    
+                    // Update each tree billboard
+                    window.treeBillboards.forEach(treeMesh => {
+                        // Calculate direction from tree to camera (horizontal only)
+                        const treePosition = treeMesh.position;
+                        const direction = new THREE.Vector3();
+                        direction.subVectors(cameraPosition, treePosition);
+                        direction.y = 0; // Remove vertical component - only horizontal rotation
+                        direction.normalize();
+                        
+                        // Calculate Y-axis rotation to face camera
+                        const angle = Math.atan2(direction.x, direction.z);
+                        
+                        // Apply only Y-axis rotation (yaw), keep trees upright
+                        treeMesh.rotation.set(0, angle, 0);
+                    });
+                }
+            }
+            
+            function loadTreeSprites() {
+                return new Promise((resolve, reject) => {
+                    console.log('🌲 Loading tree sprite images...');
+                    
+                    // Define available tree sprites (trying common naming patterns)
+                    const treeSprites = [
+                        'assets/tree-sprites/Tree_Pine_diff.png',
+                        'assets/tree-sprites/Tree_PiceaA_diff.png',
+                        'assets/tree-sprites/Tree_PiceaB_diff.png',
+                        'assets/tree-sprites/Tree_PiceaC_diff.png',
+                        'assets/tree-sprites/Tree_Pseudo_diff.png'
+                    ];
+                    
+                    const textureLoader = new THREE.TextureLoader();
+                    const loadedTextures = [];
+                    let loadedCount = 0;
+                    let hasError = false;
+                    
+                    if (treeSprites.length === 0) {
+                        reject('No tree sprites defined');
+                        return;
+                    }
+                    
+                    treeSprites.forEach((spritePath, index) => {
+                        textureLoader.load(
+                            spritePath,
+                            // Success callback
+                            function(texture) {
+                                texture.transparent = true;
+                                texture.alphaTest = 0.1;
+                                loadedTextures[index] = texture;
+                                loadedCount++;
+                                
+                                console.log(`✅ Loaded tree sprite: ${spritePath}`);
+                                
+                                if (loadedCount === treeSprites.length) {
+                                    console.log(`🌲 All ${loadedCount} tree sprites loaded successfully`);
+                                    resolve(loadedTextures);
+                                }
+                            },
+                            // Progress callback
+                            function(progress) {
+                                // Optional progress tracking
+                            },
+                            // Error callback
+                            function(error) {
+                                console.log(`❌ Failed to load tree sprite: ${spritePath}`);
+                                hasError = true;
+                                loadedCount++;
+                                
+                                if (loadedCount === treeSprites.length) {
+                                    if (hasError && loadedTextures.filter(t => t).length === 0) {
+                                        reject('Failed to load any tree sprites');
+                                    } else {
+                                        // Return only successfully loaded textures
+                                        const validTextures = loadedTextures.filter(t => t);
+                                        console.log(`🌲 Loaded ${validTextures.length}/${treeSprites.length} tree sprites`);
+                                        resolve(validTextures);
+                                    }
+                                }
+                            }
+                        );
+                    });
+                });
+            }
+            
+            function createProceduralTreeTextures() {
+                const textures = [];
+                
+                // Create 5 different realistic tree types
+                const treeTypes = [
+                    {name: 'Oak', trunkColor: [30, 50, 20], foliageColor: [95, 60, 30], shape: 'round'},
+                    {name: 'Pine', trunkColor: [25, 40, 25], foliageColor: [120, 70, 25], shape: 'conical'},
+                    {name: 'Birch', trunkColor: [0, 0, 85], foliageColor: [85, 55, 35], shape: 'oval'},
+                    {name: 'Maple', trunkColor: [20, 45, 22], foliageColor: [100, 65, 28], shape: 'irregular'},
+                    {name: 'Spruce', trunkColor: [28, 35, 18], foliageColor: [130, 75, 20], shape: 'tall_conical'}
+                ];
+                
+                treeTypes.forEach((treeType, i) => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 256; // Higher resolution for realism
+                    canvas.height = 384;
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Clear with transparency
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    
+                    // More realistic trunk with texture
+                    const trunkWidth = 12 + Math.random() * 8;
+                    const trunkHeight = 80 + Math.random() * 40;
+                    
+                    // Trunk gradient for 3D effect
+                    const trunkGradient = ctx.createLinearGradient(
+                        canvas.width/2 - trunkWidth/2, 0,
+                        canvas.width/2 + trunkWidth/2, 0
+                    );
+                    const [h, s, l] = treeType.trunkColor;
+                    trunkGradient.addColorStop(0, `hsl(${h}, ${s}%, ${l - 5}%)`); // Darker left
+                    trunkGradient.addColorStop(0.3, `hsl(${h}, ${s}%, ${l + 5}%)`); // Lighter center-left
+                    trunkGradient.addColorStop(0.7, `hsl(${h}, ${s}%, ${l}%)`); // Normal center-right
+                    trunkGradient.addColorStop(1, `hsl(${h}, ${s - 10}%, ${l - 8}%)`); // Darker right
+                    
+                    ctx.fillStyle = trunkGradient;
+                    ctx.fillRect(canvas.width/2 - trunkWidth/2, canvas.height - trunkHeight, trunkWidth, trunkHeight);
+                    
+                    // Add trunk texture lines
+                    ctx.strokeStyle = `hsla(${h}, ${s}%, ${l - 15}%, 0.6)`;
+                    ctx.lineWidth = 1;
+                    for (let line = 0; line < 5; line++) {
+                        const y = canvas.height - trunkHeight + line * (trunkHeight / 5) + Math.random() * 10;
+                        ctx.beginPath();
+                        ctx.moveTo(canvas.width/2 - trunkWidth/2, y);
+                        ctx.lineTo(canvas.width/2 + trunkWidth/2, y);
+                        ctx.stroke();
+                    }
+                    
+                    // Create realistic foliage based on tree type
+                    const [fh, fs, fl] = treeType.foliageColor;
+                    
+                    if (treeType.shape === 'round') {
+                        // Oak-style round crown
+                        createRoundCrown(ctx, canvas.width/2, canvas.height - trunkHeight - 30, 50, fh, fs, fl);
+                    } else if (treeType.shape === 'conical' || treeType.shape === 'tall_conical') {
+                        // Pine/Spruce-style conical crown
+                        const height = treeType.shape === 'tall_conical' ? 120 : 80;
+                        createConicalCrown(ctx, canvas.width/2, canvas.height - trunkHeight, height, fh, fs, fl);
+                    } else if (treeType.shape === 'oval') {
+                        // Birch-style oval crown
+                        createOvalCrown(ctx, canvas.width/2, canvas.height - trunkHeight - 25, 45, 65, fh, fs, fl);
+                    } else if (treeType.shape === 'irregular') {
+                        // Maple-style irregular crown
+                        createIrregularCrown(ctx, canvas.width/2, canvas.height - trunkHeight - 35, 55, fh, fs, fl);
+                    }
+                    
+                    // Create Three.js texture
+                    const texture = new THREE.CanvasTexture(canvas);
+                    texture.needsUpdate = true;
+                    textures.push(texture);
+                });
+                
+                return textures;
+                
+                // Helper functions for different crown shapes
+                function createRoundCrown(ctx, centerX, centerY, radius, h, s, l) {
+                    // Main crown circle with gradient
+                    const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+                    gradient.addColorStop(0, `hsl(${h}, ${s}%, ${l + 8}%)`);
+                    gradient.addColorStop(0.7, `hsl(${h}, ${s}%, ${l}%)`);
+                    gradient.addColorStop(1, `hsl(${h}, ${s - 10}%, ${l - 12}%)`);
+                    
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Add foliage clusters for texture
+                    for (let i = 0; i < 15; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const dist = Math.random() * radius * 0.7;
+                        const x = centerX + Math.cos(angle) * dist;
+                        const y = centerY + Math.sin(angle) * dist;
+                        const size = 8 + Math.random() * 12;
+                        
+                        ctx.fillStyle = `hsla(${h + (Math.random() - 0.5) * 20}, ${s}%, ${l + (Math.random() - 0.5) * 15}%, 0.8)`;
+                        ctx.beginPath();
+                        ctx.arc(x, y, size, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                
+                function createConicalCrown(ctx, centerX, baseY, height, h, s, l) {
+                    // Create triangular/conical shape with layers
+                    const layers = 6;
+                    for (let layer = 0; layer < layers; layer++) {
+                        const y = baseY - (layer / layers) * height;
+                        const width = (1 - layer / layers) * 40 + 10;
+                        
+                        const layerGradient = ctx.createLinearGradient(centerX - width, y, centerX + width, y);
+                        layerGradient.addColorStop(0, `hsl(${h}, ${s}%, ${l - 8}%)`);
+                        layerGradient.addColorStop(0.5, `hsl(${h}, ${s}%, ${l + 5}%)`);
+                        layerGradient.addColorStop(1, `hsl(${h}, ${s}%, ${l - 8}%)`);
+                        
+                        ctx.fillStyle = layerGradient;
+                        ctx.beginPath();
+                        ctx.ellipse(centerX, y, width, 12, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                
+                function createOvalCrown(ctx, centerX, centerY, radiusX, radiusY, h, s, l) {
+                    const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radiusX);
+                    gradient.addColorStop(0, `hsl(${h}, ${s}%, ${l + 8}%)`);
+                    gradient.addColorStop(0.7, `hsl(${h}, ${s}%, ${l}%)`);
+                    gradient.addColorStop(1, `hsl(${h}, ${s - 10}%, ${l - 12}%)`);
+                    
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Add texture spots
+                    for (let i = 0; i < 12; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const distX = Math.random() * radiusX * 0.6;
+                        const distY = Math.random() * radiusY * 0.6;
+                        const x = centerX + Math.cos(angle) * distX;
+                        const y = centerY + Math.sin(angle) * distY;
+                        
+                        ctx.fillStyle = `hsla(${h + (Math.random() - 0.5) * 15}, ${s}%, ${l + (Math.random() - 0.5) * 10}%, 0.7)`;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 6 + Math.random() * 8, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                
+                function createIrregularCrown(ctx, centerX, centerY, baseRadius, h, s, l) {
+                    // Create irregular shape with multiple overlapping circles
+                    const numCircles = 8;
+                    for (let i = 0; i < numCircles; i++) {
+                        const angle = (i / numCircles) * Math.PI * 2;
+                        const offsetRadius = baseRadius * (0.3 + Math.random() * 0.4);
+                        const x = centerX + Math.cos(angle) * offsetRadius;
+                        const y = centerY + Math.sin(angle) * offsetRadius;
+                        const radius = baseRadius * (0.4 + Math.random() * 0.3);
+                        
+                        const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+                        gradient.addColorStop(0, `hsl(${h}, ${s}%, ${l + 5}%)`);
+                        gradient.addColorStop(1, `hsl(${h}, ${s - 5}%, ${l - 8}%)`);
+                        
+                        ctx.fillStyle = gradient;
+                        ctx.beginPath();
+                        ctx.arc(x, y, radius, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+            
+            function createGroundPhysics() {
+                // Create physics collision for the ground (invisible box)
+                const groundPhysics = new Ammo.btBoxShape(new Ammo.btVector3(150, 0.5, 150));
+                const groundTransform = new Ammo.btTransform();
+                groundTransform.setIdentity();
+                groundTransform.setOrigin(new Ammo.btVector3(0, -0.75, 0));
+                
+                const groundMotionState = new Ammo.btDefaultMotionState(groundTransform);
+                const groundRigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(0, groundMotionState, groundPhysics, new Ammo.btVector3(0, 0, 0));
+                const groundRigidBody = new Ammo.btRigidBody(groundRigidBodyInfo);
+                groundRigidBody.setFriction(2);
+                physicsWorld.addRigidBody(groundRigidBody);
+            }
+
             function createObjects() {
                 // Create racing path first
                 console.log('Creating racing path...');
                 createRacingPath();
                 console.log('Racing path created:', !!racingPath, 'Points:', pathPoints.length);
                 
-                // Ground (4x bigger) - lowered by 75cm total (raised by 25cm from -1.0m)
-                createBox(new THREE.Vector3(0, -0.75, 0), ZERO_QUATERNION, 300, 1, 300, 0, 2);
+                // Create textured ground directly with your forest textures
+                createTexturedGround();
 
-                // Walls around the driving area
-                createBox(new THREE.Vector3(0, 5, -150), ZERO_QUATERNION, 300, 10, 2, 0, 2);
-                createBox(new THREE.Vector3(0, 5, 150), ZERO_QUATERNION, 300, 10, 2, 0, 2);
-                createBox(new THREE.Vector3(150, 5, 0), ZERO_QUATERNION, 2, 10, 300, 0, 2);
-                createBox(new THREE.Vector3(-150, 5, 0), ZERO_QUATERNION, 2, 10, 300, 0, 2);
+                // Transparent walls around the driving area (doubled for larger track)
+                createBox(new THREE.Vector3(0, 5, -300), ZERO_QUATERNION, 600, 10, 2, 0, 2, materialTransparent);
+                createBox(new THREE.Vector3(0, 5, 300), ZERO_QUATERNION, 600, 10, 2, 0, 2, materialTransparent);
+                createBox(new THREE.Vector3(300, 5, 0), ZERO_QUATERNION, 2, 10, 600, 0, 2, materialTransparent);
+                createBox(new THREE.Vector3(-300, 5, 0), ZERO_QUATERNION, 2, 10, 600, 0, 2, materialTransparent);
 
                 // Ramp
                 var quaternion = new THREE.Quaternion(0, 0, 0, 1);
@@ -4956,18 +6806,18 @@
                     for (var i = 0; i < nh; i++)
                         createBox(new THREE.Vector3(size * j - (size * (nw - 1)) / 2 + 120, size * i, 10), ZERO_QUATERNION, size, size, size, 10);
 
-                // Random cones - fewer and away from track
+                // Random cones - fewer and away from track (doubled area for larger track)
                 for (var c = 0; c < 25; c++) {
                     var x, z;
                     do {
-                        x = (Math.random() - 0.5) * 280;
-                        z = (Math.random() - 0.5) * 280;
+                        x = (Math.random() - 0.5) * 560; // Doubled from 280
+                        z = (Math.random() - 0.5) * 560; // Doubled from 280
                         
                         // Check if too close to racing path (only if path exists)
                         var testPos = new THREE.Vector3(x, 0, z);
                         var pathInfo = racingPath ? findNearestPathPoint(testPos) : {distance: 100};
                         
-                    } while ((Math.abs(x) < 30 && Math.abs(z) < 30) || pathInfo.distance < 20);
+                    } while ((Math.abs(x) < 60 && Math.abs(z) < 60) || pathInfo.distance < 40); // Doubled exclusion zones
                     
                     createBox(new THREE.Vector3(x, 2, z), ZERO_QUATERNION, 1, 4, 1, 10, 1);
                 }
@@ -5047,6 +6897,14 @@
             // Initialize menu system
             setupMenuEventListeners();
             updateMenuDisplay();
+            
+            // Initialize default game mode (singleplayer) after everything is loaded
+            setTimeout(() => {
+                if (!isMultiplayer && !botVehicleRef && racingPath) {
+                    console.log('🎮 Initializing default singleplayer mode...');
+                    switchToSingleplayer();
+                }
+            }, 1000); // Wait 1 second for everything to initialize
             
             tick();
 
