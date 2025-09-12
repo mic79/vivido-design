@@ -746,13 +746,26 @@
                 controls = new THREE.OrbitControls(orbitCamera);
                 controls.enabled = false; // Disabled by default
 
-                renderer = new THREE.WebGLRenderer({ antialias: true });
+                // Quest optimization: reduce quality for performance
+                const isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
+                
+                renderer = new THREE.WebGLRenderer({ 
+                    antialias: !isQuest, // Disable antialiasing on Quest
+                    powerPreference: isQuest ? "high-performance" : "default"
+                });
                 renderer.setClearColor(0xbfd1e5);
-                renderer.setPixelRatio(window.devicePixelRatio);
+                
+                // Reduce pixel ratio on Quest for better performance
+                const pixelRatio = isQuest ? Math.min(window.devicePixelRatio, 1.0) : window.devicePixelRatio;
+                renderer.setPixelRatio(pixelRatio);
                 renderer.setSize(window.innerWidth, window.innerHeight);
                 
                 // Enable WebXR
                 renderer.xr.enabled = true;
+                
+                if (isQuest) {
+                    console.log('📱 Quest optimizations applied: reduced pixel ratio, disabled antialiasing');
+                }
 
                 var ambientLight = new THREE.AmbientLight(0x404040);
                 scene.add(ambientLight);
@@ -5486,7 +5499,9 @@
                 var roadWidth = 14; // 14 meter wide road as requested
                 var borderWidth = 0.4; // 40cm white borders on each side
                 var totalWidth = roadWidth + (borderWidth * 2); // Road + borders
-                var segments = 800; // Very high resolution for maximum smoothness
+                // Adjust road complexity based on platform
+                const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
+                var segments = isQuest ? 200 : 800; // Lower resolution for Quest performance
                 
                 // Get points along the curve
                 var pathPoints = [];
@@ -6097,29 +6112,44 @@
             }
             
             function createTexturedGround() {
-                console.log('🌍 Creating forest textured ground plane...');
+                console.log('🌍 Creating simple ground plane for VR performance...');
                 
-                // Create a large plane geometry with high detail for displacement (doubled for larger track)
-                const groundGeometry = new THREE.PlaneGeometry(600, 600, 128, 128);
-                const textureLoader = new THREE.TextureLoader();
+                // Check if running on Quest (standalone VR)
+                const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
                 
-                // Create a working ground material first (forest green-brown)
-                const groundMaterial = new THREE.MeshLambertMaterial({
-                    color: 0x4a5d23, // Forest green-brown color
-                });
+                if (isQuest) {
+                    // QUEST OPTIMIZATION: Simple low-poly ground
+                    console.log('📱 Quest detected - using simple ground for performance');
+                    const groundGeometry = new THREE.PlaneGeometry(600, 600, 4, 4); // Very low poly
+                    const groundMaterial = new THREE.MeshLambertMaterial({
+                        color: 0x4a5d23, // Forest green-brown color
+                        fog: true
+                    });
+                    
+                    const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+                    groundMesh.rotation.x = -Math.PI / 2;
+                    groundMesh.position.set(0, -0.75, 0);
+                    groundMesh.receiveShadow = false; // Disable shadows for performance
+                    scene.add(groundMesh);
+                } else {
+                    // DESKTOP: Full quality ground
+                    console.log('🖥️ Desktop detected - using full quality ground');
+                    const groundGeometry = new THREE.PlaneGeometry(600, 600, 128, 128);
+                    const groundMaterial = new THREE.MeshLambertMaterial({
+                        color: 0x4a5d23, // Forest green-brown color
+                    });
+                    
+                    const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+                    groundMesh.rotation.x = -Math.PI / 2;
+                    groundMesh.position.set(0, -0.75, 0);
+                    groundMesh.receiveShadow = true;
+                    scene.add(groundMesh);
+                    
+                    // Only load complex textures on desktop
+                    tryLoadForestTextures(groundMesh);
+                }
                 
-                console.log('🌲 Ground created with forest color, will try to load textures...');
-                
-                // Create the ground mesh
-                const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-                groundMesh.rotation.x = -Math.PI / 2; // Make it horizontal (flat)
-                groundMesh.position.set(0, -0.75, 0);  // Ground level
-                groundMesh.receiveShadow = true;
-                
-                // Add to scene
-                scene.add(groundMesh);
-                
-                // Create physics collision box (doubled for larger track)
+                // Create physics collision box (same for both)
                 const groundPhysics = new Ammo.btBoxShape(new Ammo.btVector3(300, 0.5, 300));
                 const groundTransform = new Ammo.btTransform();
                 groundTransform.setIdentity();
@@ -6131,10 +6161,7 @@
                 groundRigidBody.setFriction(2);
                 physicsWorld.addRigidBody(groundRigidBody);
                 
-                console.log('✅ Forest ground plane created with physics');
-                
-                // Try to enhance with textures (multiple possible paths)
-                tryLoadForestTextures(groundMesh);
+                console.log('✅ Ground plane created with physics');
             }
             
             function tryLoadForestTextures(groundMesh) {
@@ -6233,8 +6260,13 @@
                 groundMesh.material = enhancedMaterial;
                 console.log('🌲 Ground enhanced with forest PBR textures!');
                 
-                // Add billboard trees for background atmosphere
-                createBillboardTrees();
+                // Add billboard trees for background atmosphere (desktop only)
+                const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
+                if (!isQuest) {
+                    createBillboardTrees();
+                } else {
+                    console.log('📱 Skipping billboard trees on Quest for performance');
+                }
             }
             
             function createBillboardTrees() {
@@ -6807,7 +6839,9 @@
                         createBox(new THREE.Vector3(size * j - (size * (nw - 1)) / 2 + 120, size * i, 10), ZERO_QUATERNION, size, size, size, 10);
 
                 // Random cones - fewer and away from track (doubled area for larger track)
-                for (var c = 0; c < 25; c++) {
+                const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
+                const coneCount = isQuest ? 5 : 25; // Much fewer cones on Quest
+                for (var c = 0; c < coneCount; c++) {
                     var x, z;
                     do {
                         x = (Math.random() - 0.5) * 560; // Doubled from 280
