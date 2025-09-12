@@ -6112,44 +6112,42 @@
             }
             
             function createTexturedGround() {
-                console.log('🌍 Creating simple ground plane for VR performance...');
+                console.log('🌍 Creating simple flat textured ground...');
                 
-                // Check if running on Quest (standalone VR)
-                const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
+                // Simple flat ground geometry
+                const groundGeometry = new THREE.PlaneGeometry(600, 600, 1, 1);
                 
-                if (isQuest) {
-                    // QUEST OPTIMIZATION: Simple low-poly ground
-                    console.log('📱 Quest detected - using simple ground for performance');
-                    const groundGeometry = new THREE.PlaneGeometry(600, 600, 4, 4); // Very low poly
-                    const groundMaterial = new THREE.MeshLambertMaterial({
-                        color: 0x4a5d23, // Forest green-brown color
-                        fog: true
-                    });
-                    
-                    const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-                    groundMesh.rotation.x = -Math.PI / 2;
-                    groundMesh.position.set(0, -0.75, 0);
-                    groundMesh.receiveShadow = false; // Disable shadows for performance
-                    scene.add(groundMesh);
-                } else {
-                    // DESKTOP: Full quality ground
-                    console.log('🖥️ Desktop detected - using full quality ground');
-                    const groundGeometry = new THREE.PlaneGeometry(600, 600, 128, 128);
-                    const groundMaterial = new THREE.MeshLambertMaterial({
-                        color: 0x4a5d23, // Forest green-brown color
-                    });
-                    
-                    const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-                    groundMesh.rotation.x = -Math.PI / 2;
-                    groundMesh.position.set(0, -0.75, 0);
-                    groundMesh.receiveShadow = true;
-                    scene.add(groundMesh);
-                    
-                    // Only load complex textures on desktop
-                    tryLoadForestTextures(groundMesh);
-                }
+                // Load a simple grass texture
+                const textureLoader = new THREE.TextureLoader();
+                const grassTexture = textureLoader.load('assets/ground/textures/forest_ground_04_diff_8k.jpg', 
+                    function(texture) {
+                        // Texture loaded successfully
+                        texture.wrapS = THREE.RepeatWrapping;
+                        texture.wrapT = THREE.RepeatWrapping;
+                        texture.repeat.set(20, 20); // Tile the texture
+                        console.log('✅ Ground texture loaded');
+                    },
+                    undefined,
+                    function(error) {
+                        // Fallback if texture fails to load
+                        console.log('⚠️ Ground texture failed to load, using solid color');
+                    }
+                );
                 
-                // Create physics collision box (same for both)
+                // Simple material with texture
+                const groundMaterial = new THREE.MeshLambertMaterial({
+                    map: grassTexture,
+                    color: 0x4a5d23 // Fallback color if texture doesn't load
+                });
+                
+                // Create the ground mesh
+                const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+                groundMesh.rotation.x = -Math.PI / 2; // Make it horizontal
+                groundMesh.position.set(0, -0.75, 0);  // Ground level
+                groundMesh.receiveShadow = true;
+                scene.add(groundMesh);
+                
+                // Create physics collision box
                 const groundPhysics = new Ammo.btBoxShape(new Ammo.btVector3(300, 0.5, 300));
                 const groundTransform = new Ammo.btTransform();
                 groundTransform.setIdentity();
@@ -6161,7 +6159,7 @@
                 groundRigidBody.setFriction(2);
                 physicsWorld.addRigidBody(groundRigidBody);
                 
-                console.log('✅ Ground plane created with physics');
+                console.log('✅ Simple flat textured ground created');
             }
             
             function tryLoadForestTextures(groundMesh) {
