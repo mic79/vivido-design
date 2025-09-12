@@ -532,6 +532,11 @@
             // - Functions -
             
             function setupCubeLayer(session) {
+                // TEMPORARILY DISABLED: Skip cube layer for performance testing
+                console.log('🌅 Cube layer temporarily disabled for performance');
+                createThreeJSSkybox(); // This will just set a solid color background
+                return;
+                
                 console.log('🌅 Setting up skybox...');
                 
                 // First, try to create a Three.js skybox as fallback
@@ -665,6 +670,11 @@
             }
             
             function createThreeJSSkybox() {
+                // TEMPORARILY DISABLED: Skip skybox for performance testing
+                console.log('🌅 Skybox temporarily disabled for performance');
+                scene.background = new THREE.Color(0x87CEEB); // Simple sky blue background
+                return;
+                
                 console.log('🎨 Creating Three.js skybox fallback...');
                 
                 // Skybox image URLs - same as WebXR cube layer
