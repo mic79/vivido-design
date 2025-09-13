@@ -756,26 +756,35 @@
                 controls = new THREE.OrbitControls(orbitCamera);
                 controls.enabled = false; // Disabled by default
 
-                // Quest optimization: reduce quality for performance
+                // Quest optimization: aggressive performance settings
                 const isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
                 
                 renderer = new THREE.WebGLRenderer({ 
-                    antialias: !isQuest, // Disable antialiasing on Quest
-                    powerPreference: isQuest ? "high-performance" : "default"
+                    antialias: false, // Always disable for Quest compatibility
+                    powerPreference: "high-performance",
+                    precision: isQuest ? "lowp" : "highp", // Low precision on Quest
+                    alpha: false, // Disable alpha for performance
+                    premultipliedAlpha: false,
+                    preserveDrawingBuffer: false
                 });
-                renderer.setClearColor(0xbfd1e5);
+                renderer.setClearColor(0x87CEEB); // Simple sky blue (same as disabled skybox)
                 
-                // Reduce pixel ratio on Quest for better performance
-                const pixelRatio = isQuest ? Math.min(window.devicePixelRatio, 1.0) : window.devicePixelRatio;
+                // Very conservative pixel ratio for Quest
+                const pixelRatio = isQuest ? 0.8 : window.devicePixelRatio;
                 renderer.setPixelRatio(pixelRatio);
                 renderer.setSize(window.innerWidth, window.innerHeight);
                 
+                // Disable shadows completely on Quest
+                if (isQuest) {
+                    renderer.shadowMap.enabled = false;
+                    console.log('📱 Quest optimizations: low precision, no shadows, reduced pixel ratio (0.8)');
+                } else {
+                    renderer.shadowMap.enabled = true;
+                    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                }
+                
                 // Enable WebXR
                 renderer.xr.enabled = true;
-                
-                if (isQuest) {
-                    console.log('📱 Quest optimizations applied: reduced pixel ratio, disabled antialiasing');
-                }
 
                 var ambientLight = new THREE.AmbientLight(0x404040);
                 scene.add(ambientLight);
@@ -844,17 +853,29 @@
                         renderer.xr.getSession().end();
                     } else {
                         try {
+                            // Request minimal VR session for Quest 3 compatibility
                             const session = await navigator.xr.requestSession('immersive-vr', {
-                                optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+                                optionalFeatures: ['local-floor'] // Minimal features for Quest compatibility
                             });
                             renderer.xr.setSession(session);
-                            console.log('VR session started');
+                            console.log('🥽 VR session started - Quest 3 compatibility mode');
+                            console.log('🥽 Session details:', {
+                                inputSources: session.inputSources.length,
+                                renderState: session.renderState,
+                                environmentBlendMode: session.environmentBlendMode
+                            });
+                            
                             // Set up VR HUD when VR starts
+                            console.log('🥽 Setting up VR HUD...');
                             setupVRHUD();
+                            
                             // Set up VR controllers
+                            console.log('🥽 Setting up VR controllers...');
                             setupVRControllers();
-                            // Set up cube layer for immersive background
-                            setupCubeLayer(session);
+                            
+                            // Skip cube layer for Quest compatibility
+                            console.log('🥽 Skipping cube layer setup for Quest compatibility');
+                            // setupCubeLayer(session);
                             // Hide desktop HUD in VR mode
                             document.body.classList.add('vr-mode');
                             
@@ -6860,16 +6881,20 @@
                 quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 18);
                 createBox(new THREE.Vector3(0, -1.5, 0), quaternion, 8, 4, 10, 0);
 
-                // Stack of boxes (moved away from track)
-                var size = .75;
-                var nw = 8;
-                var nh = 6;
-                for (var j = 0; j < nw; j++)
-                    for (var i = 0; i < nh; i++)
-                        createBox(new THREE.Vector3(size * j - (size * (nw - 1)) / 2 + 120, size * i, 10), ZERO_QUATERNION, size, size, size, 10);
+                // Stack of boxes (moved away from track) - reduced for Quest
+                const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
+                if (!isQuest) {
+                    var size = .75;
+                    var nw = 8;
+                    var nh = 6;
+                    for (var j = 0; j < nw; j++)
+                        for (var i = 0; i < nh; i++)
+                            createBox(new THREE.Vector3(size * j - (size * (nw - 1)) / 2 + 120, size * i, 10), ZERO_QUATERNION, size, size, size, 10);
+                } else {
+                    console.log('📱 Skipping box stack on Quest for performance');
+                }
 
                 // Random cones - fewer and away from track (doubled area for larger track)
-                const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
                 const coneCount = isQuest ? 5 : 25; // Much fewer cones on Quest
                 for (var c = 0; c < coneCount; c++) {
                     var x, z;
