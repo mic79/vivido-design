@@ -334,7 +334,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <!-- TEMPORARILY DISABLED FOR QUEST 3: <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script> -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script> <!-- RE-ENABLED FOR TIRE TESTING -->
     <script src="https://kripken.github.io/ammo.js/builds/ammo.js"></script>
     <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/Detector.js"></script>
     <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/OrbitControls.js"></script>
@@ -3595,27 +3595,24 @@
             
             // GLTF TIRE LOADER: Load the tire model for wheels
             function loadTireModel(isRightSide = false, scale = 1.0) {
-                // TEMPORARILY DISABLED: Skip GLTF tire loading for Quest 3 performance
-                console.log('🛞 GLTF tire models temporarily disabled for Quest 3');
-                
-                // Create simple fallback tire immediately
-                const fallbackGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 16);
-                fallbackGeometry.rotateZ(Math.PI / 2);
-                const fallbackMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
-                const fallbackTire = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
-                fallbackTire.castShadow = true;
-                fallbackTire.receiveShadow = true;
-                scene.add(fallbackTire);
-                
-                return Promise.resolve(fallbackTire);
+                // TEST: Re-enabling GLTF tire models for Quest 3 testing
+                console.log('🛞 Testing GLTF tire models on Quest 3...');
                 
                 return new Promise((resolve, reject) => {
                     const loader = new THREE.GLTFLoader();
                     
-                    // Setup DRACOLoader for compressed GLTF files
+                    // Setup DRACOLoader for compressed GLTF files (Quest optimized)
                     const dracoLoader = new THREE.DRACOLoader();
                     dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
                     dracoLoader.setDecoderConfig({ type: 'js' });
+                    
+                    // Quest optimization: Limit workers
+                    const isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
+                    if (isQuest) {
+                        dracoLoader.setWorkerLimit(1); // Limit workers on Quest
+                        console.log('🛞 Quest detected: Using single DRACO worker for tire loading');
+                    }
+                    
                     loader.setDRACOLoader(dracoLoader);
                     
                     loader.load(
@@ -3632,9 +3629,14 @@
                             model.traverse((child) => {
                                 if (child.isMesh) {
                                     // Keep original materials and textures - no color override
-                                    // Just enable shadows
-                                    child.castShadow = true;
-                                    child.receiveShadow = true;
+                                    // Quest optimization: Disable shadows on tires for performance
+                                    const isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
+                                    child.castShadow = !isQuest;
+                                    child.receiveShadow = !isQuest;
+                                    
+                                    if (isQuest) {
+                                        console.log('🛞 Quest: Disabled shadows on tire for performance');
+                                    }
                                 }
                             });
                             
