@@ -334,7 +334,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+    <!-- TEMPORARILY DISABLED FOR QUEST 3: <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script> -->
     <script src="https://kripken.github.io/ammo.js/builds/ammo.js"></script>
     <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/Detector.js"></script>
     <script src="https://rawcdn.githack.com/kripken/ammo.js/8f8b7187ef74994093318645e5e96b11d982688a/examples/js/three/OrbitControls.js"></script>
@@ -1712,6 +1712,10 @@
             }
             
             function initAudioSystem() {
+                // TEMPORARILY DISABLED: Skip complex audio system for Quest 3 performance
+                console.log('🔊 Complex audio system temporarily disabled for Quest 3');
+                return;
+                
                 try {
                     // Create audio context
                     audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -3570,6 +3574,20 @@
             
             // GLTF TIRE LOADER: Load the tire model for wheels
             function loadTireModel(isRightSide = false, scale = 1.0) {
+                // TEMPORARILY DISABLED: Skip GLTF tire loading for Quest 3 performance
+                console.log('🛞 GLTF tire models temporarily disabled for Quest 3');
+                
+                // Create simple fallback tire immediately
+                const fallbackGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 16);
+                fallbackGeometry.rotateZ(Math.PI / 2);
+                const fallbackMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+                const fallbackTire = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
+                fallbackTire.castShadow = true;
+                fallbackTire.receiveShadow = true;
+                scene.add(fallbackTire);
+                
+                return Promise.resolve(fallbackTire);
+                
                 return new Promise((resolve, reject) => {
                     const loader = new THREE.GLTFLoader();
                     
