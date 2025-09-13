@@ -3645,9 +3645,10 @@
                             const center = box.getCenter(new THREE.Vector3());
                             model.position.sub(center);
                             
-                            // Rotate for right side tires (flip 180 degrees around Y axis)
-                            if (isRightSide) {
-                                model.rotation.y = Math.PI;
+                            // Mirror left side tires (flip around Z axis to reverse inside/outside)
+                            // Left wheels need to be mirrored so the outside face points outward
+                            if (!isRightSide) { // Left wheels (positive X positions)
+                                model.scale.x = -1; // Mirror/flip the tire horizontally
                             }
                             
                             // Add to scene
@@ -3688,17 +3689,24 @@
             
             // GLTF DUNE BUGGY LOADER: Load the dune buggy model for vehicles
             function loadDuneBuggyModel(scale = 1.0) {
-                // TEMPORARILY DISABLED: Skip GLTF loading for performance testing
-                console.log('🚗 GLTF car models temporarily disabled');
-                return Promise.reject('GLTF models temporarily disabled');
+                // RE-ENABLED: Testing 3D car models on Quest 3
+                console.log('🚗 Loading GLTF car models...');
                 
                 return new Promise((resolve, reject) => {
                     const loader = new THREE.GLTFLoader();
                     
-                    // Setup DRACOLoader for compressed GLTF files
+                    // Setup DRACOLoader for compressed GLTF files (Quest optimized)
                     const dracoLoader = new THREE.DRACOLoader();
                     dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
                     dracoLoader.setDecoderConfig({ type: 'js' });
+                    
+                    // Quest optimization: Limit workers
+                    const isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
+                    if (isQuest) {
+                        dracoLoader.setWorkerLimit(1); // Limit workers on Quest
+                        console.log('🚗 Quest detected: Using single DRACO worker for car loading');
+                    }
+                    
                     loader.setDRACOLoader(dracoLoader);
                     
                     loader.load(
@@ -3715,9 +3723,14 @@
                             model.traverse((child) => {
                                 if (child.isMesh) {
                                     // Keep original materials and textures - no color override
-                                    // Just enable shadows
-                                    child.castShadow = true;
-                                    child.receiveShadow = true;
+                                    // Quest optimization: Disable shadows on cars for performance
+                                    const isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
+                                    child.castShadow = !isQuest;
+                                    child.receiveShadow = !isQuest;
+                                    
+                                    if (isQuest) {
+                                        console.log('🚗 Quest: Disabled shadows on car for performance');
+                                    }
                                 }
                             });
                             
