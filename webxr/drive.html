@@ -4038,15 +4038,25 @@
                     // Send car state to other players (throttled to 10Hz)
                     // Car state sending now handled by sendPlayerState() in sync list
 
-                    // Update wheel meshes
+                    // Update wheel meshes with smoothing to reduce stuttering
                     var n = vehicle.getNumWheels();
                     for (var i = 0; i < n; i++) {
                         vehicle.updateWheelTransform(i, true);
                         var wheelTm = vehicle.getWheelTransformWS(i);
                         var wheelP = wheelTm.getOrigin();
                         var wheelQ = wheelTm.getRotation();
+                        
+                        // Position update (immediate for responsiveness)
                         wheelMeshes[i].position.set(wheelP.x(), wheelP.y(), wheelP.z());
-                        wheelMeshes[i].quaternion.set(wheelQ.x(), wheelQ.y(), wheelQ.z(), wheelQ.w());
+                        
+                        // Smooth quaternion interpolation to reduce stuttering/oscillation
+                        const targetQuaternion = new THREE.Quaternion(wheelQ.x(), wheelQ.y(), wheelQ.z(), wheelQ.w());
+                        const currentQuaternion = wheelMeshes[i].quaternion.clone();
+                        
+                        // Smooth interpolation factor (0.1 = heavy smoothing, 0.9 = light smoothing)
+                        const smoothingFactor = 0.15; // Balanced smoothing for realistic wheel motion
+                        currentQuaternion.slerp(targetQuaternion, smoothingFactor);
+                        wheelMeshes[i].quaternion.copy(currentQuaternion);
                     }
 
 
@@ -5281,8 +5291,18 @@
                         tm = vehicle.getWheelTransformWS(i);
                         p = tm.getOrigin();
                         q = tm.getRotation();
+                        
+                        // Position update (immediate for responsiveness)
                         wheelMeshes[i].position.set(p.x(), p.y(), p.z());
-                        wheelMeshes[i].quaternion.set(q.x(), q.y(), q.z(), q.w());
+                        
+                        // Smooth quaternion interpolation to reduce stuttering/oscillation
+                        const targetQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
+                        const currentQuaternion = wheelMeshes[i].quaternion.clone();
+                        
+                        // Smooth interpolation factor for bot wheels
+                        const smoothingFactor = 0.15; // Same smoothing as player wheels
+                        currentQuaternion.slerp(targetQuaternion, smoothingFactor);
+                        wheelMeshes[i].quaternion.copy(currentQuaternion);
                     }
 
                     tm = vehicle.getChassisWorldTransform();
