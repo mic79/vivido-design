@@ -532,10 +532,8 @@
             // - Functions -
             
             function setupCubeLayer(session) {
-                // TEMPORARILY DISABLED: Skip cube layer for performance testing
-                console.log('🌅 Cube layer temporarily disabled for performance');
-                createThreeJSSkybox(); // This will just set a solid color background
-                return;
+                // RE-ENABLED: WebXR cube layer skybox
+                console.log('🌅 Setting up WebXR cube layer skybox...');
                 
                 console.log('🌅 Setting up skybox...');
                 
@@ -670,10 +668,8 @@
             }
             
             function createThreeJSSkybox() {
-                // TEMPORARILY DISABLED: Skip skybox for performance testing
-                console.log('🌅 Skybox temporarily disabled for performance');
-                scene.background = new THREE.Color(0x87CEEB); // Simple sky blue background
-                return;
+                // RE-ENABLED: Three.js skybox fallback
+                console.log('🌅 Loading Three.js skybox...');
                 
                 console.log('🎨 Creating Three.js skybox fallback...');
                 
@@ -1733,9 +1729,8 @@
             }
             
             function initAudioSystem() {
-                // TEMPORARILY DISABLED: Skip complex audio system for Quest 3 performance
-                console.log('🔊 Complex audio system temporarily disabled for Quest 3');
-                return;
+                // RE-ENABLED: Audio system for immersive driving experience
+                console.log('🔊 Initializing audio system...');
                 
                 try {
                     // Create audio context
@@ -5578,7 +5573,7 @@
                 var totalWidth = roadWidth + (borderWidth * 2); // Road + borders
                 // Adjust road complexity based on platform
                 const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
-                var segments = isQuest ? 200 : 800; // Lower resolution for Quest performance
+                var segments = 1200; // Increased for smoother curves on all platforms
                 
                 // Get points along the curve
                 var pathPoints = [];
