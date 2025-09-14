@@ -3684,17 +3684,14 @@
             
             // GLTF DUNE BUGGY LOADER: Load the dune buggy model for vehicles
             function loadDuneBuggyModel(scale = 1.0) {
-                // Quest 3 compatibility check
+                // Quest 3 compatibility check with optimized 15k vertex model
                 const isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
                 if (isQuest) {
-                    console.log('🚗 Quest 3 detected: GLTF car models disabled for stability');
-                    console.log('🚗 80k vertices still too heavy - Quest 3 needs <10k vertex models');
-                    console.log('🚗 Using simple box cars for Quest 3 compatibility');
-                    return Promise.reject('Car models disabled for Quest 3 performance');
+                    console.log('🚗 Quest 3 detected: Testing optimized 15k vertex car model');
+                    console.log('🚗 Reduced from 80k to 15k vertices - should be stable now');
+                } else {
+                    console.log('🚗 Desktop detected: Loading GLTF car models...');
                 }
-                
-                // Desktop: Allow full GLTF models
-                console.log('🚗 Desktop detected: Loading full GLTF car models...');
                 
                 return new Promise((resolve, reject) => {
                     const loader = new THREE.GLTFLoader();
@@ -3708,13 +3705,13 @@
                     const isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
                     if (isQuest) {
                         dracoLoader.setWorkerLimit(1); // Limit workers on Quest
-                        console.log('🚗 Quest detected: Using single DRACO worker for car loading');
+                        console.log('🚗 Quest detected: Using single DRACO worker for 15k vertex car model');
                     }
                     
                     loader.setDRACOLoader(dracoLoader);
                     
                     loader.load(
-                        'assets/dune-buggy/dunebuggy2.gltf',
+                        'assets/dune-buggy/dunebuggy3.gltf',
                         function (gltf) {
                             console.log('🏎️ Dune buggy GLTF loaded successfully');
                             
@@ -3733,7 +3730,17 @@
                                     child.receiveShadow = !isQuest;
                                     
                                     if (isQuest) {
-                                        console.log('🚗 Quest: Disabled shadows on car for performance');
+                                        console.log('🚗 Quest: Optimizing 15k vertex car model for performance');
+                                        console.log('🚗 Quest: Disabled shadows, optimized materials');
+                                        
+                                        // Additional Quest optimizations for 15k vertex model
+                                        if (child.material) {
+                                            // Reduce material complexity for Quest
+                                            child.material.envMapIntensity = 0.3; // Reduce reflections
+                                            if (child.material.normalMap) {
+                                                child.material.normalScale.set(0.5, 0.5); // Reduce normal intensity
+                                            }
+                                        }
                                     }
                                 }
                             });
