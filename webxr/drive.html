@@ -882,6 +882,14 @@
                                 console.log('🎵 VR audio started');
                             }, 100);
                             
+                            // Auto-adjust VR camera height after a short delay
+                            setTimeout(() => {
+                                if (renderer.xr.isPresenting) {
+                                    console.log('🎯 Auto-adjusting VR camera height...');
+                                    showVRCameraPosition(); // This will apply the automatic adjustment
+                                }
+                            }, 2000); // Wait 2 seconds for VR to fully initialize
+                            
                             // Listen for VR session end to restore desktop HUD
                             session.addEventListener('end', () => {
                                 console.log('VR session ended');
@@ -1067,6 +1075,41 @@
                         e.stopPropagation();
                         return false;
                     }
+                }
+            }
+            
+            function showVRCameraPosition() {
+                if (!renderer.xr.isPresenting) {
+                    console.log('⚠️ Not in VR mode');
+                    return;
+                }
+                
+                if (vehicleRef && vehicleRef.vehicle) {
+                    var tm = vehicleRef.vehicle.getChassisWorldTransform();
+                    var carY = tm.getOrigin().y();
+                    
+                    // Get actual VR camera world position
+                    var cameraWorldPos = new THREE.Vector3();
+                    firstPersonCamera.getWorldPosition(cameraWorldPos);
+                    var cameraY = cameraWorldPos.y;
+                    var difference = cameraY - carY;
+                    
+                    console.log('📍 Before - Car Y:', carY.toFixed(3) + 'm | Camera Y:', cameraY.toFixed(3) + 'm | Difference:', difference.toFixed(3) + 'm');
+                    
+                    // Adjust camera rig to make the actual VR camera 0.65m above car
+                    var targetDifference = 0.65;
+                    var adjustment = targetDifference - difference;
+                    
+                    console.log('🔧 Calculating adjustment: target=' + targetDifference + ', current=' + difference.toFixed(3) + ', adjustment=' + adjustment.toFixed(3));
+                    
+                    // Update the global VR camera offset that the sync function uses
+                    var currentOffset = window.vrCameraYOffset || -1.1;
+                    var newOffset = currentOffset + adjustment;
+                    window.vrCameraYOffset = newOffset;
+                    
+                    console.log('📍 VR camera offset updated from', currentOffset.toFixed(3) + 'm to', newOffset.toFixed(3) + 'm (adjustment:', adjustment.toFixed(3) + 'm)');
+                } else {
+                    console.log('⚠️ Vehicle not available');
                 }
             }
             
@@ -4226,9 +4269,7 @@
 
                         // Minimal debug output - only show important events
                         if (botRef.debugCounter % 600 === 0) { // Every 10 seconds instead of 5
-                            var status = '🏎️ Bot: ' + speed.toFixed(0) + 'km/h | WP:' + botRef.currentWaypointIndex + '/' + denseWaypoints.length;
-                            if (botRef.stuckCounter > 0) status += ' ⚠️ STUCK:' + botRef.stuckCounter;
-                            console.log(status);
+                            // Bot status logging removed
                         }
                     } else {
                         // No racing path - simple forward movement for testing
@@ -4807,6 +4848,16 @@
                     // Update the vehicle reference
                     if (vehicleRef) {
                         vehicleRef.chassisMesh = chassisMesh;
+                        
+                        // Attach camera rig to car for automatic following
+                        if (cameraRig && cameraRig.parent === scene) {
+                            scene.remove(cameraRig);
+                            chassisMesh.add(cameraRig);
+                            // Set local position offset within the car (driver's seat)
+                            cameraRig.position.set(0.3, window.vrCameraYOffset || -1.1, -0.2);
+                            cameraRig.rotation.set(0, Math.PI, 0); // Face forward
+                            console.log('📷 Camera rig attached to car chassis');
+                        }
                     }
                     console.log('🏎️ Player dune buggy model loaded and positioned');
                 }).catch((error) => {
@@ -5113,6 +5164,16 @@
                                             vrFlyPosition.y -= moveY * flyDelta; // Inverted for natural feel
                                         }
                                     }
+                                    
+                                    // Left thumbstick press to show VR camera Y position
+                                    if (gamepad.buttons && gamepad.buttons[3]) {
+                                        if (gamepad.buttons[3].pressed && !window.leftThumbstickPressed) {
+                                            window.leftThumbstickPressed = true;
+                                            showVRCameraPosition();
+                                        } else if (!gamepad.buttons[3].pressed) {
+                                            window.leftThumbstickPressed = false;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -5343,22 +5404,26 @@
                     // Update camera position (works for both desktop and VR)
                     if (cameraMode === 'firstperson') {
                         if (renderer.xr.isPresenting) {
-                            // In VR: Simple fixed cockpit position
-                            var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
-                            
-                            // Rotate 180 degrees around Y axis to face forward
-                            var forwardRotation = new THREE.Quaternion();
-                            forwardRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
-                            carQuaternion.multiply(forwardRotation);
-                            
-                            // Set camera rig to fixed cockpit position (ignoring player's real height)
-                            // Fixed Y position ensures consistent height regardless of sitting/standing
-                            cameraRig.position.set(
-                                p.x() - 0.5, // 50cm left of car center
-                                p.y() - 1.1, // Fixed height: 1.1m below car center (cockpit level)
-                                p.z() + 0.7  // 70cm forward of car center
-                            );
-                            cameraRig.quaternion.copy(carQuaternion);
+                            // Camera rig now follows car automatically as a child
+                            // Just update the local Y offset if it changed
+                            if (cameraRig.parent === vehicleRef.chassisMesh) {
+                                cameraRig.position.y = window.vrCameraYOffset || -1.1;
+                            } else {
+                                // Fallback: manual positioning if not attached to car yet
+                                var cameraOffset = new THREE.Vector3(0.3, window.vrCameraYOffset || -1.1, -0.2);
+                                var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
+                                var forwardRotation = new THREE.Quaternion();
+                                forwardRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+                                carQuaternion.multiply(forwardRotation);
+                                cameraOffset.applyQuaternion(carQuaternion);
+                                
+                                cameraRig.position.set(
+                                    p.x() + cameraOffset.x,
+                                    p.y() + cameraOffset.y,
+                                    p.z() + cameraOffset.z
+                                );
+                                cameraRig.quaternion.copy(carQuaternion);
+                            }
                         } else {
                             // In Desktop: Move the first person camera directly
                             var cameraOffset = new THREE.Vector3(0, 1.4, 1.2); // x, y(up), z(forward)
