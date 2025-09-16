@@ -5344,6 +5344,7 @@
                     if (cameraMode === 'firstperson') {
                         if (renderer.xr.isPresenting) {
                             // In VR: Move the camera rig (which contains the VR camera)
+                            // Fixed cockpit position independent of player height/sitting/standing
                             var cameraOffset = new THREE.Vector3(-0.5, -1.1, 0.7); // x(left), y(up), z(forward) - 50cm left, 1.1m lower, 1m forward
                             var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
                             
@@ -5354,6 +5355,7 @@
                             
                             cameraOffset.applyQuaternion(carQuaternion);
                             
+                            // Set cockpit position - let VR handle head tracking naturally
                             cameraRig.position.set(
                                 p.x() + cameraOffset.x,
                                 p.y() + cameraOffset.y,
