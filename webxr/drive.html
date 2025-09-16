@@ -5343,9 +5343,7 @@
                     // Update camera position (works for both desktop and VR)
                     if (cameraMode === 'firstperson') {
                         if (renderer.xr.isPresenting) {
-                            // In VR: Move the camera rig (which contains the VR camera)
-                            // Fixed cockpit position independent of player height/sitting/standing
-                            var cameraOffset = new THREE.Vector3(-0.5, -1.1, 0.7); // x(left), y(up), z(forward) - 50cm left, 1.1m lower, 1m forward
+                            // In VR: Simple fixed cockpit position
                             var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
                             
                             // Rotate 180 degrees around Y axis to face forward
@@ -5353,13 +5351,12 @@
                             forwardRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
                             carQuaternion.multiply(forwardRotation);
                             
-                            cameraOffset.applyQuaternion(carQuaternion);
-                            
-                            // Set cockpit position - let VR handle head tracking naturally
+                            // Set camera rig to fixed cockpit position (ignoring player's real height)
+                            // Fixed Y position ensures consistent height regardless of sitting/standing
                             cameraRig.position.set(
-                                p.x() + cameraOffset.x,
-                                p.y() + cameraOffset.y,
-                                p.z() + cameraOffset.z
+                                p.x() - 0.5, // 50cm left of car center
+                                p.y() - 1.1, // Fixed height: 1.1m below car center (cockpit level)
+                                p.z() + 0.7  // 70cm forward of car center
                             );
                             cameraRig.quaternion.copy(carQuaternion);
                         } else {
