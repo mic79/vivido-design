@@ -3611,9 +3611,9 @@
                     loader.setDRACOLoader(dracoLoader);
                     
                     loader.load(
-                        'assets/dune-buggy/dunebuggy-tire.gltf',
+                        'assets/sportcar017/sportcar.017-wheel.gltf',
                         function (gltf) {
-                            console.log('🛞 Tire GLTF loaded successfully');
+                            console.log('🛞 Sportcar wheel GLTF loaded successfully');
                             
                             const model = gltf.scene.clone();
                             
@@ -3660,7 +3660,7 @@
                             console.log('🛞 Tire loading progress:', Math.round((progress.loaded / progress.total) * 100) + '%');
                         },
                         function (error) {
-                            console.error('❌ Error loading tire GLTF:', error);
+                            console.error('❌ Error loading sportcar wheel GLTF:', error);
                             
                             // Fallback: create a simple cylinder tire
                             const fallbackGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 16);
@@ -3711,9 +3711,9 @@
                     loader.setDRACOLoader(dracoLoader);
                     
                     loader.load(
-                        'assets/dune-buggy/dunebuggy4.gltf',
+                        'assets/sportcar017/sportcar.017.gltf',
                         function (gltf) {
-                            console.log('🏎️ Dune buggy GLTF loaded successfully');
+                            console.log('🏎️ Sportcar GLTF loaded successfully');
                             
                             const model = gltf.scene.clone();
                             
@@ -3750,8 +3750,8 @@
                             const center = box.getCenter(new THREE.Vector3());
                             model.position.sub(center);
                             
-                            // Store offset for physics sync (lower by 55cm, centered horizontally, 20cm forward)
-                            model.userData.chassisOffset = new THREE.Vector3(0, -0.55, -0.2);
+                            // Store offset for physics sync (lower by 45cm, centered horizontally, 20cm forward)
+                            model.userData.chassisOffset = new THREE.Vector3(0, -0.45, -0.2);
                             
                             // Add to scene
                             scene.add(model);
@@ -3764,10 +3764,10 @@
                             resolve(model);
                         },
                         function (progress) {
-                            console.log('🏎️ Dune buggy loading progress:', (progress.loaded / progress.total * 100) + '%');
+                            console.log('🏎️ Sportcar loading progress:', (progress.loaded / progress.total * 100) + '%');
                         },
                         function (error) {
-                            console.error('❌ Error loading dune buggy GLTF:', error);
+                            console.error('❌ Error loading sportcar GLTF:', error);
                             
                             // Cleanup DRACOLoader
                             dracoLoader.dispose();
@@ -3786,19 +3786,19 @@
 
             function createBotVehicle(pos, quat, color) {
                 // Vehicle constants - improved for stability (same as player car)
-                var chassisWidth = 2.2;  // Wider for better stability (was 1.8)
+                var chassisWidth = 1.95;  // Narrowed by 25cm for better proportions
                 var chassisHeight = .4;  // Lower center of mass (was .6)
                 var chassisLength = 4;
                 var massVehicle = 1500; // Heavy for good collision physics (was 800)
 
-                var wheelAxisPositionBack = -1.5; // Moved 50cm backwards
+                var wheelAxisPositionBack = -1.3; // Moved 5cm more backward (total 30cm from original -1.0)
                 var wheelRadiusBack = .5; // Reduced by 10cm from .6
                 var wheelWidthBack = .3;
-                var wheelHalfTrackBack = 1.4; // Increased by 20cm for 40cm wider total span
+                var wheelHalfTrackBack = 0.775; // Narrowed by another 12.5cm (125cm total reduction)
                 var wheelAxisHeightBack = .2; // Lower for stability (was .3)
 
-                var wheelAxisFrontPosition = 1.7;
-                var wheelHalfTrackFront = 1.4; // Increased by 20cm for 40cm wider total span
+                var wheelAxisFrontPosition = 1.1; // Moved 15cm more forward (total 40cm from original 0.7)
+                var wheelHalfTrackFront = 0.775; // Narrowed by another 12.5cm (125cm total reduction)
                 var wheelAxisHeightFront = .2; // Lower for stability (was .3)
                 var wheelRadiusFront = .45; // Reduced by 10cm from .55
                 var wheelWidthFront = .2;
@@ -4735,19 +4735,19 @@
 
             function createVehicle(pos, quat) {
                 // Vehicle constants - improved for stability
-                var chassisWidth = 2.2;  // Wider for better stability (was 1.8)
+                var chassisWidth = 1.95;  // Narrowed by 25cm for better proportions
                 var chassisHeight = .4;  // Lower center of mass (was .6)
                 var chassisLength = 4;
                 var massVehicle = 1500; // Heavy for good collision physics (was 800)
 
-                var wheelAxisPositionBack = -1.5; // Moved 50cm backwards
+                var wheelAxisPositionBack = -1.3; // Moved 5cm more backward (total 30cm from original -1.0)
                 var wheelRadiusBack = .5; // Reduced by 10cm from .6
                 var wheelWidthBack = .3;
-                var wheelHalfTrackBack = 1.4; // Increased by 20cm for 40cm wider total span
+                var wheelHalfTrackBack = 0.775; // Narrowed by another 12.5cm (125cm total reduction)
                 var wheelAxisHeightBack = .2; // Lower for stability (was .3)
 
-                var wheelAxisFrontPosition = 1.7;
-                var wheelHalfTrackFront = 1.4; // Increased by 20cm for 40cm wider total span
+                var wheelAxisFrontPosition = 1.1; // Moved 15cm more forward (total 40cm from original 0.7)
+                var wheelHalfTrackFront = 0.775; // Narrowed by another 12.5cm (125cm total reduction)
                 var wheelAxisHeightFront = .2; // Lower for stability (was .3)
                 var wheelRadiusFront = .45; // Reduced by 10cm from .55
                 var wheelWidthFront = .2;
