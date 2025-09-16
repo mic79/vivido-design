@@ -5344,7 +5344,7 @@
                     if (cameraMode === 'firstperson') {
                         if (renderer.xr.isPresenting) {
                             // In VR: Move the camera rig (which contains the VR camera)
-                            var cameraOffset = new THREE.Vector3(-0.5, -0.6, -0.3); // x(left), y(up), z(forward) - 50cm left, 50cm lower, forward
+                            var cameraOffset = new THREE.Vector3(-0.5, -1.1, 0.7); // x(left), y(up), z(forward) - 50cm left, 1.1m lower, 1m forward
                             var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
                             
                             // Rotate 180 degrees around Y axis to face forward
@@ -6211,46 +6211,398 @@
             }
             
             function createTexturedGround() {
-                console.log('🌍 Creating simple flat textured ground...');
+                console.log('🌍 Creating simple visible terrain...');
                 
-                // Simple flat ground geometry
-                const groundGeometry = new THREE.PlaneGeometry(600, 600, 1, 1);
+                // Create a simple, guaranteed-to-work terrain
+                createSimpleVisibleTerrain();
+            }
+            
+            function createSimpleVisibleTerrain() {
+                console.log('🏙️ Creating performance-optimized cityscape...');
                 
-                // Load a simple grass texture
-                const textureLoader = new THREE.TextureLoader();
-                const grassTexture = textureLoader.load('assets/ground/textures/forest_ground_04_diff_8k.jpg', 
-                    function(texture) {
-                        // Texture loaded successfully
-                        texture.wrapS = THREE.RepeatWrapping;
-                        texture.wrapT = THREE.RepeatWrapping;
-                        texture.repeat.set(20, 20); // Tile the texture
-                        console.log('✅ Ground texture loaded');
-                    },
-                    undefined,
-                    function(error) {
-                        // Fallback if texture fails to load
-                        console.log('⚠️ Ground texture failed to load, using solid color');
-                    }
-                );
+                // Create optimized cityscape using geometry merging
+                createOptimizedCityscape();
+            }
+            
+            function createOptimizedCityscape() {
+                console.log('🏙️ Building performance-optimized cityscape...');
                 
-                // Simple material with texture
-                const groundMaterial = new THREE.MeshLambertMaterial({
-                    map: grassTexture,
-                    color: 0x4a5d23 // Fallback color if texture doesn't load
+                // Create optimized city textures
+                const cityTextures = createOptimizedCityTextures();
+                
+                // Create ground plane with texture
+                const groundGeometry = new THREE.PlaneGeometry(1200, 1200, 1, 1);
+                const groundMaterial = new THREE.MeshBasicMaterial({ 
+                    map: cityTextures.asphalt,
+                    color: 0x2d2d2d 
+                });
+                const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+                ground.rotation.x = -Math.PI / 2;
+                ground.position.set(0, -1, 0);
+                scene.add(ground);
+                
+                // Create optimized geometry for different city elements
+                createOptimizedStreets(cityTextures);
+                createOptimizedBuildings(cityTextures);
+                createOptimizedHighways(cityTextures);
+                
+                // Create simplified physics
+                createSimplifiedCityPhysics();
+                
+                console.log('✅ Performance-optimized cityscape created');
+            }
+            
+            function createOptimizedCityTextures() {
+                console.log('🎨 Creating optimized city textures...');
+                
+                const textures = {};
+                
+                // Create procedural textures using canvas (no external files needed)
+                textures.asphalt = createProceduralTexture('asphalt', 256, 256);
+                textures.concrete = createProceduralTexture('concrete', 256, 256);
+                textures.brick = createProceduralTexture('brick', 256, 256);
+                textures.glass = createProceduralTexture('glass', 128, 128);
+                textures.metal = createProceduralTexture('metal', 128, 128);
+                
+                console.log('✅ City textures created (procedural, no file loading)');
+                return textures;
+            }
+            
+            function createProceduralTexture(type, width, height) {
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                
+                switch(type) {
+                    case 'asphalt':
+                        // Dark gray asphalt with subtle noise
+                        ctx.fillStyle = '#2a2a2a';
+                        ctx.fillRect(0, 0, width, height);
+                        
+                        // Add noise pattern
+                        for (let i = 0; i < width * height * 0.1; i++) {
+                            const x = Math.random() * width;
+                            const y = Math.random() * height;
+                            const brightness = Math.random() * 30 + 20;
+                            ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
+                            ctx.fillRect(x, y, 1, 1);
+                        }
+                        break;
+                        
+                    case 'concrete':
+                        // Light gray concrete
+                        ctx.fillStyle = '#505050';
+                        ctx.fillRect(0, 0, width, height);
+                        
+                        // Add subtle texture lines
+                        ctx.strokeStyle = '#454545';
+                        ctx.lineWidth = 1;
+                        for (let i = 0; i < 5; i++) {
+                            ctx.beginPath();
+                            ctx.moveTo(0, Math.random() * height);
+                            ctx.lineTo(width, Math.random() * height);
+                            ctx.stroke();
+                        }
+                        break;
+                        
+                    case 'brick':
+                        // Reddish brick pattern
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillRect(0, 0, width, height);
+                        
+                        // Simple brick pattern
+                        ctx.strokeStyle = '#654321';
+                        ctx.lineWidth = 2;
+                        const brickHeight = 20;
+                        const brickWidth = 40;
+                        
+                        for (let y = 0; y < height; y += brickHeight) {
+                            for (let x = 0; x < width; x += brickWidth) {
+                                const offset = (Math.floor(y / brickHeight) % 2) * (brickWidth / 2);
+                                ctx.strokeRect(x + offset, y, brickWidth, brickHeight);
+                            }
+                        }
+                        break;
+                        
+                    case 'glass':
+                        // Semi-transparent blue-tinted glass
+                        const gradient = ctx.createLinearGradient(0, 0, width, height);
+                        gradient.addColorStop(0, '#87CEEB');
+                        gradient.addColorStop(1, '#4682B4');
+                        ctx.fillStyle = gradient;
+                        ctx.fillRect(0, 0, width, height);
+                        break;
+                        
+                    case 'metal':
+                        // Metallic gray with horizontal lines
+                        ctx.fillStyle = '#666666';
+                        ctx.fillRect(0, 0, width, height);
+                        
+                        ctx.strokeStyle = '#777777';
+                        ctx.lineWidth = 1;
+                        for (let y = 0; y < height; y += 4) {
+                            ctx.beginPath();
+                            ctx.moveTo(0, y);
+                            ctx.lineTo(width, y);
+                            ctx.stroke();
+                        }
+                        break;
+                }
+                
+                // Create Three.js texture from canvas
+                const texture = new THREE.CanvasTexture(canvas);
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.minFilter = THREE.LinearFilter; // Optimize for performance
+                texture.magFilter = THREE.LinearFilter;
+                
+                return texture;
+            }
+            
+            function createOptimizedStreets(cityTextures) {
+                console.log('🛣️ Creating optimized street geometry...');
+                
+                const streetGeometries = [];
+                const citySize = 800;
+                const blockSize = 80;
+                const streetWidth = 12;
+                const mainStreetWidth = 16;
+                
+                // Create street geometries to merge
+                for (let x = -citySize/2; x <= citySize/2; x += blockSize) {
+                    // North-South streets
+                    const streetGeometry = new THREE.PlaneGeometry(streetWidth, citySize, 1, 1);
+                    streetGeometry.rotateX(-Math.PI / 2);
+                    streetGeometry.translate(x, -0.5, 0);
+                    streetGeometries.push(streetGeometry);
+                    
+                    // Add lane markings
+                    const lineGeometry = new THREE.PlaneGeometry(0.3, citySize, 1, 1);
+                    lineGeometry.rotateX(-Math.PI / 2);
+                    lineGeometry.translate(x, -0.4, 0);
+                    streetGeometries.push(lineGeometry);
+                }
+                
+                for (let z = -citySize/2; z <= citySize/2; z += blockSize) {
+                    // East-West streets
+                    const streetGeometry = new THREE.PlaneGeometry(citySize, streetWidth, 1, 1);
+                    streetGeometry.rotateX(-Math.PI / 2);
+                    streetGeometry.translate(0, -0.5, z);
+                    streetGeometries.push(streetGeometry);
+                    
+                    // Add lane markings
+                    const lineGeometry = new THREE.PlaneGeometry(citySize, 0.3, 1, 1);
+                    lineGeometry.rotateX(-Math.PI / 2);
+                    lineGeometry.translate(0, -0.4, z);
+                    streetGeometries.push(lineGeometry);
+                }
+                
+                // Create individual street meshes with textures
+                streetGeometries.forEach((geometry, index) => {
+                    const streetMaterial = new THREE.MeshBasicMaterial({ 
+                        map: cityTextures.asphalt,
+                        color: 0x2a2a2a 
+                    });
+                    const streetMesh = new THREE.Mesh(geometry, streetMaterial);
+                    scene.add(streetMesh);
                 });
                 
-                // Create the ground mesh
-                const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-                groundMesh.rotation.x = -Math.PI / 2; // Make it horizontal
-                groundMesh.position.set(0, -0.75, 0);  // Ground level
-                groundMesh.receiveShadow = true;
-                scene.add(groundMesh);
+                console.log(`✅ Created street network (${streetGeometries.length} individual street segments)`);
+            }
+            
+            function createOptimizedBuildings(cityTextures) {
+                console.log('🏢 Creating optimized building geometry...');
                 
-                // Create physics collision box
-                const groundPhysics = new Ammo.btBoxShape(new Ammo.btVector3(300, 0.5, 300));
+                const buildingGeometries = [];
+                const windowGeometries = [];
+                const citySize = 800;
+                const blockSize = 80;
+                const centerClearance = 120;
+                
+                // Define districts with simpler logic
+                const districts = [
+                    { x: 0, z: 0, radius: 150, height: [60, 120], color: 0x505050 }, // Downtown
+                    { x: 200, z: 200, radius: 100, height: [30, 80], color: 0x606060 }, // Business
+                    { x: -200, z: -200, radius: 120, height: [15, 40], color: 0x8B4513 }, // Residential
+                ];
+                
+                // Create buildings in a simplified grid
+                for (let x = -citySize/2; x < citySize/2; x += blockSize) {
+                    for (let z = -citySize/2; z < citySize/2; z += blockSize) {
+                        // Skip center area (racing track)
+                        if (Math.sqrt(x*x + z*z) < centerClearance) continue;
+                        
+                        // Determine district
+                        let district = { height: [20, 50], color: 0x654321 }; // Default suburban
+                        for (const d of districts) {
+                            const dist = Math.sqrt(Math.pow(x - d.x, 2) + Math.pow(z - d.z, 2));
+                            if (dist < d.radius) {
+                                district = d;
+                                break;
+                            }
+                        }
+                        
+                        // Create 2-4 buildings per block
+                        const numBuildings = 2 + Math.floor(Math.random() * 3);
+                        for (let i = 0; i < numBuildings; i++) {
+                            const buildingX = x + (Math.random() - 0.5) * (blockSize - 20);
+                            const buildingZ = z + (Math.random() - 0.5) * (blockSize - 20);
+                            const buildingWidth = 15 + Math.random() * 15;
+                            const buildingDepth = 15 + Math.random() * 15;
+                            const buildingHeight = district.height[0] + Math.random() * (district.height[1] - district.height[0]);
+                            
+                            // Create building geometry
+                            const buildingGeometry = new THREE.BoxGeometry(buildingWidth, buildingHeight, buildingDepth);
+                            buildingGeometry.translate(buildingX, buildingHeight/2, buildingZ);
+                            buildingGeometries.push(buildingGeometry);
+                            
+                            // Add simplified windows (fewer objects)
+                            if (Math.random() > 0.7) { // Only 30% of buildings get detailed windows
+                                const windowCount = Math.floor(buildingHeight / 10);
+                                for (let w = 0; w < windowCount; w++) {
+                                    const windowGeometry = new THREE.PlaneGeometry(2, 2);
+                                    windowGeometry.translate(buildingX + buildingWidth/2 + 0.1, 5 + w * 8, buildingZ);
+                                    windowGeometries.push(windowGeometry);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Create individual building meshes with textures
+                if (buildingGeometries.length > 0) {
+                    buildingGeometries.forEach((geometry, index) => {
+                        // Randomly choose building material
+                        const materials = [cityTextures.concrete, cityTextures.brick];
+                        const selectedTexture = materials[Math.floor(Math.random() * materials.length)];
+                        
+                        const buildingMaterial = new THREE.MeshBasicMaterial({ 
+                            map: selectedTexture,
+                            color: 0x505050 
+                        });
+                        const buildingMesh = new THREE.Mesh(geometry, buildingMaterial);
+                        scene.add(buildingMesh);
+                    });
+                    
+                    console.log(`✅ Created ${buildingGeometries.length} textured buildings`);
+                }
+                
+                // Create individual window meshes with glass texture
+                if (windowGeometries.length > 0) {
+                    windowGeometries.forEach((geometry, index) => {
+                        const windowMaterial = new THREE.MeshBasicMaterial({ 
+                            map: cityTextures.glass,
+                            color: 0xffffaa,
+                            transparent: true,
+                            opacity: 0.7
+                        });
+                        const windowMesh = new THREE.Mesh(geometry, windowMaterial);
+                        scene.add(windowMesh);
+                    });
+                    
+                    console.log(`✅ Created ${windowGeometries.length} glass windows`);
+                }
+            }
+            
+            function createOptimizedHighways(cityTextures) {
+                console.log('🛣️ Creating optimized highway geometry...');
+                
+                const highwayGeometries = [];
+                const pillarGeometries = [];
+                const highwayHeight = 18;
+                const ringRadius = 350;
+                const segments = 12; // Fewer segments for performance
+                
+                for (let i = 0; i < segments; i++) {
+                    const angle1 = (i / segments) * Math.PI * 2;
+                    const angle2 = ((i + 1) / segments) * Math.PI * 2;
+                    
+                    const x1 = Math.cos(angle1) * ringRadius;
+                    const z1 = Math.sin(angle1) * ringRadius;
+                    const x2 = Math.cos(angle2) * ringRadius;
+                    const z2 = Math.sin(angle2) * ringRadius;
+                    
+                    const centerX = (x1 + x2) / 2;
+                    const centerZ = (z1 + z2) / 2;
+                    const length = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(z2 - z1, 2));
+                    const rotation = Math.atan2(z2 - z1, x2 - x1);
+                    
+                    // Highway segment
+                    const highwayGeometry = new THREE.BoxGeometry(length, 1.5, 14);
+                    highwayGeometry.rotateY(rotation);
+                    highwayGeometry.translate(centerX, highwayHeight, centerZ);
+                    highwayGeometries.push(highwayGeometry);
+                    
+                    // Support pillar (every 4th segment)
+                    if (i % 4 === 0) {
+                        const pillarGeometry = new THREE.CylinderGeometry(1.5, 2.5, highwayHeight, 8);
+                        pillarGeometry.translate(centerX, highwayHeight/2, centerZ);
+                        pillarGeometries.push(pillarGeometry);
+                    }
+                }
+                
+                // Create individual highway meshes with texture
+                if (highwayGeometries.length > 0) {
+                    highwayGeometries.forEach((geometry, index) => {
+                        const highwayMaterial = new THREE.MeshBasicMaterial({ 
+                            map: cityTextures.asphalt,
+                            color: 0x1a1a1a 
+                        });
+                        const highwayMesh = new THREE.Mesh(geometry, highwayMaterial);
+                        scene.add(highwayMesh);
+                    });
+                    
+                    console.log(`✅ Created ${highwayGeometries.length} textured highway segments`);
+                }
+                
+                // Create individual pillar meshes with concrete texture
+                if (pillarGeometries.length > 0) {
+                    pillarGeometries.forEach((geometry, index) => {
+                        const pillarMaterial = new THREE.MeshBasicMaterial({ 
+                            map: cityTextures.concrete,
+                            color: 0x666666 
+                        });
+                        const pillarMesh = new THREE.Mesh(geometry, pillarMaterial);
+                        scene.add(pillarMesh);
+                    });
+                    
+                    console.log(`✅ Created ${pillarGeometries.length} concrete pillars`);
+                }
+            }
+            
+            function createSimplifiedCityPhysics() {
+                console.log('🔧 Creating simplified city physics...');
+                
+                // Create a few large physics boxes instead of individual building physics
+                const physicsBoxes = [
+                    { x: 200, z: 200, width: 150, height: 60, depth: 150 }, // Business district
+                    { x: -200, z: -200, width: 120, height: 30, depth: 120 }, // Residential
+                    { x: 300, z: 0, width: 100, height: 40, depth: 100 }, // Suburban area
+                    { x: -300, z: 0, width: 100, height: 40, depth: 100 }, // Suburban area
+                    { x: 0, z: 300, width: 100, height: 50, depth: 100 }, // Mixed area
+                    { x: 0, z: -300, width: 100, height: 50, depth: 100 } // Mixed area
+                ];
+                
+                physicsBoxes.forEach((box, index) => {
+                    const boxPhysics = new Ammo.btBoxShape(new Ammo.btVector3(box.width/2, box.height/2, box.depth/2));
+                    const boxTransform = new Ammo.btTransform();
+                    boxTransform.setIdentity();
+                    boxTransform.setOrigin(new Ammo.btVector3(box.x, box.height/2, box.z));
+                    
+                    const boxMotionState = new Ammo.btDefaultMotionState(boxTransform);
+                    const boxRigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(0, boxMotionState, boxPhysics, new Ammo.btVector3(0, 0, 0));
+                    const boxRigidBody = new Ammo.btRigidBody(boxRigidBodyInfo);
+                    boxRigidBody.setFriction(0.8);
+                    boxRigidBody.setRestitution(0.1);
+                    physicsWorld.addRigidBody(boxRigidBody);
+                });
+                
+                // Create physics ground
+                const groundPhysics = new Ammo.btBoxShape(new Ammo.btVector3(600, 0.5, 600));
                 const groundTransform = new Ammo.btTransform();
                 groundTransform.setIdentity();
-                groundTransform.setOrigin(new Ammo.btVector3(0, -0.75, 0));
+                groundTransform.setOrigin(new Ammo.btVector3(0, -1, 0));
                 
                 const groundMotionState = new Ammo.btDefaultMotionState(groundTransform);
                 const groundRigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(0, groundMotionState, groundPhysics, new Ammo.btVector3(0, 0, 0));
@@ -6258,7 +6610,933 @@
                 groundRigidBody.setFriction(2);
                 physicsWorld.addRigidBody(groundRigidBody);
                 
-                console.log('✅ Simple flat textured ground created');
+                console.log(`✅ Created simplified physics (${physicsBoxes.length} collision areas + ground)`);
+            }
+            
+            function createCityscape() {
+                console.log('🏙️ Building realistic interconnected cityscape...');
+                
+                // Create ground plane
+                const groundGeometry = new THREE.PlaneGeometry(1200, 1200, 1, 1);
+                const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x2d2d2d }); // Dark city ground
+                const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+                ground.rotation.x = -Math.PI / 2;
+                ground.position.set(0, -1, 0);
+                scene.add(ground);
+                
+                // Create organized city layout
+                const cityLayout = createCityLayout();
+                buildCityFromLayout(cityLayout);
+                
+                // Create physics ground
+                const groundPhysics = new Ammo.btBoxShape(new Ammo.btVector3(600, 0.5, 600));
+                const groundTransform = new Ammo.btTransform();
+                groundTransform.setIdentity();
+                groundTransform.setOrigin(new Ammo.btVector3(0, -1, 0));
+                
+                const groundMotionState = new Ammo.btDefaultMotionState(groundTransform);
+                const groundRigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(0, groundMotionState, groundPhysics, new Ammo.btVector3(0, 0, 0));
+                const groundRigidBody = new Ammo.btRigidBody(groundRigidBodyInfo);
+                groundRigidBody.setFriction(2);
+                physicsWorld.addRigidBody(groundRigidBody);
+                
+                console.log('✅ Realistic cityscape created with interconnected streets and proper urban layout');
+            }
+            
+            function createCityLayout() {
+                console.log('🗺️ Planning city layout...');
+                
+                const layout = {
+                    blocks: [],
+                    streets: [],
+                    highways: [],
+                    intersections: [],
+                    districts: {}
+                };
+                
+                // Define city parameters
+                const blockSize = 80;
+                const streetWidth = 12;
+                const mainStreetWidth = 16;
+                const citySize = 1000;
+                const centerClearance = 120; // Clear area around racing track
+                
+                // Create main arterial streets (major roads)
+                const mainStreets = [
+                    { type: 'main', dir: 'ns', pos: -200, width: mainStreetWidth },
+                    { type: 'main', dir: 'ns', pos: 0, width: mainStreetWidth },
+                    { type: 'main', dir: 'ns', pos: 200, width: mainStreetWidth },
+                    { type: 'main', dir: 'ew', pos: -200, width: mainStreetWidth },
+                    { type: 'main', dir: 'ew', pos: 0, width: mainStreetWidth },
+                    { type: 'main', dir: 'ew', pos: 200, width: mainStreetWidth }
+                ];
+                
+                // Create secondary streets (grid system)
+                for (let i = -citySize/2; i <= citySize/2; i += blockSize) {
+                    if (!mainStreets.find(s => s.dir === 'ns' && Math.abs(s.pos - i) < 30)) {
+                        layout.streets.push({ type: 'street', dir: 'ns', pos: i, width: streetWidth });
+                    }
+                    if (!mainStreets.find(s => s.dir === 'ew' && Math.abs(s.pos - i) < 30)) {
+                        layout.streets.push({ type: 'street', dir: 'ew', pos: i, width: streetWidth });
+                    }
+                }
+                
+                // Add main streets to layout
+                layout.streets.push(...mainStreets);
+                
+                // Define city districts
+                layout.districts = {
+                    downtown: { x: 0, z: 0, radius: 150, buildingHeight: [60, 200] },
+                    business: { x: 200, z: 200, radius: 100, buildingHeight: [40, 120] },
+                    residential: { x: -200, z: -200, radius: 120, buildingHeight: [15, 45] },
+                    industrial: { x: 300, z: -300, radius: 80, buildingHeight: [20, 60] }
+                };
+                
+                // Create city blocks between streets
+                for (let x = -citySize/2; x < citySize/2; x += blockSize) {
+                    for (let z = -citySize/2; z < citySize/2; z += blockSize) {
+                        // Skip center area (racing track)
+                        if (Math.sqrt(x*x + z*z) < centerClearance) continue;
+                        
+                        // Determine district type
+                        let district = 'suburban';
+                        for (const [name, info] of Object.entries(layout.districts)) {
+                            const dist = Math.sqrt(Math.pow(x - info.x, 2) + Math.pow(z - info.z, 2));
+                            if (dist < info.radius) {
+                                district = name;
+                                break;
+                            }
+                        }
+                        
+                        layout.blocks.push({
+                            x: x,
+                            z: z,
+                            size: blockSize,
+                            district: district
+                        });
+                    }
+                }
+                
+                console.log(`📋 City layout planned: ${layout.blocks.length} blocks, ${layout.streets.length} streets`);
+                return layout;
+            }
+            
+            function buildCityFromLayout(layout) {
+                console.log('🏗️ Building city from planned layout...');
+                
+                // Build street network
+                buildStreetNetwork(layout.streets);
+                
+                // Build buildings for each block
+                layout.blocks.forEach(block => {
+                    buildCityBlock(block, layout.districts[block.district] || { buildingHeight: [10, 30] });
+                });
+                
+                // Add urban infrastructure
+                addUrbanInfrastructure(layout);
+                
+                console.log('✅ City construction completed');
+            }
+            
+            function buildStreetNetwork(streets) {
+                console.log('🛣️ Building interconnected street network...');
+                
+                const citySize = 1000;
+                
+                streets.forEach(street => {
+                    let streetGeometry, streetMaterial;
+                    
+                    // Different materials for different street types
+                    if (street.type === 'main') {
+                        streetMaterial = new THREE.MeshBasicMaterial({ color: 0x1a1a1a }); // Darker for main streets
+                    } else {
+                        streetMaterial = new THREE.MeshBasicMaterial({ color: 0x2a2a2a }); // Regular streets
+                    }
+                    
+                    if (street.dir === 'ns') {
+                        // North-South street
+                        streetGeometry = new THREE.PlaneGeometry(street.width, citySize, 1, 1);
+                        const streetMesh = new THREE.Mesh(streetGeometry, streetMaterial);
+                        streetMesh.rotation.x = -Math.PI / 2;
+                        streetMesh.position.set(street.pos, -0.5, 0);
+                        scene.add(streetMesh);
+                        
+                        // Add lane markings for main streets
+                        if (street.type === 'main') {
+                            addLaneMarkings(street.pos, 0, street.width, citySize, 'ns');
+                        }
+                    } else {
+                        // East-West street
+                        streetGeometry = new THREE.PlaneGeometry(citySize, street.width, 1, 1);
+                        const streetMesh = new THREE.Mesh(streetGeometry, streetMaterial);
+                        streetMesh.rotation.x = -Math.PI / 2;
+                        streetMesh.position.set(0, -0.5, street.pos);
+                        scene.add(streetMesh);
+                        
+                        // Add lane markings for main streets
+                        if (street.type === 'main') {
+                            addLaneMarkings(0, street.pos, citySize, street.width, 'ew');
+                        }
+                    }
+                });
+                
+                console.log(`✅ Built ${streets.length} interconnected streets`);
+            }
+            
+            function addLaneMarkings(x, z, width, length, direction) {
+                // Center line
+                const lineGeometry = direction === 'ns' ? 
+                    new THREE.PlaneGeometry(0.3, length, 1, 1) : 
+                    new THREE.PlaneGeometry(length, 0.3, 1, 1);
+                const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+                const centerLine = new THREE.Mesh(lineGeometry, lineMaterial);
+                centerLine.rotation.x = -Math.PI / 2;
+                centerLine.position.set(x, -0.4, z);
+                scene.add(centerLine);
+                
+                // Side lines
+                const sideOffset = width / 2 - 0.5;
+                if (direction === 'ns') {
+                    [-sideOffset, sideOffset].forEach(offset => {
+                        const sideLine = new THREE.Mesh(lineGeometry.clone(), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                        sideLine.rotation.x = -Math.PI / 2;
+                        sideLine.position.set(x + offset, -0.4, z);
+                        scene.add(sideLine);
+                    });
+                } else {
+                    [-sideOffset, sideOffset].forEach(offset => {
+                        const sideLine = new THREE.Mesh(lineGeometry.clone(), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                        sideLine.rotation.x = -Math.PI / 2;
+                        sideLine.position.set(x, -0.4, z + offset);
+                        scene.add(sideLine);
+                    });
+                }
+            }
+            
+            function buildCityBlock(block, districtInfo) {
+                // Build buildings along the perimeter of each block (street-facing)
+                const buildingDepth = 20; // How deep buildings go into the block
+                const buildingSpacing = 25; // Space between buildings
+                const blockSize = block.size;
+                
+                // Determine building characteristics based on district
+                const heightRange = districtInfo.buildingHeight || [10, 30];
+                const minHeight = heightRange[0];
+                const maxHeight = heightRange[1];
+                
+                // Build buildings along each side of the block
+                const sides = [
+                    { start: { x: block.x - blockSize/2, z: block.z - blockSize/2 }, end: { x: block.x + blockSize/2, z: block.z - blockSize/2 }, dir: 'north' },
+                    { start: { x: block.x + blockSize/2, z: block.z - blockSize/2 }, end: { x: block.x + blockSize/2, z: block.z + blockSize/2 }, dir: 'east' },
+                    { start: { x: block.x + blockSize/2, z: block.z + blockSize/2 }, end: { x: block.x - blockSize/2, z: block.z + blockSize/2 }, dir: 'south' },
+                    { start: { x: block.x - blockSize/2, z: block.z + blockSize/2 }, end: { x: block.x - blockSize/2, z: block.z - blockSize/2 }, dir: 'west' }
+                ];
+                
+                sides.forEach(side => {
+                    const sideLength = Math.abs(side.end.x - side.start.x) + Math.abs(side.end.z - side.start.z);
+                    const numBuildings = Math.floor(sideLength / buildingSpacing);
+                    
+                    for (let i = 0; i < numBuildings; i++) {
+                        const progress = i / numBuildings;
+                        const buildingX = side.start.x + (side.end.x - side.start.x) * progress;
+                        const buildingZ = side.start.z + (side.end.z - side.start.z) * progress;
+                        
+                        // Offset building inward from street
+                        let offsetX = buildingX;
+                        let offsetZ = buildingZ;
+                        
+                        if (side.dir === 'north') offsetZ += buildingDepth/2;
+                        else if (side.dir === 'south') offsetZ -= buildingDepth/2;
+                        else if (side.dir === 'east') offsetX -= buildingDepth/2;
+                        else if (side.dir === 'west') offsetX += buildingDepth/2;
+                        
+                        // Create building
+                        const buildingWidth = 15 + Math.random() * 15;
+                        const buildingHeight = minHeight + Math.random() * (maxHeight - minHeight);
+                        const buildingColor = getBuildingColor(block.district);
+                        
+                        createBuilding(offsetX, offsetZ, buildingWidth, buildingDepth, buildingHeight, buildingColor, block.district);
+                    }
+                });
+                
+                // Add some interior buildings for larger blocks
+                if (blockSize > 60 && Math.random() > 0.5) {
+                    const interiorX = block.x + (Math.random() - 0.5) * (blockSize - 40);
+                    const interiorZ = block.z + (Math.random() - 0.5) * (blockSize - 40);
+                    const interiorHeight = minHeight + Math.random() * (maxHeight - minHeight);
+                    const interiorColor = getBuildingColor(block.district);
+                    
+                    createBuilding(interiorX, interiorZ, 20, 20, interiorHeight, interiorColor, block.district);
+                }
+            }
+            
+            function getBuildingColor(district) {
+                const colors = {
+                    downtown: [0x404040, 0x505050, 0x606060, 0x707070],
+                    business: [0x4a4a4a, 0x5a5a5a, 0x6a6a6a],
+                    residential: [0x8B4513, 0xA0522D, 0xCD853F, 0xDEB887],
+                    industrial: [0x2F4F4F, 0x696969, 0x778899],
+                    suburban: [0x654321, 0x8B4513, 0xA0522D]
+                };
+                
+                const districtColors = colors[district] || colors.suburban;
+                return districtColors[Math.floor(Math.random() * districtColors.length)];
+            }
+            
+            function createBuilding(x, z, width, depth, height, color, district) {
+                // Main building structure
+                const buildingGeometry = new THREE.BoxGeometry(width, height, depth);
+                const buildingMaterial = new THREE.MeshBasicMaterial({ color: color });
+                const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
+                building.position.set(x, height/2, z);
+                scene.add(building);
+                
+                // Add windows based on district type
+                addBuildingWindows(x, z, width, depth, height, district);
+                
+                // Add rooftop details for taller buildings
+                if (height > 50) {
+                    addRooftopDetails(x, z, width, depth, height);
+                }
+                
+                // Create physics collision
+                createBuildingPhysics(x, z, width, height, depth);
+            }
+            
+            function addBuildingWindows(x, z, width, depth, height, district) {
+                const windowSpacing = 4;
+                const windowSize = district === 'downtown' ? 2.5 : 2;
+                
+                // Front and back faces
+                for (let y = 5; y < height - 5; y += 6) {
+                    for (let wx = -width/2 + windowSpacing/2; wx < width/2; wx += windowSpacing) {
+                        // Front face
+                        const frontWindow = createWindow(windowSize, district);
+                        frontWindow.position.set(x + wx, y, z + depth/2 + 0.1);
+                        scene.add(frontWindow);
+                        
+                        // Back face
+                        const backWindow = createWindow(windowSize, district);
+                        backWindow.position.set(x + wx, y, z - depth/2 - 0.1);
+                        scene.add(backWindow);
+                    }
+                }
+                
+                // Side faces
+                for (let y = 5; y < height - 5; y += 6) {
+                    for (let wz = -depth/2 + windowSpacing/2; wz < depth/2; wz += windowSpacing) {
+                        // Right face
+                        const rightWindow = createWindow(windowSize, district);
+                        rightWindow.position.set(x + width/2 + 0.1, y, z + wz);
+                        rightWindow.rotation.y = Math.PI/2;
+                        scene.add(rightWindow);
+                        
+                        // Left face
+                        const leftWindow = createWindow(windowSize, district);
+                        leftWindow.position.set(x - width/2 - 0.1, y, z + wz);
+                        leftWindow.rotation.y = Math.PI/2;
+                        scene.add(leftWindow);
+                    }
+                }
+            }
+            
+            function createWindow(size, district) {
+                const windowGeometry = new THREE.PlaneGeometry(size, size * 1.2);
+                let windowColor;
+                
+                // Different window styles per district
+                if (district === 'downtown') {
+                    windowColor = Math.random() > 0.4 ? 0xffffcc : 0x333333; // More lit windows downtown
+                } else if (district === 'residential') {
+                    windowColor = Math.random() > 0.7 ? 0xffddaa : 0x444444; // Warmer residential lighting
+                } else {
+                    windowColor = Math.random() > 0.6 ? 0xffffaa : 0x333333; // Standard office lighting
+                }
+                
+                const windowMaterial = new THREE.MeshBasicMaterial({ color: windowColor });
+                return new THREE.Mesh(windowGeometry, windowMaterial);
+            }
+            
+            function addRooftopDetails(x, z, width, depth, height) {
+                // Add rooftop equipment, antennas, etc.
+                const numDetails = 2 + Math.floor(Math.random() * 4);
+                
+                for (let i = 0; i < numDetails; i++) {
+                    const detailX = x + (Math.random() - 0.5) * (width - 4);
+                    const detailZ = z + (Math.random() - 0.5) * (depth - 4);
+                    const detailHeight = 2 + Math.random() * 6;
+                    
+                    const detailGeometry = new THREE.BoxGeometry(2, detailHeight, 2);
+                    const detailMaterial = new THREE.MeshBasicMaterial({ color: 0x666666 });
+                    const detail = new THREE.Mesh(detailGeometry, detailMaterial);
+                    detail.position.set(detailX, height + detailHeight/2, detailZ);
+                    scene.add(detail);
+                }
+            }
+            
+            function addUrbanInfrastructure(layout) {
+                console.log('🏗️ Adding urban infrastructure...');
+                
+                // Add elevated highways
+                addElevatedHighways();
+                
+                // Add tunnels and underpasses
+                addTunnelsAndUnderpasses();
+                
+                // Add on/off ramps
+                addHighwayRamps();
+                
+                // Add traffic infrastructure
+                addTrafficInfrastructure();
+                
+                console.log('✅ Urban infrastructure completed');
+            }
+            
+            function addElevatedHighways() {
+                console.log('🛣️ Creating elevated highway system...');
+                
+                const highwayHeight = 18;
+                const highwayWidth = 14;
+                
+                // Create highway ring around the city
+                const ringRadius = 350;
+                const segments = 16;
+                
+                for (let i = 0; i < segments; i++) {
+                    const angle1 = (i / segments) * Math.PI * 2;
+                    const angle2 = ((i + 1) / segments) * Math.PI * 2;
+                    
+                    const x1 = Math.cos(angle1) * ringRadius;
+                    const z1 = Math.sin(angle1) * ringRadius;
+                    const x2 = Math.cos(angle2) * ringRadius;
+                    const z2 = Math.sin(angle2) * ringRadius;
+                    
+                    const centerX = (x1 + x2) / 2;
+                    const centerZ = (z1 + z2) / 2;
+                    const length = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(z2 - z1, 2));
+                    const rotation = Math.atan2(z2 - z1, x2 - x1);
+                    
+                    // Highway segment
+                    const highwayGeometry = new THREE.BoxGeometry(length, 1.5, highwayWidth);
+                    const highwayMaterial = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+                    const highway = new THREE.Mesh(highwayGeometry, highwayMaterial);
+                    highway.position.set(centerX, highwayHeight, centerZ);
+                    highway.rotation.y = rotation;
+                    scene.add(highway);
+                    
+                    // Highway barriers
+                    [-highwayWidth/2, highwayWidth/2].forEach(offset => {
+                        const barrierGeometry = new THREE.BoxGeometry(length, 1, 0.5);
+                        const barrierMaterial = new THREE.MeshBasicMaterial({ color: 0xcccccc });
+                        const barrier = new THREE.Mesh(barrierGeometry, barrierMaterial);
+                        barrier.position.set(centerX, highwayHeight + 1, centerZ);
+                        barrier.rotation.y = rotation;
+                        
+                        // Offset barrier to side
+                        const offsetX = Math.cos(rotation + Math.PI/2) * offset;
+                        const offsetZ = Math.sin(rotation + Math.PI/2) * offset;
+                        barrier.position.x += offsetX;
+                        barrier.position.z += offsetZ;
+                        scene.add(barrier);
+                    });
+                    
+                    // Support pillars every 60m
+                    if (i % 3 === 0) {
+                        const pillarGeometry = new THREE.CylinderGeometry(1.5, 2.5, highwayHeight, 8);
+                        const pillarMaterial = new THREE.MeshBasicMaterial({ color: 0x666666 });
+                        const pillar = new THREE.Mesh(pillarGeometry, pillarMaterial);
+                        pillar.position.set(centerX, highwayHeight/2, centerZ);
+                        scene.add(pillar);
+                        
+                        createBuildingPhysics(centerX, centerZ, 3, highwayHeight, 3);
+                    }
+                }
+                
+                console.log('✅ Elevated highway ring created');
+            }
+            
+            function addTunnelsAndUnderpasses() {
+                console.log('🚇 Creating tunnels and underpasses...');
+                
+                // Add several tunnel systems
+                const tunnels = [
+                    { x: 0, z: 0, length: 120, width: 16, direction: 'ns', name: 'Central Tunnel' },
+                    { x: 200, z: 200, length: 80, width: 12, direction: 'ew', name: 'Business District Tunnel' },
+                    { x: -150, z: -150, length: 100, width: 14, direction: 'ns', name: 'Residential Underpass' }
+                ];
+                
+                tunnels.forEach((tunnel, index) => {
+                    // Tunnel entrance portals
+                    const portalHeight = 8;
+                    const portalWidth = tunnel.width + 4;
+                    
+                    const portal1Geometry = new THREE.BoxGeometry(portalWidth, portalHeight, 3);
+                    const portal2Geometry = new THREE.BoxGeometry(portalWidth, portalHeight, 3);
+                    const portalMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+                    
+                    if (tunnel.direction === 'ns') {
+                        // North and south portals
+                        const northPortal = new THREE.Mesh(portal1Geometry, portalMaterial);
+                        northPortal.position.set(tunnel.x, portalHeight/2, tunnel.z - tunnel.length/2);
+                        scene.add(northPortal);
+                        
+                        const southPortal = new THREE.Mesh(portal2Geometry, portalMaterial);
+                        southPortal.position.set(tunnel.x, portalHeight/2, tunnel.z + tunnel.length/2);
+                        scene.add(southPortal);
+                        
+                        // Underground tunnel passage
+                        const tunnelGeometry = new THREE.BoxGeometry(tunnel.width, 6, tunnel.length);
+                        const tunnelMaterial = new THREE.MeshBasicMaterial({ color: 0x222222 });
+                        const tunnelPassage = new THREE.Mesh(tunnelGeometry, tunnelMaterial);
+                        tunnelPassage.position.set(tunnel.x, -3, tunnel.z);
+                        scene.add(tunnelPassage);
+                        
+                    } else {
+                        // East and west portals
+                        const eastPortal = new THREE.Mesh(portal1Geometry, portalMaterial);
+                        eastPortal.position.set(tunnel.x + tunnel.length/2, portalHeight/2, tunnel.z);
+                        eastPortal.rotation.y = Math.PI/2;
+                        scene.add(eastPortal);
+                        
+                        const westPortal = new THREE.Mesh(portal2Geometry, portalMaterial);
+                        westPortal.position.set(tunnel.x - tunnel.length/2, portalHeight/2, tunnel.z);
+                        westPortal.rotation.y = Math.PI/2;
+                        scene.add(westPortal);
+                        
+                        // Underground tunnel passage
+                        const tunnelGeometry = new THREE.BoxGeometry(tunnel.length, 6, tunnel.width);
+                        const tunnelMaterial = new THREE.MeshBasicMaterial({ color: 0x222222 });
+                        const tunnelPassage = new THREE.Mesh(tunnelGeometry, tunnelMaterial);
+                        tunnelPassage.position.set(tunnel.x, -3, tunnel.z);
+                        scene.add(tunnelPassage);
+                    }
+                    
+                    console.log(`🚇 Added ${tunnel.name}`);
+                });
+            }
+            
+            function addHighwayRamps() {
+                console.log('🛣️ Creating highway on/off ramps...');
+                
+                // Add ramps connecting surface streets to elevated highways
+                const ramps = [
+                    { x: 300, z: 0, direction: 'up', angle: Math.PI/4 },
+                    { x: 0, z: 300, direction: 'up', angle: 0 },
+                    { x: -300, z: 0, direction: 'down', angle: -Math.PI/4 },
+                    { x: 0, z: -300, direction: 'down', angle: Math.PI }
+                ];
+                
+                ramps.forEach((ramp, index) => {
+                    const rampLength = 60;
+                    const rampWidth = 8;
+                    const rampHeight = ramp.direction === 'up' ? 18 : 0;
+                    
+                    // Create curved ramp
+                    for (let i = 0; i < 6; i++) {
+                        const progress = i / 5;
+                        const segmentX = ramp.x + Math.cos(ramp.angle) * progress * rampLength/6;
+                        const segmentZ = ramp.z + Math.sin(ramp.angle) * progress * rampLength/6;
+                        const segmentY = progress * rampHeight;
+                        
+                        const rampGeometry = new THREE.BoxGeometry(rampLength/6, 1, rampWidth);
+                        const rampMaterial = new THREE.MeshBasicMaterial({ color: 0x2a2a2a });
+                        const rampSegment = new THREE.Mesh(rampGeometry, rampMaterial);
+                        rampSegment.position.set(segmentX, segmentY, segmentZ);
+                        rampSegment.rotation.y = ramp.angle;
+                        rampSegment.rotation.z = (ramp.direction === 'up' ? 1 : -1) * 0.1;
+                        scene.add(rampSegment);
+                    }
+                    
+                    console.log(`🛣️ Added highway ramp ${index + 1}`);
+                });
+            }
+            
+            function addTrafficInfrastructure() {
+                console.log('🚦 Adding traffic infrastructure...');
+                
+                // Add traffic lights at major intersections
+                const intersections = [
+                    { x: 0, z: 0 }, { x: 200, z: 0 }, { x: -200, z: 0 },
+                    { x: 0, z: 200 }, { x: 0, z: -200 },
+                    { x: 200, z: 200 }, { x: -200, z: -200 }
+                ];
+                
+                intersections.forEach(intersection => {
+                    // Traffic light poles
+                    const poleGeometry = new THREE.CylinderGeometry(0.2, 0.2, 8, 8);
+                    const poleMaterial = new THREE.MeshBasicMaterial({ color: 0x444444 });
+                    
+                    const pole = new THREE.Mesh(poleGeometry, poleMaterial);
+                    pole.position.set(intersection.x + 8, 4, intersection.z + 8);
+                    scene.add(pole);
+                    
+                    // Traffic light box
+                    const lightGeometry = new THREE.BoxGeometry(1, 3, 0.5);
+                    const lightMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+                    const lightBox = new THREE.Mesh(lightGeometry, lightMaterial);
+                    lightBox.position.set(intersection.x + 8, 7, intersection.z + 8);
+                    scene.add(lightBox);
+                    
+                    // Colored lights
+                    const colors = [0xff0000, 0xffff00, 0x00ff00]; // Red, Yellow, Green
+                    colors.forEach((color, i) => {
+                        const lightGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+                        const lightMaterial = new THREE.MeshBasicMaterial({ color: color });
+                        const light = new THREE.Mesh(lightGeometry, lightMaterial);
+                        light.position.set(intersection.x + 8, 7.5 - i * 0.8, intersection.z + 8.3);
+                        scene.add(light);
+                    });
+                });
+                
+                console.log('✅ Traffic infrastructure added');
+            }
+            
+            function createBuildingPhysics(x, z, width, height, depth) {
+                const buildingPhysics = new Ammo.btBoxShape(new Ammo.btVector3(width/2, height/2, depth/2));
+                const buildingTransform = new Ammo.btTransform();
+                buildingTransform.setIdentity();
+                buildingTransform.setOrigin(new Ammo.btVector3(x, height/2, z));
+                
+                const buildingMotionState = new Ammo.btDefaultMotionState(buildingTransform);
+                const buildingRigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(0, buildingMotionState, buildingPhysics, new Ammo.btVector3(0, 0, 0));
+                const buildingRigidBody = new Ammo.btRigidBody(buildingRigidBodyInfo);
+                buildingRigidBody.setFriction(0.8);
+                buildingRigidBody.setRestitution(0.1);
+                physicsWorld.addRigidBody(buildingRigidBody);
+            }
+            
+            function createHillyTerrain() {
+                console.log('🏔️ Generating hilly terrain based on track spline...');
+                
+                // Terrain parameters - optimize for Quest 3
+                const isQuest = renderer.xr.isPresenting || navigator.userAgent.includes('Quest');
+                const terrainSize = 800; // 800x800 meter terrain
+                const terrainResolution = isQuest ? 64 : 128; // Reduce resolution for Quest
+                const maxHeight = 25; // Maximum hill height
+                const trackInfluenceRadius = 40; // How far track affects terrain
+                
+                console.log('🔧 Terrain params:', { terrainSize, terrainResolution, maxHeight, isQuest });
+                
+                // Create heightmap
+                const heightData = generateHeightmap(terrainSize, terrainResolution, maxHeight, trackInfluenceRadius);
+                
+                // Create terrain geometry
+                const terrainGeometry = new THREE.PlaneGeometry(
+                    terrainSize, terrainSize, 
+                    terrainResolution - 1, terrainResolution - 1
+                );
+                
+                // Apply heightmap to vertices
+                const vertices = terrainGeometry.attributes.position.array;
+                console.log('🔧 Applying heightmap to', vertices.length / 3, 'vertices');
+                
+                let appliedCount = 0;
+                for (let i = 0; i < vertices.length; i += 3) {
+                    const x = vertices[i];
+                    const z = vertices[i + 2];
+                    
+                    // Convert world coordinates to heightmap coordinates
+                    const hx = Math.floor(((x + terrainSize/2) / terrainSize) * terrainResolution);
+                    const hz = Math.floor(((z + terrainSize/2) / terrainSize) * terrainResolution);
+                    
+                    if (hx >= 0 && hx < terrainResolution && hz >= 0 && hz < terrainResolution) {
+                        const heightValue = heightData[hz * terrainResolution + hx];
+                        vertices[i + 1] = heightValue;
+                        appliedCount++;
+                        
+                        // Debug first few vertices
+                        if (appliedCount <= 5) {
+                            console.log(`🔧 Vertex ${appliedCount}: (${x.toFixed(1)}, ${z.toFixed(1)}) -> height ${heightValue.toFixed(2)}`);
+                        }
+                    }
+                }
+                
+                console.log('🔧 Applied heightmap to', appliedCount, 'vertices');
+                
+                // Mark the geometry as needing update
+                terrainGeometry.attributes.position.needsUpdate = true;
+                
+                // Recalculate normals for proper lighting
+                terrainGeometry.computeVertexNormals();
+                
+                // Load terrain texture
+                const textureLoader = new THREE.TextureLoader();
+                const grassTexture = textureLoader.load('assets/ground/textures/forest_ground_04_diff_8k.jpg', 
+                    function(texture) {
+                        texture.wrapS = THREE.RepeatWrapping;
+                        texture.wrapT = THREE.RepeatWrapping;
+                        texture.repeat.set(40, 40); // More tiling for detailed terrain
+                        console.log('✅ Terrain texture loaded');
+                    },
+                    undefined,
+                    function(error) {
+                        console.log('⚠️ Terrain texture failed to load, using solid color');
+                    }
+                );
+                
+                // Create terrain material - solid and visible
+                const terrainMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0x8B4513, // Brown color for terrain
+                    wireframe: false,
+                    side: THREE.DoubleSide
+                });
+                
+                // Temporary: Also create a wireframe version for debugging
+                const wireframeMaterial = new THREE.MeshBasicMaterial({
+                    color: 0xff0000, // Bright red for visibility
+                    wireframe: true,
+                    transparent: false,
+                    opacity: 1.0
+                });
+                
+                // Create terrain mesh
+                const terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+                terrain.rotation.x = -Math.PI / 2;
+                terrain.position.set(0, -15, 0); // Position well below track so hills show above ground
+                terrain.receiveShadow = true;
+                terrain.castShadow = false; // Terrain doesn't cast shadows (performance)
+                scene.add(terrain);
+                
+                // ALSO create a visible copy right at the track location for immediate visibility
+                const visibleTerrain = new THREE.Mesh(terrainGeometry.clone(), new THREE.MeshBasicMaterial({
+                    color: 0xff6600, // Orange color for high visibility
+                    wireframe: false,
+                    side: THREE.DoubleSide
+                }));
+                visibleTerrain.rotation.x = -Math.PI / 2;
+                visibleTerrain.position.set(0, -2, 0); // Just below track level
+                visibleTerrain.scale.set(0.1, 0.1, 0.1); // Much smaller for testing
+                scene.add(visibleTerrain);
+                console.log('🔧 Added ORANGE visible terrain at track level');
+                
+                // Create a solid terrain copy at ground level for visibility testing
+                const terrainCopy = new THREE.Mesh(terrainGeometry.clone(), new THREE.MeshBasicMaterial({
+                    color: 0x00ff00,
+                    wireframe: false, // SOLID surface, not wireframe
+                    transparent: false,
+                    side: THREE.DoubleSide
+                }));
+                terrainCopy.rotation.x = -Math.PI / 2;
+                terrainCopy.position.y = 0; // At ground level
+                terrainCopy.scale.set(0.2, 0.2, 0.2); // Much smaller for testing
+                scene.add(terrainCopy);
+                console.log('🔧 Added GREEN SOLID terrain copy at ground level');
+                
+                // Add wireframe version for debugging (temporary)
+                const wireframeTerrain = new THREE.Mesh(terrainGeometry.clone(), wireframeMaterial);
+                wireframeTerrain.rotation.x = -Math.PI / 2;
+                wireframeTerrain.position.y = 2; // Much higher to be visible
+                wireframeTerrain.scale.set(0.1, 0.1, 0.1); // Smaller for testing
+                scene.add(wireframeTerrain);
+                console.log('🔧 Added wireframe terrain for debugging');
+                
+                // Add a test cube to verify positioning
+                const testCube = new THREE.Mesh(
+                    new THREE.BoxGeometry(10, 10, 10),
+                    new THREE.MeshBasicMaterial({ color: 0xff00ff })
+                );
+                testCube.position.set(0, 5, 0);
+                scene.add(testCube);
+                console.log('🔧 Added test cube at (0, 5, 0)');
+                
+                // Add a simple test plane to verify basic geometry works
+                const testPlane = new THREE.Mesh(
+                    new THREE.PlaneGeometry(50, 50, 10, 10),
+                    new THREE.MeshBasicMaterial({ color: 0xffff00, wireframe: false, side: THREE.DoubleSide })
+                );
+                testPlane.rotation.x = -Math.PI / 2;
+                testPlane.position.set(50, 1, 0);
+                scene.add(testPlane);
+                console.log('🔧 Added YELLOW test plane at (50, 1, 0)');
+                
+                // Add a test terrain with manual height variations
+                const testTerrainGeometry = new THREE.PlaneGeometry(100, 100, 20, 20);
+                const testVertices = testTerrainGeometry.attributes.position.array;
+                
+                // Manually set some heights to create visible hills
+                for (let i = 0; i < testVertices.length; i += 3) {
+                    const x = testVertices[i];
+                    const z = testVertices[i + 2];
+                    // Create a simple hill pattern
+                    testVertices[i + 1] = Math.sin(x * 0.1) * Math.cos(z * 0.1) * 10;
+                }
+                testTerrainGeometry.attributes.position.needsUpdate = true;
+                testTerrainGeometry.computeVertexNormals();
+                
+                const testTerrain = new THREE.Mesh(
+                    testTerrainGeometry,
+                    new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: false, side: THREE.DoubleSide })
+                );
+                testTerrain.rotation.x = -Math.PI / 2;
+                testTerrain.position.set(-100, 2, 0);
+                scene.add(testTerrain);
+                console.log('🔧 Added CYAN test terrain with hills at (-100, 2, 0)');
+                
+                // Create a LARGE visible terrain using our actual heightmap data right at the track
+                const bigTerrainGeometry = new THREE.PlaneGeometry(200, 200, 50, 50);
+                const bigVertices = bigTerrainGeometry.attributes.position.array;
+                
+                // Apply our actual heightmap data to this visible terrain
+                for (let i = 0; i < bigVertices.length; i += 3) {
+                    const x = bigVertices[i];
+                    const z = bigVertices[i + 2];
+                    
+                    // Convert to heightmap coordinates
+                    const hx = Math.floor(((x + 100) / 200) * terrainResolution);
+                    const hz = Math.floor(((z + 100) / 200) * terrainResolution);
+                    
+                    if (hx >= 0 && hx < terrainResolution && hz >= 0 && hz < terrainResolution) {
+                        bigVertices[i + 1] = heightData[hz * terrainResolution + hx] * 0.5; // Scale down heights
+                    }
+                }
+                bigTerrainGeometry.attributes.position.needsUpdate = true;
+                bigTerrainGeometry.computeVertexNormals();
+                
+                const bigTerrain = new THREE.Mesh(
+                    bigTerrainGeometry,
+                    new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: false, side: THREE.DoubleSide })
+                );
+                bigTerrain.rotation.x = -Math.PI / 2;
+                bigTerrain.position.set(0, 5, 0); // High above track for visibility
+                scene.add(bigTerrain);
+                console.log('🔧 Added MAGENTA big terrain with actual heightmap at (0, 5, 0)');
+                
+                console.log('✅ Hilly terrain created with', terrainResolution + 'x' + terrainResolution, 'vertices');
+                console.log('🔧 Terrain mesh added to scene at position:', terrain.position);
+                console.log('🔧 Terrain bounding box:', new THREE.Box3().setFromObject(terrain));
+                
+                // Create physics collision for terrain
+                createTerrainPhysics(heightData, terrainSize, terrainResolution);
+                
+                // Store terrain reference for potential physics
+                window.terrainMesh = terrain;
+                window.terrainHeightData = heightData;
+                window.terrainSize = terrainSize;
+                window.terrainResolution = terrainResolution;
+            }
+            
+            function generateHeightmap(terrainSize, resolution, maxHeight, trackInfluenceRadius) {
+                console.log('📊 Generating heightmap...');
+                
+                const heightData = new Float32Array(resolution * resolution);
+                const halfSize = terrainSize / 2;
+                
+                // Generate base noise for natural hills
+                for (let z = 0; z < resolution; z++) {
+                    for (let x = 0; x < resolution; x++) {
+                        const worldX = (x / resolution) * terrainSize - halfSize;
+                        const worldZ = (z / resolution) * terrainSize - halfSize;
+                        
+                        // Multi-octave noise for natural terrain
+                        let height = 0;
+                        
+                        // Large hills (low frequency)
+                        height += Math.sin(worldX * 0.01) * Math.cos(worldZ * 0.008) * maxHeight * 0.6;
+                        
+                        // Medium hills
+                        height += Math.sin(worldX * 0.02) * Math.cos(worldZ * 0.025) * maxHeight * 0.3;
+                        
+                        // Small details
+                        height += Math.sin(worldX * 0.05) * Math.cos(worldZ * 0.04) * maxHeight * 0.1;
+                        
+                        // Add some randomness
+                        height += (Math.random() - 0.5) * maxHeight * 0.1;
+                        
+                        heightData[z * resolution + x] = height;
+                    }
+                }
+                
+                // Flatten terrain around the racing track
+                if (racingPath) {
+                    console.log('🛣️ Flattening terrain around racing track...');
+                    
+                    // Sample points along the racing path
+                    const pathSamples = 200;
+                    for (let i = 0; i < pathSamples; i++) {
+                        const t = i / pathSamples;
+                        const pathPoint = racingPath.getPoint(t);
+                        
+                        // Flatten terrain in a radius around each path point
+                        for (let z = 0; z < resolution; z++) {
+                            for (let x = 0; x < resolution; x++) {
+                                const worldX = (x / resolution) * terrainSize - halfSize;
+                                const worldZ = (z / resolution) * terrainSize - halfSize;
+                                
+                                const distanceToTrack = Math.sqrt(
+                                    Math.pow(worldX - pathPoint.x, 2) + 
+                                    Math.pow(worldZ - pathPoint.z, 2)
+                                );
+                                
+                                if (distanceToTrack < trackInfluenceRadius) {
+                                    // Smooth transition from track level to natural terrain
+                                    const influence = 1.0 - (distanceToTrack / trackInfluenceRadius);
+                                    const smoothInfluence = influence * influence * (3.0 - 2.0 * influence); // Smoothstep
+                                    
+                                    const currentHeight = heightData[z * resolution + x];
+                                    const trackHeight = pathPoint.y - 1; // Slightly below track level
+                                    
+                                    heightData[z * resolution + x] = 
+                                        currentHeight * (1.0 - smoothInfluence) + 
+                                        trackHeight * smoothInfluence;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Smooth the heightmap to reduce sharp edges
+                const smoothedData = new Float32Array(resolution * resolution);
+                for (let z = 1; z < resolution - 1; z++) {
+                    for (let x = 1; x < resolution - 1; x++) {
+                        let sum = 0;
+                        let count = 0;
+                        
+                        // 3x3 kernel smoothing
+                        for (let dz = -1; dz <= 1; dz++) {
+                            for (let dx = -1; dx <= 1; dx++) {
+                                sum += heightData[(z + dz) * resolution + (x + dx)];
+                                count++;
+                            }
+                        }
+                        
+                        smoothedData[z * resolution + x] = sum / count;
+                    }
+                }
+                
+                // Copy smoothed data back (except edges)
+                for (let z = 1; z < resolution - 1; z++) {
+                    for (let x = 1; x < resolution - 1; x++) {
+                        heightData[z * resolution + x] = smoothedData[z * resolution + x];
+                    }
+                }
+                
+                // Debug: Check heightmap values
+                let heightMin = Math.min(...heightData);
+                let heightMax = Math.max(...heightData);
+                console.log('📊 Heightmap stats:', { min: heightMin, max: heightMax, range: heightMax - heightMin });
+                
+                console.log('✅ Heightmap generated');
+                return heightData;
+            }
+            
+            function createTerrainPhysics(heightData, terrainSize, resolution) {
+                console.log('🔧 Creating terrain physics collision...');
+                
+                // Create a large flat physics ground to prevent falling
+                // This provides basic collision while we work on the visual terrain
+                const groundPhysics = new Ammo.btBoxShape(new Ammo.btVector3(terrainSize/2, 1, terrainSize/2));
+                const groundTransform = new Ammo.btTransform();
+                groundTransform.setIdentity();
+                groundTransform.setOrigin(new Ammo.btVector3(0, -10, 0)); // Well below terrain
+                
+                const groundMotionState = new Ammo.btDefaultMotionState(groundTransform);
+                const groundRigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(0, groundMotionState, groundPhysics, new Ammo.btVector3(0, 0, 0));
+                const groundRigidBody = new Ammo.btRigidBody(groundRigidBodyInfo);
+                groundRigidBody.setFriction(2);
+                groundRigidBody.setRestitution(0.1);
+                physicsWorld.addRigidBody(groundRigidBody);
+                
+                console.log('✅ Basic ground physics created to prevent falling');
             }
             
             function tryLoadForestTextures(groundMesh) {
