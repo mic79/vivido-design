@@ -5405,9 +5405,9 @@
                     if (cameraMode === 'firstperson') {
                         if (renderer.xr.isPresenting) {
                             // Camera rig now follows car automatically as a child
-                            // Just update the local Y offset if it changed
+                            // Maintain full VR driver's seat position
                             if (cameraRig.parent === vehicleRef.chassisMesh) {
-                                cameraRig.position.y = window.vrCameraYOffset || -1.1;
+                                cameraRig.position.set(0.3, window.vrCameraYOffset || -1.1, -0.2);
                             } else {
                                 // Fallback: manual positioning if not attached to car yet
                                 var cameraOffset = new THREE.Vector3(0.3, window.vrCameraYOffset || -1.1, -0.2);
@@ -5425,22 +5425,38 @@
                                 cameraRig.quaternion.copy(carQuaternion);
                             }
                         } else {
-                            // In Desktop: Move the first person camera directly
-                            var cameraOffset = new THREE.Vector3(0, 1.4, 1.2); // x, y(up), z(forward)
-                            var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
-                            cameraOffset.applyQuaternion(carQuaternion);
-                            
-                            firstPersonCamera.position.set(
-                                p.x() + cameraOffset.x,
-                                p.y() + cameraOffset.y,
-                                p.z() + cameraOffset.z
-                            );
-                            
-                            // Make camera look forward relative to car
-                            var lookDirection = new THREE.Vector3(0, 0, 5); // Look forward
-                            lookDirection.applyQuaternion(carQuaternion);
-                            var lookTarget = firstPersonCamera.position.clone().add(lookDirection);
-                            firstPersonCamera.lookAt(lookTarget);
+                            // Desktop Mode: Position the camera rig for desktop view (same driver's seat as VR)
+                            if (cameraRig.parent === vehicleRef.chassisMesh) {
+                                // Camera rig is attached to car, set desktop-specific local offset (50cm more forward than VR)
+                                cameraRig.position.set(0.3, 1.2, 0.3); // 50cm forward from VR position (-0.2 + 0.5 = 0.3)
+                                cameraRig.rotation.set(0, Math.PI, 0); // Face forward (180° turn since car model faces backward)
+                                
+                                // Reset firstPersonCamera to origin within the rig
+                                firstPersonCamera.position.set(0, 0, 0);
+                                firstPersonCamera.rotation.set(0, 0, 0);
+                            } else {
+                                // Fallback: manual positioning if not attached to car yet
+                                var cameraOffset = new THREE.Vector3(0.3, 1.2, 0.3); // 50cm more forward than VR position
+                                var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
+                                
+                                // Apply forward rotation (car model faces backward)
+                                var forwardRotation = new THREE.Quaternion();
+                                forwardRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+                                carQuaternion.multiply(forwardRotation);
+                                
+                                cameraOffset.applyQuaternion(carQuaternion);
+                                
+                                cameraRig.position.set(
+                                    p.x() + cameraOffset.x,
+                                    p.y() + cameraOffset.y,
+                                    p.z() + cameraOffset.z
+                                );
+                                cameraRig.quaternion.copy(carQuaternion);
+                                
+                                // Reset firstPersonCamera to origin within the rig
+                                firstPersonCamera.position.set(0, 0, 0);
+                                firstPersonCamera.rotation.set(0, 0, 0);
+                            }
                         }
                     } else if (cameraMode === 'fly') {
                         if (renderer.xr.isPresenting) {
