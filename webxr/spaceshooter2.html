@@ -9094,6 +9094,12 @@ function setGameplayHUD(isPlaying) {
             this.selectTeam('red');
           } else if (id === 'menu-team-blue') {
             this.selectTeam('blue');
+          } else if (id === 'menu-toggle-spaceship') {
+            this.toggleModel('spaceship');
+          } else if (id === 'menu-toggle-asteroid-field') {
+            this.toggleModel('asteroid-field');
+          } else if (id === 'menu-toggle-asteroid-42') {
+            this.toggleModel('asteroid-42');
           } else if (id === 'menu-restart-match') {
             this.restartMatch();
           }
@@ -9396,6 +9402,64 @@ function setGameplayHUD(isPlaying) {
           const menuToggle = document.querySelector('[menu-toggle]');
           if (menuToggle && menuToggle.components['menu-toggle']) {
             menuToggle.components['menu-toggle'].toggleMenu();
+          }
+        },
+        
+        toggleModel: function(modelType) {
+          console.log('🎮 Toggling model:', modelType);
+          
+          if (modelType === 'spaceship') {
+            const spaceship = document.querySelector('#model-spaceship');
+            const button = document.querySelector('#menu-toggle-spaceship');
+            const buttonText = button.querySelector('a-text');
+            
+            if (spaceship.getAttribute('visible') !== false) {
+              spaceship.setAttribute('visible', false);
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Spaceship: OFF');
+            } else {
+              spaceship.setAttribute('visible', true);
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Spaceship: ON');
+            }
+          } else if (modelType === 'asteroid-field') {
+            const fields = [
+              document.querySelector('#model-asteroid-field-north'),
+              document.querySelector('#model-asteroid-field-south'),
+              document.querySelector('#model-asteroid-field-east'),
+              document.querySelector('#model-asteroid-field-west')
+            ];
+            const button = document.querySelector('#menu-toggle-asteroid-field');
+            const buttonText = button.querySelector('a-text');
+            
+            const isVisible = fields[0].getAttribute('visible') !== false;
+            fields.forEach(field => {
+              if (field) {
+                field.setAttribute('visible', !isVisible);
+              }
+            });
+            
+            if (isVisible) {
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Ast.Field: OFF');
+            } else {
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Ast.Field: ON');
+            }
+          } else if (modelType === 'asteroid-42') {
+            const asteroid = document.querySelector('#model-asteroid-42');
+            const button = document.querySelector('#menu-toggle-asteroid-42');
+            const buttonText = button.querySelector('a-text');
+            
+            if (asteroid.getAttribute('visible') !== false) {
+              asteroid.setAttribute('visible', false);
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Asteroid: OFF');
+            } else {
+              asteroid.setAttribute('visible', true);
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Asteroid: ON');
+            }
           }
         }
       });
@@ -9817,6 +9881,36 @@ function setGameplayHUD(isPlaying) {
               
               <!-- Game mode and team selection removed - space shooter is always dodgeball mode -->
               
+              <!-- 3D Model Toggles for Performance Testing -->
+              <a-text value="3D Models (Performance Test):" position="0 -0.05 0" align="center" width="0.8" color="#ffff00"></a-text>
+              
+              <!-- Spaceship Toggle -->
+              <a-entity id="menu-toggle-spaceship" position="-0.3 -0.12 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Spaceship: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Asteroid Field Toggle -->
+              <a-entity id="menu-toggle-asteroid-field" position="0 -0.12 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Ast.Field: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Single Asteroid Toggle -->
+              <a-entity id="menu-toggle-asteroid-42" position="0.3 -0.12 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Asteroid: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
               <!-- Start/Restart Match Button (only visible for host) -->
               <a-entity id="menu-restart-match" position="0 -0.25 0"
                         geometry="primitive: plane; width: 0.3; height: 0.06"
@@ -10010,7 +10104,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- SPACESHIP AT CENTER -->
-      <a-entity position="0 0 0" 
+      <a-entity id="model-spaceship" position="0 0 0" 
                 scale="10.0 10.0 10.0"
                 rotation="0 0 0">
         <a-gltf-model src="#spaceship-model"></a-gltf-model>
@@ -10018,35 +10112,35 @@ function setGameplayHUD(isPlaying) {
 
       <!-- ASTEROID BELT - 4 DIRECTIONS -->
       <!-- North Asteroid Field -->
-      <a-entity position="-50 -150 200" 
+      <a-entity id="model-asteroid-field-north" position="-50 -150 200" 
                 scale="10.0 10.0 10.0"
                 grab-surface="type: static">
         <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
       </a-entity>
       
       <!-- South Asteroid Field -->
-      <a-entity position="-50 -150 -250" 
+      <a-entity id="model-asteroid-field-south" position="-50 -150 -250" 
                 scale="10.0 10.0 10.0"
                 grab-surface="type: static">
         <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
       </a-entity>
       
       <!-- East Asteroid Field -->
-      <a-entity position="200 -150 -50" 
+      <a-entity id="model-asteroid-field-east" position="200 -150 -50" 
                 scale="10.0 10.0 10.0"
                 grab-surface="type: static">
         <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
       </a-entity>
       
       <!-- West Asteroid Field -->
-      <a-entity position="-300 -150 -50" 
+      <a-entity id="model-asteroid-field-west" position="-300 -150 -50" 
                 scale="10.0 10.0 10.0"
                 grab-surface="type: static">
         <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
       </a-entity>
       
       <!-- Single Asteroid 250m Away -->
-      <a-entity position="250 0 0" 
+      <a-entity id="model-asteroid-42" position="250 0 0" 
                 scale="1.2 1.2 1.2"
                 grab-surface="type: static">
         <a-gltf-model src="#asteroid-42-model"></a-gltf-model>
