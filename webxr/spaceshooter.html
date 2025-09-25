@@ -1000,8 +1000,7 @@
         }
       }
 
-      function handleMatchStartSync(data) {
-        console.log('🚀 CLIENT received match-start-sync:', data);
+        function handleMatchStartSync(data) {
         // Handle match start synchronization from host
         const gameManager = document.querySelector('#game-manager');
         if (gameManager && gameManager.components['game-manager']) {
@@ -1260,9 +1259,8 @@
       }
       
       function handleBallGrabState(data) {
-        // Only update grab state for remote player's ball, don't send back
-        if (data.playerId !== myPlayerId) {
-          console.log(`🎯 Received ball grab state: ${data.ballId} -> ${data.isGrabbed ? 'GRABBED' : 'RELEASED'} by ${data.playerId}`);
+          // Only update grab state for remote player's ball, don't send back
+          if (data.playerId !== myPlayerId) {
           
           const ball = document.querySelector(`[zerog-ball*="player: ${data.ballId}"]`);
           if (ball && ball.components['zerog-ball']) {
@@ -2324,9 +2322,18 @@ function setGameplayHUD(isPlaying) {
             return this.distanceToCylinder(handPos, handRadius, elementPos, geometry);
           } else if (geometry.primitive === 'octahedron') {
             return this.distanceToOctahedron(handPos, handRadius, elementPos, geometry);
+          } else if (geometry.primitive === 'dodecahedron') {
+            return this.distanceToDodecahedron(handPos, handRadius, elementPos, geometry);
+          } else if (geometry.primitive === 'icosahedron') {
+            return this.distanceToIcosahedron(handPos, handRadius, elementPos, geometry);
           } else if (geometry.primitive === 'torus') {
             return this.distanceToTorus(handPos, handRadius, elementPos, geometry, element);
           } else {
+            // Check if this is a GLTF model entity
+            const gltfModel = element.querySelector('a-gltf-model');
+            if (gltfModel) {
+              return this.distanceToGltfModel(handPos, handRadius, elementPos, element);
+            }
             // Fallback
             return handPos.distanceTo(elementPos) - handRadius;
           }
@@ -2410,6 +2417,57 @@ function setGameplayHUD(isPlaying) {
           
           // Distance to octahedron surface
           const distanceToSurface = manhattanDistance - octahedronRadius;
+          
+          // Return distance to surface minus hand radius (minimum 0)
+          return Math.max(0, distanceToSurface - handRadius);
+        },
+        
+        distanceToDodecahedron: function(handPos, handRadius, dodecahedronPos, geometry) {
+          const radius = geometry.radius || 1.0;
+          
+          // Get point relative to dodecahedron center
+          const relativePos = handPos.clone().sub(dodecahedronPos);
+          
+          // For dodecahedron, use the same radius as the physics body
+          // The physics body uses full radius for vertices, so collision should match
+          const distance = relativePos.length();
+          
+          // Use full radius to match physics body (not inscribed sphere)
+          const distanceToSurface = distance - radius;
+          
+          // Return distance to surface minus hand radius (minimum 0)
+          return Math.max(0, distanceToSurface - handRadius);
+        },
+        
+        distanceToIcosahedron: function(handPos, handRadius, icosahedronPos, geometry) {
+          const radius = geometry.radius || 1.0;
+          
+          // Get point relative to icosahedron center
+          const relativePos = handPos.clone().sub(icosahedronPos);
+          
+          // For icosahedron, use the same radius as the physics body
+          // The physics body uses full radius for vertices, so collision should match
+          const distance = relativePos.length();
+          
+          // Use full radius to match physics body (not inscribed sphere)
+          const distanceToSurface = distance - radius;
+          
+          // Return distance to surface minus hand radius (minimum 0)
+          return Math.max(0, distanceToSurface - handRadius);
+        },
+        
+        distanceToGltfModel: function(handPos, handRadius, modelPos, element) {
+          // For GLTF models, use sphere approximation based on scale
+          const scale = element.getAttribute('scale') || {x: 1, y: 1, z: 1};
+          const avgScale = (scale.x + scale.y + scale.z) / 3;
+          const radius = avgScale * 1.0; // Assume 1 unit radius, scaled
+          
+          // Get point relative to model center
+          const relativePos = handPos.clone().sub(modelPos);
+          const distance = relativePos.length();
+          
+          // Distance to surface
+          const distanceToSurface = distance - radius;
           
           // Return distance to surface minus hand radius (minimum 0)
           return Math.max(0, distanceToSurface - handRadius);
@@ -3338,7 +3396,6 @@ function setGameplayHUD(isPlaying) {
                 
                 if (isOscillating) {
                   // Only limit velocity if we detect unwanted oscillation
-                  console.log('Oscillation detected - limiting velocity from', this.velocity.length().toFixed(2), 'to 2.0 m/s');
                   const maxVelocityWhenOscillating = 2.0; // Further reduced for better stability
                   if (this.velocity.length() > maxVelocityWhenOscillating) {
                     this.velocity.normalize().multiplyScalar(maxVelocityWhenOscillating);
@@ -3461,7 +3518,57 @@ function setGameplayHUD(isPlaying) {
               
               response.copy(direction.multiplyScalar(penetration));
             }
-          } else if (geometry.primitive === 'torus') {
+          } else if (geometry.primitive === 'dodecahedron') {
+            // Dodecahedron collision
+            const dodecahedronRadius = geometry.radius || 1.0;
+            
+            // Get point relative to dodecahedron center
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            
+            // Calculate penetration using full radius to match physics body
+            const penetration = radius + this.collisionMargin + dodecahedronRadius - distance;
+            
+            if (penetration > 0) {
+              // Push away from center
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'icosahedron') {
+            // Icosahedron collision
+            const icosahedronRadius = geometry.radius || 1.0;
+            
+            // Get point relative to icosahedron center
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            
+            // Calculate penetration using full radius to match physics body
+            const penetration = radius + this.collisionMargin + icosahedronRadius - distance;
+            
+            if (penetration > 0) {
+              // Push away from center
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (!geometry && element.querySelector('a-gltf-model')) {
+            // GLTF Model collision
+            const scale = element.getAttribute('scale') || {x: 1, y: 1, z: 1};
+            const avgScale = (scale.x + scale.y + scale.z) / 3;
+            const modelRadius = avgScale * 1.0;
+            
+            // Get point relative to model center
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            
+            // Calculate penetration using full radius to match physics body
+            const penetration = radius + this.collisionMargin + modelRadius - distance;
+            
+            if (penetration > 0) {
+              // Push away from center
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry && geometry.primitive === 'torus') {
             // Torus collision (check rotation to determine orientation)
             const torusRadius = geometry.radius || 1.0;
             const tubeRadius = geometry.radiusTubular || 0.2;
@@ -4198,6 +4305,7 @@ function setGameplayHUD(isPlaying) {
         createPhysicsBody: function() {
           // Create physics body for surface
           const geometry = this.el.getAttribute('geometry');
+          const gltfModel = this.el.querySelector('a-gltf-model');
           let shape;
           
           if (geometry && geometry.primitive === 'box') {
@@ -4235,9 +4343,23 @@ function setGameplayHUD(isPlaying) {
             ];
             
             shape = new CANNON.ConvexPolyhedron(vertices, faces);
+          } else if (geometry && geometry.primitive === 'dodecahedron') {
+            // Dodecahedron: use sphere approximation for better performance and no winding errors
+            const radius = geometry.radius || 1.0;
+            shape = new CANNON.Sphere(radius);
+          } else if (geometry && geometry.primitive === 'icosahedron') {
+            // Icosahedron: use sphere approximation for better performance and no winding errors
+            const radius = geometry.radius || 1.0;
+            shape = new CANNON.Sphere(radius);
           } else if (geometry && geometry.primitive === 'torus') {
             // Torus: Skip CANNON.js physics body - use custom collision detection instead
             return; // Don't create physics body for torus
+          } else if (gltfModel) {
+            // GLTF Model: use sphere approximation based on scale
+            const scale = this.el.getAttribute('scale') || {x: 1, y: 1, z: 1};
+            const avgScale = (scale.x + scale.y + scale.z) / 3;
+            const radius = avgScale * 1.0; // Assume 1 unit radius, scaled
+            shape = new CANNON.Sphere(radius);
           } else {
             // Fallback for unknown geometry
             shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
@@ -4324,6 +4446,16 @@ function setGameplayHUD(isPlaying) {
             wireframe = document.createElement('a-octahedron');
             wireframe.setAttribute('radius', geometry.radius || 1.0);
             wireframe.setAttribute('material', 'wireframe: true; color: #ff00ff; opacity: 0.3; transparent: true');
+          } else if (geometry && geometry.primitive === 'dodecahedron') {
+            // Dodecahedron wireframe
+            wireframe = document.createElement('a-dodecahedron');
+            wireframe.setAttribute('radius', geometry.radius || 1.0);
+            wireframe.setAttribute('material', 'wireframe: true; color: #ffff00; opacity: 0.3; transparent: true');
+          } else if (geometry && geometry.primitive === 'icosahedron') {
+            // Icosahedron wireframe
+            wireframe = document.createElement('a-icosahedron');
+            wireframe.setAttribute('radius', geometry.radius || 1.0);
+            wireframe.setAttribute('material', 'wireframe: true; color: #00ffff; opacity: 0.3; transparent: true');
           } else if (geometry && geometry.primitive === 'torus') {
             // Torus wireframe (show actual torus collision shape)
             wireframe = document.createElement('a-torus');
@@ -4448,7 +4580,6 @@ function setGameplayHUD(isPlaying) {
           const ballPlayer = `player${ballIndex}`;
           this.ball = this.el.sceneEl.querySelector(`[zerog-ball*="player: ${ballPlayer}"]`);
           
-          console.log(`🤖 Bot ${this.el.id} ball assignment: botId=${botId}, ballIndex=${ballIndex}, ballPlayer=${ballPlayer}, ball=${!!this.ball}`);
         },
         
                  checkPlayerBallHit: function(evt) {
@@ -4631,7 +4762,6 @@ function setGameplayHUD(isPlaying) {
             return;
           }
           
-          console.log(`🚀 Bot ${this.el.id} throwing ball at player!`);
           
           // Find the best target (closest opponent)
           const bestTarget = this.findBestTarget();
@@ -4639,7 +4769,6 @@ function setGameplayHUD(isPlaying) {
             console.log(`❌ Bot ${this.el.id} found no target to throw at`);
             return;
           }
-          console.log(`🎯 Bot ${this.el.id} found target:`, bestTarget);
           
           // Reset ball to bot position
           this.ball.components['zerog-ball'].resetPosition();
@@ -4758,13 +4887,8 @@ function setGameplayHUD(isPlaying) {
           const timeSinceLastThrow = time - this.lastThrowTime;
           const throwIntervalMet = timeSinceLastThrow > this.data.throwInterval;
 
-          // Debug bot throwing conditions (reduced logging)
-          if (time % 10000 < 100) { // Every 10 seconds
-            console.log(`🤖 Bot ${this.el.id} status: matchActive=${isMatchActive}, interval=${throwIntervalMet}`);
-          }
           
           if (isMatchActive && throwIntervalMet) {
-            console.log(`🚀 Bot ${this.el.id} attempting to throw!`);
             
             // In capture mode, only throw at opponents
             if (gameMode === 'capture') {
@@ -5379,7 +5503,6 @@ function setGameplayHUD(isPlaying) {
               // CRITICAL FIX: Prevent multiple setTimeout calls by using a flag
               if (!this.matchStartScheduled) {
                 this.matchStartScheduled = true;
-                console.log('🎯 Scheduling match start (only once)');
                 
                 setTimeout(() => {
                   // CRITICAL FIX: Only host should call startMatch and sync to clients
@@ -5875,7 +5998,6 @@ function setGameplayHUD(isPlaying) {
           this.playerStats[0].kills += 1;
           this.playerScores[0] = this.playerStats[0].kills; // Update score for compatibility
           this.updateMultiplayerScore();
-          console.log('🎯 Player killed bot! K/D:', `${this.playerStats[0].kills}/${this.playerStats[0].deaths}`);
           
           if (isMultiplayer && activePlayers.size > 1) {
             // HOST-AUTHORITATIVE SCORING: Only host handles scoring logic
@@ -5916,7 +6038,6 @@ function setGameplayHUD(isPlaying) {
           
           // SPACE SHOOTER: Increment death count when bot hits player
           this.playerStats[0].deaths += 1;
-          console.log('💀 Player killed by bot! K/D:', `${this.playerStats[0].kills}/${this.playerStats[0].deaths}`);
           this._opponentHitCount = (this._opponentHitCount || 0) + 1;
           
           if (isMultiplayer && activePlayers.size > 1) {
@@ -6528,7 +6649,6 @@ function setGameplayHUD(isPlaying) {
           const gameManager = document.querySelector('[game-manager]');
           if (gameManager && gameManager.components['game-manager']) {
             gameManager.components['game-manager'].startMatchWithBots();
-            console.log('🎮 Space shooter match auto-started - bots should now be active');
           }
         }, 2000);
         
@@ -7402,7 +7522,6 @@ function setGameplayHUD(isPlaying) {
           if (this.isCaptureBall) {
             this.currentOwner = myPlayerId;
             this.lastOwnerChangeTime = Date.now();
-            console.log('🎯 Ball ownership set to', myPlayerId);
           }
           
           // Activate shield for player balls when grabbed (if available and not capture ball)
@@ -7429,7 +7548,6 @@ function setGameplayHUD(isPlaying) {
               timestamp: Date.now()
             };
             
-            console.log(`🎯 Sending ball grab state: ${this.data.player} grabbed by ${myPlayerId}`);
             connections.forEach((conn, playerId) => {
               if (conn && conn.open) {
                 conn.send(data);
@@ -7572,7 +7690,6 @@ function setGameplayHUD(isPlaying) {
                 timestamp: Date.now()
               };
               
-              console.log(`🎯 Sending ball release state: ${this.data.player} released by ${myPlayerId}`);
               connections.forEach((conn, playerId) => {
                 if (conn && conn.open) {
                   conn.send(data);
@@ -7583,7 +7700,6 @@ function setGameplayHUD(isPlaying) {
           
           // CRITICAL FIX: Clear ownership when ball is voluntarily released (not stolen)
           if (this.isCaptureBall && this.currentOwner === myPlayerId) {
-            console.log('🎯 Ball ownership cleared - voluntary release by', myPlayerId);
             this.currentOwner = null;
             this.lastOwnerChangeTime = Date.now();
           }
@@ -8216,6 +8332,40 @@ function setGameplayHUD(isPlaying) {
                 force: force
               };
             }
+          } else if (geometry.primitive === 'dodecahedron') {
+            // Dodecahedron collision - clamp to safe position outside dodecahedron
+            const dodecahedronRadius = geometry.radius || 1.0;
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            const minDistance = radius + dodecahedronRadius;
+            
+            if (distance < minDistance) {
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              const penetration = minDistance - distance;
+              const force = direction.clone().multiplyScalar(penetration * forceMultiplier);
+              
+              return {
+                safePos: surfacePos.clone().add(direction.multiplyScalar(minDistance)),
+                force: force
+              };
+            }
+          } else if (geometry.primitive === 'icosahedron') {
+            // Icosahedron collision - clamp to safe position outside icosahedron
+            const icosahedronRadius = geometry.radius || 1.0;
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            const minDistance = radius + icosahedronRadius;
+            
+            if (distance < minDistance) {
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              const penetration = minDistance - distance;
+              const force = direction.clone().multiplyScalar(penetration * forceMultiplier);
+              
+              return {
+                safePos: surfacePos.clone().add(direction.multiplyScalar(minDistance)),
+                force: force
+              };
+            }
           }
           
           return { safePos: null, force: new THREE.Vector3(0, 0, 0) }; // No collision
@@ -8330,6 +8480,38 @@ function setGameplayHUD(isPlaying) {
               
               response.copy(direction.multiplyScalar(penetration));
             }
+          } else if (geometry.primitive === 'dodecahedron') {
+            // Dodecahedron collision
+            const dodecahedronRadius = geometry.radius || 1.0;
+            
+            // Get point relative to dodecahedron center
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            
+            // Calculate penetration using full radius to match physics body
+            const penetration = radius + collisionMargin + dodecahedronRadius - distance;
+            
+            if (penetration > 0) {
+              // Push away from center
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'icosahedron') {
+            // Icosahedron collision
+            const icosahedronRadius = geometry.radius || 1.0;
+            
+            // Get point relative to icosahedron center
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            
+            // Calculate penetration using full radius to match physics body
+            const penetration = radius + collisionMargin + icosahedronRadius - distance;
+            
+            if (penetration > 0) {
+              // Push away from center
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              response.copy(direction.multiplyScalar(penetration));
+            }
           } else if (geometry.primitive === 'torus') {
             // Torus collision (exact copy from player system)
             const torusRadius = geometry.radius || 1.0;
@@ -8399,6 +8581,24 @@ function setGameplayHUD(isPlaying) {
                 
                 response.copy(direction.multiplyScalar(penetration));
               }
+            }
+          } else if (!geometry && element.querySelector('a-gltf-model')) {
+            // GLTF Model collision
+            const scale = element.getAttribute('scale') || {x: 1, y: 1, z: 1};
+            const avgScale = (scale.x + scale.y + scale.z) / 3;
+            const modelRadius = avgScale * 1.0;
+            
+            // Get point relative to model center
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            
+            // Calculate penetration using full radius to match physics body
+            const penetration = radius + collisionMargin + modelRadius - distance;
+            
+            if (penetration > 0) {
+              // Push away from center
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              response.copy(direction.multiplyScalar(penetration));
             }
           }
           
@@ -8894,6 +9094,12 @@ function setGameplayHUD(isPlaying) {
             this.selectTeam('red');
           } else if (id === 'menu-team-blue') {
             this.selectTeam('blue');
+          } else if (id === 'menu-toggle-spaceship') {
+            this.toggleModel('spaceship');
+          } else if (id === 'menu-toggle-asteroid-field') {
+            this.toggleModel('asteroid-field');
+          } else if (id === 'menu-toggle-asteroid-42') {
+            this.toggleModel('asteroid-42');
           } else if (id === 'menu-restart-match') {
             this.restartMatch();
           }
@@ -9197,6 +9403,64 @@ function setGameplayHUD(isPlaying) {
           if (menuToggle && menuToggle.components['menu-toggle']) {
             menuToggle.components['menu-toggle'].toggleMenu();
           }
+        },
+        
+        toggleModel: function(modelType) {
+          console.log('🎮 Toggling model:', modelType);
+          
+          if (modelType === 'spaceship') {
+            const spaceship = document.querySelector('#model-spaceship');
+            const button = document.querySelector('#menu-toggle-spaceship');
+            const buttonText = button.querySelector('a-text');
+            
+            if (spaceship.getAttribute('visible') !== false) {
+              spaceship.setAttribute('visible', false);
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Spaceship: OFF');
+            } else {
+              spaceship.setAttribute('visible', true);
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Spaceship: ON');
+            }
+          } else if (modelType === 'asteroid-field') {
+            const fields = [
+              document.querySelector('#model-asteroid-field-north'),
+              document.querySelector('#model-asteroid-field-south'),
+              document.querySelector('#model-asteroid-field-east'),
+              document.querySelector('#model-asteroid-field-west')
+            ];
+            const button = document.querySelector('#menu-toggle-asteroid-field');
+            const buttonText = button.querySelector('a-text');
+            
+            const isVisible = fields[0].getAttribute('visible') !== false;
+            fields.forEach(field => {
+              if (field) {
+                field.setAttribute('visible', !isVisible);
+              }
+            });
+            
+            if (isVisible) {
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Ast.Field: OFF');
+            } else {
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Ast.Field: ON');
+            }
+          } else if (modelType === 'asteroid-42') {
+            const asteroid = document.querySelector('#model-asteroid-42');
+            const button = document.querySelector('#menu-toggle-asteroid-42');
+            const buttonText = button.querySelector('a-text');
+            
+            if (asteroid.getAttribute('visible') !== false) {
+              asteroid.setAttribute('visible', false);
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Asteroid: OFF');
+            } else {
+              asteroid.setAttribute('visible', true);
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Asteroid: ON');
+            }
+          }
         }
       });
 
@@ -9209,6 +9473,60 @@ function setGameplayHUD(isPlaying) {
         <a-assets>
          <!-- Nebula Skybox Texture -->
          <img id="nebula-texture" src="assets/nebula_skybox_16k/textures/Material.001_baseColor.jpeg">
+         
+         <!-- Asteroid Field 3D Model -->
+         <a-asset-item id="asteroid-field-model" src="assets/asteroid_field_100_x_medium-poly-2k.glb"></a-asset-item>
+         <!-- Single Asteroid 3D Model -->
+         <a-asset-item id="asteroid-42-model" src="assets/asteroid_42.glb"></a-asset-item>
+         <!-- Spaceship 3D Model -->
+         <a-asset-item id="spaceship-model" src="assets/ship-blockout.glb"></a-asset-item>
+         <!-- New SpaceShip 3D Model -->
+         <a-asset-item id="new-spaceship-model" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/SpaceShip.glb"></a-asset-item>
+         
+         <!-- Procedural Noise Textures for Asteroids -->
+         <canvas id="noise-texture-1" width="256" height="256"></canvas>
+         <canvas id="noise-texture-2" width="256" height="256"></canvas>
+         <canvas id="noise-texture-3" width="256" height="256"></canvas>
+         
+         <!-- Asteroid Materials with Normal Maps Only (No Displacement) -->
+         <a-mixin id="asteroid-material" 
+                  material="shader: standard; 
+                           color: #666666; 
+                           roughness: 0.9; 
+                           metalness: 0.1;
+                           emissive: #111111;
+                           normalMap: #noise-texture-1;
+                           normalScale: 0.8 0.8;
+                           wireframe: false"></a-mixin>
+         
+         <a-mixin id="asteroid-material-2" 
+                  material="shader: standard; 
+                           color: #555555; 
+                           roughness: 0.95; 
+                           metalness: 0.05;
+                           emissive: #0f0f0f;
+                           normalMap: #noise-texture-2;
+                           normalScale: 0.7 0.7;
+                           wireframe: false"></a-mixin>
+         
+         <a-mixin id="asteroid-material-3" 
+                  material="shader: standard; 
+                           color: #777777; 
+                           roughness: 0.85; 
+                           metalness: 0.15;
+                           emissive: #131313;
+                           normalMap: #noise-texture-3;
+                           normalScale: 0.9 0.9;
+                           wireframe: false"></a-mixin>
+         
+         <a-mixin id="asteroid-far" 
+                  material="shader: standard; 
+                           color: #444444; 
+                           roughness: 1.0; 
+                           metalness: 0.0;
+                           emissive: #080808;
+                           normalMap: #noise-texture-1;
+                           normalScale: 0.3 0.3"></a-mixin>
         </a-assets>
       
       
@@ -9294,207 +9612,7 @@ function setGameplayHUD(isPlaying) {
         </a-torus>
       </a-cylinder>
 
-      <!-- Randomly positioned 1m cubes throughout the space -->
-      <a-box position="-5 1 -10" 
-             width="1" height="1" depth="1" 
-             src="#boxTexture"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
       
-      <a-box position="3 4 -5" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-box position="-2 3 8" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-box position="6 2 -12" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-box position="-7 5 3" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-box position="1 1 -8" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-box position="-4 4 -2" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-box position="5 3 12" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-octahedron position="-15 10 40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Duplicate octahedron at floor corner -->
-      <a-octahedron position="-15 -10 40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Center left wall octahedrons -->
-      <a-octahedron position="-15 10 0" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <a-octahedron position="-15 -10 0" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Blue side left wall - vertically centered octahedron -->
-      <a-octahedron position="-15 0 20" 
-             radius="10" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Red side back wall corner octahedrons -->
-      <a-octahedron position="-15 10 -40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <a-octahedron position="-15 -10 -40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Right wall octahedrons (mirroring left wall) -->
-      
-      <!-- Blue side corner (front wall) -->
-      <a-octahedron position="15 10 40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <a-octahedron position="15 -10 40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Center right wall octahedrons -->
-      <a-octahedron position="15 10 0" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <a-octahedron position="15 -10 0" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Red side corner (back wall) -->
-      <a-octahedron position="15 10 -40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <a-octahedron position="15 -10 -40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Blue side right wall - vertically centered octahedron -->
-      <a-octahedron position="15 0 20" 
-             radius="10" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Red side left wall - vertically centered octahedron -->
-      <a-octahedron position="-15 0 -20" 
-             radius="10" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <!-- Red side right wall - vertically centered octahedron -->
-      <a-octahedron position="15 0 -20" 
-             radius="10" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-octahedron>
-      
-      <a-box position="7 5 -6" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-box position="-6 1 -14" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
-      
-      <a-box position="2 4 9" 
-             width="1" height="1" depth="1" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static">
-      </a-box>
 
       <!-- Floating objects/balls (spawned at center) -->
       <a-sphere position="0 2 0" 
@@ -9765,6 +9883,36 @@ function setGameplayHUD(isPlaying) {
               
               <!-- Game mode and team selection removed - space shooter is always dodgeball mode -->
               
+              <!-- 3D Model Toggles for Performance Testing -->
+              <a-text value="3D Models (Performance Test):" position="0 -0.05 0" align="center" width="0.8" color="#ffff00"></a-text>
+              
+              <!-- Spaceship Toggle -->
+              <a-entity id="menu-toggle-spaceship" position="-0.3 -0.12 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Spaceship: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Asteroid Field Toggle -->
+              <a-entity id="menu-toggle-asteroid-field" position="0 -0.12 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Ast.Field: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Single Asteroid Toggle -->
+              <a-entity id="menu-toggle-asteroid-42" position="0.3 -0.12 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Asteroid: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
               <!-- Start/Restart Match Button (only visible for host) -->
               <a-entity id="menu-restart-match" position="0 -0.25 0"
                         geometry="primitive: plane; width: 0.3; height: 0.06"
@@ -9956,6 +10104,108 @@ function setGameplayHUD(isPlaying) {
           </a-sphere>
         </a-sphere>
       </a-entity>
+
+      <!-- SPACESHIP AT CENTER -->
+      <a-entity id="model-spaceship" position="0 0 0" 
+                scale="0.5 0.5 0.5"
+                rotation="0 0 0">
+        <a-gltf-model src="#spaceship-model"></a-gltf-model>
+      </a-entity>
+
+      <!-- NEW SPACESHIP MODEL -->
+      <a-entity id="model-new-spaceship" position="10 5 -10" 
+                scale="1.0 1.0 1.0"
+                rotation="0 45 0">
+        <a-gltf-model src="#new-spaceship-model"></a-gltf-model>
+      </a-entity>
+
+      <!-- ASTEROID BELT - 4 DIRECTIONS -->
+      <!-- North Asteroid Field -->
+      <a-entity id="model-asteroid-field-north" position="-50 -150 200" 
+                scale="10.0 10.0 10.0"
+                grab-surface="type: static">
+        <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
+      </a-entity>
+      
+      <!-- South Asteroid Field -->
+      <a-entity id="model-asteroid-field-south" position="-50 -150 -250" 
+                scale="10.0 10.0 10.0"
+                grab-surface="type: static">
+        <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
+      </a-entity>
+      
+      <!-- East Asteroid Field -->
+      <a-entity id="model-asteroid-field-east" position="200 -150 -50" 
+                scale="10.0 10.0 10.0"
+                grab-surface="type: static">
+        <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
+      </a-entity>
+      
+      <!-- West Asteroid Field -->
+      <a-entity id="model-asteroid-field-west" position="-300 -150 -50" 
+                scale="10.0 10.0 10.0"
+                grab-surface="type: static">
+        <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
+      </a-entity>
+      
+      <!-- Single Asteroid 250m Away -->
+      <a-entity id="model-asteroid-42" position="250 0 0" 
+                scale="1.2 1.2 1.2"
+                grab-surface="type: static">
+        <a-gltf-model src="#asteroid-42-model"></a-gltf-model>
+      </a-entity>
+      
+      <a-icosahedron position="-12 -3 10" 
+                     radius="0.8" 
+                     detail="1"
+                     mixin="asteroid-material-2"
+                     grab-surface="type: static">
+      </a-icosahedron>
+      
+      <a-dodecahedron position="8 -6 15" 
+                      radius="1.5" 
+                      detail="1"
+                      mixin="asteroid-material-3"
+                      grab-surface="type: static">
+      </a-dodecahedron>
+      
+      <a-icosahedron position="-18 8 -5" 
+                     radius="1.0" 
+                     detail="1"
+                     mixin="asteroid-material"
+                     grab-surface="type: static">
+      </a-icosahedron>
+
+      <!-- Mid-Distance Decorative Asteroids (no physics) -->
+      <a-dodecahedron position="25 12 -20" 
+                      radius="2.0" 
+                      detail="0"
+                      mixin="asteroid-far">
+      </a-dodecahedron>
+      
+      <a-icosahedron position="-30 -8 25" 
+                     radius="1.8" 
+                     detail="0"
+                     mixin="asteroid-far">
+      </a-icosahedron>
+      
+      <a-dodecahedron position="35 -15 -12" 
+                      radius="2.5" 
+                      detail="0"
+                      mixin="asteroid-far">
+      </a-dodecahedron>
+      
+      <a-icosahedron position="-22 20 -35" 
+                     radius="1.6" 
+                     detail="0"
+                     mixin="asteroid-far">
+      </a-icosahedron>
+      
+      <a-dodecahedron position="18 -25 30" 
+                      radius="2.2" 
+                      detail="0"
+                      mixin="asteroid-far">
+      </a-dodecahedron>
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
@@ -10293,6 +10543,66 @@ function setGameplayHUD(isPlaying) {
           }
         });
       };
+      
+      // Generate procedural noise textures for asteroids (optimized for normal maps)
+      function generateNoiseTexture(canvasId, seed = 0) {
+        const canvas = document.getElementById(canvasId);
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.createImageData(256, 256);
+        const data = imageData.data;
+        
+        // Enhanced noise generation for better normal map detail
+        for (let y = 0; y < 256; y++) {
+          for (let x = 0; x < 256; x++) {
+            const index = (y * 256 + x) * 4;
+            
+            // Multi-octave noise with crater-like patterns
+            let noise = 0;
+            let amplitude = 1;
+            let frequency = 0.008;
+            
+            for (let octave = 0; octave < 5; octave++) {
+              // Create more crater-like patterns
+              const nx = (x + seed * 137) * frequency;
+              const ny = (y + seed * 73) * frequency;
+              
+              // Combine sine/cosine with some turbulence
+              let octaveNoise = Math.sin(nx) * Math.cos(ny);
+              octaveNoise += Math.sin(nx * 2.1) * Math.cos(ny * 2.3) * 0.5;
+              
+              noise += amplitude * octaveNoise;
+              amplitude *= 0.6;
+              frequency *= 1.8;
+            }
+            
+            // Add some sharp crater-like features
+            const craterX = (x + seed * 200) * 0.02;
+            const craterY = (y + seed * 150) * 0.02;
+            const craterNoise = Math.pow(Math.sin(craterX) * Math.cos(craterY), 3) * 0.4;
+            noise += craterNoise;
+            
+            // Add fine random detail
+            noise += (Math.random() - 0.5) * 0.2;
+            
+            // Normalize to 0-255 range with better contrast
+            const value = Math.max(0, Math.min(255, (noise + 1.2) * 100));
+            
+            data[index] = value;     // R
+            data[index + 1] = value; // G  
+            data[index + 2] = value; // B
+            data[index + 3] = 255;   // A
+          }
+        }
+        
+        ctx.putImageData(imageData, 0, 0);
+      }
+      
+      // Generate different noise patterns for variety
+      document.addEventListener('DOMContentLoaded', function() {
+        generateNoiseTexture('noise-texture-1', 1);
+        generateNoiseTexture('noise-texture-2', 42);
+        generateNoiseTexture('noise-texture-3', 123);
+      });
       
       window.debugShieldStates = function() {
         console.log('🔍 SHIELD DEBUG: Current shield states...');
