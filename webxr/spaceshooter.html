@@ -9413,7 +9413,7 @@ function setGameplayHUD(isPlaying) {
             const button = document.querySelector('#menu-toggle-spaceship');
             const buttonText = button.querySelector('a-text');
             
-            if (spaceship.getAttribute('visible') !== 'false') {
+            if (spaceship.getAttribute('visible') !== false) {
               spaceship.setAttribute('visible', false);
               button.setAttribute('material', 'color', '#aa0000');
               buttonText.setAttribute('text', 'value', 'Spaceship: OFF');
@@ -9432,7 +9432,7 @@ function setGameplayHUD(isPlaying) {
             const button = document.querySelector('#menu-toggle-asteroid-field');
             const buttonText = button.querySelector('a-text');
             
-            const isVisible = fields[0].getAttribute('visible') !== 'false';
+            const isVisible = fields[0].getAttribute('visible') !== false;
             fields.forEach(field => {
               if (field) {
                 field.setAttribute('visible', !isVisible);
@@ -9451,7 +9451,7 @@ function setGameplayHUD(isPlaying) {
             const button = document.querySelector('#menu-toggle-asteroid-42');
             const buttonText = button.querySelector('a-text');
             
-            if (asteroid.getAttribute('visible') !== 'false') {
+            if (asteroid.getAttribute('visible') !== false) {
               asteroid.setAttribute('visible', false);
               button.setAttribute('material', 'color', '#aa0000');
               buttonText.setAttribute('text', 'value', 'Asteroid: OFF');
@@ -9478,7 +9478,7 @@ function setGameplayHUD(isPlaying) {
          <a-asset-item id="asteroid-field-model" src="assets/asteroid_field_100_x_medium-poly-2k.glb"></a-asset-item>
          <!-- Single Asteroid 3D Model -->
          <a-asset-item id="asteroid-42-model" src="assets/asteroid_42.glb"></a-asset-item>
-         <!-- SpaceShip 3D Model -->
+         <!-- Spaceship 3D Model -->
          <a-asset-item id="spaceship-model" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/SpaceShip.glb"></a-asset-item>
          
          <!-- Procedural Noise Textures for Asteroids -->
@@ -10103,13 +10103,13 @@ function setGameplayHUD(isPlaying) {
         </a-sphere>
       </a-entity>
 
-      <!-- SPACESHIP AT CENTER -->
-      <a-entity id="model-spaceship" position="10 5 -10" 
-                scale="1.0 1.0 1.0"
-                rotation="0 45 0"
-                visible="false">
-        <a-gltf-model src="#spaceship-model"></a-gltf-model>
-      </a-entity>
+       <!-- SPACESHIP AT CENTER -->
+       <a-entity id="model-spaceship" position="10 5 -10" 
+                 scale="1.0 1.0 1.0"
+                 rotation="0 45 0"
+                 visible="false">
+         <a-gltf-model src="#spaceship-model"></a-gltf-model>
+       </a-entity>
 
       <!-- ASTEROID BELT - 4 DIRECTIONS -->
       <!-- North Asteroid Field -->
