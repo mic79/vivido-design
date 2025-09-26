@@ -9413,7 +9413,7 @@ function setGameplayHUD(isPlaying) {
             const button = document.querySelector('#menu-toggle-spaceship');
             const buttonText = button.querySelector('a-text');
             
-            if (spaceship.getAttribute('visible') !== false) {
+            if (spaceship.getAttribute('visible') !== 'false') {
               spaceship.setAttribute('visible', false);
               button.setAttribute('material', 'color', '#aa0000');
               buttonText.setAttribute('text', 'value', 'Spaceship: OFF');
@@ -9432,7 +9432,7 @@ function setGameplayHUD(isPlaying) {
             const button = document.querySelector('#menu-toggle-asteroid-field');
             const buttonText = button.querySelector('a-text');
             
-            const isVisible = fields[0].getAttribute('visible') !== false;
+            const isVisible = fields[0].getAttribute('visible') !== 'false';
             fields.forEach(field => {
               if (field) {
                 field.setAttribute('visible', !isVisible);
@@ -9451,7 +9451,7 @@ function setGameplayHUD(isPlaying) {
             const button = document.querySelector('#menu-toggle-asteroid-42');
             const buttonText = button.querySelector('a-text');
             
-            if (asteroid.getAttribute('visible') !== false) {
+            if (asteroid.getAttribute('visible') !== 'false') {
               asteroid.setAttribute('visible', false);
               button.setAttribute('material', 'color', '#aa0000');
               buttonText.setAttribute('text', 'value', 'Asteroid: OFF');
@@ -10104,9 +10104,9 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- SPACESHIP AT CENTER -->
-      <a-entity id="model-spaceship" position="0 0 0" 
-                scale="0.5 0.5 0.5"
-                rotation="0 0 0"
+      <a-entity id="model-spaceship" position="10 5 -10" 
+                scale="1.0 1.0 1.0"
+                rotation="0 45 0"
                 visible="false">
         <a-gltf-model src="#spaceship-model"></a-gltf-model>
       </a-entity>
