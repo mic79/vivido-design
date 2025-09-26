@@ -9478,10 +9478,8 @@ function setGameplayHUD(isPlaying) {
          <a-asset-item id="asteroid-field-model" src="assets/asteroid_field_100_x_medium-poly-2k.glb"></a-asset-item>
          <!-- Single Asteroid 3D Model -->
          <a-asset-item id="asteroid-42-model" src="assets/asteroid_42.glb"></a-asset-item>
-         <!-- Spaceship 3D Model -->
-         <a-asset-item id="spaceship-model" src="assets/ship-blockout.glb"></a-asset-item>
-         <!-- New SpaceShip 3D Model -->
-         <a-asset-item id="new-spaceship-model" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/SpaceShip.glb"></a-asset-item>
+         <!-- SpaceShip 3D Model -->
+         <a-asset-item id="spaceship-model" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/SpaceShip.glb"></a-asset-item>
          
          <!-- Procedural Noise Textures for Asteroids -->
          <canvas id="noise-texture-1" width="256" height="256"></canvas>
@@ -9889,28 +9887,28 @@ function setGameplayHUD(isPlaying) {
               <!-- Spaceship Toggle -->
               <a-entity id="menu-toggle-spaceship" position="-0.3 -0.12 0"
                         geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        material="color: #aa0000; transparent: true; opacity: 0.8"
                         cursor-listener
                         class="clickable">
-                <a-text value="Spaceship: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+                <a-text value="Spaceship: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
               <!-- Asteroid Field Toggle -->
               <a-entity id="menu-toggle-asteroid-field" position="0 -0.12 0"
                         geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        material="color: #aa0000; transparent: true; opacity: 0.8"
                         cursor-listener
                         class="clickable">
-                <a-text value="Ast.Field: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+                <a-text value="Ast.Field: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
               <!-- Single Asteroid Toggle -->
               <a-entity id="menu-toggle-asteroid-42" position="0.3 -0.12 0"
                         geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        material="color: #aa0000; transparent: true; opacity: 0.8"
                         cursor-listener
                         class="clickable">
-                <a-text value="Asteroid: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+                <a-text value="Asteroid: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
               <!-- Start/Restart Match Button (only visible for host) -->
@@ -10108,50 +10106,49 @@ function setGameplayHUD(isPlaying) {
       <!-- SPACESHIP AT CENTER -->
       <a-entity id="model-spaceship" position="0 0 0" 
                 scale="0.5 0.5 0.5"
-                rotation="0 0 0">
+                rotation="0 0 0"
+                visible="false">
         <a-gltf-model src="#spaceship-model"></a-gltf-model>
-      </a-entity>
-
-      <!-- NEW SPACESHIP MODEL -->
-      <a-entity id="model-new-spaceship" position="10 5 -10" 
-                scale="1.0 1.0 1.0"
-                rotation="0 45 0">
-        <a-gltf-model src="#new-spaceship-model"></a-gltf-model>
       </a-entity>
 
       <!-- ASTEROID BELT - 4 DIRECTIONS -->
       <!-- North Asteroid Field -->
       <a-entity id="model-asteroid-field-north" position="-50 -150 200" 
                 scale="10.0 10.0 10.0"
-                grab-surface="type: static">
+                grab-surface="type: static"
+                visible="false">
         <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
       </a-entity>
       
       <!-- South Asteroid Field -->
       <a-entity id="model-asteroid-field-south" position="-50 -150 -250" 
                 scale="10.0 10.0 10.0"
-                grab-surface="type: static">
+                grab-surface="type: static"
+                visible="false">
         <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
       </a-entity>
       
       <!-- East Asteroid Field -->
       <a-entity id="model-asteroid-field-east" position="200 -150 -50" 
                 scale="10.0 10.0 10.0"
-                grab-surface="type: static">
+                grab-surface="type: static"
+                visible="false">
         <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
       </a-entity>
       
       <!-- West Asteroid Field -->
       <a-entity id="model-asteroid-field-west" position="-300 -150 -50" 
                 scale="10.0 10.0 10.0"
-                grab-surface="type: static">
+                grab-surface="type: static"
+                visible="false">
         <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
       </a-entity>
       
       <!-- Single Asteroid 250m Away -->
       <a-entity id="model-asteroid-42" position="250 0 0" 
                 scale="1.2 1.2 1.2"
-                grab-surface="type: static">
+                grab-surface="type: static"
+                visible="false">
         <a-gltf-model src="#asteroid-42-model"></a-gltf-model>
       </a-entity>
       
