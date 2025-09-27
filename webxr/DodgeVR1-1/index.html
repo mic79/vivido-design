@@ -759,6 +759,17 @@
                 });
               }
               break;
+            case 'ball-grab-state':
+              handleBallGrabState(data);
+              // If host receives ball grab state from client, broadcast to all other clients
+              if (isHost) {
+                connections.forEach(otherConn => {
+                  if (otherConn !== conn && otherConn.open) {
+                    otherConn.send(data);
+                  }
+                });
+              }
+              break;
             case 'player-grab':
               handlePlayerGrab(data);
               // If host receives player grab from client, broadcast to all other clients
@@ -1410,6 +1421,41 @@
           remotePlayer.setAttribute('position', `${data.state.x} ${data.state.y} ${data.state.z}`);
           remotePlayer.setAttribute('rotation', `${data.state.rx} ${data.state.ry} ${data.state.rz}`);
           remotePlayer.setAttribute('visible', true);
+          
+          // Store rig rotation data for IK calculations
+          if (data.state.rig) {
+            remotePlayer.setAttribute('data-rig-rotation', `${data.state.rig.rx} ${data.state.rig.ry} ${data.state.rig.rz}`);
+          }
+          
+          // Update remote hand controllers for IK arms
+          if (data.state.leftHand) {
+            const leftHand = remotePlayer.querySelector('.remote-left-hand');
+            if (leftHand) {
+              // Convert world position to local position relative to remote player
+              const localPos = new THREE.Vector3(
+                data.state.leftHand.x - data.state.x,
+                data.state.leftHand.y - data.state.y,
+                data.state.leftHand.z - data.state.z
+              );
+              leftHand.setAttribute('position', `${localPos.x} ${localPos.y} ${localPos.z}`);
+              leftHand.setAttribute('rotation', `${data.state.leftHand.rx} ${data.state.leftHand.ry} ${data.state.leftHand.rz}`);
+            }
+          }
+          
+          if (data.state.rightHand) {
+            const rightHand = remotePlayer.querySelector('.remote-right-hand');
+            if (rightHand) {
+              // Convert world position to local position relative to remote player
+              const localPos = new THREE.Vector3(
+                data.state.rightHand.x - data.state.x,
+                data.state.rightHand.y - data.state.y,
+                data.state.rightHand.z - data.state.z
+              );
+              rightHand.setAttribute('position', `${localPos.x} ${localPos.y} ${localPos.z}`);
+              rightHand.setAttribute('rotation', `${data.state.rightHand.rx} ${data.state.rightHand.ry} ${data.state.rightHand.rz}`);
+            }
+          }
+          
           if (!this.lastRemotePlayerUpdateTime || Date.now() - this.lastRemotePlayerUpdateTime > 30000) {
             this.lastRemotePlayerUpdateTime = Date.now();
           }
@@ -1522,21 +1568,74 @@
       }
       
       function handleBallShieldState(data) {
-        // Update shield state for remote player's ball
+        // CRITICAL FIX: Only update shield state for remote player's ball, don't send back
         if (data.playerId !== myPlayerId) {
+          console.log(`🛡️ Received shield state: ${data.ballId} -> ${data.shieldActive ? 'ON' : 'OFF'} from ${data.playerId}`);
+          
           const ball = document.querySelector(`[zerog-ball*="player: ${data.ballId}"]`);
           if (ball && ball.components['zerog-ball']) {
             const shieldElement = ball.querySelector('.ball-shield');
             if (shieldElement && shieldElement.components['ball-shield']) {
               const shieldComponent = shieldElement.components['ball-shield'];
+              
+              // CRITICAL FIX: Sync visual state and update collision masks properly
               if (data.shieldActive) {
                 shieldComponent.isActive = true;
                 shieldElement.setAttribute('visible', true);
+                console.log(`🛡️ Remote shield VISIBLE for ${data.ballId}`);
               } else {
                 shieldComponent.isActive = false;
                 shieldElement.setAttribute('visible', false);
+                console.log(`🛡️ Remote shield HIDDEN for ${data.ballId}`);
               }
+              
+              // Update collision mask based on grab and shield state
+              const ballComponent = ball.components['zerog-ball'];
+              if (ballComponent && ballComponent.updateCollisionMask) {
+                ballComponent.updateCollisionMask();
+              }
+              
+              // Sync cooldown state if provided
+              if (data.cooldownEndTime) {
+                shieldComponent.isOnCooldown = data.cooldownEndTime > Date.now();
+                shieldComponent.cooldownEndTime = data.cooldownEndTime;
+              }
+            } else {
+              console.log(`🛡️ Shield element/component not found for ${data.ballId}`);
             }
+          } else {
+            console.log(`🛡️ Ball not found for shield update: ${data.ballId}`);
+          }
+        }
+      }
+      
+      function handleBallGrabState(data) {
+        // Only update grab state for remote player's ball, don't send back
+        if (data.playerId !== myPlayerId) {
+          console.log(`🎯 Received ball grab state: ${data.ballId} -> ${data.isGrabbed ? 'GRABBED' : 'RELEASED'} by ${data.playerId}`);
+          
+          const ball = document.querySelector(`[zerog-ball*="player: ${data.ballId}"]`);
+          if (ball && ball.components['zerog-ball']) {
+            const ballComponent = ball.components['zerog-ball'];
+            
+            // Update the grab state
+            ballComponent.isGrabbed = data.isGrabbed;
+            
+            // Update release time if provided
+            if (data.lastReleaseTime) {
+              ballComponent.lastReleaseTime = data.lastReleaseTime;
+            }
+            
+            // Update collision mask based on new grab state
+            if (ballComponent.updateCollisionMask) {
+              ballComponent.updateCollisionMask();
+            } else {
+              console.log(`🎯 WARNING: updateCollisionMask not available for ${data.ballId}`);
+            }
+            
+            console.log(`🎯 Updated remote ball ${data.ballId}: grabbed=${data.isGrabbed}, currentMask=${ballComponent.body?.collisionFilterMask}`);
+          } else {
+            console.log(`🎯 Ball not found for grab state update: ${data.ballId}`);
           }
         }
       }
@@ -6512,8 +6611,13 @@ function setGameplayHUD(isPlaying) {
           this.toggleHUDLayers(this.menuVisible);
           
           // Show/hide laser pointers based on menu visibility
-          const leftRaycastSettings = `objects: .clickable; lineColor: #ffffff; lineOpacity: ${this.menuVisible ? 1 : 0}; far: 10`;
-          const rightRaycastSettings = `objects: .clickable; lineColor: #ffffff; lineOpacity: ${this.menuVisible ? 1 : 0}; far: 10`;
+          // CRITICAL FIX: Properly disable raycaster interactions when menu is closed
+          const leftRaycastSettings = this.menuVisible ? 
+            `objects: .clickable; lineColor: #ffffff; lineOpacity: 1; far: 10; enabled: true` :
+            `objects: ; lineColor: #ffffff; lineOpacity: 0; far: 10; enabled: false`;
+          const rightRaycastSettings = this.menuVisible ? 
+            `objects: .clickable; lineColor: #ffffff; lineOpacity: 1; far: 10; enabled: true` :
+            `objects: ; lineColor: #ffffff; lineOpacity: 0; far: 10; enabled: false`;
           
           if (leftHand) {
             leftHand.setAttribute('raycaster', leftRaycastSettings);
@@ -6955,16 +7059,63 @@ function setGameplayHUD(isPlaying) {
           // In multiplayer, send the local camera's world position/rotation as player state
           if (isMultiplayer && activePlayers.size > 1) {
             const camera = document.querySelector('[camera]');
+            const rig = document.querySelector('#rig');
+            const leftHand = document.querySelector('#leftHand');
+            const rightHand = document.querySelector('#rightHand');
+            
             if (camera) {
               const worldPos = new THREE.Vector3();
               camera.object3D.getWorldPosition(worldPos);
               const worldQuat = new THREE.Quaternion();
               camera.object3D.getWorldQuaternion(worldQuat);
               const worldRot = new THREE.Euler().setFromQuaternion(worldQuat, 'YXZ');
+              
               const playerState = {
                 x: worldPos.x, y: worldPos.y, z: worldPos.z,
                 rx: worldRot.x, ry: worldRot.y, rz: worldRot.z
               };
+              
+              // Add rig (body) rotation for proper shoulder positioning
+              if (rig) {
+                const rigWorldPos = new THREE.Vector3();
+                const rigWorldQuat = new THREE.Quaternion();
+                rig.object3D.getWorldPosition(rigWorldPos);
+                rig.object3D.getWorldQuaternion(rigWorldQuat);
+                const rigWorldRot = new THREE.Euler().setFromQuaternion(rigWorldQuat, 'YXZ');
+                
+                playerState.rig = {
+                  x: rigWorldPos.x, y: rigWorldPos.y, z: rigWorldPos.z,
+                  rx: rigWorldRot.x, ry: rigWorldRot.y, rz: rigWorldRot.z
+                };
+              }
+              
+              // Add hand controller positions and rotations
+              if (leftHand) {
+                const leftWorldPos = new THREE.Vector3();
+                const leftWorldQuat = new THREE.Quaternion();
+                leftHand.object3D.getWorldPosition(leftWorldPos);
+                leftHand.object3D.getWorldQuaternion(leftWorldQuat);
+                const leftWorldRot = new THREE.Euler().setFromQuaternion(leftWorldQuat, 'YXZ');
+                
+                playerState.leftHand = {
+                  x: leftWorldPos.x, y: leftWorldPos.y, z: leftWorldPos.z,
+                  rx: leftWorldRot.x, ry: leftWorldRot.y, rz: leftWorldRot.z
+                };
+              }
+              
+              if (rightHand) {
+                const rightWorldPos = new THREE.Vector3();
+                const rightWorldQuat = new THREE.Quaternion();
+                rightHand.object3D.getWorldPosition(rightWorldPos);
+                rightHand.object3D.getWorldQuaternion(rightWorldQuat);
+                const rightWorldRot = new THREE.Euler().setFromQuaternion(rightWorldQuat, 'YXZ');
+                
+                playerState.rightHand = {
+                  x: rightWorldPos.x, y: rightWorldPos.y, z: rightWorldPos.z,
+                  rx: rightWorldRot.x, ry: rightWorldRot.y, rz: rightWorldRot.z
+                };
+              }
+              
               sendPlayerState(playerState);
               
               // Debug: Log when client sends data (throttled to once per 30 seconds)
@@ -7196,7 +7347,7 @@ function setGameplayHUD(isPlaying) {
           // Different collision masks for capture ball vs regular balls
           const collisionMask = this.isCaptureBall 
             ? 4 | 8  // Capture ball collides with walls (4) AND goals (8)
-            : 4 | 2; // Regular balls collide with walls (4) AND other balls (2)
+            : 4; // CRITICAL FIX: Regular balls start with walls only (4) - no ball collisions by default
           
           this.body = new CANNON.Body({
             mass: mass,
@@ -7223,6 +7374,20 @@ function setGameplayHUD(isPlaying) {
           // CRITICAL: Store element reference in physics body for collision detection
           this.body.el = this.el;
           
+          // CRITICAL FIX: Add shield collision detection using beginContact (before collision resolution)
+          this.body.addEventListener('beginContact', (evt) => {
+            const otherBody = evt.target === this.body ? evt.body : evt.target;
+            
+            if (otherBody.el && otherBody.el.components && otherBody.el.components['zerog-ball']) {
+              const otherBallComponent = otherBody.el.components['zerog-ball'];
+              
+              // Don't process shield collisions for capture ball
+              if (!this.isCaptureBall && !otherBallComponent.isCaptureBall) {
+                this.handleShieldBeginContact(otherBody, otherBallComponent, evt.contact);
+              }
+            }
+          });
+          
           if (this.isCaptureBall) {
           }
           
@@ -7230,6 +7395,17 @@ function setGameplayHUD(isPlaying) {
           this.body.addEventListener('collide', (evt) => {
             const contact = evt.contact;
             const otherBody = evt.target === this.body ? evt.body : evt.target;
+            
+            // CRITICAL FIX: Check for shield collisions between balls
+            if (otherBody.el && otherBody.el.components && otherBody.el.components['zerog-ball']) {
+              const otherBallComponent = otherBody.el.components['zerog-ball'];
+              
+              // Don't process shield collisions for capture ball
+              if (!this.isCaptureBall && !otherBallComponent.isCaptureBall) {
+                // Handle shield logic - this will deactivate shields and restore collision masks
+                this.handleShieldCollision(otherBody, otherBallComponent, evt.contact);
+              }
+            }
             
             // Capture ball collision detection
             
@@ -7776,24 +7952,30 @@ function setGameplayHUD(isPlaying) {
             const shieldElement = this.el.querySelector('.ball-shield');
             if (shieldElement && shieldElement.components['ball-shield']) {
               const activated = shieldElement.components['ball-shield'].activateShield();
-              console.log(`Ball shield activation: ${activated ? 'SUCCESS' : 'FAILED (cooldown)'}`);
+              console.log(`🛡️ Shield activation for ${this.data.player}: ${activated ? 'SUCCESS' : 'FAILED (cooldown)'}`);
             } else {
-              console.log('Ball shield element or component not found:', {
-                shieldElement: !!shieldElement,
-                hasComponent: shieldElement ? !!shieldElement.components['ball-shield'] : false
-              });
+              console.log(`🛡️ Shield element or component missing for ${this.data.player}`);
             }
+            
+            // CRITICAL: Update collision mask after shield activation
+            this.updateCollisionMask();
           }
           
-          // CRITICAL FIX: Immediately send grab state to other players
-          if (isMultiplayer && activePlayers.size > 1) {
-            const pos = this.el.object3D.position;
-            const ballPlayerIndex = this.isCaptureBall ? 'capture' : parseInt(this.data.player.replace('player', ''));
-            sendBallState({ 
-              playerId: ballPlayerIndex,
-              x: pos.x, y: pos.y, z: pos.z, 
-              vx: 0, vy: 0, vz: 0, // Zero velocity when grabbed
-              grabbed: true // Add grabbed state
+          // CRITICAL FIX: Send ball grab state to other players for collision mask sync
+          if (isMultiplayer && activePlayers.size > 1 && !this.isCaptureBall) {
+            const data = {
+              type: 'ball-grab-state',
+              ballId: this.data.player,
+              playerId: myPlayerId,
+              isGrabbed: true,
+              timestamp: Date.now()
+            };
+            
+            console.log(`🎯 Sending ball grab state: ${this.data.player} grabbed by ${myPlayerId}`);
+            connections.forEach((conn, playerId) => {
+              if (conn && conn.open) {
+                conn.send(data);
+              }
             });
           }
           
@@ -7905,6 +8087,42 @@ function setGameplayHUD(isPlaying) {
           this.grabbingHand = null;
           this.velocityHistory = [];
           
+          // CRITICAL: Track release time for collision logic
+          this.lastReleaseTime = Date.now();
+          
+          // CRITICAL FIX: Ensure shield is deactivated when ball is released
+          if (!this.isCaptureBall) {
+            const shieldElement = this.el.querySelector('.ball-shield');
+            if (shieldElement && shieldElement.components['ball-shield']) {
+              const shieldComponent = shieldElement.components['ball-shield'];
+              if (shieldComponent.isActive && !shieldComponent.isOnCooldown) {
+                shieldComponent.deactivateShield();
+              }
+            }
+            
+            // CRITICAL: Update collision mask after release (should be walls only)
+            this.updateCollisionMask();
+            
+            // CRITICAL FIX: Send ball release state to other players for collision mask sync
+            if (isMultiplayer && activePlayers.size > 1) {
+              const data = {
+                type: 'ball-grab-state',
+                ballId: this.data.player,
+                playerId: myPlayerId,
+                isGrabbed: false,
+                lastReleaseTime: this.lastReleaseTime,
+                timestamp: Date.now()
+              };
+              
+              console.log(`🎯 Sending ball release state: ${this.data.player} released by ${myPlayerId}`);
+              connections.forEach((conn, playerId) => {
+                if (conn && conn.open) {
+                  conn.send(data);
+                }
+              });
+            }
+          }
+          
           // CRITICAL FIX: Clear ownership when ball is voluntarily released (not stolen)
           if (this.isCaptureBall && this.currentOwner === myPlayerId) {
             console.log('🎯 Ball ownership cleared - voluntary release by', myPlayerId);
@@ -7914,6 +8132,233 @@ function setGameplayHUD(isPlaying) {
           
           // NOTE: Ball state with velocity is already sent immediately above in onRelease
           // No need to send additional release state here since throw velocity sync handles it
+        },
+        
+        handleShieldCollision: function(otherBody, otherBallComponent, contact) {
+          // Check if either ball has an active shield
+          const myShieldElement = this.el.querySelector('.ball-shield');
+          const otherShieldElement = otherBody.el.querySelector('.ball-shield');
+          
+          let myShield = null;
+          let otherShield = null;
+          
+          if (myShieldElement && myShieldElement.components['ball-shield']) {
+            myShield = myShieldElement.components['ball-shield'];
+          }
+          
+          if (otherShieldElement && otherShieldElement.components['ball-shield']) {
+            otherShield = otherShieldElement.components['ball-shield'];
+          }
+          
+          // Check team logic - only process if balls are from opposing teams
+          const myBallIndex = parseInt(this.data.player.replace('player', ''));
+          const otherBallIndex = parseInt(otherBallComponent.data.player.replace('player', ''));
+          const myPlayerId_safe = myPlayerId || 'player_0';
+          
+          if (!shouldBallAffectTarget(otherBallIndex, myPlayerId_safe)) {
+            return; // Same team - no shield interaction
+          }
+          
+          // Check if my ball has an active shield and is being hit
+          if (myShield && myShield.isActive) {
+            console.log(`🛡️ SHIELD HIT! ${this.data.player} blocked ${otherBallComponent.data.player}`);
+            
+            // CRITICAL FIX: Deactivate shield first, then let collision happen normally
+            if (this.isLocalPlayerBall && this.isLocalPlayerBall()) {
+              console.log(`🛡️ Deactivating MY shield for ${this.data.player}`);
+              myShield.deactivateShield(); // This restores collision mask to 4|2
+              myShield.startCooldown();
+            }
+            
+            // Now let the collision happen with normal physics (bouncy)
+            if (contact) {
+              contact.restitution = 1.2; // Slightly bouncy for shield collision
+            }
+            
+            return; // Let physics handle the collision
+          }
+          
+          // Check if the other ball has an active shield and I'm hitting it
+          if (otherShield && otherShield.isActive) {
+            console.log(`🛡️ SHIELD BLOCKED! ${this.data.player} hit ${otherBallComponent.data.player}'s shield`);
+            
+            // CRITICAL FIX: Deactivate the other shield first, then let collision happen
+            if (otherBallComponent.isLocalPlayerBall && otherBallComponent.isLocalPlayerBall()) {
+              console.log(`🛡️ Deactivating OTHER shield for ${otherBallComponent.data.player}`);
+              otherShield.deactivateShield(); // This restores collision mask to 4|2
+              otherShield.startCooldown();
+            }
+            
+            // Now let the collision happen with normal physics (bouncy)
+            if (contact) {
+              contact.restitution = 1.2; // Slightly bouncy for shield collision
+            }
+            
+            return; // Let physics handle the collision
+          }
+        },
+        
+        handleShieldBeginContact: function(otherBody, otherBallComponent, contact) {
+          // Check if either ball has an active shield
+          const myShieldElement = this.el.querySelector('.ball-shield');
+          const otherShieldElement = otherBody.el.querySelector('.ball-shield');
+          
+          let myShield = null;
+          let otherShield = null;
+          
+          if (myShieldElement && myShieldElement.components['ball-shield']) {
+            myShield = myShieldElement.components['ball-shield'];
+          }
+          
+          if (otherShieldElement && otherShieldElement.components['ball-shield']) {
+            otherShield = otherShieldElement.components['ball-shield'];
+          }
+          
+          // Check team logic - only process if balls are from opposing teams
+          const myBallIndex = parseInt(this.data.player.replace('player', ''));
+          const otherBallIndex = parseInt(otherBallComponent.data.player.replace('player', ''));
+          const myPlayerId_safe = myPlayerId || 'player_0';
+          
+          if (!shouldBallAffectTarget(otherBallIndex, myPlayerId_safe)) {
+            return; // Same team - no shield interaction
+          }
+          
+          
+          // Check if my ball has an active shield and is being hit
+          if (myShield && myShield.isActive) {
+            console.log(`🛡️ SHIELD HIT! ${this.data.player} blocked ${otherBallComponent.data.player}`);
+            
+            // CRITICAL FIX: Deactivate shield and update collision mask immediately
+            if (this.isLocalPlayerBall && this.isLocalPlayerBall()) {
+              console.log(`🛡️ Deactivating MY shield for ${this.data.player}`);
+              myShield.deactivateShield();
+              myShield.startCooldown();
+              
+              // TRIPLE IMMEDIATE collision mask updates to ensure it takes effect
+              this.updateCollisionMask();
+              console.log(`🔄 INSTANT: Updated collision mask after MY shield deactivation for ${this.data.player}`);
+              
+              setTimeout(() => {
+                if (this.updateCollisionMask) {
+                  this.updateCollisionMask();
+                  console.log(`🔄 DELAYED: Double-checked collision mask after MY shield deactivation for ${this.data.player}`);
+                }
+              }, 1);
+              
+              setTimeout(() => {
+                if (this.updateCollisionMask) {
+                  this.updateCollisionMask();
+                  console.log(`🔄 FINAL: Triple-checked collision mask after MY shield deactivation for ${this.data.player}`);
+                }
+              }, 50);
+            }
+            
+            // Make collision bouncy for shield hit
+            if (contact) {
+              contact.restitution = 1.2;
+            }
+            
+            return;
+          }
+          
+          // Check if the other ball has an active shield and I'm hitting it
+          if (otherShield && otherShield.isActive) {
+            console.log(`🛡️ SHIELD BLOCKED! ${this.data.player} hit ${otherBallComponent.data.player}'s shield`);
+            
+            // CRITICAL FIX: Deactivate the other shield and update collision mask immediately
+            if (otherBallComponent.isLocalPlayerBall && otherBallComponent.isLocalPlayerBall()) {
+              console.log(`🛡️ Deactivating OTHER shield for ${otherBallComponent.data.player}`);
+              otherShield.deactivateShield();
+              otherShield.startCooldown();
+              
+              // TRIPLE IMMEDIATE collision mask updates to ensure it takes effect
+              otherBallComponent.updateCollisionMask();
+              console.log(`🔄 INSTANT: Updated collision mask after OTHER shield deactivation for ${otherBallComponent.data.player}`);
+              
+              setTimeout(() => {
+                if (otherBallComponent.updateCollisionMask) {
+                  otherBallComponent.updateCollisionMask();
+                  console.log(`🔄 DELAYED: Double-checked collision mask after OTHER shield deactivation for ${otherBallComponent.data.player}`);
+                }
+              }, 1);
+              
+              setTimeout(() => {
+                if (otherBallComponent.updateCollisionMask) {
+                  otherBallComponent.updateCollisionMask();
+                  console.log(`🔄 FINAL: Triple-checked collision mask after OTHER shield deactivation for ${otherBallComponent.data.player}`);
+                }
+              }, 50);
+            }
+            
+            // Make collision bouncy for shield hit
+            if (contact) {
+              contact.restitution = 1.2;
+            }
+            
+            return;
+          }
+          
+        },
+        
+        isLocalPlayerBall: function() {
+          // Use getBallForPlayer to get the correct ball assignment
+          const myBallNumber = getBallForPlayer(myPlayerId || 'player_0');
+          const myBallId = `player${myBallNumber}`;
+          
+          return this.data.player === myBallId;
+        },
+        
+        updateCollisionMask: function() {
+          if (!this.body || this.isCaptureBall) return;
+          
+          const shieldElement = this.el.querySelector('.ball-shield');
+          const hasActiveShield = shieldElement && 
+                                 shieldElement.components['ball-shield'] && 
+                                 shieldElement.components['ball-shield'].isActive;
+          
+          // USER SPECIFIED COLLISION MASK LOGIC:
+          // 1. Ball not held = collision mask 6
+          // 2. Ball held + shield active = collision mask 6  
+          // 3. Ball held + shield deactivated = collision mask 4
+          
+          let newMask;
+          if (!this.isGrabbed) {
+            // Ball not held → collision mask 6
+            newMask = 4 | 2; // 6
+          } else if (this.isGrabbed && hasActiveShield) {
+            // Ball held + shield active → collision mask 6
+            newMask = 4 | 2; // 6
+          } else if (this.isGrabbed && !hasActiveShield) {
+            // Ball held + shield deactivated → collision mask 4
+            newMask = 4;
+          } else {
+            // Fallback
+            newMask = 4;
+          }
+          
+          console.log(`🔥 USER MASKS: ${this.data.player} grabbed=${this.isGrabbed} shield=${hasActiveShield} -> mask=${newMask}`);
+          
+          // CRITICAL: Extra verification for shield state
+          if (this.isGrabbed && hasActiveShield && newMask !== 6) {
+            console.log(`🚨 CRITICAL ERROR: Ball grabbed with active shield but mask is not 6! mask=${newMask}`);
+            console.log(`🚨 DEBUG: shieldElement=${!!shieldElement}, shieldComponent=${!!shieldElement?.components?.['ball-shield']}, isActive=${shieldElement?.components?.['ball-shield']?.isActive}`);
+          }
+          if (this.isGrabbed && hasActiveShield && shieldElement && !shieldElement.getAttribute('visible')) {
+            console.log(`🚨 VISUAL ERROR: Shield marked active but not visible!`);
+          }
+          
+          // EXTRA DEBUG: Log shield state details
+          if (this.isGrabbed) {
+            console.log(`🔍 SHIELD DEBUG: ${this.data.player} - shieldElement exists: ${!!shieldElement}, hasActiveShield: ${hasActiveShield}, visible: ${shieldElement?.getAttribute('visible')}`);
+          }
+          
+          if (this.body.collisionFilterMask !== newMask) {
+            const oldMask = this.body.collisionFilterMask;
+            this.body.collisionFilterMask = newMask;
+            console.log(`🎯 Collision mask updated for ${this.data.player}: grabbed=${this.isGrabbed}, shield=${hasActiveShield}, mask=${oldMask}->${newMask} (group=${this.body.collisionFilterGroup})`);
+          } else {
+            console.log(`🎯 Collision mask unchanged for ${this.data.player}: grabbed=${this.isGrabbed}, shield=${hasActiveShield}, mask=${newMask} (group=${this.body.collisionFilterGroup})`);
+          }
         },
         
         stunPlayer: function() {
@@ -7984,8 +8429,14 @@ function setGameplayHUD(isPlaying) {
         
         tick: function() {
           if (this.body) {
-
-            
+            // CRITICAL: Periodically verify collision mask matches shield state (every 500ms)
+            if (!this.lastSyncCheck) this.lastSyncCheck = 0;
+            if (Date.now() - this.lastSyncCheck > 500) {
+              this.updateCollisionMask();
+              this.lastSyncCheck = Date.now();
+            }
+ 
+             
             if (this.isGrabbed && this.grabbingHand) {
               // When grabbed, track hand movement and rotation for throwing
               const handPos = new THREE.Vector3();
@@ -8612,6 +9063,7 @@ function setGameplayHUD(isPlaying) {
             this.isOnCooldown = false;
             this.cooldownEndTime = 0;
             this.cooldownDuration = 6000; // 6 seconds
+            this.lastStateChange = 0; // Throttling for state changes
             
             // Wait for parent ball to initialize
             setTimeout(() => {
@@ -8623,11 +9075,14 @@ function setGameplayHUD(isPlaying) {
           },
           
           setupCollisionHandler: function() {
-            if (!this.ballComponent || !this.ballComponent.body) return;
+            if (!this.ballComponent || !this.ballComponent.body) {
+              return;
+            }
             
             // Set up collision detection on the ball's physics body
             this.ballComponent.body.addEventListener('collide', (event) => {
               const otherBody = event.target === this.ballComponent.body ? event.body : event.target;
+              
               if (this.isActive) {
                 this.handleCollision(otherBody);
               }
@@ -8637,17 +9092,25 @@ function setGameplayHUD(isPlaying) {
           handleCollision: function(otherBody) {
             // Find the ball element that collided with us
             const otherBallEl = otherBody.el;
-            if (!otherBallEl || !otherBallEl.components['zerog-ball']) return;
+            if (!otherBallEl || !otherBallEl.components['zerog-ball']) {
+              return;
+            }
             
             const otherBallComponent = otherBallEl.components['zerog-ball'];
-            if (otherBallComponent.isCaptureBall) return; // Don't block capture ball
+            if (otherBallComponent.isCaptureBall) {
+              return; // Don't block capture ball
+            }
             
             // Check if this is an opponent ball using team logic
             const otherBallIndex = parseInt(otherBallComponent.data.player.replace('player', ''));
             const myPlayerId_safe = myPlayerId || 'player_0';
             
-            if (!shouldBallAffectTarget(otherBallIndex, myPlayerId_safe)) return; // Same team
+            if (!shouldBallAffectTarget(otherBallIndex, myPlayerId_safe)) {
+              return; // Same team
+            }
             
+            // SHIELD COLLISION: Reflect the other ball and deactivate shield
+            console.log(`🛡️ SHIELD HIT! ${this.ballComponent.data.player} blocked ${otherBallComponent.data.player}`);
             
             // Reflect the other ball
             this.reflectBall(otherBody, otherBallEl);
@@ -8676,51 +9139,86 @@ function setGameplayHUD(isPlaying) {
           },
           
           tick: function() {
+            // CRITICAL FIX: Only manage shields for LOCAL player's balls, not remote balls
+            if (!this.ballComponent || !this.isLocalPlayerBall()) {
+              return; // Don't manage remote player shields
+            }
+            
+            // CRITICAL: Verify shield visual state matches collision expectations
+            this.verifyShieldSync();
+            
             // Check cooldown
             if (this.isOnCooldown && Date.now() >= this.cooldownEndTime) {
               this.isOnCooldown = false;
+              console.log(`🛡️ Cooldown EXPIRED for ${this.ballComponent.data.player}`);
               
               // If ball is still grabbed after cooldown, reactivate shield
-              if (this.ballComponent && this.ballComponent.isGrabbed && !this.isActive) {
+              if (this.ballComponent.isGrabbed && !this.isActive) {
+                console.log(`🛡️ Auto-reactivating shield after cooldown for ${this.ballComponent.data.player}`);
                 this.activateShield();
               }
             }
             
-            // Check if shield should stay active based on ball being grabbed
-            if (this.isActive && this.ballComponent) {
-              // CRITICAL FIX: In multiplayer, don't rely solely on isGrabbed state due to sync issues
-              // Only deactivate if we're sure the ball is not grabbed (add delay/tolerance)
-              if (!this.ballComponent.isGrabbed) {
-                // Add a small delay before deactivating to handle sync issues
-                if (!this.deactivateTimer) {
-                  this.deactivateTimer = Date.now() + 100; // 100ms delay
-                  console.log(`Shield deactivate timer started: ball not grabbed (isGrabbed: ${this.ballComponent.isGrabbed})`);
-                } else if (Date.now() >= this.deactivateTimer) {
-                  console.log(`Shield deactivating after delay: ball not grabbed (isGrabbed: ${this.ballComponent.isGrabbed})`);
-                  this.deactivateShield();
-                  this.deactivateTimer = null;
-                }
-              } else {
-                // Ball is grabbed, cancel any pending deactivation
-                if (this.deactivateTimer) {
-                  console.log(`Shield deactivate timer cancelled: ball is grabbed`);
-                  this.deactivateTimer = null;
-                }
+            // CRITICAL FIX: Only manage shield state for local player's ball
+            const shouldBeActive = this.ballComponent.isGrabbed && !this.isOnCooldown;
+            
+            // Add throttling to prevent rapid state changes
+            const now = Date.now();
+            if (!this.lastStateChange || (now - this.lastStateChange) > 100) { // 100ms throttle
+              // Shield should be active but isn't
+              if (shouldBeActive && !this.isActive) {
+                console.log(`🛡️ Tick: Activating shield for ${this.ballComponent.data.player} (grabbed: ${this.ballComponent.isGrabbed}, cooldown: ${this.isOnCooldown})`);
+                this.activateShield();
+                this.lastStateChange = now;
+              }
+              // Shield is active but shouldn't be
+              else if (!shouldBeActive && this.isActive) {
+                console.log(`🛡️ Tick: Deactivating shield for ${this.ballComponent.data.player} (grabbed: ${this.ballComponent.isGrabbed}, cooldown: ${this.isOnCooldown})`);
+                this.deactivateShield();
+                this.lastStateChange = now;
               }
             }
           },
           
+          isLocalPlayerBall: function() {
+            if (!this.ballComponent || !this.ballComponent.data) {
+              return false;
+            }
+            
+            // Get the ball's player ID (e.g., "player4")
+            const ballPlayer = this.ballComponent.data.player;
+            
+            // Use getBallForPlayer to get the correct ball assignment
+            const myBallNumber = getBallForPlayer(myPlayerId || 'player_0');
+            const myBallId = `player${myBallNumber}`;
+            
+            return ballPlayer === myBallId;
+          },
+          
           activateShield: function() {
             if (this.isOnCooldown) {
+              console.log(`🛡️ Shield activation FAILED: on cooldown for ${this.ballComponent?.data?.player}`);
               return false;
             }
             
             this.isActive = true;
             this.el.setAttribute('visible', true);
+            console.log(`🛡️ Shield ACTIVATED for ${this.ballComponent?.data?.player}`);
             
-            // Enable ball-to-ball collisions when shield is active
-            if (this.ballComponent && this.ballComponent.body) {
-              this.ballComponent.body.collisionFilterMask = 4 | 2; // Walls (4) + Balls (2)
+            // CRITICAL FIX: Update collision mask based on new shield state
+            if (this.ballComponent && this.ballComponent.updateCollisionMask) {
+              this.ballComponent.updateCollisionMask();
+              console.log(`🔄 Shield ACTIVATED: Updated collision mask for ${this.ballComponent.data.player}`);
+              
+              // FORCE IMMEDIATE UPDATE (ensure it takes effect)
+              setTimeout(() => {
+                if (this.ballComponent && this.ballComponent.updateCollisionMask) {
+                  this.ballComponent.updateCollisionMask();
+                  console.log(`🔄 FORCE: Double-checked collision mask after shield activation for ${this.ballComponent.data.player}`);
+                }
+              }, 50);
+            } else {
+              console.log(`🚨 ERROR: Cannot update collision mask for shield activation - ballComponent or updateCollisionMask missing`);
             }
             
             // Send shield state to other players in multiplayer
@@ -8732,23 +9230,73 @@ function setGameplayHUD(isPlaying) {
           deactivateShield: function() {
             this.isActive = false;
             this.el.setAttribute('visible', false);
+            console.log(`🛡️ Shield DEACTIVATED for ${this.ballComponent?.data?.player}`);
             
             // Clear any pending deactivate timer
             this.deactivateTimer = null;
             
-            // Disable ball-to-ball collisions when shield is inactive
-            if (this.ballComponent && this.ballComponent.body) {
-              this.ballComponent.body.collisionFilterMask = 4; // Walls (4) only, NO balls (2)
+            // CRITICAL FIX: Update collision mask based on new shield state
+            if (this.ballComponent && this.ballComponent.updateCollisionMask) {
+              this.ballComponent.updateCollisionMask();
             }
             
             // Send shield state to other players in multiplayer
             this.sendShieldState(false);
+          },
+          
+          forceShieldSync: function() {
+            // Force synchronization of shield visual state and collision mask
+            console.log(`🔧 FORCE SYNC: Synchronizing shield for ${this.ballComponent?.data?.player}`);
             
+            if (this.ballComponent && this.ballComponent.isGrabbed && !this.isOnCooldown) {
+              // Ball is grabbed and not on cooldown - shield should be active
+              if (!this.isActive) {
+                console.log(`🔧 FORCE SYNC: Activating shield`);
+                this.activateShield();
+              }
+            } else {
+              // Ball not grabbed or on cooldown - shield should be inactive
+              if (this.isActive) {
+                console.log(`🔧 FORCE SYNC: Deactivating shield`);
+                this.deactivateShield();
+              }
+            }
+            
+            // Always update collision mask after sync
+            if (this.ballComponent && this.ballComponent.updateCollisionMask) {
+              this.ballComponent.updateCollisionMask();
+            }
+          },
+          
+          verifyShieldSync: function() {
+            // Verify that visual shield state matches collision mask expectations
+            const isVisuallyActive = this.isActive && this.el.getAttribute('visible');
+            const ballIsGrabbed = this.ballComponent && this.ballComponent.isGrabbed;
+            const shouldHaveCollision = ballIsGrabbed && isVisuallyActive;
+            
+            if (this.ballComponent && this.ballComponent.body) {
+              const currentMask = this.ballComponent.body.collisionFilterMask;
+              const hasCollisionMask = (currentMask & 2) !== 0; // Check if group 2 (balls) is in mask
+              
+              if (shouldHaveCollision && !hasCollisionMask) {
+                console.log(`🚨 SYNC ERROR: Shield visually ON but collision mask wrong! ${this.ballComponent.data.player} mask=${currentMask}`);
+                // Force complete sync
+                this.forceShieldSync();
+              } else if (!shouldHaveCollision && hasCollisionMask && ballIsGrabbed) {
+                console.log(`🚨 SYNC ERROR: Shield visually OFF but collision mask still active! ${this.ballComponent.data.player} mask=${currentMask}`);
+                // Force complete sync
+                this.forceShieldSync();
+              }
+            }
           },
           
           startCooldown: function() {
             this.isOnCooldown = true;
             this.cooldownEndTime = Date.now() + this.cooldownDuration;
+            console.log(`🛡️ Cooldown STARTED for ${this.ballComponent?.data?.player} - ends at ${new Date(this.cooldownEndTime).toLocaleTimeString()}`);
+            
+            // Send cooldown state to other players
+            this.sendShieldState(false);
           },
           
           sendShieldState: function(shieldActive) {
@@ -8758,16 +9306,19 @@ function setGameplayHUD(isPlaying) {
                 playerId: myPlayerId,
                 ballId: this.ballComponent.data.player,
                 shieldActive: shieldActive,
+                cooldownEndTime: this.isOnCooldown ? this.cooldownEndTime : null,
                 timestamp: Date.now()
               };
+              
+              console.log(`🛡️ Sending shield state: ${this.ballComponent.data.player} -> ${shieldActive ? 'ON' : 'OFF'} to ${connections.size} players`);
               
               connections.forEach((conn, playerId) => {
                 if (conn && conn.open) {
                   conn.send(data);
                 }
               });
+            }
           }
-        }
       });
 
       // FPS counter
@@ -8839,6 +9390,355 @@ function setGameplayHUD(isPlaying) {
             handControls.animateGesture = this.originalAnimateGesture;
             handControls.playAnimation = this.originalPlayAnimation;
           }
+        }
+      });
+
+      // Arm Segment 3D Model Component
+      AFRAME.registerComponent('arm-segment-model', {
+        schema: {
+          segmentLength: { type: 'number', default: 0.25 },
+          segmentType: { type: 'string', default: 'forearm' } // 'forearm' or 'upperarm'
+        },
+        
+        init: function() {
+          // Original model dimensions: 20cm diameter x 2m length (Z-axis)
+          this.originalDiameter = 0.20;
+          this.originalLength = 2.0;
+          
+          // Target dimensions: 3cm thickness x dynamic length
+          this.targetDiameter = 0.03;
+          this.targetLength = this.data.segmentLength;
+          
+          // Calculate scale factors
+          this.scaleX = this.targetDiameter / this.originalDiameter;
+          this.scaleY = this.targetDiameter / this.originalDiameter;
+          this.scaleZ = this.targetLength / this.originalLength;
+          
+          // Load and scale the model
+          this.el.setAttribute('gltf-model', '#arm-segment-model');
+          this.el.setAttribute('scale', `${this.scaleX} ${this.scaleY} ${this.scaleZ}`);
+          this.el.setAttribute('visible', true);
+        },
+        
+        update: function() {
+          // Update scaling if segment length changes
+          this.targetLength = this.data.segmentLength;
+          this.scaleZ = this.targetLength / this.originalLength;
+          this.el.setAttribute('scale', `${this.scaleX} ${this.scaleY} ${this.scaleZ}`);
+        }
+      });
+
+      // Arm IK Visualizer Component
+      AFRAME.registerComponent('arm-ik-visualizer', {
+        schema: {
+          hand: { type: 'string', default: 'left' }, // 'left' or 'right'
+          upperArmLength: { type: 'number', default: 0.3 }, // 30cm upper arm
+          forearmLength: { type: 'number', default: 0.25 }, // 25cm forearm
+          shoulderOffset: { type: 'number', default: 0.18 } // 18cm from center to shoulder
+        },
+        
+        init: function() {
+          this.forearmModel = this.el.querySelector('.forearm-model');
+          this.upperarmModel = this.el.querySelector('.upperarm-model');
+          this.elbowIndicator = this.el.querySelector('.elbow-indicator');
+          this.rig = null;
+          this.headset = null;
+          this.isRemotePlayer = false;
+          
+          // Check if this is a remote player controller
+          this.isRemotePlayer = this.el.closest('[id^="remote-player"]') !== null;
+          
+          // Wait for scene to load before querying for headset and rig
+          this.el.sceneEl.addEventListener('loaded', () => {
+            if (this.isRemotePlayer) {
+              // For remote players, headset and rig are the remote player entity itself
+              const remotePlayerEntity = this.el.closest('[id^="remote-player"]');
+              this.headset = remotePlayerEntity;
+              this.rig = remotePlayerEntity;
+            } else {
+              // For local player
+              this.rig = document.querySelector('#rig');
+              this.headset = document.querySelector('[camera]');
+            }
+          });
+        },
+
+        tick: function() {
+          // Re-query elements if not found during init (they might load later)
+          if (!this.forearmModel) {
+            this.forearmModel = this.el.querySelector('.forearm-model');
+          }
+          if (!this.upperarmModel) {
+            this.upperarmModel = this.el.querySelector('.upperarm-model');
+          }
+          if (!this.elbowIndicator) {
+            this.elbowIndicator = this.el.querySelector('.elbow-indicator');
+          }
+          
+          if (!this.forearmModel || !this.upperarmModel || !this.elbowIndicator || !this.headset) {
+            return;
+          }
+          
+          // For remote players, don't render arms if the remote player entity is not visible
+          if (this.isRemotePlayer) {
+            const remotePlayerEntity = this.el.closest('[id^="remote-player"]');
+            const isVisible = remotePlayerEntity && remotePlayerEntity.getAttribute('visible') !== 'false' && remotePlayerEntity.getAttribute('visible') !== false;
+            if (!isVisible) return;
+          }
+
+          // Calculate proper IK elbow and shoulder positions
+          const result = this.calculateIKArm();
+          
+          if (result) {
+            // Set elbow position
+            if (this.elbowIndicator) {
+              this.elbowIndicator.setAttribute('position', `${result.elbowPos.x} ${result.elbowPos.y} ${result.elbowPos.z}`);
+            }
+            
+            // Position and orient forearm model (wrist to elbow)
+            if (this.forearmModel) {
+              this.positionArmSegment(this.forearmModel, 
+                new THREE.Vector3(0, 0, 0), // wrist position (controller origin)
+                result.elbowPos,
+                this.data.forearmLength
+              );
+            }
+            
+            // Position and orient upper arm model (elbow to shoulder)
+            if (this.upperarmModel) {
+              this.positionArmSegment(this.upperarmModel,
+                result.elbowPos,
+                result.shoulderPos,
+                this.data.upperArmLength
+              );
+            }
+          }
+        },
+
+        positionArmSegment: function(modelElement, startPos, endPos, segmentLength) {
+          if (!modelElement) return;
+          
+          // Calculate direction vector from start to end
+          const direction = new THREE.Vector3().subVectors(endPos, startPos);
+          const actualLength = direction.length();
+          
+          if (actualLength < 0.001) return;
+          
+          // Position at midpoint between start and end points
+          const midpoint = new THREE.Vector3().addVectors(startPos, endPos).multiplyScalar(0.5);
+          modelElement.setAttribute('position', `${midpoint.x} ${midpoint.y} ${midpoint.z}`);
+          
+          // Scale the model to the actual segment length
+          modelElement.setAttribute('arm-segment-model', `segmentLength: ${actualLength}`);
+          
+          // Calculate rotation to align model with direction vector
+          const dx = direction.x / actualLength;
+          const dy = direction.y / actualLength; 
+          const dz = direction.z / actualLength;
+          
+          const pitch = Math.asin(-dy);
+          const yaw = Math.atan2(dx, dz);
+          
+          let pitchDeg = THREE.MathUtils.radToDeg(pitch);
+          const yawDeg = THREE.MathUtils.radToDeg(yaw);
+          
+          // Add 90° to align Blender Z-axis with direction vector
+          pitchDeg += 90;
+          
+          modelElement.setAttribute('rotation', `${pitchDeg} ${yawDeg} 0`);
+        },
+
+        calculateIKArm: function() {
+          // Get world positions
+          const handWorldPos = new THREE.Vector3();
+          const headsetWorldPos = new THREE.Vector3();
+          const handWorldQuat = new THREE.Quaternion();
+          const headsetWorldQuat = new THREE.Quaternion();
+          
+          this.el.object3D.getWorldPosition(handWorldPos);
+          this.el.object3D.getWorldQuaternion(handWorldQuat);
+          
+          this.headset.object3D.getWorldPosition(headsetWorldPos);
+          this.headset.object3D.getWorldQuaternion(headsetWorldQuat);
+
+          // Calculate shoulder position
+          const shoulderOffset = new THREE.Vector3(
+            this.data.hand === 'left' ? -this.data.shoulderOffset : this.data.shoulderOffset,
+            -0.15, // Below head
+            0.05   // Slightly forward
+          );
+          
+          // Use different rotation logic for remote vs local players
+          if (this.isRemotePlayer) {
+            // For remote players, use the synced rig rotation data
+            const remotePlayerEntity = this.el.closest('[id^="remote-player"]');
+            const rigRotationData = remotePlayerEntity ? remotePlayerEntity.getAttribute('data-rig-rotation') : null;
+            
+            if (rigRotationData) {
+              const rigRotParts = rigRotationData.split(' ');
+              const rigEuler = new THREE.Euler(
+                parseFloat(rigRotParts[0]),
+                parseFloat(rigRotParts[1]), 
+                parseFloat(rigRotParts[2]),
+                'YXZ'
+              );
+              // Only use Y-axis rotation for stability (same as local player)
+              const bodyYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rigEuler.y);
+              shoulderOffset.applyQuaternion(bodyYaw);
+            }
+            // If no rig data available, use shoulder offset as-is
+          } else {
+            // For local player, use rig (body) rotation instead of headset rotation for shoulders
+            const rigWorldQuat = new THREE.Quaternion();
+            if (this.rig) {
+              this.rig.object3D.getWorldQuaternion(rigWorldQuat);
+              shoulderOffset.applyQuaternion(rigWorldQuat);
+            } else {
+              // Fallback: use headset rotation but only Y-axis (yaw) to keep shoulders level
+              const headsetEuler = new THREE.Euler().setFromQuaternion(headsetWorldQuat, 'YXZ');
+              const bodyYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), headsetEuler.y);
+              shoulderOffset.applyQuaternion(bodyYaw);
+            }
+          }
+          
+          const shoulderWorldPos = new THREE.Vector3().addVectors(headsetWorldPos, shoulderOffset);
+
+          // Vector from shoulder to hand
+          const shoulderToHand = new THREE.Vector3().subVectors(handWorldPos, shoulderWorldPos);
+          const distance = shoulderToHand.length();
+
+          const upperArmLength = this.data.upperArmLength;
+          const forearmLength = this.data.forearmLength;
+          const totalArmLength = upperArmLength + forearmLength;
+
+          // Handle arm length constraints
+          if (distance >= totalArmLength * 0.98) {
+            // Too far - stretch both segments proportionally
+            const stretchFactor = distance / totalArmLength;
+            const stretchedUpperArm = upperArmLength * stretchFactor;
+            const stretchedForearm = forearmLength * stretchFactor;
+            
+            const elbowWorldPos = new THREE.Vector3().addVectors(
+              shoulderWorldPos,
+              shoulderToHand.clone().normalize().multiplyScalar(stretchedUpperArm)
+            );
+
+            return {
+              elbowPos: this.worldToControllerLocal(elbowWorldPos),
+              shoulderPos: this.worldToControllerLocal(shoulderWorldPos)
+            };
+          } else if (distance < Math.abs(upperArmLength - forearmLength)) {
+            // Too close - use minimum possible distance
+            const minDistance = Math.abs(upperArmLength - forearmLength);
+            const elbowWorldPos = new THREE.Vector3().addVectors(
+              shoulderWorldPos,
+              shoulderToHand.clone().normalize().multiplyScalar(minDistance * 0.5)
+            );
+
+            return {
+              elbowPos: this.worldToControllerLocal(elbowWorldPos),
+              shoulderPos: this.worldToControllerLocal(shoulderWorldPos)
+            };
+          }
+
+          // Two-bone IK using law of cosines
+          const a = upperArmLength;
+          const b = forearmLength;
+          const c = distance;
+
+          const angle = Math.acos((a*a + c*c - b*b) / (2*a*c));
+
+          // Direction from shoulder to hand
+          const shoulderToHandDir = shoulderToHand.normalize();
+
+          // Stable elbow bend direction with proper left/right mirroring
+          
+          // Get body orientation for elbow bend direction
+          let bodyRotation;
+          if (this.isRemotePlayer) {
+            // For remote players, use the synced rig rotation data
+            const remotePlayerEntity = this.el.closest('[id^="remote-player"]');
+            const rigRotationData = remotePlayerEntity ? remotePlayerEntity.getAttribute('data-rig-rotation') : null;
+            
+            if (rigRotationData) {
+              const rigRotParts = rigRotationData.split(' ');
+              const rigEuler = new THREE.Euler(
+                parseFloat(rigRotParts[0]),
+                parseFloat(rigRotParts[1]), 
+                parseFloat(rigRotParts[2]),
+                'YXZ'
+              );
+              // Only use Y-axis rotation for stability (same as local player)
+              bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rigEuler.y);
+            } else {
+              // Fallback to identity rotation
+              bodyRotation = new THREE.Quaternion();
+            }
+          } else {
+            // For local player, prefer rig rotation but only Y-axis for stability
+            if (this.rig) {
+              const rigEuler = new THREE.Euler();
+              const rigQuat = new THREE.Quaternion();
+              this.rig.object3D.getWorldQuaternion(rigQuat);
+              rigEuler.setFromQuaternion(rigQuat, 'YXZ');
+              bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rigEuler.y);
+            } else {
+              const headsetEuler = new THREE.Euler().setFromQuaternion(headsetWorldQuat, 'YXZ');
+              bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), headsetEuler.y);
+            }
+          }
+          
+          // Create stable bend direction based on controller's up vector
+          const controllerUp = new THREE.Vector3(0, 1, 0);
+          controllerUp.applyQuaternion(handWorldQuat);
+          
+          // Base bend direction: outward and downward bias
+          const handSign = this.data.hand === 'left' ? -1 : 1;
+          let bendDir = new THREE.Vector3(handSign * 0.6, -0.8, 0);
+          bendDir.applyQuaternion(bodyRotation);
+          
+          // Blend with controller influence (10% influence)
+          const controllerInfluence = controllerUp.clone().multiplyScalar(0.1);
+          controllerInfluence.y = Math.max(-0.5, controllerInfluence.y); // Prevent upward bending
+          bendDir.lerp(controllerInfluence, 0.1).normalize();
+
+          // Calculate elbow direction
+          const elbowDirection = new THREE.Vector3()
+            .copy(shoulderToHandDir)
+            .multiplyScalar(Math.cos(angle))
+            .addScaledVector(bendDir, Math.sin(angle));
+
+          const elbowWorldPos = new THREE.Vector3().addVectors(
+            shoulderWorldPos,
+            elbowDirection.multiplyScalar(upperArmLength)
+          );
+
+          // Validate that forearm length is correct
+          const elbowToHand = new THREE.Vector3().subVectors(handWorldPos, elbowWorldPos);
+          const actualForearmLength = elbowToHand.length();
+          const expectedForearmLength = forearmLength;
+          
+          // If forearm length is significantly wrong, adjust elbow position
+          if (Math.abs(actualForearmLength - expectedForearmLength) > 0.01) {
+            const correctionDirection = elbowToHand.normalize();
+            const correctionDistance = actualForearmLength - expectedForearmLength;
+            elbowWorldPos.addScaledVector(correctionDirection, correctionDistance);
+          }
+
+          // Convert both positions to controller local space
+          const elbowLocalPos = this.worldToControllerLocal(elbowWorldPos);
+          const shoulderLocalPos = this.worldToControllerLocal(shoulderWorldPos);
+          
+          return {
+            elbowPos: elbowLocalPos,
+            shoulderPos: shoulderLocalPos
+          };
+        },
+
+        worldToControllerLocal: function(worldPos) {
+          const localPos = new THREE.Vector3();
+          this.el.object3D.worldToLocal(localPos.copy(worldPos));
+          return localPos;
         }
       });
 
@@ -9200,6 +10100,9 @@ function setGameplayHUD(isPlaying) {
         <img id="panelMetallic" src="assets/TCom_Scifi_Panel_4K_metallic.jpg">
         <img id="panelRoughness" src="assets/TCom_Scifi_Panel_4K_roughness.jpg">
         <img id="panelAo" src="assets/TCom_Scifi_Panel_4K_ao.jpg">
+        
+        <!-- Arm Segment 3D Model -->
+        <a-asset-item id="arm-segment-model" src="../assets/test-arm.glb"></a-asset-item>
       </a-assets>
       
       <!-- Main chamber floor (Echo Arena size) -->
@@ -9947,6 +10850,7 @@ function setGameplayHUD(isPlaying) {
                    hand-haptics
                    debug-controller
                    custom-hand-controls
+                   arm-ik-visualizer="hand: left"
                    >
             <!-- Thruster visual effect -->
             <a-cone class="thruster-vfx"
@@ -9958,6 +10862,27 @@ function setGameplayHUD(isPlaying) {
                     material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
                     visible="false">
             </a-cone>
+            
+            <!-- IK Arm Visualization -->
+            <!-- Forearm model (wrist to elbow) -->
+            <a-entity class="forearm-model" 
+                      arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                      visible="true">
+            </a-entity>
+            
+            <!-- Upper arm model (elbow to shoulder) -->
+            <a-entity class="upperarm-model" 
+                      arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                      visible="true">
+            </a-entity>
+            
+            <!-- Elbow position indicator -->
+            <a-sphere class="elbow-indicator"
+                     radius="0.02"
+                     color="#ff0000"
+                     material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
+                     visible="true">
+            </a-sphere>
           </a-entity>
           
           <a-entity id="rightHand" 
@@ -9969,6 +10894,7 @@ function setGameplayHUD(isPlaying) {
                    hand-haptics
                    debug-controller
                    custom-hand-controls
+                   arm-ik-visualizer="hand: right"
                    >
             <!-- Thruster visual effect -->
             <a-cone class="thruster-vfx"
@@ -9980,6 +10906,27 @@ function setGameplayHUD(isPlaying) {
                     material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
                     visible="false">
             </a-cone>
+            
+            <!-- IK Arm Visualization -->
+            <!-- Forearm model (wrist to elbow) -->
+            <a-entity class="forearm-model" 
+                      arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                      visible="true">
+            </a-entity>
+            
+            <!-- Upper arm model (elbow to shoulder) -->
+            <a-entity class="upperarm-model" 
+                      arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                      visible="true">
+            </a-entity>
+            
+            <!-- Elbow position indicator -->
+            <a-sphere class="elbow-indicator"
+                     radius="0.02"
+                     color="#ff0000"
+                     material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
+                     visible="true">
+            </a-sphere>
           </a-entity>
         </a-entity>
       </a-entity>
@@ -10001,6 +10948,56 @@ function setGameplayHUD(isPlaying) {
             animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
           </a-sphere>
         </a-sphere>
+        
+        <!-- Remote Left Hand -->
+        <a-entity class="remote-left-hand" 
+                  arm-ik-visualizer="hand: left"
+                  position="0 0 0">
+          <!-- Forearm model (wrist to elbow) -->
+          <a-entity class="forearm-model" 
+                    arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Upper arm model (elbow to shoulder) -->
+          <a-entity class="upperarm-model" 
+                    arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Elbow position indicator -->
+          <a-sphere class="elbow-indicator"
+                   radius="0.02"
+                   color="#ff0000"
+                   material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
+                   visible="true">
+          </a-sphere>
+        </a-entity>
+        
+        <!-- Remote Right Hand -->
+        <a-entity class="remote-right-hand" 
+                  arm-ik-visualizer="hand: right"
+                  position="0 0 0">
+          <!-- Forearm model (wrist to elbow) -->
+          <a-entity class="forearm-model" 
+                    arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Upper arm model (elbow to shoulder) -->
+          <a-entity class="upperarm-model" 
+                    arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Elbow position indicator -->
+          <a-sphere class="elbow-indicator"
+                   radius="0.02"
+                   color="#ff0000"
+                   material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
+                   visible="true">
+          </a-sphere>
+        </a-entity>
       </a-entity>
 
       <a-entity id="remote-player-1" position="2 0 -2" visible="false">
@@ -10019,6 +11016,56 @@ function setGameplayHUD(isPlaying) {
             animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
           </a-sphere>
         </a-sphere>
+        
+        <!-- Remote Left Hand -->
+        <a-entity class="remote-left-hand" 
+                  arm-ik-visualizer="hand: left"
+                  position="0 0 0">
+          <!-- Forearm model (wrist to elbow) -->
+          <a-entity class="forearm-model" 
+                    arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Upper arm model (elbow to shoulder) -->
+          <a-entity class="upperarm-model" 
+                    arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Elbow position indicator -->
+          <a-sphere class="elbow-indicator"
+                   radius="0.02"
+                   color="#ff0000"
+                   material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
+                   visible="true">
+          </a-sphere>
+        </a-entity>
+        
+        <!-- Remote Right Hand -->
+        <a-entity class="remote-right-hand" 
+                  arm-ik-visualizer="hand: right"
+                  position="0 0 0">
+          <!-- Forearm model (wrist to elbow) -->
+          <a-entity class="forearm-model" 
+                    arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Upper arm model (elbow to shoulder) -->
+          <a-entity class="upperarm-model" 
+                    arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Elbow position indicator -->
+          <a-sphere class="elbow-indicator"
+                   radius="0.02"
+                   color="#ff0000"
+                   material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
+                   visible="true">
+          </a-sphere>
+        </a-entity>
       </a-entity>
 
       <a-entity id="remote-player-2" position="-2 0 2" visible="false">
@@ -10037,6 +11084,56 @@ function setGameplayHUD(isPlaying) {
             animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
           </a-sphere>
         </a-sphere>
+        
+        <!-- Remote Left Hand -->
+        <a-entity class="remote-left-hand" 
+                  arm-ik-visualizer="hand: left"
+                  position="0 0 0">
+          <!-- Forearm model (wrist to elbow) -->
+          <a-entity class="forearm-model" 
+                    arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Upper arm model (elbow to shoulder) -->
+          <a-entity class="upperarm-model" 
+                    arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Elbow position indicator -->
+          <a-sphere class="elbow-indicator"
+                   radius="0.02"
+                   color="#ff00ff"
+                   material="shader: standard; emissive: #ff00ff; emissiveIntensity: 0.5"
+                   visible="true">
+          </a-sphere>
+        </a-entity>
+        
+        <!-- Remote Right Hand -->
+        <a-entity class="remote-right-hand" 
+                  arm-ik-visualizer="hand: right"
+                  position="0 0 0">
+          <!-- Forearm model (wrist to elbow) -->
+          <a-entity class="forearm-model" 
+                    arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Upper arm model (elbow to shoulder) -->
+          <a-entity class="upperarm-model" 
+                    arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Elbow position indicator -->
+          <a-sphere class="elbow-indicator"
+                   radius="0.02"
+                   color="#ff00ff"
+                   material="shader: standard; emissive: #ff00ff; emissiveIntensity: 0.5"
+                   visible="true">
+          </a-sphere>
+        </a-entity>
       </a-entity>
 
       <a-entity id="remote-player-3" position="2 0 2" visible="false">
@@ -10055,6 +11152,56 @@ function setGameplayHUD(isPlaying) {
             animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
           </a-sphere>
         </a-sphere>
+        
+        <!-- Remote Left Hand -->
+        <a-entity class="remote-left-hand" 
+                  arm-ik-visualizer="hand: left"
+                  position="0 0 0">
+          <!-- Forearm model (wrist to elbow) -->
+          <a-entity class="forearm-model" 
+                    arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Upper arm model (elbow to shoulder) -->
+          <a-entity class="upperarm-model" 
+                    arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Elbow position indicator -->
+          <a-sphere class="elbow-indicator"
+                   radius="0.02"
+                   color="#ffff00"
+                   material="shader: standard; emissive: #ffff00; emissiveIntensity: 0.5"
+                   visible="true">
+          </a-sphere>
+        </a-entity>
+        
+        <!-- Remote Right Hand -->
+        <a-entity class="remote-right-hand" 
+                  arm-ik-visualizer="hand: right"
+                  position="0 0 0">
+          <!-- Forearm model (wrist to elbow) -->
+          <a-entity class="forearm-model" 
+                    arm-segment-model="segmentLength: 0.25; segmentType: forearm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Upper arm model (elbow to shoulder) -->
+          <a-entity class="upperarm-model" 
+                    arm-segment-model="segmentLength: 0.30; segmentType: upperarm"
+                    visible="true">
+          </a-entity>
+          
+          <!-- Elbow position indicator -->
+          <a-sphere class="elbow-indicator"
+                   radius="0.02"
+                   color="#ffff00"
+                   material="shader: standard; emissive: #ffff00; emissiveIntensity: 0.5"
+                   visible="true">
+          </a-sphere>
+        </a-entity>
       </a-entity>
 
       <!-- Zero-G Bot Red Team (for singleplayer) -->
@@ -10580,6 +11727,46 @@ function setGameplayHUD(isPlaying) {
         }
       }
 
+      
+      // Global debugging functions for shield sync
+      window.forceShieldSync = function() {
+        console.log('🔧 MANUAL: Force syncing all shields...');
+        const shields = document.querySelectorAll('[ball-shield]');
+        shields.forEach(shield => {
+          const shieldComponent = shield.components['ball-shield'];
+          if (shieldComponent && shieldComponent.forceShieldSync) {
+            shieldComponent.forceShieldSync();
+          }
+        });
+      };
+      
+      window.debugShieldStates = function() {
+        console.log('🔍 SHIELD DEBUG: Current shield states...');
+        const shields = document.querySelectorAll('[ball-shield]');
+        shields.forEach(shield => {
+          const shieldComponent = shield.components['ball-shield'];
+          const ballComponent = shield.parentElement?.components?.['zerog-ball'];
+          if (shieldComponent && ballComponent) {
+            const mask = ballComponent.body?.collisionFilterMask;
+            const hasCollision = (mask & 2) !== 0;
+            const visible = shield.getAttribute('visible');
+            console.log(`🔍 ${ballComponent.data.player}: visual=${shieldComponent.isActive}, grabbed=${ballComponent.isGrabbed}, cooldown=${shieldComponent.isOnCooldown}, mask=${mask}, collision=${hasCollision}, visible=${visible}`);
+          }
+        });
+      };
+      
+      window.testShieldCollision = function() {
+        console.log('🧪 TEST: Forcing collision mask updates for all balls...');
+        const balls = document.querySelectorAll('[zerog-ball]');
+        balls.forEach(ball => {
+          const ballComponent = ball.components['zerog-ball'];
+          if (ballComponent && ballComponent.updateCollisionMask) {
+            ballComponent.updateCollisionMask();
+          }
+        });
+      };
+      
     </script>
   </body>
 </html> 
+
