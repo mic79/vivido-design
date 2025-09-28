@@ -10039,6 +10039,8 @@ function setGameplayHUD(isPlaying) {
          <a-asset-item id="asteroid-42-model" src="assets/asteroid_42.glb"></a-asset-item>
          <!-- Spaceship 3D Model -->
          <a-asset-item id="spaceship-model" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/SpaceShip.glb"></a-asset-item>
+         <!-- Level 3D Model -->
+         <a-asset-item id="level-model" src="assets/level.glb"></a-asset-item>
          
          <!-- Arm Segment 3D Model -->
          <a-asset-item id="arm-segment-model" src="assets/test-arm.glb"></a-asset-item>
@@ -10767,6 +10769,14 @@ function setGameplayHUD(isPlaying) {
                  rotation="0 45 0"
                  visible="false">
          <a-gltf-model src="#spaceship-model"></a-gltf-model>
+       </a-entity>
+
+       <!-- LEVEL MODEL - OPPOSITE SIDE FROM SPACESHIP -->
+       <a-entity id="model-level" position="-10 5 10" 
+                 scale="1.0 1.0 1.0"
+                 rotation="0 225 0"
+                 visible="true">
+         <a-gltf-model src="#level-model"></a-gltf-model>
        </a-entity>
 
       <!-- ASTEROID BELT - 4 DIRECTIONS -->
