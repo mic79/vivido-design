@@ -3616,12 +3616,28 @@ function setGameplayHUD(isPlaying) {
         checkPointCollision: function(point, radius, pointName) {
           const response = new THREE.Vector3(0, 0, 0);
           
-          // TEMPORARY: Disable level mesh collision for performance testing
-          const DISABLE_LEVEL_COLLISION = true; // Set to false to re-enable
+          // TEMPORARY: Completely bypass all level mesh collision for performance testing
+          const DISABLE_ALL_LEVEL_COLLISION = true; // Set to false to re-enable
+          if (DISABLE_ALL_LEVEL_COLLISION) {
+            // Skip all level mesh collision processing - go straight to A-Frame entities
+            const surfaces = document.querySelectorAll('[grab-surface]');
+            surfaces.forEach(surface => {
+              const surfacePos = new THREE.Vector3();
+              surface.object3D.getWorldPosition(surfacePos);
+              const geometry = surface.getAttribute('geometry');
+              
+              if (!geometry) return;
+              
+              const collision = this.getCollisionResponse(point, radius, surfacePos, geometry, surface);
+              response.add(collision);
+            });
+            
+            return response;
+          }
           
           // PERFORMANCE: Always check level collision when level mesh is available
           // The distance culling will be done per-mesh in the raycasting function
-          if (!DISABLE_LEVEL_COLLISION) { // Always enter this block when level mesh exists
+          if (true) { // Always enter this block when level mesh exists
             // Check collision with octree (level model) first
             if (levelOctree) {
               const octreeResponse = this.checkOctreeCollision(point, radius);
@@ -4193,10 +4209,6 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateGrabFeedback: function() {
-          // PERFORMANCE: Only update grab feedback every 5th frame
-          if (!this.grabFeedbackCounter) this.grabFeedbackCounter = 0;
-          this.grabFeedbackCounter++;
-          if (this.grabFeedbackCounter % 5 !== 0) return;
           
           // Show visual feedback for grabbable objects in range
           if (!this.leftHand || !this.rightHand) return;
@@ -4703,10 +4715,6 @@ function setGameplayHUD(isPlaying) {
         
         // NEW: Validate that grabbed surfaces are still within reach
         validateGrabDistances: function() {
-          // PERFORMANCE: Only validate grab distances every 10th frame
-          if (!this.validateGrabCounter) this.validateGrabCounter = 0;
-          this.validateGrabCounter++;
-          if (this.validateGrabCounter % 10 !== 0) return;
           
           // RE-ENABLED with improved logic
           
@@ -6617,12 +6625,12 @@ function setGameplayHUD(isPlaying) {
         tick: function(time) {
           const deltaTime = (time - this.lastTime) / 1000;
           if (deltaTime > 0) {
-            // PERFORMANCE: Use larger timesteps for better performance
-            const maxStep = 1/120; // 120Hz timestep (reduced from 240Hz)
+            // Use smaller timesteps to prevent tunneling at high speeds in zero-g
+            const maxStep = 1/240; // 240Hz timestep for better collision detection
             const steps = Math.ceil(deltaTime / maxStep);
             
             // Clamp to reasonable step count to prevent performance issues
-            const clampedSteps = Math.min(steps, 4); // Reduced from 8 to 4
+            const clampedSteps = Math.min(steps, 8);
             const clampedStepSize = deltaTime / clampedSteps;
             
             for (let i = 0; i < clampedSteps; i++) {
@@ -10590,9 +10598,8 @@ function setGameplayHUD(isPlaying) {
     </script>
 
     <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle
-             renderer="antialias: false; colorManagement: false; shadowMapEnabled: false; maxDeltaTime: 0.033; logarithmicDepthBuffer: false; physicallyCorrectLights: false"
-             webxr="requiredFeatures: local-floor"
-             stats="false">
+             renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
+             webxr="requiredFeatures: local-floor">
       
         <a-assets>
          <!-- Nebula Skybox Texture -->
