@@ -2385,6 +2385,12 @@ function setGameplayHUD(isPlaying) {
         },
         
         checkLevelMeshGrab: function(handPos, handRadius) {
+          // TEMPORARY: Disable level mesh grabbing for performance testing
+          const DISABLE_LEVEL_GRABBING = true; // Set to false to re-enable
+          if (DISABLE_LEVEL_GRABBING) {
+            return null;
+          }
+          
           if (!window.levelMeshesForGrabbing || window.levelMeshesForGrabbing.length === 0) {
             return null;
           }
@@ -3610,9 +3616,12 @@ function setGameplayHUD(isPlaying) {
         checkPointCollision: function(point, radius, pointName) {
           const response = new THREE.Vector3(0, 0, 0);
           
+          // TEMPORARY: Disable level mesh collision for performance testing
+          const DISABLE_LEVEL_COLLISION = true; // Set to false to re-enable
+          
           // PERFORMANCE: Always check level collision when level mesh is available
           // The distance culling will be done per-mesh in the raycasting function
-          if (true) { // Always enter this block when level mesh exists
+          if (!DISABLE_LEVEL_COLLISION) { // Always enter this block when level mesh exists
             // Check collision with octree (level model) first
             if (levelOctree) {
               const octreeResponse = this.checkOctreeCollision(point, radius);
