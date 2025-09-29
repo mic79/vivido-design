@@ -2389,6 +2389,13 @@ function setGameplayHUD(isPlaying) {
             return null;
           }
           
+          // PERFORMANCE: Only check level mesh grabs every 2nd frame
+          if (!this.levelGrabFrameCounter) this.levelGrabFrameCounter = 0;
+          this.levelGrabFrameCounter++;
+          if (this.levelGrabFrameCounter % 2 !== 0) {
+            return this.lastLevelGrabResult || null;
+          }
+          
           const raycaster = new THREE.Raycaster();
           const grabDistance = 0.15; // 15cm grab range
           raycaster.far = grabDistance;
@@ -2428,8 +2435,14 @@ function setGameplayHUD(isPlaying) {
               distance: minDistance,
               mesh: closestIntersection.object
             };
+            
+            // Cache the result for performance
+            this.lastLevelGrabResult = result;
+            return result;
           }
           
+          // Cache null result
+          this.lastLevelGrabResult = null;
           return null;
         },
         
@@ -3653,18 +3666,19 @@ function setGameplayHUD(isPlaying) {
           const response = new THREE.Vector3(0, 0, 0);
           
           if (!window.levelMeshForCollision) {
-            if (Math.random() < 0.01) console.log('⚠️ No level mesh available for collision');
-            return response;
+            return response; // Remove debug logging
           }
           
-          // Debug: Log when raycasting is called
-          if (Math.random() < 0.01) {
-            console.log('🎯 Raycasting collision check called at:', point);
+          // PERFORMANCE: Only check collision every 3rd frame (30fps -> 90fps effective)
+          if (!this.collisionFrameCounter) this.collisionFrameCounter = 0;
+          this.collisionFrameCounter++;
+          if (this.collisionFrameCounter % 3 !== 0) {
+            return this.lastCollisionResponse || response;
           }
           
           // Create raycaster from the point
           const raycaster = new THREE.Raycaster();
-          raycaster.far = Math.max(radius * 2, 5.0); // Ensure we check at least 5 units away
+          raycaster.far = Math.max(radius * 1.5, 3.0); // Reduced range for performance
           
           // Cast rays in 6 cardinal directions (like existing collision system)
           const directions = [
@@ -3726,9 +3740,7 @@ function setGameplayHUD(isPlaying) {
                   const pushVector = pushDirection.multiplyScalar(penetration * 0.1); // Much softer
                   response.add(pushVector);
                   
-                  if (Math.random() < 0.1) {
-                    console.log(`🚧 Collision: distance=${distance.toFixed(3)}, penetration=${penetration.toFixed(3)}, push=${pushVector.length().toFixed(3)}`);
-                  }
+                  // Debug logging removed for performance
                 }
               }
             }
@@ -3739,10 +3751,10 @@ function setGameplayHUD(isPlaying) {
           // Also log if we're near the level model but no collision
           const levelModelPos = new THREE.Vector3(-10, 5, 10);
           const distanceToLevel = point.distanceTo(levelModelPos);
-          if (distanceToLevel < 15 && Math.random() < 0.01) { // Much less frequent logging
-            console.log(`📍 Near level model - distance: ${distanceToLevel.toFixed(2)}, collision: ${collisionDetected}`);
-          }
+          // Debug logging removed for performance
           
+          // Cache the response for performance
+          this.lastCollisionResponse = response.clone();
           return response;
         },
         
@@ -4097,6 +4109,11 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateGrabFeedback: function() {
+          // PERFORMANCE: Only update grab feedback every 5th frame
+          if (!this.grabFeedbackCounter) this.grabFeedbackCounter = 0;
+          this.grabFeedbackCounter++;
+          if (this.grabFeedbackCounter % 5 !== 0) return;
+          
           // Show visual feedback for grabbable objects in range
           if (!this.leftHand || !this.rightHand) return;
           
@@ -4602,6 +4619,11 @@ function setGameplayHUD(isPlaying) {
         
         // NEW: Validate that grabbed surfaces are still within reach
         validateGrabDistances: function() {
+          // PERFORMANCE: Only validate grab distances every 10th frame
+          if (!this.validateGrabCounter) this.validateGrabCounter = 0;
+          this.validateGrabCounter++;
+          if (this.validateGrabCounter % 10 !== 0) return;
+          
           // RE-ENABLED with improved logic
           
           ['left', 'right'].forEach(handKey => {
@@ -6511,12 +6533,12 @@ function setGameplayHUD(isPlaying) {
         tick: function(time) {
           const deltaTime = (time - this.lastTime) / 1000;
           if (deltaTime > 0) {
-            // Use smaller timesteps to prevent tunneling at high speeds in zero-g
-            const maxStep = 1/240; // 240Hz timestep for better collision detection
+            // PERFORMANCE: Use larger timesteps for better performance
+            const maxStep = 1/120; // 120Hz timestep (reduced from 240Hz)
             const steps = Math.ceil(deltaTime / maxStep);
             
             // Clamp to reasonable step count to prevent performance issues
-            const clampedSteps = Math.min(steps, 8);
+            const clampedSteps = Math.min(steps, 4); // Reduced from 8 to 4
             const clampedStepSize = deltaTime / clampedSteps;
             
             for (let i = 0; i < clampedSteps; i++) {
@@ -10470,8 +10492,9 @@ function setGameplayHUD(isPlaying) {
     </script>
 
     <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle
-             renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
-             webxr="requiredFeatures: local-floor">
+             renderer="antialias: false; colorManagement: false; shadowMapEnabled: false; maxDeltaTime: 0.033; logarithmicDepthBuffer: false; physicallyCorrectLights: false"
+             webxr="requiredFeatures: local-floor"
+             stats="false">
       
         <a-assets>
          <!-- Nebula Skybox Texture -->
