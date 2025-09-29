@@ -9620,6 +9620,13 @@ function setGameplayHUD(isPlaying) {
         },
         
         setupOctreeCollision: function() {
+          // TEMPORARY: Disable all octree/level mesh setup for performance testing
+          const DISABLE_LEVEL_SETUP = true; // Set to false to re-enable
+          if (DISABLE_LEVEL_SETUP) {
+            console.log('🚫 Level mesh setup disabled for performance testing');
+            return;
+          }
+          
           console.log('🏗️ Setting up octree collision for level model...');
           
           // Get the loaded 3D model
@@ -9663,6 +9670,13 @@ function setGameplayHUD(isPlaying) {
         },
         
         makeLevelMeshesGrabbable: function() {
+          // TEMPORARY: Disable all level mesh processing for performance testing
+          const DISABLE_LEVEL_PROCESSING = true; // Set to false to re-enable
+          if (DISABLE_LEVEL_PROCESSING) {
+            console.log(`🚫 Level mesh processing disabled for performance testing`);
+            return;
+          }
+          
           if (!window.levelMeshForCollision) return;
           
           // Add grabbable class to the level entity
