@@ -8,9 +8,9 @@
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://unpkg.com/three-mesh-bvh@0.7.8/build/index.umd.cjs"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
-    <script src="https://threejs.org/examples/js/math/Octree.js"></script>
   </head>
   <body>
     <script>
@@ -19,9 +19,6 @@
       world.gravity.set(0, 0, 0); // Zero gravity for space environment
       world.broadphase = new CANNON.NaiveBroadphase();
       world.solver.iterations = 10;
-      
-      // Octree for level collision detection
-      let levelOctree = null;
 
       // Global error handler to suppress Meta Touch Controls errors
       window.addEventListener('error', (event) => {
@@ -1664,7 +1661,7 @@
                   // Reset to singleplayer state
                   const rig = document.querySelector('#rig');
                   if (rig) {
-                    rig.setAttribute('position', '0 0 0');
+                    rig.setAttribute('position', '0 5.300 0');
                     rig.setAttribute('rotation', '0 0 0');
                   }
                   
@@ -1702,7 +1699,7 @@
                     // Reset to singleplayer state
                     const rig = document.querySelector('#rig');
                     if (rig) {
-                      rig.setAttribute('position', '0 0 0');
+                      rig.setAttribute('position', '0 5.300 0');
                       rig.setAttribute('rotation', '0 0 0');
                     }
                     
@@ -1973,12 +1970,11 @@ function setGameplayHUD(isPlaying) {
         
         init: function() {
           
-          // Option B: No physics body - use visual collision detection instead
           
           // Create collision visualization (this IS our collision system now)
           this.createCollisionVisualization();
           
-          // Option B: Custom physics simulation state
+          // Custom physics simulation state
           this.velocity = new THREE.Vector3(0, 0, 0);
           this.angularVelocity = new THREE.Vector3(0, 0, 0);
           this.lastPosition = new THREE.Vector3(0, 0, 0);
@@ -2001,6 +1997,22 @@ function setGameplayHUD(isPlaying) {
             if (evt.key === 'v' || evt.key === 'V') {
               this.toggleCollisionVisualization();
             }
+            
+            // Toggle mesh distance culling visualization with 'M' key
+            if (evt.key === 'm' || evt.key === 'M') {
+              this.showMeshDebug = !this.showMeshDebug;
+              console.log('🎨 Mesh debug visualization:', this.showMeshDebug ? 'ON (Green=nearby, Red=far)' : 'OFF');
+              
+              // Reset all mesh colors when turning off
+              if (!this.showMeshDebug && this.bvhMeshes) {
+                this.bvhMeshes.forEach(mesh => {
+                  if (mesh.material && mesh.userData.originalColor !== undefined) {
+                    mesh.material.color.setHex(mesh.userData.originalColor);
+                  }
+                });
+              }
+            }
+            
             
             // Air brake with 'C' key
             if (evt.key === 'c' || evt.key === 'C') {
@@ -2098,7 +2110,8 @@ function setGameplayHUD(isPlaying) {
 
           });
         },
-        
+
+
         setupHandEvents: function() {
           // Grip controls for grabbing surfaces AND balls (EchoVR style)
           this.el.sceneEl.addEventListener('gripdown', (evt) => {
@@ -2352,13 +2365,7 @@ function setGameplayHUD(isPlaying) {
           hand.object3D.getWorldPosition(handPos);
           const handRadius = 0.08; // Hand collision radius
           
-          // First check for level mesh surfaces using raycasting
-          const levelSurface = this.checkLevelMeshGrab(handPos, handRadius);
-          if (levelSurface) {
-            return levelSurface;
-          }
-          
-          // Look for elements with grab-surface component OR zerog-ball attribute
+                  // Look for elements with grab-surface component OR zerog-ball attribute
         const allElements = document.querySelectorAll('[grab-surface], [zerog-ball]');
           let nearestSurface = null;
           let minDistance = Infinity;
@@ -2375,6 +2382,13 @@ function setGameplayHUD(isPlaying) {
             }
           });
           
+          // Also check level.glb model for grabbing
+          const levelGrabResult = this.checkLevelModelGrab(handPos, handRadius);
+          if (levelGrabResult && levelGrabResult.distance < minDistance) {
+            nearestSurface = levelGrabResult.surface;
+            minDistance = levelGrabResult.distance;
+          }
+          
           // Only log when something is found
           if (nearestSurface) {
             const distanceCm = minDistance > 0 ? (minDistance * 100).toFixed(1) : "touching";
@@ -2384,98 +2398,89 @@ function setGameplayHUD(isPlaying) {
           return nearestSurface;
         },
         
-        checkLevelMeshGrab: function(handPos, handRadius) {
-          // TEMPORARY: Disable level mesh grabbing for performance testing
-          const DISABLE_LEVEL_GRABBING = true; // Set to false to re-enable
-          if (DISABLE_LEVEL_GRABBING) {
-            return null;
+        // Check if hand can grab onto level.glb model surfaces
+        checkLevelModelGrab: function(handPos, handRadius) {
+          // Get cached BVH meshes
+          if (!this.bvhMeshes || this.bvhMeshes.length === 0) {
+            this.initializeBVH();
+            if (!this.bvhMeshes || this.bvhMeshes.length === 0) return null;
           }
           
-          if (!window.levelMeshesForGrabbing || window.levelMeshesForGrabbing.length === 0) {
-            return null;
-          }
-          
-          // PERFORMANCE: Filter grab meshes by bounding box intersection (more accurate)
-          const handGrabRadius = 2.0; // 2 meter grab detection radius around hand
-          const nearbyGrabMeshes = window.levelMeshesForGrabbing.filter(mesh => {
-            // Use bounding box instead of center point for large meshes
-            mesh.geometry.computeBoundingBox();
-            const bbox = mesh.geometry.boundingBox.clone();
-            bbox.applyMatrix4(mesh.matrixWorld);
-            
-            // Check if hand grab sphere intersects with mesh bounding box
-            const closestPoint = bbox.clampPoint(handPos, new THREE.Vector3());
-            const distance = handPos.distanceTo(closestPoint);
-            
-            return distance < handGrabRadius;
-          });
-          
-          // Skip grab check if no nearby meshes
-          if (nearbyGrabMeshes.length === 0) {
-            this.lastLevelGrabResult = null;
-            return null;
-          }
-          
-          // Debug: Log when grab detection is active
-          if (Math.random() < 0.01) {
-            console.log(`🤲 Grab detection active: ${nearbyGrabMeshes.length} meshes within ${handGrabRadius}m of hand`);
-          }
-          
-          // PERFORMANCE: Only check level mesh grabs every 2nd frame (better responsiveness)
-          if (!this.levelGrabFrameCounter) this.levelGrabFrameCounter = 0;
-          this.levelGrabFrameCounter++;
-          if (this.levelGrabFrameCounter % 2 !== 0) {
-            return this.lastLevelGrabResult || null;
-          }
-          
+          // Use BVH-accelerated raycasting to find nearby surfaces for grabbing
           const raycaster = new THREE.Raycaster();
           const grabDistance = 0.15; // 15cm grab range
           raycaster.far = grabDistance;
           
-          // PERFORMANCE: Cast rays in 6 directions for reliable grabbing
           const directions = [
             new THREE.Vector3(1, 0, 0),   // Right
             new THREE.Vector3(-1, 0, 0),  // Left
-            new THREE.Vector3(0, 1, 0),   // Up (needed for ceiling grabs)
-            new THREE.Vector3(0, -1, 0),  // Down (needed for floor grabs)
+            new THREE.Vector3(0, 1, 0),   // Up
+            new THREE.Vector3(0, -1, 0),  // Down
             new THREE.Vector3(0, 0, 1),   // Forward
             new THREE.Vector3(0, 0, -1)   // Backward
           ];
           
-          let closestIntersection = null;
-          let minDistance = Infinity;
+          let closestGrab = null;
+          let closestDistance = Infinity;
           
+          // Performance optimization: Use sphere-based grab detection
+          const maxGrabDistance = 5; // 5 meter radius for grab detection
+          
+          // Create detection sphere at hand position
+          const grabSphere = new THREE.Sphere(handPos, maxGrabDistance);
+          
+          // Filter meshes using sphere intersection for grabbing
+          const nearbyMeshes = this.bvhMeshes.filter(mesh => {
+            // Update mesh world matrix
+            mesh.updateMatrixWorld(true);
+            
+            // Get mesh bounding sphere in world space
+            if (!mesh.geometry.boundingSphere) {
+              mesh.geometry.computeBoundingSphere();
+            }
+            
+            const meshSphere = mesh.geometry.boundingSphere.clone();
+            meshSphere.applyMatrix4(mesh.matrixWorld);
+            
+            // Check if grab sphere intersects with mesh sphere
+            const isNearby = grabSphere.intersectsSphere(meshSphere);
+            
+            // Visual debugging for grab detection (blue tint)
+            if (isNearby && this.debugMode && mesh.material && !Array.isArray(mesh.material)) {
+              if (!mesh.userData.originalColor) {
+                mesh.userData.originalColor = mesh.material.color ? mesh.material.color.getHex() : 0x888888;
+              }
+              mesh.material.color.setHex(0x0088ff);
+            }
+            
+            return isNearby;
+          });
+          
+          // Check each direction for grabbable surfaces using nearby BVH-accelerated meshes
           directions.forEach(direction => {
             raycaster.set(handPos, direction);
-            const intersects = raycaster.intersectObjects(nearbyGrabMeshes, false); // Use filtered meshes
+            
+            // Use THREE.js raycasting with BVH acceleration on nearby meshes only
+            const intersects = raycaster.intersectObjects(nearbyMeshes, false);
             
             if (intersects.length > 0) {
               const intersection = intersects[0];
-              if (intersection.distance < minDistance) {
-                minDistance = intersection.distance;
-                closestIntersection = intersection;
+              const distance = intersection.distance;
+              
+              if (distance < closestDistance) {
+                closestDistance = distance;
+                closestGrab = {
+                  surface: intersection.object, // The mesh itself
+                  distance: distance,
+                  point: intersection.point,
+                  normal: intersection.face.normal,
+                  isLevelMesh: true
+                };
               }
             }
           });
           
-          if (closestIntersection && minDistance <= grabDistance) {
-            // Create a virtual surface object for the level mesh
-            return {
-              isLevelMesh: true,
-              position: closestIntersection.point,
-              normal: closestIntersection.face ? closestIntersection.face.normal.clone() : new THREE.Vector3(0, 1, 0),
-              distance: minDistance,
-              mesh: closestIntersection.object
-            };
-            
-            // Cache the result for performance
-            this.lastLevelGrabResult = result;
-            return result;
-          }
-          
-          // Cache null result
-          this.lastLevelGrabResult = null;
-          return null;
+          return closestGrab;
         },
         
         getDistanceToSurface: function(handPos, handRadius, element) {
@@ -2706,66 +2711,66 @@ function setGameplayHUD(isPlaying) {
           const handPos = new THREE.Vector3();
           hand.object3D.getWorldPosition(handPos);
           
-          let surfacePos = new THREE.Vector3();
-          
-          // Handle level mesh surfaces differently
-          if (surface.isLevelMesh) {
-            surfacePos.copy(surface.position);
-          } else {
-            surface.object3D.getWorldPosition(surfacePos);
-          }
-          
           const isLeft = hand.id === 'leftHand';
           const handKey = isLeft ? 'left' : 'right';
           
-          // Handle level mesh surfaces differently
-          if (surface.isLevelMesh) {
-            // For level meshes, create a simple grab info
-            this.grabInfo[handKey] = {
-              surface: surface,
-              isBall: false,
-              isPlayer: false,
-              isLevelMesh: true,
-              grabPoint: surfacePos.clone(),
-              grabOffset: handPos.clone().sub(surfacePos),
-              lastHandPos: handPos.clone() // Initialize for grab movement tracking
-            };
-            
-            this.isGrabbing[handKey] = true;
-            console.log(`🤲 Grabbed level mesh surface at distance: ${handPos.distanceTo(surfacePos).toFixed(3)}m`);
-            return;
-          }
-          
-          // Check if this is a ball and handle differently
-          if (surface.hasAttribute && surface.hasAttribute('zerog-ball') && surface.components['zerog-ball']) {
-            // For balls, call the ball's onGrab method
-            surface.components['zerog-ball'].onGrab(hand);
-            
-            this.grabInfo[handKey] = {
-              surface: surface,
-              isBall: true,
-              initialHandPos: handPos.clone(),
-              lastHandPos: handPos.clone()
-            };
-            
-
-          } else {
-            // For static surfaces, use normal grab behavior
-            // Option B: Use VR rig position instead of physics body
+          // Check if this is a level mesh (THREE.Mesh object)
+          if (surface.isMesh) {
+            // Handle level mesh grabbing - need to get the actual grab point
             const rigPos = new THREE.Vector3();
             this.rig.object3D.getWorldPosition(rigPos);
             
+            // Find the actual grab point by re-running the grab detection
+            const levelGrabResult = this.checkLevelModelGrab(handPos, 0.08);
+            const actualGrabPoint = levelGrabResult && levelGrabResult.point ? 
+                                   levelGrabResult.point.clone() : 
+                                   handPos.clone(); // Fallback to hand position
+            
             this.grabInfo[handKey] = {
               surface: surface,
               isBall: false,
+              isLevelMesh: true,
               initialHandPos: handPos.clone(),
               lastHandPos: handPos.clone(),
-              initialSurfacePos: surfacePos.clone(),
+              initialSurfacePos: actualGrabPoint.clone(), // Use actual intersection point
               initialPlayerPos: rigPos.clone(),
-              grabPoint: surfacePos.clone()
+              grabPoint: actualGrabPoint.clone() // Use actual intersection point
             };
             
-
+            
+          } else {
+            // Handle A-Frame entities (original logic)
+            const surfacePos = new THREE.Vector3();
+            surface.object3D.getWorldPosition(surfacePos);
+            
+            // Check if this is a ball and handle differently
+            if (surface.hasAttribute && surface.hasAttribute('zerog-ball') && surface.components['zerog-ball']) {
+              // For balls, call the ball's onGrab method
+              surface.components['zerog-ball'].onGrab(hand);
+              
+              this.grabInfo[handKey] = {
+                surface: surface,
+                isBall: true,
+                initialHandPos: handPos.clone(),
+                lastHandPos: handPos.clone()
+              };
+              
+            } else {
+              // For static surfaces, use normal grab behavior
+              // Option B: Use VR rig position instead of physics body
+              const rigPos = new THREE.Vector3();
+              this.rig.object3D.getWorldPosition(rigPos);
+              
+              this.grabInfo[handKey] = {
+                surface: surface,
+                isBall: false,
+                initialHandPos: handPos.clone(),
+                lastHandPos: handPos.clone(),
+                initialSurfacePos: surfacePos.clone(),
+                initialPlayerPos: rigPos.clone(),
+                grabPoint: surfacePos.clone()
+              };
+            }
           }
           
           // Set grabbing flag
@@ -2911,7 +2916,8 @@ function setGameplayHUD(isPlaying) {
         },
 
         tick: function(time, deltaTime) {
-          // Option B: Custom physics simulation with visual collision detection
+          
+          // Custom physics simulation with visual collision detection
           if (!this.rig) return;
           
           const dt = Math.min(deltaTime / 1000, 0.033); // Cap at 30fps for stability
@@ -2961,14 +2967,14 @@ function setGameplayHUD(isPlaying) {
           // Apply damping to velocity
           this.applyDamping(dt);
           
-          // Check for collisions and apply responses
-          this.checkAndResolveCollisions(dt);
-          
-          // Apply velocity to move VR rig
-          this.applyVelocityToRig(dt);
-          
-          // Update grab visual feedback
-          this.updateGrabFeedback();
+            // Check for collisions and apply responses
+            this.checkAndResolveCollisions(dt);
+            
+            // Apply velocity to move VR rig
+            this.applyVelocityToRig(dt);
+            
+            // Update grab visual feedback
+            this.updateGrabFeedback();
           
           // NEW: Continuous ball grabbing while grip is held
           this.updateGripBallGrabbing();
@@ -2986,6 +2992,7 @@ function setGameplayHUD(isPlaying) {
           if (!this.speedBoostAvailable && Date.now() - this.lastSpeedBoostTime >= this.speedBoostCooldown) {
             this.speedBoostAvailable = true;
           }
+          
           }
         },
         
@@ -3616,42 +3623,10 @@ function setGameplayHUD(isPlaying) {
         checkPointCollision: function(point, radius, pointName) {
           const response = new THREE.Vector3(0, 0, 0);
           
-          // TEMPORARY: Completely bypass all level mesh collision for performance testing
-          const DISABLE_ALL_LEVEL_COLLISION = true; // Set to false to re-enable
-          if (DISABLE_ALL_LEVEL_COLLISION) {
-            // Skip all level mesh collision processing - go straight to A-Frame entities
-            const surfaces = document.querySelectorAll('[grab-surface]');
-            surfaces.forEach(surface => {
-              const surfacePos = new THREE.Vector3();
-              surface.object3D.getWorldPosition(surfacePos);
-              const geometry = surface.getAttribute('geometry');
-              
-              if (!geometry) return;
-              
-              const collision = this.getCollisionResponse(point, radius, surfacePos, geometry, surface);
-              response.add(collision);
-            });
-            
-            return response;
-          }
-          
-          // PERFORMANCE: Always check level collision when level mesh is available
-          // The distance culling will be done per-mesh in the raycasting function
-          if (true) { // Always enter this block when level mesh exists
-            // Check collision with octree (level model) first
-            if (levelOctree) {
-              const octreeResponse = this.checkOctreeCollision(point, radius);
-              response.add(octreeResponse);
-            } else if (window.levelMeshForCollision) {
-              // FIXED: Actually call the raycasting collision when octree isn't available
-              const raycastResponse = this.checkRaycastCollision(point, radius);
-              response.add(raycastResponse);
-            }
-          }
-          
-          // Debug: Log when collision checking is happening
-          if (Math.random() < 0.001) { // Very rare debug log
-            console.log(`🔍 Checking collision at point:`, point, `radius:`, radius, `levelMesh available:`, !!window.levelMeshForCollision);
+          // Check collision with level.glb model using raycasting
+          const levelCollision = this.checkLevelModelCollision(point, radius);
+          if (levelCollision.length() > 0) {
+            response.add(levelCollision);
           }
           
           // Check against all grab-surface objects
@@ -3674,188 +3649,214 @@ function setGameplayHUD(isPlaying) {
           return response;
         },
         
-        // NEW: Check collision with octree (level geometry)
-        checkOctreeCollision: function(point, radius) {
+        // Check collision with level.glb model using raycasting
+        checkLevelModelCollision: function(point, radius) {
           const response = new THREE.Vector3(0, 0, 0);
           
-          // Try octree first
-          if (levelOctree) {
-            return this.checkOctreeCollisionInternal(point, radius);
+          // Get cached BVH meshes
+          if (!this.bvhMeshes || this.bvhMeshes.length === 0) {
+            this.initializeBVH();
+            if (!this.bvhMeshes || this.bvhMeshes.length === 0) return response;
           }
           
-          // Fallback to raycasting if octree not available
-          if (window.levelMeshForCollision) {
-            return this.checkRaycastCollision(point, radius);
-          }
-          
-          return response;
-        },
-        
-        // Octree collision detection (ThreeJS FPS example style)
-        checkOctreeCollisionInternal: function(point, radius) {
-          const response = new THREE.Vector3(0, 0, 0);
-          
-          if (!levelOctree) return response;
-          
-          // Create a sphere for collision testing
-          const sphere = new THREE.Sphere(point, radius);
-          
-          // Use octree's sphereIntersect method (like FPS example)
-          const result = levelOctree.sphereIntersect(sphere);
-          
-          if (result) {
-            // Calculate push direction based on collision normal
-            const pushDirection = result.normal ? result.normal.clone() : new THREE.Vector3(0, 1, 0);
-            const penetration = result.distance || radius * 0.1;
-            
-            // Push away from collision surface
-            const pushVector = pushDirection.multiplyScalar(penetration);
-            response.add(pushVector);
-          }
-          
-          return response;
-        },
-        
-        // Enhanced raycasting collision detection
-        checkRaycastCollision: function(point, radius) {
-          const response = new THREE.Vector3(0, 0, 0);
-          
-          if (!window.levelMeshForCollision) {
-            return response; // Remove debug logging
-          }
-          
-          // PERFORMANCE: Only check collision every 3rd frame (balanced performance/stability)
-          if (!this.collisionFrameCounter) this.collisionFrameCounter = 0;
-          this.collisionFrameCounter++;
-          if (this.collisionFrameCounter % 3 !== 0) {
-            return this.lastCollisionResponse || response;
-          }
-          
-          // Create raycaster from the point
+          // Use BVH-accelerated raycasting
           const raycaster = new THREE.Raycaster();
-          raycaster.far = Math.max(radius * 2.0, 2.0); // Better detection range
-          
-          // PERFORMANCE: Use 6 rays for reliable collision (floors/ceilings need up/down)
           const directions = [
             new THREE.Vector3(1, 0, 0),   // Right
             new THREE.Vector3(-1, 0, 0),  // Left
-            new THREE.Vector3(0, 1, 0),   // Up (needed for ceilings)
-            new THREE.Vector3(0, -1, 0),  // Down (needed for floors)
+            new THREE.Vector3(0, 1, 0),   // Up
+            new THREE.Vector3(0, -1, 0),  // Down
             new THREE.Vector3(0, 0, 1),   // Forward
             new THREE.Vector3(0, 0, -1)   // Backward
           ];
           
-          // Get all meshes to test against (cache this for performance)
-          if (!this.levelMeshes) {
-            this.levelMeshes = [];
-            window.levelMeshForCollision.traverse((child) => {
-              if (child.isMesh && child.geometry && child.visible) {
-                // PERFORMANCE: Filter out very small meshes but keep structural elements
-                child.geometry.computeBoundingSphere();
-                const boundingSphere = child.geometry.boundingSphere;
-                if (boundingSphere && boundingSphere.radius > 0.1) { // Keep most structural elements
-                  child.updateMatrixWorld(true);
-                  this.levelMeshes.push(child);
+          // Performance optimization: Use sphere-based collision detection
+          const maxDistance = 5; // 5 meter radius around player
+          
+          // Create detection sphere at player position
+          const detectionSphere = new THREE.Sphere(point, maxDistance);
+          
+          // Reset all mesh colors first (if debug mode is on)
+          if (this.showMeshDebug) {
+            this.bvhMeshes.forEach(mesh => {
+              if (mesh.material && !Array.isArray(mesh.material)) {
+                // Clone material if it's shared to avoid affecting other meshes
+                if (!mesh.userData.hasOwnMaterial) {
+                  mesh.material = mesh.material.clone();
+                  mesh.userData.hasOwnMaterial = true;
+                  mesh.userData.originalColor = mesh.material.color ? mesh.material.color.getHex() : 0x888888;
                 }
+                // Set all to red first
+                mesh.material.color.setHex(0xff0000);
               }
             });
-            console.log(`📐 Found ${this.levelMeshes.length} visible meshes for collision (filtered from 381 total)`);
           }
           
-          let collisionDetected = false;
+          // Filter meshes using smart proximity detection
+          const nearbyMeshes = [];
           
-          // PERFORMANCE: Filter meshes by bounding box intersection (more accurate for large meshes)
-          const playerCollisionRadius = 5.0; // 5 meter collision radius around player
-          const nearbyMeshes = this.levelMeshes.filter(mesh => {
-            // Use bounding box instead of center point for large meshes like floors
-            mesh.geometry.computeBoundingBox();
-            const bbox = mesh.geometry.boundingBox.clone();
-            bbox.applyMatrix4(mesh.matrixWorld);
+          this.bvhMeshes.forEach(mesh => {
+            // Update mesh world matrix
+            mesh.updateMatrixWorld(true);
             
-            // Check if player collision sphere intersects with mesh bounding box
-            const closestPoint = bbox.clampPoint(point, new THREE.Vector3());
-            const distance = point.distanceTo(closestPoint);
+            const geometry = mesh.geometry;
+            let hasNearbyParts = false;
             
-            return distance < playerCollisionRadius;
+            // Get mesh bounding sphere
+            if (!geometry.boundingSphere) {
+              geometry.computeBoundingSphere();
+            }
+            
+            const meshSphere = geometry.boundingSphere.clone();
+            meshSphere.applyMatrix4(mesh.matrixWorld);
+            
+            // Quick check: if entire mesh is very close, include it
+            if (detectionSphere.intersectsSphere(meshSphere)) {
+              // For large meshes (like asteroid fields), do more granular checking
+              const meshSize = meshSphere.radius;
+              
+              if (meshSize > maxDistance * 2) {
+                // Large mesh - sample vertices to see if any are actually nearby
+                const positions = geometry.attributes.position.array;
+                const sampleRate = Math.max(1, Math.floor(positions.length / 300)); // Sample every Nth vertex
+                
+                // Large mesh detected - using vertex sampling for better culling
+                
+                for (let i = 0; i < positions.length; i += sampleRate * 3) {
+                  const vertex = new THREE.Vector3(
+                    positions[i],
+                    positions[i + 1],
+                    positions[i + 2]
+                  );
+                  vertex.applyMatrix4(mesh.matrixWorld);
+                  
+                  if (detectionSphere.containsPoint(vertex)) {
+                    hasNearbyParts = true;
+                    break;
+                  }
+                }
+              } else {
+                // Small mesh - if bounding sphere intersects, include it
+                hasNearbyParts = true;
+              }
+            }
+            
+            // Visual debugging and inclusion logic
+            if (this.showMeshDebug && mesh.material && !Array.isArray(mesh.material)) {
+              if (hasNearbyParts) {
+                mesh.material.color.setHex(0x00ff00);
+              }
+            }
+            
+            if (hasNearbyParts) {
+              nearbyMeshes.push(mesh);
+            }
           });
           
-          // Skip collision check if no nearby meshes
-          if (nearbyMeshes.length === 0) {
-            // FALLBACK: If no meshes found nearby, check a few without distance filtering
-            // This helps with edge cases where large meshes are missed
-            if (Math.random() < 0.1) { // 10% of the time, check all meshes as fallback
-              nearbyMeshes.push(...this.levelMeshes.slice(0, 5)); // Check first 5 meshes
-            }
-            
-            if (nearbyMeshes.length === 0) {
-              this.lastCollisionResponse = response.clone();
-              return response;
-            }
+          // Debug logging every 60 frames
+          if (!this.debugFrameCounter) this.debugFrameCounter = 0;
+          this.debugFrameCounter++;
+          if (this.debugFrameCounter % 180 === 0 && this.showMeshDebug) {
+            console.log(`🔍 Active meshes: ${nearbyMeshes.length}/${this.bvhMeshes.length} [5m culling]`);
           }
           
-          // Debug: Log collision details for troubleshooting
-          if (Math.random() < 0.005) {
-            console.log(`🎯 Collision check: ${nearbyMeshes.length} meshes within ${playerCollisionRadius}m of player at`, point);
-            nearbyMeshes.forEach((mesh, i) => {
-              const meshPos = new THREE.Vector3();
-              mesh.getWorldPosition(meshPos);
-              const dist = point.distanceTo(meshPos);
-              console.log(`  Mesh ${i}: distance=${dist.toFixed(2)}m, faces=${mesh.geometry.index ? mesh.geometry.index.count/3 : 'no-index'}`);
-            });
-          }
-          
+          // Check collision in all directions using nearby BVH-accelerated meshes
           directions.forEach(direction => {
             raycaster.set(point, direction);
             
-            const intersects = raycaster.intersectObjects(nearbyMeshes, false); // Use filtered meshes
-            
-            // Debug: Log raycast results occasionally
-            if (Math.random() < 0.001 && intersects.length > 0) {
-              console.log(`🎯 Ray ${direction.x},${direction.y},${direction.z}: ${intersects.length} hits, closest at ${intersects[0].distance.toFixed(3)}m`);
-            }
+            // Use THREE.js raycasting with BVH acceleration on nearby meshes only
+            const intersects = raycaster.intersectObjects(nearbyMeshes, false);
             
             if (intersects.length > 0) {
               const intersection = intersects[0];
               const distance = intersection.distance;
               
-              // If intersection is within our radius, push away
+              // If intersection is within collision radius, push player away
               if (distance < radius) {
-                collisionDetected = true;
-                const penetration = radius - distance;
-                
-                // Only push if penetration is significant (avoid micro-collisions)
-                if (penetration > 0.01) {
-                  // Use intersection normal if available, otherwise use ray direction
-                  let pushDirection;
-                  if (intersection.face && intersection.face.normal) {
-                    pushDirection = intersection.face.normal.clone();
-                    // Transform normal to world space
-                    const normalMatrix = new THREE.Matrix3().getNormalMatrix(intersection.object.matrixWorld);
-                    pushDirection.applyMatrix3(normalMatrix).normalize();
-                  } else {
-                    pushDirection = direction.clone().negate();
-                  }
-                  
-                  // Much gentler push - more like physics
-                  const pushVector = pushDirection.multiplyScalar(penetration * 0.1); // Much softer
-                  response.add(pushVector);
-                  
-                  // Debug logging removed for performance
-                }
+                const pushDistance = radius - distance + 0.01; // Small buffer
+                const pushDirection = direction.clone().negate(); // Push opposite to ray direction
+                response.add(pushDirection.multiplyScalar(pushDistance));
               }
             }
           });
           
-          // Removed collision spam logging
           
-          // Also log if we're near the level model but no collision
-          const levelModelPos = new THREE.Vector3(-10, 5, 10);
-          const distanceToLevel = point.distanceTo(levelModelPos);
-          // Debug logging removed for performance
-          
-          // Cache the response for performance
-          this.lastCollisionResponse = response.clone();
           return response;
+        },
+        
+        // Initialize BVH for all level meshes (called once for massive performance boost)
+        initializeBVH: function() {
+          if (this.bvhMeshes) return; // Already initialized
+          
+          // Debug: Check what's available and patch THREE.js if needed
+          console.log('🔍 Checking BVH library availability:', {
+            'window.MeshBVHLib': !!window.MeshBVHLib,
+            'window.MeshBVH': !!window.MeshBVH,
+            'window.THREE.MeshBVH': !!(window.THREE && window.THREE.MeshBVH),
+            'window keys': Object.keys(window).filter(k => k.toLowerCase().includes('bvh') || k.toLowerCase().includes('mesh'))
+          });
+          
+          // Patch THREE.js to use BVH if available
+          if (window.MeshBVHLib && window.MeshBVHLib.acceleratedRaycast) {
+            // Apply the BVH patch to THREE.js
+            window.THREE.BufferGeometry.prototype.computeBoundsTree = window.MeshBVHLib.computeBoundsTree;
+            window.THREE.BufferGeometry.prototype.disposeBoundsTree = window.MeshBVHLib.disposeBoundsTree;
+            window.THREE.Mesh.prototype.raycast = window.MeshBVHLib.acceleratedRaycast;
+            console.log('🔧 THREE.js patched with BVH acceleration');
+          }
+          
+          // Find the level model entity
+          const levelEntity = document.querySelector('#model-level');
+          if (!levelEntity) return;
+          
+          // Get the GLTF model component
+          const gltfModel = levelEntity.querySelector('a-gltf-model');
+          if (!gltfModel || !gltfModel.object3D) return;
+          
+          // Get all meshes and build BVH for each
+          this.bvhMeshes = [];
+          let bvhCount = 0;
+          
+          gltfModel.object3D.traverse((child) => {
+            if (child.isMesh && child.geometry) {
+              // Build BVH for this mesh geometry (this is where the magic happens!)
+              if (!child.geometry.boundsTree) {
+                // Try different ways the library might be exposed
+                let MeshBVH;
+                if (window.MeshBVHLib && window.MeshBVHLib.MeshBVH) {
+                  MeshBVH = window.MeshBVHLib.MeshBVH;
+                } else if (window.MeshBVH) {
+                  MeshBVH = window.MeshBVH;
+                } else if (window.THREE && window.THREE.MeshBVH) {
+                  MeshBVH = window.THREE.MeshBVH;
+                } else {
+                  console.warn('⚠️ MeshBVH library not found - falling back to standard raycasting');
+                  // Set flag to use fallback method
+                  this.useFallbackRaycasting = true;
+                  this.bvhMeshes = [];
+                  gltfModel.object3D.traverse((child) => {
+                    if (child.isMesh) {
+                      this.bvhMeshes.push(child);
+                    }
+                  });
+                  console.log(`📦 Fallback: Using standard raycasting with ${this.bvhMeshes.length} meshes`);
+                  return;
+                }
+                
+                // Build BVH using the proper API
+                if (child.geometry.computeBoundsTree) {
+                  child.geometry.computeBoundsTree();
+                } else {
+                  child.geometry.boundsTree = new MeshBVH(child.geometry);
+                }
+                
+                bvhCount++;
+              }
+              this.bvhMeshes.push(child);
+            }
+          });
+          
+          console.log(`🚀 BVH initialized for ${bvhCount} meshes - expect major performance boost!`);
         },
         
         // Option B: Calculate collision response for point vs geometry
@@ -4209,7 +4210,6 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateGrabFeedback: function() {
-          
           // Show visual feedback for grabbable objects in range
           if (!this.leftHand || !this.rightHand) return;
           
@@ -4226,18 +4226,13 @@ function setGameplayHUD(isPlaying) {
             }
           });
           
-          // Highlight objects in grab range
-          if (leftNearby && !this.isGrabbing.left) {
-            // Skip highlighting for level meshes (they don't have setAttribute)
-            if (!leftNearby.isLevelMesh && leftNearby.setAttribute) {
-              leftNearby.setAttribute('material', 'color', '#00ff00');
-            }
+          
+          // Highlight objects in grab range (A-Frame entities only)
+          if (leftNearby && !this.isGrabbing.left && leftNearby.setAttribute) {
+            leftNearby.setAttribute('material', 'color', '#00ff00');
           }
-          if (rightNearby && !this.isGrabbing.right && rightNearby !== leftNearby) {
-            // Skip highlighting for level meshes (they don't have setAttribute)
-            if (!rightNearby.isLevelMesh && rightNearby.setAttribute) {
-              rightNearby.setAttribute('material', 'color', '#00ff00');
-            }
+          if (rightNearby && !this.isGrabbing.right && rightNearby !== leftNearby && rightNearby.setAttribute) {
+            rightNearby.setAttribute('material', 'color', '#00ff00');
           }
         },
         
@@ -4312,7 +4307,101 @@ function setGameplayHUD(isPlaying) {
           }
         },
         
-        // Desktop keyboard movement controls
+        // CannonJS physics-based thruster forces
+        
+        // CannonJS physics-based keyboard movement
+        applyKeyboardMovementToPhysics: function(dt) {
+          if (!this.rig || !this.playerBody) return;
+          
+          // Get camera orientation for relative movement
+          const camera = this.rig.querySelector('[camera]');
+          if (!camera) return;
+          
+          const cameraQuat = new THREE.Quaternion();
+          camera.object3D.getWorldQuaternion(cameraQuat);
+          
+          let forceX = 0, forceY = 0, forceZ = 0;
+          
+          // WASD movement relative to camera direction
+          if (this.keys['KeyW']) { // Forward
+            const forward = new THREE.Vector3(0, 0, -1);
+            forward.applyQuaternion(cameraQuat);
+            forceX += forward.x;
+            forceY += forward.y;
+            forceZ += forward.z;
+          }
+          if (this.keys['KeyS']) { // Backward
+            const backward = new THREE.Vector3(0, 0, 1);
+            backward.applyQuaternion(cameraQuat);
+            forceX += backward.x;
+            forceY += backward.y;
+            forceZ += backward.z;
+          }
+          if (this.keys['KeyA']) { // Left
+            const left = new THREE.Vector3(-1, 0, 0);
+            left.applyQuaternion(cameraQuat);
+            forceX += left.x;
+            forceY += left.y;
+            forceZ += left.z;
+          }
+          if (this.keys['KeyD']) { // Right
+            const right = new THREE.Vector3(1, 0, 0);
+            right.applyQuaternion(cameraQuat);
+            forceX += right.x;
+            forceY += right.y;
+            forceZ += right.z;
+          }
+          if (this.keys['KeyQ']) { // Up
+            forceY += 1;
+          }
+          if (this.keys['KeyZ']) { // Down
+            forceY -= 1;
+          }
+          
+          // Apply keyboard force if any keys are pressed
+          if (forceX !== 0 || forceY !== 0 || forceZ !== 0) {
+            // Normalize the force vector
+            const length = Math.sqrt(forceX * forceX + forceY * forceY + forceZ * forceZ);
+            if (length > 0) {
+              forceX = (forceX / length) * this.data.thrusterForce * 100;
+              forceY = (forceY / length) * this.data.thrusterForce * 100;
+              forceZ = (forceZ / length) * this.data.thrusterForce * 100;
+              
+              // Apply force using proper CannonJS Vec3
+              const force = new CANNON.Vec3(forceX, forceY, forceZ);
+              this.playerBody.applyForce(force);
+            }
+          }
+        },
+        
+        // CannonJS physics-based braking
+        applyGradualBrakingToPhysics: function(dt) {
+          if (!this.playerBody) return;
+          
+          const isBrakingActive = this.isBraking.left || this.isBraking.right;
+          
+          if (isBrakingActive) {
+            // Apply damping to velocity
+            const velocity = this.playerBody.velocity;
+            const dampingForce = new CANNON.Vec3(
+              -velocity.x * 5,
+              -velocity.y * 5,
+              -velocity.z * 5
+            );
+            this.playerBody.applyForce(dampingForce);
+          }
+        },
+        
+        // Sync VR rig position with physics body
+        syncRigWithPhysics: function() {
+          if (!this.rig || !this.playerBody) return;
+          
+          // Update rig position to match physics body
+          const physicsPos = this.playerBody.position;
+          this.rig.object3D.position.set(physicsPos.x, physicsPos.y - 0.8, physicsPos.z); // Offset for VR height
+        },
+        
+        // Desktop keyboard movement controls (OLD - keeping for reference)
         applyKeyboardMovement: function(dt) {
           if (!this.rig) return;
           
@@ -4377,7 +4466,10 @@ function setGameplayHUD(isPlaying) {
           ['left', 'right'].forEach(handKey => {
             if (this.isGrabbing[handKey] && this.grabInfo[handKey] && !this.grabInfo[handKey].isBall) {
               const grabInfo = this.grabInfo[handKey];
-              if (!grabInfo.surface || (!grabInfo.surface.hasAttribute || !grabInfo.surface.hasAttribute('zerog-ball'))) {
+              // Check if surface exists and is not a ball (handle both A-Frame entities and level meshes)
+              if (!grabInfo.surface || 
+                  (grabInfo.surface.hasAttribute && !grabInfo.surface.hasAttribute('zerog-ball')) ||
+                  (grabInfo.surface.isMesh)) {
                 activeGrabs.push({ handKey, grabInfo });
               }
             }
@@ -4715,7 +4807,6 @@ function setGameplayHUD(isPlaying) {
         
         // NEW: Validate that grabbed surfaces are still within reach
         validateGrabDistances: function() {
-          
           // RE-ENABLED with improved logic
           
           ['left', 'right'].forEach(handKey => {
@@ -4735,24 +4826,31 @@ function setGameplayHUD(isPlaying) {
               const handPos = new THREE.Vector3();
               hand.object3D.getWorldPosition(handPos);
               
-              // Get surface position
+              // Get surface position - handle both A-Frame entities and THREE.Mesh objects
               const surfacePos = new THREE.Vector3();
-              
-              // Handle level mesh surfaces differently
-              if (grabInfo.isLevelMesh) {
-                surfacePos.copy(grabInfo.surface.position);
-              } else {
+              if (grabInfo.surface.object3D) {
+                // A-Frame entity
                 grabInfo.surface.object3D.getWorldPosition(surfacePos);
+              } else if (grabInfo.surface.isMesh) {
+                // THREE.Mesh object (level mesh)
+                grabInfo.surface.getWorldPosition(surfacePos);
+              } else {
+                // Fallback - skip validation for unknown surface types
+                return;
               }
               
-              // Calculate distance differently for level meshes
+              // Calculate distance - different methods for different surface types
               let distance;
-              if (grabInfo.isLevelMesh) {
-                // For level meshes, use simple distance to grab point
-                distance = handPos.distanceTo(surfacePos);
-              } else {
-                // Use the same distance calculation as the original grab detection
+              if (grabInfo.surface.object3D) {
+                // A-Frame entity - use existing distance calculation
                 distance = this.getDistanceToSurface(handPos, 0.08, grabInfo.surface);
+              } else if (grabInfo.surface.isMesh) {
+                // THREE.Mesh object (level mesh) - use distance to actual grab point
+                const grabPoint = grabInfo.grabPoint || grabInfo.initialSurfacePos;
+                distance = handPos.distanceTo(grabPoint) - 0.08; // 0.08 = hand radius
+              } else {
+                // Unknown surface type - skip validation
+                return;
               }
               
               // More generous distance for validation than initial grab
@@ -4761,7 +4859,6 @@ function setGameplayHUD(isPlaying) {
               
               // If hand is too far from surface, release the grab
               if (distance > maxGrabDistance) {
-                console.log(`Auto-releasing ${handKey} hand grab - distance: ${distance.toFixed(3)}m > ${maxGrabDistance}m`);
                 
                 // Gentle velocity reduction to prevent jarring release
                 this.velocity.multiplyScalar(0.8); // Reduce velocity by 20% (less aggressive)
@@ -6615,6 +6712,118 @@ function setGameplayHUD(isPlaying) {
           }
         },
         
+      });
+
+      // Level Physics Component - Creates CannonJS collision from 3D model
+      AFRAME.registerComponent('level-physics', {
+        init: function() {
+          // Wait for the GLTF model to load
+          const gltfModel = this.el.querySelector('a-gltf-model');
+          if (gltfModel) {
+            gltfModel.addEventListener('model-loaded', () => {
+              // Add delay to ensure player physics body is created first
+              setTimeout(() => {
+                this.createPhysicsFromModel();
+              }, 1000); // 1 second delay
+            });
+          }
+        },
+        
+        createPhysicsFromModel: function() {
+          const object3D = this.el.object3D;
+          const meshes = [];
+          
+          // Traverse the model and collect all meshes
+          object3D.traverse((child) => {
+            if (child.isMesh && child.geometry) {
+              meshes.push(child);
+            }
+          });
+          
+          console.log(`🏗️ Creating physics for level model with ${meshes.length} meshes`);
+          
+          // Create physics bodies for each mesh
+          meshes.forEach((mesh, index) => {
+            this.createPhysicsBodyFromMesh(mesh, index);
+          });
+          
+          // Safety check: Move player to safe position if needed
+          setTimeout(() => {
+            this.ensurePlayerSafePosition();
+          }, 500);
+        },
+        
+        createPhysicsBodyFromMesh: function(mesh, index) {
+          const geometry = mesh.geometry;
+          
+          // Get world position and scale
+          const worldPos = new THREE.Vector3();
+          const worldScale = new THREE.Vector3();
+          const worldQuat = new THREE.Quaternion();
+          mesh.getWorldPosition(worldPos);
+          mesh.getWorldScale(worldScale);
+          mesh.getWorldQuaternion(worldQuat);
+          
+          // Create a simplified collision shape (box for performance)
+          geometry.computeBoundingBox();
+          const bbox = geometry.boundingBox;
+          const size = new THREE.Vector3();
+          bbox.getSize(size);
+          
+          // Scale the size by world scale
+          size.multiply(worldScale);
+          
+          // Create CannonJS box shape
+          const shape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/2, size.z/2));
+          
+          // Create static physics body
+          const body = new CANNON.Body({
+            mass: 0, // Static body
+            shape: shape,
+            position: new CANNON.Vec3(worldPos.x, worldPos.y, worldPos.z),
+            material: new CANNON.Material({
+              friction: 0.3,
+              restitution: 0.0 // No bouncing
+            }),
+            collisionFilterGroup: 2,
+            collisionFilterMask: 1 // Only collide with player
+          });
+          
+          // Set rotation
+          body.quaternion.set(worldQuat.x, worldQuat.y, worldQuat.z, worldQuat.w);
+          
+          // Add to physics world
+          world.addBody(body);
+          
+          console.log(`📦 Created physics body ${index} for level mesh at`, worldPos);
+        },
+        
+        ensurePlayerSafePosition: function() {
+          // Find the player physics body
+          const playerComponent = document.querySelector('[zerog-player]');
+          if (playerComponent && playerComponent.components['zerog-player'] && playerComponent.components['zerog-player'].playerBody) {
+            const playerBody = playerComponent.components['zerog-player'].playerBody;
+            
+            // Check if player velocity is too high (indicating collision ejection)
+            const velocity = playerBody.velocity;
+            const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+            
+            if (speed > 10) { // If moving too fast, likely ejected
+              console.log('⚠️ Player ejected by collision, moving to safe position');
+              
+              // Stop the player and move to safe position
+              playerBody.velocity.set(0, 0, 0);
+              playerBody.angularVelocity.set(0, 0, 0);
+              playerBody.position.set(0, 15, 0); // Move higher up
+              
+              // Also update the VR rig
+              const rig = document.querySelector('#rig');
+              if (rig) {
+                rig.object3D.position.set(0, 15, 0);
+              }
+            }
+          }
+        }
       });
 
       // Physics update loop - Anti-tunneling optimized for zero-gravity
@@ -9615,100 +9824,6 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // Level Collision Component - Sets up octree collision for level.glb
-      AFRAME.registerComponent('level-collision', {
-        init: function() {
-          // Wait for the GLTF model to load
-          const gltfModel = this.el.querySelector('a-gltf-model');
-          if (gltfModel) {
-            gltfModel.addEventListener('model-loaded', () => {
-              this.setupOctreeCollision();
-            });
-          }
-        },
-        
-        setupOctreeCollision: function() {
-          // TEMPORARY: Disable all octree/level mesh setup for performance testing
-          const DISABLE_LEVEL_SETUP = true; // Set to false to re-enable
-          if (DISABLE_LEVEL_SETUP) {
-            console.log('🚫 Level mesh setup disabled for performance testing');
-            return;
-          }
-          
-          console.log('🏗️ Setting up octree collision for level model...');
-          
-          // Get the loaded 3D model
-          const gltfModel = this.el.querySelector('a-gltf-model');
-          if (!gltfModel || !gltfModel.getObject3D('mesh')) {
-            console.warn('❌ Level model not found or not loaded');
-            return;
-          }
-          
-          const levelMesh = gltfModel.getObject3D('mesh');
-          
-          // Create octree from the level geometry (like ThreeJS FPS example)
-          if (typeof THREE.Octree !== 'undefined') {
-            levelOctree = new THREE.Octree();
-            
-            // Add all meshes from the level to the octree
-            levelMesh.traverse((child) => {
-              if (child.isMesh && child.geometry) {
-                // Apply world matrix to get correct positions
-                child.updateMatrixWorld(true);
-                levelOctree.fromGraphNode(child);
-              }
-            });
-            
-            console.log('✅ Level octree collision setup complete (ThreeJS native)');
-          } else {
-            console.warn('❌ THREE.Octree not available - using simple raycasting fallback');
-            // Store the level mesh for raycasting fallback
-            window.levelMeshForCollision = levelMesh;
-            
-            // Debug: Count meshes in the level
-            let meshCount = 0;
-            levelMesh.traverse((child) => {
-              if (child.isMesh) meshCount++;
-            });
-            console.log(`📊 Level mesh stored for raycasting - contains ${meshCount} sub-meshes`);
-            
-            // Make level meshes grabbable
-            this.makeLevelMeshesGrabbable();
-          }
-        },
-        
-        makeLevelMeshesGrabbable: function() {
-          // TEMPORARY: Disable all level mesh processing for performance testing
-          const DISABLE_LEVEL_PROCESSING = true; // Set to false to re-enable
-          if (DISABLE_LEVEL_PROCESSING) {
-            console.log(`🚫 Level mesh processing disabled for performance testing`);
-            return;
-          }
-          
-          if (!window.levelMeshForCollision) return;
-          
-          // Add grabbable class to the level entity
-          this.el.classList.add('grabbable-surface');
-          
-          // Store reference to level meshes for grab detection
-          window.levelMeshesForGrabbing = [];
-          
-          window.levelMeshForCollision.traverse((child) => {
-            if (child.isMesh && child.geometry && child.visible) {
-              // Filter for reasonably sized meshes (not tiny details)
-              child.geometry.computeBoundingSphere();
-              const boundingSphere = child.geometry.boundingSphere;
-              if (boundingSphere && boundingSphere.radius > 0.2) {
-                child.updateMatrixWorld(true);
-                window.levelMeshesForGrabbing.push(child);
-              }
-            }
-          });
-          
-          console.log(`🤲 Made ${window.levelMeshesForGrabbing.length} level meshes grabbable`);
-        }
-      });
-
       // Arm Segment 3D Model Component
       AFRAME.registerComponent('arm-segment-model', {
         schema: {
@@ -10887,7 +11002,7 @@ function setGameplayHUD(isPlaying) {
       <!-- Capture ball removed for space shooter -->
 
       <!-- Player with zero-g physics -->
-      <a-entity id="player" position="0 2 12" zerog-player="mass: 70; thrusterForce: 0.8">
+      <a-entity id="player" position="0 5.300 12" zerog-player="mass: 70; thrusterForce: 0.8">
         <a-entity id="rig" position="0 0 0">
           <a-entity camera look-controls="pointerLockEnabled: false">
             <!-- Player target sphere (like in original dodgeball project) -->
@@ -11343,14 +11458,13 @@ function setGameplayHUD(isPlaying) {
          <a-gltf-model src="#spaceship-model"></a-gltf-model>
        </a-entity>
 
-       <!-- LEVEL MODEL - OPPOSITE SIDE FROM SPACESHIP -->
-       <a-entity id="model-level" position="-10 5 10" 
-                 scale="1.0 1.0 1.0"
-                 rotation="0 225 0"
-                 visible="true"
-                 level-collision>
-         <a-gltf-model src="#level-model"></a-gltf-model>
-       </a-entity>
+        <!-- LEVEL MODEL - OPPOSITE SIDE FROM SPACESHIP -->
+        <a-entity id="model-level" position="-10 5 10" 
+                  scale="1.0 1.0 1.0"
+                  rotation="0 225 0"
+                  visible="true">
+          <a-gltf-model src="#level-model"></a-gltf-model>
+        </a-entity>
 
       <!-- ASTEROID BELT - 4 DIRECTIONS -->
       <!-- North Asteroid Field -->
