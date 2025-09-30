@@ -2407,11 +2407,11 @@ function setGameplayHUD(isPlaying) {
           let closestGrab = null;
           let closestDistance = Infinity;
           
-          // Check each direction for grabbable surfaces using BVH-accelerated meshes
+          // Check each direction for grabbable surfaces using direct BVH intersection
           directions.forEach(direction => {
             raycaster.set(handPos, direction);
             
-            // BVH-accelerated intersection test (much faster for grab detection!)
+            // Use THREE.js raycasting with BVH acceleration
             const intersects = raycaster.intersectObjects(this.bvhMeshes, false);
             
             if (intersects.length > 0) {
@@ -2867,6 +2867,7 @@ function setGameplayHUD(isPlaying) {
         },
 
         tick: function(time, deltaTime) {
+          
           // Custom physics simulation with visual collision detection
           if (!this.rig) return;
           
@@ -2942,6 +2943,7 @@ function setGameplayHUD(isPlaying) {
           if (!this.speedBoostAvailable && Date.now() - this.lastSpeedBoostTime >= this.speedBoostCooldown) {
             this.speedBoostAvailable = true;
           }
+          
           }
         },
         
@@ -3619,11 +3621,11 @@ function setGameplayHUD(isPlaying) {
             new THREE.Vector3(0, 0, -1)   // Backward
           ];
           
-          // Check collision in all directions using BVH-accelerated meshes
+          // Check collision in all directions using direct BVH intersection
           directions.forEach(direction => {
             raycaster.set(point, direction);
             
-            // BVH-accelerated intersection test (much faster!)
+            // Use THREE.js raycasting with BVH acceleration
             const intersects = raycaster.intersectObjects(this.bvhMeshes, false);
             
             if (intersects.length > 0) {
@@ -3639,6 +3641,7 @@ function setGameplayHUD(isPlaying) {
             }
           });
           
+          
           return response;
         },
         
@@ -3646,13 +3649,22 @@ function setGameplayHUD(isPlaying) {
         initializeBVH: function() {
           if (this.bvhMeshes) return; // Already initialized
           
-          // Debug: Check what's available
+          // Debug: Check what's available and patch THREE.js if needed
           console.log('🔍 Checking BVH library availability:', {
             'window.MeshBVHLib': !!window.MeshBVHLib,
             'window.MeshBVH': !!window.MeshBVH,
             'window.THREE.MeshBVH': !!(window.THREE && window.THREE.MeshBVH),
             'window keys': Object.keys(window).filter(k => k.toLowerCase().includes('bvh') || k.toLowerCase().includes('mesh'))
           });
+          
+          // Patch THREE.js to use BVH if available
+          if (window.MeshBVHLib && window.MeshBVHLib.acceleratedRaycast) {
+            // Apply the BVH patch to THREE.js
+            window.THREE.BufferGeometry.prototype.computeBoundsTree = window.MeshBVHLib.computeBoundsTree;
+            window.THREE.BufferGeometry.prototype.disposeBoundsTree = window.MeshBVHLib.disposeBoundsTree;
+            window.THREE.Mesh.prototype.raycast = window.MeshBVHLib.acceleratedRaycast;
+            console.log('🔧 THREE.js patched with BVH acceleration');
+          }
           
           // Find the level model entity
           const levelEntity = document.querySelector('#model-level');
@@ -3692,7 +3704,13 @@ function setGameplayHUD(isPlaying) {
                   return;
                 }
                 
-                child.geometry.boundsTree = new MeshBVH(child.geometry);
+                // Build BVH using the proper API
+                if (child.geometry.computeBoundsTree) {
+                  child.geometry.computeBoundsTree();
+                } else {
+                  child.geometry.boundsTree = new MeshBVH(child.geometry);
+                }
+                
                 bvhCount++;
               }
               this.bvhMeshes.push(child);
