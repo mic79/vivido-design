@@ -3610,7 +3610,7 @@ function setGameplayHUD(isPlaying) {
             if (!this.bvhMeshes || this.bvhMeshes.length === 0) return response;
           }
           
-          // Use BVH-accelerated raycasting to detect collision with level geometry
+          // Use BVH-accelerated raycasting
           const raycaster = new THREE.Raycaster();
           const directions = [
             new THREE.Vector3(1, 0, 0),   // Right
@@ -3621,7 +3621,7 @@ function setGameplayHUD(isPlaying) {
             new THREE.Vector3(0, 0, -1)   // Backward
           ];
           
-          // Check collision in all directions using direct BVH intersection
+          // Check collision in all directions using BVH-accelerated meshes
           directions.forEach(direction => {
             raycaster.set(point, direction);
             
@@ -3718,13 +3718,6 @@ function setGameplayHUD(isPlaying) {
           });
           
           console.log(`🚀 BVH initialized for ${bvhCount} meshes - expect major performance boost!`);
-          
-          // Performance monitoring
-          this.performanceStats = {
-            collisionTests: 0,
-            grabTests: 0,
-            startTime: performance.now()
-          };
         },
         
         // Option B: Calculate collision response for point vs geometry
