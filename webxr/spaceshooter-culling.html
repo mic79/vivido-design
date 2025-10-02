@@ -5,9 +5,90 @@
     <title>WebXR Space Shooter</title>
     <meta name="description" content="Zero-gravity space shooter with 6DOF movement inspired by Overload">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    
+    <!-- VR Fog Fix Component - After A-Frame loads -->
+    <script>
+      // Apply fog fix only when fog is actually used, avoiding shader conflicts
+      AFRAME.registerComponent('vr-fog-fix', {
+        init: function() {
+          // Wait for scene to be ready
+          this.el.addEventListener('loaded', () => {
+            this.applyFogFix();
+          });
+        },
+        
+        applyFogFix: function() {
+          const scene = this.el.object3D;
+          const renderer = this.el.renderer;
+          
+          // Store original shader chunks
+          const originalFogVertex = THREE.ShaderChunk.fog_vertex;
+          const originalFogFragment = THREE.ShaderChunk.fog_fragment;
+          const originalFogParsVertex = THREE.ShaderChunk.fog_pars_vertex;
+          const originalFogParsFragment = THREE.ShaderChunk.fog_pars_fragment;
+          
+          // Apply the world-space fog fix
+          THREE.ShaderChunk.fog_pars_vertex = `
+            #ifdef USE_FOG
+              varying vec3 vFogPosition;
+            #endif
+          `;
+          
+          THREE.ShaderChunk.fog_vertex = `
+            #ifdef USE_FOG
+              vFogPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+            #endif
+          `;
+          
+          THREE.ShaderChunk.fog_pars_fragment = `
+            #ifdef USE_FOG
+              uniform vec3 fogColor;
+              varying vec3 vFogPosition;
+              #ifdef FOG_EXP2
+                uniform float fogDensity;
+              #else
+                uniform float fogNear;
+                uniform float fogFar;
+              #endif
+            #endif
+          `;
+          
+          THREE.ShaderChunk.fog_fragment = `
+            #ifdef USE_FOG
+              float fogDepth = distance(cameraPosition, vFogPosition);
+              #ifdef FOG_EXP2
+                float fogFactor = 1.0 - exp(-fogDensity * fogDensity * fogDepth * fogDepth);
+              #else
+                float fogFactor = smoothstep(fogNear, fogFar, fogDepth);
+              #endif
+              gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, fogFactor);
+            #endif
+          `;
+          
+          // Force recompilation of existing materials
+          scene.traverse((object) => {
+            if (object.isMesh && object.material) {
+              if (Array.isArray(object.material)) {
+                object.material.forEach(mat => {
+                  if (mat.fog !== false) { // Default is true, so check for explicit false
+                    mat.needsUpdate = true;
+                  }
+                });
+              } else if (object.material.fog !== false) {
+                object.material.needsUpdate = true;
+              }
+            }
+          });
+          
+          console.log('🌫️ VR fog fix applied to scene materials');
+        }
+      });
+    </script>
+
     <script src="https://unpkg.com/three-mesh-bvh@0.7.8/build/index.umd.cjs"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
@@ -2001,7 +2082,7 @@ function setGameplayHUD(isPlaying) {
             // Toggle mesh distance culling visualization with 'M' key
             if (evt.key === 'm' || evt.key === 'M') {
               this.showMeshDebug = !this.showMeshDebug;
-              console.log('🎨 Mesh debug visualization:', this.showMeshDebug ? 'ON (Green=collision 0-5m, Yellow=render 5-10m, Red=hidden >10m)' : 'OFF');
+              console.log('🎨 Mesh debug visualization:', this.showMeshDebug ? 'ON (Green=collision 0-5m, Yellow=render 5-8m, Red=hidden >8m)' : 'OFF');
               
               // Reset all mesh colors when turning off
               if (!this.showMeshDebug && this.bvhMeshes) {
@@ -2026,22 +2107,19 @@ function setGameplayHUD(isPlaying) {
               }
             }
             
-            // Toggle fog with 'F' key (for testing fog effectiveness)
+            // Toggle A-Frame fog with 'F' key
             if (evt.key === 'f' || evt.key === 'F') {
               const scene = this.el.sceneEl;
               const currentFog = scene.getAttribute('fog');
               
-              if (!this.fogEnabled) this.fogEnabled = true;
-              this.fogEnabled = !this.fogEnabled;
-              
-              if (this.fogEnabled) {
-                // Strong fog: objects fade from 7m, fully hidden at 9m
-                scene.setAttribute('fog', 'type: linear; color: #000011; near: 7; far: 9');
-                console.log('🌫️ Fog: ON (linear 7-9m, dark blue)');
-              } else {
-                // No fog
+              if (currentFog && currentFog.type) {
+                // Fog is on, turn it off
                 scene.removeAttribute('fog');
-                console.log('🌫️ Fog: OFF');
+                console.log('🌫️ A-Frame fog: OFF');
+              } else {
+                // Fog is off, turn it on with proper spherical calculation
+                scene.setAttribute('fog', 'type: linear; color: #000011; near: 6; far: 8');
+                console.log('🌫️ A-Frame fog: ON (spherical world-space distance)');
               }
             }
             
@@ -3704,7 +3782,7 @@ function setGameplayHUD(isPlaying) {
           
           // Two-tier culling system for optimal performance vs quality balance
           const collisionDistance = 5;  // 5m for collision detection (performance critical)
-          const renderDistance = 10;    // 10m for rendering (visual quality)
+          const renderDistance = 8;     // 8m for rendering (reduced without fog masking)
           
           // Create detection spheres
           const collisionSphere = new THREE.Sphere(point, collisionDistance);
@@ -3816,7 +3894,7 @@ function setGameplayHUD(isPlaying) {
           if (!this.debugFrameCounter) this.debugFrameCounter = 0;
           this.debugFrameCounter++;
           if (this.debugFrameCounter % 180 === 0 && this.showMeshDebug) {
-            console.log(`🚀 Collision: ${nearbyMeshes.length}/${this.bvhMeshes.length} | Rendering: ${visibleMeshes.length}/${this.bvhMeshes.length} [5m/10m culling + BVH]`);
+            console.log(`🚀 Collision: ${nearbyMeshes.length}/${this.bvhMeshes.length} | Rendering: ${visibleMeshes.length}/${this.bvhMeshes.length} [5m/8m culling + BVH]`);
           }
           
           // Check collision in all directions using nearby BVH-accelerated meshes
@@ -10773,7 +10851,8 @@ function setGameplayHUD(isPlaying) {
 
     <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
-             fog="type: linear; color: #000011; near: 7; far: 9"
+             fog="type: linear; color: #000011; near: 6; far: 8"
+             vr-fog-fix
              webxr="requiredFeatures: local-floor">
       
         <a-assets>
