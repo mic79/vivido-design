@@ -2082,7 +2082,7 @@ function setGameplayHUD(isPlaying) {
             // Toggle mesh distance culling visualization with 'M' key
             if (evt.key === 'm' || evt.key === 'M') {
               this.showMeshDebug = !this.showMeshDebug;
-              console.log('🎨 Mesh debug visualization:', this.showMeshDebug ? 'ON (Green=collision 0-5m, Yellow=render 5-8m, Red=hidden >8m)' : 'OFF');
+              console.log('🎨 Mesh debug visualization:', this.showMeshDebug ? 'ON (Green=collision 0-5m, Yellow=render 5-16m, Red=hidden >16m)' : 'OFF');
               
               // Reset all mesh colors when turning off
               if (!this.showMeshDebug && this.bvhMeshes) {
@@ -2117,9 +2117,9 @@ function setGameplayHUD(isPlaying) {
                 scene.removeAttribute('fog');
                 console.log('🌫️ A-Frame fog: OFF');
               } else {
-                // Fog is off, turn it on with proper spherical calculation
-                scene.setAttribute('fog', 'type: linear; color: #000011; near: 6; far: 8');
-                console.log('🌫️ A-Frame fog: ON (spherical world-space distance)');
+                // Fog is off, turn it on with doubled range
+                scene.setAttribute('fog', 'type: linear; color: #000011; near: 12; far: 16');
+                console.log('🌫️ A-Frame fog: ON (spherical world-space distance 12-16m)');
               }
             }
             
@@ -3782,7 +3782,7 @@ function setGameplayHUD(isPlaying) {
           
           // Two-tier culling system for optimal performance vs quality balance
           const collisionDistance = 5;  // 5m for collision detection (performance critical)
-          const renderDistance = 8;     // 8m for rendering (reduced without fog masking)
+          const renderDistance = 16;    // 16m for rendering (doubled for better visual quality)
           
           // Create detection spheres
           const collisionSphere = new THREE.Sphere(point, collisionDistance);
@@ -3894,7 +3894,7 @@ function setGameplayHUD(isPlaying) {
           if (!this.debugFrameCounter) this.debugFrameCounter = 0;
           this.debugFrameCounter++;
           if (this.debugFrameCounter % 180 === 0 && this.showMeshDebug) {
-            console.log(`🚀 Collision: ${nearbyMeshes.length}/${this.bvhMeshes.length} | Rendering: ${visibleMeshes.length}/${this.bvhMeshes.length} [5m/8m culling + BVH]`);
+            console.log(`🚀 Collision: ${nearbyMeshes.length}/${this.bvhMeshes.length} | Rendering: ${visibleMeshes.length}/${this.bvhMeshes.length} [5m/16m culling + BVH]`);
           }
           
           // Check collision in all directions using nearby BVH-accelerated meshes
@@ -10851,7 +10851,7 @@ function setGameplayHUD(isPlaying) {
 
     <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
-             fog="type: linear; color: #000011; near: 6; far: 8"
+             fog="type: linear; color: #000011; near: 12; far: 16"
              vr-fog-fix
              webxr="requiredFeatures: local-floor">
       
