@@ -2013,6 +2013,57 @@ function setGameplayHUD(isPlaying) {
               }
             }
             
+            // Toggle collision/grab debug logging with 'B' key
+            if (evt.key === 'b' || evt.key === 'B') {
+              this.debugCollisionGrab = !this.debugCollisionGrab;
+              console.log(`🔧 Collision/Grab Debug Logging: ${this.debugCollisionGrab ? 'ON' : 'OFF'}`);
+            }
+            
+            // Model toggles with number keys
+            if (evt.key === '1') {
+              // Find any element with cursor-listener component and call toggleModel
+              const cursorListener = document.querySelector('[cursor-listener]');
+              if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
+                console.log('🚀 Keyboard shortcut: Toggling Spaceship (Key 1)');
+                cursorListener.components['cursor-listener'].toggleModel('spaceship');
+              } else {
+                console.warn('⚠️ Cursor listener component not found for spaceship toggle');
+              }
+            } else if (evt.key === '2') {
+              // Find any element with cursor-listener component and call toggleModel
+              const cursorListener = document.querySelector('[cursor-listener]');
+              if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
+                console.log('🌌 Keyboard shortcut: Toggling Asteroid Field (Key 2)');
+                cursorListener.components['cursor-listener'].toggleModel('asteroid-field');
+              } else {
+                console.warn('⚠️ Cursor listener component not found for asteroid field toggle');
+              }
+            } else if (evt.key === '3') {
+              // Find any element with cursor-listener component and call toggleModel
+              const cursorListener = document.querySelector('[cursor-listener]');
+              if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
+                console.log('🪨 Keyboard shortcut: Toggling Individual Asteroid (Key 3)');
+                cursorListener.components['cursor-listener'].toggleModel('asteroid-42');
+              } else {
+                console.warn('⚠️ Cursor listener component not found for individual asteroid toggle');
+              }
+            } else if (evt.key === '4') {
+              // Find any element with cursor-listener component and call toggleMeshDebug
+              const cursorListener = document.querySelector('[cursor-listener]');
+              if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
+                console.log('🎨 Keyboard shortcut: Toggling Mesh Debug (Key 4)');
+                cursorListener.components['cursor-listener'].toggleMeshDebug();
+              } else {
+                console.warn('⚠️ Cursor listener component not found for mesh debug toggle');
+              }
+            }
+            
+            // Speed boost with Shift key
+            if (evt.key === 'Shift') {
+              console.log('🚀 Keyboard shortcut: Speed Boost (Shift)');
+              this.activateSpeedBoost();
+            }
+            
             
             // Air brake with 'C' key
             if (evt.key === 'c' || evt.key === 'C') {
@@ -3663,7 +3714,7 @@ function setGameplayHUD(isPlaying) {
           // Use BVH-accelerated raycasting
           const raycaster = new THREE.Raycaster();
           raycaster.firstHitOnly = true; // MAJOR performance boost - stop at first hit!
-          raycaster.far = radius * 2;    // Only check within collision range
+          raycaster.far = radius * 3;    // Increase range to match grab detection coverage
           const directions = [
             new THREE.Vector3(1, 0, 0),   // Right
             new THREE.Vector3(-1, 0, 0),  // Left
@@ -3695,7 +3746,7 @@ function setGameplayHUD(isPlaying) {
             });
           }
           
-          // Filter meshes using smart proximity detection
+          // Filter meshes using improved proximity detection
           const nearbyMeshes = [];
           
           this.bvhMeshes.forEach(mesh => {
@@ -3713,15 +3764,18 @@ function setGameplayHUD(isPlaying) {
             const meshSphere = geometry.boundingSphere.clone();
             meshSphere.applyMatrix4(mesh.matrixWorld);
             
-            // Quick check: if entire mesh is very close, include it
-            if (detectionSphere.intersectsSphere(meshSphere)) {
-              // For large meshes (like asteroid fields), do more granular checking
+            // IMPROVED: Check distance from player to mesh surface, not just bounding sphere intersection
+            const distanceToMeshSurface = detectionSphere.center.distanceTo(meshSphere.center) - meshSphere.radius;
+            
+            // Include mesh if any part of it is within detection range
+            if (distanceToMeshSurface <= maxDistance) {
+              // For very large meshes, still do vertex sampling for optimization
               const meshSize = meshSphere.radius;
               
-              if (meshSize > maxDistance * 2) {
-                // Large mesh - sample vertices to see if any are actually nearby
+              if (meshSize > maxDistance * 4) {
+                // Very large mesh - sample vertices to see if any are actually nearby
                 const positions = geometry.attributes.position.array;
-                const sampleRate = Math.max(1, Math.floor(positions.length / 300)); // Sample every Nth vertex
+                const sampleRate = Math.max(1, Math.floor(positions.length / 150)); // Even more samples for better accuracy
                 
                 // Large mesh detected - using vertex sampling for better culling
                 
@@ -3738,8 +3792,14 @@ function setGameplayHUD(isPlaying) {
                     break;
                   }
                 }
+                
+                // FALLBACK: If no vertices found nearby but mesh is reasonably close, include it anyway
+                if (!hasNearbyParts && distanceToMeshSurface <= maxDistance * 0.5) {
+                  hasNearbyParts = true;
+                  console.log(`🔧 Fallback inclusion for large mesh (distance: ${distanceToMeshSurface.toFixed(2)}m, size: ${meshSize.toFixed(2)}m)`);
+                }
               } else {
-                // Small mesh - if bounding sphere intersects, include it
+                // Medium/small mesh - if surface is close enough, include it
                 hasNearbyParts = true;
               }
             }
@@ -3764,6 +3824,7 @@ function setGameplayHUD(isPlaying) {
           }
           
           // Check collision in all directions using nearby BVH-accelerated meshes
+          let collisionHits = 0;
           directions.forEach(direction => {
             raycaster.set(point, direction);
             
@@ -3776,12 +3837,18 @@ function setGameplayHUD(isPlaying) {
               
               // If intersection is within collision radius, push player away
               if (distance < radius) {
+                collisionHits++;
                 const pushDistance = radius - distance + 0.01; // Small buffer
                 const pushDirection = direction.clone().negate(); // Push opposite to ray direction
                 response.add(pushDirection.multiplyScalar(pushDistance));
               }
             }
           });
+          
+          // Debug logging for collision detection issues
+          if (this.debugCollisionGrab && (collisionHits > 0 || this.debugFrameCounter % 60 === 0)) {
+            console.log(`🔧 Collision Debug: ${collisionHits} hits, ${nearbyMeshes.length}/${this.bvhMeshes.length} nearby meshes, radius: ${radius.toFixed(3)}m, range: ${(radius * 3).toFixed(3)}m, detection: ${maxDistance}m`);
+          }
           
           
           return response;
@@ -9883,7 +9950,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.35 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.36 | ${this.fps} FPS`);
           }
         }
       });
@@ -10439,6 +10506,8 @@ function setGameplayHUD(isPlaying) {
             this.toggleModel('asteroid-field');
           } else if (id === 'menu-toggle-asteroid-42') {
             this.toggleModel('asteroid-42');
+          } else if (id === 'menu-toggle-mesh-debug') {
+            this.toggleMeshDebug();
           } else if (id === 'menu-restart-match') {
             this.restartMatch();
           }
@@ -10799,6 +10868,43 @@ function setGameplayHUD(isPlaying) {
               button.setAttribute('material', 'color', '#00aa00');
               buttonText.setAttribute('text', 'value', 'Asteroid: ON');
             }
+          }
+        },
+        
+        toggleMeshDebug: function() {
+          console.log('🎮 Toggling mesh debug visualization');
+          
+          // Get the zerog-player component to access showMeshDebug
+          const player = document.querySelector('[zerog-player]');
+          if (player && player.components && player.components['zerog-player']) {
+            const playerComponent = player.components['zerog-player'];
+            
+            // Toggle the debug state
+            playerComponent.showMeshDebug = !playerComponent.showMeshDebug;
+            console.log('🎨 Mesh debug visualization:', playerComponent.showMeshDebug ? 'ON (Green=nearby, Red=far)' : 'OFF');
+            
+            // Update button appearance
+            const button = document.querySelector('#menu-toggle-mesh-debug');
+            const buttonText = button.querySelector('a-text');
+            
+            if (playerComponent.showMeshDebug) {
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Debug: ON');
+            } else {
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Debug: OFF');
+              
+              // Reset all mesh colors when turning off
+              if (playerComponent.bvhMeshes) {
+                playerComponent.bvhMeshes.forEach(mesh => {
+                  if (mesh.material && !Array.isArray(mesh.material) && mesh.userData.hasOwnMaterial) {
+                    mesh.material.color.setHex(mesh.userData.originalColor || 0x888888);
+                  }
+                });
+              }
+            }
+          } else {
+            console.warn('⚠️ zerog-player component not found for mesh debug toggle');
           }
         }
       });
@@ -11255,6 +11361,15 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="Asteroid: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
+              <!-- Mesh Debug Toggle -->
+              <a-entity id="menu-toggle-mesh-debug" position="-0.3 -0.18 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #aa0000; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Debug: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
               <!-- Start/Restart Match Button (only visible for host) -->
               <a-entity id="menu-restart-match" position="0 -0.25 0"
                         geometry="primitive: plane; width: 0.3; height: 0.06"
@@ -11544,7 +11659,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
        <!-- SPACESHIP AT CENTER -->
-       <a-entity id="model-spaceship" position="10 5 -10" 
+       <a-entity id="model-spaceship" position="53.953 -3.604 46.634" 
                  scale="1.0 1.0 1.0"
                  rotation="0 45 0"
                  visible="false">
