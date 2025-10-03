@@ -3790,6 +3790,7 @@ function setGameplayHUD(isPlaying) {
         // Initialize BVH for all level meshes (called once for massive performance boost)
         initializeBVH: function() {
           if (this.bvhMeshes) return; // Already initialized
+          if (this.bvhInitializing) return; // Currently initializing, prevent spam
           
           // Debug: Check what's available and patch THREE.js if needed
           console.log('🔍 Checking BVH library availability:', {
@@ -3810,17 +3811,101 @@ function setGameplayHUD(isPlaying) {
           
           // Find the level model entity
           const levelEntity = document.querySelector('#model-level');
-          if (!levelEntity) return;
+          if (!levelEntity) {
+            console.warn('⚠️ Level entity #model-level not found');
+            return;
+          }
           
           // Get the GLTF model component
           const gltfModel = levelEntity.querySelector('a-gltf-model');
-          if (!gltfModel || !gltfModel.object3D) return;
+          if (!gltfModel) {
+            console.warn('⚠️ GLTF model component not found in level entity');
+            return;
+          }
+          
+          // Check if model is loaded by looking at the component state
+          const modelComponent = gltfModel.components['gltf-model'];
+          if (!modelComponent || !modelComponent.model) {
+            if (!this.bvhInitializing) {
+              console.warn('⚠️ GLTF model not loaded yet, setting up event listener');
+              this.bvhInitializing = true; // Prevent spam
+              
+              // Listen for model-loaded event
+              const onModelLoaded = () => {
+                console.log('🎉 Model loaded event fired, retrying BVH initialization');
+                this.bvhMeshes = null; // Reset so we can try again
+                this.bvhInitializing = false; // Allow retry
+                setTimeout(() => this.initializeBVH(), 100); // Small delay to ensure everything is ready
+              };
+              
+              gltfModel.removeEventListener('model-loaded', onModelLoaded); // Prevent duplicates
+              gltfModel.addEventListener('model-loaded', onModelLoaded);
+            }
+            return;
+          }
+          
+          // Use the loaded model from the component
+          const loadedModel = modelComponent.model;
+          console.log('🎯 Using loaded model from component:', loadedModel);
+          
+          if (!gltfModel.object3D) {
+            console.warn('⚠️ GLTF model object3D not ready - model may not be loaded yet');
+            // Try again in 1 second
+            setTimeout(() => {
+              this.bvhMeshes = null; // Reset so we can try again
+              this.initializeBVH();
+            }, 1000);
+            return;
+          }
+          
+          // Debug: Check the model structure
+          console.log('🔍 Level model structure:', {
+            'gltfModel.object3D': gltfModel.object3D,
+            'children count': gltfModel.object3D.children.length,
+            'has scene': gltfModel.object3D.children.some(child => child.type === 'Group' || child.type === 'Scene'),
+            'loadedModel': loadedModel,
+            'loadedModel.scene': loadedModel?.scene
+          });
+          
+          // Try using the loaded model's scene if available
+          const targetObject = loadedModel?.scene || gltfModel.object3D;
+          console.log('🎯 Target object for BVH traversal:', targetObject);
+          
+          // Deep debugging: Show full hierarchy structure
+          const analyzeHierarchy = (obj, depth = 0, maxDepth = 3) => {
+            if (depth > maxDepth) return;
+            const indent = '  '.repeat(depth);
+            console.log(`${indent}📁 ${obj.type} "${obj.name}" (children: ${obj.children.length}, isMesh: ${obj.isMesh}, hasGeometry: ${!!obj.geometry})`);
+            
+            obj.children.forEach((child, i) => {
+              if (i < 5 || child.isMesh) { // Show first 5 children or any meshes
+                analyzeHierarchy(child, depth + 1, maxDepth);
+              }
+            });
+          };
+          
+          console.log('🏗️ Full model hierarchy:');
+          analyzeHierarchy(targetObject);
           
           // Get all meshes and build BVH for each
           this.bvhMeshes = [];
           let bvhCount = 0;
+          let totalTraversed = 0;
           
-          gltfModel.object3D.traverse((child) => {
+          targetObject.traverse((child) => {
+            totalTraversed++;
+            
+            // Debug: Log what we're finding
+            if (totalTraversed <= 10) {
+              console.log(`🔍 Child ${totalTraversed}:`, {
+                type: child.type,
+                isMesh: child.isMesh,
+                hasGeometry: !!child.geometry,
+                name: child.name,
+                uuid: child.uuid.substring(0, 8)
+              });
+            }
+            
             if (child.isMesh && child.geometry) {
               // Build BVH for this mesh geometry (this is where the magic happens!)
               if (!child.geometry.boundsTree) {
@@ -3871,7 +3956,20 @@ function setGameplayHUD(isPlaying) {
             }
           });
           
-          console.log(`🚀 BVH initialized for ${bvhCount} meshes - expect major performance boost!`);
+          console.log(`🚀 BVH initialized for ${bvhCount} meshes out of ${totalTraversed} total objects - expect major performance boost!`);
+          
+          // Clean up initialization flag
+          this.bvhInitializing = false;
+          
+          // If no meshes found, suggest checking the model
+          if (bvhCount === 0) {
+            console.warn('⚠️ No meshes found in level.glb! Possible issues:');
+            console.warn('  1. Model structure changed (meshes nested deeper)');
+            console.warn('  2. Model failed to load properly');  
+            console.warn('  3. Textures caused loading issues');
+            console.warn('  4. Model exported with different settings');
+            console.warn('💡 Try temporarily renaming levelBAK.glb to level.glb to test');
+          }
           
           // Optional: Performance analysis (enable for debugging)
           if (this.debugMode && window.MeshBVHLib && window.MeshBVHLib.estimateMemoryInBytes) {
