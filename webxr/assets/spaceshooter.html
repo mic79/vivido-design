@@ -2019,6 +2019,42 @@ function setGameplayHUD(isPlaying) {
               console.log(`🔧 Collision/Grab Debug Logging: ${this.debugCollisionGrab ? 'ON' : 'OFF'}`);
             }
             
+            // Model toggles with number keys
+            if (evt.key === '1') {
+              // Find any element with cursor-listener component and call toggleModel
+              const cursorListener = document.querySelector('[cursor-listener]');
+              if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
+                console.log('🚀 Keyboard shortcut: Toggling Spaceship (Key 1)');
+                cursorListener.components['cursor-listener'].toggleModel('spaceship');
+              } else {
+                console.warn('⚠️ Cursor listener component not found for spaceship toggle');
+              }
+            } else if (evt.key === '2') {
+              // Find any element with cursor-listener component and call toggleModel
+              const cursorListener = document.querySelector('[cursor-listener]');
+              if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
+                console.log('🌌 Keyboard shortcut: Toggling Asteroid Field (Key 2)');
+                cursorListener.components['cursor-listener'].toggleModel('asteroid-field');
+              } else {
+                console.warn('⚠️ Cursor listener component not found for asteroid field toggle');
+              }
+            } else if (evt.key === '3') {
+              // Find any element with cursor-listener component and call toggleModel
+              const cursorListener = document.querySelector('[cursor-listener]');
+              if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
+                console.log('🪨 Keyboard shortcut: Toggling Individual Asteroid (Key 3)');
+                cursorListener.components['cursor-listener'].toggleModel('asteroid-42');
+              } else {
+                console.warn('⚠️ Cursor listener component not found for individual asteroid toggle');
+              }
+            }
+            
+            // Speed boost with Shift key
+            if (evt.key === 'Shift') {
+              console.log('🚀 Keyboard shortcut: Speed Boost (Shift)');
+              this.activateSpeedBoost();
+            }
+            
             
             // Air brake with 'C' key
             if (evt.key === 'c' || evt.key === 'C') {
@@ -3701,7 +3737,7 @@ function setGameplayHUD(isPlaying) {
             });
           }
           
-          // Filter meshes using smart proximity detection
+          // Filter meshes using improved proximity detection
           const nearbyMeshes = [];
           
           this.bvhMeshes.forEach(mesh => {
@@ -3719,15 +3755,18 @@ function setGameplayHUD(isPlaying) {
             const meshSphere = geometry.boundingSphere.clone();
             meshSphere.applyMatrix4(mesh.matrixWorld);
             
-            // Quick check: if entire mesh is very close, include it
-            if (detectionSphere.intersectsSphere(meshSphere)) {
-              // For large meshes (like asteroid fields), do more granular checking
+            // IMPROVED: Check distance from player to mesh surface, not just bounding sphere intersection
+            const distanceToMeshSurface = detectionSphere.center.distanceTo(meshSphere.center) - meshSphere.radius;
+            
+            // Include mesh if any part of it is within detection range
+            if (distanceToMeshSurface <= maxDistance) {
+              // For very large meshes, still do vertex sampling for optimization
               const meshSize = meshSphere.radius;
               
-              if (meshSize > maxDistance * 2) {
-                // Large mesh - sample vertices to see if any are actually nearby
+              if (meshSize > maxDistance * 4) {
+                // Very large mesh - sample vertices to see if any are actually nearby
                 const positions = geometry.attributes.position.array;
-                const sampleRate = Math.max(1, Math.floor(positions.length / 300)); // Sample every Nth vertex
+                const sampleRate = Math.max(1, Math.floor(positions.length / 150)); // Even more samples for better accuracy
                 
                 // Large mesh detected - using vertex sampling for better culling
                 
@@ -3744,8 +3783,14 @@ function setGameplayHUD(isPlaying) {
                     break;
                   }
                 }
+                
+                // FALLBACK: If no vertices found nearby but mesh is reasonably close, include it anyway
+                if (!hasNearbyParts && distanceToMeshSurface <= maxDistance * 0.5) {
+                  hasNearbyParts = true;
+                  console.log(`🔧 Fallback inclusion for large mesh (distance: ${distanceToMeshSurface.toFixed(2)}m, size: ${meshSize.toFixed(2)}m)`);
+                }
               } else {
-                // Small mesh - if bounding sphere intersects, include it
+                // Medium/small mesh - if surface is close enough, include it
                 hasNearbyParts = true;
               }
             }
@@ -3793,7 +3838,7 @@ function setGameplayHUD(isPlaying) {
           
           // Debug logging for collision detection issues
           if (this.debugCollisionGrab && (collisionHits > 0 || this.debugFrameCounter % 60 === 0)) {
-            console.log(`🔧 Collision Debug: ${collisionHits} hits, ${nearbyMeshes.length} nearby meshes, radius: ${radius.toFixed(3)}m, range: ${(radius * 3).toFixed(3)}m`);
+            console.log(`🔧 Collision Debug: ${collisionHits} hits, ${nearbyMeshes.length}/${this.bvhMeshes.length} nearby meshes, radius: ${radius.toFixed(3)}m, range: ${(radius * 3).toFixed(3)}m, detection: ${maxDistance}m`);
           }
           
           
