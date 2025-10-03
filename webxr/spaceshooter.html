@@ -2408,6 +2408,7 @@ function setGameplayHUD(isPlaying) {
           
           // Use BVH-accelerated raycasting to find nearby surfaces for grabbing
           const raycaster = new THREE.Raycaster();
+          raycaster.firstHitOnly = true; // MAJOR performance boost - stop at first hit!
           const grabDistance = 0.15; // 15cm grab range
           raycaster.far = grabDistance;
           
@@ -3661,6 +3662,8 @@ function setGameplayHUD(isPlaying) {
           
           // Use BVH-accelerated raycasting
           const raycaster = new THREE.Raycaster();
+          raycaster.firstHitOnly = true; // MAJOR performance boost - stop at first hit!
+          raycaster.far = radius * 2;    // Only check within collision range
           const directions = [
             new THREE.Vector3(1, 0, 0),   // Right
             new THREE.Vector3(-1, 0, 0),  // Left
@@ -3843,11 +3846,23 @@ function setGameplayHUD(isPlaying) {
                   return;
                 }
                 
-                // Build BVH using the proper API
+                // Build BVH using optimized options for static geometry
                 if (child.geometry.computeBoundsTree) {
-                  child.geometry.computeBoundsTree();
+                  child.geometry.computeBoundsTree({
+                    maxLeafTris: 8,        // Optimal for collision detection
+                    maxDepth: 30,          // Reduce depth for faster traversal  
+                    verbose: false,        // Disable console spam
+                    strategy: 0,           // SPATIAL_SPLIT for static geometry
+                    packData: false        // We don't need GPU raytracing
+                  });
                 } else {
-                  child.geometry.boundsTree = new MeshBVH(child.geometry);
+                  child.geometry.boundsTree = new MeshBVH(child.geometry, {
+                    maxLeafTris: 8,
+                    maxDepth: 30,
+                    verbose: false,
+                    strategy: 0,
+                    packData: false
+                  });
                 }
                 
                 bvhCount++;
@@ -3857,6 +3872,17 @@ function setGameplayHUD(isPlaying) {
           });
           
           console.log(`🚀 BVH initialized for ${bvhCount} meshes - expect major performance boost!`);
+          
+          // Optional: Performance analysis (enable for debugging)
+          if (this.debugMode && window.MeshBVHLib && window.MeshBVHLib.estimateMemoryInBytes) {
+            const totalMemory = this.bvhMeshes.reduce((total, mesh) => {
+              if (mesh.geometry.boundsTree) {
+                return total + window.MeshBVHLib.estimateMemoryInBytes(mesh.geometry.boundsTree);
+              }
+              return total;
+            }, 0);
+            console.log(`📊 BVH Memory Usage: ${(totalMemory / 1024 / 1024).toFixed(2)} MB`);
+          }
         },
         
         // Option B: Calculate collision response for point vs geometry
