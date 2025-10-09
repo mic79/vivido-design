@@ -748,12 +748,6 @@
             case 'capture-ball-steal-ack':
               handleCaptureBallStealAck(data);
               break;
-            case 'capture-ball-reset':
-              handleCaptureBallReset(data);
-              break;
-            case 'goal-notification':
-              handleGoalNotification(data);
-              break;
             case 'ball-shield-state':
               handleBallShieldState(data);
               // If host receives shield state from client, broadcast to all other clients
@@ -1576,362 +1570,6 @@
             console.log('🎯 Ball ownership confirmed for client');
           }
         }
-      }
-      
-      function handleCaptureBallReset(data) {
-        // CLIENT: Receive authoritative ball reset from host after goal
-        console.log(`📡 CLIENT: Received authoritative ball reset from host (forceReset: ${data.forceReset}, clearAllSystems: ${data.clearAllSystems})`);
-        
-        const captureBall = document.querySelector('#capture-ball');
-        if (captureBall && captureBall.components['zerog-ball']) {
-          const ballComponent = captureBall.components['zerog-ball'];
-          
-          // CRITICAL: If clearAllSystems flag is set, disable ALL control systems first
-          if (data.clearAllSystems) {
-            ballComponent.isGrabbed = false;
-            ballComponent.grabbingHand = null;
-            ballComponent.tractorBeamActive = false;
-            ballComponent.autoReturnActive = false;
-            ballComponent.currentOwner = null;
-            console.log('🔧 CLIENT: All ball control systems cleared by host authority');
-          }
-          
-          // Force release from local player if they were controlling it
-          if (ballComponent.isGrabbed) {
-            ballComponent.onRelease();
-          }
-          
-          // Clear any local grab state
-          const zerogPlayer = document.querySelector('[zerog-player]');
-          if (zerogPlayer && zerogPlayer.components['zerog-player']) {
-            const playerComponent = zerogPlayer.components['zerog-player'];
-            playerComponent.isGrabbing.left = false;
-            playerComponent.isGrabbing.right = false;
-            playerComponent.grabbedSurface.left = null;
-            playerComponent.grabbedSurface.right = null;
-            
-            // CRITICAL FIX: Re-enable speed boost when ball is forcibly reset by host
-            playerComponent.speedBoostAvailable = true;
-            console.log('✅ CLIENT: Speed boost re-enabled - ball reset by host authority');
-          }
-          
-          // Apply the authoritative reset
-          ballComponent.resetPosition();
-          console.log('✅ CLIENT: Ball reset applied from host authority');
-        }
-      }
-      
-      function handleGoalNotification(data) {
-        // CLIENT: Handle goal notification from host
-        console.log(`📡 CLIENT: Received goal notification - ${data.scoringTeam} scored!`);
-        
-        // Update local team scores
-        teamScores = data.teamScores;
-        
-        // Update score displays
-        updateScoreDisplays();
-        
-        // Show goal notification in HUD
-        showGoalHUD(data.scoringTeam, data.gameState, data.winner);
-        
-        // If this is a winning goal or overtime, don't do countdown
-        if (data.gameState === 'ENDED' || data.gameState === 'OVERTIME') {
-          return;
-        }
-        
-        // Start 5-second countdown for regular goals
-        startGoalCountdown();
-      }
-      
-      // CENTRALIZED GOAL PROCESSING SYSTEM
-      function processGoalScored(scoringTeam, goalTeam) {
-        console.log(`🏆 GOAL! ${scoringTeam} team scored into ${goalTeam} goal!`);
-        
-        // Get game manager for time/state checks - FIND THE ACTIVE ONE
-        let gameManager = null;
-        let gameManagerComponent = null;
-        
-        // Try to find the game manager that has been started (matchStartTime > 0)
-        const allGameManagers = document.querySelectorAll('[game-manager]');
-        console.log(`🔍 DEBUG: Found ${allGameManagers.length} game managers total`);
-        
-        for (let i = 0; i < allGameManagers.length; i++) {
-          const gm = allGameManagers[i];
-          const comp = gm.components['game-manager'];
-          console.log(`🔍 DEBUG: GameManager ${i}: matchStartTime=${comp?.matchStartTime}, matchState=${comp?.matchState}, gameStarted=${comp?.gameStarted}`);
-          
-          // Use the one that has been started (matchStartTime > 0) or is in PLAYING state
-          if (comp && (comp.matchStartTime > 0 || comp.matchState === 'PLAYING' || comp.gameStarted)) {
-            gameManager = gm;
-            gameManagerComponent = comp;
-            console.log(`🎯 DEBUG: Using active game manager ${i}`);
-            break;
-          }
-        }
-        
-        // Fallback to first one if none are active
-        if (!gameManagerComponent && allGameManagers.length > 0) {
-          gameManager = allGameManagers[0];
-          gameManagerComponent = gameManager.components['game-manager'];
-          console.log(`🔄 DEBUG: Fallback to first game manager`);
-        }
-        
-        if (!gameManagerComponent) {
-          console.error('❌ No game manager found for goal processing');
-          return;
-        }
-        
-        // Calculate current game time - use the same logic as the HUD timer
-        const currentTime = Date.now();
-        
-        // CRITICAL FIX: Block goals if match hasn't started yet (matchStartTime = 0)
-        if (!gameManagerComponent.matchStartTime || gameManagerComponent.matchStartTime === 0) {
-          console.log(`🚫 GOAL IGNORED: Match hasn't started yet (matchStartTime = ${gameManagerComponent.matchStartTime})`);
-          // TEMPORARY: Allow goal but log the issue for debugging
-          console.log(`🚨 TEMPORARY: Allowing goal despite match not started for debugging purposes`);
-          // return;
-        }
-        
-        const elapsed = (currentTime - gameManagerComponent.matchStartTime) / 1000;
-        const remaining = Math.max(0, gameManagerComponent.matchDuration - elapsed);
-        
-        // Additional safety check: if remaining time equals full duration, match hasn't really started
-        if (remaining >= gameManagerComponent.matchDuration - 1) {
-          console.log(`🚫 GOAL IGNORED: Match hasn't started yet (remaining: ${remaining.toFixed(1)}s / ${gameManagerComponent.matchDuration}s)`);
-          return;
-        }
-        
-        console.log(`🏆 Goal analysis: remaining time = ${remaining.toFixed(1)}s, elapsed = ${elapsed.toFixed(1)}s, matchStartTime = ${gameManagerComponent.matchStartTime}, matchDuration = ${gameManagerComponent.matchDuration}, currentTime = ${currentTime}, matchState = ${gameManagerComponent.matchState}`);
-        console.log(`🏆 Current scores before goal: red=${teamScores.red}, blue=${teamScores.blue}`);
-        
-        // Store scores before updating for overtime logic
-        const scoresBeforeGoal = { red: teamScores.red, blue: teamScores.blue };
-        
-        // Update team scores
-        teamScores[scoringTeam] += 1;
-        console.log(`🏆 Updated scores: red=${teamScores.red}, blue=${teamScores.blue}`);
-        
-        // Determine game state after this goal
-        let gameState = 'PLAYING';
-        let winner = null;
-        
-        // CRITICAL: Only end game if time is actually up (remaining <= 0)
-        console.log(`🏆 Game state analysis: remaining=${remaining.toFixed(1)}s, matchState=${gameManagerComponent.matchState}, scoresBeforeGoal=[${scoresBeforeGoal.red},${scoresBeforeGoal.blue}], scoresAfterGoal=[${teamScores.red},${teamScores.blue}]`);
-        
-        // Check for overtime win (time expired and this breaks a tie)
-        if (remaining <= 0 && gameManagerComponent.matchState === 'OVERTIME') {
-          gameState = 'ENDED';
-          winner = `${scoringTeam.toUpperCase()} TEAM WINS!`;
-          gameManagerComponent.endMatch();
-          console.log(`🏆 OVERTIME WIN: ${winner}`);
-        }
-        // Check for regular time end with this goal deciding the winner
-        else if (remaining <= 0 && teamScores.red !== teamScores.blue) {
-          gameState = 'ENDED';
-          if (teamScores.red > teamScores.blue) {
-            winner = 'RED TEAM WINS!';
-          } else {
-            winner = 'BLUE TEAM WINS!';
-          }
-          gameManagerComponent.endMatch();
-          console.log(`🏆 GAME END WIN: ${winner}`);
-        }
-        // FIXED: Check if time expired and scores WERE tied BEFORE this goal (enter overtime)
-        else if (remaining <= 0 && scoresBeforeGoal.red === scoresBeforeGoal.blue) {
-          gameState = 'OVERTIME';
-          gameManagerComponent.startOvertime();
-          console.log('🏆 ENTERING OVERTIME - Scores were tied when time expired');
-        }
-        // CRITICAL: If there's still time remaining, game continues normally
-        else if (remaining > 0) {
-          gameState = 'PLAYING';
-          console.log(`🏆 GAME CONTINUES - Time remaining: ${remaining.toFixed(1)}s`);
-        }
-        // Fallback case (should not happen)
-        else {
-          console.warn(`🚨 UNEXPECTED GAME STATE: remaining=${remaining}, matchState=${gameManagerComponent.matchState}`);
-          gameState = 'PLAYING'; // Default to continue playing
-        }
-        
-        // Update score displays
-        updateScoreDisplays();
-        
-        // Update game manager
-        gameManagerComponent.updateMultiplayerScore();
-        gameManagerComponent.sendScoreUpdate();
-        
-        // Send goal notification to all players (including self for consistency)
-        const goalData = {
-          type: 'goal-notification',
-          scoringTeam: scoringTeam,
-          goalTeam: goalTeam,
-          teamScores: teamScores,
-          gameState: gameState,
-          winner: winner,
-          timestamp: Date.now()
-        };
-        
-        if (isMultiplayer) {
-          // Send to all clients
-          connections.forEach((conn, playerId) => {
-            if (conn && conn.open) {
-              conn.send(goalData);
-            }
-          });
-        }
-        
-        // Process locally (host processes immediately, clients will receive via network)
-        if (isHost || !isMultiplayer) {
-          handleGoalNotification(goalData);
-        }
-        
-        // Force ball reset after goal processing
-        resetCaptureBallAfterGoal();
-      }
-      
-      function updateScoreDisplays() {
-        // Update team score displays
-        const blueScore = document.querySelector('#blue-score');
-        const redScore = document.querySelector('#red-score');
-        
-        if (blueScore) blueScore.setAttribute('text', 'value', teamScores.blue);
-        if (redScore) redScore.setAttribute('text', 'value', teamScores.red);
-        
-        // Make score display visible
-        const scoreDisplay = document.querySelector('#score-display');
-        if (scoreDisplay) {
-          scoreDisplay.setAttribute('visible', true);
-        }
-      }
-      
-      function showGoalHUD(scoringTeam, gameState, winner) {
-        const hudMessage = document.querySelector('#hud-message');
-        if (!hudMessage) return;
-        
-        let message, color, duration;
-        
-        if (gameState === 'ENDED' && winner) {
-          // Game ended - show winner
-          message = winner;
-          color = scoringTeam === 'red' ? '#ff0000' : '#0000ff';
-          duration = 10000; // Show winner for 10 seconds
-        } else if (gameState === 'OVERTIME') {
-          // Overtime started
-          message = 'OVERTIME - Next goal wins!';
-          color = '#ffff00'; // Yellow for overtime
-          duration = 5000; // Show overtime message for 5 seconds
-        } else {
-          // Regular goal
-          message = `${scoringTeam.toUpperCase()} SCORED!`;
-          color = scoringTeam === 'red' ? '#ff0000' : '#0000ff';
-          duration = 5000; // Show goal message for 5 seconds
-        }
-        
-        hudMessage.setAttribute('text', `value: ${message}; color: ${color}`);
-        hudMessage.setAttribute('visible', true);
-        
-        // Hide message after duration
-        setTimeout(() => {
-          hudMessage.setAttribute('visible', false);
-        }, duration);
-      }
-      
-      function startGoalCountdown() {
-        const hudMessage = document.querySelector('#hud-message');
-        if (!hudMessage) return;
-        
-        let countdown = 3;
-        
-        // Wait 2 seconds after goal message, then start countdown
-        setTimeout(() => {
-          const countdownInterval = setInterval(() => {
-            if (countdown > 0) {
-              hudMessage.setAttribute('text', `value: ${countdown}; color: #ffffff`);
-              hudMessage.setAttribute('visible', true);
-              countdown--;
-            } else {
-              hudMessage.setAttribute('text', 'value: GO!; color: #00ff00');
-              setTimeout(() => {
-                hudMessage.setAttribute('visible', false);
-                
-                // Ensure game HUD is visible after countdown
-                setGameplayHUD(true);
-              }, 1000);
-              clearInterval(countdownInterval);
-            }
-          }, 1000);
-        }, 2000); // 2 second delay after goal message
-      }
-      
-      function resetCaptureBallAfterGoal() {
-        const captureBall = document.querySelector('#capture-ball');
-        if (!captureBall || !captureBall.components['zerog-ball']) return;
-        
-        const ballComponent = captureBall.components['zerog-ball'];
-        
-        console.log('🎯 RESETTING CAPTURE BALL AFTER GOAL');
-        
-        // CRITICAL FIX: Release ball from ANY owner (bot OR human player)
-        if (ballComponent.currentOwner) {
-          console.log(`🏆 Releasing ball from owner: ${ballComponent.currentOwner}`);
-          
-          // If owned by a bot, release from bot
-          if (ballComponent.currentOwner.startsWith('bot-')) {
-            const botElement = document.querySelector(`#zerog-${ballComponent.currentOwner}`);
-            if (botElement && botElement.components['zerog-bot']) {
-              botElement.components['zerog-bot'].isGrabbingBall = false;
-            }
-          }
-          
-          // If owned by a human player, force release from their hands
-          else if (ballComponent.currentOwner.startsWith('player_')) {
-            // Force release from the owning player's hands
-            if (ballComponent.isGrabbed) {
-              ballComponent.onRelease();
-            }
-            
-            // Clear any grab state from player component (only for local player)
-            if (ballComponent.currentOwner === myPlayerId) {
-              const zerogPlayer = document.querySelector('[zerog-player]');
-              if (zerogPlayer && zerogPlayer.components['zerog-player']) {
-                const playerComponent = zerogPlayer.components['zerog-player'];
-                playerComponent.isGrabbing.left = false;
-                playerComponent.isGrabbing.right = false;
-                playerComponent.grabbedSurface.left = null;
-                playerComponent.grabbedSurface.right = null;
-                
-                // CRITICAL FIX: Re-enable speed boost when ball is forcibly taken during goal
-                playerComponent.speedBoostAvailable = true;
-                console.log('✅ Speed boost re-enabled - ball taken during goal scoring');
-              }
-            }
-          }
-        }
-        
-        // HOST: Send authoritative ball reset to all clients FIRST
-        if (isHost && isMultiplayer && activePlayers.size > 1) {
-          const resetData = {
-            type: 'capture-ball-reset',
-            position: { x: 0, y: 2, z: 0 },
-            timestamp: Date.now(),
-            forceReset: true, // Flag for emergency reset
-            clearAllSystems: true // Flag to clear all control systems
-          };
-          
-          console.log(`📡 HOST: Sending authoritative ball reset to ${activePlayers.size - 1} clients`);
-          connections.forEach((conn, playerId) => {
-            if (conn && conn.open) {
-              conn.send(resetData);
-            }
-          });
-        }
-        
-        // CRITICAL: Wait a moment for network messages to propagate, then reset locally
-        setTimeout(() => {
-          // Reset ball position and clear ownership
-          ballComponent.resetPosition();
-          console.log('🏆 Ball reset to center position after goal');
-        }, 50); // Small delay to ensure network sync
       }
       
       function handleBallShieldState(data) {
@@ -3176,9 +2814,8 @@ function setGameplayHUD(isPlaying) {
           hand.object3D.getWorldPosition(handPos);
           const handRadius = 0.08; // Hand collision radius
           
-          // CRITICAL FIX: Only look for grab-surface elements, NOT balls
-          // Balls have their own grabbing logic with ownership checks in tryGrabBall
-          const allElements = document.querySelectorAll('[grab-surface]');
+                  // Look for elements with grab-surface component OR zerog-ball attribute
+        const allElements = document.querySelectorAll('[grab-surface], [zerog-ball]');
           let nearestSurface = null;
           let minDistance = Infinity;
           
@@ -3379,25 +3016,6 @@ function setGameplayHUD(isPlaying) {
           
           // Check if this is a ball and handle differently
           if (surface.hasAttribute('zerog-ball') && surface.components['zerog-ball']) {
-            // CRITICAL FIX: Double-check ball ownership before allowing grab
-            const ballPlayer = surface.getAttribute('zerog-ball')?.player;
-            
-            // Only allow capture ball or player's own ball
-            let shouldGrabThisBall = false;
-            if (ballPlayer === 'capture') {
-              shouldGrabThisBall = true;
-            } else {
-              const currentPlayerId = myPlayerId || 'player_0';
-              const myBallIndex = getBallForPlayer(currentPlayerId);
-              const expectedBallPlayer = `player${myBallIndex}`;
-              shouldGrabThisBall = (ballPlayer === expectedBallPlayer);
-            }
-            
-            if (!shouldGrabThisBall) {
-              console.log(`🚫 BLOCKED: Attempted to grab ball ${ballPlayer} but player ${myPlayerId} should only grab player${getBallForPlayer(myPlayerId || 'player_0')} or capture ball`);
-              return; // Block the grab
-            }
-            
             // For balls, call the ball's onGrab method
             surface.components['zerog-ball'].onGrab(hand);
             
@@ -3407,6 +3025,7 @@ function setGameplayHUD(isPlaying) {
               initialHandPos: handPos.clone(),
               lastHandPos: handPos.clone()
             };
+            
 
           } else {
             // For static surfaces, use normal grab behavior
@@ -6141,14 +5760,10 @@ function setGameplayHUD(isPlaying) {
             
             // Set steal timeout for the previous owner if it was a human player
             const zerogPlayer = document.querySelector('[zerog-player]');
-            if (zerogPlayer && zerogPlayer.components['zerog-player'] && ballComponent.currentOwner === myPlayerId) {
+            if (zerogPlayer && zerogPlayer.components['zerog-player'] && ballComponent.currentOwner === 'player_0') {
               const playerComponent = zerogPlayer.components['zerog-player'];
                 playerComponent.ballStealTimeout = Date.now() + 5000; // 5 seconds timeout
                 console.log('⏰ Player steal timeout set for 5 seconds (stolen by bot)');
-                
-                // CRITICAL FIX: Re-enable speed boost when ball is stolen by bot
-                playerComponent.speedBoostAvailable = true;
-                console.log('✅ Speed boost re-enabled - ball stolen by bot');
             }
             
             // If previous owner was another bot, set their timeout
@@ -6292,55 +5907,6 @@ function setGameplayHUD(isPlaying) {
             return;
           }
           
-          // CRITICAL FIX: Find the ACTIVE game manager (not just any game manager)
-          let gameManager = null;
-          let gameManagerComponent = null;
-          
-          // Try to find the game manager that has been started (matchStartTime > 0)
-          const allGameManagers = document.querySelectorAll('[game-manager]');
-          console.log(`🔍 GOAL DEBUG: Found ${allGameManagers.length} game managers total`);
-          
-          for (let i = 0; i < allGameManagers.length; i++) {
-            const gm = allGameManagers[i];
-            const comp = gm.components['game-manager'];
-            console.log(`🔍 GOAL DEBUG: GameManager ${i}: matchStartTime=${comp?.matchStartTime}, matchState=${comp?.matchState}, gameStarted=${comp?.gameStarted}`);
-            
-            // Use the one that has been started (matchStartTime > 0) or is in PLAYING state
-            if (comp && (comp.matchStartTime > 0 || comp.matchState === 'PLAYING' || comp.gameStarted)) {
-              gameManager = gm;
-              gameManagerComponent = comp;
-              console.log(`🎯 GOAL DEBUG: Using active game manager ${i}`);
-              break;
-            }
-          }
-          
-          // Fallback to first one if none are active
-          if (!gameManagerComponent && allGameManagers.length > 0) {
-            gameManager = allGameManagers[0];
-            gameManagerComponent = gameManager.components['game-manager'];
-            console.log(`🔄 GOAL DEBUG: Fallback to first game manager`);
-          }
-          
-          if (gameManagerComponent) {
-            // Primary check: matchStartTime must be set (not 0)
-            if (!gameManagerComponent.matchStartTime || gameManagerComponent.matchStartTime === 0) {
-              console.log(`🚫 GOAL BLOCKED: Match hasn't started yet (matchStartTime = ${gameManagerComponent.matchStartTime})`);
-              // TEMPORARY: Allow goal but log the issue for debugging
-              console.log(`🚨 TEMPORARY: Allowing goal despite match not started for debugging purposes`);
-              // return;
-            }
-            
-            // Secondary check: use time calculation as additional safety
-            const currentTime = Date.now();
-            const elapsed = (currentTime - gameManagerComponent.matchStartTime) / 1000;
-            const remaining = Math.max(0, gameManagerComponent.matchDuration - elapsed);
-            
-            if (remaining >= gameManagerComponent.matchDuration - 1) {
-              console.log(`🚫 GOAL BLOCKED: Match hasn't started yet (remaining: ${remaining.toFixed(1)}s / ${gameManagerComponent.matchDuration}s)`);
-              return;
-            }
-          }
-          
           // Global goal scoring lock to prevent multiple goals from scoring simultaneously
           const now = Date.now();
           window.lastGlobalGoalTime = window.lastGlobalGoalTime || 0;
@@ -6370,9 +5936,18 @@ function setGameplayHUD(isPlaying) {
               // Score for the team that got the ball into the opponent's goal
               // If ball goes into red goal, blue team scores (and vice versa)
               const scoringTeam = this.data.team === 'red' ? 'blue' : 'red';
+              teamScores[scoringTeam] += 1;
               
-              // Use centralized goal processing system
-              processGoalScored(scoringTeam, this.data.team);
+              // Update score display
+              this.updateTeamScores();
+              
+              // Also update the multiplayer score display
+              const gameManager = document.querySelector('#game-manager');
+              if (gameManager && gameManager.components['game-manager']) {
+                gameManager.components['game-manager'].updateMultiplayerScore();
+                gameManager.components['game-manager'].sendScoreUpdate();
+                gameManager.components['game-manager'].checkOvertimeWin();
+              }
             } else {
               // CLIENT: Send goal hit to host for processing
               const hostConnection = connections.get('host');
@@ -6386,7 +5961,26 @@ function setGameplayHUD(isPlaying) {
               }
             }
             
-            // Play goal sound/effect (all players do this for immediate feedback)
+            // Reset capture ball to center (all players do this for immediate feedback)
+            const captureBall = document.querySelector('#capture-ball');
+            if (captureBall && captureBall.components['zerog-ball']) {
+              const ballComponent = captureBall.components['zerog-ball'];
+              
+              // Release ball from any bot that might be carrying it
+              if (ballComponent.currentOwner && ballComponent.currentOwner.startsWith('bot-')) {
+                const botElement = document.querySelector(`#zerog-${ballComponent.currentOwner}`);
+                if (botElement && botElement.components['zerog-bot']) {
+                  botElement.components['zerog-bot'].isGrabbingBall = false;
+                  console.log(`🏆 Goal scored! Released ball from ${ballComponent.currentOwner}`);
+                }
+              }
+              
+              // Reset ball position and clear ownership
+              ballComponent.resetPosition();
+              console.log('🏆 Goal scored! Ball reset to center position.');
+            }
+            
+            // Play goal sound/effect (all players do this)
             this.playGoalEffect();
           } else {
           }
@@ -6832,10 +6426,8 @@ function setGameplayHUD(isPlaying) {
                 
                 setTimeout(() => {
                   // CRITICAL FIX: Only host should call startMatch and sync to clients
-                  console.log(`🎯 TIMEOUT REACHED: isMultiplayer=${isMultiplayer}, isHost=${isHost}`);
                   if (!isMultiplayer || isHost) {
                     const matchStartTime = Date.now();
-                    console.log(`🎯 CALLING startMatch with time: ${matchStartTime}`);
                     this.startMatch(matchStartTime);
                     
                     // Send match start sync to all clients
@@ -6850,8 +6442,6 @@ function setGameplayHUD(isPlaying) {
                         }
                       });
                     }
-                  } else {
-                    console.log(`🚫 MATCH START BLOCKED: isMultiplayer=${isMultiplayer}, isHost=${isHost}`);
                   }
                   // Clients will receive match-start-sync message and start their match
                 }, 500);
@@ -6988,12 +6578,9 @@ function setGameplayHUD(isPlaying) {
         },
 
         startMatch: function(matchStartTime) {
-          console.log(`🎯 startMatch CALLED with matchStartTime: ${matchStartTime}`);
           this.matchState = 'PLAYING';
           this.matchStartTime = matchStartTime || Date.now(); // Use provided time or current time as fallback
           this.gameStarted = true;
-          
-          console.log(`🎯 startMatch SET: matchState=${this.matchState}, matchStartTime=${this.matchStartTime}, gameStarted=${this.gameStarted}`);
           
           // Immediately update timer to show initial time
           this.updateTimer();
@@ -8404,34 +7991,28 @@ function setGameplayHUD(isPlaying) {
               return;
             }
             
-            // CRITICAL FIX: Use direct ball assignment check instead of getBallOwnerId
+            // CRITICAL FIX: Use dynamic ownership check instead of hardcoded ball indices
             const currentPlayerId = myPlayerId || 'player_0';
             const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
-            
-            // Direct check: does this ball belong to the current player?
-            const expectedBallIndex = getBallForPlayer(currentPlayerId);
-            const isMyBall = (ballPlayerIndex === expectedBallIndex);
+            const ballOwnerId = getBallOwnerId(ballPlayerIndex);
             
             // FIXED: Only allow tractor beam on player's own ball, NOT capture ball
             // Check if this ball is owned by the current player (excludes capture ball)
-            if (this.data.owner === 'human' && isMyBall && !this.isCaptureBall) {
+            if (this.data.owner === 'human' && ballOwnerId === currentPlayerId && !this.isCaptureBall) {
               this.tractorBeamActive = true;
             }
             // Bots cannot be controlled by humans
           });
           
           this.el.sceneEl.addEventListener('triggerup', (evt) => {
-            
+            // CRITICAL FIX: Use dynamic ownership check instead of hardcoded ball indices
             const currentPlayerId = myPlayerId || 'player_0';
             const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
-            
-            // Direct check: does this ball belong to the current player?
-            const expectedBallIndex = getBallForPlayer(currentPlayerId);
-            const isMyBall = (ballPlayerIndex === expectedBallIndex);
+            const ballOwnerId = getBallOwnerId(ballPlayerIndex);
             
             // FIXED: Only allow tractor beam on player's own ball, NOT capture ball
             // Check if this ball is owned by the current player (excludes capture ball)
-            if (this.data.owner === 'human' && isMyBall && !this.isCaptureBall) {
+            if (this.data.owner === 'human' && ballOwnerId === currentPlayerId && !this.isCaptureBall) {
               this.tractorBeamActive = false;
             }
           });
@@ -8441,123 +8022,18 @@ function setGameplayHUD(isPlaying) {
           // Capture ball always resets to center
           if (this.isCaptureBall) {
             const resetPos = { x: 0, y: 2, z: 0 };
-            
-            console.log(`🔄 RESETTING CAPTURE BALL: Current pos: [${this.body.position.x.toFixed(2)}, ${this.body.position.y.toFixed(2)}, ${this.body.position.z.toFixed(2)}]`);
-            
-            // CRITICAL: Force physics body to sleep to prevent interference
-            this.body.sleep();
-            
-            // CRITICAL: Disable ALL ball control systems during reset
-            this.isGrabbed = false;
-            this.grabbingHand = null;
-            this.tractorBeamActive = false;
-            this.autoReturnActive = false;
-            this.autoReturnStartTime = 0;
-            
-            // CRITICAL: Clear ownership and prevent network interference
-            this.currentOwner = null;
-            this.lastOwnerChangeTime = Date.now();
-            
-            // CRITICAL: Reset ALL physics properties
             this.body.position.set(resetPos.x, resetPos.y, resetPos.z);
+            this.el.object3D.position.set(resetPos.x, resetPos.y, resetPos.z);
             this.body.velocity.set(0, 0, 0);
             this.body.angularVelocity.set(0, 0, 0);
             this.body.gravity.set(0, 0, 0);
-            this.body.quaternion.set(0, 0, 0, 1);
-            
-            // CRITICAL: Reset collision properties
-            this.body.collisionFilterGroup = 2; // Ball group
-            this.body.collisionFilterMask = 4 | 8; // Walls and goals
-            
-            // CRITICAL: Force physics body to wake up after reset
-            this.body.wakeUp();
-            
-            // CRITICAL: Reset visual object completely
-            this.el.object3D.position.set(resetPos.x, resetPos.y, resetPos.z);
-            this.el.object3D.quaternion.set(0, 0, 0, 1);
-            this.el.object3D.rotation.set(0, 0, 0);
-            this.el.object3D.scale.set(1, 1, 1);
-            
-            // Force update matrices to ensure visual sync
-            this.el.object3D.updateMatrix();
-            this.el.object3D.updateMatrixWorld(true);
-            
-            // CRITICAL: Reset ALL ball state variables
+            this.isGrabbed = false;
+            this.grabbingHand = null;
             this.velocityHistory = [];
-            this.lastPosition.set(resetPos.x, resetPos.y, resetPos.z);
-            this.lastPositionTime = 0;
-            this.targetPosition.set(0, 0, 0);
-            this.lastHitTime = 0;
             
-            // CRITICAL: Force disable any lingering network control
-            if (this.el.components && this.el.components['networked']) {
-              // Reset networked component if it exists
-              const networked = this.el.components['networked'];
-              if (networked.data && networked.data.owner) {
-                networked.data.owner = null;
-              }
-            }
-            
-            // CRITICAL: Double-check position after a physics tick
-            setTimeout(() => {
-              const currentPos = this.body.position;
-              const distance = Math.sqrt(
-                Math.pow(currentPos.x - resetPos.x, 2) + 
-                Math.pow(currentPos.y - resetPos.y, 2) + 
-                Math.pow(currentPos.z - resetPos.z, 2)
-              );
-              
-              if (distance > 0.5) {
-                console.warn(`🚨 BALL DRIFT DETECTED! Distance from center: ${distance.toFixed(2)}, pos: [${currentPos.x.toFixed(2)}, ${currentPos.y.toFixed(2)}, ${currentPos.z.toFixed(2)}]`);
-                
-                // EMERGENCY CORRECTION: Force all systems off and reset position again
-                this.isGrabbed = false;
-                this.grabbingHand = null;
-                this.tractorBeamActive = false;
-                this.autoReturnActive = false;
-                this.currentOwner = null;
-                
-                this.body.sleep();
-                this.body.position.set(resetPos.x, resetPos.y, resetPos.z);
-                this.body.velocity.set(0, 0, 0);
-                this.body.angularVelocity.set(0, 0, 0);
-                this.body.wakeUp();
-                
-                this.el.object3D.position.set(resetPos.x, resetPos.y, resetPos.z);
-                this.el.object3D.updateMatrixWorld(true);
-                
-                console.log(`🔧 EMERGENCY CORRECTION APPLIED`);
-              } else {
-                console.log(`✅ BALL RESET SUCCESSFUL: Distance from center: ${distance.toFixed(2)}`);
-              }
-            }, 100);
-            
-            // CRITICAL: Triple-check after more time for network interference
-            setTimeout(() => {
-              const currentPos = this.body.position;
-              const distance = Math.sqrt(
-                Math.pow(currentPos.x - resetPos.x, 2) + 
-                Math.pow(currentPos.y - resetPos.y, 2) + 
-                Math.pow(currentPos.z - resetPos.z, 2)
-              );
-              
-              if (distance > 1.0) {
-                console.error(`🚨 PERSISTENT BALL DRIFT! Distance: ${distance.toFixed(2)}, pos: [${currentPos.x.toFixed(2)}, ${currentPos.y.toFixed(2)}, ${currentPos.z.toFixed(2)}]`);
-                console.error(`🚨 Systems status: grabbed=${this.isGrabbed}, tractor=${this.tractorBeamActive}, autoReturn=${this.autoReturnActive}, owner=${this.currentOwner}`);
-                
-                // FINAL NUCLEAR OPTION: Complete system reset
-                this.body.sleep();
-                this.body.position.set(resetPos.x, resetPos.y, resetPos.z);
-                this.body.velocity.set(0, 0, 0);
-                this.body.angularVelocity.set(0, 0, 0);
-                this.body.wakeUp();
-                this.el.object3D.position.set(resetPos.x, resetPos.y, resetPos.z);
-                
-                console.log(`🔧 NUCLEAR RESET APPLIED`);
-              }
-            }, 500);
-            
-            console.log(`✅ CAPTURE BALL RESET COMPLETE: Target pos: [${resetPos.x}, ${resetPos.y}, ${resetPos.z}]`);
+            // Clear ownership to prevent any lingering ownership conflicts
+            this.currentOwner = null;
+            this.lastOwnerChangeTime = Date.now();
             
             return;
           }
@@ -12562,55 +12038,6 @@ function setGameplayHUD(isPlaying) {
         // HOST ONLY: Process goal hit from client
         if (!isHost) return;
         
-        // CRITICAL FIX: Find the ACTIVE game manager (not just any game manager)
-        let gameManager = null;
-        let gameManagerComponent = null;
-        
-        // Try to find the game manager that has been started (matchStartTime > 0)
-        const allGameManagers = document.querySelectorAll('[game-manager]');
-        console.log(`🔍 HOST DEBUG: Found ${allGameManagers.length} game managers total`);
-        
-        for (let i = 0; i < allGameManagers.length; i++) {
-          const gm = allGameManagers[i];
-          const comp = gm.components['game-manager'];
-          console.log(`🔍 HOST DEBUG: GameManager ${i}: matchStartTime=${comp?.matchStartTime}, matchState=${comp?.matchState}, gameStarted=${comp?.gameStarted}`);
-          
-          // Use the one that has been started (matchStartTime > 0) or is in PLAYING state
-          if (comp && (comp.matchStartTime > 0 || comp.matchState === 'PLAYING' || comp.gameStarted)) {
-            gameManager = gm;
-            gameManagerComponent = comp;
-            console.log(`🎯 HOST DEBUG: Using active game manager ${i}`);
-            break;
-          }
-        }
-        
-        // Fallback to first one if none are active
-        if (!gameManagerComponent && allGameManagers.length > 0) {
-          gameManager = allGameManagers[0];
-          gameManagerComponent = gameManager.components['game-manager'];
-          console.log(`🔄 HOST DEBUG: Fallback to first game manager`);
-        }
-        
-        if (gameManagerComponent) {
-          // Primary check: matchStartTime must be set (not 0)
-          if (!gameManagerComponent.matchStartTime || gameManagerComponent.matchStartTime === 0) {
-            console.log(`🚫 HOST GOAL BLOCKED: Match hasn't started yet (matchStartTime = ${gameManagerComponent.matchStartTime})`);
-            // TEMPORARY: Allow goal but log the issue for debugging
-            console.log(`🚨 TEMPORARY: Allowing goal despite match not started for debugging purposes`);
-            // return;
-          }
-          
-          // Secondary check: use time calculation as additional safety
-          const currentTime = Date.now();
-          const elapsed = (currentTime - gameManagerComponent.matchStartTime) / 1000;
-          const remaining = Math.max(0, gameManagerComponent.matchDuration - elapsed);
-          
-          if (remaining >= gameManagerComponent.matchDuration - 1) {
-            console.log(`🚫 HOST GOAL BLOCKED: Match hasn't started yet (remaining: ${remaining.toFixed(1)}s / ${gameManagerComponent.matchDuration}s)`);
-            return;
-          }
-        }
-        
         // Use global goal cooldown to prevent processing if host already scored
         const now = Date.now();
         window.lastGlobalGoalTime = window.lastGlobalGoalTime || 0;
@@ -12627,9 +12054,45 @@ function setGameplayHUD(isPlaying) {
           // Score for the team that got the ball into the opponent's goal
           // If ball goes into red goal, blue team scores (and vice versa)
           const scoringTeam = data.goalTeam === 'red' ? 'blue' : 'red';
+          teamScores[scoringTeam] += 1;
           
-          // Use centralized goal processing system
-          processGoalScored(scoringTeam, data.goalTeam);
+          // Update score display
+          const redGoal = document.querySelector('[goal="team: red"]');
+          if (redGoal && redGoal.components.goal) {
+            redGoal.components.goal.updateTeamScores();
+          }
+          
+          // Also update the multiplayer score display
+          const gameManager = document.querySelector('#game-manager');
+          if (gameManager && gameManager.components['game-manager']) {
+            gameManager.components['game-manager'].updateMultiplayerScore();
+            gameManager.components['game-manager'].sendScoreUpdate();
+            gameManager.components['game-manager'].checkOvertimeWin();
+          }
+          
+          // Reset capture ball to center (host needs to do this when processing client goals)
+          const captureBall = document.querySelector('#capture-ball');
+          if (captureBall && captureBall.components['zerog-ball']) {
+            const ballComponent = captureBall.components['zerog-ball'];
+            
+            // Release ball from any bot that might be carrying it
+            if (ballComponent.currentOwner && ballComponent.currentOwner.startsWith('bot-')) {
+              const botElement = document.querySelector(`#zerog-${ballComponent.currentOwner}`);
+              if (botElement && botElement.components['zerog-bot']) {
+                botElement.components['zerog-bot'].isGrabbingBall = false;
+                console.log(`🏆 Host: Goal scored! Released ball from ${ballComponent.currentOwner}`);
+              }
+            }
+            
+            // Reset ball position and clear ownership
+            ballComponent.resetPosition();
+          }
+          
+          // Play goal sound/effect for host when client scores
+          const goalComponent = redGoal && redGoal.components.goal;
+          if (goalComponent && goalComponent.playGoalEffect) {
+            goalComponent.playGoalEffect();
+          }
         }
       }
       
