@@ -2483,6 +2483,24 @@ function setGameplayHUD(isPlaying) {
           
           // Filter meshes using sphere intersection for grabbing
           const nearbyMeshes = this.bvhMeshes.filter(mesh => {
+            // Check if mesh belongs to a visible model entity first
+            let isFromVisibleModel = true;
+            let currentParent = mesh.parent;
+            
+            // Traverse up the hierarchy to find the model entity
+            while (currentParent) {
+              if (currentParent.el && currentParent.el.getAttribute && currentParent.el.getAttribute('visible') === false) {
+                isFromVisibleModel = false;
+                break;
+              }
+              currentParent = currentParent.parent;
+            }
+            
+            // Skip invisible models
+            if (!isFromVisibleModel) {
+              return false;
+            }
+            
             // Update mesh world matrix
             mesh.updateMatrixWorld(true);
             
@@ -3796,7 +3814,7 @@ function setGameplayHUD(isPlaying) {
                 // FALLBACK: If no vertices found nearby but mesh is reasonably close, include it anyway
                 if (!hasNearbyParts && distanceToMeshSurface <= maxDistance * 0.5) {
                   hasNearbyParts = true;
-                  console.log(`🔧 Fallback inclusion for large mesh (distance: ${distanceToMeshSurface.toFixed(2)}m, size: ${meshSize.toFixed(2)}m)`);
+                  // console.log(`🔧 Fallback inclusion for large mesh (distance: ${distanceToMeshSurface.toFixed(2)}m, size: ${meshSize.toFixed(2)}m)`);
                 }
               } else {
                 // Medium/small mesh - if surface is close enough, include it
@@ -3812,7 +3830,23 @@ function setGameplayHUD(isPlaying) {
             }
             
             if (hasNearbyParts) {
-              nearbyMeshes.push(mesh);
+              // Check if mesh belongs to a visible model entity
+              let isFromVisibleModel = true;
+              let currentParent = mesh.parent;
+              
+              // Traverse up the hierarchy to find the model entity
+              while (currentParent) {
+                if (currentParent.el && currentParent.el.getAttribute && currentParent.el.getAttribute('visible') === false) {
+                  isFromVisibleModel = false;
+                  break;
+                }
+                currentParent = currentParent.parent;
+              }
+              
+              // Only include mesh if it's from a visible model
+              if (isFromVisibleModel) {
+                nearbyMeshes.push(mesh);
+              }
             }
           });
           
@@ -3820,7 +3854,7 @@ function setGameplayHUD(isPlaying) {
           if (!this.debugFrameCounter) this.debugFrameCounter = 0;
           this.debugFrameCounter++;
           if (this.debugFrameCounter % 180 === 0 && this.showMeshDebug) {
-            console.log(`🔍 Active meshes: ${nearbyMeshes.length}/${this.bvhMeshes.length} [5m culling]`);
+            // Debug info available if needed
           }
           
           // Check collision in all directions using nearby BVH-accelerated meshes
@@ -3847,7 +3881,7 @@ function setGameplayHUD(isPlaying) {
           
           // Debug logging for collision detection issues
           if (this.debugCollisionGrab && (collisionHits > 0 || this.debugFrameCounter % 60 === 0)) {
-            console.log(`🔧 Collision Debug: ${collisionHits} hits, ${nearbyMeshes.length}/${this.bvhMeshes.length} nearby meshes, radius: ${radius.toFixed(3)}m, range: ${(radius * 3).toFixed(3)}m, detection: ${maxDistance}m`);
+            // Debug info available if needed
           }
           
           
@@ -3859,13 +3893,7 @@ function setGameplayHUD(isPlaying) {
           if (this.bvhMeshes) return; // Already initialized
           if (this.bvhInitializing) return; // Currently initializing, prevent spam
           
-          // Debug: Check what's available and patch THREE.js if needed
-          console.log('🔍 Checking BVH library availability:', {
-            'window.MeshBVHLib': !!window.MeshBVHLib,
-            'window.MeshBVH': !!window.MeshBVH,
-            'window.THREE.MeshBVH': !!(window.THREE && window.THREE.MeshBVH),
-            'window keys': Object.keys(window).filter(k => k.toLowerCase().includes('bvh') || k.toLowerCase().includes('mesh'))
-          });
+          // Check what's available and patch THREE.js if needed
           
           // Patch THREE.js to use BVH if available
           if (window.MeshBVHLib && window.MeshBVHLib.acceleratedRaycast) {
@@ -3873,12 +3901,12 @@ function setGameplayHUD(isPlaying) {
             window.THREE.BufferGeometry.prototype.computeBoundsTree = window.MeshBVHLib.computeBoundsTree;
             window.THREE.BufferGeometry.prototype.disposeBoundsTree = window.MeshBVHLib.disposeBoundsTree;
             window.THREE.Mesh.prototype.raycast = window.MeshBVHLib.acceleratedRaycast;
-            console.log('🔧 THREE.js patched with BVH acceleration');
           }
           
           // Initialize BVH for multiple models
           this.initializeBVHForModels([
             { selector: '#model-level', name: 'Level' },
+            { selector: '#model-spaceship', name: 'Spaceship' },
             { selector: '#model-asteroid-42', name: 'Asteroid-42' },
             { selector: '#model-asteroid-field-north', name: 'Asteroid Field North' },
             { selector: '#model-asteroid-field-south', name: 'Asteroid Field South' },
@@ -3898,14 +3926,13 @@ function setGameplayHUD(isPlaying) {
           modelConfigs.forEach(config => {
             const entity = document.querySelector(config.selector);
             if (!entity) {
-              console.log(`⚠️ ${config.name} entity not found: ${config.selector}`);
               return;
             }
+
             
             modelsFound++;
             const gltfModel = entity.querySelector('a-gltf-model');
             if (!gltfModel) {
-              console.log(`⚠️ ${config.name} GLTF model component not found`);
               return;
             }
             
@@ -3913,12 +3940,10 @@ function setGameplayHUD(isPlaying) {
             const modelComponent = gltfModel.components['gltf-model'];
             if (!modelComponent || !modelComponent.model) {
               if (!this.bvhInitializing) {
-                console.log(`⚠️ ${config.name} model not loaded yet, setting up event listener`);
                 this.bvhInitializing = true;
                 
                 // Listen for model-loaded event
                 const onModelLoaded = () => {
-                  console.log(`🎉 ${config.name} model loaded, retrying BVH initialization`);
                   this.bvhMeshes = null;
                   this.bvhInitializing = false;
                   setTimeout(() => this.initializeBVH(), 100);
@@ -3933,12 +3958,6 @@ function setGameplayHUD(isPlaying) {
             // Process this model
             const loadedModel = modelComponent.model;
             const targetObject = loadedModel?.scene || gltfModel.object3D;
-            
-            console.log(`🎯 Processing ${config.name} for BVH:`, {
-              entity: entity,
-              children: targetObject.children.length,
-              visible: entity.getAttribute('visible')
-            });
             
             let modelBvhCount = 0;
             let modelTraversed = 0;
@@ -3989,23 +4008,11 @@ function setGameplayHUD(isPlaying) {
               }
             });
             
-            console.log(`✅ ${config.name}: ${modelBvhCount} meshes processed from ${modelTraversed} objects`);
             modelsProcessed++;
           });
           
-          console.log(`🚀 BVH initialized for ${totalBvhCount} meshes across ${modelsProcessed}/${modelsFound} models (${totalTraversed} total objects)`);
-          
           // Clean up initialization flag
           this.bvhInitializing = false;
-          
-          // If no meshes found, suggest checking the model
-          if (totalBvhCount === 0) {
-            console.warn('⚠️ No meshes found in any models! Possible issues:');
-            console.warn('  1. Model structure changed (meshes nested deeper)');
-            console.warn('  2. Models failed to load properly');  
-            console.warn('  3. Textures caused loading issues');
-            console.warn('  4. Models exported with different settings');
-          }
           
           // Optional: Performance analysis (enable for debugging)
           if (this.debugMode && window.MeshBVHLib && window.MeshBVHLib.estimateMemoryInBytes) {
@@ -5251,7 +5258,7 @@ function setGameplayHUD(isPlaying) {
             wireframe.setAttribute('position', '0 0 0'); // Relative to parent
             this.el.appendChild(wireframe);
           }
-        }
+        },
       });
 
 
@@ -7524,14 +7531,6 @@ function setGameplayHUD(isPlaying) {
         
         // Initialize status display
         updateMultiplayerStatus('Singleplayer');
-        
-        // SPACE SHOOTER: Auto-start match for immediate gameplay
-        setTimeout(() => {
-          const gameManager = document.querySelector('[game-manager]');
-          if (gameManager && gameManager.components['game-manager']) {
-            gameManager.components['game-manager'].startMatchWithBots();
-          }
-        }, 2000);
         
         // Wait for A-Frame scene to be fully loaded before setting team colors
         const aframeScene = document.querySelector('a-scene');
@@ -9955,6 +9954,931 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
+      // Door Proximity Trigger Component
+      AFRAME.registerComponent('door-proximity-trigger', {
+        schema: {
+          triggerDistance: {type: 'number', default: 2.0},
+          doorObjects: {type: 'array', default: ['Misc01005', 'Misc01006']},
+          animations: {type: 'array', default: ['DoorOpen', 'DoorOpen.001']},
+          maxFrame: {type: 'number', default: 120}
+        },
+        
+        init: function() {
+          this.player = null;
+          this.doorMeshes = [];
+          this.isDoorsOpen = false;
+          this.animationMixer = null;
+          this.doorAnimations = [];
+          this.lastPlayerDistance = Infinity;
+          this.doorActions = []; // Store animation actions for better control
+          this.isAnimating = false; // Track if doors are currently animating
+          this.lastStateChange = 0; // Timestamp of last state change
+          this.debounceDelay = 500; // 500ms debounce to prevent rapid state changes
+          
+          // Wait for model to load
+          this.el.addEventListener('model-loaded', () => {
+            this.setupDoorSystem();
+          });
+        },
+        
+        setupDoorSystem: function() {
+          // Set up door system
+          
+          // Get the animation mixer component
+          this.animationMixer = this.el.components['animation-mixer'];
+          if (!this.animationMixer) {
+            console.warn('Animation mixer not found on spaceship entity');
+            return;
+          }
+          
+          // Wait a bit more for the model to be fully loaded
+          setTimeout(() => {
+            this.findDoorMeshes();
+          }, 500);
+        },
+        
+        findDoorMeshes: function() {
+          // Try multiple ways to get the model
+          const model = this.el.getObject3D('mesh') || this.el.object3D;
+          
+          if (!model) {
+            console.error('❌ No model found in spaceship entity!');
+            console.log('Available object3D keys:', Object.keys(this.el.object3D));
+            return;
+          }
+          
+          
+          // Find door meshes in the loaded model
+          let allObjects = [];
+          model.traverse((child) => {
+            // Log ALL objects for debugging
+            if (child.name) {
+              allObjects.push(child.name);
+            }
+            
+            if (this.data.doorObjects.includes(child.name)) {
+              this.doorMeshes.push(child);
+            }
+          });
+          
+          
+          if (this.doorMeshes.length === 0) {
+            console.warn('⚠️ No door meshes found! Expected:', this.data.doorObjects);
+            return;
+          }
+          
+          // Initialize door animations and set to closed state
+          this.initializeDoorAnimations();
+          
+          // Get player reference
+          this.player = document.querySelector('#player-rig') || document.querySelector('[camera]');
+          if (!this.player) {
+            console.warn('Player entity not found for door proximity detection');
+          }
+          
+        },
+        
+        initializeDoorAnimations: function() {
+          // Get animation actions and set doors to closed state (frame 0)
+          this.data.animations.forEach(animName => {
+            if (this.animationMixer && this.animationMixer.mixer) {
+              const action = this.animationMixer.mixer.clipAction(
+                THREE.AnimationClip.findByName(this.animationMixer.mixer._root, animName)
+              );
+              if (action) {
+                action.reset();
+                action.setLoop(THREE.LoopOnce);
+                action.clampWhenFinished = true;
+                action.time = 0; // Start at frame 0 (closed)
+                action.timeScale = 0; // Pause the animation
+                action.play();
+                this.doorActions.push(action);
+              }
+            }
+          });
+        },
+        
+        tick: function() {
+          if (!this.player) return;
+          
+          // Get player world position
+          const playerWorldPos = new THREE.Vector3();
+          this.player.object3D.getWorldPosition(playerWorldPos);
+          
+          let minDistance = Infinity;
+          let closestDoor = null;
+          
+          if (this.doorMeshes.length > 0) {
+            // Calculate minimum distance to any door
+            this.doorMeshes.forEach(doorMesh => {
+              const doorWorldPos = new THREE.Vector3();
+              doorMesh.getWorldPosition(doorWorldPos);
+              const distance = playerWorldPos.distanceTo(doorWorldPos);
+              if (distance < minDistance) {
+                minDistance = distance;
+                closestDoor = doorMesh;
+              }
+            });
+          } else {
+            // Fallback: use spaceship center for proximity detection
+            const spaceshipWorldPos = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(spaceshipWorldPos);
+            minDistance = playerWorldPos.distanceTo(spaceshipWorldPos);
+          }
+          
+          // Enhanced debugging every 300 frames (5 seconds at 60fps)
+          if (!this.debugTick) this.debugTick = 0;
+          const now = Date.now(); // Define now variable for use in multiple places
+          
+          if (this.debugTick % 300 === 0) { // Every 5 seconds instead of every second
+            const shouldBeOpen = minDistance <= this.data.triggerDistance;
+            const playerPos = `(${playerWorldPos.x.toFixed(1)}, ${playerWorldPos.y.toFixed(1)}, ${playerWorldPos.z.toFixed(1)})`;
+            // Door proximity check
+            
+            // Force state correction if there's a mismatch
+            if (shouldBeOpen !== this.isDoorsOpen) {
+              console.log(`⚠️ Door state mismatch detected! Forcing correction...`);
+              this.isAnimating = false; // Reset animation flag to allow correction
+              if (shouldBeOpen) {
+                this.openDoors();
+              } else {
+                this.closeDoors();
+              }
+            }
+          }
+          
+          // More frequent state verification every 60 frames (1 second)
+          if (this.debugTick % 60 === 0) {
+            const shouldBeOpen = minDistance <= this.data.triggerDistance;
+            
+            // Check if we're stuck in animating state for too long
+            if (this.isAnimating && this.lastStateChange && (now - this.lastStateChange) > 6000) {
+              console.log('⚠️ Animation stuck - forcing reset');
+              this.isAnimating = false;
+            }
+            
+            // Force immediate correction if state is wrong and we're not animating
+            if (shouldBeOpen !== this.isDoorsOpen && !this.isAnimating) {
+              if (shouldBeOpen) {
+                this.openDoors();
+              } else {
+                this.closeDoors();
+              }
+            }
+          }
+          this.debugTick++;
+          
+          // Check for state changes with debouncing
+          const shouldOpen = minDistance <= this.data.triggerDistance;
+          
+          // Only change state if:
+          // 1. The desired state is different from current state
+          // 2. We're not currently animating, OR enough time has passed since last state change
+          // 3. Enough time has passed since the last state change (debounce)
+          if (shouldOpen !== this.isDoorsOpen && 
+              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay)) {
+            
+            this.lastStateChange = now;
+            
+            if (shouldOpen) {
+              this.openDoors();
+            } else {
+              this.closeDoors();
+            }
+          }
+          
+          this.lastPlayerDistance = minDistance;
+        },
+        
+        openDoors: function() {
+          this.isDoorsOpen = true;
+          this.isAnimating = true;
+          
+          let completedAnimations = 0;
+          const totalAnimations = this.doorActions.length;
+          
+          // Callback when an animation completes
+          const onAnimationComplete = () => {
+            completedAnimations++;
+            if (completedAnimations >= totalAnimations) {
+              this.isAnimating = false;
+            }
+          };
+          
+          // Smoothly transition all door animations to open state
+          this.doorActions.forEach((action, index) => {
+            if (action) {
+              // Get current time and duration for debugging
+              const currentTime = action.time;
+              const duration = action.getClip().duration;
+              
+              // Set up forward animation
+              action.timeScale = 1; // Forward playback
+              action.setLoop(THREE.LoopOnce);
+              action.clampWhenFinished = true;
+              
+              // Remove any existing event listeners to prevent duplicates
+              action.getMixer().removeEventListener('finished', action._onFinished);
+              
+              // Add completion callback
+              action._onFinished = (event) => {
+                if (event.action === action) {
+                  onAnimationComplete();
+                }
+              };
+              action.getMixer().addEventListener('finished', action._onFinished);
+              
+              // If animation was playing in reverse, continue from current position
+              if (currentTime > 0 && currentTime < duration) {
+                // Continue from current position
+                action.play();
+              } else {
+                // Start from beginning
+                action.reset();
+                action.play();
+              }
+              
+            }
+          });
+        },
+        
+        closeDoors: function() {
+          this.isDoorsOpen = false;
+          this.isAnimating = true;
+          
+          let completedAnimations = 0;
+          const totalAnimations = this.doorActions.length;
+          
+          // Callback when an animation completes
+          const onAnimationComplete = () => {
+            completedAnimations++;
+            if (completedAnimations >= totalAnimations) {
+              this.isAnimating = false;
+            }
+          };
+          
+          // Smoothly transition all door animations to closed state
+          this.doorActions.forEach(action => {
+            if (action) {
+              // Get current time and duration
+              const currentTime = action.time;
+              const duration = action.getClip().duration;
+              
+              // CRITICAL FIX: Reset the action if it's stuck at the end
+              if (currentTime >= duration) {
+                console.log(`🔧 Resetting stuck animation from time=${currentTime.toFixed(2)}`);
+                action.reset();
+                action.time = duration; // Set to end position
+                action.play();
+                action.paused = true; // Pause it at the end
+              }
+              
+              // Set up reverse animation
+              action.timeScale = -1; // Reverse playback
+              action.setLoop(THREE.LoopOnce);
+              action.clampWhenFinished = true;
+              
+              // Remove existing event listeners
+              if (action._onFinished) {
+                action.getMixer().removeEventListener('finished', action._onFinished);
+              }
+              
+              // Add completion callback
+              action._onFinished = (event) => {
+                if (event.action === action) {
+                  onAnimationComplete();
+                }
+              };
+              action.getMixer().addEventListener('finished', action._onFinished);
+              
+              // Ensure the animation can play in reverse
+              if (currentTime >= duration) {
+                // If at the end, start from full duration and play in reverse
+                action.time = duration;
+                action.paused = false;
+                action.play();
+              } else if (currentTime > 0) {
+                // If partway through, continue from current position in reverse
+                action.paused = false;
+                action.play();
+              } else {
+                // If already at start, just complete immediately
+                onAnimationComplete();
+                return;
+              }
+              
+            }
+          });
+        },
+        
+        remove: function() {
+          // Clean up animation actions
+          this.doorActions = [];
+        }
+      });
+
+      // Door Proximity Trigger Component 2 (for second door group)
+      AFRAME.registerComponent('door-proximity-trigger-2', {
+        schema: {
+          triggerDistance: {type: 'number', default: 2.0},
+          doorObjects: {type: 'array', default: ['Misc01003', 'Misc01004']},
+          animations: {type: 'array', default: ['Misc01.003Action', 'Misc01.004Action']},
+          maxFrame: {type: 'number', default: 120}
+        },
+        
+        init: function() {
+          this.player = null;
+          this.doorMeshes = [];
+          this.isDoorsOpen = false;
+          this.animationMixer = null;
+          this.doorAnimations = [];
+          this.lastPlayerDistance = Infinity;
+          this.doorActions = []; // Store animation actions for better control
+          this.isAnimating = false; // Track if doors are currently animating
+          this.lastStateChange = 0; // Timestamp of last state change
+          this.debounceDelay = 500; // 500ms debounce to prevent rapid state changes
+          
+          // Wait for model to load
+          this.el.addEventListener('model-loaded', () => {
+            this.setupDoorSystem();
+          });
+        },
+        
+        setupDoorSystem: function() {
+          // Set up door system 2
+          
+          // Get the animation mixer component
+          this.animationMixer = this.el.components['animation-mixer'];
+          if (!this.animationMixer) {
+            console.warn('Animation mixer not found on spaceship entity');
+            return;
+          }
+          
+          // Wait a bit more for the model to be fully loaded
+          setTimeout(() => {
+            this.findDoorMeshes();
+          }, 500);
+        },
+        
+        findDoorMeshes: function() {
+          // Try multiple ways to get the model
+          const model = this.el.getObject3D('mesh') || this.el.object3D;
+          
+          if (!model) {
+            console.error('❌ No model found in spaceship entity for door system 2!');
+            console.log('Available object3D keys:', Object.keys(this.el.object3D));
+            return;
+          }
+          
+          
+          // Find door meshes in the loaded model
+          let allObjects = [];
+          model.traverse((child) => {
+            // Log ALL objects for debugging
+            if (child.name) {
+              allObjects.push(child.name);
+            }
+            
+            if (this.data.doorObjects.includes(child.name)) {
+              this.doorMeshes.push(child);
+            }
+          });
+          
+          
+          if (this.doorMeshes.length === 0) {
+            console.warn(`⚠️ No door objects found for door system 2! Looking for: ${this.data.doorObjects.join(', ')}`);
+            console.log('Available objects:', allObjects.slice(0, 20).join(', '), allObjects.length > 20 ? '...' : '');
+          }
+          
+          // Initialize door animations
+          this.initializeDoorAnimations();
+          
+          // Find player
+          this.player = document.querySelector('#player-rig') || document.querySelector('[camera]');
+          if (!this.player) {
+            console.warn('Player not found for door system 2');
+          }
+          
+        },
+        
+        initializeDoorAnimations: function() {
+          if (!this.animationMixer || !this.animationMixer.mixer) {
+            console.warn('Animation mixer not ready for door system 2');
+            return;
+          }
+          
+          // Initialize each door animation to closed state (frame 0)
+          this.data.animations.forEach(animName => {
+            const action = this.animationMixer.mixer.clipAction(animName);
+            if (action) {
+              action.setLoop(THREE.LoopOnce);
+              action.clampWhenFinished = true;
+              action.time = 0; // Start at closed position
+              action.timeScale = 0; // Pause at frame 0
+              action.play();
+              this.doorActions.push(action);
+            } else {
+              console.warn(`⚠️ Animation not found for door system 2: ${animName}`);
+            }
+          });
+        },
+        
+        tick: function() {
+          // Try to find player if not found yet
+          if (!this.player) {
+            this.player = document.querySelector('#player-rig') || document.querySelector('[camera]') || document.querySelector('a-camera');
+            if (!this.player) return;
+          }
+          
+          // Get player world position
+          const playerWorldPos = new THREE.Vector3();
+          this.player.object3D.getWorldPosition(playerWorldPos);
+          
+          let minDistance = Infinity;
+          let closestDoor = null;
+          
+          if (this.doorMeshes.length > 0) {
+            // Calculate minimum distance to any door in this group
+            this.doorMeshes.forEach(doorMesh => {
+              const doorWorldPos = new THREE.Vector3();
+              doorMesh.getWorldPosition(doorWorldPos);
+              const distance = playerWorldPos.distanceTo(doorWorldPos);
+              if (distance < minDistance) {
+                minDistance = distance;
+                closestDoor = doorMesh;
+              }
+            });
+          } else {
+            return; // No doors to check
+          }
+          
+          // Enhanced debugging every 300 frames (5 seconds at 60fps)
+          if (!this.debugTick) this.debugTick = 0;
+          if (this.debugTick % 300 === 0) {
+            const shouldBeOpen = minDistance <= this.data.triggerDistance;
+            const playerPos = `(${playerWorldPos.x.toFixed(1)}, ${playerWorldPos.y.toFixed(1)}, ${playerWorldPos.z.toFixed(1)})`;
+            // Door 2 proximity check
+            
+            // Force state correction if there's a mismatch
+            if (shouldBeOpen !== this.isDoorsOpen) {
+              console.log(`⚠️ Door 2 state mismatch detected! Forcing correction...`);
+              if (shouldBeOpen) {
+                this.openDoors();
+              } else {
+                this.closeDoors();
+              }
+            }
+          }
+          this.debugTick++;
+          
+          // Check for state changes with debouncing
+          const shouldOpen = minDistance <= this.data.triggerDistance;
+          const now = Date.now();
+          
+          // Only change state if conditions are met
+          if (shouldOpen !== this.isDoorsOpen && 
+              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay)) {
+            
+            this.lastStateChange = now;
+            
+            if (shouldOpen) {
+              this.openDoors();
+            } else {
+              this.closeDoors();
+            }
+          }
+          
+          this.lastPlayerDistance = minDistance;
+        },
+        
+        openDoors: function() {
+          this.isDoorsOpen = true;
+          this.isAnimating = true;
+          
+          let completedAnimations = 0;
+          const totalAnimations = this.doorActions.length;
+          
+          // Callback when an animation completes
+          const onAnimationComplete = () => {
+            completedAnimations++;
+            if (completedAnimations >= totalAnimations) {
+              this.isAnimating = false;
+            }
+          };
+          
+          // Smoothly transition all door animations to open state
+          this.doorActions.forEach((action, index) => {
+            if (action) {
+              // Get current time and duration for debugging
+              const currentTime = action.time;
+              const duration = action.getClip().duration;
+              
+              // Set up forward animation
+              action.timeScale = 1; // Forward playback
+              action.setLoop(THREE.LoopOnce);
+              action.clampWhenFinished = true;
+              
+              // Remove any existing event listeners to prevent duplicates
+              action.getMixer().removeEventListener('finished', action._onFinished);
+              
+              // Add completion callback
+              action._onFinished = (event) => {
+                if (event.action === action) {
+                  onAnimationComplete();
+                }
+              };
+              action.getMixer().addEventListener('finished', action._onFinished);
+              
+              // If animation was playing in reverse, continue from current position
+              if (currentTime > 0 && currentTime < duration) {
+                // Continue from current position
+                action.play();
+              } else {
+                // Start from beginning
+                action.reset();
+                action.play();
+              }
+              
+            }
+          });
+        },
+        
+        closeDoors: function() {
+          this.isDoorsOpen = false;
+          this.isAnimating = true;
+          
+          let completedAnimations = 0;
+          const totalAnimations = this.doorActions.length;
+          
+          // Callback when an animation completes
+          const onAnimationComplete = () => {
+            completedAnimations++;
+            if (completedAnimations >= totalAnimations) {
+              this.isAnimating = false;
+            }
+          };
+          
+          // Smoothly transition all door animations to closed state
+          this.doorActions.forEach(action => {
+            if (action) {
+              // Get current time and duration
+              const currentTime = action.time;
+              const duration = action.getClip().duration;
+              
+              // CRITICAL FIX: Reset the action if it's stuck at the end
+              if (currentTime >= duration) {
+                console.log(`🔧 Resetting stuck animation 2 from time=${currentTime.toFixed(2)}`);
+                action.reset();
+                action.time = duration; // Set to end position
+                action.play();
+                action.paused = true; // Pause it at the end
+              }
+              
+              // Set up reverse animation
+              action.timeScale = -1; // Reverse playback
+              action.setLoop(THREE.LoopOnce);
+              action.clampWhenFinished = true;
+              
+              // Remove existing event listeners
+              if (action._onFinished) {
+                action.getMixer().removeEventListener('finished', action._onFinished);
+              }
+              
+              // Add completion callback
+              action._onFinished = (event) => {
+                if (event.action === action) {
+                  onAnimationComplete();
+                }
+              };
+              action.getMixer().addEventListener('finished', action._onFinished);
+              
+              // Ensure the animation can play in reverse
+              if (currentTime >= duration) {
+                // If at the end, start from full duration and play in reverse
+                action.time = duration;
+                action.paused = false;
+                action.play();
+              } else if (currentTime > 0) {
+                // If partway through, continue from current position in reverse
+                action.paused = false;
+                action.play();
+              } else {
+                // If already at start, just complete immediately
+                onAnimationComplete();
+                return;
+              }
+              
+            }
+          });
+        },
+        
+        remove: function() {
+          // Clean up animation actions
+          this.doorActions = [];
+        }
+      });
+
+      // Door Proximity Trigger Component 3 (for third door group)
+      AFRAME.registerComponent('door-proximity-trigger-3', {
+        schema: {
+          triggerDistance: {type: 'number', default: 2.0},
+          doorObjects: {type: 'array', default: ['Misc01001', 'Misc01002']},
+          animations: {type: 'array', default: ['Misc01.001Action', 'Misc01.002Action']},
+          maxFrame: {type: 'number', default: 120}
+        },
+        
+        init: function() {
+          this.player = null;
+          this.doorMeshes = [];
+          this.isDoorsOpen = false;
+          this.animationMixer = null;
+          this.doorAnimations = [];
+          this.lastPlayerDistance = Infinity;
+          this.doorActions = []; // Store animation actions for better control
+          this.isAnimating = false; // Track if doors are currently animating
+          this.lastStateChange = 0; // Timestamp of last state change
+          this.debounceDelay = 500; // 500ms debounce to prevent rapid state changes
+          
+          // Wait for model to load
+          this.el.addEventListener('model-loaded', () => {
+            this.setupDoorSystem();
+          });
+        },
+        
+        setupDoorSystem: function() {
+          // Set up door system 3
+          
+          // Get the animation mixer component
+          this.animationMixer = this.el.components['animation-mixer'];
+          if (!this.animationMixer) {
+            console.warn('Animation mixer not found on spaceship entity');
+            return;
+          }
+          
+          // Wait a bit more for the model to be fully loaded
+          setTimeout(() => {
+            this.findDoorMeshes();
+          }, 500);
+        },
+        
+        findDoorMeshes: function() {
+          // Try multiple ways to get the model
+          const model = this.el.getObject3D('mesh') || this.el.object3D;
+          
+          if (!model) {
+            console.error('❌ No model found in spaceship entity for door system 3!');
+            console.log('Available object3D keys:', Object.keys(this.el.object3D));
+            return;
+          }
+          
+          
+          // Find door meshes in the loaded model
+          let allObjects = [];
+          model.traverse((child) => {
+            // Log ALL objects for debugging
+            if (child.name) {
+              allObjects.push(child.name);
+            }
+            
+            if (this.data.doorObjects.includes(child.name)) {
+              this.doorMeshes.push(child);
+            }
+          });
+          
+          
+          if (this.doorMeshes.length === 0) {
+            console.warn(`⚠️ No door objects found for door system 3! Looking for: ${this.data.doorObjects.join(', ')}`);
+            console.log('Available objects:', allObjects.slice(0, 20).join(', '), allObjects.length > 20 ? '...' : '');
+          }
+          
+          // Initialize door animations
+          this.initializeDoorAnimations();
+          
+          // Find player
+          this.player = document.querySelector('#player-rig') || document.querySelector('[camera]');
+          if (!this.player) {
+            console.warn('Player not found for door system 3');
+          }
+          
+        },
+        
+        initializeDoorAnimations: function() {
+          if (!this.animationMixer || !this.animationMixer.mixer) {
+            console.warn('Animation mixer not ready for door system 3');
+            return;
+          }
+          
+          // Initialize each door animation to closed state (frame 0)
+          this.data.animations.forEach(animName => {
+            const action = this.animationMixer.mixer.clipAction(animName);
+            if (action) {
+              action.setLoop(THREE.LoopOnce);
+              action.clampWhenFinished = true;
+              action.time = 0; // Start at closed position
+              action.timeScale = 0; // Pause at frame 0
+              action.play();
+              this.doorActions.push(action);
+            } else {
+              console.warn(`⚠️ Animation not found for door system 3: ${animName}`);
+            }
+          });
+        },
+        
+        tick: function() {
+          // Try to find player if not found yet
+          if (!this.player) {
+            this.player = document.querySelector('#player-rig') || document.querySelector('[camera]') || document.querySelector('a-camera');
+            if (!this.player) return;
+          }
+          
+          // Get player world position
+          const playerWorldPos = new THREE.Vector3();
+          this.player.object3D.getWorldPosition(playerWorldPos);
+          
+          let minDistance = Infinity;
+          let closestDoor = null;
+          
+          if (this.doorMeshes.length > 0) {
+            // Calculate minimum distance to any door in this group
+            this.doorMeshes.forEach(doorMesh => {
+              const doorWorldPos = new THREE.Vector3();
+              doorMesh.getWorldPosition(doorWorldPos);
+              const distance = playerWorldPos.distanceTo(doorWorldPos);
+              if (distance < minDistance) {
+                minDistance = distance;
+                closestDoor = doorMesh;
+              }
+            });
+          } else {
+            return; // No doors to check
+          }
+          
+          // Enhanced debugging every 300 frames (5 seconds at 60fps)
+          if (!this.debugTick) this.debugTick = 0;
+          if (this.debugTick % 300 === 0) {
+            const shouldBeOpen = minDistance <= this.data.triggerDistance;
+            const playerPos = `(${playerWorldPos.x.toFixed(1)}, ${playerWorldPos.y.toFixed(1)}, ${playerWorldPos.z.toFixed(1)})`;
+            // Door 3 proximity check
+            
+            // Force state correction if there's a mismatch
+            if (shouldBeOpen !== this.isDoorsOpen) {
+              console.log(`⚠️ Door 3 state mismatch detected! Forcing correction...`);
+              if (shouldBeOpen) {
+                this.openDoors();
+              } else {
+                this.closeDoors();
+              }
+            }
+          }
+          this.debugTick++;
+          
+          // Check for state changes with debouncing
+          const shouldOpen = minDistance <= this.data.triggerDistance;
+          const now = Date.now();
+          
+          // Only change state if conditions are met
+          if (shouldOpen !== this.isDoorsOpen && 
+              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay)) {
+            
+            this.lastStateChange = now;
+            
+            if (shouldOpen) {
+              this.openDoors();
+            } else {
+              this.closeDoors();
+            }
+          }
+          
+          this.lastPlayerDistance = minDistance;
+        },
+        
+        openDoors: function() {
+          this.isDoorsOpen = true;
+          this.isAnimating = true;
+          
+          let completedAnimations = 0;
+          const totalAnimations = this.doorActions.length;
+          
+          // Callback when an animation completes
+          const onAnimationComplete = () => {
+            completedAnimations++;
+            if (completedAnimations >= totalAnimations) {
+              this.isAnimating = false;
+            }
+          };
+          
+          // Smoothly transition all door animations to open state
+          this.doorActions.forEach((action, index) => {
+            if (action) {
+              // Get current time and duration for debugging
+              const currentTime = action.time;
+              const duration = action.getClip().duration;
+              
+              // Set up forward animation
+              action.timeScale = 1; // Forward playback
+              action.setLoop(THREE.LoopOnce);
+              action.clampWhenFinished = true;
+              
+              // Remove any existing event listeners to prevent duplicates
+              action.getMixer().removeEventListener('finished', action._onFinished);
+              
+              // Add completion callback
+              action._onFinished = (event) => {
+                if (event.action === action) {
+                  onAnimationComplete();
+                }
+              };
+              action.getMixer().addEventListener('finished', action._onFinished);
+              
+              // If animation was playing in reverse, continue from current position
+              if (currentTime > 0 && currentTime < duration) {
+                // Continue from current position
+                action.play();
+              } else {
+                // Start from beginning
+                action.reset();
+                action.play();
+              }
+              
+            }
+          });
+        },
+        
+        closeDoors: function() {
+          this.isDoorsOpen = false;
+          this.isAnimating = true;
+          
+          let completedAnimations = 0;
+          const totalAnimations = this.doorActions.length;
+          
+          // Callback when an animation completes
+          const onAnimationComplete = () => {
+            completedAnimations++;
+            if (completedAnimations >= totalAnimations) {
+              this.isAnimating = false;
+            }
+          };
+          
+          // Smoothly transition all door animations to closed state
+          this.doorActions.forEach(action => {
+            if (action) {
+              // Get current time and duration
+              const currentTime = action.time;
+              const duration = action.getClip().duration;
+              
+              // CRITICAL FIX: Reset the action if it's stuck at the end
+              if (currentTime >= duration) {
+                console.log(`🔧 Resetting stuck animation 3 from time=${currentTime.toFixed(2)}`);
+                action.reset();
+                action.time = duration; // Set to end position
+                action.play();
+                action.paused = true; // Pause it at the end
+              }
+              
+              // Set up reverse animation
+              action.timeScale = -1; // Reverse playback
+              action.setLoop(THREE.LoopOnce);
+              action.clampWhenFinished = true;
+              
+              // Remove existing event listeners
+              if (action._onFinished) {
+                action.getMixer().removeEventListener('finished', action._onFinished);
+              }
+              
+              // Add completion callback
+              action._onFinished = (event) => {
+                if (event.action === action) {
+                  onAnimationComplete();
+                }
+              };
+              action.getMixer().addEventListener('finished', action._onFinished);
+              
+              // Ensure the animation can play in reverse
+              if (currentTime >= duration) {
+                // If at the end, start from full duration and play in reverse
+                action.time = duration;
+                action.paused = false;
+                action.play();
+              } else if (currentTime > 0) {
+                // If partway through, continue from current position in reverse
+                action.paused = false;
+                action.play();
+              } else {
+                // If already at start, just complete immediately
+                onAnimationComplete();
+                return;
+              }
+              
+            }
+          });
+        },
+        
+        remove: function() {
+          // Clean up animation actions
+          this.doorActions = [];
+        }
+      });
+
       // Fix for hand-controls clipAction error
       AFRAME.registerComponent('custom-hand-controls', {
         init: function() {
@@ -10472,7 +11396,6 @@ function setGameplayHUD(isPlaying) {
 
         onClick: function() {
           const id = this.el.id;
-          console.log('🖱️ Button clicked:', id);
           
           // Prevent accidental clicks immediately after menu toggle
           const menuToggle = document.querySelector('[menu-toggle]');
@@ -10814,7 +11737,6 @@ function setGameplayHUD(isPlaying) {
         },
         
         toggleModel: function(modelType) {
-          console.log('🎮 Toggling model:', modelType);
           
           if (modelType === 'spaceship') {
             const spaceship = document.querySelector('#model-spaceship');
@@ -10829,6 +11751,15 @@ function setGameplayHUD(isPlaying) {
               spaceship.setAttribute('visible', true);
               button.setAttribute('material', 'color', '#00aa00');
               buttonText.setAttribute('text', 'value', 'Spaceship: ON');
+            }
+            
+            // Re-initialize BVH for collision detection when spaceship visibility changes
+            const collisionSystem = document.querySelector('[collision-system]');
+            if (collisionSystem && collisionSystem.components['collision-system']) {
+              console.log('🔄 Re-initializing BVH due to spaceship visibility change');
+              setTimeout(() => {
+                collisionSystem.components['collision-system'].initializeBVH();
+              }, 200); // Increased delay to ensure visibility change is processed
             }
           } else if (modelType === 'asteroid-field') {
             const fields = [
@@ -10854,6 +11785,15 @@ function setGameplayHUD(isPlaying) {
               button.setAttribute('material', 'color', '#00aa00');
               buttonText.setAttribute('text', 'value', 'Ast.Field: ON');
             }
+            
+            // Re-initialize BVH for asteroid fields
+            const collisionSystem = document.querySelector('[collision-system]');
+            if (collisionSystem && collisionSystem.components['collision-system']) {
+              console.log('🔄 Re-initializing BVH due to asteroid field visibility change');
+              setTimeout(() => {
+                collisionSystem.components['collision-system'].initializeBVH();
+              }, 200); // Increased delay to ensure visibility change is processed
+            }
           } else if (modelType === 'asteroid-42') {
             const asteroid = document.querySelector('#model-asteroid-42');
             const button = document.querySelector('#menu-toggle-asteroid-42');
@@ -10868,11 +11808,19 @@ function setGameplayHUD(isPlaying) {
               button.setAttribute('material', 'color', '#00aa00');
               buttonText.setAttribute('text', 'value', 'Asteroid: ON');
             }
+            
+            // Re-initialize BVH for single asteroid
+            const collisionSystem = document.querySelector('[collision-system]');
+            if (collisionSystem && collisionSystem.components['collision-system']) {
+              console.log('🔄 Re-initializing BVH due to asteroid visibility change');
+              setTimeout(() => {
+                collisionSystem.components['collision-system'].initializeBVH();
+              }, 200); // Increased delay to ensure visibility change is processed
+            }
           }
         },
         
         toggleMeshDebug: function() {
-          console.log('🎮 Toggling mesh debug visualization');
           
           // Get the zerog-player component to access showMeshDebug
           const player = document.querySelector('[zerog-player]');
@@ -10881,7 +11829,6 @@ function setGameplayHUD(isPlaying) {
             
             // Toggle the debug state
             playerComponent.showMeshDebug = !playerComponent.showMeshDebug;
-            console.log('🎨 Mesh debug visualization:', playerComponent.showMeshDebug ? 'ON (Green=nearby, Red=far)' : 'OFF');
             
             // Update button appearance
             const button = document.querySelector('#menu-toggle-mesh-debug');
@@ -10924,7 +11871,7 @@ function setGameplayHUD(isPlaying) {
          <!-- Single Asteroid 3D Model -->
          <a-asset-item id="asteroid-42-model" src="assets/asteroid_42.glb"></a-asset-item>
          <!-- Spaceship 3D Model -->
-         <a-asset-item id="spaceship-model" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/SpaceShip.glb"></a-asset-item>
+         <a-asset-item id="spaceship-model" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/SpaceShipAnim.glb"></a-asset-item>
          <!-- Level 3D Model -->
          <a-asset-item id="level-model" src="assets/level.glb"></a-asset-item>
          
@@ -11602,7 +12549,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Red Team (for singleplayer) -->
-      <a-entity id="zerog-bot-red" position="0 2 -12" zerog-bot="enabled: true; difficulty: medium; team: red; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-red" position="0 2 -12" zerog-bot="enabled: false; difficulty: medium; team: red; throwInterval: 2000" visible="false">
         <a-sphere id="bot-target" 
                   radius="0.2" 
                   color="#ff0000" 
@@ -11621,7 +12568,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Blue Team (for singleplayer) -->
-      <a-entity id="zerog-bot-blue" position="0 2 12" zerog-bot="enabled: true; difficulty: medium; team: blue; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-blue" position="0 2 12" zerog-bot="enabled: false; difficulty: medium; team: blue; throwInterval: 2000" visible="false">
         <a-sphere id="bot-blue-target" 
                   radius="0.2" 
                   color="#0000ff" 
@@ -11640,7 +12587,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Green (additional bot for 4-player support) -->
-      <a-entity id="zerog-bot-green" position="2 2 0" zerog-bot="enabled: true; difficulty: medium; team: green; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-green" position="2 2 0" zerog-bot="enabled: false; difficulty: medium; team: green; throwInterval: 2000" visible="false">
         <a-sphere id="bot-green-target" 
                    radius="0.2" 
                    color="#ff00ff" 
@@ -11662,7 +12609,11 @@ function setGameplayHUD(isPlaying) {
        <a-entity id="model-spaceship" position="53.953 -3.604 46.634" 
                  scale="1.0 1.0 1.0"
                  rotation="0 45 0"
-                 visible="false">
+                 visible="false"
+                 animation-mixer="clip: *; loop: once; clampWhenFinished: true"
+                 door-proximity-trigger="triggerDistance: 2.0; doorObjects: Misc01005, Misc01006; animations: DoorOpen, DoorOpen.001; maxFrame: 120"
+                 door-proximity-trigger-2="triggerDistance: 2.0; doorObjects: Misc01003, Misc01004; animations: Misc01.003Action, Misc01.004Action; maxFrame: 120"
+                 door-proximity-trigger-3="triggerDistance: 2.0; doorObjects: Misc01001, Misc01002; animations: Misc01.001Action, Misc01.002Action; maxFrame: 120">
          <a-gltf-model src="#spaceship-model"></a-gltf-model>
        </a-entity>
 
