@@ -5,642 +5,22 @@
     <title>WebXR Space Shooter</title>
     <meta name="description" content="Zero-gravity space shooter with 6DOF movement inspired by Overload">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script type="importmap">
-      {
-        "imports": {
-          "aframe": "https://raw.githack.com/aframevr/aframe/gh-pages/dist/aframe-master.module.min.js",
-          "three": "https://cdn.jsdelivr.net/npm/super-three@0.173.5/build/three.module.js",
-          "three/addons/": "https://cdn.jsdelivr.net/npm/super-three@0.173.5/examples/jsm/"
-        }
-      }
-    </script>
-        <script type="module">
-          import AFRAME from 'aframe';
-          // Make AFRAME and THREE globally available for other scripts
-          window.AFRAME = AFRAME;
-          window.THREE = AFRAME.THREE;
-          
-          // Also make them available without window prefix
-          globalThis.AFRAME = AFRAME;
-          globalThis.THREE = AFRAME.THREE;
-          
-          console.log('AFRAME globally exposed:', !!window.AFRAME);
-        </script>
-    <script src="https://raw.githack.com/aframevr/aframe/gh-pages/examples/showcase/post-processing/bloom.js" type="module"></script>
-    
-    <!-- Wait for modules to load before loading other scripts -->
-    <script>
-      // Wait for AFRAME to be available globally before loading other components
-      function waitForAFrame() {
-        if (typeof AFRAME !== 'undefined' && typeof THREE !== 'undefined') {
-          // Load other scripts dynamically after AFRAME is ready
-          const scripts = [
-            'https://cdn.jsdelivr.net/gh/c-frame/aframe-particle-system-component@1.2.0/dist/aframe-particle-system-component.min.js',
-            'https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js',
-            'https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js',
-            'https://unpkg.com/three-mesh-bvh@0.7.8/build/index.umd.cjs',
-            'https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js'
-          ];
-          
-          let loadedCount = 0;
-          scripts.forEach(src => {
-            const script = document.createElement('script');
-            script.src = src;
-            script.onload = () => {
-              loadedCount++;
-              if (loadedCount === scripts.length) {
-                console.log('All external scripts loaded successfully');
-              }
-            };
-            document.head.appendChild(script);
-          });
-        } else {
-          setTimeout(waitForAFrame, 50);
-        }
-      }
-      waitForAFrame();
-    </script>
-    
-    <!-- Custom components that depend on AFRAME -->
-    <script>
-      // Wait for AFRAME before registering custom components
-      function initCustomComponents() {
-        if (typeof AFRAME === 'undefined') {
-          setTimeout(initCustomComponents, 50);
-          return;
-        }
-        
-        // Enhanced emissive materials for better bloom visibility
-        
-        // Bullet Component - Real bullets with collision detection
-        AFRAME.registerComponent('bullet', {
-          schema: {
-            speed: { type: 'number', default: 10 },
-            damage: { type: 'number', default: 10 },
-            lifetime: { type: 'number', default: 5000 },
-            shooter: { type: 'string', default: '' },
-            hand: { type: 'string', default: 'right' },
-            directionX: { type: 'number', default: 0 },
-            directionY: { type: 'number', default: 0 },
-            directionZ: { type: 'number', default: -1 }
-          },
-          
-          init: function() {
-            this.startTime = Date.now();
-            this.velocity = new THREE.Vector3();
-            this.lastPosition = new THREE.Vector3();
-            
-            // Use the direction passed from the gun component
-            const direction = new THREE.Vector3(
-              this.data.directionX, 
-              this.data.directionY, 
-              this.data.directionZ
-            );
-            
-            // Normalize and set velocity
-            direction.normalize();
-            this.velocity.copy(direction).multiplyScalar(this.data.speed);
-            
-            // Store starting position for CCD
-            this.lastPosition.copy(this.el.object3D.position);
-            
-            
-            // Create bullet visual
-            this.el.setAttribute('geometry', {
-              primitive: 'sphere',
-              radius: 0.02
-            });
-            this.el.setAttribute('material', {
-              color: '#ffff00',
-              emissive: '#ffff00',
-              emissiveIntensity: 2
-            });
-          },
-          
-          tick: function(time, timeDelta) {
-            const dt = timeDelta / 1000;
-            
-            // Check lifetime
-            if (Date.now() - this.startTime > this.data.lifetime) {
-              this.destroyBullet();
-              return;
-            }
-            
-            // Store current position before moving
-            this.lastPosition.copy(this.el.object3D.position);
-            
-            // Move bullet
-            const movement = this.velocity.clone().multiplyScalar(dt);
-            this.el.object3D.position.add(movement);
-            
-            // Continuous collision detection - check path from last position to current
-            this.checkContinuousCollision();
-          },
-          
-          checkContinuousCollision: function() {
-            const currentPos = this.el.object3D.position.clone();
-            const lastPos = this.lastPosition.clone();
-            
-            // Get all collidable meshes
-            const meshes = [];
-            const models = [
-              document.querySelector('#model-level'),
-              document.querySelector('#model-spaceship'),
-              document.querySelector('#model-asteroid-42'),
-              document.querySelector('#model-asteroid-field-north'),
-              document.querySelector('#model-asteroid-field-south'),
-              document.querySelector('#model-asteroid-field-east'),
-              document.querySelector('#model-asteroid-field-west')
-            ];
-            
-            models.forEach(model => {
-              if (model && model.object3D) {
-                model.object3D.traverse(child => {
-                  if (child.isMesh && child.geometry) {
-                    meshes.push(child);
-                  }
-                });
-              }
-            });
-            
-            // Add grab-surface objects
-            const surfaces = document.querySelectorAll('[grab-surface]');
-            surfaces.forEach(surface => {
-              if (surface.object3D) {
-                surface.object3D.traverse(child => {
-                  if (child.isMesh && child.geometry) {
-                    meshes.push(child);
-                  }
-                });
-              }
-            });
-            
-            // CCD - Raycast from last position to current position
-            const raycaster = new THREE.Raycaster();
-            const direction = new THREE.Vector3().subVectors(currentPos, lastPos);
-            const distance = direction.length();
-            
-            if (distance > 0) {
-              direction.normalize();
-              raycaster.set(lastPos, direction);
-              raycaster.far = distance + 0.02; // Add small buffer
-              
-          const intersects = raycaster.intersectObjects(meshes, false);
-          
-          if (intersects.length > 0) {
-            const hit = intersects[0];
-            if (hit.distance <= distance + 0.01) {
-              
-              // Create impact effects at hit point
-              const impactManager = document.querySelector('[impact-effects-manager]');
-              if (impactManager && impactManager.components['impact-effects-manager']) {
-                impactManager.components['impact-effects-manager'].createImpactEffect(hit.point);
-              }
-              
-              this.destroyBullet();
-              return;
-            }
-          }
-            }
-            
-            // Check entity collisions
-            this.checkEntityCollisions(currentPos);
-          },
-          
-          checkEntityCollisions: function(bulletPos) {
-            const hitRadius = 0.3; // Hit detection radius
-            
-            // Check collision with player
-            const player = document.querySelector('#player');
-            if (player && this.data.shooter !== 'player') {
-              const playerPos = new THREE.Vector3();
-              player.object3D.getWorldPosition(playerPos);
-              const distance = bulletPos.distanceTo(playerPos);
-              
-              if (distance < hitRadius) {
-                this.hitPlayer(player);
-                return;
-              }
-            }
-            
-            // Check collision with bots
-            const bots = document.querySelectorAll('[zerog-bot]');
-            bots.forEach(bot => {
-              if (this.data.shooter === bot.id) return; // Don't hit self
-              
-              const botPos = new THREE.Vector3();
-              bot.object3D.getWorldPosition(botPos);
-              const distance = bulletPos.distanceTo(botPos);
-              
-              if (distance < hitRadius) {
-                this.hitBot(bot);
-              }
-            });
-          },
-          
-          hitPlayer: function(player) {
-            // Create impact effects at bullet position before destroying it
-            const bulletPos = this.el.object3D.position.clone();
-            const impactManager = document.querySelector('[impact-effects-manager]');
-            if (impactManager && impactManager.components['impact-effects-manager']) {
-              impactManager.components['impact-effects-manager'].createImpactEffect(bulletPos);
-            }
-            
-            // Trigger impact effect on player
-            const playerTarget = document.querySelector('#player-target');
-            if (playerTarget && playerTarget.components['impact-effect']) {
-              playerTarget.components['impact-effect'].playEffect();
-            }
-            
-            // Simple feedback for player hit
-            console.log('Player hit by bullet!');
-            
-            this.destroyBullet();
-          },
-          
-          hitBot: function(bot) {
-            // Create impact effects at bullet position before destroying it
-            const bulletPos = this.el.object3D.position.clone();
-            const impactManager = document.querySelector('[impact-effects-manager]');
-            if (impactManager && impactManager.components['impact-effects-manager']) {
-              impactManager.components['impact-effects-manager'].createImpactEffect(bulletPos);
-            }
-            
-            // Trigger impact effect on bot - try multiple ways to ensure it works
-            if (bot.components && bot.components['impact-effect']) {
-              bot.components['impact-effect'].playEffect();
-            } else {
-              // Fallback - manually trigger the impact effect
-              bot.setAttribute('impact-effect', 'enabled', true);
-              setTimeout(() => {
-                if (bot.components && bot.components['impact-effect']) {
-                  bot.components['impact-effect'].playEffect();
-                }
-              }, 100);
-            }
-            
-            // Visual feedback - make bot flash red briefly
-            const originalColor = bot.getAttribute('color') || '#ffffff';
-            bot.setAttribute('color', '#ff0000');
-            setTimeout(() => {
-              bot.setAttribute('color', originalColor);
-            }, 200);
-            
-            // Simple scoring - increment player score
-            const scoreElements = document.querySelectorAll('#hud-score a-entity');
-            if (scoreElements.length > 0) {
-              const playerScoreEl = scoreElements[0]; // First element is player score
-              const currentText = playerScoreEl.getAttribute('text').value;
-              const currentScore = parseInt(currentText) || 0;
-              const newScore = currentScore + 1;
-              playerScoreEl.setAttribute('text', 'value', newScore.toString());
-              console.log('Score updated:', newScore);
-            }
-            
-            this.destroyBullet();
-          },
-          
-          destroyBullet: function() {
-            if (this.el.parentNode) {
-              this.el.parentNode.removeChild(this.el);
-            }
-          }
-        });
-        
-        // Gun Component - Power management and automatic firing for both controllers
-        AFRAME.registerComponent('gun', {
-          schema: {
-            maxPower: { type: 'number', default: 100 },
-            fireRate: { type: 'number', default: 8 }, // 8 bullets per second (32 in 4 seconds)
-            powerDrainRate: { type: 'number', default: 25 }, // power per second when firing
-            rechargeRate: { type: 'number', default: 25 }, // power per second when not firing
-            bulletSpeed: { type: 'number', default: 10 } // Reduced for better collision
-          },
-          
-          init: function() {
-            this.currentPower = this.data.maxPower;
-            this.isFiring = { left: false, right: false, camera: false };
-            this.lastFireTime = { left: 0, right: 0, camera: 0 };
-            this.triggerPressed = false;
-            
-            // Determine which hand this gun component belongs to
-            this.handType = 'unknown';
-            if (this.el.id === 'leftHand') {
-              this.handType = 'left';
-            } else if (this.el.id === 'rightHand') {
-              this.handType = 'right';
-            }
-            
-            // Listen for trigger events from this specific controller
-            this.el.addEventListener('triggerdown', () => this.startFiring(this.handType));
-            this.el.addEventListener('triggerup', () => this.stopFiring(this.handType));
-            
-            // Desktop controls (space for right hand only to avoid duplication)
-            if (this.handType === 'right') {
-              document.addEventListener('keydown', (evt) => {
-                if (evt.code === 'Space' && !this.triggerPressed) {
-                  this.triggerPressed = true;
-                  this.startFiring('camera');
-                }
-              });
-              
-              document.addEventListener('keyup', (evt) => {
-                if (evt.code === 'Space' && this.triggerPressed) {
-                  this.triggerPressed = false;
-                  this.stopFiring('camera');
-                }
-              });
-            }
-          },
-          
-          tick: function(time, timeDelta) {
-            const dt = timeDelta / 1000; // Convert to seconds
-            
-            const isFiring = this.isFiring[this.handType] || (this.handType === 'right' && this.isFiring.camera);
-            
-            if (isFiring && this.currentPower > 0) {
-              // Drain power while firing
-              this.currentPower -= this.data.powerDrainRate * dt;
-              if (this.currentPower < 0) this.currentPower = 0;
-              
-              // Fire bullets at specified rate
-              const fireInterval = 1000 / this.data.fireRate; // ms between shots
-              
-              const handKey = this.handType === 'right' && this.isFiring.camera ? 'camera' : this.handType;
-              if (time - this.lastFireTime[handKey] >= fireInterval) {
-                this.fireBullet(handKey);
-                this.lastFireTime[handKey] = time;
-              }
-              
-              // Stop firing if out of power
-              if (this.currentPower <= 0) {
-                this.stopFiring(this.handType);
-                if (this.handType === 'right') {
-                  this.stopFiring('camera');
-                }
-              }
-            } else if (!isFiring && this.currentPower < this.data.maxPower) {
-              // Recharge power when not firing
-              this.currentPower += this.data.rechargeRate * dt;
-              if (this.currentPower > this.data.maxPower) {
-                this.currentPower = this.data.maxPower;
-              }
-            }
-            
-            // Update power display for this specific hand
-            this.updatePowerDisplay();
-          },
-          
-          startFiring: function(hand) {
-            if (this.currentPower > 0) {
-              this.isFiring[hand] = true;
-            }
-          },
-          
-          stopFiring: function(hand) {
-            this.isFiring[hand] = false;
-          },
-          
-          fireBullet: function(hand) {
-            // Create bullet entity
-            const bullet = document.createElement('a-entity');
-            
-            let gunPos = new THREE.Vector3();
-            let forwardDirection = new THREE.Vector3();
-            let controller = null;
-            
-            // Get position and FORWARD DIRECTION based on hand
-            if (hand === 'left') {
-              controller = document.querySelector('#leftHand');
-            } else if (hand === 'right') {
-              controller = document.querySelector('#rightHand');
-            } else {
-              controller = document.querySelector('[camera]');
-            }
-            
-            if (controller) {
-              // EXACT COPY FROM WORKING PLAYER BALLS (lines 10781-10788)
-              const controllerPos = new THREE.Vector3();
-              const controllerQuat = new THREE.Quaternion();
-              controller.object3D.getWorldPosition(controllerPos);
-              controller.object3D.getWorldQuaternion(controllerQuat);
-              
-              // Calculate shooting direction (same as thruster - pointing down from controller)
-              const direction = new THREE.Vector3(0, -1, 0);
-              direction.applyQuaternion(controllerQuat);
-              
-              gunPos.copy(controllerPos);
-              forwardDirection.copy(direction);
-            }
-            
-            // Position bullet at gun position
-            bullet.object3D.position.copy(gunPos);
-            
-            // Add bullet component with the calculated direction
-            bullet.setAttribute('bullet', {
-              speed: this.data.bulletSpeed,
-              shooter: 'player',
-              hand: hand,
-              directionX: forwardDirection.x,
-              directionY: forwardDirection.y,
-              directionZ: forwardDirection.z
-            });
-            
-            // Add to scene
-            this.el.sceneEl.appendChild(bullet);
-          },
-          
-          updatePowerDisplay: function() {
-            // Update power bar for this specific hand
-            const powerBarId = this.handType === 'left' ? '#power-bar-left' : '#power-bar-right';
-            const powerBar = document.querySelector(powerBarId);
-            if (powerBar) {
-              const percentage = (this.currentPower / this.data.maxPower) * 100;
-              const maxWidth = 0.1; // 10cm maximum width
-              powerBar.setAttribute('geometry', {
-                primitive: 'plane',
-                width: maxWidth * (percentage / 100),
-                height: 0.02
-              });
-              
-              // Color based on power level
-              let color = '#00ff00'; // Green
-              if (percentage < 30) color = '#ff0000'; // Red
-              else if (percentage < 60) color = '#ffff00'; // Yellow
-              
-              powerBar.setAttribute('material', { color: color });
-            }
-          }
-        });
-        
-        AFRAME.registerComponent('enhanced-emissive', {
-          schema: {
-            intensity: { type: 'number', default: 2.0 },
-            color: { type: 'color', default: '#ffffff' }
-          },
-          
-          init: function() {
-            this.el.addEventListener('materialtextureloaded', () => {
-              this.applyEnhancement();
-            });
-            
-            // Also apply immediately if material exists
-            setTimeout(() => this.applyEnhancement(), 100);
-          },
-          
-          applyEnhancement: function() {
-            const mesh = this.el.getObject3D('mesh');
-            if (mesh && mesh.material) {
-              // Significantly boost emissive properties for bloom
-              const emissiveColor = new THREE.Color(this.data.color);
-              mesh.material.emissive = emissiveColor;
-              mesh.material.emissiveIntensity = this.data.intensity;
-              
-              // Make material appear brighter
-              if (mesh.material.type === 'MeshStandardMaterial') {
-                mesh.material.emissiveMap = null;
-              }
-              
-              mesh.material.needsUpdate = true;
-              console.log('Enhanced emissive applied for bloom - intensity:', this.data.intensity);
-            }
-          },
-          
-          update: function() {
-            this.applyEnhancement();
-          }
-        });
-        
-        // Enhanced particle system for better spark visibility
-        AFRAME.registerComponent('enhanced-particles', {
-        init: function() {
-          setTimeout(() => {
-            const particleSystem = this.el.components['particle-system'];
-            
-            if (particleSystem && particleSystem.particleGroup) {
-              const group = particleSystem.particleGroup;
-              
-              if (group.material) {
-                // Make particles much brighter and more visible
-                group.material.blending = THREE.AdditiveBlending;
-                group.material.transparent = true;
-                
-                // Boost opacity and size significantly
-                if (group.material.uniforms) {
-                  if (group.material.uniforms.opacity) {
-                    group.material.uniforms.opacity.value = Math.min(group.material.uniforms.opacity.value * 5.0, 1.0);
-                  }
-                  if (group.material.uniforms.scale) {
-                    group.material.uniforms.scale.value *= 1.0; // No scaling to prevent huge sparks
-                  }
-                }
-                
-                group.material.needsUpdate = true;
-              }
-            } else {
-              // Retry after another second
-              setTimeout(() => {
-                this.init();
-              }, 1000);
-            }
-          }, 1000);
-        }
-        });
-        
-        // Register all main components here where AFRAME is guaranteed available
-        registerMainComponents();
-      }
-      
-      function registerMainComponents() {
-        // Billboard component to make particles always face the camera
-        AFRAME.registerComponent('billboard', {
-          tick: function() {
-            const camera = document.querySelector('[camera]');
-            if (camera) {
-              this.el.object3D.lookAt(camera.object3D.position);
-            }
-          }
-        });
-        
-        // All other components will be registered from main script after timeout
-        // This prevents timing issues with the main script
-        
-        // Set flag to indicate components are ready
-        window.componentsReady = true;
-      }
-      
-      // Initialize custom components
-      initCustomComponents();
-    </script>
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://unpkg.com/three-mesh-bvh@0.7.8/build/index.umd.cjs"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
   </head>
   <body>
     <script>
-      // Multiplayer state for 1-4 players (global scope)
-      let isMultiplayer = false;
-      let isHost = false;
-      let peer = null;
-      let connections = new Map();
-      let activePlayers = new Set();
-      let selectedLobby = 1; // Start with lobby 1 (number, not letter)
-      let playerId = null;
-      let playerNumber = 1;
-      let gameMode = 'solo';
-      const MAX_LOBBIES = 26; // A-Z lobbies
-      
-      // Wait for all dependencies to load before initializing physics
-      function initializeApp() {
-        if (typeof CANNON === 'undefined' || typeof AFRAME === 'undefined') {
-          setTimeout(initializeApp, 100);
-          return;
-        }
-        
-        
       // Physics world setup for zero-gravity
       const world = new CANNON.World();
       world.gravity.set(0, 0, 0); // Zero gravity for space environment
       world.broadphase = new CANNON.NaiveBroadphase();
       world.solver.iterations = 10;
 
-      // Make physics world globally accessible for components
-      window.world = world;
-
-      // Create materials for zero-g environment (moved inside initializeApp)
-      const defaultMaterial = new CANNON.Material('default');
-      const playerMaterial = new CANNON.Material('player');
-      const surfaceMaterial = new CANNON.Material('surface');
-      const ballMaterial = new CANNON.Material('ball');
-      
-      // Make materials globally accessible for components
-      window.defaultMaterial = defaultMaterial;
-      window.playerMaterial = playerMaterial;
-      window.surfaceMaterial = surfaceMaterial;
-      window.ballMaterial = ballMaterial;
-      
-      // Contact materials for physics interactions
-      const playerSurfaceContact = new CANNON.ContactMaterial(
-        playerMaterial,
-        surfaceMaterial,
-        {
-          friction: 0.3,
-          restitution: 0.3
-        }
-      );
-      world.addContactMaterial(playerSurfaceContact);
-
-      const ballSurfaceContact = new CANNON.ContactMaterial(
-        ballMaterial,
-        surfaceMaterial,
-        {
-          friction: 0.3,
-          restitution: 0.9
-        }
-      );
-      world.addContactMaterial(ballSurfaceContact);
-
-      // Initialize multiplayer system
-      initMultiplayer();
-
-      // Global error handler to suppress Meta Touch Controls thumbstick errors
+      // Global error handler to suppress Meta Touch Controls errors
       window.addEventListener('error', (event) => {
         if (event.error && event.error.message && 
             event.error.message.includes('thumbstick') && 
@@ -651,11 +31,14 @@
         }
       });
 
-      } // End of initializeApp function
-      
-      // Additional multiplayer variables (keeping only what's needed)
+      // Multiplayer state for 1-4 players
+      let isMultiplayer = false;
+      let isHost = false;
+      let peer = null;
+      let connections = new Map();
       let connectionToPlayer = new Map(); // Track which player ID is assigned to each connection
       let players = new Map();
+      let activePlayers = new Set();
       let botPlayers = new Set();
       let playerSlots = [
         { name: 'Player 0', color: '#ff0000', position: '-2 0 -2', rotation: '0 45 0' },
@@ -669,8 +52,10 @@
       let myReadyState = false;
       let readyStates = [false, false, false, false];
       let lastMultiplayerToggle = 0;
+      let MAX_LOBBIES = 10;
       let multiplayerStartType = 'dodgevr';
       let connectionState = 'disconnected';
+      let selectedLobby = 1;
       let isSearchingForMatch = false;
 
       // Multiplayer score state
@@ -681,7 +66,8 @@
       // Menu state tracking
       let isMenuVisible = false;
 
-      // Space shooter mode - individual player vs bots (gameMode declared in initializeApp)
+      // Space shooter mode - individual player vs bots
+      let gameMode = 'dodgeball';
 
       // Helper: check if menu is currently visible
       function getMenuVisibility() {
@@ -710,31 +96,6 @@
         }
 
       }
-
-      // Global toggles for effects - START AS OFF
-      let smokeEnabled = false;
-      let iceCubeEnabled = false;
-      let sparksEnabled = false;
-
-      // Keyboard controls for toggles
-      document.addEventListener('keydown', (event) => {
-        if (event.code === 'Digit4') {
-          const cursorListener = document.querySelector('[cursor-listener]');
-          if (cursorListener && cursorListener.components['cursor-listener']) {
-            cursorListener.components['cursor-listener'].toggleSmoke();
-          }
-        } else if (event.code === 'Digit5') {
-          const cursorListener = document.querySelector('[cursor-listener]');
-          if (cursorListener && cursorListener.components['cursor-listener']) {
-            cursorListener.components['cursor-listener'].toggleIceCube();
-          }
-        } else if (event.code === 'Digit6') {
-          const cursorListener = document.querySelector('[cursor-listener]');
-          if (cursorListener && cursorListener.components['cursor-listener']) {
-            cursorListener.components['cursor-listener'].toggleSparks();
-          }
-        }
-      });
 
       // Helper: update menu display
       function updateMenuDisplay() {
@@ -920,39 +281,19 @@
       }
       
       // Helper: update player color based on team
-      // Global cache to prevent infinite loops
-      const colorUpdateCache = {};
-      
       function updatePlayerTeamColor(playerId, team) {
         const teamColors = {
           red: '#ff0000',
-          blue: '#0000ff',
-          green: '#00ff00',
-          yellow: '#ffff00',
-          white: '#ffffff'
+          blue: '#0000ff'
         };
         
         const color = teamColors[team];
         if (!color) return;
         
-        // CRITICAL FIX: Prevent infinite loops but allow initial color updates
-        const currentTime = Date.now();
-        const cacheKey = `${playerId}-${team}`;
-        
-        // Allow first update or updates after 500ms (reduced from 2 seconds for faster retries)
-        if (colorUpdateCache[cacheKey] && (currentTime - colorUpdateCache[cacheKey]) < 500) {
-          return; // Skip if updated within last 500ms
-        }
-        
-        colorUpdateCache[cacheKey] = currentTime;
-        
-        console.log(`🎨 Applying color ${color} (${team}) to player ${playerId}`);
-        
         // CRITICAL FIX: Update LOCAL player target if this is for the current player
         // In singleplayer, myPlayerId might be null but we still want to update player_0
         const isLocalPlayer = (playerId === myPlayerId) || (playerId === 'player_0' && !isMultiplayer);
         if (isLocalPlayer) {
-          console.log(`🎨 Updating LOCAL player body color: ${color} for ${playerId}`);
           updateLocalPlayerColor(color);
         }
         
@@ -961,8 +302,6 @@
           const playerIndex = parseInt(playerId.split('_')[1]);
           const remoteTarget = document.querySelector(`#remote-target-${playerIndex}`);
           const remoteImpact = document.querySelector(`#remote-impact-${playerIndex}`);
-          
-          console.log(`🎨 Updating REMOTE player body color: ${color} for ${playerId} (target: #remote-target-${playerIndex}, found: ${!!remoteTarget})`);
           
           if (remoteTarget) {
             remoteTarget.setAttribute('color', color);
@@ -980,63 +319,7 @@
               remoteImpact.setAttribute('color', color);
             }
             
-            console.log(`✅ Updated remote target #remote-target-${playerIndex} with color ${color}`);
-          } else {
-            console.warn(`❌ Remote target #remote-target-${playerIndex} not found!`);
           }
-        }
-        
-        // CRITICAL FIX: Update player ball color based on ACTUAL ball assignments
-        const playerIndex = parseInt(playerId.split('_')[1]);
-        
-        // Map player slots to their ACTUAL ball assignments (from getBallForPlayer function)
-        // getBallForPlayer: player_0->Ball2, player_1->Ball4, player_2->Ball1, player_3->Ball3
-        // But balls are named player1, player2, player3, player4 in HTML
-        const actualBallMapping = {
-          0: 2, // player_0 shoots Ball 2 -> update player2 ball 
-          1: 4, // player_1 shoots Ball 4 -> update player4 ball
-          2: 1, // player_2 shoots Ball 1 -> update player1 ball  
-          3: 3  // player_3 shoots Ball 3 -> update player3 ball
-        };
-        
-        const actualBallNumber = actualBallMapping[playerIndex];
-        if (!actualBallNumber) {
-          console.warn(`⚽ No actual ball mapping for ${playerId} (index: ${playerIndex})`);
-          return;
-        }
-        
-        const playerBall = document.querySelector(`[zerog-ball*="player: player${actualBallNumber}"]`);
-        
-        if (playerBall) {
-          // Update ball color
-          playerBall.setAttribute('color', color);
-          playerBall.setAttribute('material', `color: ${color}; shader: standard`);
-          
-          // Update ball glow
-          playerBall.setAttribute('glow', `color: ${color}; intensity: 1.5`);
-          
-          // Update ball light
-          const ballLight = playerBall.querySelector('a-entity[light]');
-          if (ballLight) {
-            ballLight.setAttribute('light', `type: point; color: ${color}; intensity: 1.5; distance: 5; decay: 2`);
-          }
-          
-          // CRITICAL FIX: Update wireframe sphere color
-          const wireframeSphere = playerBall.querySelector('a-sphere[material*="wireframe"]');
-          if (wireframeSphere) {
-            wireframeSphere.setAttribute('color', color);
-            wireframeSphere.setAttribute('material', `wireframe: true; color: ${color}; opacity: 0.5`);
-          }
-          
-          // CRITICAL FIX: Update ball shield color
-          const ballShield = playerBall.querySelector('.ball-shield');
-          if (ballShield) {
-            ballShield.setAttribute('material', `transparent: true; opacity: 0.3; color: ${color}`);
-          }
-          
-          console.log(`⚽ Updated ball color for ${playerId} (player${actualBallNumber}): ${color}`);
-        } else {
-          console.warn(`⚽ Ball not found for ${playerId} (player${actualBallNumber})`);
         }
       }
 
@@ -1084,10 +367,6 @@
               player.isConnected = true;
               player.isBot = false;
             }
-            
-            // CRITICAL FIX: Assign host color (red for player_0)
-            updatePlayerTeamColor('player_0', 'red');
-            console.log(`🎨 HOST assigned color: red (player_0)`);
             
             // Update bot management for new player count
             manageActivePlayersAndBots();
@@ -1385,33 +664,19 @@
         
         // Update local activePlayers set with the host's data
         if (data.activePlayers) {
-          // Preserve client's own player ID if it exists
-          const myId = myPlayerId;
           activePlayers.clear();
           data.activePlayers.forEach(playerId => {
             activePlayers.add(playerId);
           });
-          
-          // CRITICAL FIX: Ensure client's own ID is always included
-          if (myId && !activePlayers.has(myId)) {
-            activePlayers.add(myId);
-            console.log(`🔧 CLIENT re-added own playerId to activePlayers: ${myId}`);
-          }
-          
-          console.log(`📊 CLIENT updated activePlayers: ${Array.from(activePlayers)}`);
         }
         
         // If client doesn't have a player ID yet, request assignment
         if (!isHost && !myPlayerId) {
-          console.log('🔍 CLIENT requesting player assignment...');
           const hostConn = connections.get('host');
           if (hostConn && hostConn.open) {
             hostConn.send({
               type: 'request-player-assignment'
             });
-            console.log('📤 CLIENT sent player assignment request to host');
-          } else {
-            console.warn('❌ CLIENT cannot request assignment - no host connection');
           }
         }
         
@@ -1422,27 +687,21 @@
       }
 
       function handlePlayerAssignment(data) {
-        console.log('📥 CLIENT received player assignment:', data);
-        
         // Only accept assignment if we don't already have a player ID
         if (myPlayerId) {
-          console.log(`⚠️ CLIENT already has playerId: ${myPlayerId}, ignoring assignment`);
           return;
         }
         
         myPlayerId = data.playerId;
-        console.log(`✅ CLIENT assigned playerId: ${myPlayerId}`);
         
         // Team assignment removed - space shooter doesn't use teams
         if (data.team) {
           // CRITICAL FIX: Update client's own body color immediately
-          console.log(`🎨 CLIENT applying color ${data.team} to self (${myPlayerId})`);
           updatePlayerTeamColor(myPlayerId, data.team);
         }
         
         // Add self to active players
         activePlayers.add(myPlayerId);
-        console.log(`✅ CLIENT added self to activePlayers: ${Array.from(activePlayers)}`);
         
         // Update bot management for new player count
         manageActivePlayersAndBots();
@@ -1611,13 +870,12 @@
                     sphere.setAttribute('visible', true);
                   }
                   
-                  // CRITICAL FIX: Don't override colors - let updatePlayerTeamColor handle this
-                  // The colors will be set by the multiplayer color assignment system
-                  
-                  // Only set basic properties, not colors
-                  if (!sphere.hasAttribute('material')) {
-                    sphere.setAttribute('material', `shader: standard; transparent: true; opacity: 0.7`);
-                  }
+                  // Set team color for when they do appear during hits
+                  // Team colors removed - space shooter uses default colors
+                  const teamColor = '#ffffff'; // Default white
+                  sphere.setAttribute('material', `shader: standard; emissive: ${teamColor}; emissiveIntensity: 0.5; transparent: true; opacity: 0.7`);
+                  sphere.setAttribute('color', teamColor);
+                  sphere.setAttribute('impact-effect', `color: ${teamColor}`);
                 }
                 
               } else {
@@ -1634,7 +892,6 @@
       function handlePlayerAssignmentRequest(conn) {
         if (!isHost) return;
         
-        console.log('🏠 HOST received player assignment request');
         
         let assignedSlot = null;
         for (let slotNumber = 1; slotNumber < 4; slotNumber++) {
@@ -1648,70 +905,91 @@
         
         if (assignedSlot !== null) {
           const playerId = `player_${assignedSlot}`;
-          console.log(`🏠 HOST assigning slot ${assignedSlot} (${playerId}) to client`);
           
-          // Mark player as connected
-          const player = players.get(playerId) || { name: `Player ${assignedSlot}`, color: '#ffffff', isConnected: false, isBot: false };
-            player.isConnected = true;
-            player.isBot = false;
-          players.set(playerId, player);
+          // Team assignment removed - space shooter doesn't use teams
           
-          // Add to active players
-            activePlayers.add(playerId);
-          
-          // Assign colors based on player slot (not teams)
-          const playerColors = {
-            0: 'red',    // player_0 (host)
-            1: 'blue',   // player_1 (first client)
-            2: 'green',  // player_2 (second client) 
-            3: 'yellow'  // player_3 (third client)
-          };
-          const assignedColor = playerColors[assignedSlot] || 'white';
-          
-          // Send assignment to client
-          if (conn && conn.open) {
           conn.send({
             type: 'player-assignment',
-              playerId: playerId,
-              team: assignedColor // Send color as team for compatibility
-            });
-            console.log(`📤 HOST sent player assignment: ${playerId} with color: ${assignedColor}`);
+            playerId: playerId
+            // Team removed - space shooter doesn't use teams
+          });
+          
+          const player = players.get(playerId);
+          if (player) {
+            player.isConnected = true;
+            player.isBot = false;
+            activePlayers.add(playerId);
           }
           
-          // CRITICAL FIX: Host also needs to apply the same color to the client's remote target
-          console.log(`🎨 HOST applying color ${assignedColor} to remote client ${playerId}`);
-          updatePlayerTeamColor(playerId, assignedColor);
+          // Update bot management for new player count
+          manageActivePlayersAndBots();
           
-          // CRITICAL FIX: Refresh remote player visibility after color assignment
+          // Track which connection this player is assigned to
+          connectionToPlayer.set(conn, playerId);
+          
+          updateMenuDisplay();
+          sendPlayerCountUpdate();
+          
+          // Send current team assignments to new client
           setTimeout(() => {
-            makeAllRemotePlayersVisible();
-          }, 50);
-          
-          // CRITICAL FIX: Force ball color update with delay to ensure it takes effect
-          setTimeout(() => {
-            console.log(`🎨 HOST forcing ball color update for ${playerId} with ${assignedColor}`);
-            updatePlayerTeamColor(playerId, assignedColor);
-          }, 100);
-          
-          // Update player count for all clients
-          updateAllClientsPlayerCount();
-        } else {
-          console.warn('❌ HOST cannot assign player - all slots taken');
-        }
-      }
-      
-      function updateAllClientsPlayerCount() {
-        // Send updated player count to all connected clients
-        connections.forEach((conn, playerId) => {
-          if (conn && conn.open) {
+            // Team assignments removed - space shooter doesn't use teams
+            
+            // CRITICAL FIX: Always send current game state to new joiner (including WAITING)
+            // Check for multiple game managers and find the active one
+            const allGameManagers = document.querySelectorAll('[game-manager]');
+            console.log('🔍 HOST found', allGameManagers.length, 'game managers');
+            
+            let gameManagerComp = null;
+            let gameManager = null;
+            
+            // Find the game manager with active state or the first valid one
+            for (let i = 0; i < allGameManagers.length; i++) {
+              const gm = allGameManagers[i];
+              if (gm.components && gm.components['game-manager']) {
+                const comp = gm.components['game-manager'];
+                console.log(`🎮 Game Manager ${i}:`, {
+                  matchState: comp.matchState,
+                  gameStarted: comp.gameStarted,
+                  matchStartTime: comp.matchStartTime
+                });
+                
+                // Prefer the one with active match or use first valid one
+                if (!gameManagerComp || comp.gameStarted || comp.matchState !== 'WAITING') {
+                  gameManagerComp = comp;
+                  gameManager = gm;
+                }
+              }
+            }
+            
+            if (gameManager && gameManagerComp) {
+              const matchState = gameManagerComp.matchState;
+              
+              console.log('🏠 HOST sending game-state to new client:', {
+                state: matchState,
+                gameStarted: gameManagerComp.gameStarted,
+                matchStartTime: gameManagerComp.matchStartTime,
+                playerScores: gameManagerComp.playerScores
+              });
+              
+              // Send game state for all states, not just active matches
               conn.send({
-              type: 'player-count-update',
-              activePlayers: Array.from(activePlayers),
-              playerCount: activePlayers.size,
-              maxPlayers: 4
-            });
-          }
-        });
+                  type: 'game-state',
+                  state: matchState,
+                gameStarted: gameManagerComp.gameStarted,
+                matchStartTime: gameManagerComp.matchStartTime,
+                matchDuration: gameManagerComp.matchDuration,
+                playerScores: gameManagerComp.playerScores,
+                gameMode: gameMode,
+                // CRITICAL FIX: Send current time for proper timer sync
+                currentTime: Date.now(),
+                // Send countdown info if in countdown state
+                countdownStartTime: gameManagerComp.countdownStartTime,
+                countdownDuration: gameManagerComp.countdownDuration
+              });
+            }
+          }, 100);
+        } else {
+        }
       }
 
       function handlePlayerUpdate(data) {
@@ -1881,23 +1159,6 @@
       }
       
       function handlePlayerState(data) {
-        // Debug logging for received player state
-        if (!this.lastReceiveLog || Date.now() - this.lastReceiveLog > 5000) {
-          this.lastReceiveLog = Date.now();
-          console.log(`📥 Received player state from ${data.playerId}:`, {
-            position: `${data.state.x?.toFixed(1)}, ${data.state.y?.toFixed(1)}, ${data.state.z?.toFixed(1)}`,
-            hasRig: !!data.state.rig,
-            hasLeftHand: !!data.state.leftHand,
-            hasRightHand: !!data.state.rightHand
-          });
-        }
-        
-        // CRITICAL FIX: Check if playerId is valid
-        if (!data.playerId || typeof data.playerId !== 'string') {
-          console.warn('❌ Invalid playerId in player state:', data.playerId);
-          return;
-        }
-        
         // Handle remote player position/rotation updates (throttled logging)
         if (!this.lastPlayerStateReceiveTime || Date.now() - this.lastPlayerStateReceiveTime > 30000) {
           this.lastPlayerStateReceiveTime = Date.now();
@@ -1927,9 +1188,6 @@
           remotePlayer.setAttribute('position', `${data.state.x} ${data.state.y} ${data.state.z}`);
           remotePlayer.setAttribute('rotation', `${data.state.rx} ${data.state.ry} ${data.state.rz}`);
           remotePlayer.setAttribute('visible', true);
-          
-          // REMOVED: Redundant color application system
-          // Colors are now applied directly from player assignments
           
           // Store rig rotation data for arm IK calculations
           if (data.state.rig) {
@@ -2150,26 +1408,6 @@
         }
       }
       
-      function handleTeamAssignmentsRequest(conn) {
-        // CRITICAL FIX: Host responds to team assignment requests from clients
-        if (!isHost) {
-          return; // Only host can respond to team assignment requests
-        }
-        
-        // Space shooter doesn't use teams, but send empty response to prevent errors
-        if (conn && conn.open) {
-          conn.send({
-            type: 'team-assignments',
-            assignments: {}
-          });
-        }
-      }
-      
-      function handleTeamAssignments(data) {
-        // Space shooter doesn't use teams, but handle to prevent errors
-        console.log('Team assignments received (space shooter doesn\'t use teams):', data);
-      }
-      
       // Team assignment functions removed - space shooter doesn't use teams
       
       // Game mode UI function removed - space shooter is always in dodgeball mode
@@ -2208,6 +1446,8 @@
       }
       
       function handleBallState(data) {
+
+        
         // Handle remote ball position/velocity updates (throttled logging)
         if (!this.lastBallStateReceiveTime || Date.now() - this.lastBallStateReceiveTime > 30000) {
           this.lastBallStateReceiveTime = Date.now();
@@ -2681,1317 +1921,41 @@ function setGameplayHUD(isPlaying) {
   // HUD updated silently
 }
 
-      // Start the app initialization immediately after dependencies load
-      initializeApp();
-
-      // Wait for components to be registered in head before proceeding
-      function waitForComponents() {
-        if (window.componentsReady) {
-          console.log('Components ready, proceeding with component registration...');
-          // Now register all the main components
-          registerAllComponents();
-        } else {
-          setTimeout(waitForComponents, 50);
-        }
-      }
+      // Create materials for zero-g environment
+      const defaultMaterial = new CANNON.Material('default');
+      const playerMaterial = new CANNON.Material('player');
+      const surfaceMaterial = new CANNON.Material('surface');
+      const ballMaterial = new CANNON.Material('ball');
       
-      // Start waiting for components
-      waitForComponents();
+      /* 
+       * COLLISION FILTERING SYSTEM:
+       * Group 1: Player (can grab surfaces, ignores balls when held)
+       * Group 2: Balls (can hit walls/surfaces, pass through player body)  
+       * Group 4: Walls/Surfaces (interact with both player and balls)
+       * 
+       * This prevents physics reactions when holding balls near your body!
+       */
 
-      function registerAllComponents() {
-        if (typeof AFRAME === 'undefined') {
-          console.error('AFRAME still not available');
-          return;
+      // Create contact materials for realistic surface interaction
+      const playerSurfaceContact = new CANNON.ContactMaterial(
+        playerMaterial,
+        surfaceMaterial,
+        {
+          friction: 0.8,
+          restitution: 0.3
         }
-        
-        console.log('Registering main components...');
-        
-      // WORLD-SPACE Three.js spark system - completely independent of A-Frame hierarchy
-      AFRAME.registerComponent('world-spark-system', {
-        init: function() {
-          this.sparks = [];
-          this.worldPosition = new THREE.Vector3();
-          this.el.object3D.getWorldPosition(this.worldPosition);
-          this.setupSparks();
-        },
-        
-        setupSparks: function() {
-          const scene = this.el.sceneEl.object3D;
-          
-          const sparkConfigs = [
-            {velocity: new THREE.Vector3(0.8, 0.3, 0.6), color: 0xFFFF00, size: 0.008, life: 1.2},
-            {velocity: new THREE.Vector3(-0.7, 0.9, -0.4), color: 0xFFFF00, size: 0.006, life: 1.1},
-            {velocity: new THREE.Vector3(0.4, -0.6, 0.8), color: 0xFF8800, size: 0.007, life: 1.0},
-            {velocity: new THREE.Vector3(-0.5, -0.3, -0.7), color: 0xFFFF00, size: 0.005, life: 1.3},
-            {velocity: new THREE.Vector3(0.2, 0.8, -0.9), color: 0xFF4400, size: 0.004, life: 0.9}
-          ];
-          
-          sparkConfigs.forEach((config, i) => {
-            const geometry = new THREE.SphereGeometry(config.size, 8, 6);
-            const material = new THREE.MeshBasicMaterial({
-              color: new THREE.Color(config.color),
-              transparent: true,
-              opacity: 0.9
-            });
-            
-            const mesh = new THREE.Mesh(geometry, material);
-            // Set WORLD position directly
-            mesh.position.copy(this.worldPosition);
-            
-            const spark = {
-              mesh: mesh,
-              velocity: config.velocity.clone(),
-              startPosition: this.worldPosition.clone(),
-              age: 0,
-              maxAge: config.life,
-              startColor: new THREE.Color(config.color),
-              endColor: new THREE.Color(0x220000),
-              originalOpacity: 0.9
-            };
-            
-            this.sparks.push(spark);
-            // Add directly to scene, NOT to A-Frame entity
-            scene.add(mesh);
-          });
-        },
-        
-        tick: function(time, timeDelta) {
-          if (!this.el.getAttribute('visible')) {
-            this.sparks.forEach(spark => spark.mesh.visible = false);
-            return;
-          }
-          
-          this.sparks.forEach(spark => spark.mesh.visible = true);
-          
-          const deltaSeconds = timeDelta / 1000;
-          
-          this.sparks.forEach(spark => {
-            spark.age += deltaSeconds;
-            
-            if (spark.age > spark.maxAge) {
-              // Reset to world start position
-              spark.age = 0;
-              spark.mesh.position.copy(spark.startPosition);
-              spark.mesh.material.opacity = spark.originalOpacity;
-              spark.mesh.material.color.copy(spark.startColor);
-              return;
-            }
-            
-            // PURE WORLD-SPACE LINEAR MOVEMENT
-            spark.mesh.position.x += spark.velocity.x * deltaSeconds;
-            spark.mesh.position.y += spark.velocity.y * deltaSeconds;
-            spark.mesh.position.z += spark.velocity.z * deltaSeconds;
-            
-            // Color transition
-            const progress = spark.age / spark.maxAge;
-            const currentColor = spark.startColor.clone().lerp(spark.endColor, progress);
-            spark.mesh.material.color.copy(currentColor);
-            spark.mesh.material.opacity = spark.originalOpacity * (1 - progress);
-          });
-        },
-        
-        remove: function() {
-          const scene = this.el.sceneEl.object3D;
-          this.sparks.forEach(spark => {
-            scene.remove(spark.mesh);
-            spark.mesh.geometry.dispose();
-            spark.mesh.material.dispose();
-          });
-          this.sparks = [];
-        }
-      });
+      );
+      world.addContactMaterial(playerSurfaceContact);
 
-      // Spark burst controller - realistic welding/electrical spark patterns
-      AFRAME.registerComponent('spark-burst-controller', {
-        init: function() {
-          this.timer = 0;
-          this.state = 'pause'; // 'pause', 'burst', 'continuous'
-          this.nextStateTime = 2; // Start with 2 second pause
-          this.particleSystem = null;
-          this.smokeSystem = null;
-        },
-        
-        tick: function(time, timeDelta) {
-          if (!this.el.getAttribute('visible')) return;
-          
-          // Get particle system components
-          if (!this.particleSystem) {
-            this.particleSystem = this.el.components['particle-system'];
-            if (!this.particleSystem) return;
-          }
-          
-          if (!this.smokeSystem) {
-            const smokeEntity = this.el.querySelector('#spark-smoke');
-            if (smokeEntity) {
-              this.smokeSystem = smokeEntity.components['particle-system'];
-            }
-          }
-          
-          const deltaSeconds = timeDelta / 1000;
-          this.timer += deltaSeconds;
-          
-          // Check if we should change state
-          if (this.timer >= this.nextStateTime) {
-            this.timer = 0;
-            this.changeState();
-          }
-          
-          // Control particle emission based on state
-          if (this.state === 'pause') {
-            // Stop particles during pause
-            this.particleSystem.stopParticles();
-            if (this.smokeSystem) {
-              this.smokeSystem.stopParticles();
-            }
-          } else {
-            // Start particles for burst or continuous
-            this.particleSystem.startParticles();
-            if (this.smokeSystem) {
-              this.smokeSystem.startParticles();
-            }
-          }
-        },
-        
-        changeState: function() {
-          const rand = Math.random();
-          
-          if (this.state === 'pause') {
-            // Coming out of pause - choose burst or continuous
-            if (rand < 0.7) {
-              // 70% chance of burst
-              this.state = 'burst';
-              this.nextStateTime = 0.1 + Math.random() * 0.4; // 0.1-0.5 second bursts
-              // console.log('Spark burst for', this.nextStateTime.toFixed(2), 'seconds');
-            } else {
-              // 30% chance of continuous
-              this.state = 'continuous';
-              this.nextStateTime = 0.8 + Math.random() * 1.5; // 0.8-2.3 second continuous
-              // console.log('Spark continuous for', this.nextStateTime.toFixed(2), 'seconds');
-            }
-          } else {
-            // Coming out of burst or continuous - go to pause
-            this.state = 'pause';
-            this.nextStateTime = 1.5 + Math.random() * 3.5; // 1.5-5 second pauses
-            // console.log('Spark pause for', this.nextStateTime.toFixed(2), 'seconds');
-          }
-        },
-        
-        remove: function() {
-          if (this.particleSystem) {
-            this.particleSystem.stopParticles();
-          }
-          if (this.smokeSystem) {
-            this.smokeSystem.stopParticles();
-          }
+      const ballSurfaceContact = new CANNON.ContactMaterial(
+        ballMaterial,
+        surfaceMaterial,
+        {
+          friction: 0.1,
+          restitution: 0.9
         }
-      });
-
-      // Impact Effects System - Creates temporary spark and smoke effects at any 3D position
-      AFRAME.registerComponent('impact-effects-manager', {
-        init: function() {
-          this.activeEffects = [];
-          this.maxEffects = 20; // Limit concurrent effects for performance
-        },
-        
-        createImpactEffect: function(position) {
-          // Remove oldest effect if at limit
-          if (this.activeEffects.length >= this.maxEffects) {
-            this.removeEffect(this.activeEffects[0]);
-          }
-          
-          const effectId = 'impact-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-          
-          // Create temporary spark effect
-          const sparkEntity = document.createElement('a-entity');
-          sparkEntity.id = effectId + '-sparks';
-          sparkEntity.setAttribute('position', `${position.x} ${position.y} ${position.z}`);
-          sparkEntity.setAttribute('impact-spark-burst', '');
-          
-          // Create a temporary copy of the working spark smoke system
-          const smokeEntity = document.createElement('a-entity');
-          smokeEntity.id = effectId + '-smoke';
-          smokeEntity.setAttribute('position', `${position.x} ${position.y} ${position.z}`);
-          smokeEntity.setAttribute('visible', 'true');
-          
-          // Use specialized impact smoke controller instead of the continuous one
-          smokeEntity.setAttribute('impact-smoke-controller', '');
-          smokeEntity.setAttribute('threejs-smoke-puffs', '');
-          
-          // Add to scene
-          this.el.sceneEl.appendChild(sparkEntity);
-          this.el.sceneEl.appendChild(smokeEntity);
-          
-          // The impact-smoke-controller will handle immediate puff creation
-          
-          const effect = {
-            id: effectId,
-            sparkEntity: sparkEntity,
-            smokeEntity: smokeEntity,
-            startTime: Date.now(),
-            duration: 5000 // 5 seconds to let smoke fully fade out
-          };
-          
-          this.activeEffects.push(effect);
-        },
-        
-        tick: function() {
-          const now = Date.now();
-          
-          // Clean up expired effects
-          this.activeEffects = this.activeEffects.filter(effect => {
-            if (now - effect.startTime > effect.duration) {
-              this.removeEffect(effect);
-              return false;
-            }
-            return true;
-          });
-        },
-        
-        removeEffect: function(effect) {
-          if (effect.sparkEntity && effect.sparkEntity.parentNode) {
-            effect.sparkEntity.parentNode.removeChild(effect.sparkEntity);
-          }
-          if (effect.smokeEntity && effect.smokeEntity.parentNode) {
-            effect.smokeEntity.parentNode.removeChild(effect.smokeEntity);
-          }
-        }
-      });
-
-      // One-time spark burst for bullet impacts
-      AFRAME.registerComponent('impact-spark-burst', {
-        init: function() {
-          this.sparks = [];
-          this.burstDuration = 0.8; // Sparks last 0.8 seconds
-          this.startTime = Date.now();
-          this.setupSparks();
-        },
-        
-        setupSparks: function() {
-          const scene = this.el.sceneEl.object3D;
-          const worldPos = new THREE.Vector3();
-          this.el.object3D.getWorldPosition(worldPos);
-          
-          // Create 8-12 sparks for impact
-          const sparkCount = 8 + Math.floor(Math.random() * 5);
-          
-          for (let i = 0; i < sparkCount; i++) {
-            // Random directions in hemisphere above impact point
-            const theta = Math.random() * Math.PI * 2; // 0 to 2π
-            const phi = Math.random() * Math.PI * 0.5; // 0 to π/2 (hemisphere)
-            const speed = 1.5 + Math.random() * 2; // 1.5-3.5 speed
-            
-            const velocity = new THREE.Vector3(
-              Math.sin(phi) * Math.cos(theta) * speed,
-              Math.cos(phi) * speed * 0.5, // Bias upward
-              Math.sin(phi) * Math.sin(theta) * speed
-            );
-            
-            const colors = [0xFFFF00, 0xFF8800, 0xFF4400, 0xFF6600];
-            const color = colors[Math.floor(Math.random() * colors.length)];
-            const size = 0.006 + Math.random() * 0.004; // 0.006-0.010
-            
-            const geometry = new THREE.SphereGeometry(size, 6, 4);
-            const material = new THREE.MeshBasicMaterial({
-              color: new THREE.Color(color),
-              transparent: true,
-              opacity: 0.9
-            });
-            
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.position.copy(worldPos);
-            
-            const spark = {
-              mesh: mesh,
-              velocity: velocity,
-              startPosition: worldPos.clone(),
-              age: 0,
-              maxAge: this.burstDuration,
-              startColor: new THREE.Color(color),
-              endColor: new THREE.Color(0x220000),
-              originalOpacity: 0.9
-            };
-            
-            this.sparks.push(spark);
-            scene.add(mesh);
-          }
-        },
-        
-        tick: function(time, timeDelta) {
-          const deltaSeconds = timeDelta / 1000;
-          const elapsed = (Date.now() - this.startTime) / 1000;
-          
-          if (elapsed > this.burstDuration) {
-            // Effect finished, mark for cleanup
-            this.sparks.forEach(spark => spark.mesh.visible = false);
-            return;
-          }
-          
-          this.sparks.forEach(spark => {
-            spark.age += deltaSeconds;
-            
-            if (spark.age > spark.maxAge) {
-              spark.mesh.visible = false;
-              return;
-            }
-            
-            // Move spark
-            spark.mesh.position.x += spark.velocity.x * deltaSeconds;
-            spark.mesh.position.y += spark.velocity.y * deltaSeconds;
-            spark.mesh.position.z += spark.velocity.z * deltaSeconds;
-            
-            // Apply gravity
-            spark.velocity.y -= 2.0 * deltaSeconds;
-            
-            // Color and opacity fade
-            const progress = spark.age / spark.maxAge;
-            const currentColor = spark.startColor.clone().lerp(spark.endColor, progress);
-            spark.mesh.material.color.copy(currentColor);
-            spark.mesh.material.opacity = spark.originalOpacity * (1 - progress);
-          });
-        },
-        
-        remove: function() {
-          const scene = this.el.sceneEl.object3D;
-          this.sparks.forEach(spark => {
-            scene.remove(spark.mesh);
-            spark.mesh.geometry.dispose();
-            spark.mesh.material.dispose();
-          });
-          this.sparks = [];
-        }
-      });
-
-      // Specialized smoke controller for bullet impacts - creates immediate burst, no continuous emission
-      AFRAME.registerComponent('impact-smoke-controller', {
-        init: function() {
-          this.smokeComponent = null;
-          this.activePuffs = [];
-          this.initialized = false;
-          this.impactMeshes = []; // Separate mesh pool for impact effects
-          
-          // Initialize after a short delay to ensure threejs-smoke-puffs is ready
-          setTimeout(() => {
-            this.initializeImpactSmoke();
-          }, 100);
-        },
-        
-        initializeImpactSmoke: function() {
-          // Create our own dedicated mesh pool for impact effects (don't share with static system)
-          this.createImpactMeshes();
-          
-          // Create 2-4 puffs immediately at impact location
-          const puffCount = 2 + Math.floor(Math.random() * 3); // 2-4 puffs
-          
-          for (let i = 0; i < puffCount; i++) {
-            // Small delay between puffs for natural look
-            setTimeout(() => {
-              this.createImpactPuff();
-            }, i * 50); // 50ms between each puff
-          }
-          
-          this.initialized = true;
-        },
-        
-        createImpactMeshes: function() {
-          // Create 20 dedicated meshes for impact effects (separate from static system)
-          this.impactMeshes = [];
-          
-          for (let i = 0; i < 20; i++) {
-            const geometry = new THREE.PlaneGeometry(1, 1);
-            
-            const material = new THREE.ShaderMaterial({
-              uniforms: {
-                time: { value: 0 },
-                puffOpacity: { value: 0.0 },
-                puffScale: { value: 0.001 },
-                smokeTexture: { value: new THREE.TextureLoader().load('assets/particles/smoke1.png') },
-                lightPosition: { value: new THREE.Vector3(0, 5.3, 12) },
-                lightColor: { value: new THREE.Color(1, 0, 0) }
-              },
-              vertexShader: `
-                uniform float time;
-                uniform float puffScale;
-                
-                varying vec2 vUv;
-                varying vec3 vWorldPosition;
-                
-                void main() {
-                  vUv = uv;
-                  vec3 pos = position;
-                  
-                  // Apply scaling directly to the geometry
-                  pos *= puffScale;
-                  
-                  // Gentle movement
-                  pos.x += sin(time * 0.3) * 0.01;
-                  pos.y += cos(time * 0.2) * 0.01;
-                  
-                  vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
-                  vWorldPosition = worldPosition.xyz;
-                  
-                  vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-                  gl_Position = projectionMatrix * mvPosition;
-                }
-              `,
-              fragmentShader: `
-                uniform float time;
-                uniform float puffOpacity;
-                uniform sampler2D smokeTexture;
-                uniform vec3 lightPosition;
-                uniform vec3 lightColor;
-                
-                varying vec2 vUv;
-                varying vec3 vWorldPosition;
-                
-                void main() {
-                  // Use the realistic smoke texture (same as static system)
-                  vec4 smokeColor = texture2D(smokeTexture, vUv);
-                  
-                  // Simple neutral coloring (no red lighting influence)
-                  vec3 baseColor = vec3(0.5, 0.5, 0.5); // Neutral gray like static system
-                  smokeColor.rgb *= baseColor;
-                  
-                  // Apply dynamic opacity
-                  smokeColor.a *= puffOpacity;
-                  
-                  gl_FragColor = smokeColor;
-                }
-              `,
-              transparent: true,
-              blending: THREE.NormalBlending,
-              depthWrite: false,
-              side: THREE.DoubleSide
-            });
-            
-            const mesh = new THREE.Mesh(geometry, material);
-            
-            // Set up for camera billboarding like the static system
-            mesh.userData.isBillboard = true;
-            
-            // Start invisible
-            mesh.visible = false;
-            
-            // Add to scene
-            this.el.sceneEl.object3D.add(mesh);
-            
-            this.impactMeshes.push(mesh);
-          }
-        },
-        
-        createImpactPuff: function() {
-          if (!this.impactMeshes || this.impactMeshes.length === 0) {
-            console.warn('💨 Impact smoke: No impact meshes available');
-            return;
-          }
-          
-          // Find an available mesh from our dedicated pool
-          const totalMeshes = this.impactMeshes.length;
-          const availableMeshes = this.impactMeshes.filter(mesh => !mesh.visible);
-          
-          const availableMesh = availableMeshes[0];
-          
-          if (!availableMesh) {
-            return;
-          }
-          
-          // Position at impact point with small random offset
-          const worldPos = new THREE.Vector3();
-          this.el.object3D.getWorldPosition(worldPos);
-          
-          const puff = {
-            age: 0,
-            maxAge: 1.5 + Math.random() * 0.5, // 1.5-2.0 second lifetime (faster fade)
-            startSize: 0.0125, // 4x smaller: was 0.05, now 0.0125
-            endSize: 0.1 + Math.random() * 0.075, // 4x smaller: was 0.4-0.7, now 0.1-0.175
-            opacity: 0.05625, // 4x more transparent: was 0.225, now 0.05625
-            mesh: availableMesh,
-            startTime: performance.now(),
-            // Small random offset from impact point
-            position: {
-              x: (Math.random() - 0.5) * 0.05, // 5cm spawn area
-              y: (Math.random() - 0.5) * 0.05,
-              z: (Math.random() - 0.5) * 0.05
-            }
-          };
-          
-          // Position the mesh at world position + offset
-          availableMesh.position.set(
-            worldPos.x + puff.position.x,
-            worldPos.y + puff.position.y,
-            worldPos.z + puff.position.z
-          );
-          
-          // No random rotation - billboarding will handle orientation
-          availableMesh.visible = true;
-          
-          // Initialize with visible size and opacity
-          if (availableMesh.material && availableMesh.material.uniforms) {
-            availableMesh.material.uniforms.puffOpacity.value = 0.05625; // 4x more transparent
-            availableMesh.material.uniforms.puffScale.value = puff.startSize;
-          }
-          
-          this.activePuffs.push(puff);
-        },
-        
-        tick: function(time, timeDelta) {
-          if (!this.initialized || this.impactMeshes.length === 0) return;
-          
-          const deltaSeconds = timeDelta / 1000;
-          const elapsedTime = time / 1000; // Convert to seconds for shader
-          
-          // Update time uniform and handle billboarding for all impact meshes
-          this.impactMeshes.forEach(mesh => {
-            mesh.material.uniforms.time.value = elapsedTime;
-            
-            // Billboard behavior - make mesh face the camera (same as static system)
-            if (mesh.userData.isBillboard && mesh.visible) {
-              const camera = document.querySelector('a-scene').camera;
-              if (camera) {
-                mesh.lookAt(camera.getWorldPosition(new THREE.Vector3()));
-              }
-            }
-          });
-          
-          // Update and clean up puffs using our dedicated meshes
-          this.activePuffs = this.activePuffs.filter(puff => {
-            puff.age += deltaSeconds;
-            
-            if (puff.age >= puff.maxAge) {
-              // Hide the mesh when puff expires
-              puff.mesh.visible = false;
-              return false; // Remove from active puffs
-            }
-            
-            // Update puff appearance
-            const progress = puff.age / puff.maxAge;
-            
-            // Scale grows throughout lifetime
-            const currentScale = puff.startSize + (puff.endSize - puff.startSize) * progress;
-            
-            // Opacity: quick fade in, hold, then fade out
-            let currentOpacity;
-            if (progress < 0.2) {
-              // Quick fade in (20% of lifetime)
-              currentOpacity = puff.opacity * (progress / 0.2);
-            } else if (progress > 0.6) {
-              // Gradual fade out (40% of lifetime)
-              currentOpacity = puff.opacity * (1 - (progress - 0.6) / 0.4);
-            } else {
-              // Hold at full opacity (40% of lifetime)
-              currentOpacity = puff.opacity;
-            }
-            
-            // Update mesh
-            if (puff.mesh.material && puff.mesh.material.uniforms) {
-              puff.mesh.material.uniforms.puffOpacity.value = currentOpacity;
-              puff.mesh.material.uniforms.puffScale.value = currentScale;
-            }
-            
-            return true; // Keep active
-          });
-        },
-        
-        remove: function() {
-          // Clean up any remaining puffs and remove meshes from scene
-          this.activePuffs.forEach(puff => {
-            if (puff.mesh) {
-              puff.mesh.visible = false;
-            }
-          });
-          this.activePuffs = [];
-          
-          // Remove all dedicated meshes from scene
-          this.impactMeshes.forEach(mesh => {
-            this.el.sceneEl.object3D.remove(mesh);
-            mesh.geometry.dispose();
-            mesh.material.dispose();
-          });
-          this.impactMeshes = [];
-        }
-      });
-
-      // Small smoke puffs for spark emitter - uses same logic as main smoke
-      AFRAME.registerComponent('threejs-smoke-puffs', {
-      init: function() {
-        this.setupSmokePuffs();
-      },
-        
-        setupSmokePuffs: function() {
-          // Create up to 100 smoke puff planes with random orientations
-          this.puffMeshes = [];
-          
-          for (let i = 0; i < 100; i++) {
-            const geometry = new THREE.PlaneGeometry(1, 1);
-            
-            const material = new THREE.ShaderMaterial({
-              uniforms: {
-                time: { value: 0 },
-                puffOpacity: { value: 0.0 },
-                puffScale: { value: 0.001 }, // Start at 1mm
-                smokeTexture: { value: new THREE.TextureLoader().load('assets/particles/smoke1.png') },
-                lightPosition: { value: new THREE.Vector3(0, 5.3, 12) }, // Player position for lighting
-                lightColor: { value: new THREE.Color(1, 0, 0) } // Default red light
-              },
-              vertexShader: `
-                uniform float time;
-                uniform float puffScale;
-                
-                varying vec2 vUv;
-                varying vec3 vWorldPosition;
-                
-                void main() {
-                  vUv = uv;
-                  vec3 pos = position;
-                  
-                  // Apply scaling directly to the geometry
-                  pos *= puffScale;
-                  
-                  // Gentle movement
-                  pos.x += sin(time * 0.3) * 0.01;
-                  pos.y += cos(time * 0.2) * 0.01;
-                  
-                  vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
-                  vWorldPosition = worldPosition.xyz;
-                  
-                  vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-                  gl_Position = projectionMatrix * mvPosition;
-                }
-              `,
-              fragmentShader: `
-                uniform float time;
-                uniform float puffOpacity;
-                uniform sampler2D smokeTexture;
-                uniform vec3 lightPosition;
-                uniform vec3 lightColor;
-                
-                varying vec2 vUv;
-                varying vec3 vWorldPosition;
-                
-                void main() {
-                  // Use the realistic smoke texture
-                  vec4 smokeColor = texture2D(smokeTexture, vUv);
-                  
-                  // Calculate lighting from player
-                  vec3 lightDir = normalize(lightPosition - vWorldPosition);
-                  float lightDistance = length(lightPosition - vWorldPosition);
-                  float attenuation = 1.0 / (1.0 + 0.1 * lightDistance + 0.01 * lightDistance * lightDistance);
-                  
-                  // Base dark smoke color
-                  vec3 baseColor = vec3(0.3, 0.3, 0.3);
-                  
-                  // Add colored lighting influence
-                  vec3 lightInfluence = lightColor * attenuation * 0.8;
-                  vec3 finalColor = baseColor + lightInfluence;
-                  
-                  // Apply to smoke texture
-                  smokeColor.rgb *= finalColor;
-                  
-                  // Apply dynamic opacity
-                  smokeColor.a *= puffOpacity;
-                  
-                  gl_FragColor = smokeColor;
-                }
-              `,
-              transparent: true,
-              blending: THREE.NormalBlending,
-              depthWrite: false,
-              side: THREE.DoubleSide
-            });
-            
-            const mesh = new THREE.Mesh(geometry, material);
-            
-            // Random orientation for each puff
-            mesh.rotation.x = Math.random() * Math.PI * 2;
-            mesh.rotation.y = Math.random() * Math.PI * 2;
-            mesh.rotation.z = Math.random() * Math.PI * 2;
-            
-            // Random position offset within small area
-            mesh.position.set(
-              (Math.random() - 0.5) * 0.02, // Within 2cm
-              (Math.random() - 0.5) * 0.01,
-              (Math.random() - 0.5) * 0.02
-            );
-            
-            mesh.visible = false; // Start invisible
-            this.puffMeshes.push(mesh);
-            this.el.object3D.add(mesh);
-          }
-          
-          this.clock = new THREE.Clock();
-        },
-        
-        tick: function() {
-          if (!this.puffMeshes || !this.el.getAttribute('visible')) return;
-          const time = this.clock.getElapsedTime();
-          
-          // Get player position and light color for dynamic lighting
-          const player = document.querySelector('#player');
-          const playerLight = player ? player.querySelector('[light]') : null;
-          
-          // Update time uniform for all puff meshes and handle billboarding + lighting
-          this.puffMeshes.forEach(mesh => {
-            mesh.material.uniforms.time.value = time;
-            
-            // Update lighting from player
-            if (player && playerLight) {
-              const playerPos = player.object3D.position;
-              mesh.material.uniforms.lightPosition.value.copy(playerPos);
-              
-              // Get light color from player's light component
-              const lightComponent = playerLight.components.light;
-              if (lightComponent && lightComponent.data.color) {
-                const color = new THREE.Color(lightComponent.data.color);
-                mesh.material.uniforms.lightColor.value.copy(color);
-              }
-            }
-            
-            // Billboard behavior - make mesh face the camera
-            if (mesh.userData.isBillboard && mesh.visible) {
-              const camera = document.querySelector('a-scene').camera;
-              if (camera) {
-                mesh.lookAt(camera.getWorldPosition(new THREE.Vector3()));
-              }
-            }
-          });
-        },
-        
-        remove: function() {
-          if (this.puffMeshes) {
-            this.puffMeshes.forEach(mesh => {
-              this.el.object3D.remove(mesh);
-              if (mesh.geometry) mesh.geometry.dispose();
-              if (mesh.material) mesh.material.dispose();
-            });
-            this.puffMeshes = null;
-          }
-        }
-      });
-
-      // Smoke puff controller - creates growing, fading puffs with randomness
-      AFRAME.registerComponent('spark-smoke-controller', {
-        init: function() {
-          this.timer = 0;
-          this.nextPuffTime = 0.5 + Math.random() * 1; // Start creating puffs quickly
-          this.smokeComponent = null;
-          this.activePuffs = []; // Track individual puffs
-          this.maxConcurrentPuffs = 80; // Allow 80 puffs at once for very dense smoke with 100 available meshes
-        },
-        
-        tick: function(time, timeDelta) {
-          if (!this.el.getAttribute('visible')) return;
-          
-        if (!this.smokeComponent) {
-          this.smokeComponent = this.el.components['threejs-smoke-puffs'];
-          if (!this.smokeComponent) {
-            return;
-          }
-        }
-          
-          const deltaSeconds = timeDelta / 1000;
-          this.timer += deltaSeconds;
-          
-          // Create new puffs more frequently and allow multiple concurrent ones
-          if (this.timer >= this.nextPuffTime && this.activePuffs.length < this.maxConcurrentPuffs) {
-            this.timer = 0;
-            this.nextPuffTime = 0.1 + Math.random() * 0.2; // 0.1-0.3 second intervals for very rapid smoke creation
-            
-            // Create new smoke puff
-            this.createPuff();
-          }
-          
-          // Update existing puffs
-          this.updatePuffs(deltaSeconds);
-        },
-        
-        createPuff: function() {
-          // Find an available mesh (not currently visible)
-          const availableMesh = this.smokeComponent.puffMeshes.find(mesh => !mesh.visible);
-          
-          if (!availableMesh) {
-            console.log('No available puff meshes - all 100 are in use');
-            return;
-          }
-          
-          const puff = {
-            age: 0,
-            maxAge: 1.5 + Math.random() * 1, // 1.5-2.5 second lifetime - 4x faster growth (was 6-10 seconds)
-            startSize: 0.001, // Start at 1mm (0.001m)
-            endSize: 0.15 + Math.random() * 0.15, // End at 15-30cm - much larger puffs for bigger smoke ball
-            opacity: 0.2 + Math.random() * 0.2, // Peak at 0.2-0.4 opacity - more subtle for layering
-            mesh: availableMesh, // Assign this specific mesh to this puff
-            startTime: performance.now(), // Track when this puff started
-            // Start from center of emitter with very small random offset
-            position: {
-              x: (Math.random() - 0.5) * 0.2, // 4x larger spawn area (20cm) for bigger smoke ball
-              y: (Math.random() - 0.5) * 0.2, // 4x larger spawn area
-              z: (Math.random() - 0.5) * 0.2  // 4x larger spawn area
-            },
-            velocity: {
-              // More movement for larger smoke ball spread
-              x: (Math.random() - 0.5) * 0.24, // 4x more spread (-0.12 to +0.12 m/s)
-              y: 0.08 + Math.random() * 0.16,  // 4x more upward (0.08 to 0.24 m/s)
-              z: (Math.random() - 0.5) * 0.24  // 4x more spread (-0.12 to +0.12 m/s)
-            },
-            // Very gentle rotation - barely noticeable (but billboard will override this)
-            rotationVelocity: {
-              x: (Math.random() - 0.5) * 0.1, // Reduced since billboard handles main rotation
-              y: (Math.random() - 0.5) * 0.1,
-              z: (Math.random() - 0.5) * 0.1
-            }
-          };
-          
-            // Give this mesh a random initial orientation but keep it subtle
-            puff.mesh.rotation.x = Math.random() * Math.PI * 2;
-            puff.mesh.rotation.y = Math.random() * Math.PI * 2;
-            puff.mesh.rotation.z = Math.random() * Math.PI * 2;
-            
-            // Add billboard component to make it face the camera
-            puff.mesh.userData.isBillboard = true;
-          
-          // Start very close to center - smoke accumulates here
-          puff.mesh.position.set(
-            puff.position.x,
-            puff.position.y,
-            puff.position.z
-          );
-          
-          this.activePuffs.push(puff);
-          // console.log('Smoke puff created: size', (puff.endSize * 100).toFixed(1), 'cm, lifetime', puff.maxAge.toFixed(1), 's'); // Disabled for production
-        },
-        
-        updatePuffs: function(deltaSeconds) {
-          if (!this.smokeComponent || !this.smokeComponent.puffMeshes) return;
-          
-          // Remove expired puffs and hide their meshes
-          this.activePuffs = this.activePuffs.filter(puff => {
-            puff.age += deltaSeconds;
-            
-            if (puff.age >= puff.maxAge) {
-              // Hide the mesh when puff expires
-              puff.mesh.visible = false;
-              return false; // Remove from active puffs
-            }
-            return true; // Keep active
-          });
-          
-          // Update each active puff - they stay close together and overlap
-          this.activePuffs.forEach(puff => {
-            const progress = puff.age / puff.maxAge;
-            
-            // Scale grows continuously throughout the entire lifetime
-            const currentScale = puff.startSize + (puff.endSize - puff.startSize) * progress;
-            
-            // Opacity has 3 phases for realistic fade
-            let currentOpacity;
-            if (progress < 0.3) {
-              // Fade in phase - opacity grows
-              currentOpacity = puff.opacity * (progress / 0.3);
-            } else if (progress > 0.7) {
-              // Fade out phase - opacity decreases
-              currentOpacity = puff.opacity * (1 - (progress - 0.7) / 0.3);
-            } else {
-              // Stable phase - full opacity
-              currentOpacity = puff.opacity;
-            }
-            
-            // Apply scale and opacity to this puff's mesh
-            puff.mesh.material.uniforms.puffScale.value = currentScale;
-            puff.mesh.material.uniforms.puffOpacity.value = currentOpacity;
-            puff.mesh.visible = currentOpacity > 0.01; // Only show if reasonably visible
-            
-            // Very gentle movement - smoke barely drifts, stays clustered
-            puff.position.x += puff.velocity.x * deltaSeconds;
-            puff.position.y += puff.velocity.y * deltaSeconds;
-            puff.position.z += puff.velocity.z * deltaSeconds;
-            
-            // Strong air resistance - smoke slows down quickly and settles
-            const damping = 0.85; // Stronger damping than before
-            puff.velocity.x *= Math.pow(damping, deltaSeconds);
-            puff.velocity.y *= Math.pow(damping, deltaSeconds);
-            puff.velocity.z *= Math.pow(damping, deltaSeconds);
-            
-            // Very gentle rotation - barely noticeable since billboard overrides main rotation
-            puff.mesh.rotation.x += puff.rotationVelocity.x * deltaSeconds;
-            puff.mesh.rotation.y += puff.rotationVelocity.y * deltaSeconds;
-            puff.mesh.rotation.z += puff.rotationVelocity.z * deltaSeconds;
-            
-            // Apply position - puffs stay close to origin
-            puff.mesh.position.set(
-              puff.position.x,
-              puff.position.y,
-              puff.position.z
-            );
-          });
-          
-          // Only log occasionally to avoid spam
-          // if (Math.random() < 0.01) { // Disabled for production
-          //   console.log('Smoke accumulation:', this.activePuffs.length, 'overlapping puffs');
-          // }
-        },
-        
-        remove: function() {
-          this.activePuffs = [];
-          if (this.smokeComponent && this.smokeComponent.puffMeshes) {
-            this.smokeComponent.puffMeshes.forEach(mesh => {
-              mesh.visible = false;
-            });
-          }
-        }
-      });
-      AFRAME.registerComponent('webgpu-style-sparks', {
-        init: function() {
-          this.setupWebGPUStyleSparks();
-        },
-        
-        setupWebGPUStyleSparks: function() {
-          const scene = this.el.sceneEl.object3D;
-          const particleCount = 5;
-          
-          // Get world position
-          const worldPos = new THREE.Vector3();
-          this.el.object3D.getWorldPosition(worldPos);
-          
-          // Create positions and velocities exactly like WebGPU example
-          const positions = new Float32Array(particleCount * 3);
-          const velocities = new Float32Array(particleCount * 3);
-          
-          // Spark data - exactly like WebGPU particles
-          const sparkVelocities = [
-            [0.8, 0.3, 0.6],
-            [-0.7, 0.9, -0.4], 
-            [0.4, -0.6, 0.8],
-            [-0.5, -0.3, -0.7],
-            [0.2, 0.8, -0.9]
-          ];
-          
-          for (let i = 0; i < particleCount; i++) {
-            const i3 = i * 3;
-            
-            // Initial positions
-            positions[i3] = worldPos.x;
-            positions[i3 + 1] = worldPos.y;
-            positions[i3 + 2] = worldPos.z;
-            
-            // Velocities
-            velocities[i3] = sparkVelocities[i][0];
-            velocities[i3 + 1] = sparkVelocities[i][1];
-            velocities[i3 + 2] = sparkVelocities[i][2];
-          }
-          
-          const geometry = new THREE.BufferGeometry();
-          geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-          geometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3));
-          
-          const material = new THREE.PointsMaterial({
-            color: 0xFFFF00,
-            size: 0.02,
-            transparent: true
-          });
-          
-          this.points = new THREE.Points(geometry, material);
-          this.startTime = Date.now();
-          this.initialPositions = new Float32Array(positions);
-          
-          scene.add(this.points);
-        },
-        
-        tick: function(time, timeDelta) {
-          if (!this.points || !this.el.getAttribute('visible')) {
-            if (this.points) this.points.visible = false;
-            return;
-          }
-          
-          this.points.visible = true;
-          
-          // Exact WebGPU approach - calculate position from initial + velocity * time
-          const elapsedTime = (Date.now() - this.startTime) / 1000;
-          const positions = this.points.geometry.attributes.position.array;
-          const velocities = this.points.geometry.attributes.velocity.array;
-          
-          for (let i = 0; i < positions.length; i += 3) {
-            const cycleTime = elapsedTime % 2.0; // 2 second cycle
-            
-            // position = initial + velocity * time (EXACTLY like WebGPU)
-            positions[i] = this.initialPositions[i] + velocities[i] * cycleTime;
-            positions[i + 1] = this.initialPositions[i + 1] + velocities[i + 1] * cycleTime;
-            positions[i + 2] = this.initialPositions[i + 2] + velocities[i + 2] * cycleTime;
-          }
-          
-          this.points.geometry.attributes.position.needsUpdate = true;
-        },
-        
-        remove: function() {
-          if (this.points) {
-            const scene = this.el.sceneEl.object3D;
-            scene.remove(this.points);
-            this.points.geometry.dispose();
-            this.points.material.dispose();
-            this.points = null;
-          }
-        }
-      });
-
-      // ACTUAL Three.js WebGPU Particles Implementation - STABLE FLUFFY BLACK SMOKE
-      AFRAME.registerComponent('threejs-webgpu-particles', {
-        init: function() {
-          this.setupWebGPUParticles();
-        },
-        
-        setupWebGPUParticles: function() {
-          // Create the exact particle system from the WebGPU example - ULTRA OPTIMIZED FOR PERFORMANCE
-          const particleCount = 2000; // Reduced from 5,000 to 2,000 for maximum performance
-          
-          // Create geometry
-          const geometry = new THREE.BufferGeometry();
-          
-          // Position buffer
-          const positions = new Float32Array(particleCount * 3);
-          const randoms = new Float32Array(particleCount);
-          const sizes = new Float32Array(particleCount);
-          
-          for (let i = 0; i < particleCount; i++) {
-            const i3 = i * 3;
-            
-            // Spherical distribution that stays in place - 4x SMALLER AREA
-            const radius = Math.random() * 1.5; // Reduced from 6 to 1.5 (4x smaller)
-            const theta = Math.random() * Math.PI * 2;
-            const phi = Math.acos(2 * Math.random() - 1);
-            
-            positions[i3] = radius * Math.sin(phi) * Math.cos(theta);
-            positions[i3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
-            positions[i3 + 2] = radius * Math.cos(phi);
-            
-            randoms[i] = Math.random();
-            sizes[i] = Math.random() * 8 + 6; // Even larger sizes to compensate for fewer particles
-          }
-          
-          geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-          geometry.setAttribute('random', new THREE.BufferAttribute(randoms, 1));
-          geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-          
-          // Create shader material for STABLE FLUFFY BLACK SMOKE - PERFORMANCE OPTIMIZED
-          const material = new THREE.ShaderMaterial({
-            uniforms: {
-              time: { value: 0 }
-            },
-            vertexShader: `
-              attribute float random;
-              attribute float size;
-              uniform float time;
-              
-              varying float vRandom;
-              
-              void main() {
-                vRandom = random;
-                
-                // Use original position as base, add contained turbulence
-                vec3 pos = position;
-                
-                // Gentle, contained turbulence that doesn't drift the cloud - SMALLER MOVEMENT
-                pos.x += sin(time * 0.3 + random * 6.0) * 0.25; // Reduced from 1.0 to 0.25
-                pos.y += cos(time * 0.2 + random * 4.0) * 0.2;  // Reduced from 0.8 to 0.2
-                pos.z += sin(time * 0.25 + random * 5.0) * 0.25; // Reduced from 1.0 to 0.25
-                
-                // Additional small-scale turbulence for realism - SMALLER
-                pos += sin(pos * 2.0 + time * 0.5) * 0.075; // Reduced from 0.3 to 0.075
-                
-                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-                gl_Position = projectionMatrix * mvPosition;
-                
-                // Larger particle sizes for fluffy smoke appearance with fewer particles
-                gl_PointSize = size * (500.0 / -mvPosition.z); // Increased size multiplier
-              }
-            `,
-            fragmentShader: `
-              varying float vRandom;
-              uniform float time;
-              
-              void main() {
-                // Soft circular particle shape
-                vec2 center = gl_PointCoord - 0.5;
-                float dist = length(center);
-                if (dist > 0.5) discard;
-                
-                // BLACK/DARK GRAY smoke colors with variation
-                float density = vRandom * 0.4 + 0.3;
-                vec3 smokeColor = vec3(0.12, 0.12, 0.12) * density;
-                
-                // Add subtle variation for gritty smoke look (simplified for performance)
-                smokeColor += vec3(0.03) * sin(time * 1.0 + vRandom * 10.0);
-                
-                // Very soft, fluffy edges
-                float alpha = pow(1.0 - dist * 2.0, 2.0);
-                alpha *= 0.6; // Slightly more opaque to compensate for fewer particles
-                
-                gl_FragColor = vec4(smokeColor, alpha);
-              }
-            `,
-            transparent: true,
-            blending: THREE.NormalBlending,
-            depthWrite: false
-          });
-          
-          // Create particle system
-          this.particles = new THREE.Points(geometry, material);
-          this.el.object3D.add(this.particles);
-          
-          this.clock = new THREE.Clock();
-        },
-        
-        tick: function() {
-          // Skip all processing if not visible or disabled
-          if (!this.particles || !this.el.getAttribute('visible')) return;
-          
-          const time = this.clock.getElapsedTime();
-          this.particles.material.uniforms.time.value = time;
-          
-          // Very slow rotation to keep the cloud stable
-          this.particles.rotation.y = time * 0.008;
-        },
-        
-        remove: function() {
-          // Clean up resources when component is removed
-          if (this.particles) {
-            this.el.object3D.remove(this.particles);
-            if (this.particles.geometry) this.particles.geometry.dispose();
-            if (this.particles.material) this.particles.material.dispose();
-            this.particles = null;
-          }
-        }
-      });
-
-      // Three.js WebGPU Parallax UV Component (exact from reference)
-      AFRAME.registerComponent('webgpu-parallax-uv', {
-        schema: {
-          colorMap: { type: 'string' },
-          normalMap: { type: 'string' },
-          roughnessMap: { type: 'string' },
-          displacementMap: { type: 'string' }
-        },
-        
-        init: function() {
-          this.setupParallaxUV();
-        },
-        
-        setupParallaxUV: function() {
-          const data = this.data;
-          const textureLoader = new THREE.TextureLoader();
-          
-          // Load textures
-          const colorMap = textureLoader.load(data.colorMap);
-          const normalMap = textureLoader.load(data.normalMap);
-          const roughnessMap = textureLoader.load(data.roughnessMap);
-          const displacementMap = textureLoader.load(data.displacementMap);
-          
-          // Exact shader from Three.js WebGPU parallax UV example
-          const material = new THREE.ShaderMaterial({
-            uniforms: {
-              map: { value: colorMap },
-              normalMap: { value: normalMap },
-              roughnessMap: { value: roughnessMap },
-              displacementMap: { value: displacementMap },
-              displacementScale: { value: 0.1 },
-              time: { value: 0 }
-            },
-            vertexShader: `
-              varying vec2 vUv;
-              varying vec3 vViewPosition;
-              varying vec3 vNormal;
-              varying vec3 vTangent;
-              varying vec3 vBitangent;
-              
-              attribute vec4 tangent;
-              
-              void main() {
-                vUv = uv;
-                
-                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                vViewPosition = -mvPosition.xyz;
-                
-                vNormal = normalize(normalMatrix * normal);
-                vTangent = normalize(normalMatrix * tangent.xyz);
-                vBitangent = normalize(cross(vNormal, vTangent) * tangent.w);
-                
-                gl_Position = projectionMatrix * mvPosition;
-              }
-            `,
-            fragmentShader: `
-              uniform sampler2D map;
-              uniform sampler2D normalMap;
-              uniform sampler2D roughnessMap;
-              uniform sampler2D displacementMap;
-              uniform float displacementScale;
-              
-              varying vec2 vUv;
-              varying vec3 vViewPosition;
-              varying vec3 vNormal;
-              varying vec3 vTangent;
-              varying vec3 vBitangent;
-              
-              vec2 parallaxUv(vec2 uv, vec3 viewDir) {
-                float height = texture2D(displacementMap, uv).r;
-                vec2 p = viewDir.xy / viewDir.z * (height * displacementScale);
-                return uv - p;
-              }
-              
-              void main() {
-                mat3 tbn = mat3(vTangent, vBitangent, vNormal);
-                vec3 viewDir = normalize(tbn * vViewPosition);
-                
-                vec2 uv = parallaxUv(vUv, viewDir);
-                
-                vec4 diffuseColor = texture2D(map, uv);
-                vec3 normal = normalize(texture2D(normalMap, uv).rgb * 2.0 - 1.0);
-                float roughness = texture2D(roughnessMap, uv).r;
-                
-                // Simple lighting
-                vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
-                normal = normalize(tbn * normal);
-                float NdotL = max(dot(normal, lightDir), 0.0);
-                
-                vec3 color = diffuseColor.rgb * (0.1 + 0.9 * NdotL);
-                
-                gl_FragColor = vec4(color, diffuseColor.a);
-              }
-            `,
-            transparent: true
-          });
-          
-          // Apply to mesh
-          const mesh = this.el.getObject3D('mesh');
-          if (mesh) {
-            mesh.material = material;
-            
-            // Ensure geometry has tangents for parallax mapping
-            if (!mesh.geometry.attributes.tangent) {
-              mesh.geometry.computeTangents();
-            }
-          }
-        },
-        
-        tick: function() {
-          // Skip processing if not visible or disabled
-          if (!this.el.getAttribute('visible')) return;
-          
-          // No animation needed for ice cube - it's static
-        },
-        
-        remove: function() {
-          // Clean up resources when component is removed
-          const mesh = this.el.getObject3D('mesh');
-          if (mesh && mesh.material) {
-            if (mesh.material.uniforms) {
-              // Dispose textures
-              Object.values(mesh.material.uniforms).forEach(uniform => {
-                if (uniform.value && uniform.value.dispose) {
-                  uniform.value.dispose();
-                }
-              });
-            }
-            mesh.material.dispose();
-          }
-        }
-      });
+      );
+      world.addContactMaterial(ballSurfaceContact);
 
       // Zero-G Player Controller - Physics-based movement
       AFRAME.registerComponent('zerog-player', {
@@ -4005,6 +1969,7 @@ function setGameplayHUD(isPlaying) {
         },
         
         init: function() {
+          
           
           // Create collision visualization (this IS our collision system now)
           this.createCollisionVisualization();
@@ -4060,11 +2025,7 @@ function setGameplayHUD(isPlaying) {
               const cursorListener = document.querySelector('[cursor-listener]');
               if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
                 console.log('🚀 Keyboard shortcut: Toggling Spaceship (Key 1)');
-                if (cursorListener.components['cursor-listener'].toggleModel) {
                 cursorListener.components['cursor-listener'].toggleModel('spaceship');
-                } else {
-                  console.warn('⚠️ toggleModel method not found on cursor-listener');
-                }
               } else {
                 console.warn('⚠️ Cursor listener component not found for spaceship toggle');
               }
@@ -4073,11 +2034,7 @@ function setGameplayHUD(isPlaying) {
               const cursorListener = document.querySelector('[cursor-listener]');
               if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
                 console.log('🌌 Keyboard shortcut: Toggling Asteroid Field (Key 2)');
-                if (cursorListener.components['cursor-listener'].toggleModel) {
                 cursorListener.components['cursor-listener'].toggleModel('asteroid-field');
-                } else {
-                  console.warn('⚠️ toggleModel method not found on cursor-listener');
-                }
               } else {
                 console.warn('⚠️ Cursor listener component not found for asteroid field toggle');
               }
@@ -4086,11 +2043,7 @@ function setGameplayHUD(isPlaying) {
               const cursorListener = document.querySelector('[cursor-listener]');
               if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
                 console.log('🪨 Keyboard shortcut: Toggling Individual Asteroid (Key 3)');
-                if (cursorListener.components['cursor-listener'].toggleModel) {
                 cursorListener.components['cursor-listener'].toggleModel('asteroid-42');
-                } else {
-                  console.warn('⚠️ toggleModel method not found on cursor-listener');
-                }
               } else {
                 console.warn('⚠️ Cursor listener component not found for individual asteroid toggle');
               }
@@ -4099,11 +2052,7 @@ function setGameplayHUD(isPlaying) {
               const cursorListener = document.querySelector('[cursor-listener]');
               if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
                 console.log('🎨 Keyboard shortcut: Toggling Mesh Debug (Key 4)');
-                if (cursorListener.components['cursor-listener'].toggleMeshDebug) {
                 cursorListener.components['cursor-listener'].toggleMeshDebug();
-                } else {
-                  console.warn('⚠️ toggleMeshDebug method not found on cursor-listener');
-                }
               } else {
                 console.warn('⚠️ Cursor listener component not found for mesh debug toggle');
               }
@@ -4200,37 +2149,17 @@ function setGameplayHUD(isPlaying) {
           this.debugMode = this.data.debug || false;
           
           // Wait for scene to load to get hand references
-        if (this.el.sceneEl.hasLoaded) {
-          // Scene already loaded, get references immediately
-            this.leftHand = document.querySelector('#leftHand');
-            this.rightHand = document.querySelector('#rightHand');
-          this.rig = this.el.querySelector('#rig'); // Look for rig as child of player entity
-          
-          console.log('🎮 Player references found immediately:', {
-            leftHand: !!this.leftHand,
-            rightHand: !!this.rightHand,
-            rig: !!this.rig,
-            rigId: this.rig ? this.rig.id : 'not found'
-          });
-            
-            this.setupHandEvents();
-        } else {
-          // Scene not loaded yet, wait for it
           this.el.sceneEl.addEventListener('loaded', () => {
             this.leftHand = document.querySelector('#leftHand');
             this.rightHand = document.querySelector('#rightHand');
-            this.rig = this.el.querySelector('#rig'); // Look for rig as child of player entity
+            this.rig = document.querySelector('#rig');
             
-            console.log('🎮 Player references found after scene load:', {
-              leftHand: !!this.leftHand,
-              rightHand: !!this.rightHand,
-              rig: !!this.rig,
-              rigId: this.rig ? this.rig.id : 'not found'
-            });
             
             this.setupHandEvents();
+            
+            // Keyboard listener removed - now handled in main keyboard controls above
+
           });
-        }
         },
 
 
@@ -7253,6 +5182,9 @@ function setGameplayHUD(isPlaying) {
           
           world.addBody(this.body);
           
+          // NEW: Add wireframe visualization for collision shape (debug)
+          this.addCollisionWireframe(geometry, shape);
+          
           // Store body reference for grabbing
           this.el.body = this.body;
           
@@ -7327,29 +5259,6 @@ function setGameplayHUD(isPlaying) {
             this.el.appendChild(wireframe);
           }
         },
-        
-        // Apply velocity to position and handle damping
-        updatePosition: function(dt) {
-          if (!this.velocity || !this.rig) return;
-          
-          // Apply damping
-          this.velocity.multiplyScalar(this.damping);
-          
-          // Stop very slow movement
-          if (this.velocity.length() < this.minVelocity) {
-            this.velocity.set(0, 0, 0);
-          }
-          
-          // Apply velocity to position
-          if (this.velocity.length() > 0) {
-            const deltaPosition = this.velocity.clone().multiplyScalar(dt);
-            this.rig.object3D.position.add(deltaPosition);
-            
-            if (this.debugMode) {
-              console.log('Position updated by velocity:', deltaPosition.toArray().map(x => x.toFixed(3)));
-            }
-          }
-        },
       });
 
 
@@ -7391,21 +5300,13 @@ function setGameplayHUD(isPlaying) {
           
           // Create physics body for the bot
           const shape = new CANNON.Sphere(0.2);
-          // Position based on bot ID around ice cube area (2, 5.8, 12)
-          let startX = 2, startY = 5.8, startZ = 12;
-          if (this.el.id === 'zerog-bot-red') {
-            startX = 4; startZ = 10; // Right side of ice cube
-          } else if (this.el.id === 'zerog-bot-blue') {
-            startX = 0; startZ = 14; // Behind ice cube
-          } else if (this.el.id === 'zerog-bot-green') {
-            startX = -2; startZ = 10; // Left side of ice cube
-          }
-          
+          // Position based on team: red bot at negative Z, blue bot at positive Z
+          const startZ = this.data.team === 'red' ? -12 : 12;
           this.body = new CANNON.Body({
             mass: 50, // 50kg bot
             shape: shape,
             material: defaultMaterial,
-            position: new CANNON.Vec3(startX, startY, startZ), // Ice cube area positioning
+            position: new CANNON.Vec3(0, 2, startZ), // Team-based starting position
             linearDamping: 0.8,
             angularDamping: 0.8,
             collisionFilterGroup: 1,
@@ -7424,7 +5325,7 @@ function setGameplayHUD(isPlaying) {
           // Initialize ball assignment - will be updated when game mode changes
           this.updateBallAssignment();
           
-          // Bot initialized with team
+          console.log(`Bot ${this.el.id} initialized with team: ${this.data.team}`);
           
           // Add collision detection for bot being hit
           this.body.addEventListener('collide', (evt) => {
@@ -7490,38 +5391,24 @@ function setGameplayHUD(isPlaying) {
          },
         
         generateNewTargetPosition: function() {
-          // Generate a random position around the ice cube area (2, 5.8, 12)
-          const iceCubePos = { x: 2, y: 5.8, z: 12 };
+          // Generate a random position near team's goal
 
-          // Position bots in a wider area around the ice cube based on their ID
-          if (this.el.id === 'zerog-bot-red') {
-            // Red bot: right side of ice cube
+          if (this.data.team === 'red') {
+            // Red team: stay near red goal (Z: -14.8), move in 4x4 area around -12.8
           this.targetPosition.set(
-              iceCubePos.x + 2 + (Math.random() - 0.5) * 2,  // X: 3 to 5 (right side)
-              iceCubePos.y + (Math.random() - 0.5) * 2,      // Y: 4.8 to 6.8 (around ice cube height)
-              iceCubePos.z + (Math.random() - 0.5) * 4       // Z: 10 to 14 (front/back of ice cube)
+              (Math.random() - 0.5) * 4,  // X: -2 to 2 (4m wide)
+              Math.random() * 2 + 1.5,    // Y: 1.5 to 3.5 (2m high)
+              -12.8 + (Math.random() - 0.5) * 4  // Z: -14.8 to -10.8 (4m deep, centered on -12.8)
             );
-          } else if (this.el.id === 'zerog-bot-blue') {
-            // Blue bot: behind ice cube
-            this.targetPosition.set(
-              iceCubePos.x + (Math.random() - 0.5) * 4,      // X: 0 to 4 (around ice cube)
-              iceCubePos.y + (Math.random() - 0.5) * 2,      // Y: 4.8 to 6.8 (around ice cube height)
-              iceCubePos.z + 2 + (Math.random() - 0.5) * 2   // Z: 13 to 15 (behind ice cube)
-            );
-          } else if (this.el.id === 'zerog-bot-green') {
-            // Green bot: left side of ice cube
-            this.targetPosition.set(
-              iceCubePos.x - 2 + (Math.random() - 0.5) * 2,  // X: -1 to -3 (left side)
-              iceCubePos.y + (Math.random() - 0.5) * 2,      // Y: 4.8 to 6.8 (around ice cube height)
-              iceCubePos.z + (Math.random() - 0.5) * 4       // Z: 10 to 14 (front/back of ice cube)
-            );
+
           } else {
-            // Fallback for unknown bots - around ice cube
+            // Blue team: stay near blue goal (Z: 14.8), move in 4x4 area around 12.8
             this.targetPosition.set(
-              iceCubePos.x + (Math.random() - 0.5) * 6,      // X: -1 to 5
-              iceCubePos.y + (Math.random() - 0.5) * 2,      // Y: 4.8 to 6.8
-              iceCubePos.z + (Math.random() - 0.5) * 6       // Z: 9 to 15
+              (Math.random() - 0.5) * 4,  // X: -2 to 2 (4m wide)
+              Math.random() * 2 + 1.5,    // Y: 1.5 to 3.5 (2m high)
+              12.8 + (Math.random() - 0.5) * 4   // Z: 10.8 to 14.8 (4m deep, centered on 12.8)
             );
+
           }
         },
         
@@ -7585,8 +5472,6 @@ function setGameplayHUD(isPlaying) {
               playerTarget.object3D.getWorldPosition(targetPos);
               const distance = botPos.distanceTo(targetPos);
               
-              // CRITICAL FIX: Check line of sight before adding target
-              if (this.hasLineOfSight(botPos, targetPos)) {
               // Get player velocity (simplified)
               const playerVelocity = new THREE.Vector3(); // Could be enhanced with actual tracking
               
@@ -7596,7 +5481,6 @@ function setGameplayHUD(isPlaying) {
                 velocity: playerVelocity,
                 distance: distance
               });
-              }
             }
           }
           
@@ -7610,8 +5494,6 @@ function setGameplayHUD(isPlaying) {
               otherBotTarget.object3D.getWorldPosition(targetPos);
               const distance = botPos.distanceTo(targetPos);
               
-              // CRITICAL FIX: Check line of sight before adding target
-              if (this.hasLineOfSight(botPos, targetPos)) {
               // Get other bot's velocity
               const otherBotVelocity = otherBot.components['zerog-bot'] && otherBot.components['zerog-bot'].body 
                 ? new THREE.Vector3().copy(otherBot.components['zerog-bot'].body.velocity)
@@ -7623,7 +5505,6 @@ function setGameplayHUD(isPlaying) {
                 velocity: otherBotVelocity,
                 distance: distance
               });
-              }
             }
           }
           
@@ -7658,118 +5539,27 @@ function setGameplayHUD(isPlaying) {
           }
         },
         
-        hasLineOfSight: function(fromPos, toPos, showDebugLine = false) {
-          // Simple, direct raycast from bot center to player center
-          const direction = new THREE.Vector3();
-          direction.subVectors(toPos, fromPos).normalize();
-          const distance = fromPos.distanceTo(toPos);
-          
-          // Get all 3D meshes that can block line of sight
-          const meshes = [];
-          const models = [
-            document.querySelector('#model-level'),
-            document.querySelector('#model-spaceship'),
-            document.querySelector('#model-asteroid-42'),
-            document.querySelector('#model-asteroid-field-north'),
-            document.querySelector('#model-asteroid-field-south'),
-            document.querySelector('#model-asteroid-field-east'),
-            document.querySelector('#model-asteroid-field-west')
-          ];
-          
-          models.forEach(model => {
-            if (model && model.object3D) {
-              model.object3D.traverse(child => {
-                if (child.isMesh && child.geometry) {
-                  meshes.push(child);
-                }
-              });
-            }
-          });
-          
-          // Add grab-surface objects as blocking meshes
-          const surfaces = document.querySelectorAll('[grab-surface]');
-          surfaces.forEach(surface => {
-            if (surface.object3D) {
-              surface.object3D.traverse(child => {
-                if (child.isMesh && child.geometry) {
-                  meshes.push(child);
-                }
-              });
-            }
-          });
-          
-          // Single raycast from bot to player
-          const raycaster = new THREE.Raycaster();
-          raycaster.set(fromPos, direction);
-          raycaster.far = distance; // Only check up to player distance
-          
-          const intersects = raycaster.intersectObjects(meshes, false);
-          
-          // If any intersection is closer than the player, line of sight is blocked
-          let hasLOS = true;
-          if (intersects.length > 0) {
-            const closestIntersection = intersects[0];
-            if (closestIntersection.distance < distance - 0.1) { // Small buffer
-              hasLOS = false;
-            }
-          }
-          
-          // Show debug line if requested
-          if (showDebugLine) {
-            this.createLineOfSightDebug(fromPos, toPos, hasLOS);
-          }
-          
-          return hasLOS;
-        },
-        
-        createLineOfSightDebug: function(fromPos, toPos, hasLineOfSight) {
-          // Remove old debug line
-          if (this.debugLine) {
-            this.debugLine.parent.remove(this.debugLine);
-          }
-          
-          // Create new debug line
-          const geometry = new THREE.BufferGeometry().setFromPoints([fromPos, toPos]);
-          const material = new THREE.LineBasicMaterial({ 
-            color: hasLineOfSight ? 0x00ff00 : 0xff0000,
-            transparent: true,
-            opacity: 0.7
-          });
-          
-          this.debugLine = new THREE.Line(geometry, material);
-          document.querySelector('a-scene').object3D.add(this.debugLine);
-          
-          // Auto-remove after 1 second
-          setTimeout(() => {
-            if (this.debugLine && this.debugLine.parent) {
-              this.debugLine.parent.remove(this.debugLine);
-              this.debugLine = null;
-            }
-          }, 1000);
-        },
-        
         throwBallAtPlayer: function() {
           if (!this.ball || !this.ball.components['zerog-ball']) {
+            console.log(`Bot ${this.el.id} cannot throw: ball=${!!this.ball}, ballComponent=${this.ball ? !!this.ball.components['zerog-ball'] : false}`);
             return;
           }
           
-          // Find the best target (closest opponent with line of sight)
+          
+          // Find the best target (closest opponent)
           const bestTarget = this.findBestTarget();
           if (!bestTarget) {
-            // No target in sight - don't shoot
+            console.log(`❌ Bot ${this.el.id} found no target to throw at`);
             return;
           }
-          
-          // Show debug line to the actual target we're shooting at
-          const botPos = new THREE.Vector3().copy(this.body.position);
-          this.hasLineOfSight(botPos, bestTarget.position, true); // Show debug line
           
           // Reset ball to bot position
           this.ball.components['zerog-ball'].resetPosition();
           const ballBody = this.ball.components['zerog-ball'].body;
           
           // Position ball slightly in front of bot
-          botPos.z += 0.5; // Slightly forward (reuse botPos variable)
+          const botPos = new THREE.Vector3().copy(this.body.position);
+          botPos.z += 0.5; // Slightly forward
           ballBody.position.set(botPos.x, botPos.y, botPos.z);
           
           // Calculate throw force
@@ -7829,12 +5619,6 @@ function setGameplayHUD(isPlaying) {
           // CRITICAL: In multiplayer, only the host should run bot AI
           // Clients should only receive bot position updates
           if (isMultiplayer && activePlayers.size > 1 && !isHost) {
-            // CRITICAL FIX: Clients still need to update bot visual position from physics
-            // but don't run AI logic
-            if (this.body) {
-              this.el.object3D.position.copy(this.body.position);
-              this.el.object3D.quaternion.copy(this.body.quaternion);
-            }
             return; // Clients don't run bot AI
           }
           
@@ -8894,31 +6678,17 @@ function setGameplayHUD(isPlaying) {
         },
 
         updateMultiplayerScore: function() {
-          // Update score display for multiplayer - use individual player scores
-          if (this.scoreDisplay) {
-            const scoreText = this.playerScores.join(' - ');
-            this.scoreDisplay.setAttribute('text', 'value', scoreText);
-          }
-          
-          // CRITICAL FIX: Update HUD score display for the current player
-          if (myPlayerId) {
-            const playerIndex = parseInt(myPlayerId.split('_')[1]);
-            const myScore = this.playerScores[playerIndex] || 0;
-            const otherScores = this.playerScores.filter((score, index) => index !== playerIndex);
-            const maxOtherScore = Math.max(...otherScores, 0);
-            updateHUDScore(myScore, maxOtherScore, true);
-          }
-          
-          // SPACE SHOOTER: Also update K/D display for player 0 (legacy)
+          // SPACE SHOOTER: Always show K/D stats
           const blueScore = document.querySelector('#blue-score');
           const redScore = document.querySelector('#red-score');
           
-          if (blueScore && this.playerStats[0]) {
+          // Update main score display to show K/D
+          if (blueScore) {
             const kills = this.playerStats[0].kills;
             blueScore.setAttribute('text', 'value', `${kills}`);
             blueScore.setAttribute('text', 'color', '#00ff00'); // Green for kills
           }
-          if (redScore && this.playerStats[0]) {
+          if (redScore) {
             const deaths = this.playerStats[0].deaths;
             redScore.setAttribute('text', 'value', `${deaths}`);
             redScore.setAttribute('text', 'color', '#ff0000'); // Red for deaths
@@ -9000,14 +6770,22 @@ function setGameplayHUD(isPlaying) {
           
           this.lastPlayerHitTime = now;
           
+          // SPACE SHOOTER: Increment kill count for hitting bot
+          this.playerStats[0].kills += 1;
+          this.playerScores[0] = this.playerStats[0].kills; // Update score for compatibility
+          this.updateMultiplayerScore();
+          
           if (isMultiplayer && activePlayers.size > 1) {
-            // CRITICAL FIX: All multiplayer scoring is now handled via hit-effect system
-            // This ensures host-authoritative scoring for all players
-            // The hit-effect will be sent via sendHitEffect() and processed by handleHitEffect()
+            // HOST-AUTHORITATIVE SCORING: Only host handles scoring logic
+            if (isHost && myPlayerId) {
+              const playerIndex = parseInt(myPlayerId.split('_')[1]);
+              this.playerStats[playerIndex].kills += 1;
+              this.playerScores[playerIndex] = this.playerStats[playerIndex].kills;
+              this.updateMultiplayerScore();
+              this.sendScoreUpdate();
             } else {
-            // SINGLEPLAYER: Use legacy scoring system
-            this.playerStats[0].kills += 1;
-            this.playerScores[0] = this.playerStats[0].kills;
+            }
+          } else {
             this.playerScore += 1;
             this.updateScore();
           }
@@ -9034,21 +6812,22 @@ function setGameplayHUD(isPlaying) {
           
           this.lastOpponentHitTime = now;
           
+          // SPACE SHOOTER: Increment death count when bot hits player
+          this.playerStats[0].deaths += 1;
+          this._opponentHitCount = (this._opponentHitCount || 0) + 1;
+          
           if (isMultiplayer && activePlayers.size > 1) {
             // HOST-AUTHORITATIVE SCORING: Only host handles scoring logic
             if (isHost && myPlayerId) {
+              // Find the opponent player index (not the current player)
               const playerIndex = parseInt(myPlayerId.split('_')[1]);
-              this.playerStats[playerIndex].deaths += 1;
-              console.log(`🎯 HOST onOpponentHit: Player ${playerIndex} deaths updated to ${this.playerStats[playerIndex].deaths}`);
-              // Note: Deaths don't affect score in space shooter, only kills do
+              const opponentIndex = (playerIndex + 1) % 4; // Simple opponent assignment
+              this.playerScores[opponentIndex] += 1;
               this.updateMultiplayerScore();
               this.sendScoreUpdate();
             } else {
-              console.log(`🎯 CLIENT onOpponentHit: Ignoring - host handles scoring`);
             }
           } else {
-            // SINGLEPLAYER: Use legacy scoring system
-            this.playerStats[0].deaths += 1;
             this.opponentScore += 1;
             this.updateScore();
           }
@@ -9715,6 +7494,15 @@ function setGameplayHUD(isPlaying) {
 
 
 
+      function sendPlayerState(state) {
+        if (isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, playerId) => {
+            if (conn && conn.open) {
+              conn.send({ type: 'player-state', state });
+            }
+          });
+        }
+      }
 
 
 
@@ -9783,11 +7571,6 @@ function setGameplayHUD(isPlaying) {
       // --- MULTIPLAYER SYNC COMPONENT ---
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
-          // Debug logging for multiplayer sync (throttled)
-          if (!this.lastDebugLog || Date.now() - this.lastDebugLog > 5000) {
-            this.lastDebugLog = Date.now();
-          }
-          
           // In multiplayer, send the local camera's world position/rotation as player state
           if (isMultiplayer && activePlayers.size > 1) {
             const camera = document.querySelector('[camera]');
@@ -9849,17 +7632,6 @@ function setGameplayHUD(isPlaying) {
               }
               
               sendPlayerState(playerState);
-              
-              // Debug: Log when sending player state (throttled)
-              if (!this.lastSendLog || Date.now() - this.lastSendLog > 5000) {
-                this.lastSendLog = Date.now();
-                console.log(`📤 Sending player state as ${myPlayerId}:`, {
-                  position: `${playerState.x?.toFixed(1)}, ${playerState.y?.toFixed(1)}, ${playerState.z?.toFixed(1)}`,
-                  hasRig: !!playerState.rig,
-                  hasLeftHand: !!playerState.leftHand,
-                  hasRightHand: !!playerState.rightHand
-                });
-              }
               
               // Debug: Log when client sends data (throttled to once per 30 seconds)
               if (!isHost) {
@@ -9951,27 +7723,6 @@ function setGameplayHUD(isPlaying) {
                   x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
                   vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z
                 });
-              }
-              
-              // CRITICAL FIX: Host also sends bot ball states to clients
-              // Bot balls: player1, player2, player3, player4
-              for (let i = 1; i <= 4; i++) {
-                const botBall = document.querySelector(`[zerog-ball*="player: player${i}"]`);
-                if (botBall && botBall.components['zerog-ball']) {
-                  const pos = botBall.object3D.position;
-                  const ballComponent = botBall.components['zerog-ball'];
-                  const velocity = ballComponent?.body?.velocity || {x:0, y:0, z:0};
-                  
-                  // Only send if ball is moving or not at spawn position
-                  const ballSpeed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
-                  if (ballSpeed > 0.1) {
-                    sendBallState({ 
-                      playerId: i, // Bot ball number (1, 2, 3, 4)
-                      x: pos.x, y: pos.y, z: pos.z, 
-                      vx: velocity.x, vy: velocity.y, vz: velocity.z 
-                    });
-                  }
-                }
               }
             }
           }
@@ -10160,9 +7911,6 @@ function setGameplayHUD(isPlaying) {
             const contact = evt.contact;
             const otherBody = evt.target === this.body ? evt.body : evt.target;
             
-            // Environment collision now handled by tick function
-            // Only handle ball-to-ball and ball-to-target collisions here
-            
             // CRITICAL FIX: Check for shield collisions between balls
             if (otherBody.el && otherBody.el.components && otherBody.el.components['zerog-ball']) {
               const otherBallComponent = otherBody.el.components['zerog-ball'];
@@ -10231,84 +7979,11 @@ function setGameplayHUD(isPlaying) {
             const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
             const ballOwnerId = getBallOwnerId(ballPlayerIndex);
             
-            // OLD BALL SHOOTING DISABLED - Now using bullet system
             // Only shoot player's own ball, not capture ball
-            // if (this.data.owner === 'human' && ballOwnerId === currentPlayerId && !this.isCaptureBall) {
-            //   this.shootBall(evt.target);
-            // }
-          });
-        },
-        
-        tick: function(time, timeDelta) {
-          if (!this.body) return;
-          
-          // Sync A-Frame object with physics body
-          this.el.object3D.position.copy(this.body.position);
-          this.el.object3D.quaternion.copy(this.body.quaternion);
-          
-          // Check for environment collisions using Three.js raycasting
-          this.checkEnvironmentCollision();
-        },
-        
-        checkEnvironmentCollision: function() {
-          if (!this.body || this.isGrabbed) return;
-          
-          const currentPos = new THREE.Vector3().copy(this.body.position);
-          const velocity = new THREE.Vector3().copy(this.body.velocity);
-          
-          // Only check collision if ball is moving
-          if (velocity.length() < 0.1) return;
-          
-          // Get all 3D meshes that can block the ball (same as bot line-of-sight)
-          const meshes = [];
-          const models = [
-            document.querySelector('#model-level'),
-            document.querySelector('#model-spaceship'),
-            document.querySelector('#model-asteroid-42'),
-            document.querySelector('#model-asteroid-field-north'),
-            document.querySelector('#model-asteroid-field-south'),
-            document.querySelector('#model-asteroid-field-east'),
-            document.querySelector('#model-asteroid-field-west')
-          ];
-          
-          models.forEach(model => {
-            if (model && model.object3D) {
-              model.object3D.traverse(child => {
-                if (child.isMesh && child.geometry) {
-                  meshes.push(child);
-                }
-              });
+            if (this.data.owner === 'human' && ballOwnerId === currentPlayerId && !this.isCaptureBall) {
+              this.shootBall(evt.target);
             }
           });
-          
-          // Add grab-surface objects as blocking meshes
-          const surfaces = document.querySelectorAll('[grab-surface]');
-          surfaces.forEach(surface => {
-            if (surface.object3D) {
-              surface.object3D.traverse(child => {
-                if (child.isMesh && child.geometry) {
-                  meshes.push(child);
-                }
-              });
-            }
-          });
-          
-          // Raycast in the direction the ball is moving
-          const raycaster = new THREE.Raycaster();
-          const direction = velocity.clone().normalize();
-          raycaster.set(currentPos, direction);
-          raycaster.far = 0.2; // Check 20cm ahead of ball
-          
-          const intersects = raycaster.intersectObjects(meshes, false);
-          
-          // If ball is about to hit something, remove it
-          if (intersects.length > 0) {
-            const intersection = intersects[0];
-            if (intersection.distance < 0.15) { // Ball radius + small buffer
-              // Ball hit environment - remove it
-              this.resetPosition();
-            }
-          }
         },
         
         resetPosition: function() {
@@ -10665,10 +8340,6 @@ function setGameplayHUD(isPlaying) {
                 // In dodge mode: always play effect and score
                 const impactEffect = redBotTarget.components['impact-effect'];
                 if (impactEffect) impactEffect.playEffect();
-                
-                // CRITICAL FIX: Send hit effect for multiplayer scoring
-                sendHitEffect('bot-red');
-                
                 const gameManager = this.el.sceneEl.querySelector('#game-manager');
                 if (gameManager && gameManager.components['game-manager']) {
                   gameManager.components['game-manager'].onPlayerHit();
@@ -10700,10 +8371,6 @@ function setGameplayHUD(isPlaying) {
                 // In dodge mode: always play effect and score
                 const impactEffect = blueBotTarget.components['impact-effect'];
                 if (impactEffect) impactEffect.playEffect();
-                
-                // CRITICAL FIX: Send hit effect for multiplayer scoring
-                sendHitEffect('bot-blue');
-                
                 const gameManager = this.el.sceneEl.querySelector('#game-manager');
                 if (gameManager && gameManager.components['game-manager']) {
                   gameManager.components['game-manager'].onPlayerHit();
@@ -10735,10 +8402,6 @@ function setGameplayHUD(isPlaying) {
                 // In dodge mode: always play effect and score
                 const impactEffect = greenBotTarget.components['impact-effect'];
                 if (impactEffect) impactEffect.playEffect();
-                
-                // CRITICAL FIX: Send hit effect for multiplayer scoring
-                sendHitEffect('bot-green');
-                
                 const gameManager = this.el.sceneEl.querySelector('#game-manager');
                 if (gameManager && gameManager.components['game-manager']) {
                   gameManager.components['game-manager'].onPlayerHit();
@@ -11213,7 +8876,7 @@ function setGameplayHUD(isPlaying) {
           
           // Ball will stay where it lands - no auto reset
           
-          // Ball shot from controller
+          console.log('Ball shot from', controller.id);
         },
         
         stunPlayer: function() {
@@ -12368,25 +10031,16 @@ function setGameplayHUD(isPlaying) {
           this.initializeDoorAnimations();
           
           // Get player reference
-        this.player = document.querySelector('#player') || document.querySelector('[camera]');
+          this.player = document.querySelector('#player-rig') || document.querySelector('[camera]');
           if (!this.player) {
-            // Retry finding player after a delay
-            setTimeout(() => {
-              this.player = document.querySelector('#player') || document.querySelector('[camera]') || document.querySelector('[zerog-player]');
-              if (this.player) {
-                this.rig = this.player.querySelector('#rig') || this.player;
-              }
-            }, 1000);
-        } else {
-          // Get the rig for actual position tracking
-          this.rig = this.player.querySelector('#rig') || this.player;
+            console.warn('Player entity not found for door proximity detection');
           }
           
         },
         
         initializeDoorAnimations: function() {
           // Get animation actions and set doors to closed state (frame 0)
-          this.data.animations.forEach((animName, index) => {
+          this.data.animations.forEach(animName => {
             if (this.animationMixer && this.animationMixer.mixer) {
               const action = this.animationMixer.mixer.clipAction(
                 THREE.AnimationClip.findByName(this.animationMixer.mixer._root, animName)
@@ -12405,20 +10059,11 @@ function setGameplayHUD(isPlaying) {
         },
         
         tick: function() {
-          // Try to find player if we don't have one yet
-          if (!this.player) {
-            this.player = document.querySelector('#player') || document.querySelector('[camera]') || document.querySelector('[zerog-player]');
-            if (this.player) {
-              this.rig = this.player.querySelector('#rig') || this.player;
-            } else {
-              return; // Skip this tick if no player found
-            }
-          }
+          if (!this.player) return;
           
-          // Get player world position from rig (which actually moves)
+          // Get player world position
           const playerWorldPos = new THREE.Vector3();
-          const positionSource = this.rig || this.player;
-          positionSource.object3D.getWorldPosition(playerWorldPos);
+          this.player.object3D.getWorldPosition(playerWorldPos);
           
           let minDistance = Infinity;
           let closestDoor = null;
@@ -12441,9 +10086,50 @@ function setGameplayHUD(isPlaying) {
             minDistance = playerWorldPos.distanceTo(spaceshipWorldPos);
           }
           
+          // Enhanced debugging every 300 frames (5 seconds at 60fps)
+          if (!this.debugTick) this.debugTick = 0;
+          const now = Date.now(); // Define now variable for use in multiple places
+          
+          if (this.debugTick % 300 === 0) { // Every 5 seconds instead of every second
+            const shouldBeOpen = minDistance <= this.data.triggerDistance;
+            const playerPos = `(${playerWorldPos.x.toFixed(1)}, ${playerWorldPos.y.toFixed(1)}, ${playerWorldPos.z.toFixed(1)})`;
+            // Door proximity check
+            
+            // Force state correction if there's a mismatch
+            if (shouldBeOpen !== this.isDoorsOpen) {
+              console.log(`⚠️ Door state mismatch detected! Forcing correction...`);
+              this.isAnimating = false; // Reset animation flag to allow correction
+              if (shouldBeOpen) {
+                this.openDoors();
+              } else {
+                this.closeDoors();
+              }
+            }
+          }
+          
+          // More frequent state verification every 60 frames (1 second)
+          if (this.debugTick % 60 === 0) {
+            const shouldBeOpen = minDistance <= this.data.triggerDistance;
+            
+            // Check if we're stuck in animating state for too long
+            if (this.isAnimating && this.lastStateChange && (now - this.lastStateChange) > 6000) {
+              console.log('⚠️ Animation stuck - forcing reset');
+              this.isAnimating = false;
+            }
+            
+            // Force immediate correction if state is wrong and we're not animating
+            if (shouldBeOpen !== this.isDoorsOpen && !this.isAnimating) {
+              if (shouldBeOpen) {
+                this.openDoors();
+              } else {
+                this.closeDoors();
+              }
+            }
+          }
+          this.debugTick++;
+          
           // Check for state changes with debouncing
           const shouldOpen = minDistance <= this.data.triggerDistance;
-          const now = Date.now();
           
           // Only change state if:
           // 1. The desired state is different from current state
@@ -12540,6 +10226,7 @@ function setGameplayHUD(isPlaying) {
               
               // CRITICAL FIX: Reset the action if it's stuck at the end
               if (currentTime >= duration) {
+                console.log(`🔧 Resetting stuck animation from time=${currentTime.toFixed(2)}`);
                 action.reset();
                 action.time = duration; // Set to end position
                 action.play();
@@ -12667,18 +10354,9 @@ function setGameplayHUD(isPlaying) {
           this.initializeDoorAnimations();
           
           // Find player
-        this.player = document.querySelector('#player') || document.querySelector('[camera]');
+          this.player = document.querySelector('#player-rig') || document.querySelector('[camera]');
           if (!this.player) {
-            // Retry finding player after a delay
-            setTimeout(() => {
-              this.player = document.querySelector('#player') || document.querySelector('[camera]') || document.querySelector('[zerog-player]');
-              if (this.player) {
-                this.rig = this.player.querySelector('#rig') || this.player;
-              }
-            }, 1000);
-        } else {
-          // Get the rig for actual position tracking
-          this.rig = this.player.querySelector('#rig') || this.player;
+            console.warn('Player not found for door system 2');
           }
           
         },
@@ -12708,14 +10386,13 @@ function setGameplayHUD(isPlaying) {
         tick: function() {
           // Try to find player if not found yet
           if (!this.player) {
-            this.player = document.querySelector('#player') || document.querySelector('[camera]') || document.querySelector('a-camera');
+            this.player = document.querySelector('#player-rig') || document.querySelector('[camera]') || document.querySelector('a-camera');
             if (!this.player) return;
           }
           
-          // Get player world position from rig (which actually moves)
+          // Get player world position
           const playerWorldPos = new THREE.Vector3();
-          const positionSource = this.rig || this.player;
-          positionSource.object3D.getWorldPosition(playerWorldPos);
+          this.player.object3D.getWorldPosition(playerWorldPos);
           
           let minDistance = Infinity;
           let closestDoor = null;
@@ -12978,20 +10655,9 @@ function setGameplayHUD(isPlaying) {
           this.initializeDoorAnimations();
           
           // Find player
-        this.player = document.querySelector('#player') || document.querySelector('[camera]');
+          this.player = document.querySelector('#player-rig') || document.querySelector('[camera]');
           if (!this.player) {
-            // Retry finding player after a delay
-            setTimeout(() => {
-              this.player = document.querySelector('#player') || document.querySelector('[camera]') || document.querySelector('[zerog-player]');
-              if (this.player) {
-                this.rig = this.player.querySelector('#rig') || this.player;
-              }
-            }, 1000);
-        } else {
-          // Door proximity trigger - Player found
-          // Get the rig for actual position tracking
-          this.rig = this.player.querySelector('#rig') || this.player;
-          // Door proximity trigger - Rig found
+            console.warn('Player not found for door system 3');
           }
           
         },
@@ -13021,14 +10687,13 @@ function setGameplayHUD(isPlaying) {
         tick: function() {
           // Try to find player if not found yet
           if (!this.player) {
-            this.player = document.querySelector('#player') || document.querySelector('[camera]') || document.querySelector('a-camera');
+            this.player = document.querySelector('#player-rig') || document.querySelector('[camera]') || document.querySelector('a-camera');
             if (!this.player) return;
           }
           
-          // Get player world position from rig (which actually moves)
+          // Get player world position
           const playerWorldPos = new THREE.Vector3();
-          const positionSource = this.rig || this.player;
-          positionSource.object3D.getWorldPosition(playerWorldPos);
+          this.player.object3D.getWorldPosition(playerWorldPos);
           
           let minDistance = Infinity;
           let closestDoor = null;
@@ -13766,12 +11431,6 @@ function setGameplayHUD(isPlaying) {
             this.toggleModel('asteroid-42');
           } else if (id === 'menu-toggle-mesh-debug') {
             this.toggleMeshDebug();
-          } else if (id === 'menu-toggle-smoke') {
-            this.toggleSmoke();
-          } else if (id === 'menu-toggle-ice-cube') {
-            this.toggleIceCube();
-          } else if (id === 'menu-toggle-sparks') {
-            this.toggleSparks();
           } else if (id === 'menu-restart-match') {
             this.restartMatch();
           }
@@ -14194,185 +11853,13 @@ function setGameplayHUD(isPlaying) {
           } else {
             console.warn('⚠️ zerog-player component not found for mesh debug toggle');
           }
-        },
-        
-        toggleSmoke: function() {
-          smokeEnabled = !smokeEnabled;
-          const smokeEntity = document.querySelector('#webgpu-particles');
-          if (smokeEntity) {
-            smokeEntity.setAttribute('visible', smokeEnabled);
-            // Enable/disable the component logic
-            if (smokeEnabled) {
-              smokeEntity.setAttribute('threejs-webgpu-particles', '');
-            } else {
-              smokeEntity.removeAttribute('threejs-webgpu-particles');
-            }
-          }
-          
-          // Update button appearance
-          const button = document.querySelector('#menu-toggle-smoke');
-          const buttonText = button.querySelector('a-text');
-          
-          if (smokeEnabled) {
-            button.setAttribute('material', 'color', '#00aa00');
-            buttonText.setAttribute('text', 'value', 'Smoke: ON');
-          } else {
-            button.setAttribute('material', 'color', '#aa0000');
-            buttonText.setAttribute('text', 'value', 'Smoke: OFF');
-          }
-          
-          console.log('Smoke:', smokeEnabled ? 'ON' : 'OFF');
-        },
-        
-        toggleIceCube: function() {
-          iceCubeEnabled = !iceCubeEnabled;
-          const iceCubeEntity = document.querySelector('#ice-cube');
-          if (iceCubeEntity) {
-            iceCubeEntity.setAttribute('visible', iceCubeEnabled);
-              // Enable/disable the component logic
-              if (iceCubeEnabled) {
-                iceCubeEntity.setAttribute('webgpu-parallax-uv', 
-                  'colorMap: assets/textures/ice002/Ice002_2K-JPG_Color.jpg; ' +
-                  'normalMap: assets/textures/ice002/Ice002_2K-JPG_NormalGL.jpg; ' +
-                  'roughnessMap: assets/textures/ice002/Ice002_2K-JPG_Roughness.jpg; ' +
-                  'displacementMap: assets/textures/ice002/Ice002_2K-JPG_Displacement.jpg');
-                iceCubeEntity.setAttribute('grab-surface', '');
-              } else {
-                iceCubeEntity.removeAttribute('webgpu-parallax-uv');
-                iceCubeEntity.removeAttribute('grab-surface');
-              }
-          }
-          
-          // Update button appearance
-          const button = document.querySelector('#menu-toggle-ice-cube');
-          const buttonText = button.querySelector('a-text');
-          
-          if (iceCubeEnabled) {
-            button.setAttribute('material', 'color', '#00aa00');
-            buttonText.setAttribute('text', 'value', 'Ice: ON');
-          } else {
-            button.setAttribute('material', 'color', '#aa0000');
-            buttonText.setAttribute('text', 'value', 'Ice: OFF');
-          }
-          
-          console.log('Ice Cube:', iceCubeEnabled ? 'ON' : 'OFF');
-        },
-        
-        toggleSparks: function() {
-          sparksEnabled = !sparksEnabled;
-          const sparksEntity = document.querySelector('#spark-particles');
-          const smokeEntity = document.querySelector('#spark-smoke');
-          
-          if (sparksEntity) {
-            sparksEntity.setAttribute('visible', sparksEnabled);
-            
-          // Also control the smoke entity visibility
-          if (smokeEntity) {
-            smokeEntity.setAttribute('visible', sparksEnabled);
-          }
-          
-          if (sparksEnabled) {
-              // Simple particle system with burst controller
-              sparksEntity.setAttribute('particle-system', 
-                'preset: default; ' +
-                'particleCount: 100; ' +
-                'maxAge: 1.5; ' +
-                'positionSpread: 0.02 0.02 0.02; ' +
-                'velocityValue: 0 0 0; ' +
-                'velocitySpread: 2 2 2; ' +
-                'accelerationValue: 0 0 0; ' +
-                'accelerationSpread: 0 0 0; ' +
-                'color: #FFFF00,#FF8800,#FF4400,#4444FF,#8844FF,#220000; ' +
-                'size: 0.02,0.01; ' +
-                'opacity: 1.0,0.0; ' +
-                'texture: assets/particles/sparkle.png; ' +
-                'blending: 2; ' +
-                'dragValue: 0; ' +
-                'dragSpread: 0; ' +
-                'randomise: false; ' +
-                'hasPerspective: false; ' +
-                'enabled: false'); // Start disabled, burst controller will manage
-              
-            // Add burst controller if not present
-            if (!sparksEntity.components['spark-burst-controller']) {
-              sparksEntity.setAttribute('spark-burst-controller', '');
-            }
-          } else {
-              // Disable the particle system
-              if (sparksEntity.components['particle-system']) {
-                sparksEntity.components['particle-system'].stopParticles();
-              }
-              sparksEntity.removeAttribute('particle-system');
-            }
-          }
-          
-          // Update button appearance
-          const button = document.querySelector('#menu-toggle-sparks');
-          const buttonText = button.querySelector('a-text');
-          
-          if (sparksEnabled) {
-            button.setAttribute('material', 'color', '#00aa00');
-            buttonText.setAttribute('text', 'value', 'Sparks: ON');
-          } else {
-            button.setAttribute('material', 'color', '#aa0000');
-            buttonText.setAttribute('text', 'value', 'Sparks: OFF');
-          }
-          
-          console.log('Sparks:', sparksEnabled ? 'ON' : 'OFF');
         }
       });
-      
-      } // End of registerAllComponents function
-      
-      // Wait for all critical components to be fully initialized
-      function waitForCriticalComponents() {
-        const checkInterval = setInterval(() => {
-          const scene = document.querySelector('a-scene');
-          const playerController = scene?.querySelector('#player')?.components?.['zerog-player'];
-          const fpsCounter = scene?.components?.['fps-counter'];
-          const gameManager = scene?.components?.['game-manager'];
-          
-          if (playerController && fpsCounter && gameManager) {
-            clearInterval(checkInterval);
-            
-            // CRITICAL: Ensure scene is playing and tick loop is active
-            if (scene && !scene.is('vr-mode')) {
-              // Force scene to play if it's not already
-              if (!scene.isPlaying) {
-                console.log('🎬 Scene not playing - forcing scene.play()');
-                scene.play();
-              }
-              
-              // Verify scene tick is working
-              setTimeout(() => {
-                console.log('🎬 Scene state check:', {
-                  isPlaying: scene.isPlaying,
-                  hasLoaded: scene.hasLoaded,
-                  time: scene.time,
-                  renderStarted: scene.renderStarted
-                });
-              }, 1000);
-            }
-            
-            console.log('✅ All critical components initialized and operational');
-          }
-        }, 100);
-        
-        // Fallback timeout after 10 seconds
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          console.log('⚠️ Timeout reached - proceeding anyway');
-        }, 10000);
-      }
-      
-      // Start waiting for critical components
-      waitForCriticalComponents();
 
     </script>
 
-    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle impact-effects-manager
+    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
-             bloom="threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0"
              webxr="requiredFeatures: local-floor">
       
         <a-assets>
@@ -14390,10 +11877,6 @@ function setGameplayHUD(isPlaying) {
          
          <!-- Arm Segment 3D Model -->
          <a-asset-item id="arm-segment-model" src="assets/test-arm.glb"></a-asset-item>
-         
-         <!-- Particle Textures -->
-         <img id="fog-texture" src="assets/particles/fog-256.png">
-         <img id="sparkle-texture" src="assets/particles/sparkle.png">
          
          <!-- Procedural Noise Textures for Asteroids -->
          <canvas id="noise-texture-1" width="256" height="256"></canvas>
@@ -14446,37 +11929,37 @@ function setGameplayHUD(isPlaying) {
       <!-- Central Circular Tube Structure (2m diameter, 4m length, made from 16 cubes) -->
       <!-- First Group of 8 blocks - positioned at 1m radius from center (0,2,0) -->
       <!-- 0° - Top/Bottom pair (horizontal blocks) -->
-      <a-box position="0 3 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="0 1 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
+      <a-box position="0 3 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0 1 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
       
       <!-- 45° - Diagonal pair -->
-      <a-box position="0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
+      <a-box position="0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
       
       <!-- 90° - Left/Right pair (vertical blocks) -->
-      <a-box position="1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
+      <a-box position="1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
       
       <!-- 135° - Diagonal pair -->
-      <a-box position="-0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
+      <a-box position="-0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
       
       <!-- Second Group of 8 blocks - filling the gaps -->
       <!-- 22.5° - Between 0° and 45° -->
-      <a-box position="0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
+      <a-box position="0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
       
       <!-- 67.5° - Between 45° and 90° -->
-      <a-box position="0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
+      <a-box position="0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
       
       <!-- 112.5° - Between 90° and 135° -->
-      <a-box position="0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
+      <a-box position="0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
       
       <!-- 157.5° - Between 135° and 180° -->
-      <a-box position="-0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
+      <a-box position="-0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
 
       <!-- Tube Launcher (based on goal structure) -->
       <a-cylinder id="tube-launcher-container"
@@ -14497,7 +11980,7 @@ function setGameplayHUD(isPlaying) {
                  material="shader: standard; emissive: #ff8800; emissiveIntensity: 0.3; metalness: 0.8; roughness: 0.2"
                  tube-launcher
                  grab-surface="type: static"
-                 class="grabbable-surface collidable">
+                 class="grabbable-surface">
         </a-torus>
       </a-cylinder>
       
@@ -14596,11 +12079,11 @@ function setGameplayHUD(isPlaying) {
       <!-- Ball 3 (Purple) - Blue Bot Ball -->
       <a-sphere position="0 2 0" 
                 radius="0.1"
-                color="#00ff00" 
-                glow="color: #00ff00; intensity: 1.5"
+                color="#ff00ff" 
+                glow="color: #ff00ff; intensity: 1.5"
                 zerog-ball="player: player3; owner: bot">
         <a-entity light="type: point; 
-                       color: #00ff00;
+                       color: #ff00ff;
                        intensity: 1.5;     
                        distance: 5;       
                        decay: 2"  
@@ -14664,68 +12147,6 @@ function setGameplayHUD(isPlaying) {
       <!-- Special white capture ball (twice the size, half max velocity) -->
       <!-- Capture ball removed for space shooter -->
 
-      <!-- ACTUAL Three.js WebGPU particles implementation (disabled by default) -->
-      <a-entity id="webgpu-particles" 
-                position="0 6 12" 
-                visible="false">
-      </a-entity>
-      
-      <!-- Spark effect using proper aframe-particle-system-component (disabled by default) -->
-      <a-entity id="spark-particles" 
-                position="-6.242 5.988 1.867" 
-                visible="false"
-                world-spark-system
-                enhanced-particles
-                spark-burst-controller
-                particle-system="
-                  preset: default;
-                  particleCount: 100;
-                  maxAge: 1.5;
-                  positionSpread: 0.02 0.02 0.02;
-                  velocityValue: 0 0 0;
-                  velocitySpread: 2 2 2;
-                  accelerationValue: 0 0 0;
-                  accelerationSpread: 0 0 0;
-                  color: #FFFF00,#FF8800,#FF4400,#4444FF,#8844FF,#220000;
-                  size: 0.02,0.01;
-                  opacity: 1.0,0.0;
-                  texture: assets/particles/sparkle.png;
-                  blending: 2;
-                  dragValue: 0;
-                  dragSpread: 0;
-                  randomise: false;
-                  hasPerspective: false;
-                  enabled: false">
-        
-        <!-- Small smoke puffs using proper Three.js smoke system -->
-        <a-entity id="spark-smoke" 
-                  spark-smoke-controller
-                  threejs-smoke-puffs>
-        </a-entity>
-      </a-entity>
-
-       <!-- Three.js WebGPU parallax UV ice cube (exact from reference, with physics and grabbable) -->
-       <a-box id="ice-cube" 
-              position="2 5.8 12" 
-              width="1" height="1" depth="1"
-              visible="false"
-              material="color: #88ccff; transparent: true; opacity: 0.8"
-              webgpu-parallax-uv="
-                colorMap: assets/textures/ice002/Ice002_2K-JPG_Color.jpg;
-                normalMap: assets/textures/ice002/Ice002_2K-JPG_NormalGL.jpg;
-                roughnessMap: assets/textures/ice002/Ice002_2K-JPG_Roughness.jpg;
-                displacementMap: assets/textures/ice002/Ice002_2K-JPG_Displacement.jpg">
-       </a-box>
-
-      <!-- DEBUG: Enhanced emissive sphere at player start position -->
-      <a-sphere id="bloom-debug-sphere"
-                position="0 5.3 12"
-                radius="0.2"
-                material="color: #ffff00; shader: standard; emissive: #ffff00; emissiveIntensity: 8.0; metalness: 0; roughness: 0"
-                enhanced-emissive="intensity: 5.0; color: #ffff00"
-                visible="true">
-      </a-sphere>
-
       <!-- Player with zero-g physics -->
       <a-entity id="player" position="0 5.300 12" zerog-player="mass: 70; thrusterForce: 0.8">
         <a-entity id="rig" position="0 0 0">
@@ -14745,7 +12166,6 @@ function setGameplayHUD(isPlaying) {
                 animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
                 animation__fade="property: material.opacity; from: 0.5; to: 0; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;">
               </a-sphere>
-            
             </a-sphere>
             
             <!-- HUD display -->
@@ -14765,23 +12185,6 @@ function setGameplayHUD(isPlaying) {
             
             <!-- Speed Display in HUD -->
             <a-entity id="hud-speed" position="0 -0.15 -0.5" text="value: 0.0 m/s; align: center; width: 0.5; color: #ffffff" visible="true"></a-entity>
-            
-            <!-- Power Bars in HUD - Separate for each hand -->
-            <a-entity id="power-bars-container" position="0 -0.25 -0.5" visible="true">
-              <!-- Left Hand Power Bar -->
-              <a-entity id="left-power-container" position="-0.06 0 0">
-                <a-text value="L" position="0 0.05 0" align="center" width="0.8" color="#ffffff"></a-text>
-                <a-plane id="power-bar-bg-left" width="0.1" height="0.02" color="#333333" position="0 -0.02 0"></a-plane>
-                <a-plane id="power-bar-left" width="0.1" height="0.02" color="#00ff00" position="0 -0.02 0.001"></a-plane>
-              </a-entity>
-              
-              <!-- Right Hand Power Bar -->
-              <a-entity id="right-power-container" position="0.06 0 0">
-                <a-text value="R" position="0 0.05 0" align="center" width="0.8" color="#ffffff"></a-text>
-                <a-plane id="power-bar-bg-right" width="0.1" height="0.02" color="#333333" position="0 -0.02 0"></a-plane>
-                <a-plane id="power-bar-right" width="0.1" height="0.02" color="#00ff00" position="0 -0.02 0.001"></a-plane>
-              </a-entity>
-            </a-entity>
             
             <!-- Game Messages in HUD -->
              <a-entity id="hud-message" position="0 0 -0.5" text="value: ; align: center; width: 1.1; color: #ffffff" visible="false"></a-entity>
@@ -14914,33 +12317,6 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="Debug: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
-              <!-- Smoke Effect Toggle -->
-              <a-entity id="menu-toggle-smoke" position="0 -0.18 0"
-                        geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #aa0000; transparent: true; opacity: 0.8"
-                        cursor-listener
-                        class="clickable">
-                <a-text value="Smoke: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
-              </a-entity>
-              
-              <!-- Ice Cube Effect Toggle -->
-              <a-entity id="menu-toggle-ice-cube" position="0.3 -0.18 0"
-                        geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #aa0000; transparent: true; opacity: 0.8"
-                        cursor-listener
-                        class="clickable">
-                <a-text value="Ice: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
-              </a-entity>
-              
-              <!-- Sparks Effect Toggle -->
-              <a-entity id="menu-toggle-sparks" position="-0.3 -0.24 0"
-                        geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #aa0000; transparent: true; opacity: 0.8"
-                        cursor-listener
-                        class="clickable">
-                <a-text value="Sparks: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
-              </a-entity>
-              
               <!-- Start/Restart Match Button (only visible for host) -->
               <a-entity id="menu-restart-match" position="0 -0.25 0"
                         geometry="primitive: plane; width: 0.3; height: 0.06"
@@ -14967,7 +12343,6 @@ function setGameplayHUD(isPlaying) {
                    debug-controller
                    custom-hand-controls
                    arm-ik-visualizer="hand: left"
-                   gun="fireRate: 8; powerDrainRate: 25; rechargeRate: 25"
                    >
             <!-- Thruster visual effect -->
             <a-cone class="thruster-vfx"
@@ -15012,7 +12387,6 @@ function setGameplayHUD(isPlaying) {
                    debug-controller
                    custom-hand-controls
                    arm-ik-visualizer="hand: right"
-                   gun="fireRate: 8; powerDrainRate: 25; rechargeRate: 25"
                    >
             <!-- Thruster visual effect -->
             <a-cone class="thruster-vfx"
@@ -15175,7 +12549,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Red Team (for singleplayer) -->
-      <a-entity id="zerog-bot-red" position="4 5.8 10" zerog-bot="enabled: false; difficulty: medium; team: red; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-red" position="0 2 -12" zerog-bot="enabled: false; difficulty: medium; team: red; throwInterval: 2000" visible="false">
         <a-sphere id="bot-target" 
                   radius="0.2" 
                   color="#ff0000" 
@@ -15194,7 +12568,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Blue Team (for singleplayer) -->
-      <a-entity id="zerog-bot-blue" position="0 5.8 14" zerog-bot="enabled: false; difficulty: medium; team: blue; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-blue" position="0 2 12" zerog-bot="enabled: false; difficulty: medium; team: blue; throwInterval: 2000" visible="false">
         <a-sphere id="bot-blue-target" 
                   radius="0.2" 
                   color="#0000ff" 
@@ -15213,7 +12587,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Green (additional bot for 4-player support) -->
-      <a-entity id="zerog-bot-green" position="-2 5.8 10" zerog-bot="enabled: false; difficulty: medium; team: green; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-green" position="2 2 0" zerog-bot="enabled: false; difficulty: medium; team: green; throwInterval: 2000" visible="false">
         <a-sphere id="bot-green-target" 
                    radius="0.2" 
                    color="#ff00ff" 
@@ -15406,7 +12780,9 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
        <!-- Nebula Skybox -->
-       <a-sky src="#nebula-texture"></a-sky>
+       <a-sky src="#nebula-texture" 
+              rotation="0 0 0"
+              material="shader: standard; side: back"></a-sky>
     </a-scene>
     
     <script>
@@ -15466,12 +12842,6 @@ function setGameplayHUD(isPlaying) {
       function sendPlayerState(state) {
         if (!isMultiplayer || activePlayers.size <= 1) return;
         
-        // CRITICAL FIX: Don't send if myPlayerId is invalid
-        if (!myPlayerId || typeof myPlayerId !== 'string') {
-          console.warn('❌ Cannot send player state - invalid myPlayerId:', myPlayerId);
-          return;
-        }
-        
         const data = {
           type: 'player-state',
           state: state,
@@ -15520,7 +12890,6 @@ function setGameplayHUD(isPlaying) {
         const hitData = {
           type: 'hit-effect',
           targetPlayerId: targetPlayerId,
-          shooterPlayerId: myPlayerId, // CRITICAL: Include who did the shooting
           timestamp: Date.now()
         };
         
@@ -15546,21 +12915,9 @@ function setGameplayHUD(isPlaying) {
         if (!data.targetPlayerId) return;
         
         const targetPlayerId = data.targetPlayerId;
-        const shooterPlayerId = data.shooterPlayerId;
         const playerIndex = parseInt(targetPlayerId.split('_')[1]);
         
-        // CRITICAL FIX: Host handles scoring when receiving hit effects
-        if (isHost && shooterPlayerId && targetPlayerId.startsWith('bot-')) {
-          // A player hit a bot - update the shooter's score
-          const gameManager = document.querySelector('#game-manager');
-          if (gameManager && gameManager.components['game-manager']) {
-            const shooterIndex = parseInt(shooterPlayerId.split('_')[1]);
-            gameManager.components['game-manager'].playerStats[shooterIndex].kills += 1;
-            gameManager.components['game-manager'].playerScores[shooterIndex] = gameManager.components['game-manager'].playerStats[shooterIndex].kills;
-            gameManager.components['game-manager'].updateMultiplayerScore();
-            gameManager.components['game-manager'].sendScoreUpdate();
-          }
-        }
+
         
         // Play impact effect on the appropriate target for this viewer
         let targetToAnimate = null;
@@ -15580,16 +12937,8 @@ function setGameplayHUD(isPlaying) {
             }
             targetToAnimate.setAttribute('visible', true);
             
-            // CRITICAL FIX: Use correct player color for hit effects, not white
-            // Get the player's assigned color based on their slot
-            const playerColors = {
-              0: '#ff0000', // red
-              1: '#0000ff', // blue
-              2: '#00ff00', // green
-              3: '#ffff00'  // yellow
-            };
-            const teamColor = playerColors[playerIndex] || '#ffffff';
-            
+            // Team colors removed - space shooter uses default colors
+            const teamColor = '#ffffff'; // Default white
             targetToAnimate.setAttribute('color', teamColor);
             targetToAnimate.setAttribute('material', `shader: standard; emissive: ${teamColor}; emissiveIntensity: 0.5; transparent: true; opacity: 0.7`);
             targetToAnimate.setAttribute('impact-effect', `color: ${teamColor}`);
@@ -15612,20 +12961,10 @@ function setGameplayHUD(isPlaying) {
         // CRITICAL FIX: Always send ball state for our own ball - other players need to see it!
         // The receiving end (handleBallState) will decide whether to apply the update or not
         
-        // CRITICAL FIX: For bot balls, use the bot's ball ID, not the host's player ID
-        let senderPlayerId = myPlayerId;
-        if (typeof ballState.playerId === 'number' && ballState.playerId >= 1 && ballState.playerId <= 4) {
-          // This is a bot ball (player1, player2, player3, player4)
-          senderPlayerId = `bot-player${ballState.playerId}`;
-        } else if (ballState.playerId === 'capture') {
-          // This is the capture ball
-          senderPlayerId = myPlayerId; // Host controls capture ball
-        }
-        
         const data = {
           type: 'ball-state',
           ballState: ballState,
-          playerId: senderPlayerId
+          playerId: myPlayerId
         };
         
         // Only log if there are connections to send to (throttled to once per 30 seconds)
@@ -15649,8 +12988,10 @@ function setGameplayHUD(isPlaying) {
         });
       }
 
-      // Initialize multiplayer system when page loads (moved inside initializeApp)
-      // This is now handled inside initializeApp function
+      // Initialize multiplayer system when page loads
+      document.addEventListener('DOMContentLoaded', function() {
+        initMultiplayer();
+      });
       // Function to manage active players and bots
       function manageActivePlayersAndBots() {
         const humanPlayerCount = isMultiplayer ? activePlayers.size : 1;
