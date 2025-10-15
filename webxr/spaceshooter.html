@@ -72,6 +72,80 @@
         
         // Enhanced emissive materials for better bloom visibility
         
+        // === BULLET SHOOTING SYSTEM ===
+        // This system handles rapid-fire projectile weapons with impact animations
+        // Separate from ball throwing mechanics used by bots
+        
+        // Bullet Manager - Handles cleanup and optimization
+        AFRAME.registerComponent('bullet-manager', {
+          init: function() {
+            this.activeBullets = new Map(); // Track bullets by ID
+            this.maxBullets = 50; // Maximum bullets per player
+            this.cleanupInterval = 5000; // Cleanup every 5 seconds
+            
+            // Start cleanup timer
+            this.cleanupTimer = setInterval(() => {
+              this.cleanupOldBullets();
+            }, this.cleanupInterval);
+          },
+          
+          remove: function() {
+            if (this.cleanupTimer) {
+              clearInterval(this.cleanupTimer);
+            }
+          },
+          
+          registerBullet: function(bulletId, bulletElement) {
+            this.activeBullets.set(bulletId, {
+              element: bulletElement,
+              timestamp: Date.now()
+            });
+            
+            // Enforce bullet limit
+            if (this.activeBullets.size > this.maxBullets) {
+              this.removeOldestBullet();
+            }
+          },
+          
+          unregisterBullet: function(bulletId) {
+            this.activeBullets.delete(bulletId);
+          },
+          
+          removeOldestBullet: function() {
+            let oldestTime = Infinity;
+            let oldestId = null;
+            
+            for (const [id, data] of this.activeBullets) {
+              if (data.timestamp < oldestTime) {
+                oldestTime = data.timestamp;
+                oldestId = id;
+              }
+            }
+            
+            if (oldestId) {
+              const bulletData = this.activeBullets.get(oldestId);
+              if (bulletData.element && bulletData.element.parentNode) {
+                bulletData.element.parentNode.removeChild(bulletData.element);
+              }
+              this.activeBullets.delete(oldestId);
+            }
+          },
+          
+          cleanupOldBullets: function() {
+            const now = Date.now();
+            const maxAge = 10000; // 10 seconds max age
+            
+            for (const [id, data] of this.activeBullets) {
+              if (now - data.timestamp > maxAge) {
+                if (data.element && data.element.parentNode) {
+                  data.element.parentNode.removeChild(data.element);
+                }
+                this.activeBullets.delete(id);
+              }
+            }
+          }
+        });
+        
         // Bullet Component - Real bullets with collision detection
         AFRAME.registerComponent('bullet', {
           schema: {
@@ -82,13 +156,21 @@
             hand: { type: 'string', default: 'right' },
             directionX: { type: 'number', default: 0 },
             directionY: { type: 'number', default: 0 },
-            directionZ: { type: 'number', default: -1 }
+            directionZ: { type: 'number', default: -1 },
+            bulletId: { type: 'string', default: '' },
+            isRemote: { type: 'boolean', default: false }
           },
           
           init: function() {
             this.startTime = Date.now();
             this.velocity = new THREE.Vector3();
             this.lastPosition = new THREE.Vector3();
+            
+            // Generate unique bullet ID if not provided (for local bullets)
+            if (!this.data.bulletId) {
+              this.data.bulletId = `bullet_${this.data.shooter}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              this.el.setAttribute('bulletId', this.data.bulletId);
+            }
             
             // Use the direction passed from the gun component
             const direction = new THREE.Vector3(
@@ -104,6 +186,16 @@
             // Store starting position for CCD
             this.lastPosition.copy(this.el.object3D.position);
             
+            // Send bullet creation to other players (only for local bullets)
+            if (!this.data.isRemote && isMultiplayer && (isHost || connections.size > 0)) {
+              this.sendBulletCreate();
+            }
+            
+            // Register with bullet manager for cleanup
+            const bulletManager = document.querySelector('[bullet-manager]');
+            if (bulletManager && bulletManager.components['bullet-manager']) {
+              bulletManager.components['bullet-manager'].registerBullet(this.data.bulletId, this.el);
+            }
             
             // Create bullet visual
             this.el.setAttribute('geometry', {
@@ -210,16 +302,40 @@
           checkEntityCollisions: function(bulletPos) {
             const hitRadius = 0.3; // Hit detection radius
             
-            // Check collision with player
-            const player = document.querySelector('#player');
-            if (player && this.data.shooter !== 'player') {
+            // Check collision with local player target (only if bullet is from another player)
+            const playerTarget = document.querySelector('#player-target');
+            if (playerTarget && this.data.shooter !== 'player' && this.data.shooter !== myPlayerId) {
               const playerPos = new THREE.Vector3();
-              player.object3D.getWorldPosition(playerPos);
+              playerTarget.object3D.getWorldPosition(playerPos);
               const distance = bulletPos.distanceTo(playerPos);
               
               if (distance < hitRadius) {
-                this.hitPlayer(player);
+                this.hitPlayer(playerTarget);
                 return;
+              }
+            }
+            
+            // Check collision with remote players in multiplayer
+            if (isMultiplayer && this.data.shooter !== myPlayerId) {
+              for (let i = 0; i < 4; i++) {
+                const remoteTarget = document.querySelector(`#remote-target-${i}`);
+                const playerId = `player_${i}`;
+                
+                // Skip if this is the shooter or if target doesn't exist
+                if (this.data.shooter === playerId || !remoteTarget) continue;
+                
+                // Check if remote player is visible and active
+                const remotePlayer = document.querySelector(`#remote-player-${i}`);
+                if (!remotePlayer || remotePlayer.getAttribute('visible') === 'false') continue;
+                
+                const targetPos = new THREE.Vector3();
+                remoteTarget.object3D.getWorldPosition(targetPos);
+                const distance = bulletPos.distanceTo(targetPos);
+                
+                if (distance < hitRadius) {
+                  this.hitRemotePlayer(remoteTarget, playerId);
+                  return;
+                }
               }
             }
             
@@ -246,14 +362,16 @@
               impactManager.components['impact-effects-manager'].createImpactEffect(bulletPos);
             }
             
-            // Trigger impact effect on player
+            // Play impact effect locally first (same as ball system)
             const playerTarget = document.querySelector('#player-target');
             if (playerTarget && playerTarget.components['impact-effect']) {
               playerTarget.components['impact-effect'].playEffect();
             }
             
-            // Simple feedback for player hit
-            console.log('Player hit by bullet!');
+            // Broadcast hit effect to all other players (same as ball system)
+            if (isMultiplayer && activePlayers.size > 1) {
+              sendHitEffect(myPlayerId); // Send hit effect for local player
+            }
             
             this.destroyBullet();
           },
@@ -266,27 +384,34 @@
               impactManager.components['impact-effects-manager'].createImpactEffect(bulletPos);
             }
             
-            // Trigger impact effect on bot - try multiple ways to ensure it works
+            // Play impact effect locally first (same as ball system)
             if (bot.components && bot.components['impact-effect']) {
               bot.components['impact-effect'].playEffect();
-            } else {
-              // Fallback - manually trigger the impact effect
-              bot.setAttribute('impact-effect', 'enabled', true);
-              setTimeout(() => {
-                if (bot.components && bot.components['impact-effect']) {
-                  bot.components['impact-effect'].playEffect();
-                }
-              }, 100);
             }
             
-            // Visual feedback - make bot flash red briefly
+            // Visual feedback - make bot flash red briefly (local only)
             const originalColor = bot.getAttribute('color') || '#ffffff';
             bot.setAttribute('color', '#ff0000');
             setTimeout(() => {
               bot.setAttribute('color', originalColor);
             }, 200);
             
-            // Simple scoring - increment player score
+            // Broadcast hit effect to all other players (same as ball system)
+            // Map bot entity ID to the format used by ball system
+            let botTargetId = 'bot-red'; // Default
+            if (bot.id === 'zerog-bot-red') {
+              botTargetId = 'bot-red';
+            } else if (bot.id === 'zerog-bot-blue') {
+              botTargetId = 'bot-blue';
+            } else if (bot.id === 'zerog-bot-green') {
+              botTargetId = 'bot-green';
+            }
+            
+            if (isMultiplayer && activePlayers.size > 1) {
+              sendHitEffect(botTargetId); // Send hit effect using ball system format
+            }
+            
+            // Simple scoring - increment player score (local only for now)
             const scoreElements = document.querySelectorAll('#hud-score a-entity');
             if (scoreElements.length > 0) {
               const playerScoreEl = scoreElements[0]; // First element is player score
@@ -300,7 +425,93 @@
             this.destroyBullet();
           },
           
+          hitRemotePlayer: function(remoteTarget, playerId) {
+            // Create impact effects at bullet position before destroying it
+            const bulletPos = this.el.object3D.position.clone();
+            const impactManager = document.querySelector('[impact-effects-manager]');
+            if (impactManager && impactManager.components['impact-effects-manager']) {
+              impactManager.components['impact-effects-manager'].createImpactEffect(bulletPos);
+            }
+            
+            // Play impact effect locally first (same as ball system)
+            if (remoteTarget && remoteTarget.components['impact-effect']) {
+              remoteTarget.components['impact-effect'].playEffect();
+            }
+            
+            // Broadcast hit effect to all other players (same as ball system)
+            if (isMultiplayer && activePlayers.size > 1) {
+              sendHitEffect(playerId); // Send hit effect for the remote player
+            }
+            
+            this.destroyBullet();
+          },
+          
+          sendBulletCreate: function() {
+            const bulletData = {
+              type: 'bullet-create',
+              bulletId: this.data.bulletId,
+              shooterPlayerId: this.data.shooter,
+              position: {
+                x: this.el.object3D.position.x,
+                y: this.el.object3D.position.y,
+                z: this.el.object3D.position.z
+              },
+              direction: {
+                x: this.data.directionX,
+                y: this.data.directionY,
+                z: this.data.directionZ
+              },
+              speed: this.data.speed,
+              hand: this.data.hand
+            };
+            
+            if (isHost) {
+              // Host sends to all clients
+              connections.forEach((conn, connectionKey) => {
+                if (conn && conn.open) {
+                  conn.send(bulletData);
+                }
+              });
+            } else {
+              // Client sends to host
+              const hostConn = connections.get('host');
+              if (hostConn && hostConn.open) {
+                hostConn.send(bulletData);
+              }
+            }
+          },
+          
           destroyBullet: function() {
+            // Unregister from bullet manager
+            const bulletManager = document.querySelector('[bullet-manager]');
+            if (bulletManager && bulletManager.components['bullet-manager']) {
+              bulletManager.components['bullet-manager'].unregisterBullet(this.data.bulletId);
+            }
+            
+            // Send bullet destroy notification to other players
+            if (!this.data.isRemote && isMultiplayer && (isHost || connections.size > 0)) {
+              const destroyData = {
+                type: 'bullet-destroy',
+                bulletId: this.data.bulletId,
+                shooterPlayerId: this.data.shooter
+              };
+              
+              if (isHost) {
+                // Host sends to all clients
+                connections.forEach((conn, connectionKey) => {
+                  if (conn && conn.open) {
+                    conn.send(destroyData);
+                  }
+                });
+              } else {
+                // Client sends to host
+                const hostConn = connections.get('host');
+                if (hostConn && hostConn.open) {
+                  hostConn.send(destroyData);
+                }
+              }
+            }
+            
             if (this.el.parentNode) {
               this.el.parentNode.removeChild(this.el);
             }
@@ -323,6 +534,11 @@
             this.lastFireTime = { left: 0, right: 0, camera: 0 };
             this.triggerPressed = false;
             
+            // Multiplayer rate limiting
+            this.bulletsSentThisSecond = 0;
+            this.maxBulletsPerSecond = isMultiplayer ? 6 : 8; // Reduced rate for multiplayer
+            this.lastSecondReset = Date.now();
+            
             // Determine which hand this gun component belongs to
             this.handType = 'unknown';
             if (this.el.id === 'leftHand') {
@@ -338,7 +554,7 @@
             // Desktop controls (space for right hand only to avoid duplication)
             if (this.handType === 'right') {
               document.addEventListener('keydown', (evt) => {
-                if (evt.code === 'Space' && !this.triggerPressed) {
+                if (evt.code === 'Space' && !this.triggerPressed && !isMenuVisible) {
                   this.triggerPressed = true;
                   this.startFiring('camera');
                 }
@@ -392,6 +608,11 @@
           },
           
           startFiring: function(hand) {
+            // Don't start firing if menu is visible
+            if (isMenuVisible) {
+              return;
+            }
+            
             if (this.currentPower > 0) {
               this.isFiring[hand] = true;
             }
@@ -402,6 +623,17 @@
           },
           
           fireBullet: function(hand) {
+            // Check multiplayer rate limiting
+            const now = Date.now();
+            if (now - this.lastSecondReset > 1000) {
+              this.bulletsSentThisSecond = 0;
+              this.lastSecondReset = now;
+            }
+            
+            if (this.bulletsSentThisSecond >= this.maxBulletsPerSecond) {
+              return; // Rate limited
+            }
+            
             // Create bullet entity
             const bullet = document.createElement('a-entity');
             
@@ -439,7 +671,7 @@
             // Add bullet component with the calculated direction
             bullet.setAttribute('bullet', {
               speed: this.data.bulletSpeed,
-              shooter: 'player',
+              shooter: isMultiplayer && myPlayerId ? myPlayerId : 'player',
               hand: hand,
               directionX: forwardDirection.x,
               directionY: forwardDirection.y,
@@ -448,6 +680,9 @@
             
             // Add to scene
             this.el.sceneEl.appendChild(bullet);
+            
+            // Increment rate limiting counter
+            this.bulletsSentThisSecond++;
           },
           
           updatePowerDisplay: function() {
@@ -1281,6 +1516,12 @@
               break;
             case 'bot-state':
               handleBotState(data);
+              break;
+            case 'bullet-create':
+              handleBulletCreate(data);
+              break;
+            case 'bullet-destroy':
+              handleBulletDestroy(data);
               break;
             case 'game-mode-update':
               handleGameModeUpdate(data);
@@ -2201,6 +2442,70 @@
                 type: 'bot-state',
                 botState: data.botState,
                 playerId: data.playerId
+              });
+            }
+          });
+        }
+      }
+      
+      // Bullet multiplayer handlers
+      function handleBulletCreate(data) {
+        // Create a remote bullet from another player's shot
+        if (data.shooterPlayerId === myPlayerId) {
+          return; // Don't create our own bullets remotely
+        }
+        
+        const bullet = document.createElement('a-entity');
+        bullet.object3D.position.set(data.position.x, data.position.y, data.position.z);
+        
+        // Add bullet component with remote flag
+        bullet.setAttribute('bullet', {
+          speed: data.speed,
+          shooter: data.shooterPlayerId,
+          hand: data.hand,
+          directionX: data.direction.x,
+          directionY: data.direction.y,
+          directionZ: data.direction.z,
+          bulletId: data.bulletId,
+          isRemote: true
+        });
+        
+        // Add to scene
+        document.querySelector('a-scene').appendChild(bullet);
+        
+        // Host forwards bullet creation to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open && connectionKey !== data.shooterPlayerId) {
+              conn.send({
+                type: 'bullet-create',
+                bulletId: data.bulletId,
+                shooterPlayerId: data.shooterPlayerId,
+                position: data.position,
+                direction: data.direction,
+                speed: data.speed,
+                hand: data.hand
+              });
+            }
+          });
+        }
+      }
+      
+      function handleBulletDestroy(data) {
+        // Remove bullet by ID
+        const bullet = document.querySelector(`[bullet][bulletId="${data.bulletId}"]`);
+        if (bullet && bullet.parentNode) {
+          bullet.parentNode.removeChild(bullet);
+        }
+        
+        // Host forwards bullet destroy to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open && connectionKey !== data.shooterPlayerId) {
+              conn.send({
+                type: 'bullet-destroy',
+                bulletId: data.bulletId,
+                shooterPlayerId: data.shooterPlayerId
               });
             }
           });
@@ -7364,7 +7669,11 @@ function setGameplayHUD(isPlaying) {
           maxThrowForce: { type: 'number', default: 8 },
           movementSpeed: { type: 'number', default: 1.5 },
           accuracy: { type: 'number', default: 0.7 },
-          team: { type: 'string', default: 'red' } // 'red' or 'blue'
+          team: { type: 'string', default: 'red' }, // 'red' or 'blue'
+          // Player-like locomotion parameters
+          thrusterForce: { type: 'number', default: 0.8 },
+          maxSpeed: { type: 'number', default: 8 },
+          rotationSpeed: { type: 'number', default: 2 }
         },
         
         init: function() {
@@ -7389,6 +7698,40 @@ function setGameplayHUD(isPlaying) {
           this.stunEndTime = 0;
           this.stunImmunityEndTime = 0; // 10-second immunity after being stunned
           
+          // Player-like locomotion system
+          this.velocity = new THREE.Vector3(); // Persistent velocity accumulator like humans
+          this.damping = 0.996; // Same damping as humans (0.4% loss per frame)
+          this.minVelocity = 0.01; // Stop very slow movement
+          this.thrusterActive = { left: false, right: false };
+          this.rotationY = 0;
+          this.currentTarget = null;
+          this.targetDirection = new THREE.Vector3();
+          this.desiredRotation = 0;
+          this.rotationVelocity = 0;
+          this.maxRotationVelocity = this.data.rotationSpeed;
+          
+          // Navigation state
+          this.navigationState = 'idle'; // 'idle', 'rotating', 'thrusting', 'drifting', 'avoiding-obstacle', 'seeking-lost-target'
+          this.lastNavigationUpdate = 0;
+          this.rotationTolerance = 0.2; // radians (~11.5 degrees) - more forgiving
+          this.lastCloseTime = 0; // Track when bot was last close to target
+          this.closeDistance = 0.5; // Distance considered "close" to target
+          
+          // Collision state for navigation system
+          this.isColliding = false;
+          
+          // Line of sight memory system
+          this.lastKnownTargetPosition = new THREE.Vector3();
+          this.lineOfSightLost = false;
+          this.lastKnownTargetTime = 0;
+          this.lastKnownTargetIndicator = null;
+          this.targetMemoryDuration = 10000; // 10 seconds
+          
+          // Collision and obstacle avoidance
+          this.isColliding = false;
+          this.collisionResponse = new THREE.Vector3();
+          this.obstacleAvoidanceDirection = new THREE.Vector3();
+          
           // Create physics body for the bot
           const shape = new CANNON.Sphere(0.2);
           // Position based on bot ID around ice cube area (2, 5.8, 12)
@@ -7409,7 +7752,7 @@ function setGameplayHUD(isPlaying) {
             linearDamping: 0.8,
             angularDamping: 0.8,
             collisionFilterGroup: 1,
-            collisionFilterMask: 6 // Collide with balls (group 2) and surfaces (group 4)
+            collisionFilterMask: 7 // Collide with players (1) + balls (2) + surfaces (4) = 7
           });
           
           this.body.gravity = new CANNON.Vec3(0, 0, 0); // Zero gravity
@@ -7417,6 +7760,9 @@ function setGameplayHUD(isPlaying) {
           
           // Store reference
           this.body.el = this.el;
+          
+          // Create direction indicator for debugging (2m forward-facing line)
+          this.createDirectionIndicator();
           
           // Initialize position
           this.generateNewTargetPosition();
@@ -7429,6 +7775,18 @@ function setGameplayHUD(isPlaying) {
           // Add collision detection for bot being hit
           this.body.addEventListener('collide', (evt) => {
             this.checkPlayerBallHit(evt);
+            this.handleEnvironmentCollision(evt);
+          });
+          
+          // Reset collision state when no longer colliding
+          this.body.addEventListener('endContact', (evt) => {
+            const otherBody = evt.target === this.body ? evt.body : evt.target;
+            
+            // Reset collision state when no longer touching environment
+            if ((otherBody.el && otherBody.el.hasAttribute('grab-surface')) || 
+                (otherBody.collisionFilterGroup === 4)) {
+              this.isColliding = false;
+            }
           });
           
           // Update difficulty settings
@@ -7462,6 +7820,467 @@ function setGameplayHUD(isPlaying) {
           const ballPlayer = `player${ballIndex}`;
           this.ball = this.el.sceneEl.querySelector(`[zerog-ball*="player: ${ballPlayer}"]`);
           
+        },
+        
+        createDirectionIndicator: function() {
+          // Create a 2m line showing bot's forward direction for debugging
+          const line = document.createElement('a-entity');
+          line.setAttribute('geometry', {
+            primitive: 'cylinder',
+            radius: 0.02,
+            height: 2
+          });
+          line.setAttribute('material', {
+            color: this.data.team === 'red' ? '#ff0000' : (this.data.team === 'blue' ? '#0000ff' : '#00ff00'),
+            opacity: 0.7,
+            transparent: true
+          });
+          line.setAttribute('position', '0 0 1'); // 1m forward from bot center (positive Z is forward)
+          line.setAttribute('rotation', '90 0 0'); // Rotate to point forward (Z-axis)
+          line.setAttribute('class', 'bot-direction-indicator');
+          
+          this.el.appendChild(line);
+          this.directionIndicator = line;
+        },
+        
+        handleEnvironmentCollision: function(evt) {
+          // Handle collision with environment objects (surfaces, meshes)
+          const otherBody = evt.target === this.body ? evt.body : evt.target;
+          
+          // Handle collisions with grab-surface elements OR level physics bodies
+          if ((otherBody.el && otherBody.el.hasAttribute('grab-surface')) || 
+              (otherBody.collisionFilterGroup === 4)) {
+            this.isColliding = true;
+            
+            // Stop thruster forces when colliding
+            this.thrusterActive.left = false;
+            this.thrusterActive.right = false;
+            
+            // Change navigation state to avoid obstacle
+            if (this.navigationState === 'thrusting') {
+              this.navigationState = 'avoiding-obstacle';
+            }
+          }
+        },
+        
+        checkLevelModelCollision: function(botPos, radius = 0.3) {
+          // Use the SAME collision detection system as human players
+          const response = new THREE.Vector3(0, 0, 0);
+          
+          // Get human player component to access BVH meshes
+          const player = document.querySelector('[zerog-player]');
+          if (!player || !player.components['zerog-player']) {
+            return response;
+          }
+          
+          const playerComponent = player.components['zerog-player'];
+          if (!playerComponent.bvhMeshes || playerComponent.bvhMeshes.length === 0) {
+            return response;
+          }
+          
+          // Use BVH-accelerated raycasting (same as human players)
+          const raycaster = new THREE.Raycaster();
+          raycaster.firstHitOnly = true;
+          raycaster.far = radius * 3;
+          const directions = [
+            new THREE.Vector3(1, 0, 0),   // Right
+            new THREE.Vector3(-1, 0, 0),  // Left
+            new THREE.Vector3(0, 1, 0),   // Up
+            new THREE.Vector3(0, -1, 0),  // Down
+            new THREE.Vector3(0, 0, 1),   // Forward
+            new THREE.Vector3(0, 0, -1)   // Backward
+          ];
+          
+          // Performance optimization: Use sphere-based collision detection
+          const maxDistance = 5; // 5 meter radius around bot
+          const detectionSphere = new THREE.Sphere(botPos, maxDistance);
+          
+          // Filter to nearby meshes only (same as human players)
+          const nearbyMeshes = playerComponent.bvhMeshes.filter(mesh => {
+            if (!mesh.geometry || !mesh.geometry.boundingSphere) return false;
+            
+            const meshSphere = mesh.geometry.boundingSphere.clone();
+            meshSphere.applyMatrix4(mesh.matrixWorld);
+            
+            return detectionSphere.intersectsSphere(meshSphere);
+          });
+          
+          // Check each direction for collisions
+          directions.forEach(direction => {
+            raycaster.set(botPos, direction);
+            
+            const intersects = raycaster.intersectObjects(nearbyMeshes, false);
+            
+            if (intersects.length > 0) {
+              const intersection = intersects[0];
+              const distance = intersection.distance;
+              
+              // If intersection is within collision radius, push bot away
+              if (distance < radius) {
+                const pushDistance = radius - distance + 0.01; // Small buffer
+                const pushDirection = direction.clone().negate(); // Push opposite to ray direction
+                response.add(pushDirection.multiplyScalar(pushDistance));
+              }
+            }
+          });
+          
+          return response;
+        },
+        
+        checkForObstacles: function(fromPos, toPos) {
+          // Check if there are obstacles between current position and target
+          const direction = new THREE.Vector3().subVectors(toPos, fromPos).normalize();
+          const distance = fromPos.distanceTo(toPos);
+          
+          // Use raycasting to detect obstacles
+          const raycaster = new THREE.Raycaster();
+          raycaster.set(fromPos, direction);
+          raycaster.far = Math.min(distance, 5.0); // Check up to 5 meters ahead
+          
+          // Get obstacle meshes (same as line of sight detection)
+          const meshes = [];
+          const models = [
+            document.querySelector('#model-level'),
+            document.querySelector('#model-spaceship'),
+            document.querySelector('#model-asteroid-42'),
+            document.querySelector('#model-asteroid-field-north'),
+            document.querySelector('#model-asteroid-field-south'),
+            document.querySelector('#model-asteroid-field-east'),
+            document.querySelector('#model-asteroid-field-west')
+          ];
+          
+          models.forEach(model => {
+            if (model && model.object3D) {
+              model.object3D.traverse(child => {
+                if (child.isMesh && child.geometry) {
+                  meshes.push(child);
+                }
+              });
+            }
+          });
+          
+          // Add grab-surface objects
+          const surfaces = document.querySelectorAll('[grab-surface]');
+          surfaces.forEach(surface => {
+            if (surface.object3D) {
+              surface.object3D.traverse(child => {
+                if (child.isMesh && child.geometry) {
+                  meshes.push(child);
+                }
+              });
+            }
+          });
+          
+          const intersects = raycaster.intersectObjects(meshes, false);
+          return intersects.length > 0 && intersects[0].distance < raycaster.far - 0.5; // 0.5m buffer
+        },
+        
+        createLastKnownPositionIndicator: function(position) {
+          // Remove existing indicator
+          this.removeLastKnownPositionIndicator();
+          
+          // Create wireframe sphere at last known position
+          const sphere = document.createElement('a-sphere');
+          sphere.setAttribute('radius', '0.5');
+          sphere.setAttribute('position', `${position.x} ${position.y} ${position.z}`);
+          sphere.setAttribute('material', {
+            wireframe: true,
+            color: this.data.team === 'red' ? '#ff0000' : (this.data.team === 'blue' ? '#0000ff' : '#00ff00'),
+            opacity: 0.6,
+            transparent: true
+          });
+          sphere.setAttribute('class', 'bot-last-known-position');
+          
+          // Add to scene
+          document.querySelector('a-scene').appendChild(sphere);
+          this.lastKnownTargetIndicator = sphere;
+          
+          // Auto-remove after 10 seconds
+          setTimeout(() => {
+            this.removeLastKnownPositionIndicator();
+          }, this.targetMemoryDuration);
+        },
+        
+        removeLastKnownPositionIndicator: function() {
+          if (this.lastKnownTargetIndicator && this.lastKnownTargetIndicator.parentNode) {
+            this.lastKnownTargetIndicator.parentNode.removeChild(this.lastKnownTargetIndicator);
+            this.lastKnownTargetIndicator = null;
+          }
+        },
+        
+        updateLineOfSightMemory: function(hasLOS, targetPos) {
+          const now = Date.now();
+          
+          if (hasLOS) {
+            // We have line of sight - update last known position
+            this.lastKnownTargetPosition.copy(targetPos);
+            this.lastKnownTargetTime = now;
+            this.lineOfSightLost = false;
+            
+            // Remove indicator if we regained sight
+            this.removeLastKnownPositionIndicator();
+          } else {
+            // We lost line of sight
+            if (!this.lineOfSightLost) {
+              // Just lost sight - store position and create indicator
+              this.lineOfSightLost = true;
+              this.createLastKnownPositionIndicator(this.lastKnownTargetPosition);
+            }
+          }
+          
+          // Check if memory has expired
+          if (this.lineOfSightLost && (now - this.lastKnownTargetTime > this.targetMemoryDuration)) {
+            this.lineOfSightLost = false;
+            this.removeLastKnownPositionIndicator();
+          }
+        },
+        
+        calculateObstacleAvoidance: function(botPos, targetPos) {
+          // Calculate a direction to avoid obstacles while moving toward target
+          const toTarget = new THREE.Vector3().subVectors(targetPos, botPos).normalize();
+          
+          // Try perpendicular directions to find clear path
+          const rightDir = new THREE.Vector3().crossVectors(toTarget, new THREE.Vector3(0, 1, 0)).normalize();
+          const leftDir = rightDir.clone().multiplyScalar(-1);
+          
+          // Test both directions
+          const rightClear = !this.checkForObstacles(botPos, botPos.clone().add(rightDir.clone().multiplyScalar(3)));
+          const leftClear = !this.checkForObstacles(botPos, botPos.clone().add(leftDir.clone().multiplyScalar(3)));
+          
+          if (rightClear && leftClear) {
+            // Both directions clear - choose randomly
+            this.obstacleAvoidanceDirection.copy(Math.random() > 0.5 ? rightDir : leftDir);
+          } else if (rightClear) {
+            this.obstacleAvoidanceDirection.copy(rightDir);
+          } else if (leftClear) {
+            this.obstacleAvoidanceDirection.copy(leftDir);
+          } else {
+            // Both blocked - try going up or back
+            const upDir = new THREE.Vector3(0, 1, 0);
+            const backDir = toTarget.clone().multiplyScalar(-1);
+            this.obstacleAvoidanceDirection.copy(Math.random() > 0.5 ? upDir : backDir);
+          }
+        },
+        
+        checkAndResolveCollisions: function(dt) {
+          // Bot collision detection using the SAME system as human players
+          // but applied to CANNON.js physics body instead of VR rig
+          
+          const botPos = new THREE.Vector3().copy(this.body.position);
+          const radius = 0.25; // Same collision radius as human players
+          
+          // Check collision points (same as human players but relative to bot position)
+          const collisionPoints = [
+            { pos: botPos.clone(), radius: radius, name: 'bot-center' }
+          ];
+          
+          let totalCollisionResponse = new THREE.Vector3(0, 0, 0);
+          
+          // Check each collision point against all collidable surfaces (same as humans)
+          collisionPoints.forEach(point => {
+            const response = this.checkBotPointCollision(point.pos, point.radius, point.name);
+            if (response.length() > 0) {
+              totalCollisionResponse.add(response);
+            }
+          });
+          
+          // Apply collision response by moving physics body (not VR rig like humans)
+          if (totalCollisionResponse.length() > 0) {
+            // Move the CANNON.js physics body to resolve collision
+            this.body.position.x += totalCollisionResponse.x;
+            this.body.position.y += totalCollisionResponse.y;
+            this.body.position.z += totalCollisionResponse.z;
+            
+            // Dampen velocity in collision direction (same as humans)
+            const collisionNormal = totalCollisionResponse.clone().normalize();
+            const currentVelocity = new THREE.Vector3(this.body.velocity.x, this.body.velocity.y, this.body.velocity.z);
+            const velocityInCollisionDirection = currentVelocity.clone().projectOnVector(collisionNormal);
+            const dampedVelocity = currentVelocity.sub(velocityInCollisionDirection.multiplyScalar(1.2));
+            
+            // Apply dampened velocity back to physics body
+            this.body.velocity.set(dampedVelocity.x, dampedVelocity.y, dampedVelocity.z);
+            
+            // Also dampen the persistent velocity accumulator
+            const persistentVelInCollisionDir = this.velocity.clone().projectOnVector(collisionNormal);
+            this.velocity.sub(persistentVelInCollisionDir.multiplyScalar(1.2));
+            
+            // Set collision flag for navigation system
+            this.isColliding = true;
+          } else {
+            this.isColliding = false;
+          }
+        },
+        
+        checkBotPointCollision: function(point, radius, pointName) {
+          // Use the EXACT same collision detection as human players
+          // This is a simplified version of the human player's checkPointCollision method
+          
+          let totalResponse = new THREE.Vector3(0, 0, 0);
+          
+          // Check against grab-surface elements (same as human players)
+          const surfaces = document.querySelectorAll('[grab-surface]');
+          surfaces.forEach(surface => {
+            const response = this.getBotCollisionResponse(point, radius, surface);
+            if (response.length() > 0) {
+              totalResponse.add(response);
+            }
+          });
+          
+          // Check against level model using BVH (same as human players)
+          const levelResponse = this.checkBotLevelModelCollision(point, radius);
+          if (levelResponse.length() > 0) {
+            totalResponse.add(levelResponse);
+          }
+          
+          return totalResponse;
+        },
+        
+        getBotCollisionResponse: function(point, radius, element) {
+          // Get element world position and geometry (same as human players)
+          const surfacePos = new THREE.Vector3();
+          element.object3D.getWorldPosition(surfacePos);
+          
+          const geometry = element.getAttribute('geometry');
+          if (!geometry) return new THREE.Vector3(0, 0, 0);
+          
+          // Use the SAME collision response math as human players
+          const response = new THREE.Vector3(0, 0, 0);
+          const collisionMargin = 0.02; // Same as player collision margin
+          
+          if (geometry.primitive === 'box') {
+            // Box collision (same math as human players)
+            const halfWidth = geometry.width / 2;
+            const halfHeight = geometry.height / 2;
+            const halfDepth = geometry.depth / 2;
+            
+            // Get point relative to box center
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Find closest point on box surface
+            const closestPoint = new THREE.Vector3(
+              Math.max(-halfWidth, Math.min(halfWidth, relativePos.x)),
+              Math.max(-halfHeight, Math.min(halfHeight, relativePos.y)),
+              Math.max(-halfDepth, Math.min(halfDepth, relativePos.z))
+            );
+            
+            // Distance from point to closest point on box
+            const distance = relativePos.distanceTo(closestPoint);
+            const penetration = radius + collisionMargin - distance;
+            
+            if (penetration > 0) {
+              // Calculate push-out direction
+              const direction = relativePos.clone().sub(closestPoint).normalize();
+              if (direction.length() === 0) {
+                // Point is exactly on surface, push up
+                direction.set(0, 1, 0);
+              }
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'sphere') {
+            // Sphere collision (same math as human players)
+            const sphereRadius = geometry.radius || 1.0;
+            
+            // Get point relative to sphere center
+            const relativePos = point.clone().sub(surfacePos);
+            const distance = relativePos.length();
+            
+            // Calculate penetration
+            const penetration = radius + collisionMargin + sphereRadius - distance;
+            
+            if (penetration > 0) {
+              // Push away from center
+              const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
+              response.copy(direction.multiplyScalar(penetration));
+            }
+          } else if (geometry.primitive === 'cylinder') {
+            // Cylinder collision (same math as human players)
+            const cylinderRadius = geometry.radius || 1.0;
+            const cylinderHeight = geometry.height || 2.0;
+            
+            // Get point relative to cylinder center
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Check if point is within cylinder height
+            if (Math.abs(relativePos.y) <= cylinderHeight / 2 + radius + collisionMargin) {
+              // Calculate horizontal distance from cylinder axis
+              const horizontalDistance = Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z);
+              const penetration = radius + collisionMargin + cylinderRadius - horizontalDistance;
+              
+              if (penetration > 0) {
+                // Push away horizontally
+                const direction = horizontalDistance > 0.001 ? 
+                  new THREE.Vector3(relativePos.x, 0, relativePos.z).normalize() : 
+                  new THREE.Vector3(1, 0, 0);
+                response.copy(direction.multiplyScalar(penetration));
+              }
+            }
+          }
+          
+          return response;
+        },
+        
+        checkBotLevelModelCollision: function(point, radius) {
+          // Use the SAME BVH collision detection as human players
+          const response = new THREE.Vector3(0, 0, 0);
+          
+          // Get human player component to access BVH meshes
+          const player = document.querySelector('[zerog-player]');
+          if (!player || !player.components['zerog-player']) {
+            return response;
+          }
+          
+          const playerComponent = player.components['zerog-player'];
+          if (!playerComponent.bvhMeshes || playerComponent.bvhMeshes.length === 0) {
+            return response;
+          }
+          
+          // Use BVH-accelerated raycasting (same as human players)
+          const raycaster = new THREE.Raycaster();
+          raycaster.firstHitOnly = true;
+          raycaster.far = radius * 3;
+          const directions = [
+            new THREE.Vector3(1, 0, 0),   // Right
+            new THREE.Vector3(-1, 0, 0),  // Left
+            new THREE.Vector3(0, 1, 0),   // Up
+            new THREE.Vector3(0, -1, 0),  // Down
+            new THREE.Vector3(0, 0, 1),   // Forward
+            new THREE.Vector3(0, 0, -1)   // Backward
+          ];
+          
+          // Performance optimization: Use sphere-based collision detection
+          const maxDistance = 5; // 5 meter radius around bot
+          const detectionSphere = new THREE.Sphere(point, maxDistance);
+          
+          // Filter to nearby meshes only (same as human players)
+          const nearbyMeshes = playerComponent.bvhMeshes.filter(mesh => {
+            if (!mesh.geometry || !mesh.geometry.boundingSphere) return false;
+            
+            const meshSphere = mesh.geometry.boundingSphere.clone();
+            meshSphere.applyMatrix4(mesh.matrixWorld);
+            
+            return detectionSphere.intersectsSphere(meshSphere);
+          });
+          
+          // Check each direction for collisions (same as human players)
+          directions.forEach(direction => {
+            raycaster.set(point, direction);
+            
+            const intersects = raycaster.intersectObjects(nearbyMeshes, false);
+            
+            if (intersects.length > 0) {
+              const intersection = intersects[0];
+              const distance = intersection.distance;
+              
+              // If intersection is within collision radius, push bot away
+              if (distance < radius) {
+                const pushDistance = radius - distance + 0.01; // Small buffer
+                const pushDirection = direction.clone().negate(); // Push opposite to ray direction
+                response.add(pushDirection.multiplyScalar(pushDistance));
+              }
+            }
+          });
+          
+          return response;
         },
         
                  checkPlayerBallHit: function(evt) {
@@ -7748,6 +8567,340 @@ function setGameplayHUD(isPlaying) {
           }, 1000);
         },
         
+        // Player-like locomotion methods
+        
+        rotateTowards: function(targetDirection, dt) {
+          // Get current forward direction (positive Z is forward in A-Frame)
+          const currentForward = new THREE.Vector3(0, 0, 1);
+          currentForward.applyQuaternion(this.el.object3D.quaternion);
+          
+          // Normalize target direction
+          const targetDir = targetDirection.clone().normalize();
+          
+          // Calculate the angle between current forward and target direction
+          const dot = currentForward.dot(targetDir);
+          const angle = Math.acos(Math.max(-1, Math.min(1, dot))); // Clamp to avoid NaN
+          
+          // Check if rotation is needed
+          if (angle > this.rotationTolerance) {
+            // Calculate rotation axis (cross product)
+            const rotationAxis = new THREE.Vector3();
+            rotationAxis.crossVectors(currentForward, targetDir);
+            
+            // If vectors are nearly opposite, choose an arbitrary perpendicular axis
+            if (rotationAxis.length() < 0.001) {
+              rotationAxis.set(0, 1, 0); // Use Y-axis as fallback
+            } else {
+              rotationAxis.normalize();
+            }
+            
+            // Calculate rotation amount for this frame
+            const maxRotationThisFrame = this.data.rotationSpeed * dt;
+            const rotationAmount = Math.min(angle, maxRotationThisFrame);
+            
+            // Create quaternion for this frame's rotation
+            const rotationQuaternion = new THREE.Quaternion();
+            rotationQuaternion.setFromAxisAngle(rotationAxis, rotationAmount);
+            
+            // Apply rotation to bot
+            this.el.object3D.quaternion.multiplyQuaternions(rotationQuaternion, this.el.object3D.quaternion);
+            this.el.object3D.quaternion.normalize();
+            
+            // Update physics body quaternion
+            this.body.quaternion.set(
+              this.el.object3D.quaternion.x,
+              this.el.object3D.quaternion.y,
+              this.el.object3D.quaternion.z,
+              this.el.object3D.quaternion.w
+            );
+            
+            return false; // Still rotating
+          }
+          
+          return true; // Rotation complete
+        },
+        
+        applyThrusterForces: function(dt) {
+          // Use persistent velocity system EXACTLY like humans
+          let totalThrust = new THREE.Vector3(0, 0, 0);
+          
+          // Simulate left and right thrusters based on navigation needs
+          if (this.thrusterActive.left || this.thrusterActive.right) {
+            // Get forward direction from bot orientation (positive Z is forward)
+            const forwardDir = new THREE.Vector3(0, 0, 1);
+            forwardDir.applyQuaternion(this.el.object3D.quaternion);
+            
+            // Use same incremental force system as humans
+            const incrementalForce = this.data.thrusterForce * dt; // Same as humans: force * dt
+            totalThrust.add(forwardDir.multiplyScalar(incrementalForce));
+          }
+          
+          // Add to PERSISTENT velocity (same as humans)
+          if (totalThrust.length() > 0) {
+            this.velocity.add(totalThrust); // Add to persistent velocity accumulator
+            
+            // Cap maximum velocity
+            if (this.velocity.length() > this.data.maxSpeed) {
+              this.velocity.normalize().multiplyScalar(this.data.maxSpeed);
+            }
+          }
+          
+          // Apply damping to persistent velocity (same as humans)
+          const dampingFactor = Math.pow(this.damping, dt * 60); // Frame-rate independent
+          this.velocity.multiplyScalar(dampingFactor);
+          
+          // Stop very slow movement
+          if (this.velocity.length() < this.minVelocity) {
+            this.velocity.set(0, 0, 0);
+          }
+          
+          // Apply persistent velocity to physics body
+          this.body.velocity.set(this.velocity.x, this.velocity.y, this.velocity.z);
+        },
+        
+        intelligentNavigation: function(dt) {
+          const MIN_TARGET_DISTANCE = 5.0; // 5 meter minimum distance from target
+          const MAX_APPROACH_DISTANCE = 3.0; // Stop approaching when this close
+          
+          // Find the closest visible HUMAN PLAYER (not other bots)
+          let currentTarget = null;
+          let targetPos = new THREE.Vector3();
+          let hasLineOfSight = false;
+          let closestDistance = Infinity;
+          
+          const botPos = new THREE.Vector3().copy(this.body.position);
+          
+          // Check for local player target first
+          const playerTarget = document.querySelector('#player-target');
+          if (playerTarget) {
+            const testPos = new THREE.Vector3();
+            playerTarget.object3D.getWorldPosition(testPos);
+            const distance = botPos.distanceTo(testPos);
+            const hasLOS = this.hasLineOfSight(botPos, testPos);
+            
+            if (hasLOS && distance < closestDistance) {
+              currentTarget = {
+                position: testPos.clone(),
+                type: 'local-player',
+                distance: distance
+              };
+              targetPos = testPos.clone();
+              hasLineOfSight = true;
+              closestDistance = distance;
+            }
+          }
+          
+          // Check for remote players (only if no local player or remote is closer)
+          for (let i = 0; i < 4; i++) {
+            const remoteTarget = document.querySelector(`#remote-target-${i}`);
+            const remotePlayer = document.querySelector(`#remote-player-${i}`);
+            
+            if (remoteTarget && remotePlayer && remotePlayer.getAttribute('visible') !== 'false') {
+              const testPos = new THREE.Vector3();
+              remoteTarget.object3D.getWorldPosition(testPos);
+              const distance = botPos.distanceTo(testPos);
+              const hasLOS = this.hasLineOfSight(botPos, testPos);
+              
+              if (hasLOS && distance < closestDistance) {
+                currentTarget = {
+                  position: testPos.clone(),
+                  type: 'remote-player',
+                  distance: distance
+                };
+                targetPos = testPos.clone();
+                hasLineOfSight = true;
+                closestDistance = distance;
+              }
+            }
+          }
+          
+          // Update line of sight memory
+          if (currentTarget) {
+            this.updateLineOfSightMemory(hasLineOfSight, currentTarget.position);
+          } else {
+            // No visible target - check if we should use last known position
+            if (this.lineOfSightLost && this.lastKnownTargetPosition.length() > 0) {
+              // Use last known position but don't update LOS memory
+            } else {
+              // No target at all - go idle
+              this.navigationState = 'idle';
+              this.thrusterActive.left = false;
+              this.thrusterActive.right = false;
+              return;
+            }
+          }
+          
+          // Determine navigation target
+          let navigationTarget;
+          if (hasLineOfSight && currentTarget) {
+            // Use current visible target
+            navigationTarget = currentTarget.position.clone();
+          } else if (this.lineOfSightLost && this.lastKnownTargetPosition.length() > 0) {
+            // Navigate to last known position
+            navigationTarget = this.lastKnownTargetPosition.clone();
+          } else {
+            // No target - go idle
+            this.navigationState = 'idle';
+            this.thrusterActive.left = false;
+            this.thrusterActive.right = false;
+            return;
+          }
+          
+          // Get current bot position and calculate distance/direction
+          const distanceToTarget = botPos.distanceTo(navigationTarget);
+          const directionToTarget = new THREE.Vector3().subVectors(navigationTarget, botPos).normalize();
+          
+          // Check for obstacles in path
+          const hasObstacle = this.checkForObstacles(botPos, navigationTarget);
+          
+          // Apply collision response if colliding with environment (use raycasting like human players)
+          const collisionResponse = this.checkLevelModelCollision(botPos, 0.3);
+          if (collisionResponse.length() > 0) {
+            // Apply collision response to bot position (same as human players)
+            this.body.position.x += collisionResponse.x * dt;
+            this.body.position.y += collisionResponse.y * dt;
+            this.body.position.z += collisionResponse.z * dt;
+            this.isColliding = true;
+            
+            // Stop thruster forces when colliding
+            this.thrusterActive.left = false;
+            this.thrusterActive.right = false;
+            
+            // Change navigation state to avoid obstacle
+            if (this.navigationState === 'thrusting') {
+              this.navigationState = 'avoiding-obstacle';
+            }
+          } else {
+            this.isColliding = false;
+          }
+          
+          // State machine for intelligent navigation with obstacle avoidance
+          switch (this.navigationState) {
+            case 'idle':
+              // Start navigation if target is at appropriate distance
+              if (distanceToTarget > MAX_APPROACH_DISTANCE) {
+                if (hasObstacle) {
+                  this.navigationState = 'avoiding-obstacle';
+                  this.calculateObstacleAvoidance(botPos, navigationTarget);
+                } else {
+                  this.navigationState = 'rotating';
+                  this.targetDirection.copy(directionToTarget);
+                }
+                this.thrusterActive.left = false;
+                this.thrusterActive.right = false;
+              }
+              break;
+              
+            case 'rotating':
+              // Rotate towards target direction (or avoidance direction)
+              const rotationComplete = this.rotateTowards(this.targetDirection, dt);
+              
+              if (rotationComplete) {
+                // Check distance before starting to thrust
+                if (distanceToTarget > MIN_TARGET_DISTANCE) {
+                  this.navigationState = 'thrusting';
+                  this.thrusterActive.left = true;
+                  this.thrusterActive.right = true;
+                } else {
+                  // Too close - maintain distance
+                  this.navigationState = 'maintaining-distance';
+                  this.thrusterActive.left = false;
+                  this.thrusterActive.right = false;
+                }
+              }
+              break;
+              
+            case 'thrusting':
+              // Continue thrusting while monitoring for obstacles and distance
+              if (distanceToTarget < MIN_TARGET_DISTANCE) {
+                // Too close - stop and maintain distance
+                this.navigationState = 'maintaining-distance';
+                this.thrusterActive.left = false;
+                this.thrusterActive.right = false;
+              } else if (hasObstacle || this.isColliding) {
+                // Obstacle detected - start avoidance
+                this.navigationState = 'avoiding-obstacle';
+                this.thrusterActive.left = false;
+                this.thrusterActive.right = false;
+                this.calculateObstacleAvoidance(botPos, navigationTarget);
+              } else {
+                // Keep rotating towards target while thrusting
+                this.targetDirection.copy(directionToTarget);
+                this.rotateTowards(this.targetDirection, dt);
+              }
+              break;
+              
+            case 'maintaining-distance':
+              // Maintain minimum distance from target
+              if (distanceToTarget < MIN_TARGET_DISTANCE - 1.0) {
+                // Too close - back away
+                const awayDirection = new THREE.Vector3().subVectors(botPos, navigationTarget).normalize();
+                this.targetDirection.copy(awayDirection);
+                this.rotateTowards(this.targetDirection, dt);
+                this.thrusterActive.left = true;
+                this.thrusterActive.right = true;
+              } else if (distanceToTarget > MIN_TARGET_DISTANCE + 2.0) {
+                // Far enough - can approach again
+                this.navigationState = 'idle';
+              } else {
+                // Good distance - just maintain orientation
+                this.thrusterActive.left = false;
+                this.thrusterActive.right = false;
+              }
+              break;
+              
+            case 'avoiding-obstacle':
+              // Navigate around obstacle
+              const avoidanceComplete = this.rotateTowards(this.obstacleAvoidanceDirection, dt);
+              
+              if (avoidanceComplete) {
+                // Start moving in avoidance direction
+                this.thrusterActive.left = true;
+                this.thrusterActive.right = true;
+                
+                // Check if we can see target again or if obstacle is cleared
+                const clearPath = !this.checkForObstacles(botPos, navigationTarget);
+                if (clearPath && distanceToTarget > MIN_TARGET_DISTANCE) {
+                  this.navigationState = 'rotating';
+                  this.targetDirection.copy(directionToTarget);
+                }
+              }
+              break;
+              
+            case 'seeking-lost-target':
+              // Navigate to last known position when LOS is lost
+              if (hasLineOfSight) {
+                // Regained sight - switch back to normal navigation
+                this.navigationState = 'idle';
+              } else if (distanceToTarget < 2.0) {
+                // Reached last known position but no target - search around
+                this.navigationState = 'idle';
+                this.removeLastKnownPositionIndicator();
+              } else {
+                // Continue moving toward last known position
+                this.targetDirection.copy(directionToTarget);
+                const rotationComplete = this.rotateTowards(this.targetDirection, dt);
+                if (rotationComplete) {
+                  this.thrusterActive.left = true;
+                  this.thrusterActive.right = true;
+                }
+              }
+              break;
+              
+            case 'drifting':
+              // Legacy state - drift for a while before starting new navigation
+              const driftTime = Date.now() - this.lastCloseTime;
+              if (driftTime > 3000 && distanceToTarget > MIN_TARGET_DISTANCE) {
+                this.navigationState = 'idle';
+              }
+              break;
+          }
+        },
+        
+        // === BALL THROWING SYSTEM ===
+        // This system handles physics-based ball throwing by bots
+        // Separate from bullet shooting mechanics used by players
+        
         throwBallAtPlayer: function() {
           if (!this.ball || !this.ball.components['zerog-ball']) {
             return;
@@ -7863,19 +9016,20 @@ function setGameplayHUD(isPlaying) {
           // Keep zero gravity
           this.body.gravity.set(0, 0, 0);
           
+          // Calculate delta time for frame-rate independent movement
+          const dt = 1/60; // Assume 60 FPS for consistent behavior
+          
+          // Use new intelligent navigation system instead of old movement logic
+          this.intelligentNavigation(dt);
+          
+          // Apply thruster forces using new locomotion system
+          this.applyThrusterForces(dt);
+          
+          // CRITICAL: Apply collision detection and response to physics body (like human players)
+          this.checkAndResolveCollisions(dt);
+          
           // Track player movement for predictive aiming
           this.updatePlayerTracking(time);
-          
-          // Movement logic
-          if (!this.isMoving && time - this.lastMoveTime > this.moveInterval) {
-            this.startMovementToTarget(time); // Pass current time
-            this.lastMoveTime = time;
-          }
-          
-          // Stop movement after duration
-          if (this.isMoving && time - this.moveStartTime > this.moveDuration) {
-            this.stopMovement();
-          }
           
           // Only shoot when match is active (like other parts of the code do)
           const gameManagerComponent = this.el.sceneEl.components['game-manager'];
@@ -7903,17 +9057,20 @@ function setGameplayHUD(isPlaying) {
               }
             }
   
-            this.throwBallAtPlayer();
-            this.lastThrowTime = time;
-          }
-        },
-        
-        remove: function() {
-          if (this.body) {
-            world.removeBody(this.body);
-          }
+          this.throwBallAtPlayer();
+          this.lastThrowTime = time;
         }
-      });
+      },
+      
+      remove: function() {
+        if (this.body) {
+          world.removeBody(this.body);
+        }
+        
+        // Clean up line of sight memory indicators
+        this.removeLastKnownPositionIndicator();
+      }
+    });
 
       // Goal component for team-based gameplay
       AFRAME.registerComponent('goal', {
@@ -9450,7 +10607,8 @@ function setGameplayHUD(isPlaying) {
             '#hud-score',
             '#hud-timer',
               '#hud-speed',
-            '#hud-message'
+            '#hud-message',
+            '#power-bars-container'  // Hide power bars when menu is open
           ];
           
             hiddenHudElements.forEach(selector => {
@@ -9497,6 +10655,10 @@ function setGameplayHUD(isPlaying) {
             // Always show speed and version display
             const speedElement = document.querySelector('#hud-speed');
             if (speedElement) speedElement.setAttribute('visible', true);
+            
+            // Always show power bars when menu is closed
+            const powerBarsElement = document.querySelector('#power-bars-container');
+            if (powerBarsElement) powerBarsElement.setAttribute('visible', true);
             
             // ALWAYS show version display (game version + FPS)
             const versionElement = document.querySelector('#version-display');
@@ -14370,7 +15532,7 @@ function setGameplayHUD(isPlaying) {
 
     </script>
 
-    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle impact-effects-manager
+    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle impact-effects-manager bullet-manager
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              bloom="threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0"
              webxr="requiredFeatures: local-floor">
@@ -15568,6 +16730,15 @@ function setGameplayHUD(isPlaying) {
         if (targetPlayerId === myPlayerId) {
           // This is the local player being hit - animate local target
           targetToAnimate = document.querySelector('#player-target');
+        } else if (targetPlayerId.startsWith('bot-')) {
+          // This is a bot being hit - animate bot target
+          if (targetPlayerId === 'bot-red') {
+            targetToAnimate = document.querySelector('#bot-target');
+          } else if (targetPlayerId === 'bot-blue') {
+            targetToAnimate = document.querySelector('#bot-blue-target');
+          } else if (targetPlayerId === 'bot-green') {
+            targetToAnimate = document.querySelector('#bot-green-target');
+          }
         } else {
           // This is a remote player being hit - animate remote target
           targetToAnimate = document.querySelector(`#remote-target-${playerIndex}`);
