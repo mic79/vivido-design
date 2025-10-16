@@ -1005,6 +1005,11 @@
           if (cursorListener && cursorListener.components['cursor-listener']) {
             cursorListener.components['cursor-listener'].toggleModel('level');
           }
+        } else if (event.code === 'Digit9') {
+          const cursorListener = document.querySelector('[cursor-listener]');
+          if (cursorListener && cursorListener.components['cursor-listener']) {
+            cursorListener.components['cursor-listener'].toggleBots();
+          }
         }
       });
 
@@ -7581,7 +7586,7 @@ function setGameplayHUD(isPlaying) {
       // Zero-G Bot Component - AI opponent for singleplayer
       AFRAME.registerComponent('zerog-bot', {
         schema: {
-          enabled: { type: 'boolean', default: true },
+          enabled: { type: 'boolean', default: false },
           difficulty: { type: 'string', default: 'medium' },
           throwInterval: { type: 'number', default: 4000 }, // 4 seconds between throws
           minThrowForce: { type: 'number', default: 3 },
@@ -14611,6 +14616,8 @@ function setGameplayHUD(isPlaying) {
             this.toggleModel('spaceship');
           } else if (id === 'menu-toggle-asteroid-42') {
             this.toggleModel('asteroid-42');
+          } else if (id === 'menu-toggle-bots') {
+            this.toggleBots();
           } else if (id === 'menu-toggle-mesh-debug') {
             this.toggleMeshDebug();
           } else if (id === 'menu-toggle-smoke') {
@@ -15004,6 +15011,54 @@ function setGameplayHUD(isPlaying) {
               }, 200); // Increased delay to ensure visibility change is processed
             }
           }
+        },
+        
+        toggleBots: function() {
+          // Get all bot entities
+          const bots = [
+            document.querySelector('#zerog-bot-red'),
+            document.querySelector('#zerog-bot-blue'),
+            document.querySelector('#zerog-bot-green')
+          ];
+          
+          const button = document.querySelector('#menu-toggle-bots');
+          const buttonText = button.querySelector('a-text');
+          
+          // Check if any bot is currently enabled
+          let anyBotEnabled = false;
+          bots.forEach(bot => {
+            if (bot && bot.getAttribute('zerog-bot')) {
+              const botAttr = bot.getAttribute('zerog-bot');
+              if (botAttr.enabled === true) {
+                anyBotEnabled = true;
+              }
+            }
+          });
+          
+          if (anyBotEnabled) {
+            // Disable all bots
+            bots.forEach(bot => {
+              if (bot) {
+                bot.setAttribute('zerog-bot', 'enabled', false);
+              }
+            });
+            button.setAttribute('material', 'color', '#aa0000');
+            buttonText.setAttribute('text', 'value', 'Bots: OFF');
+            console.log('🤖 All bots disabled - AI logic stopped for performance');
+          } else {
+            // Enable all bots
+            bots.forEach(bot => {
+              if (bot) {
+                bot.setAttribute('zerog-bot', 'enabled', true);
+              }
+            });
+            button.setAttribute('material', 'color', '#00aa00');
+            buttonText.setAttribute('text', 'value', 'Bots: ON');
+            console.log('🤖 All bots enabled - AI logic active');
+          }
+          
+          // Trigger bot management to respect the new state
+          manageActivePlayersAndBots();
         },
         
         toggleMeshDebug: function() {
@@ -15643,6 +15698,14 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="Spaceship: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
+              <!-- Bot AI Toggle -->
+              <a-entity id="menu-toggle-bots" position="0 -0.12 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #aa0000; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Bots: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
               
               <!-- Single Asteroid Toggle -->
               <a-entity id="menu-toggle-asteroid-42" position="0.3 -0.12 0"
@@ -16355,9 +16418,14 @@ function setGameplayHUD(isPlaying) {
         
         const bots = [redBot, blueBot, greenBot].filter(bot => bot); // Filter out null bots
         
-        // Enable/disable bots based on need
+        // Check if bots are manually disabled via toggle
+        const botToggleButton = document.querySelector('#menu-toggle-bots');
+        const isManuallyDisabled = botToggleButton && 
+          botToggleButton.getAttribute('material').color === '#aa0000';
+        
+        // Enable/disable bots based on need, but respect manual toggle
         bots.forEach((bot, index) => {
-          const shouldEnable = index < botsNeeded;
+          const shouldEnable = index < botsNeeded && !isManuallyDisabled;
           if (bot) {
             bot.setAttribute('visible', shouldEnable);
             if (bot.components['zerog-bot']) {
