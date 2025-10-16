@@ -15121,6 +15121,8 @@ function setGameplayHUD(isPlaying) {
             });
             button.setAttribute('material', 'color', '#aa0000');
             buttonText.setAttribute('text', 'value', 'Bots: OFF');
+            // Store the manual disable state in a reliable way
+            button.setAttribute('data-bots-manually-disabled', 'true');
             console.log('🤖 All bots disabled - AI logic stopped for performance');
           } else {
             // Enable all bots
@@ -15131,6 +15133,8 @@ function setGameplayHUD(isPlaying) {
             });
             button.setAttribute('material', 'color', '#00aa00');
             buttonText.setAttribute('text', 'value', 'Bots: ON');
+            // Clear the manual disable state
+            button.removeAttribute('data-bots-manually-disabled');
             console.log('🤖 All bots enabled - AI logic active');
           }
           
@@ -15780,7 +15784,8 @@ function setGameplayHUD(isPlaying) {
                         geometry="primitive: plane; width: 0.18; height: 0.05"
                         material="color: #aa0000; transparent: true; opacity: 0.8"
                         cursor-listener
-                        class="clickable">
+                        class="clickable"
+                        data-bots-manually-disabled="true">
                 <a-text value="Bots: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
@@ -16495,10 +16500,10 @@ function setGameplayHUD(isPlaying) {
         
         const bots = [redBot, blueBot, greenBot].filter(bot => bot); // Filter out null bots
         
-        // Check if bots are manually disabled via toggle
+        // Check if bots are manually disabled via toggle (using reliable data attribute)
         const botToggleButton = document.querySelector('#menu-toggle-bots');
         const isManuallyDisabled = botToggleButton && 
-          botToggleButton.getAttribute('material').color === '#aa0000';
+          botToggleButton.hasAttribute('data-bots-manually-disabled');
         
         // Enable/disable bots based on need, but respect manual toggle
         bots.forEach((bot, index) => {
