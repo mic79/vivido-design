@@ -233,27 +233,54 @@
             const currentPos = this.el.object3D.position.clone();
             const lastPos = this.lastPosition.clone();
             
-            // Get all collidable meshes
+            // Get all collidable meshes - only from visible models
             const meshes = [];
             const models = [
               document.querySelector('#model-level'),
               document.querySelector('#model-spaceship'),
-              document.querySelector('#model-asteroid-42'),
-              document.querySelector('#model-asteroid-field-north'),
-              document.querySelector('#model-asteroid-field-south'),
-              document.querySelector('#model-asteroid-field-east'),
-              document.querySelector('#model-asteroid-field-west')
+              document.querySelector('#model-asteroid-42')
             ];
+            
+            let visibleModelCount = 0;
+            let totalMeshCount = 0;
             
             models.forEach(model => {
               if (model && model.object3D) {
-                model.object3D.traverse(child => {
-                  if (child.isMesh && child.geometry) {
-                    meshes.push(child);
-                  }
-                });
+                if (model.getAttribute('visible') !== false) {
+                  visibleModelCount++;
+                  model.object3D.traverse(child => {
+                    if (child.isMesh && child.geometry) {
+                      meshes.push(child);
+                      totalMeshCount++;
+                    }
+                  });
+                }
               }
             });
+            
+            // Performance logging for bullet collision optimization with throttling
+            if (models.length > 0 && visibleModelCount < models.length) {
+              const hiddenCount = models.length - visibleModelCount;
+              
+              // Initialize throttling if not exists
+              if (!this._bulletOptimizationLog) {
+                this._bulletOptimizationLog = {
+                  lastCount: -1,
+                  lastLogTime: 0,
+                  logInterval: 5000 // 5 seconds
+                };
+              }
+              
+              const now = Date.now();
+              const shouldLog = hiddenCount !== this._bulletOptimizationLog.lastCount || 
+                              (now - this._bulletOptimizationLog.lastLogTime) > this._bulletOptimizationLog.logInterval;
+              
+              if (shouldLog) {
+                console.log(`🚀 Bullet Collision Optimization: ${hiddenCount} invisible models excluded from bullet collision detection`);
+                this._bulletOptimizationLog.lastCount = hiddenCount;
+                this._bulletOptimizationLog.lastLogTime = now;
+              }
+            }
             
             // Add grab-surface objects
             const surfaces = document.querySelectorAll('[grab-surface]');
@@ -967,6 +994,16 @@
           const cursorListener = document.querySelector('[cursor-listener]');
           if (cursorListener && cursorListener.components['cursor-listener']) {
             cursorListener.components['cursor-listener'].toggleSparks();
+          }
+        } else if (event.code === 'Digit7') {
+          const cursorListener = document.querySelector('[cursor-listener]');
+          if (cursorListener && cursorListener.components['cursor-listener']) {
+            cursorListener.components['cursor-listener'].toggleBloom();
+          }
+        } else if (event.code === 'Digit8') {
+          const cursorListener = document.querySelector('[cursor-listener]');
+          if (cursorListener && cursorListener.components['cursor-listener']) {
+            cursorListener.components['cursor-listener'].toggleModel('level');
           }
         }
       });
@@ -4343,9 +4380,10 @@ function setGameplayHUD(isPlaying) {
               this.showMeshDebug = !this.showMeshDebug;
               console.log('🎨 Mesh debug visualization:', this.showMeshDebug ? 'ON (Green=nearby, Red=far)' : 'OFF');
               
-              // Reset all mesh colors when turning off
+              // Reset all mesh colors when turning off - only for visible meshes
               if (!this.showMeshDebug && this.bvhMeshes) {
-                this.bvhMeshes.forEach(mesh => {
+                const visibleMeshes = this.getVisibleMeshes(this.bvhMeshes);
+                visibleMeshes.forEach(mesh => {
                   if (mesh.material && mesh.userData.originalColor !== undefined) {
                     mesh.material.color.setHex(mesh.userData.originalColor);
                   }
@@ -4377,20 +4415,7 @@ function setGameplayHUD(isPlaying) {
               // Find any element with cursor-listener component and call toggleModel
               const cursorListener = document.querySelector('[cursor-listener]');
               if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
-                console.log('🌌 Keyboard shortcut: Toggling Asteroid Field (Key 2)');
-                if (cursorListener.components['cursor-listener'].toggleModel) {
-                cursorListener.components['cursor-listener'].toggleModel('asteroid-field');
-                } else {
-                  console.warn('⚠️ toggleModel method not found on cursor-listener');
-                }
-              } else {
-                console.warn('⚠️ Cursor listener component not found for asteroid field toggle');
-              }
-            } else if (evt.key === '3') {
-              // Find any element with cursor-listener component and call toggleModel
-              const cursorListener = document.querySelector('[cursor-listener]');
-              if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
-                console.log('🪨 Keyboard shortcut: Toggling Individual Asteroid (Key 3)');
+                console.log('🪨 Keyboard shortcut: Toggling Individual Asteroid (Key 2)');
                 if (cursorListener.components['cursor-listener'].toggleModel) {
                 cursorListener.components['cursor-listener'].toggleModel('asteroid-42');
                 } else {
@@ -4399,11 +4424,11 @@ function setGameplayHUD(isPlaying) {
               } else {
                 console.warn('⚠️ Cursor listener component not found for individual asteroid toggle');
               }
-            } else if (evt.key === '4') {
+            } else if (evt.key === '3') {
               // Find any element with cursor-listener component and call toggleMeshDebug
               const cursorListener = document.querySelector('[cursor-listener]');
               if (cursorListener && cursorListener.components && cursorListener.components['cursor-listener']) {
-                console.log('🎨 Keyboard shortcut: Toggling Mesh Debug (Key 4)');
+                console.log('🎨 Keyboard shortcut: Toggling Mesh Debug (Key 3)');
                 if (cursorListener.components['cursor-listener'].toggleMeshDebug) {
                 cursorListener.components['cursor-listener'].toggleMeshDebug();
                 } else {
@@ -4825,6 +4850,52 @@ function setGameplayHUD(isPlaying) {
           return nearestSurface;
         },
         
+        // Helper function to filter meshes from visible models only
+        getVisibleMeshes: function(meshes) {
+          const visibleMeshes = meshes.filter(mesh => {
+            // Check if mesh belongs to a visible model entity
+            let isFromVisibleModel = true;
+            let currentParent = mesh.parent;
+            
+            // Traverse up the hierarchy to find the model entity
+            while (currentParent) {
+              if (currentParent.el && currentParent.el.getAttribute && currentParent.el.getAttribute('visible') === false) {
+                isFromVisibleModel = false;
+                break;
+              }
+              currentParent = currentParent.parent;
+            }
+            
+            return isFromVisibleModel;
+          });
+          
+          // Performance logging with throttling (only log when count changes or every 5 seconds)
+          if (meshes.length > 0 && visibleMeshes.length !== meshes.length) {
+            const hiddenCount = meshes.length - visibleMeshes.length;
+            
+            // Initialize throttling if not exists
+            if (!this._meshOptimizationLog) {
+              this._meshOptimizationLog = {
+                lastCount: -1,
+                lastLogTime: 0,
+                logInterval: 5000 // 5 seconds
+              };
+            }
+            
+            const now = Date.now();
+            const shouldLog = hiddenCount !== this._meshOptimizationLog.lastCount || 
+                            (now - this._meshOptimizationLog.lastLogTime) > this._meshOptimizationLog.logInterval;
+            
+            if (shouldLog) {
+              console.log(`🚀 Performance Optimization: ${hiddenCount} meshes from invisible models excluded from collision detection`);
+              this._meshOptimizationLog.lastCount = hiddenCount;
+              this._meshOptimizationLog.lastLogTime = now;
+            }
+          }
+          
+          return visibleMeshes;
+        },
+        
         // Check if hand can grab onto level.glb model surfaces
         checkLevelModelGrab: function(handPos, handRadius) {
           // Get cached BVH meshes
@@ -4857,25 +4928,9 @@ function setGameplayHUD(isPlaying) {
           // Create detection sphere at hand position
           const grabSphere = new THREE.Sphere(handPos, maxGrabDistance);
           
-          // Filter meshes using sphere intersection for grabbing
-          const nearbyMeshes = this.bvhMeshes.filter(mesh => {
-            // Check if mesh belongs to a visible model entity first
-            let isFromVisibleModel = true;
-            let currentParent = mesh.parent;
-            
-            // Traverse up the hierarchy to find the model entity
-            while (currentParent) {
-              if (currentParent.el && currentParent.el.getAttribute && currentParent.el.getAttribute('visible') === false) {
-                isFromVisibleModel = false;
-                break;
-              }
-              currentParent = currentParent.parent;
-            }
-            
-            // Skip invisible models
-            if (!isFromVisibleModel) {
-              return false;
-            }
+          // Filter meshes using sphere intersection for grabbing - only from visible models
+          const visibleMeshes = this.getVisibleMeshes(this.bvhMeshes);
+          const nearbyMeshes = visibleMeshes.filter(mesh => {
             
             // Update mesh world matrix
             mesh.updateMatrixWorld(true);
@@ -4952,8 +5007,6 @@ function setGameplayHUD(isPlaying) {
             return this.distanceToDodecahedron(handPos, handRadius, elementPos, geometry);
           } else if (geometry.primitive === 'icosahedron') {
             return this.distanceToIcosahedron(handPos, handRadius, elementPos, geometry);
-          } else if (geometry.primitive === 'torus') {
-            return this.distanceToTorus(handPos, handRadius, elementPos, geometry, element);
           } else {
             // Check if this is a GLTF model entity
             const gltfModel = element.querySelector('a-gltf-model');
@@ -5099,59 +5152,6 @@ function setGameplayHUD(isPlaying) {
           return Math.max(0, distanceToSurface - handRadius);
         },
         
-        distanceToTorus: function(handPos, handRadius, torusPos, geometry, element) {
-          // Calculate distance from hand sphere to torus surface
-          const torusRadius = geometry.radius || 1.0;
-          const tubeRadius = geometry.radiusTubular || 0.2;
-          
-          // Get hand position relative to torus center
-          const relativePos = handPos.clone().sub(torusPos);
-          
-          // Check if torus is rotated (rotation="90 0 0" makes it vertical)
-          // Check both element and parent for 90-degree rotation
-          let rotation = element ? element.getAttribute('rotation') : null;
-          let isVertical = false;
-          
-          // Check element's own rotation
-          if (rotation && (rotation.x === 90 || rotation.x === "90")) {
-            isVertical = true;
-          }
-          
-          // Check parent rotation if element doesn't have vertical rotation
-          if (!isVertical) {
-            const parent = element ? element.parentElement : null;
-            if (parent) {
-              const parentRotation = parent.getAttribute('rotation');
-              if (parentRotation && (parentRotation.x === 90 || parentRotation.x === "90")) {
-                isVertical = true;
-              }
-            }
-          }
-          
-          let distanceFromAxis, distanceToTubeCenter;
-          
-          if (isVertical) {
-            // Vertical torus (rotated 90° around X): ring in XY plane, Z is axis
-            distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.y * relativePos.y);
-            distanceToTubeCenter = Math.sqrt(
-              Math.pow(distanceFromAxis - torusRadius, 2) + 
-              Math.pow(relativePos.z, 2)
-            );
-          } else {
-            // Horizontal torus: ring in XZ plane, Y is axis
-            distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z);
-            distanceToTubeCenter = Math.sqrt(
-              Math.pow(distanceFromAxis - torusRadius, 2) + 
-              Math.pow(relativePos.y, 2)
-            );
-          }
-          
-          // Distance to torus surface
-          const distanceToSurface = distanceToTubeCenter - tubeRadius;
-          
-          // Return distance from hand surface to torus surface
-          return Math.max(0, distanceToSurface - handRadius);
-        },
         
         attachToSurface: function(hand, surface) {
           const handPos = new THREE.Vector3();
@@ -6124,9 +6124,10 @@ function setGameplayHUD(isPlaying) {
           // Create detection sphere at player position
           const detectionSphere = new THREE.Sphere(point, maxDistance);
           
-          // Reset all mesh colors first (if debug mode is on)
+          // Reset all mesh colors first (if debug mode is on) - only for visible meshes
           if (this.showMeshDebug) {
-            this.bvhMeshes.forEach(mesh => {
+            const visibleMeshes = this.getVisibleMeshes(this.bvhMeshes);
+            visibleMeshes.forEach(mesh => {
               if (mesh.material && !Array.isArray(mesh.material)) {
                 // Clone material if it's shared to avoid affecting other meshes
                 if (!mesh.userData.hasOwnMaterial) {
@@ -6140,10 +6141,11 @@ function setGameplayHUD(isPlaying) {
             });
           }
           
-          // Filter meshes using improved proximity detection
+          // Filter meshes using improved proximity detection - only from visible models
+          const visibleMeshes = this.getVisibleMeshes(this.bvhMeshes);
           const nearbyMeshes = [];
           
-          this.bvhMeshes.forEach(mesh => {
+          visibleMeshes.forEach(mesh => {
             // Update mesh world matrix
             mesh.updateMatrixWorld(true);
             
@@ -6283,11 +6285,7 @@ function setGameplayHUD(isPlaying) {
           this.initializeBVHForModels([
             { selector: '#model-level', name: 'Level' },
             { selector: '#model-spaceship', name: 'Spaceship' },
-            { selector: '#model-asteroid-42', name: 'Asteroid-42' },
-            { selector: '#model-asteroid-field-north', name: 'Asteroid Field North' },
-            { selector: '#model-asteroid-field-south', name: 'Asteroid Field South' },
-            { selector: '#model-asteroid-field-east', name: 'Asteroid Field East' },
-            { selector: '#model-asteroid-field-west', name: 'Asteroid Field West' }
+            { selector: '#model-asteroid-42', name: 'Asteroid-42' }
           ]);
         },
         
@@ -6535,76 +6533,6 @@ function setGameplayHUD(isPlaying) {
               // Push away from center
               const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
               response.copy(direction.multiplyScalar(penetration));
-            }
-          } else if (geometry && geometry.primitive === 'torus') {
-            // Torus collision (check rotation to determine orientation)
-            const torusRadius = geometry.radius || 1.0;
-            const tubeRadius = geometry.radiusTubular || 0.2;
-            
-            // Get point relative to torus center
-            const relativePos = point.clone().sub(surfacePos);
-            
-            // Check if torus is rotated (rotation="90 0 0" makes it vertical)
-            const rotation = element ? element.getAttribute('rotation') : null;
-            
-            let distanceFromAxis, distanceToTubeCenter, tubeCenter;
-            
-            if (rotation && (rotation.x === 90 || rotation.x === "90")) {
-              // Vertical torus (rotated 90° around X): ring in XY plane, Z is axis
-              distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.y * relativePos.y);
-              distanceToTubeCenter = Math.sqrt(
-                Math.pow(distanceFromAxis - torusRadius, 2) + 
-                Math.pow(relativePos.z, 2)
-              );
-              
-              const penetration = radius + this.collisionMargin + tubeRadius - distanceToTubeCenter;
-              
-              if (penetration > 0) {
-                let direction = new THREE.Vector3();
-                
-                if (distanceToTubeCenter > 0.001) {
-                  // Direction from tube center to point (vertical torus - XY plane)
-                  tubeCenter = new THREE.Vector3(
-                    relativePos.x * (torusRadius / Math.max(0.001, distanceFromAxis)),
-                    relativePos.y * (torusRadius / Math.max(0.001, distanceFromAxis)),
-                    0
-                  );
-                  direction = relativePos.clone().sub(tubeCenter).normalize();
-                } else {
-                  // Point is at tube center, push along Z axis
-                  direction.set(0, 0, 1);
-                }
-                
-                response.copy(direction.multiplyScalar(penetration));
-              }
-            } else {
-              // Horizontal torus: ring in XZ plane, Y is axis
-              distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z);
-              distanceToTubeCenter = Math.sqrt(
-                Math.pow(distanceFromAxis - torusRadius, 2) + 
-                Math.pow(relativePos.y, 2)
-              );
-              
-              const penetration = radius + this.collisionMargin + tubeRadius - distanceToTubeCenter;
-              
-              if (penetration > 0) {
-                let direction = new THREE.Vector3();
-                
-                if (distanceToTubeCenter > 0.001) {
-                  // Direction from tube center to point (horizontal torus)
-                  tubeCenter = new THREE.Vector3(
-                    relativePos.x * (torusRadius / Math.max(0.001, distanceFromAxis)),
-                    0,
-                    relativePos.z * (torusRadius / Math.max(0.001, distanceFromAxis))
-                  );
-                  direction = relativePos.clone().sub(tubeCenter).normalize();
-                } else {
-                  // Point is at tube center, push up
-                  direction.set(0, 1, 0);
-                }
-                
-                response.copy(direction.multiplyScalar(penetration));
-              }
             }
           }
           
@@ -7510,9 +7438,6 @@ function setGameplayHUD(isPlaying) {
             // Icosahedron: use sphere approximation for better performance and no winding errors
             const radius = geometry.radius || 1.0;
             shape = new CANNON.Sphere(radius);
-          } else if (geometry && geometry.primitive === 'torus') {
-            // Torus: Skip CANNON.js physics body - use custom collision detection instead
-            return; // Don't create physics body for torus
           } else if (gltfModel) {
             // GLTF Model: use sphere approximation based on scale
             const scale = this.el.getAttribute('scale') || {x: 1, y: 1, z: 1};
@@ -7612,12 +7537,6 @@ function setGameplayHUD(isPlaying) {
             wireframe = document.createElement('a-icosahedron');
             wireframe.setAttribute('radius', geometry.radius || 1.0);
             wireframe.setAttribute('material', 'wireframe: true; color: #00ffff; opacity: 0.3; transparent: true');
-          } else if (geometry && geometry.primitive === 'torus') {
-            // Torus wireframe (show actual torus collision shape)
-            wireframe = document.createElement('a-torus');
-            wireframe.setAttribute('radius', geometry.radius || 1.0);
-            wireframe.setAttribute('radius-tubular', geometry.radiusTubular || 0.2);
-            wireframe.setAttribute('material', 'wireframe: true; color: #ffaa00; opacity: 0.3; transparent: true');
           } else {
             // Fallback box wireframe
             wireframe = document.createElement('a-box');
@@ -7942,11 +7861,7 @@ function setGameplayHUD(isPlaying) {
           const models = [
             document.querySelector('#model-level'),
             document.querySelector('#model-spaceship'),
-            document.querySelector('#model-asteroid-42'),
-            document.querySelector('#model-asteroid-field-north'),
-            document.querySelector('#model-asteroid-field-south'),
-            document.querySelector('#model-asteroid-field-east'),
-            document.querySelector('#model-asteroid-field-west')
+            document.querySelector('#model-asteroid-42')
           ];
           
           models.forEach(model => {
@@ -8251,8 +8166,9 @@ function setGameplayHUD(isPlaying) {
           const maxDistance = 5; // 5 meter radius around bot
           const detectionSphere = new THREE.Sphere(point, maxDistance);
           
-          // Filter to nearby meshes only (same as human players)
-          const nearbyMeshes = playerComponent.bvhMeshes.filter(mesh => {
+          // Filter to nearby meshes only (same as human players) - only from visible models
+          const visibleMeshes = playerComponent.getVisibleMeshes(playerComponent.bvhMeshes);
+          const nearbyMeshes = visibleMeshes.filter(mesh => {
             if (!mesh.geometry || !mesh.geometry.boundingSphere) return false;
             
             const meshSphere = mesh.geometry.boundingSphere.clone();
@@ -8488,11 +8404,7 @@ function setGameplayHUD(isPlaying) {
           const models = [
             document.querySelector('#model-level'),
             document.querySelector('#model-spaceship'),
-            document.querySelector('#model-asteroid-42'),
-            document.querySelector('#model-asteroid-field-north'),
-            document.querySelector('#model-asteroid-field-south'),
-            document.querySelector('#model-asteroid-field-east'),
-            document.querySelector('#model-asteroid-field-west')
+            document.querySelector('#model-asteroid-42')
           ];
           
           models.forEach(model => {
@@ -9311,159 +9223,6 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // Component for tube launcher
-      AFRAME.registerComponent('tube-launcher', {
-        init: function() {
-          this.container = this.el.parentElement;
-          
-          // Determine launcher position and direction based on container ID
-          const containerId = this.container.id;
-          if (containerId === 'tube-launcher-container-2') {
-            // Back launcher (negative Z)
-            this.startPosition = {x: 0, y: 2, z: -3};
-            this.launchDirection = 1; // Launch toward positive Z
-          } else {
-            // Front launcher (original, positive Z)
-            this.startPosition = {x: 0, y: 2, z: 3};
-            this.launchDirection = -1; // Launch toward negative Z
-          }
-          
-          this.isLaunching = false;
-          this.isReturning = false;
-          this.launchSpeed = 10;
-          this.returnTime = 3000;
-          this.wasGrabbed = false;
-        },
-        
-        tick: function() {
-          const player = document.querySelector('[zerog-player]');
-          let isCurrentlyGrabbed = false;
-          
-          if (player && player.components['zerog-player']) {
-            const playerComponent = player.components['zerog-player'];
-            ['left', 'right'].forEach(handKey => {
-              if (playerComponent.grabInfo[handKey] && 
-                  playerComponent.grabInfo[handKey].surface === this.el) {
-                isCurrentlyGrabbed = true;
-              }
-            });
-          }
-          
-          if (isCurrentlyGrabbed && !this.wasGrabbed && !this.isLaunching && !this.isReturning) {
-            this.wasGrabbed = true;
-            if (player) {
-              this.launchPlayer(player);
-            }
-          } else if (!isCurrentlyGrabbed) {
-            this.wasGrabbed = false;
-          }
-        },
-        
-        onGrabStart: function(event) {
-          if (this.isLaunching || this.isReturning) {
-            return;
-          }
-          
-          let player = null;
-          
-          if (event.detail && event.detail.hand) {
-            player = event.detail.hand.el.closest('[zerog-player]');
-          }
-          
-          if (!player) {
-            player = document.querySelector('#player');
-          }
-          
-          if (!player) {
-            player = document.querySelector('[zerog-player]');
-          }
-          
-          if (player) {
-            this.launchPlayer(player);
-          }
-        },
-        
-        launchPlayer: function(player) {
-          this.isLaunching = true;
-          
-          const currentPosStr = this.container.getAttribute('position');
-          let currentPos;
-          
-          if (typeof currentPosStr === 'string') {
-            const parts = currentPosStr.split(' ');
-            currentPos = {
-              x: parseFloat(parts[0]) || 0,
-              y: parseFloat(parts[1]) || 0,
-              z: parseFloat(parts[2]) || 0
-            };
-          } else {
-            currentPos = currentPosStr || this.startPosition;
-          }
-          
-          const targetZ = currentPos.z + (this.launchDirection * 6); // Launch 6m in the determined direction
-          const launchDirectionVector = new THREE.Vector3(0, 0, this.launchDirection);
-          
-          let playerComponent = null;
-          if (player && player.components && player.components['zerog-player']) {
-            playerComponent = player.components['zerog-player'];
-          }
-          
-          // Force release player from grab system
-          if (playerComponent) {
-            ['left', 'right'].forEach(handKey => {
-              if (playerComponent.grabInfo[handKey] && 
-                  playerComponent.grabInfo[handKey].surface === this.el) {
-                playerComponent.grabInfo[handKey] = null;
-              }
-            });
-          }
-          
-          // Apply launch velocity to player
-          if (playerComponent && playerComponent.velocity) {
-            playerComponent.velocity.set(
-              launchDirectionVector.x * this.launchSpeed,
-              launchDirectionVector.y * this.launchSpeed,
-              launchDirectionVector.z * this.launchSpeed
-            );
-          }
-          
-          // Animate ring to target position
-          const newPos = {
-            x: currentPos.x,
-            y: currentPos.y,
-            z: targetZ
-          };
-          
-          this.container.removeAttribute('animation');
-          this.container.setAttribute('animation', {
-            property: 'position',
-            to: `${newPos.x} ${newPos.y} ${newPos.z}`,
-            dur: 500,
-            easing: 'easeOutQuad'
-          });
-          
-          setTimeout(() => {
-            this.returnToStart();
-          }, 500);
-        },
-        
-        returnToStart: function() {
-          this.isReturning = true;
-          
-          this.container.removeAttribute('animation');
-          this.container.setAttribute('animation', {
-            property: 'position',
-            to: `${this.startPosition.x} ${this.startPosition.y} ${this.startPosition.z}`,
-            dur: this.returnTime,
-            easing: 'easeInOutQuad'
-          });
-          
-          setTimeout(() => {
-            this.isLaunching = false;
-            this.isReturning = false;
-          }, this.returnTime);
-        }
-      });
 
       // Add sound manager component
       AFRAME.registerComponent('sound-manager', {
@@ -11426,11 +11185,7 @@ function setGameplayHUD(isPlaying) {
           const models = [
             document.querySelector('#model-level'),
             document.querySelector('#model-spaceship'),
-            document.querySelector('#model-asteroid-42'),
-            document.querySelector('#model-asteroid-field-north'),
-            document.querySelector('#model-asteroid-field-south'),
-            document.querySelector('#model-asteroid-field-east'),
-            document.querySelector('#model-asteroid-field-west')
+            document.querySelector('#model-asteroid-42')
           ];
           
           models.forEach(model => {
@@ -12938,76 +12693,6 @@ function setGameplayHUD(isPlaying) {
               const direction = distance > 0.001 ? relativePos.clone().normalize() : new THREE.Vector3(0, 1, 0);
               response.copy(direction.multiplyScalar(penetration));
             }
-          } else if (geometry.primitive === 'torus') {
-            // Torus collision (exact copy from player system)
-            const torusRadius = geometry.radius || 1.0;
-            const tubeRadius = geometry.radiusTubular || 0.2;
-            
-            // Get point relative to torus center
-            const relativePos = point.clone().sub(surfacePos);
-            
-            // Check if torus is rotated (rotation="90 0 0" makes it vertical)
-            const rotation = element ? element.getAttribute('rotation') : null;
-            
-            let distanceFromAxis, distanceToTubeCenter, tubeCenter;
-            
-            if (rotation && (rotation.x === 90 || rotation.x === "90")) {
-              // Vertical torus (rotated 90° around X): ring in XY plane, Z is axis
-              distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.y * relativePos.y);
-              distanceToTubeCenter = Math.sqrt(
-                Math.pow(distanceFromAxis - torusRadius, 2) + 
-                Math.pow(relativePos.z, 2)
-              );
-              
-              const penetration = radius + collisionMargin - (distanceToTubeCenter - tubeRadius);
-              
-              if (penetration > 0) {
-                let direction = new THREE.Vector3();
-                
-                if (distanceToTubeCenter > 0.001) {
-                  // Direction from tube center to point (vertical torus - XY plane)
-                  tubeCenter = new THREE.Vector3(
-                    relativePos.x * (torusRadius / Math.max(0.001, distanceFromAxis)),
-                    relativePos.y * (torusRadius / Math.max(0.001, distanceFromAxis)),
-                    0
-                  );
-                  direction = relativePos.clone().sub(tubeCenter).normalize();
-                } else {
-                  // Point is at tube center, push along Z axis
-                  direction.set(0, 0, 1);
-                }
-                
-                response.copy(direction.multiplyScalar(penetration));
-              }
-            } else {
-              // Horizontal torus: ring in XZ plane, Y is axis
-              distanceFromAxis = Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z);
-              distanceToTubeCenter = Math.sqrt(
-                Math.pow(distanceFromAxis - torusRadius, 2) + 
-                Math.pow(relativePos.y, 2)
-              );
-              
-              const penetration = radius + collisionMargin - (distanceToTubeCenter - tubeRadius);
-              
-              if (penetration > 0) {
-                let direction = new THREE.Vector3();
-                
-                if (distanceToTubeCenter > 0.001) {
-                  // Direction from tube center to point (horizontal torus)
-                  tubeCenter = new THREE.Vector3(
-                    relativePos.x * (torusRadius / Math.max(0.001, distanceFromAxis)),
-                    0,
-                    relativePos.z * (torusRadius / Math.max(0.001, distanceFromAxis))
-                  );
-                  direction = relativePos.clone().sub(tubeCenter).normalize();
-                } else {
-                  // Point is at tube center, push up
-                  direction.set(0, 1, 0);
-                }
-                
-                response.copy(direction.multiplyScalar(penetration));
-              }
-            }
           } else if (!geometry && element.querySelector('a-gltf-model')) {
             // GLTF Model collision
             const scale = element.getAttribute('scale') || {x: 1, y: 1, z: 1};
@@ -13450,6 +13135,390 @@ function setGameplayHUD(isPlaying) {
           if (versionDisplay) {
             versionDisplay.setAttribute('text', 'value', `Zero-G v1.36 | ${this.fps} FPS`);
           }
+        }
+      });
+
+      // Advanced Performance Profiler
+      AFRAME.registerComponent('performance-profiler', {
+        init: function() {
+          this.isProfiling = false;
+          this.profileData = {
+            frameTime: [],
+            collisionChecks: 0,
+            bulletCount: 0,
+            meshCount: 0,
+            visibleMeshCount: 0,
+            particleCount: 0,
+            bloomEnabled: true,
+            modelsEnabled: {
+              spaceship: false,
+              asteroid: false,
+              level: true
+            }
+          };
+          this.lastFrameTime = performance.now();
+          this.frameTimeHistory = [];
+          this.updateInterval = 1000; // Update every second
+          this.lastUpdate = 0;
+          
+          // Add keyboard shortcut for profiling (P key)
+          document.addEventListener('keydown', (evt) => {
+            if (evt.key === 'p' || evt.key === 'P') {
+              this.toggleProfiling();
+            }
+          });
+        },
+        
+        tick: function() {
+          const currentTime = performance.now();
+          const frameTime = currentTime - this.lastFrameTime;
+          this.lastFrameTime = currentTime;
+          
+          // Track frame times
+          this.frameTimeHistory.push(frameTime);
+          if (this.frameTimeHistory.length > 60) { // Keep last 60 frames
+            this.frameTimeHistory.shift();
+          }
+          
+          // Update profiling data
+          this.updateProfileData();
+          
+          // Update display if profiling is active
+          if (this.isProfiling && currentTime - this.lastUpdate >= this.updateInterval) {
+            this.updateProfileDisplay();
+            this.lastUpdate = currentTime;
+          }
+        },
+        
+        updateProfileData: function() {
+          // Count bullets
+          const bullets = document.querySelectorAll('[bullet]');
+          this.profileData.bulletCount = bullets.length;
+          
+          // Count particles
+          const particles = document.querySelectorAll('[particle-system]');
+          this.profileData.particleCount = particles.length;
+          
+          // Check bloom status
+          const scene = document.querySelector('a-scene');
+          this.profileData.bloomEnabled = scene.hasAttribute('bloom');
+          
+          // Check model visibility
+          const spaceship = document.querySelector('#model-spaceship');
+          const asteroid = document.querySelector('#model-asteroid-42');
+          const level = document.querySelector('#model-level');
+          
+          this.profileData.modelsEnabled.spaceship = spaceship && spaceship.getAttribute('visible') !== false;
+          this.profileData.modelsEnabled.asteroid = asteroid && asteroid.getAttribute('visible') !== false;
+          this.profileData.modelsEnabled.level = level && level.getAttribute('visible') !== false;
+          
+          // Count meshes (if BVH is available)
+          const player = document.querySelector('[zerog-player]');
+          if (player && player.components['zerog-player']) {
+            const playerComponent = player.components['zerog-player'];
+            if (playerComponent.bvhMeshes) {
+              this.profileData.meshCount = playerComponent.bvhMeshes.length;
+              this.profileData.visibleMeshCount = playerComponent.getVisibleMeshes(playerComponent.bvhMeshes).length;
+            }
+          }
+        },
+        
+        updateProfileDisplay: function() {
+          const avgFrameTime = this.frameTimeHistory.reduce((a, b) => a + b, 0) / this.frameTimeHistory.length;
+          const maxFrameTime = Math.max(...this.frameTimeHistory);
+          const minFrameTime = Math.min(...this.frameTimeHistory);
+          
+          const fps = Math.round(1000 / avgFrameTime);
+          const maxFPS = Math.round(1000 / minFrameTime);
+          const minFPS = Math.round(1000 / maxFrameTime);
+          
+          console.log('🔍 PERFORMANCE PROFILE:');
+          console.log(`📊 FPS: ${fps} (min: ${minFPS}, max: ${maxFPS})`);
+          console.log(`⏱️  Frame Time: ${avgFrameTime.toFixed(2)}ms (min: ${minFrameTime.toFixed(2)}ms, max: ${maxFrameTime.toFixed(2)}ms)`);
+          console.log(`🎯 Bullets: ${this.profileData.bulletCount}`);
+          console.log(`✨ Particles: ${this.profileData.particleCount}`);
+          console.log(`🌟 Bloom: ${this.profileData.bloomEnabled ? 'ON' : 'OFF'}`);
+          console.log(`🚀 Spaceship: ${this.profileData.modelsEnabled.spaceship ? 'ON' : 'OFF'}`);
+          console.log(`🪨 Asteroid: ${this.profileData.modelsEnabled.asteroid ? 'ON' : 'OFF'}`);
+          console.log(`🏗️  Level: ${this.profileData.modelsEnabled.level ? 'ON' : 'OFF'}`);
+          console.log(`📦 Total Meshes: ${this.profileData.meshCount} (Visible: ${this.profileData.visibleMeshCount})`);
+          
+          // Performance recommendations
+          this.generateRecommendations(fps, avgFrameTime);
+        },
+        
+        generateRecommendations: function(fps, avgFrameTime) {
+          console.log('💡 PERFORMANCE RECOMMENDATIONS:');
+          
+          if (fps < 60) {
+            console.log('⚠️  Low FPS detected! Try:');
+            if (this.profileData.bloomEnabled) {
+              console.log('   - Disable Bloom (Key 7)');
+            }
+            if (this.profileData.modelsEnabled.level) {
+              console.log('   - Disable Level Model (Key 8)');
+            }
+            if (this.profileData.modelsEnabled.spaceship) {
+              console.log('   - Disable Spaceship (Key 1)');
+            }
+            if (this.profileData.particleCount > 5) {
+              console.log('   - Reduce particle effects');
+            }
+            if (this.profileData.bulletCount > 20) {
+              console.log('   - Reduce bullet count');
+            }
+          }
+          
+          if (avgFrameTime > 16.67) { // More than 60fps target
+            console.log('🐌 Slow frame times detected!');
+            if (this.profileData.meshCount > this.profileData.visibleMeshCount * 1.5) {
+              console.log('   - Many invisible meshes detected - collision optimization working');
+            }
+          }
+          
+          if (fps >= 90) {
+            console.log('✅ Excellent performance! You can enable more effects.');
+          }
+        },
+        
+        toggleProfiling: function() {
+          this.isProfiling = !this.isProfiling;
+          console.log(`🔍 Performance Profiling: ${this.isProfiling ? 'ON' : 'OFF'}`);
+          console.log('Press P to toggle profiling, data will be logged every second when active.');
+        }
+      });
+
+      // Performance Comparison Tool
+      AFRAME.registerComponent('performance-comparison', {
+        init: function() {
+          this.benchmarks = [];
+          this.currentBenchmark = null;
+          this.benchmarkDuration = 10000; // 10 seconds per benchmark
+          this.benchmarkStartTime = 0;
+          this.benchmarkData = [];
+          
+          // Add keyboard shortcut for benchmarking (B key)
+          document.addEventListener('keydown', (evt) => {
+            if (evt.key === 'b' || evt.key === 'B') {
+              this.startBenchmark();
+            }
+          });
+          
+          // Predefined benchmark configurations
+          this.benchmarkConfigs = {
+            'minimal': {
+              name: 'Minimal (Best Performance)',
+              bloom: false,
+              spaceship: false,
+              asteroid: false,
+              level: false,
+              particles: false
+            },
+            'low': {
+              name: 'Low Quality',
+              bloom: false,
+              spaceship: false,
+              asteroid: false,
+              level: true,
+              particles: false
+            },
+            'medium': {
+              name: 'Medium Quality',
+              bloom: false,
+              spaceship: true,
+              asteroid: false,
+              level: true,
+              particles: true
+            },
+            'high': {
+              name: 'High Quality',
+              bloom: true,
+              spaceship: true,
+              asteroid: true,
+              level: true,
+              particles: true
+            },
+            'current': {
+              name: 'Current Settings',
+              bloom: null, // Will be detected
+              spaceship: null,
+              asteroid: null,
+              level: null,
+              particles: null
+            }
+          };
+        },
+        
+        startBenchmark: function() {
+          if (this.currentBenchmark) {
+            console.log('⚠️ Benchmark already running!');
+            return;
+          }
+          
+          console.log('🏁 Starting Performance Benchmark Suite...');
+          console.log('This will test 5 different quality settings over 50 seconds.');
+          console.log('Press B again to cancel.');
+          
+          this.runBenchmarkSuite();
+        },
+        
+        runBenchmarkSuite: function() {
+          const configs = Object.keys(this.benchmarkConfigs);
+          let currentConfigIndex = 0;
+          
+          const runNextBenchmark = () => {
+            if (currentConfigIndex >= configs.length) {
+              this.finishBenchmarkSuite();
+              return;
+            }
+            
+            const configKey = configs[currentConfigIndex];
+            const config = this.benchmarkConfigs[configKey];
+            
+            console.log(`\n🎯 Benchmark ${currentConfigIndex + 1}/5: ${config.name}`);
+            this.runSingleBenchmark(config, () => {
+              currentConfigIndex++;
+              setTimeout(runNextBenchmark, 2000); // 2 second pause between benchmarks
+            });
+          };
+          
+          runNextBenchmark();
+        },
+        
+        runSingleBenchmark: function(config, callback) {
+          // Apply configuration
+          this.applyBenchmarkConfig(config);
+          
+          // Wait for settings to take effect
+          setTimeout(() => {
+            this.currentBenchmark = {
+              config: config,
+              startTime: performance.now(),
+              frameTimes: [],
+              fpsHistory: []
+            };
+            
+            // Collect data for the duration
+            const collectData = () => {
+              if (!this.currentBenchmark) return;
+              
+              const now = performance.now();
+              const elapsed = now - this.currentBenchmark.startTime;
+              
+              if (elapsed >= this.benchmarkDuration) {
+                this.finishSingleBenchmark();
+                callback();
+              } else {
+                // Collect current FPS
+                const fpsCounter = document.querySelector('[fps-counter]');
+                if (fpsCounter && fpsCounter.components['fps-counter']) {
+                  this.currentBenchmark.fpsHistory.push(fpsCounter.components['fps-counter'].fps);
+                }
+                
+                setTimeout(collectData, 1000); // Collect every second
+              }
+            };
+            
+            collectData();
+          }, 1000);
+        },
+        
+        applyBenchmarkConfig: function(config) {
+          // Apply bloom setting
+          if (config.bloom !== null) {
+            const scene = document.querySelector('a-scene');
+            if (config.bloom) {
+              scene.setAttribute('bloom', 'threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0');
+            } else {
+              scene.removeAttribute('bloom');
+            }
+          }
+          
+          // Apply model settings
+          if (config.spaceship !== null) {
+            const spaceship = document.querySelector('#model-spaceship');
+            if (spaceship) {
+              spaceship.setAttribute('visible', config.spaceship);
+            }
+          }
+          
+          if (config.asteroid !== null) {
+            const asteroid = document.querySelector('#model-asteroid-42');
+            if (asteroid) {
+              asteroid.setAttribute('visible', config.asteroid);
+            }
+          }
+          
+          if (config.level !== null) {
+            const level = document.querySelector('#model-level');
+            if (level) {
+              level.setAttribute('visible', config.level);
+            }
+          }
+          
+          // Note: Particle settings would need to be implemented based on your particle system
+          console.log(`✅ Applied ${config.name} settings`);
+        },
+        
+        finishSingleBenchmark: function() {
+          if (!this.currentBenchmark) return;
+          
+          const avgFPS = this.currentBenchmark.fpsHistory.length > 0 
+            ? Math.round(this.currentBenchmark.fpsHistory.reduce((a, b) => a + b, 0) / this.currentBenchmark.fpsHistory.length)
+            : 0;
+          
+          const minFPS = this.currentBenchmark.fpsHistory.length > 0 
+            ? Math.min(...this.currentBenchmark.fpsHistory)
+            : 0;
+          
+          const maxFPS = this.currentBenchmark.fpsHistory.length > 0 
+            ? Math.max(...this.currentBenchmark.fpsHistory)
+            : 0;
+          
+          const result = {
+            config: this.currentBenchmark.config,
+            avgFPS: avgFPS,
+            minFPS: minFPS,
+            maxFPS: maxFPS,
+            stability: minFPS > 0 ? Math.round((minFPS / avgFPS) * 100) : 0
+          };
+          
+          this.benchmarks.push(result);
+          
+          console.log(`📊 ${result.config.name}: ${result.avgFPS} FPS avg (${result.minFPS}-${result.maxFPS}) - ${result.stability}% stable`);
+          
+          this.currentBenchmark = null;
+        },
+        
+        finishBenchmarkSuite: function() {
+          console.log('\n🏆 BENCHMARK RESULTS:');
+          console.log('====================');
+          
+          // Sort by average FPS
+          this.benchmarks.sort((a, b) => b.avgFPS - a.avgFPS);
+          
+          this.benchmarks.forEach((result, index) => {
+            const rank = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '📊';
+            console.log(`${rank} ${result.config.name}: ${result.avgFPS} FPS avg (${result.minFPS}-${result.maxFPS}) - ${result.stability}% stable`);
+          });
+          
+          // Recommendations
+          const best = this.benchmarks[0];
+          const worst = this.benchmarks[this.benchmarks.length - 1];
+          
+          console.log('\n💡 RECOMMENDATIONS:');
+          if (best.avgFPS >= 90) {
+            console.log(`✅ Best performance: ${best.config.name} (${best.avgFPS} FPS) - Perfect for VR!`);
+          } else if (best.avgFPS >= 60) {
+            console.log(`✅ Best performance: ${best.config.name} (${best.avgFPS} FPS) - Good for desktop VR`);
+          } else {
+            console.log(`⚠️  Best performance: ${best.config.name} (${best.avgFPS} FPS) - Consider upgrading hardware`);
+          }
+          
+          const performanceGain = best.avgFPS - worst.avgFPS;
+          console.log(`📈 Performance range: ${performanceGain} FPS difference between best and worst settings`);
+          
+          this.benchmarks = []; // Reset for next run
         }
       });
 
@@ -14922,8 +14991,6 @@ function setGameplayHUD(isPlaying) {
             this.selectTeam('blue');
           } else if (id === 'menu-toggle-spaceship') {
             this.toggleModel('spaceship');
-          } else if (id === 'menu-toggle-asteroid-field') {
-            this.toggleModel('asteroid-field');
           } else if (id === 'menu-toggle-asteroid-42') {
             this.toggleModel('asteroid-42');
           } else if (id === 'menu-toggle-mesh-debug') {
@@ -14934,6 +15001,10 @@ function setGameplayHUD(isPlaying) {
             this.toggleIceCube();
           } else if (id === 'menu-toggle-sparks') {
             this.toggleSparks();
+          } else if (id === 'menu-toggle-bloom') {
+            this.toggleBloom();
+          } else if (id === 'menu-toggle-level') {
+            this.toggleModel('level');
           } else if (id === 'menu-restart-match') {
             this.restartMatch();
           }
@@ -15250,49 +15321,18 @@ function setGameplayHUD(isPlaying) {
               spaceship.setAttribute('visible', false);
               button.setAttribute('material', 'color', '#aa0000');
               buttonText.setAttribute('text', 'value', 'Spaceship: OFF');
+              console.log('🚀 Spaceship model disabled - collision detection optimized');
             } else {
               spaceship.setAttribute('visible', true);
               button.setAttribute('material', 'color', '#00aa00');
               buttonText.setAttribute('text', 'value', 'Spaceship: ON');
+              console.log('🚀 Spaceship model enabled - collision detection active');
             }
             
             // Re-initialize BVH for collision detection when spaceship visibility changes
             const collisionSystem = document.querySelector('[collision-system]');
             if (collisionSystem && collisionSystem.components['collision-system']) {
               console.log('🔄 Re-initializing BVH due to spaceship visibility change');
-              setTimeout(() => {
-                collisionSystem.components['collision-system'].initializeBVH();
-              }, 200); // Increased delay to ensure visibility change is processed
-            }
-          } else if (modelType === 'asteroid-field') {
-            const fields = [
-              document.querySelector('#model-asteroid-field-north'),
-              document.querySelector('#model-asteroid-field-south'),
-              document.querySelector('#model-asteroid-field-east'),
-              document.querySelector('#model-asteroid-field-west')
-            ];
-            const button = document.querySelector('#menu-toggle-asteroid-field');
-            const buttonText = button.querySelector('a-text');
-            
-            const isVisible = fields[0].getAttribute('visible') !== false;
-            fields.forEach(field => {
-              if (field) {
-                field.setAttribute('visible', !isVisible);
-              }
-            });
-            
-            if (isVisible) {
-              button.setAttribute('material', 'color', '#aa0000');
-              buttonText.setAttribute('text', 'value', 'Ast.Field: OFF');
-            } else {
-              button.setAttribute('material', 'color', '#00aa00');
-              buttonText.setAttribute('text', 'value', 'Ast.Field: ON');
-            }
-            
-            // Re-initialize BVH for asteroid fields
-            const collisionSystem = document.querySelector('[collision-system]');
-            if (collisionSystem && collisionSystem.components['collision-system']) {
-              console.log('🔄 Re-initializing BVH due to asteroid field visibility change');
               setTimeout(() => {
                 collisionSystem.components['collision-system'].initializeBVH();
               }, 200); // Increased delay to ensure visibility change is processed
@@ -15316,6 +15356,31 @@ function setGameplayHUD(isPlaying) {
             const collisionSystem = document.querySelector('[collision-system]');
             if (collisionSystem && collisionSystem.components['collision-system']) {
               console.log('🔄 Re-initializing BVH due to asteroid visibility change');
+              setTimeout(() => {
+                collisionSystem.components['collision-system'].initializeBVH();
+              }, 200); // Increased delay to ensure visibility change is processed
+            }
+          } else if (modelType === 'level') {
+            const level = document.querySelector('#model-level');
+            const button = document.querySelector('#menu-toggle-level');
+            const buttonText = button.querySelector('a-text');
+            
+            if (level.getAttribute('visible') !== false) {
+              level.setAttribute('visible', false);
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Level: OFF');
+              console.log('🚀 Level model disabled - collision detection optimized');
+            } else {
+              level.setAttribute('visible', true);
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Level: ON');
+              console.log('🚀 Level model enabled - collision detection active');
+            }
+            
+            // Re-initialize BVH for level model
+            const collisionSystem = document.querySelector('[collision-system]');
+            if (collisionSystem && collisionSystem.components['collision-system']) {
+              console.log('🔄 Re-initializing BVH due to level model visibility change');
               setTimeout(() => {
                 collisionSystem.components['collision-system'].initializeBVH();
               }, 200); // Increased delay to ensure visibility change is processed
@@ -15481,6 +15546,43 @@ function setGameplayHUD(isPlaying) {
           }
           
           console.log('Sparks:', sparksEnabled ? 'ON' : 'OFF');
+        },
+        
+        toggleBloom: function() {
+          const scene = document.querySelector('a-scene');
+          if (!scene) {
+            console.warn('Scene not found for bloom toggle');
+            return;
+          }
+          
+          // Check if bloom is currently enabled
+          const hasBloom = scene.hasAttribute('bloom');
+          
+          if (hasBloom) {
+            // Disable bloom
+            scene.removeAttribute('bloom');
+            console.log('Bloom effect disabled');
+          } else {
+            // Enable bloom with the same settings as originally configured
+            scene.setAttribute('bloom', 'threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0');
+            console.log('Bloom effect enabled');
+          }
+          
+          // Update button appearance
+          const button = document.querySelector('#menu-toggle-bloom');
+          const buttonText = button.querySelector('a-text');
+          
+          if (hasBloom) {
+            // Bloom was enabled, now disabled
+            button.setAttribute('material', 'color', '#aa0000');
+            buttonText.setAttribute('text', 'value', 'Bloom: OFF');
+          } else {
+            // Bloom was disabled, now enabled
+            button.setAttribute('material', 'color', '#00aa00');
+            buttonText.setAttribute('text', 'value', 'Bloom: ON');
+          }
+          
+          console.log('Bloom:', hasBloom ? 'OFF' : 'ON');
         }
       });
       
@@ -15532,7 +15634,7 @@ function setGameplayHUD(isPlaying) {
 
     </script>
 
-    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle impact-effects-manager bullet-manager
+    <a-scene physics-world fps-counter performance-profiler performance-comparison game-manager sound-manager multiplayer-sync menu-toggle impact-effects-manager bullet-manager
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              bloom="threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0"
              webxr="requiredFeatures: local-floor">
@@ -15541,8 +15643,6 @@ function setGameplayHUD(isPlaying) {
          <!-- Nebula Skybox Texture -->
          <img id="nebula-texture" src="assets/nebula_skybox_16k/textures/Material.001_baseColor.jpeg">
          
-         <!-- Asteroid Field 3D Model -->
-         <a-asset-item id="asteroid-field-model" src="assets/asteroid_field_100_x_medium-poly-2k.glb"></a-asset-item>
          <!-- Single Asteroid 3D Model -->
          <a-asset-item id="asteroid-42-model" src="assets/asteroid_42.glb"></a-asset-item>
          <!-- Spaceship 3D Model -->
@@ -15556,135 +15656,11 @@ function setGameplayHUD(isPlaying) {
          <!-- Particle Textures -->
          <img id="fog-texture" src="assets/particles/fog-256.png">
          <img id="sparkle-texture" src="assets/particles/sparkle.png">
-         
-         <!-- Procedural Noise Textures for Asteroids -->
-         <canvas id="noise-texture-1" width="256" height="256"></canvas>
-         <canvas id="noise-texture-2" width="256" height="256"></canvas>
-         <canvas id="noise-texture-3" width="256" height="256"></canvas>
-         
-         <!-- Asteroid Materials with Normal Maps Only (No Displacement) -->
-         <a-mixin id="asteroid-material" 
-                  material="shader: standard; 
-                           color: #666666; 
-                           roughness: 0.9; 
-                           metalness: 0.1;
-                           emissive: #111111;
-                           normalMap: #noise-texture-1;
-                           normalScale: 0.8 0.8;
-                           wireframe: false"></a-mixin>
-         
-         <a-mixin id="asteroid-material-2" 
-                  material="shader: standard; 
-                           color: #555555; 
-                           roughness: 0.95; 
-                           metalness: 0.05;
-                           emissive: #0f0f0f;
-                           normalMap: #noise-texture-2;
-                           normalScale: 0.7 0.7;
-                           wireframe: false"></a-mixin>
-         
-         <a-mixin id="asteroid-material-3" 
-                  material="shader: standard; 
-                           color: #777777; 
-                           roughness: 0.85; 
-                           metalness: 0.15;
-                           emissive: #131313;
-                           normalMap: #noise-texture-3;
-                           normalScale: 0.9 0.9;
-                           wireframe: false"></a-mixin>
-         
-         <a-mixin id="asteroid-far" 
-                  material="shader: standard; 
-                           color: #444444; 
-                           roughness: 1.0; 
-                           metalness: 0.0;
-                           emissive: #080808;
-                           normalMap: #noise-texture-1;
-                           normalScale: 0.3 0.3"></a-mixin>
         </a-assets>
       
       
 
-      <!-- Central Circular Tube Structure (2m diameter, 4m length, made from 16 cubes) -->
-      <!-- First Group of 8 blocks - positioned at 1m radius from center (0,2,0) -->
-      <!-- 0° - Top/Bottom pair (horizontal blocks) -->
-      <a-box position="0 3 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="0 1 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      
-      <!-- 45° - Diagonal pair -->
-      <a-box position="0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      
-      <!-- 90° - Left/Right pair (vertical blocks) -->
-      <a-box position="1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      
-      <!-- 135° - Diagonal pair -->
-      <a-box position="-0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      
-      <!-- Second Group of 8 blocks - filling the gaps -->
-      <!-- 22.5° - Between 0° and 45° -->
-      <a-box position="0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      
-      <!-- 67.5° - Between 45° and 90° -->
-      <a-box position="0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      
-      <!-- 112.5° - Between 90° and 135° -->
-      <a-box position="0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="-0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      
-      <!-- 157.5° - Between 135° and 180° -->
-      <a-box position="-0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
-      <a-box position="0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static" class="collidable"></a-box>
 
-      <!-- Tube Launcher (based on goal structure) -->
-      <a-cylinder id="tube-launcher-container"
-                  position="0 2 3"
-                  radius="0.95"
-                  height="0.01"
-                  rotation="90 0 0"
-                  color="#ff8800"
-                  material="shader: standard; transparent: true; opacity: 0"
-                  visible="true">
-        
-        <!-- Launcher Torus (exact copy of goal border structure) -->
-        <a-torus id="tube-launcher"
-                 radius="0.7"
-                 radius-tubular="0.05"
-                 rotation="90 0 0"
-                 color="#ff8800"
-                 material="shader: standard; emissive: #ff8800; emissiveIntensity: 0.3; metalness: 0.8; roughness: 0.2"
-                 tube-launcher
-                 grab-surface="type: static"
-                 class="grabbable-surface collidable">
-        </a-torus>
-      </a-cylinder>
-      
-      <!-- Tube Launcher 2 (opposite side) -->
-      <a-cylinder id="tube-launcher-container-2"
-                  position="0 2 -3"
-                  radius="0.95"
-                  height="0.01"
-                  rotation="90 0 0"
-                  color="#ff8800"
-                  material="shader: standard; transparent: true; opacity: 0"
-                  visible="true">
-        
-        <!-- Launcher Torus (exact copy of goal border structure) -->
-        <a-torus id="tube-launcher-2"
-                 radius="0.7"
-                 radius-tubular="0.05"
-                 rotation="90 0 0"
-                 color="#ff8800"
-                 material="shader: standard; emissive: #ff8800; emissiveIntensity: 0.3; metalness: 0.8; roughness: 0.2"
-                 tube-launcher
-                 grab-surface="type: static"
-                 class="grabbable-surface">
-        </a-torus>
-      </a-cylinder>
 
       
 
@@ -16049,14 +16025,6 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="Spaceship: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
-              <!-- Asteroid Field Toggle -->
-              <a-entity id="menu-toggle-asteroid-field" position="0 -0.12 0"
-                        geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #aa0000; transparent: true; opacity: 0.8"
-                        cursor-listener
-                        class="clickable">
-                <a-text value="Ast.Field: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
-              </a-entity>
               
               <!-- Single Asteroid Toggle -->
               <a-entity id="menu-toggle-asteroid-42" position="0.3 -0.12 0"
@@ -16103,8 +16071,26 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="Sparks: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
+              <!-- Bloom Effect Toggle -->
+              <a-entity id="menu-toggle-bloom" position="0 -0.24 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Bloom: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Level Model Toggle -->
+              <a-entity id="menu-toggle-level" position="0.3 -0.24 0"
+                        geometry="primitive: plane; width: 0.18; height: 0.05"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Level: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+              </a-entity>
+              
               <!-- Start/Restart Match Button (only visible for host) -->
-              <a-entity id="menu-restart-match" position="0 -0.25 0"
+              <a-entity id="menu-restart-match" position="0 -0.31 0"
                         geometry="primitive: plane; width: 0.3; height: 0.06"
                         material="color: #ff4400; transparent: true; opacity: 0.8"
                         cursor-listener
@@ -16413,38 +16399,6 @@ function setGameplayHUD(isPlaying) {
           <a-gltf-model src="#level-model"></a-gltf-model>
         </a-entity>
 
-      <!-- ASTEROID BELT - 4 DIRECTIONS -->
-      <!-- North Asteroid Field -->
-      <a-entity id="model-asteroid-field-north" position="-50 -150 200" 
-                scale="10.0 10.0 10.0"
-                grab-surface="type: static"
-                visible="false">
-        <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
-      </a-entity>
-      
-      <!-- South Asteroid Field -->
-      <a-entity id="model-asteroid-field-south" position="-50 -150 -250" 
-                scale="10.0 10.0 10.0"
-                grab-surface="type: static"
-                visible="false">
-        <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
-      </a-entity>
-      
-      <!-- East Asteroid Field -->
-      <a-entity id="model-asteroid-field-east" position="200 -150 -50" 
-                scale="10.0 10.0 10.0"
-                grab-surface="type: static"
-                visible="false">
-        <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
-      </a-entity>
-      
-      <!-- West Asteroid Field -->
-      <a-entity id="model-asteroid-field-west" position="-300 -150 -50" 
-                scale="10.0 10.0 10.0"
-                grab-surface="type: static"
-                visible="false">
-        <a-gltf-model src="#asteroid-field-model"></a-gltf-model>
-      </a-entity>
       
       <!-- Single Asteroid 250m Away -->
       <a-entity id="model-asteroid-42" position="250 0 0" 
@@ -16454,77 +16408,25 @@ function setGameplayHUD(isPlaying) {
         <a-gltf-model src="#asteroid-42-model"></a-gltf-model>
       </a-entity>
       
-      <a-icosahedron position="-12 -3 10" 
-                     radius="0.8" 
-                     detail="1"
-                     mixin="asteroid-material-2"
-                     grab-surface="type: static">
-      </a-icosahedron>
       
-      <a-dodecahedron position="8 -6 15" 
-                      radius="1.5" 
-                      detail="1"
-                      mixin="asteroid-material-3"
-                      grab-surface="type: static">
-      </a-dodecahedron>
-      
-      <a-icosahedron position="-18 8 -5" 
-                     radius="1.0" 
-                     detail="1"
-                     mixin="asteroid-material"
-                     grab-surface="type: static">
-      </a-icosahedron>
-
-      <!-- Mid-Distance Decorative Asteroids (no physics) -->
-      <a-dodecahedron position="25 12 -20" 
-                      radius="2.0" 
-                      detail="0"
-                      mixin="asteroid-far">
-      </a-dodecahedron>
-      
-      <a-icosahedron position="-30 -8 25" 
-                     radius="1.8" 
-                     detail="0"
-                     mixin="asteroid-far">
-      </a-icosahedron>
-      
-      <a-dodecahedron position="35 -15 -12" 
-                      radius="2.5" 
-                      detail="0"
-                      mixin="asteroid-far">
-      </a-dodecahedron>
-      
-      <a-icosahedron position="-22 20 -35" 
-                     radius="1.6" 
-                     detail="0"
-                     mixin="asteroid-far">
-      </a-icosahedron>
-      
-      <a-dodecahedron position="18 -25 30" 
-                      radius="2.2" 
-                      detail="0"
-                      mixin="asteroid-far">
-      </a-dodecahedron>
 
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
         <!-- Version display moved closer to top -->
-        <a-entity id="version-display-override" position="0 7 0" text="value: Zero-G v1.0; align: center; width: 0.5; color: #ffffff"></a-entity>
+        <!--<a-entity id="version-display-override" position="0 7 0" text="value: Zero-G v1.0; align: center; width: 0.5; color: #ffffff"></a-entity>
         
-        <!-- K/D Stats Display -->
         <a-entity id="score-display" position="0 6.5 0">
-          <!-- Kills label and count -->
           <a-entity position="-0.8 0.3 0" text="value: KILLS; align: center; width: 2; color: #00ff00"></a-entity>
           <a-entity id="blue-score" position="-0.8 0 0" text="value: 0; align: center; width: 4; color: #00ff00"></a-entity>
-          <!-- Separator -->
+          
           <a-entity position="0 0 0" text="value: |; align: center; width: 4; color: #ffffff"></a-entity>
-          <!-- Deaths label and count -->
+          
           <a-entity position="0.8 0.3 0" text="value: DEATHS; align: center; width: 2; color: #ff0000"></a-entity>
           <a-entity id="red-score" position="0.8 0 0" text="value: 0; align: center; width: 4; color: #ff0000"></a-entity>
         </a-entity>
         
         <a-entity id="timer-display" position="0 6 0" text="value: Time: 3:00; align: center; width: 2; color: #ffff00"></a-entity>
-         <a-entity id="start-message" position="0 5.5 0" text="value: Press X to open menu; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="start-message" position="0 5.5 0" text="value: Press X to open menu; align: center; width: 2; color: #ffffff"></a-entity>-->
       </a-entity>
 
       <!-- Ambient space lighting -->
@@ -16937,13 +16839,6 @@ function setGameplayHUD(isPlaying) {
         
         ctx.putImageData(imageData, 0, 0);
       }
-      
-      // Generate different noise patterns for variety
-      document.addEventListener('DOMContentLoaded', function() {
-        generateNoiseTexture('noise-texture-1', 1);
-        generateNoiseTexture('noise-texture-2', 42);
-        generateNoiseTexture('noise-texture-3', 123);
-      });
       
       window.debugShieldStates = function() {
         console.log('🔍 SHIELD DEBUG: Current shield states...');
