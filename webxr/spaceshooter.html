@@ -7634,6 +7634,21 @@ function setGameplayHUD(isPlaying) {
           this.rotationVelocity = 0;
           this.maxRotationVelocity = this.data.rotationSpeed;
           
+          // Performance optimization: Intelligent update frequencies
+          this.frameCount = 0;
+          this.lastCollisionCheck = 0;
+          this.lastNavigationUpdate = 0;
+          this.lastPlayerTrackingUpdate = 0;
+          
+          // Calculate optimal update frequencies based on max speed (8 m/s)
+          // At 90 FPS, bot can move max 8/90 = 0.089m per frame
+          // Collision detection: Every 2-3 frames (sufficient for 8 m/s)
+          // Navigation: Every 5-10 frames (pathfinding doesn't need 90Hz)
+          // Player tracking: Every 3-5 frames (aiming prediction)
+          this.collisionUpdateInterval = 3; // Every 3 frames (30Hz)
+          this.navigationUpdateInterval = 8; // Every 8 frames (11.25Hz)
+          this.playerTrackingInterval = 5; // Every 5 frames (18Hz)
+          
           // Navigation state
           this.navigationState = 'idle'; // 'idle', 'rotating', 'thrusting', 'drifting', 'avoiding-obstacle', 'seeking-lost-target'
           this.lastNavigationUpdate = 0;
@@ -8896,6 +8911,10 @@ function setGameplayHUD(isPlaying) {
         tick: function(time) {
           if (!this.data.enabled) return;
           
+          // Performance monitoring
+          const perfStart = performance.now();
+          this.frameCount++;
+          
           // CRITICAL: In multiplayer, only the host should run bot AI
           // Clients should only receive bot position updates
           if (isMultiplayer && activePlayers.size > 1 && !isHost) {
@@ -8926,27 +8945,70 @@ function setGameplayHUD(isPlaying) {
             }
           }
           
-          // Update visual position from physics
+          // Update visual position from physics (ALWAYS - needed for smooth movement)
           this.el.object3D.position.copy(this.body.position);
           this.el.object3D.quaternion.copy(this.body.quaternion);
           
-          // Keep zero gravity
+          // Keep zero gravity (ALWAYS - physics requirement)
           this.body.gravity.set(0, 0, 0);
           
           // Calculate delta time for frame-rate independent movement
           const dt = 1/60; // Assume 60 FPS for consistent behavior
           
-          // Use new intelligent navigation system instead of old movement logic
-          this.intelligentNavigation(dt);
+          // PERFORMANCE OPTIMIZATION: Intelligent update frequencies
+          // Adaptive frequencies based on bot speed and proximity to players
+          const currentSpeed = this.body.velocity.length();
+          const playerTarget = document.querySelector('#player-target');
+          let distanceToPlayer = 100; // Default far distance
           
-          // Apply thruster forces using new locomotion system
+          if (playerTarget) {
+            const botPos = this.body.position;
+            const playerPos = new THREE.Vector3();
+            playerTarget.object3D.getWorldPosition(playerPos);
+            distanceToPlayer = botPos.distanceTo(playerPos);
+          }
+          
+          // Adaptive collision detection: More frequent when moving fast or close to players
+          let collisionInterval = this.collisionUpdateInterval;
+          if (currentSpeed > 4.0 || distanceToPlayer < 10.0) {
+            collisionInterval = 2; // Every 2 frames (45Hz) when fast/close
+          } else if (currentSpeed < 1.0 && distanceToPlayer > 20.0) {
+            collisionInterval = 5; // Every 5 frames (18Hz) when slow/far
+          }
+          
+          // Adaptive navigation: More frequent when close to players or moving
+          let navigationInterval = this.navigationUpdateInterval;
+          if (distanceToPlayer < 15.0 || currentSpeed > 2.0) {
+            navigationInterval = 5; // Every 5 frames (18Hz) when active
+          } else if (currentSpeed < 0.5 && distanceToPlayer > 25.0) {
+            navigationInterval = 15; // Every 15 frames (6Hz) when idle/far
+          }
+          
+          // Adaptive player tracking: More frequent when close
+          let trackingInterval = this.playerTrackingInterval;
+          if (distanceToPlayer < 20.0) {
+            trackingInterval = 3; // Every 3 frames (30Hz) when close
+          } else if (distanceToPlayer > 30.0) {
+            trackingInterval = 10; // Every 10 frames (9Hz) when far
+          }
+          
+          // Navigation: Adaptive frequency based on activity
+          if (this.frameCount % navigationInterval === 0) {
+            this.intelligentNavigation(dt);
+          }
+          
+          // Thruster forces: Every frame (needed for smooth physics)
           this.applyThrusterForces(dt);
           
-          // CRITICAL: Apply collision detection and response to physics body (like human players)
-          this.checkAndResolveCollisions(dt);
+          // Collision detection: Adaptive frequency based on speed and proximity
+          if (this.frameCount % collisionInterval === 0) {
+            this.checkAndResolveCollisions(dt);
+          }
           
-          // Track player movement for predictive aiming
-          this.updatePlayerTracking(time);
+          // Player tracking: Adaptive frequency based on proximity
+          if (this.frameCount % trackingInterval === 0) {
+            this.updatePlayerTracking(time);
+          }
           
           // Only shoot when match is active (like other parts of the code do)
           const gameManagerComponent = this.el.sceneEl.components['game-manager'];
@@ -8976,6 +9038,21 @@ function setGameplayHUD(isPlaying) {
   
           this.throwBallAtPlayer();
           this.lastThrowTime = time;
+        }
+        
+        // Performance monitoring
+        const perfEnd = performance.now();
+        const perfTime = perfEnd - perfStart;
+        if (perfTime > 1.0) { // Log if bot tick takes more than 1ms
+          console.log(`🤖 Bot ${this.el.id} tick took ${perfTime.toFixed(2)}ms (speed: ${currentSpeed.toFixed(1)}m/s, dist: ${distanceToPlayer.toFixed(1)}m)`);
+        }
+        
+        // Log optimization benefits occasionally
+        if (this.frameCount % 300 === 0) { // Every 300 frames (~3.3 seconds at 90fps)
+          const collisionFreq = Math.round(90 / collisionInterval);
+          const navigationFreq = Math.round(90 / navigationInterval);
+          const trackingFreq = Math.round(90 / trackingInterval);
+          console.log(`🚀 Bot ${this.el.id} optimization: Collision=${collisionFreq}Hz, Nav=${navigationFreq}Hz, Track=${trackingFreq}Hz`);
         }
       },
       
@@ -16427,9 +16504,18 @@ function setGameplayHUD(isPlaying) {
         bots.forEach((bot, index) => {
           const shouldEnable = index < botsNeeded && !isManuallyDisabled;
           if (bot) {
-            bot.setAttribute('visible', shouldEnable);
-            if (bot.components['zerog-bot']) {
-              bot.setAttribute('zerog-bot', 'enabled', shouldEnable);
+            // Only set visibility and enabled if not manually disabled
+            if (!isManuallyDisabled) {
+              bot.setAttribute('visible', shouldEnable);
+              if (bot.components['zerog-bot']) {
+                bot.setAttribute('zerog-bot', 'enabled', shouldEnable);
+              }
+            } else {
+              // When manually disabled, force both visible and enabled to false
+              bot.setAttribute('visible', false);
+              if (bot.components['zerog-bot']) {
+                bot.setAttribute('zerog-bot', 'enabled', false);
+              }
             }
           }
         });
