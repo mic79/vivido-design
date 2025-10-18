@@ -158,7 +158,14 @@
             directionY: { type: 'number', default: 0 },
             directionZ: { type: 'number', default: -1 },
             bulletId: { type: 'string', default: '' },
-            isRemote: { type: 'boolean', default: false }
+            isRemote: { type: 'boolean', default: false },
+            isHoming: { type: 'boolean', default: false },
+            targetId: { type: 'string', default: '' },
+            homingForce: { type: 'number', default: 20 },
+            explosionRadius: { type: 'number', default: 1.0 },
+            explosionDamage: { type: 'number', default: 50 },
+            bulletHits: { type: 'number', default: 0 },
+            maxBulletHits: { type: 'number', default: 5 }
           },
           
           init: function() {
@@ -172,6 +179,15 @@
               this.el.setAttribute('bulletId', this.data.bulletId);
             }
             
+            // Initialize homing missile properties
+            if (this.data.isHoming) {
+              this.target = null;
+              this.lastTargetUpdate = 0;
+              this.targetUpdateInterval = 100; // Update target every 100ms
+              this.spawnTime = Date.now(); // Track when missile was spawned
+              this.collisionDelay = 200; // Disable collision detection for first 200ms
+            }
+            
             // Use the direction passed from the gun component
             const direction = new THREE.Vector3(
               this.data.directionX, 
@@ -183,11 +199,11 @@
             direction.normalize();
             this.velocity.copy(direction).multiplyScalar(this.data.speed);
             
-            // Store starting position for CCD
-            this.lastPosition.copy(this.el.object3D.position);
+            // Store starting position for CCD - initialize after position is set
+            this.lastPosition = new THREE.Vector3();
             
             // Send bullet creation to other players (only for local bullets)
-            if (!this.data.isRemote && isMultiplayer && (isHost || connections.size > 0)) {
+            if (!this.data.isRemote && isMultiplayer) {
               this.sendBulletCreate();
             }
             
@@ -197,16 +213,38 @@
               bulletManager.components['bullet-manager'].registerBullet(this.data.bulletId, this.el);
             }
             
-            // Create bullet visual
+            // Only set visual properties if not already set (for remote bullets)
+            if (!this.el.getAttribute('geometry')) {
+              // Create bullet visual - set radius based on bullet type
+              let bulletRadius = 0.02; // Default for regular bullets
+              if (this.data.isHoming) {
+                bulletRadius = 0.1; // Missiles are larger
+              }
+              
             this.el.setAttribute('geometry', {
               primitive: 'sphere',
-              radius: 0.02
-            });
+                radius: bulletRadius
+              });
+            }
+            
+            if (!this.el.getAttribute('material')) {
+              // Set color based on bullet type
+              if (this.data.isHoming) {
+                // This is a missile - red color
+                this.el.setAttribute('material', {
+                  color: '#ff0000',
+                  emissive: '#ff0000',
+                  emissiveIntensity: 2
+                });
+              } else {
+                // This is a regular bullet - yellow color
             this.el.setAttribute('material', {
               color: '#ffff00',
               emissive: '#ffff00',
               emissiveIntensity: 2
             });
+              }
+            }
           },
           
           tick: function(time, timeDelta) {
@@ -218,49 +256,77 @@
               return;
             }
             
+            // Initialize lastPosition on first tick (after position is properly set)
+            if (this.lastPosition.length() === 0) {
+              this.lastPosition.copy(this.el.object3D.position);
+            }
+            
             // Store current position before moving
             this.lastPosition.copy(this.el.object3D.position);
+            
+            // For homing missiles, ensure lastPosition is updated even during collision delay
+            if (this.data.isHoming && (Date.now() - this.spawnTime) < this.collisionDelay) {
+              // During collision delay, keep lastPosition updated so when collision detection starts,
+              // it uses the correct previous position (from the previous frame)
+              // This prevents a long raycast from spawn position to current position
+            }
+            
+            // Homing missile logic
+            if (this.data.isHoming) {
+              this.updateHomingTarget(time);
+              this.applyHomingForce(dt);
+            }
             
             // Move bullet
             const movement = this.velocity.clone().multiplyScalar(dt);
             this.el.object3D.position.add(movement);
             
+            // For homing missiles during collision delay, update lastPosition to prevent long raycasts
+            if (this.data.isHoming && (Date.now() - this.spawnTime) < this.collisionDelay) {
+              // Update lastPosition to current position to prevent long raycasts when collision detection starts
+              this.lastPosition.copy(this.el.object3D.position);
+            }
+            
             // Continuous collision detection - check path from last position to current
+            // Skip collision detection for homing missiles during spawn delay
+            if (this.data.isHoming && (Date.now() - this.spawnTime) < this.collisionDelay) {
+              // Skip collision detection during spawn delay
+            } else {
             this.checkContinuousCollision();
+            }
           },
           
           checkContinuousCollision: function() {
             const currentPos = this.el.object3D.position.clone();
             const lastPos = this.lastPosition.clone();
             
-            // Get all collidable meshes - only from visible models
-            const meshes = [];
+            // Get all collidable meshes - only from visible models using the same filtering as other systems
+            const allMeshes = [];
             const models = [
               document.querySelector('#model-level'),
               document.querySelector('#model-spaceship'),
               document.querySelector('#model-asteroid-42')
             ];
             
-            let visibleModelCount = 0;
-            let totalMeshCount = 0;
-            
+            // Collect all meshes first
             models.forEach(model => {
               if (model && model.object3D) {
-                if (model.getAttribute('visible') !== false) {
-                  visibleModelCount++;
-                  model.object3D.traverse(child => {
-                    if (child.isMesh && child.geometry) {
-                      meshes.push(child);
-                      totalMeshCount++;
-                    }
-                  });
-                }
+                model.object3D.traverse(child => {
+                  if (child.isMesh && child.geometry) {
+                    allMeshes.push(child);
+                  }
+                });
               }
             });
             
+            // Filter to only visible meshes using the same logic as other systems
+            const meshes = this.getVisibleMeshes(allMeshes);
+            
+            // Debug logging for homing missiles - removed console spam
+            
             // Performance logging for bullet collision optimization with throttling
-            if (models.length > 0 && visibleModelCount < models.length) {
-              const hiddenCount = models.length - visibleModelCount;
+            if (allMeshes.length > 0 && meshes.length < allMeshes.length) {
+              const hiddenCount = allMeshes.length - meshes.length;
               
               // Initialize throttling if not exists
               if (!this._bulletOptimizationLog) {
@@ -276,16 +342,16 @@
                               (now - this._bulletOptimizationLog.lastLogTime) > this._bulletOptimizationLog.logInterval;
               
               if (shouldLog) {
-                console.log(`🚀 Bullet Collision Optimization: ${hiddenCount} invisible models excluded from bullet collision detection`);
+                // Removed console spam - optimization working correctly
                 this._bulletOptimizationLog.lastCount = hiddenCount;
                 this._bulletOptimizationLog.lastLogTime = now;
               }
             }
             
-            // Add grab-surface objects
+            // Add grab-surface objects (only if visible)
             const surfaces = document.querySelectorAll('[grab-surface]');
             surfaces.forEach(surface => {
-              if (surface.object3D) {
+              if (surface.object3D && surface.getAttribute('visible') !== false && surface.getAttribute('visible') !== 'false') {
                 surface.object3D.traverse(child => {
                   if (child.isMesh && child.geometry) {
                     meshes.push(child);
@@ -310,10 +376,24 @@
             const hit = intersects[0];
             if (hit.distance <= distance + 0.01) {
               
+              // Debug logging for collision - removed console spam
+              
               // Create impact effects at hit point
               const impactManager = document.querySelector('[impact-effects-manager]');
               if (impactManager && impactManager.components['impact-effects-manager']) {
                 impactManager.components['impact-effects-manager'].createImpactEffect(hit.point);
+              }
+              
+              // Play random metal hit sound at impact location
+              const metalHitSounds = [
+                document.querySelector('#metal-hit-sound-1'),
+                document.querySelector('#metal-hit-sound-2'),
+                document.querySelector('#metal-hit-sound-3')
+              ];
+              const randomSound = metalHitSounds[Math.floor(Math.random() * metalHitSounds.length)];
+              if (randomSound) {
+                randomSound.object3D.position.copy(hit.point);
+                randomSound.components.sound.playSound();
               }
               
               this.destroyBullet();
@@ -327,7 +407,31 @@
           },
           
           checkEntityCollisions: function(bulletPos) {
-            const hitRadius = 0.3; // Hit detection radius
+            const hitRadius = 0.5; // Hit detection radius - increased for better detection
+            
+            // Check collision with homing missiles first (but not with self)
+            const homingMissiles = document.querySelectorAll('[bullet]');
+            homingMissiles.forEach(missile => {
+              if (missile.components['bullet'] && missile.components['bullet'].data.isHoming && missile !== this.el) {
+                const missilePos = new THREE.Vector3();
+                missile.object3D.getWorldPosition(missilePos);
+                const distance = bulletPos.distanceTo(missilePos);
+
+                if (distance < hitRadius) {
+                  // Hit the homing missile
+                  missile.components['bullet'].hitByBullet();
+
+                  // Create impact effects
+                  const impactManager = document.querySelector('[impact-effects-manager]');
+                  if (impactManager && impactManager.components['impact-effects-manager']) {
+                    impactManager.components['impact-effects-manager'].createImpactEffect(missilePos);
+                  }
+
+                  this.destroyBullet();
+                  return;
+                }
+              }
+            });
             
             // Check collision with local player target (only if bullet is from another player)
             const playerTarget = document.querySelector('#player-target');
@@ -375,6 +479,7 @@
               bot.object3D.getWorldPosition(botPos);
               const distance = bulletPos.distanceTo(botPos);
               
+              
               if (distance < hitRadius) {
                 this.hitBot(bot);
               }
@@ -382,17 +487,31 @@
           },
           
           hitPlayer: function(player) {
-            // Create impact effects at bullet position before destroying it
-            const bulletPos = this.el.object3D.position.clone();
-            const impactManager = document.querySelector('[impact-effects-manager]');
-            if (impactManager && impactManager.components['impact-effects-manager']) {
-              impactManager.components['impact-effects-manager'].createImpactEffect(bulletPos);
+            // Don't create impact effects for individual hits - only for damage milestones or death
+            // The player damage system will handle individual hit effects and sounds
+            
+            // Call player's damage system if this is a missile
+            if (this.data.isHoming) {
+            const playerTarget = document.querySelector('#player-target');
+              if (playerTarget && playerTarget.components['player-damage']) {
+                playerTarget.components['player-damage'].hitByMissile();
+              }
             }
             
-            // Play impact effect locally first (same as ball system)
-            const playerTarget = document.querySelector('#player-target');
-            if (playerTarget && playerTarget.components['impact-effect']) {
-              playerTarget.components['impact-effect'].playEffect();
+            // Vibrate both controllers when player is hit
+            const leftHand = document.querySelector('#leftHand');
+            const rightHand = document.querySelector('#rightHand');
+            if (leftHand && leftHand.components['hand-controls'] && leftHand.components['hand-controls'].gamepad) {
+              const gamepad = leftHand.components['hand-controls'].gamepad;
+              if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+                gamepad.hapticActuators[0].pulse(0.3, 200); // 30% intensity, 200ms
+              }
+            }
+            if (rightHand && rightHand.components['hand-controls'] && rightHand.components['hand-controls'].gamepad) {
+              const gamepad = rightHand.components['hand-controls'].gamepad;
+              if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+                gamepad.hapticActuators[0].pulse(0.3, 200); // 30% intensity, 200ms
+              }
             }
             
             // Broadcast hit effect to all other players (same as ball system)
@@ -404,17 +523,13 @@
           },
           
           hitBot: function(bot) {
-            // Create impact effects at bullet position before destroying it
-            const bulletPos = this.el.object3D.position.clone();
-            const impactManager = document.querySelector('[impact-effects-manager]');
-            if (impactManager && impactManager.components['impact-effects-manager']) {
-              impactManager.components['impact-effects-manager'].createImpactEffect(bulletPos);
-            }
+            // Don't create impact effects for individual hits - only for damage milestones or death
+            // The bot damage system will handle individual hit effects and sounds
             
-            // Play impact effect locally first (same as ball system)
-            if (bot.components && bot.components['impact-effect']) {
-              bot.components['impact-effect'].playEffect();
-            }
+            // Call bot's damage system using event dispatch
+            bot.dispatchEvent(new CustomEvent('bot-hit-by-bullet', {
+              detail: { bullet: this.el }
+            }));
             
             // Visual feedback - make bot flash red briefly (local only)
             const originalColor = bot.getAttribute('color') || '#ffffff';
@@ -438,32 +553,12 @@
               sendHitEffect(botTargetId); // Send hit effect using ball system format
             }
             
-            // Simple scoring - increment player score (local only for now)
-            const scoreElements = document.querySelectorAll('#hud-score a-entity');
-            if (scoreElements.length > 0) {
-              const playerScoreEl = scoreElements[0]; // First element is player score
-              const currentText = playerScoreEl.getAttribute('text').value;
-              const currentScore = parseInt(currentText) || 0;
-              const newScore = currentScore + 1;
-              playerScoreEl.setAttribute('text', 'value', newScore.toString());
-              console.log('Score updated:', newScore);
-            }
-            
             this.destroyBullet();
           },
           
           hitRemotePlayer: function(remoteTarget, playerId) {
-            // Create impact effects at bullet position before destroying it
-            const bulletPos = this.el.object3D.position.clone();
-            const impactManager = document.querySelector('[impact-effects-manager]');
-            if (impactManager && impactManager.components['impact-effects-manager']) {
-              impactManager.components['impact-effects-manager'].createImpactEffect(bulletPos);
-            }
-            
-            // Play impact effect locally first (same as ball system)
-            if (remoteTarget && remoteTarget.components['impact-effect']) {
-              remoteTarget.components['impact-effect'].playEffect();
-            }
+            // Don't create impact effects for individual hits - only for damage milestones or death
+            // The remote player's damage system will handle individual hit effects and sounds
             
             // Broadcast hit effect to all other players (same as ball system)
             if (isMultiplayer && activePlayers.size > 1) {
@@ -489,7 +584,14 @@
                 z: this.data.directionZ
               },
               speed: this.data.speed,
-              hand: this.data.hand
+              hand: this.data.hand,
+              isHoming: this.data.isHoming,
+              targetId: this.data.targetId,
+              homingForce: this.data.homingForce,
+              explosionRadius: this.data.explosionRadius,
+              explosionDamage: this.data.explosionDamage,
+              bulletHits: this.data.bulletHits,
+              maxBulletHits: this.data.maxBulletHits
             };
             
             if (isHost) {
@@ -509,6 +611,13 @@
           },
           
           destroyBullet: function() {
+            // Debug logging for missile destruction - removed console spam
+            
+            // Stop and clean up sound component for homing missiles
+            if (this.data.isHoming && this.el.components.sound) {
+              this.el.components.sound.stopSound();
+            }
+            
             // Unregister from bullet manager
             const bulletManager = document.querySelector('[bullet-manager]');
             if (bulletManager && bulletManager.components['bullet-manager']) {
@@ -541,6 +650,383 @@
             
             if (this.el.parentNode) {
               this.el.parentNode.removeChild(this.el);
+            }
+          },
+          
+          // Helper function to filter meshes from visible models only (same as other systems)
+          getVisibleMeshes: function(meshes) {
+            const visibleMeshes = meshes.filter(mesh => {
+              // Check if mesh belongs to a visible model entity
+              let isFromVisibleModel = true;
+              let currentParent = mesh.parent;
+              
+              // Traverse up the hierarchy to find the model entity
+              while (currentParent) {
+                if (currentParent.el && currentParent.el.getAttribute) {
+                  const visible = currentParent.el.getAttribute('visible');
+                  if (visible === false || visible === 'false') {
+                    isFromVisibleModel = false;
+                    break;
+                  }
+                }
+                currentParent = currentParent.parent;
+              }
+              
+              return isFromVisibleModel;
+            });
+            
+            return visibleMeshes;
+          },
+          
+          // Homing missile methods - using tractor beam logic
+          updateHomingMissile: function(time, timeDelta) {
+            // Check lifetime
+            if (Date.now() - this.startTime > this.lifetime) {
+              this.explodeMissile();
+              return;
+            }
+            
+            // Update target periodically
+            if (time - this.lastTargetUpdate > this.targetUpdateInterval) {
+              this.updateTarget();
+              this.lastTargetUpdate = time;
+            }
+            
+            if (!this.target) return;
+            
+            // Apply homing force using tractor beam logic
+            this.applyHomingForce();
+          },
+          
+          updateTarget: function() {
+            // Find the best target (same logic as bot targeting)
+            const targets = [];
+            
+            // Add human player as potential target
+            const playerTarget = document.querySelector('#player-target');
+            if (playerTarget) {
+              const targetPos = new THREE.Vector3();
+              playerTarget.object3D.getWorldPosition(targetPos);
+              targets.push({
+                type: 'human player',
+                position: targetPos,
+                element: playerTarget,
+                distance: new THREE.Vector3().copy(this.body.position).distanceTo(targetPos)
+              });
+            }
+            
+            // Add remote players in multiplayer
+            if (isMultiplayer) {
+              for (let i = 0; i < 4; i++) {
+                const remoteTarget = document.querySelector(`#remote-target-${i}`);
+                const remotePlayer = document.querySelector(`#remote-player-${i}`);
+                
+                if (remoteTarget && remotePlayer && remotePlayer.getAttribute('visible') !== 'false') {
+                  const targetPos = new THREE.Vector3();
+                  remoteTarget.object3D.getWorldPosition(targetPos);
+                  targets.push({
+                    type: `remote player ${i}`,
+                    position: targetPos,
+                    element: remoteTarget,
+                    distance: new THREE.Vector3().copy(this.body.position).distanceTo(targetPos)
+                  });
+                }
+              }
+            }
+            
+            // Select closest target
+            if (targets.length > 0) {
+              targets.sort((a, b) => a.distance - b.distance);
+              this.target = targets[0].element;
+              this.targetPosition = targets[0].position.clone();
+            }
+          },
+          
+          applyHomingForce: function() {
+            if (!this.body || !this.target) return;
+            
+            // Get target position
+            const targetPos = new THREE.Vector3();
+            this.target.object3D.getWorldPosition(targetPos);
+            
+            // Calculate attraction force toward target position (same as tractor beam)
+            const ballPos = new THREE.Vector3().copy(this.body.position);
+            const attractionVector = new THREE.Vector3().subVectors(targetPos, ballPos);
+            const distance = attractionVector.length();
+            
+            if (distance > 0.01) { // Only apply force if not already at target
+              // Normalize and apply force - stronger when farther away
+              attractionVector.normalize();
+              
+              // Adaptive force: stronger for distant objects, gentler when close
+              let forceMultiplier;
+              if (distance > 2.0) {
+                forceMultiplier = 20.0; // Strong force for distant targets
+              } else if (distance > 0.5) {
+                forceMultiplier = 15.0; // Medium force for medium distance
+              } else {
+                forceMultiplier = 10.0;  // Gentle force when close
+              }
+              
+              // Apply force to physics body
+              const force = attractionVector.multiplyScalar(forceMultiplier);
+              this.body.velocity.add(force);
+              
+              // Limit maximum velocity
+              const maxVelocity = this.data.maxVelocity;
+              if (this.body.velocity.length() > maxVelocity) {
+                this.body.velocity.normalize().multiplyScalar(maxVelocity);
+              }
+            }
+          },
+          
+          explodeMissile: function() {
+            const explosionPos = new THREE.Vector3().copy(this.body.position);
+            
+            // Create impact effects
+            const impactManager = document.querySelector('[impact-effects-manager]');
+            if (impactManager && impactManager.components['impact-effects-manager']) {
+              impactManager.components['impact-effects-manager'].createImpactEffect(explosionPos);
+            }
+            
+            // Apply damage to nearby players
+            this.applyExplosionDamage(explosionPos);
+            
+            // Reset the missile
+            this.resetPosition();
+            
+            console.log('💥 Homing missile exploded at', explosionPos);
+          },
+          
+          applyExplosionDamage: function(explosionPos) {
+            const explosionRadius = this.data.explosionRadius;
+            const maxDamage = this.data.explosionDamage;
+            
+            // Check damage to local player
+            const playerTarget = document.querySelector('#player-target');
+            if (playerTarget) {
+              const playerPos = new THREE.Vector3();
+              playerTarget.object3D.getWorldPosition(playerPos);
+              const distance = explosionPos.distanceTo(playerPos);
+              
+              if (distance <= explosionRadius) {
+                const damageRatio = 1 - (distance / explosionRadius); // 1.0 at center, 0.0 at edge
+                const damage = maxDamage * damageRatio;
+                
+                // Apply damage (50% damage within 1m)
+                if (damage >= maxDamage * 0.5) {
+                  
+                  // Vibrate both controllers when hit by missile explosion
+                  const leftHand = document.querySelector('#left-hand');
+                  const rightHand = document.querySelector('#right-hand');
+                  if (leftHand && leftHand.components['hand-controls'] && leftHand.components['hand-controls'].gamepad) {
+                    const gamepad = leftHand.components['hand-controls'].gamepad;
+                    if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+                      gamepad.hapticActuators[0].pulse(0.4, 300); // 40% intensity, 300ms
+                    }
+                  }
+                  if (rightHand && rightHand.components['hand-controls'] && rightHand.components['hand-controls'].gamepad) {
+                    const gamepad = rightHand.components['hand-controls'].gamepad;
+                    if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+                      gamepad.hapticActuators[0].pulse(0.4, 300); // 40% intensity, 300ms
+                    }
+                  }
+                  
+                  // TODO: Implement player damage system
+                }
+              }
+            }
+            
+            // Check damage to remote players in multiplayer
+            if (isMultiplayer) {
+              for (let i = 0; i < 4; i++) {
+                const remoteTarget = document.querySelector(`#remote-target-${i}`);
+                const remotePlayer = document.querySelector(`#remote-player-${i}`);
+                
+                if (remoteTarget && remotePlayer && remotePlayer.getAttribute('visible') !== 'false') {
+                  const targetPos = new THREE.Vector3();
+                  remoteTarget.object3D.getWorldPosition(targetPos);
+                  const distance = explosionPos.distanceTo(targetPos);
+                  
+                  if (distance <= explosionRadius) {
+                    const damageRatio = 1 - (distance / explosionRadius);
+                    const damage = maxDamage * damageRatio;
+                    
+                    if (damage >= maxDamage * 0.5) {
+                      console.log(`💥 Remote player ${i} hit by missile explosion! Damage: ${damage.toFixed(1)}%`);
+                      // TODO: Implement remote player damage system
+                    }
+                  }
+                }
+              }
+            }
+          },
+          
+          hitByBullet: function() {
+            if (!this.data.isHoming) return;
+            
+            this.data.bulletHits++;
+            // Don't explode bullet when it hits something - just track hits
+            // The bullet will be destroyed by the collision system
+          },
+          
+          updateHomingTarget: function(time) {
+            // Update target periodically
+            if (time - this.lastTargetUpdate > this.targetUpdateInterval) {
+              // Find the best target (same logic as bot targeting)
+              const targets = [];
+              
+              // Add human player as potential target
+              const playerTarget = document.querySelector('#player-target');
+              if (playerTarget) {
+                const targetPos = new THREE.Vector3();
+                playerTarget.object3D.getWorldPosition(targetPos);
+                targets.push({
+                  type: 'human player',
+                  position: targetPos,
+                  element: playerTarget,
+                  distance: new THREE.Vector3().copy(this.el.object3D.position).distanceTo(targetPos)
+                });
+              }
+              
+              // Add remote players in multiplayer
+              if (isMultiplayer) {
+                for (let i = 0; i < 4; i++) {
+                  const remoteTarget = document.querySelector(`#remote-target-${i}`);
+                  const remotePlayer = document.querySelector(`#remote-player-${i}`);
+                  
+                  if (remoteTarget && remotePlayer && remotePlayer.getAttribute('visible') !== 'false') {
+                    const targetPos = new THREE.Vector3();
+                    remoteTarget.object3D.getWorldPosition(targetPos);
+                    targets.push({
+                      type: `remote player ${i}`,
+                      position: targetPos,
+                      element: remoteTarget,
+                      distance: new THREE.Vector3().copy(this.el.object3D.position).distanceTo(targetPos)
+                    });
+                  }
+                }
+              }
+              
+              // Select closest target
+              if (targets.length > 0) {
+                targets.sort((a, b) => a.distance - b.distance);
+                this.target = targets[0].element;
+              }
+              
+              this.lastTargetUpdate = time;
+            }
+          },
+          
+          applyHomingForce: function(dt) {
+            if (!this.target) return;
+            
+            // Get target position
+            const targetPos = new THREE.Vector3();
+            this.target.object3D.getWorldPosition(targetPos);
+            
+            // Calculate attraction force toward target position (same as tractor beam)
+            const bulletPos = new THREE.Vector3().copy(this.el.object3D.position);
+            const attractionVector = new THREE.Vector3().subVectors(targetPos, bulletPos);
+            const distance = attractionVector.length();
+            
+            if (distance > 0.01) { // Only apply force if not already at target
+              // Normalize and apply force - stronger when farther away
+              attractionVector.normalize();
+              
+              // Adaptive force: stronger for distant objects, gentler when close
+              let forceMultiplier;
+              if (distance > 2.0) {
+                forceMultiplier = this.data.homingForce; // Strong force for distant targets
+              } else if (distance > 0.5) {
+                forceMultiplier = this.data.homingForce * 0.75; // Medium force for medium distance
+              } else {
+                forceMultiplier = this.data.homingForce * 0.5;  // Gentle force when close
+              }
+              
+              // Apply force to velocity
+              const force = attractionVector.multiplyScalar(forceMultiplier * dt);
+              this.velocity.add(force);
+              
+              // Limit maximum velocity
+              const maxVelocity = this.data.speed;
+              if (this.velocity.length() > maxVelocity) {
+                this.velocity.normalize().multiplyScalar(maxVelocity);
+              }
+            }
+          },
+          
+          explodeMissile: function() {
+            const explosionPos = new THREE.Vector3().copy(this.el.object3D.position);
+            
+            // Create impact effects
+            const impactManager = document.querySelector('[impact-effects-manager]');
+            if (impactManager && impactManager.components['impact-effects-manager']) {
+              impactManager.components['impact-effects-manager'].createImpactEffect(explosionPos);
+            }
+            
+            // Play random metal hit sound at explosion location
+            const metalHitSounds = [
+              document.querySelector('#metal-hit-sound-1'),
+              document.querySelector('#metal-hit-sound-2'),
+              document.querySelector('#metal-hit-sound-3')
+            ];
+            const randomSound = metalHitSounds[Math.floor(Math.random() * metalHitSounds.length)];
+            if (randomSound) {
+              randomSound.object3D.position.copy(explosionPos);
+              randomSound.components.sound.playSound();
+            }
+            
+            // Apply damage to nearby players
+            this.applyExplosionDamage(explosionPos);
+            
+            // Destroy the bullet
+            this.destroyBullet();
+          },
+          
+          applyExplosionDamage: function(explosionPos) {
+            const explosionRadius = this.data.explosionRadius;
+            const maxDamage = this.data.explosionDamage;
+            
+            // Check damage to local player
+            const playerTarget = document.querySelector('#player-target');
+            if (playerTarget) {
+              const playerPos = new THREE.Vector3();
+              playerTarget.object3D.getWorldPosition(playerPos);
+              const distance = explosionPos.distanceTo(playerPos);
+              
+              if (distance <= explosionRadius) {
+                const damageRatio = 1 - (distance / explosionRadius); // 1.0 at center, 0.0 at edge
+                const damage = maxDamage * damageRatio;
+                
+                // Apply damage (50% damage within 1m)
+                if (damage >= maxDamage * 0.5) {
+                  // TODO: Implement player damage system
+                }
+              }
+            }
+            
+            // Check damage to remote players in multiplayer
+            if (isMultiplayer) {
+              for (let i = 0; i < 4; i++) {
+                const remoteTarget = document.querySelector(`#remote-target-${i}`);
+                const remotePlayer = document.querySelector(`#remote-player-${i}`);
+                
+                if (remoteTarget && remotePlayer && remotePlayer.getAttribute('visible') !== 'false') {
+                  const targetPos = new THREE.Vector3();
+                  remoteTarget.object3D.getWorldPosition(targetPos);
+                  const distance = explosionPos.distanceTo(targetPos);
+                  
+                  if (distance <= explosionRadius) {
+                    const damageRatio = 1 - (distance / explosionRadius);
+                    const damage = maxDamage * damageRatio;
+                    
+                    if (damage >= maxDamage * 0.5) {
+                      // TODO: Implement remote player damage system
+                    }
+                  }
+                }
+              }
             }
           }
         });
@@ -707,6 +1193,30 @@
             
             // Add to scene
             this.el.sceneEl.appendChild(bullet);
+            
+            // Play laser sound from the controller that fired
+            if (controller) {
+              let soundEntity = null;
+              if (hand === 'left') {
+                soundEntity = document.querySelector('#left-hand-laser-sound');
+              } else if (hand === 'right') {
+                soundEntity = document.querySelector('#right-hand-laser-sound');
+              }
+              
+              if (soundEntity && soundEntity.components.sound) {
+                // Stop any currently playing sound and restart it to allow overlapping
+                soundEntity.components.sound.stopSound();
+                soundEntity.components.sound.playSound();
+              }
+            }
+            
+            // Vibrate the controller that shot the bullet
+            if (controller && controller.components['hand-controls'] && controller.components['hand-controls'].gamepad) {
+              const gamepad = controller.components['hand-controls'].gamepad;
+              if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+                gamepad.hapticActuators[0].pulse(0.1, 50); // 10% intensity, 50ms
+              }
+            }
             
             // Increment rate limiting counter
             this.bulletsSentThisSecond++;
@@ -1564,6 +2074,21 @@
               break;
             case 'bullet-destroy':
               handleBulletDestroy(data);
+              break;
+            case 'damage-effect':
+              handleDamageEffect(data);
+              break;
+            case 'explosion-effect':
+              handleExplosionEffect(data);
+              break;
+            case 'hit-sound':
+              handleHitSound(data);
+              break;
+            case 'bot-damage-state':
+              handleBotDamageState(data);
+              break;
+            case 'player-damage-state':
+              handlePlayerDamageState(data);
               break;
             case 'game-mode-update':
               handleGameModeUpdate(data);
@@ -2467,12 +2992,22 @@
           
           // Only update bot position on clients (not on host)
           if (!isHost && botComponent.body) {
-            // Update bot physics body position and velocity
+            // Update bot physics body position, velocity, and rotation
             botComponent.body.position.set(data.botState.x, data.botState.y, data.botState.z);
             botComponent.body.velocity.set(data.botState.vx, data.botState.vy, data.botState.vz);
             
-            // Update visual position
+            // Update rotation if provided
+            if (data.botState.qx !== undefined && data.botState.qy !== undefined && 
+                data.botState.qz !== undefined && data.botState.qw !== undefined) {
+              botComponent.body.quaternion.set(data.botState.qx, data.botState.qy, data.botState.qz, data.botState.qw);
+            }
+            
+            // Update visual position and rotation
             botElement.object3D.position.set(data.botState.x, data.botState.y, data.botState.z);
+            if (data.botState.qx !== undefined && data.botState.qy !== undefined && 
+                data.botState.qz !== undefined && data.botState.qw !== undefined) {
+              botElement.object3D.quaternion.set(data.botState.qx, data.botState.qy, data.botState.qz, data.botState.qw);
+            }
           }
         }
         
@@ -2500,6 +3035,29 @@
         const bullet = document.createElement('a-entity');
         bullet.object3D.position.set(data.position.x, data.position.y, data.position.z);
         
+        // Set visual properties for remote bullets
+        if (data.isHoming) {
+          // This is a missile - set missile appearance
+          bullet.setAttribute('geometry', 'primitive: sphere; radius: 0.1');
+          bullet.setAttribute('material', 'color: #ff0000');
+          
+          // Add hum sound to homing missile
+          bullet.setAttribute('sound', {
+            src: 'url(audio/electric-hum.wav)',
+            autoplay: true,
+            loop: true,
+            volume: 0.3,
+            positional: true,
+            distanceModel: 'linear',
+            refDistance: 1,
+            maxDistance: 25
+          });
+        } else {
+          // This is a regular bullet - set bullet appearance
+          bullet.setAttribute('geometry', 'primitive: sphere; radius: 0.05');
+          bullet.setAttribute('material', 'color: #ffff00');
+        }
+        
         // Add bullet component with remote flag
         bullet.setAttribute('bullet', {
           speed: data.speed,
@@ -2509,7 +3067,14 @@
           directionY: data.direction.y,
           directionZ: data.direction.z,
           bulletId: data.bulletId,
-          isRemote: true
+          isRemote: true,
+          isHoming: data.isHoming || false,
+          targetId: data.targetId || '',
+          homingForce: data.homingForce || 20,
+          explosionRadius: data.explosionRadius || 1.0,
+          explosionDamage: data.explosionDamage || 50,
+          bulletHits: data.bulletHits || 0,
+          maxBulletHits: data.maxBulletHits || 5
         });
         
         // Add to scene
@@ -2526,7 +3091,14 @@
                 position: data.position,
                 direction: data.direction,
                 speed: data.speed,
-                hand: data.hand
+                hand: data.hand,
+                isHoming: data.isHoming,
+                targetId: data.targetId,
+                homingForce: data.homingForce,
+                explosionRadius: data.explosionRadius,
+                explosionDamage: data.explosionDamage,
+                bulletHits: data.bulletHits,
+                maxBulletHits: data.maxBulletHits
               });
             }
           });
@@ -2548,6 +3120,254 @@
                 type: 'bullet-destroy',
                 bulletId: data.bulletId,
                 shooterPlayerId: data.shooterPlayerId
+              });
+            }
+          });
+        }
+      }
+      
+      function handleDamageEffect(data) {
+        console.log('💥 Received damage effect:', data);
+        console.log('💥 Current myPlayerId:', myPlayerId);
+        console.log('💥 Target player ID:', data.targetPlayerId);
+        
+        // Create damage effect (spark/smoke) on the correct player entity
+        let targetEntity = null;
+        
+        // Find the target player entity
+        if (data.targetPlayerId === myPlayerId) {
+          // This is the local player - use local player entity
+          targetEntity = document.querySelector('#player');
+          console.log('💥 Using local player entity:', targetEntity);
+        } else if (data.targetPlayerId.startsWith('player_')) {
+          // This is a remote player - use remote player entity
+          const playerIndex = parseInt(data.targetPlayerId.split('_')[1]);
+          targetEntity = document.querySelector(`#remote-player-${playerIndex}`);
+          console.log('💥 Using remote player entity:', targetEntity, 'for index:', playerIndex);
+        } else if (data.targetPlayerId.startsWith('zerog-bot-')) {
+          // This is a bot - use bot entity
+          targetEntity = document.querySelector('#' + data.targetPlayerId);
+          console.log('💥 Using bot entity:', targetEntity);
+        }
+        
+        if (targetEntity) {
+          console.log('💥 Target entity found:', targetEntity);
+          // Create damage effect as child of the target entity
+          const radius = data.targetPlayerId.startsWith('zerog-bot-') ? 0.3 : 0.2; // Bot or player radius
+          
+          // Random position on sphere surface (relative to target)
+          const theta = Math.random() * Math.PI * 2;
+          const phi = Math.random() * Math.PI;
+          const effectPos = new THREE.Vector3(
+            radius * Math.sin(phi) * Math.cos(theta),
+            radius * Math.sin(phi) * Math.sin(theta),
+            radius * Math.cos(phi)
+          );
+          
+          // Create looping spark+smoke animation for each missile hit (player damage state)
+          const damageEffect = document.createElement('a-entity');
+          damageEffect.setAttribute('position', `${effectPos.x} ${effectPos.y} ${effectPos.z}`);
+          damageEffect.setAttribute('world-spark-system', '');
+          damageEffect.setAttribute('spark-smoke-controller', '');
+          damageEffect.setAttribute('threejs-smoke-puffs', '');
+          
+          // Add as child of target entity so it moves with the target
+          targetEntity.appendChild(damageEffect);
+          console.log('💥 Damage effect created and attached to:', targetEntity);
+        } else {
+          console.log('💥 Target entity not found for:', data.targetPlayerId);
+        }
+        
+        // Host forwards damage effect to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          console.log('💥 Host forwarding damage effect to other clients');
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open && connectionKey !== data.shooterPlayerId) {
+              conn.send({
+                type: 'damage-effect',
+                position: data.position,
+                targetPlayerId: data.targetPlayerId,
+                shooterPlayerId: data.shooterPlayerId,
+                timestamp: data.timestamp
+              });
+            }
+          });
+        }
+      }
+      
+      function handleExplosionEffect(data) {
+        console.log('💥 Received explosion effect:', data);
+        
+        // Play explosion animation and sound for target entity
+        const targetEntity = document.querySelector(data.targetSelector);
+        console.log('💥 Target entity found:', targetEntity);
+        
+        if (targetEntity) {
+          // Play explosion sound at target position
+          const soundEntity = document.querySelector('#impact-sound');
+          if (soundEntity && soundEntity.components.sound) {
+            const worldPos = new THREE.Vector3();
+            targetEntity.object3D.getWorldPosition(worldPos);
+            soundEntity.object3D.position.copy(worldPos);
+            soundEntity.components.sound.playSound();
+            console.log('💥 Playing explosion sound');
+          }
+          
+          // Play explosion animation (growing/fading sphere)
+          const impactTarget = targetEntity.querySelector('[impact-effect]');
+          console.log('💥 Impact target found:', impactTarget);
+          if (impactTarget && impactTarget.components['impact-effect']) {
+            impactTarget.components['impact-effect'].playEffect();
+            console.log('💥 Playing explosion animation');
+          }
+        }
+        
+        // Host forwards explosion effect to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open && connectionKey !== data.shooterPlayerId) {
+              conn.send({
+                type: 'explosion-effect',
+                targetSelector: data.targetSelector,
+                targetPlayerId: data.targetPlayerId,
+                shooterPlayerId: data.shooterPlayerId,
+                timestamp: data.timestamp
+              });
+            }
+          });
+        }
+      }
+      
+      function handleHitSound(data) {
+        // Play hit sound at specified position
+        const soundPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
+        const soundEntity = document.querySelector(data.soundSelector);
+        if (soundEntity && soundEntity.components.sound) {
+          soundEntity.object3D.position.copy(soundPos);
+          soundEntity.components.sound.playSound();
+        }
+        
+        // Host forwards hit sound to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open && connectionKey !== data.shooterPlayerId) {
+              conn.send({
+                type: 'hit-sound',
+                position: data.position,
+                soundSelector: data.soundSelector,
+                targetPlayerId: data.targetPlayerId,
+                shooterPlayerId: data.shooterPlayerId,
+                timestamp: data.timestamp
+              });
+            }
+          });
+        }
+      }
+      
+      function handleBotDamageState(data) {
+        console.log('🤖 Received bot damage state:', data);
+        // Update bot damage state (hit counts, death, respawn) for all clients
+        const botEntity = document.querySelector(data.botSelector);
+        console.log('🤖 Bot entity found:', botEntity);
+        if (botEntity && botEntity.components['zerog-bot']) {
+          const botComponent = botEntity.components['zerog-bot'];
+          
+          // Update hit count
+          if (data.hitCount !== undefined) {
+            botComponent.hitCount = data.hitCount;
+          }
+          
+          // Handle death
+          if (data.isDead) {
+            botComponent.isDead = true;
+            botEntity.setAttribute('visible', false);
+          }
+          
+          // Handle respawn
+          if (data.respawn) {
+            console.log('🤖 Handling bot respawn');
+            botComponent.isDead = false;
+            botComponent.hitCount = 0;
+            botEntity.setAttribute('visible', true);
+            botEntity.object3D.position.copy(new THREE.Vector3(data.position.x, data.position.y, data.position.z));
+            
+            // Clean up all damage effects for this bot
+            const damageEffects = botEntity.querySelectorAll('[world-spark-system]');
+            damageEffects.forEach(effect => {
+              if (effect.parentNode) {
+                effect.parentNode.removeChild(effect);
+              }
+            });
+          }
+        }
+        
+        // Host forwards bot damage state to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open && connectionKey !== data.shooterPlayerId) {
+              conn.send({
+                type: 'bot-damage-state',
+                botSelector: data.botSelector,
+                hitCount: data.hitCount,
+                isDead: data.isDead,
+                respawn: data.respawn,
+                position: data.position,
+                shooterPlayerId: data.shooterPlayerId,
+                timestamp: data.timestamp
+              });
+            }
+          });
+        }
+      }
+      
+      function handlePlayerDamageState(data) {
+        // Update player damage state (hit counts, death) for all clients
+        if (data.playerId === myPlayerId) {
+          return; // Don't update our own player state
+        }
+        
+        // Find the remote player entity
+        const playerIndex = parseInt(data.playerId.split('_')[1]);
+        const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
+        if (remotePlayer) {
+          // Handle respawn - clean up damage effects
+          if (data.respawn) {
+            // Clean up all damage effects for this remote player
+            const damageEffects = remotePlayer.querySelectorAll('[world-spark-system]');
+            damageEffects.forEach(effect => {
+              if (effect.parentNode) {
+                effect.parentNode.removeChild(effect);
+              }
+            });
+          }
+          
+          // Update remote player damage state
+          remotePlayer.setAttribute('player-damage', {
+            missileHits: data.missileHits,
+            isDead: data.isDead
+          });
+          
+          // Update damage bar for remote player if it exists
+          const remoteDamageBar = document.querySelector(`#remote-damage-bar-${playerIndex}`);
+          if (remoteDamageBar) {
+            const healthPercent = ((5 - data.missileHits) / 5) * 100; // Assuming max 5 hits
+            const barWidth = (healthPercent / 100) * 0.38;
+            remoteDamageBar.setAttribute('geometry', 'primitive: plane; width: ' + barWidth + '; height: 0.02');
+          }
+        }
+        
+        // Host forwards player damage state to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open && connectionKey !== data.shooterPlayerId) {
+              conn.send({
+                type: 'player-damage-state',
+                playerId: data.playerId,
+                missileHits: data.missileHits,
+                isDead: data.isDead,
+                respawn: data.respawn || false,
+                shooterPlayerId: data.shooterPlayerId,
+                timestamp: data.timestamp
               });
             }
           });
@@ -4864,9 +5684,12 @@ function setGameplayHUD(isPlaying) {
             
             // Traverse up the hierarchy to find the model entity
             while (currentParent) {
-              if (currentParent.el && currentParent.el.getAttribute && currentParent.el.getAttribute('visible') === false) {
-                isFromVisibleModel = false;
-                break;
+              if (currentParent.el && currentParent.el.getAttribute) {
+                const visible = currentParent.el.getAttribute('visible');
+                if (visible === false || visible === 'false') {
+                  isFromVisibleModel = false;
+                  break;
+                }
               }
               currentParent = currentParent.parent;
             }
@@ -4892,7 +5715,7 @@ function setGameplayHUD(isPlaying) {
                             (now - this._meshOptimizationLog.lastLogTime) > this._meshOptimizationLog.logInterval;
             
             if (shouldLog) {
-              console.log(`🚀 Performance Optimization: ${hiddenCount} meshes from invisible models excluded from collision detection`);
+              // Performance optimization logging disabled to reduce console spam
               this._meshOptimizationLog.lastCount = hiddenCount;
               this._meshOptimizationLog.lastLogTime = now;
             }
@@ -5375,9 +6198,6 @@ function setGameplayHUD(isPlaying) {
           
           // Check if stunned and disable controls
           if (this.isStunned) {
-            if (Date.now() > this.stunEndTime) {
-              this.isStunned = false;
-            } else {
               // While stunned, disable movement but allow rotation
               this.velocity.set(0, 0, 0);
               this.thrusterActive.left = false;
@@ -5395,7 +6215,6 @@ function setGameplayHUD(isPlaying) {
               
               // Continue processing for rotation (don't return early)
               // Only skip movement-related processing below
-            }
           }
           
           // Apply thumbstick rotation (allowed when stunned)
@@ -7594,6 +8413,11 @@ function setGameplayHUD(isPlaying) {
           movementSpeed: { type: 'number', default: 1.5 },
           accuracy: { type: 'number', default: 0.7 },
           team: { type: 'string', default: 'red' }, // 'red' or 'blue'
+          // Damage system
+          bulletHits: { type: 'number', default: 0 },
+          maxBulletHits: { type: 'number', default: 30 },
+          isDead: { type: 'boolean', default: false },
+          respawnTime: { type: 'number', default: 5000 }, // 5 seconds
           // Player-like locomotion parameters
           thrusterForce: { type: 'number', default: 0.8 },
           maxSpeed: { type: 'number', default: 8 },
@@ -7621,6 +8445,178 @@ function setGameplayHUD(isPlaying) {
           this.isStunned = false;
           this.stunEndTime = 0;
           this.stunImmunityEndTime = 0; // 10-second immunity after being stunned
+          
+          // Damage system
+          this.bulletHits = 0;
+          this.maxBulletHits = 30;
+          this.isDead = false;
+          this.respawnTime = 5000;
+          this.deathTime = 0;
+          this.initialPosition = new THREE.Vector3().copy(this.el.object3D.position);
+          
+          this.damageEffects = []; // Track active damage effects
+          
+          // Set up event listener for bot damage system
+          const self = this;
+          this.el.addEventListener('bot-hit-by-bullet', function(event) {
+            if (self.isDead) return;
+            
+            self.bulletHits++;
+            
+            // Send bot hit state to other players in multiplayer (for every hit)
+            if (isMultiplayer && activePlayers.size > 1) {
+              const botSelector = '#' + self.el.id;
+              sendBotDamageState(botSelector, self.bulletHits, false, false, null);
+            }
+            
+            // Play metal hit sound for bullet hit
+            const metalHitSounds = [
+              document.querySelector('#metal-hit-sound-1'),
+              document.querySelector('#metal-hit-sound-2'),
+              document.querySelector('#metal-hit-sound-3')
+            ];
+            const randomSound = metalHitSounds[Math.floor(Math.random() * metalHitSounds.length)];
+            if (randomSound) {
+              const botWorldPos = new THREE.Vector3();
+              self.el.object3D.getWorldPosition(botWorldPos);
+              randomSound.object3D.position.copy(botWorldPos);
+              randomSound.components.sound.playSound();
+              
+              // Send hit sound to other players in multiplayer
+              if (isMultiplayer && activePlayers.size > 1) {
+                sendHitSound(botWorldPos, randomSound.id, 'bot-red');
+              }
+            }
+            
+            // Create simple hit effect for individual hits (one-time spark burst)
+            const radius = 0.3; // Bot radius
+            
+            // Random position on sphere surface (relative to bot)
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.random() * Math.PI;
+            const effectPos = new THREE.Vector3(
+              radius * Math.sin(phi) * Math.cos(theta),
+              radius * Math.sin(phi) * Math.sin(theta),
+              radius * Math.cos(phi)
+            );
+            
+            // Create simple hit effect for individual hits (one-time spark burst, no loop)
+            const hitEffect = document.createElement('a-entity');
+            hitEffect.setAttribute('position', `${effectPos.x} ${effectPos.y} ${effectPos.z}`);
+            hitEffect.setAttribute('impact-spark-burst', '');
+            // NO world-spark-system, spark-smoke-controller, or threejs-smoke-puffs for individual hits
+            
+            // Add as child of bot entity so it moves with the bot
+            self.el.appendChild(hitEffect);
+            
+            // Track the effect
+            if (!self.damageEffects) self.damageEffects = [];
+            self.damageEffects.push(hitEffect);
+            
+            // Individual hits are only visible to the local player
+            // Damage milestone effects are sent to other players below
+            
+            // Check for damage milestones (every 5 hits) - create larger effect
+            if (self.bulletHits % 5 === 0) {
+              // Create larger damage effect for milestones
+              const milestoneEffect = document.createElement('a-entity');
+              milestoneEffect.setAttribute('position', `${effectPos.x} ${effectPos.y} ${effectPos.z}`);
+              milestoneEffect.setAttribute('world-spark-system', '');
+              milestoneEffect.setAttribute('spark-smoke-controller', '');
+              milestoneEffect.setAttribute('threejs-smoke-puffs', '');
+              
+              // Add as child of bot entity
+              self.el.appendChild(milestoneEffect);
+              self.damageEffects.push(milestoneEffect);
+              
+              // Send damage milestone effect to other players in multiplayer
+              if (isMultiplayer && activePlayers.size > 1) {
+                const worldPos = new THREE.Vector3();
+                self.el.object3D.getWorldPosition(worldPos);
+                const botId = self.el.id;
+                sendDamageEffect(worldPos, botId);
+              }
+            }
+            
+            // Check if bot is dead
+            if (self.bulletHits >= self.maxBulletHits) {
+              console.log('🤖 Bot killed!');
+              // Kill bot directly here
+              self.isDead = true;
+              self.deathTime = Date.now();
+              
+              // Send bot death state to other players in multiplayer
+              if (isMultiplayer && activePlayers.size > 1) {
+                console.log('🤖 Sending bot death state to other players');
+                const botSelector = '#' + self.el.id;
+                sendBotDamageState(botSelector, self.bulletHits, true, false, null);
+              }
+              
+              // Play explosion effect using the existing impact-effect component
+              // The impact-effect is on the inner sphere, not the main bot entity
+              const botTarget = self.el.querySelector('[impact-effect]');
+              console.log('🤖 Bot target found:', botTarget);
+              if (botTarget && botTarget.components['impact-effect']) {
+                botTarget.components['impact-effect'].playEffect();
+                console.log('🤖 Playing local bot explosion animation');
+                
+                // Send explosion effect to other players in multiplayer
+                if (isMultiplayer && activePlayers.size > 1) {
+                  console.log('🤖 Sending bot explosion effect to other players');
+                  const botTargetSelector = '#' + self.el.id + '-target';
+                  const botId = self.el.id;
+                  sendExplosionEffect(botTargetSelector, botId);
+                }
+              }
+              
+              // Award point to player who destroyed the bot (host authority)
+              if (isHost) {
+                const gameManager = document.querySelector('#game-manager');
+                if (gameManager && gameManager.components['game-manager']) {
+                  // Find the player who shot the bot (from the bullet that hit it)
+                  // This will be handled by the bullet collision system
+                  gameManager.components['game-manager'].awardBotKill();
+                }
+              }
+              
+              // Hide bot
+              self.el.setAttribute('visible', false);
+              
+              // Start respawn timer
+              setTimeout(() => {
+                // Reset damage
+                self.bulletHits = 0;
+                self.isDead = false;
+                
+                // Clean up damage effects
+                self.damageEffects.forEach(effect => {
+                  if (effect.parentNode) {
+                    effect.parentNode.removeChild(effect);
+                  }
+                });
+                self.damageEffects = [];
+                
+                // Reset position
+                self.body.position.set(
+                  self.initialPosition.x,
+                  self.initialPosition.y,
+                  self.initialPosition.z
+                );
+                self.body.velocity.set(0, 0, 0);
+                self.body.angularVelocity.set(0, 0, 0);
+                
+                // Show bot
+                self.el.setAttribute('visible', true);
+                
+                // Send bot respawn state to other players in multiplayer
+                if (isMultiplayer && activePlayers.size > 1) {
+                  const respawnPos = self.body.position;
+                  const botSelector = '#' + self.el.id;
+                  sendBotDamageState(botSelector, 0, false, true, respawnPos);
+                }
+              }, self.respawnTime);
+            }
+          });
           
           // Player-like locomotion system
           this.velocity = new THREE.Vector3(); // Persistent velocity accumulator like humans
@@ -8355,32 +9351,7 @@ function setGameplayHUD(isPlaying) {
             }
           }
           
-          // Add other bot as potential target
-          const otherBotId = this.data.team === 'red' ? '#zerog-bot-blue' : '#zerog-bot-red';
-          const otherBot = document.querySelector(otherBotId);
-          if (otherBot && otherBot.getAttribute('visible')) {
-            const otherBotTarget = otherBot.querySelector('[id*="target"]');
-            if (otherBotTarget) {
-              const targetPos = new THREE.Vector3();
-              otherBotTarget.object3D.getWorldPosition(targetPos);
-              const distance = botPos.distanceTo(targetPos);
-              
-              // CRITICAL FIX: Check line of sight before adding target
-              if (this.hasLineOfSight(botPos, targetPos)) {
-              // Get other bot's velocity
-              const otherBotVelocity = otherBot.components['zerog-bot'] && otherBot.components['zerog-bot'].body 
-                ? new THREE.Vector3().copy(otherBot.components['zerog-bot'].body.velocity)
-                : new THREE.Vector3();
-              
-              targets.push({
-                type: `${this.data.team === 'red' ? 'blue' : 'red'} bot`,
-                position: targetPos,
-                velocity: otherBotVelocity,
-                distance: distance
-              });
-              }
-            }
-          }
+          // Bots only target players, not other bots
           
           // Return target with switching logic
           if (targets.length === 0) return null;
@@ -8834,10 +9805,6 @@ function setGameplayHUD(isPlaying) {
         // Separate from bullet shooting mechanics used by players
         
         throwBallAtPlayer: function() {
-          if (!this.ball || !this.ball.components['zerog-ball']) {
-            return;
-          }
-          
           // Find the best target (closest opponent with line of sight)
           const bestTarget = this.findBestTarget();
           if (!bestTarget) {
@@ -8849,67 +9816,76 @@ function setGameplayHUD(isPlaying) {
           const botPos = new THREE.Vector3().copy(this.body.position);
           this.hasLineOfSight(botPos, bestTarget.position, true); // Show debug line
           
-          // Reset ball to bot position
-          this.ball.components['zerog-ball'].resetPosition();
-          const ballBody = this.ball.components['zerog-ball'].body;
+          // Calculate direction to target
+          const direction = new THREE.Vector3().subVectors(bestTarget.position, botPos).normalize();
           
-          // Position ball slightly in front of bot
-          botPos.z += 0.5; // Slightly forward (reuse botPos variable)
-          ballBody.position.set(botPos.x, botPos.y, botPos.z);
+          // Simple rotation: make bot face the target
+          const targetAngle = Math.atan2(direction.x, direction.z);
+          this.body.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetAngle);
           
-          // Calculate throw force
-          const throwForce = this.data.minThrowForce + 
-            Math.random() * (this.data.maxThrowForce - this.data.minThrowForce);
+          // Get bot's forward direction after rotation
+          const botForward = new THREE.Vector3(0, 0, 1);
+          botForward.applyQuaternion(this.body.quaternion);
           
-          // SIMPLIFIED AIMING: Direct aim at target with minimal prediction
-          let targetPos = bestTarget.position.clone();
-          const velocityMagnitude = bestTarget.velocity.length();
+          // Position missile 50cm in front of bot body center
+          const missilePos = botPos.clone();
+          missilePos.add(botForward.clone().multiplyScalar(0.5)); // 50cm in front of bot
           
-
+          // Create homing bullet instead of ball
+          const bullet = document.createElement('a-sphere');
+          bullet.setAttribute('radius', '0.1');
+          bullet.setAttribute('color', '#ff0000');
+          bullet.setAttribute('position', `${missilePos.x} ${missilePos.y} ${missilePos.z}`);
+          bullet.setAttribute('bullet', {
+            shooter: 'bot',
+            speed: 4,
+            lifetime: 10000,
+            isHoming: true,
+            targetId: bestTarget.type,
+            homingForce: 5,
+            explosionRadius: 1.0,
+            explosionDamage: 50,
+            bulletHits: 0,
+            maxBulletHits: 5,
+            directionX: botForward.x,
+            directionY: botForward.y,
+            directionZ: botForward.z
+          });
           
-          // Only use light prediction for fast-moving targets (> 2 m/s)
-          if (velocityMagnitude > 2.0) {
-            const currentDistance = botPos.distanceTo(bestTarget.position);
-            const estimatedTravelTime = currentDistance / throwForce;
-            const predictedMovement = bestTarget.velocity.clone().multiplyScalar(estimatedTravelTime * 0.3); // Only 30% prediction
-            targetPos.add(predictedMovement);
-            // Light prediction applied
-          } else {
-            // Direct aim at target
-          }
+          // Add hum sound to homing missile
+          bullet.setAttribute('sound', {
+            src: 'url(audio/electric-hum.wav)',
+            autoplay: true,
+            loop: true,
+            volume: 0.3,
+            positional: true,
+            distanceModel: 'linear',
+            refDistance: 1,
+            maxDistance: 25
+          });
           
-          // Calculate throw direction
-          let direction = new THREE.Vector3().subVectors(targetPos, botPos).normalize();
+          // Add to scene
+          document.querySelector('a-scene').appendChild(bullet);
           
-          // Bot accuracy - set to 100% accurate (no inaccuracy)
-          let inaccuracy = 0; // 100% accurate - no spread
+          // Debug logging - removed console spam
           
-          // No inaccuracy applied - bot is perfectly accurate
-          // direction.x += (Math.random() - 0.5) * inaccuracy;
-          // direction.y += (Math.random() - 0.5) * inaccuracy;
-          // direction.z += (Math.random() - 0.5) * inaccuracy;
-          // direction.normalize(); // Already normalized above
+          // Missile lifecycle tracking - removed console spam
           
-          // Apply velocity to ball
-          ballBody.velocity.set(
-            direction.x * throwForce,
-            direction.y * throwForce,
-            direction.z * throwForce
-          );
-          
-          // Add some spin
-          ballBody.angularVelocity.set(
-            (Math.random() - 0.5) * 10,
-            (Math.random() - 0.5) * 10,
-            (Math.random() - 0.5) * 10
-          );
-          
-          // Bot aiming calculation complete
-
+          // The missile's own sound component will handle the hum sound
         },
         
         tick: function(time) {
           if (!this.data.enabled) return;
+          
+          // Skip AI if bot is dead
+          if (this.isDead) {
+            // Still update visual position from physics for dead bots
+            if (this.body) {
+              this.el.object3D.position.copy(this.body.position);
+              this.el.object3D.quaternion.copy(this.body.quaternion);
+            }
+            return;
+          }
           
           // Performance monitoring
           const perfStart = performance.now();
@@ -8994,7 +9970,7 @@ function setGameplayHUD(isPlaying) {
           
           // Navigation: Adaptive frequency based on activity
           if (this.frameCount % navigationInterval === 0) {
-            this.intelligentNavigation(dt);
+          this.intelligentNavigation(dt);
           }
           
           // Thruster forces: Every frame (needed for smooth physics)
@@ -9002,12 +9978,12 @@ function setGameplayHUD(isPlaying) {
           
           // Collision detection: Adaptive frequency based on speed and proximity
           if (this.frameCount % collisionInterval === 0) {
-            this.checkAndResolveCollisions(dt);
+          this.checkAndResolveCollisions(dt);
           }
           
           // Player tracking: Adaptive frequency based on proximity
           if (this.frameCount % trackingInterval === 0) {
-            this.updatePlayerTracking(time);
+          this.updatePlayerTracking(time);
           }
           
           // Only shoot when match is active (like other parts of the code do)
@@ -9043,17 +10019,9 @@ function setGameplayHUD(isPlaying) {
         // Performance monitoring
         const perfEnd = performance.now();
         const perfTime = perfEnd - perfStart;
-        if (perfTime > 1.0) { // Log if bot tick takes more than 1ms
-          console.log(`🤖 Bot ${this.el.id} tick took ${perfTime.toFixed(2)}ms (speed: ${currentSpeed.toFixed(1)}m/s, dist: ${distanceToPlayer.toFixed(1)}m)`);
-        }
+        // Bot performance logging removed to reduce console spam
         
-        // Log optimization benefits occasionally
-        if (this.frameCount % 300 === 0) { // Every 300 frames (~3.3 seconds at 90fps)
-          const collisionFreq = Math.round(90 / collisionInterval);
-          const navigationFreq = Math.round(90 / navigationInterval);
-          const trackingFreq = Math.round(90 / trackingInterval);
-          console.log(`🚀 Bot ${this.el.id} optimization: Collision=${collisionFreq}Hz, Nav=${navigationFreq}Hz, Track=${trackingFreq}Hz`);
-        }
+        // Bot optimization logging disabled to reduce console spam
       },
       
       remove: function() {
@@ -9274,6 +10242,493 @@ function setGameplayHUD(isPlaying) {
           if (this.body) {
             world.removeBody(this.body);
           }
+        },
+        
+        // Damage system functions
+        hitByBullet: function() {
+          if (this.isDead) return;
+          
+          this.bulletHits++;
+          
+          // Check for damage milestones (every 5 hits)
+          if (this.bulletHits % 5 === 0) {
+            this.createDamageEffect();
+          }
+          
+          // Check if bot is dead
+          if (this.bulletHits >= this.maxBulletHits) {
+            this.killBot();
+          }
+        },
+        
+        createDamageEffect: function() {
+          // Create a damage effect at a random position on the bot's surface
+          const botPos = this.body.position;
+          const radius = 0.3; // Bot radius
+          
+          // Random position on sphere surface
+          const theta = Math.random() * Math.PI * 2;
+          const phi = Math.random() * Math.PI;
+          const effectPos = new THREE.Vector3(
+            botPos.x + radius * Math.sin(phi) * Math.cos(theta),
+            botPos.y + radius * Math.sin(phi) * Math.sin(theta),
+            botPos.z + radius * Math.cos(phi)
+          );
+          
+          // Create damage effect entity
+          const damageEffect = document.createElement('a-entity');
+          damageEffect.setAttribute('position', `${effectPos.x} ${effectPos.y} ${effectPos.z}`);
+          damageEffect.setAttribute('world-spark-system', '');
+          damageEffect.setAttribute('spark-smoke-controller', '');
+          damageEffect.setAttribute('threejs-smoke-puffs', '');
+          
+          // Add to scene
+          document.querySelector('a-scene').appendChild(damageEffect);
+          
+          // Track the effect
+          this.damageEffects.push(damageEffect);
+          
+          // Send damage effect to other players in multiplayer
+          if (isMultiplayer && activePlayers.size > 1) {
+            const worldPos = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(worldPos);
+            sendDamageEffect(worldPos, myPlayerId);
+          }
+          
+        },
+        
+        killBot: function() {
+          this.isDead = true;
+          this.deathTime = Date.now();
+          
+          
+          // Create explosion effect
+          this.createExplosionEffect();
+          
+          // Award point to team (players)
+          this.awardTeamPoint();
+          
+          // Hide bot
+          this.el.setAttribute('visible', false);
+          
+          // Start respawn timer
+          setTimeout(() => {
+            this.respawnBot();
+          }, this.respawnTime);
+        },
+        
+        createExplosionEffect: function() {
+          const botPos = this.body.position;
+          
+          // Create explosion effect
+          const explosionEffect = document.createElement('a-entity');
+          explosionEffect.setAttribute('position', `${botPos.x} ${botPos.y} ${botPos.z}`);
+          explosionEffect.setAttribute('impact-spark-burst', '');
+          explosionEffect.setAttribute('impact-smoke-controller', '');
+          explosionEffect.setAttribute('threejs-smoke-puffs', '');
+          
+          // Add to scene
+          document.querySelector('a-scene').appendChild(explosionEffect);
+          
+          // Play explosion sound
+          const explosionSound = document.querySelector('#impact-sound');
+          if (explosionSound) {
+            explosionSound.object3D.position.copy(botPos);
+            explosionSound.components.sound.playSound();
+          }
+          
+          // Remove explosion effect after 5 seconds
+          setTimeout(() => {
+            if (explosionEffect.parentNode) {
+              explosionEffect.parentNode.removeChild(explosionEffect);
+            }
+          }, 5000);
+        },
+        
+        awardTeamPoint: function() {
+          // Award point to team (players)
+          const scoreElements = document.querySelectorAll('#hud-score a-entity');
+          if (scoreElements.length > 0) {
+            const playerScoreEl = scoreElements[0];
+            const currentText = playerScoreEl.getAttribute('text').value;
+            const currentScore = parseInt(currentText) || 0;
+            const newScore = currentScore + 1;
+            playerScoreEl.setAttribute('text', 'value', newScore.toString());
+          }
+        },
+        
+        respawnBot: function() {
+          
+          // Reset damage
+          this.bulletHits = 0;
+          this.isDead = false;
+          
+          // Send bot respawn state to other players in multiplayer
+          if (isMultiplayer && activePlayers.size > 1) {
+            const respawnPos = this.body.position;
+            const botSelector = '#' + this.el.id;
+            console.log('🤖 Sending bot respawn state:', botSelector, respawnPos);
+            sendBotDamageState(botSelector, 0, false, true, respawnPos);
+          }
+          
+          // Clean up damage effects
+          this.damageEffects.forEach(effect => {
+            if (effect.parentNode) {
+              effect.parentNode.removeChild(effect);
+            }
+          });
+          this.damageEffects = [];
+          
+          // Reset position
+          this.body.position.set(
+            this.initialPosition.x,
+            this.initialPosition.y,
+            this.initialPosition.z
+          );
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          
+          // Show bot
+          this.el.setAttribute('visible', true);
+          
+        }
+      });
+
+      // Player Damage System Component
+      AFRAME.registerComponent('player-damage', {
+        schema: {
+          missileHits: { type: 'number', default: 0 },
+          maxMissileHits: { type: 'number', default: 5 },
+          isDead: { type: 'boolean', default: false },
+          respawnTime: { type: 'number', default: 5000 }
+        },
+        
+        init: function() {
+          this.missileHits = 0;
+          this.maxMissileHits = 5;
+          this.isDead = false;
+          this.respawnTime = 5000;
+          this.deathTime = 0;
+          // Set initial spawn position (center of the level)
+          this.initialPosition = new THREE.Vector3(0, 0, 0);
+          
+          // Create damage bar in HUD
+          this.createDamageBar();
+        },
+        
+        createDamageBar: function() {
+          // Check if damage bar already exists
+          if (document.querySelector('#damage-bar-container')) {
+            return; // Already created
+          }
+          
+          // Find the camera (HUD parent)
+          const camera = document.querySelector('[camera]');
+          if (!camera) {
+            console.warn('Camera not found - cannot create damage bar');
+            return;
+          }
+          
+          // Create damage bar container
+          const damageBarContainer = document.createElement('a-entity');
+          damageBarContainer.id = 'damage-bar-container';
+          damageBarContainer.setAttribute('position', '0 -0.35 -0.5');
+          damageBarContainer.setAttribute('geometry', 'primitive: plane; width: 0.4; height: 0.05');
+          damageBarContainer.setAttribute('material', 'color: #333333; opacity: 0.8; transparent: true');
+          
+          // Create damage bar
+          const damageBar = document.createElement('a-entity');
+          damageBar.id = 'damage-bar';
+          damageBar.setAttribute('position', '0 0 0.01');
+          damageBar.setAttribute('geometry', 'primitive: plane; width: 0.38; height: 0.04');
+          damageBar.setAttribute('material', 'color: #00ff00; opacity: 0.9; transparent: true');
+          
+          // Create damage text
+          const damageText = document.createElement('a-text');
+          damageText.id = 'damage-text';
+          damageText.setAttribute('value', 'Health: 100%');
+          damageText.setAttribute('position', '0 0 0.02');
+          damageText.setAttribute('align', 'center');
+          damageText.setAttribute('color', '#ffffff');
+          damageText.setAttribute('width', '0.8');
+          
+          damageBarContainer.appendChild(damageBar);
+          damageBarContainer.appendChild(damageText);
+          camera.appendChild(damageBarContainer);
+          
+          console.log('✅ Damage bar created successfully');
+        },
+        
+        hitByMissile: function() {
+          if (this.isDead) return;
+          
+          this.missileHits++;
+          
+          // Send player hit state to other players in multiplayer (for every hit)
+          if (isMultiplayer && activePlayers.size > 1) {
+            // Send player damage state synchronization
+            const playerDamageData = {
+              type: 'player-damage-state',
+              playerId: myPlayerId,
+              missileHits: this.missileHits,
+              isDead: this.isDead,
+              timestamp: Date.now()
+            };
+            
+            // Send to all connected players
+            if (isHost) {
+              connections.forEach(conn => {
+                if (conn.open) {
+                  conn.send(playerDamageData);
+                }
+              });
+            } else {
+              // Client sends to host, who will broadcast to all
+              const hostConnection = connections.get('host');
+              if (hostConnection && hostConnection.open) {
+                hostConnection.send(playerDamageData);
+              }
+            }
+          }
+          
+          // Update damage bar
+          this.updateDamageBar();
+          
+          // Create hit effect for each missile hit
+          const playerPos = this.el.object3D.position;
+          const radius = 0.2; // Player radius
+          
+          // Random position on sphere surface (relative to player)
+          const theta = Math.random() * Math.PI * 2;
+          const phi = Math.random() * Math.PI;
+          const effectPos = new THREE.Vector3(
+            radius * Math.sin(phi) * Math.cos(theta),
+            radius * Math.sin(phi) * Math.sin(theta),
+            radius * Math.cos(phi)
+          );
+          
+          // Create looping spark+smoke animation for each missile hit (player damage state)
+          const hitEffect = document.createElement('a-entity');
+          hitEffect.setAttribute('position', `${effectPos.x} ${effectPos.y} ${effectPos.z}`);
+          hitEffect.setAttribute('world-spark-system', '');
+          hitEffect.setAttribute('spark-smoke-controller', '');
+          hitEffect.setAttribute('threejs-smoke-puffs', '');
+          
+          // Add as child of player entity so it moves with the player
+          this.el.appendChild(hitEffect);
+          
+          // Track the effect
+          if (!this.damageEffects) this.damageEffects = [];
+          this.damageEffects.push(hitEffect);
+          
+          // Send damage effect to other players in multiplayer (for each missile hit)
+          if (isMultiplayer && activePlayers.size > 1) {
+            const worldPos = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(worldPos);
+            sendDamageEffect(worldPos, myPlayerId);
+          }
+          
+          // Each missile hit creates a looping spark+smoke animation (no milestones needed)
+          
+          // Play metal hit sound (not explosion sound)
+          const metalHitSounds = [
+            document.querySelector('#metal-hit-sound-1'),
+            document.querySelector('#metal-hit-sound-2'),
+            document.querySelector('#metal-hit-sound-3')
+          ];
+          const randomSound = metalHitSounds[Math.floor(Math.random() * metalHitSounds.length)];
+          if (randomSound) {
+            const playerWorldPos = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(playerWorldPos);
+            randomSound.object3D.position.copy(playerWorldPos);
+            randomSound.components.sound.playSound();
+            
+            // Send hit sound to other players in multiplayer
+            if (isMultiplayer && activePlayers.size > 1) {
+              sendHitSound(playerWorldPos, randomSound.id, myPlayerId);
+            }
+          }
+          
+          // Check if player is dead
+          if (this.missileHits >= this.maxMissileHits) {
+            this.killPlayer();
+          }
+        },
+        
+        updateDamageBar: function() {
+          const damageBar = document.querySelector('#damage-bar');
+          const damageText = document.querySelector('#damage-text');
+          
+          if (!damageBar || !damageText) {
+            console.warn('Damage bar elements not found');
+            return;
+          }
+          
+          const healthPercent = ((this.maxMissileHits - this.missileHits) / this.maxMissileHits) * 100;
+          const barWidth = (healthPercent / 100) * 0.38; // Scale to 0.38 units width (max width)
+          
+          // Update bar width and color
+          damageBar.setAttribute('geometry', 'primitive: plane; width: ' + barWidth + '; height: 0.04');
+          
+          // Change color based on health
+          let color = '#00ff00'; // Green
+          if (healthPercent < 60) color = '#ffff00'; // Yellow
+          if (healthPercent < 30) color = '#ff0000'; // Red
+          
+          damageBar.setAttribute('material', 'color: ' + color + '; opacity: 0.9; transparent: true');
+          
+          // Update text
+          damageText.setAttribute('value', `Health: ${Math.round(healthPercent)}%`);
+        },
+        
+        killPlayer: function() {
+          console.log('💀 Player killed!');
+          this.isDead = true;
+          this.isStunned = true;
+          this.deathTime = Date.now();
+          
+          // Disable all player controls
+          this.disablePlayerControls();
+          
+          // Play explosion effect using the existing impact-effect component
+          // The impact-effect is on the player-target element, not the main player entity
+          const playerTarget = document.querySelector('#player-target');
+          console.log('💀 Player target found:', playerTarget);
+          if (playerTarget && playerTarget.components['impact-effect']) {
+            playerTarget.components['impact-effect'].playEffect();
+            console.log('💀 Playing local explosion animation');
+            
+            // Send explosion effect to other players in multiplayer
+            if (isMultiplayer && activePlayers.size > 1) {
+              console.log('💀 Sending explosion effect to other players');
+              sendExplosionEffect('#player-target', myPlayerId);
+            }
+          }
+          
+          // Award point to bots
+          this.awardBotPoint();
+          
+          // Hide player
+          this.el.setAttribute('visible', false);
+          
+          // Start respawn timer
+          setTimeout(() => {
+            this.respawnPlayer();
+          }, this.respawnTime);
+        },
+        
+        awardBotPoint: function() {
+          // Award point to bots (host authority)
+          if (isHost) {
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].awardBotKill();
+            }
+          }
+        },
+        
+        respawnPlayer: function() {
+          // Reset damage
+          this.missileHits = 0;
+          this.isDead = false;
+          this.isStunned = false;
+          
+          // Re-enable all player controls
+          this.enablePlayerControls();
+          
+          // Clean up damage effects
+          if (this.damageEffects) {
+            this.damageEffects.forEach(effect => {
+              if (effect.parentNode) {
+                effect.parentNode.removeChild(effect);
+              }
+            });
+            this.damageEffects = [];
+          }
+          
+          // Reset position
+          this.el.object3D.position.copy(this.initialPosition);
+          
+          // Show player
+          this.el.setAttribute('visible', true);
+          
+          // Update damage bar
+          this.updateDamageBar();
+          
+          // Send player respawn state to other players in multiplayer
+          if (isMultiplayer && activePlayers.size > 1) {
+            const playerRespawnData = {
+              type: 'player-damage-state',
+              playerId: myPlayerId,
+              missileHits: 0,
+              isDead: false,
+              respawn: true,
+              timestamp: Date.now()
+            };
+            
+            // Send to all connected players
+            if (isHost) {
+              connections.forEach(conn => {
+                if (conn.open) {
+                  conn.send(playerRespawnData);
+                }
+              });
+          } else {
+              // Client sends to host, who will broadcast to all
+              const hostConnection = connections.get('host');
+              if (hostConnection && hostConnection.open) {
+                hostConnection.send(playerRespawnData);
+              }
+            }
+          }
+        },
+        
+        disablePlayerControls: function() {
+          console.log('🚫 Disabling player controls - stunned state');
+          
+          // Disable movement controls
+          const playerComponent = this.el.components['zerog-player'];
+          if (playerComponent) {
+            playerComponent.isStunned = true;
+          }
+          
+          // Disable shooting controls
+          const leftHand = document.querySelector('#left-hand');
+          const rightHand = document.querySelector('#right-hand');
+          
+          if (leftHand) {
+            leftHand.setAttribute('shoot', 'enabled', false);
+          }
+          if (rightHand) {
+            rightHand.setAttribute('shoot', 'enabled', false);
+          }
+          
+          // Add visual stunned effect
+          this.el.setAttribute('material', 'opacity', 0.5);
+        },
+        
+        enablePlayerControls: function() {
+          console.log('✅ Re-enabling player controls - respawned');
+          
+          // Re-enable movement controls
+          const playerComponent = this.el.components['zerog-player'];
+          if (playerComponent) {
+            playerComponent.isStunned = false;
+          }
+          
+          // Re-enable shooting controls
+          const leftHand = document.querySelector('#left-hand');
+          const rightHand = document.querySelector('#right-hand');
+          
+          if (leftHand) {
+            leftHand.setAttribute('shoot', 'enabled', true);
+          }
+          if (rightHand) {
+            rightHand.setAttribute('shoot', 'enabled', true);
+          }
+          
+          // Remove visual stunned effect
+          this.el.setAttribute('material', 'opacity', 1.0);
         }
       });
 
@@ -9981,6 +11436,22 @@ function setGameplayHUD(isPlaying) {
           });
         },
 
+        awardBotKill: function() {
+          // Award point to player who destroyed the bot (host authority)
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') {
+            return;
+          }
+          
+          // Find the player who shot the bot (this will be set by the bullet collision system)
+          // For now, award to the local player (this should be improved to track the actual shooter)
+          if (myPlayerId) {
+            const playerIndex = parseInt(myPlayerId.split('_')[1]);
+            this.playerScores[playerIndex] += 1;
+            this.updateMultiplayerScore();
+            this.sendScoreUpdate();
+          }
+        },
+
         onPlayerHit: function() {
           // SPACE SHOOTER: Player scores when hitting bot
           if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') {
@@ -10293,22 +11764,29 @@ function setGameplayHUD(isPlaying) {
       AFRAME.registerComponent('menu-toggle', {
         init: function() {
           this.menuVisible = false;
-          this.lastBButtonPress = 0;
+          this.lastXButtonPress = 0;
           this.lastMenuToggle = 0; // Track menu toggle time to prevent accidental clicks
           
           // X button to toggle menu with debouncing
           this.el.sceneEl.addEventListener('xbuttondown', () => {
             const now = Date.now();
-            if (now - this.lastBButtonPress < 500) return; // 500ms debounce
-            this.lastBButtonPress = now;
+            if (now - this.lastXButtonPress < 500) return; // 500ms debounce
+            this.lastXButtonPress = now;
             this.toggleMenu();
           });
         },
 
         toggleMenu: function() {
+          // Additional debouncing to prevent rapid toggling
+          const now = Date.now();
+          if (now - this.lastMenuToggle < 300) {
+            console.log('🚫 Menu toggle blocked - too soon after last toggle');
+            return;
+          }
+          this.lastMenuToggle = now;
+          
           this.menuVisible = !this.menuVisible;
           isMenuVisible = this.menuVisible; // Update global state
-          this.lastMenuToggle = Date.now(); // Track when menu was toggled
           
           const menu = document.querySelector('#game-menu');
           const leftHand = document.querySelector('#leftHand');
@@ -10344,34 +11822,96 @@ function setGameplayHUD(isPlaying) {
           // Toggle HUD layers - simple and clean
           this.toggleHUDLayers(this.menuVisible);
           
-          // Show/hide laser pointers based on menu visibility
-          // CRITICAL FIX: Properly disable raycaster interactions when menu is closed
-          const leftRaycastSettings = this.menuVisible ? 
-            `objects: .clickable; lineColor: #ffffff; lineOpacity: 1; far: 10; enabled: true` :
-            `objects: ; lineColor: #ffffff; lineOpacity: 0; far: 10; enabled: false`;
-          const rightRaycastSettings = this.menuVisible ? 
-            `objects: .clickable; lineColor: #ffffff; lineOpacity: 1; far: 10; enabled: true` :
-            `objects: ; lineColor: #ffffff; lineOpacity: 0; far: 10; enabled: false`;
-          
-          if (leftHand) {
-            leftHand.setAttribute('raycaster', leftRaycastSettings);
-            // Left hand raycaster updated
-            
-            // If opening menu, force disable any active thrusters
+          // BULLETPROOF FIX: Direct component manipulation for laser pointers
             if (this.menuVisible) {
+            // Menu is open - enable laser pointers and menu
+            if (leftHand && leftHand.components.raycaster && leftHand.components.raycaster.data) {
+              leftHand.components.raycaster.enabled = true;
+              leftHand.components.raycaster.data.objects = '.clickable';
+              leftHand.components.raycaster.data.lineColor = '#ffffff';
+              leftHand.components.raycaster.data.lineOpacity = 1;
+              leftHand.components.raycaster.data.far = 10;
+              // Disable any active thrusters when menu opens
               const leftThruster = leftHand.querySelector('.thruster-vfx');
               if (leftThruster) leftThruster.setAttribute('visible', false);
             }
-          }
-          if (rightHand) {
-            rightHand.setAttribute('raycaster', rightRaycastSettings);
-            // Right hand raycaster updated
-            
-            // If opening menu, force disable any active thrusters
-            if (this.menuVisible) {
+            if (rightHand && rightHand.components.raycaster && rightHand.components.raycaster.data) {
+              rightHand.components.raycaster.enabled = true;
+              rightHand.components.raycaster.data.objects = '.clickable';
+              rightHand.components.raycaster.data.lineColor = '#ffffff';
+              rightHand.components.raycaster.data.lineOpacity = 1;
+              rightHand.components.raycaster.data.far = 10;
+              // Disable any active thrusters when menu opens
               const rightThruster = rightHand.querySelector('.thruster-vfx');
               if (rightThruster) rightThruster.setAttribute('visible', false);
             }
+            
+            // Re-enable the menu and all buttons
+            const menu = document.querySelector('#game-menu');
+            if (menu) {
+              menu.setAttribute('enabled', true);
+            }
+            
+            // Re-enable all menu buttons
+            const menuButtons = document.querySelectorAll('.clickable');
+            menuButtons.forEach(button => {
+              button.setAttribute('enabled', true);
+              button.setAttribute('visible', true);
+              // Also enable the cursor-listener component if it exists
+              if (button.components['cursor-listener']) {
+                button.components['cursor-listener'].el.setAttribute('enabled', true);
+              }
+            });
+            
+            // Fix bloom interference by quickly toggling debug twice to reinitialize raycaster
+            setTimeout(() => {
+              const scene = document.querySelector('a-scene');
+              if (scene) {
+                // Toggle debug off and on twice to reinitialize raycaster
+                scene.setAttribute('debug', false);
+                setTimeout(() => {
+                  scene.setAttribute('debug', true);
+                  setTimeout(() => {
+                    scene.setAttribute('debug', false);
+                    setTimeout(() => {
+                      scene.setAttribute('debug', true);
+                      console.log('🔧 Debug toggled twice to fix bloom interference with raycaster');
+                    }, 50);
+                  }, 50);
+                }, 50);
+              }
+            }, 100); // Small delay to ensure menu is fully opened
+            console.log('🟢 Laser pointers ENABLED - menu opened');
+          } else {
+            // Menu is closed - disable laser pointers completely
+            if (leftHand && leftHand.components.raycaster && leftHand.components.raycaster.data) {
+              leftHand.components.raycaster.enabled = false;
+              leftHand.components.raycaster.data.objects = '';
+              leftHand.components.raycaster.data.lineOpacity = 0;
+            }
+            if (rightHand && rightHand.components.raycaster && rightHand.components.raycaster.data) {
+              rightHand.components.raycaster.enabled = false;
+              rightHand.components.raycaster.data.objects = '';
+              rightHand.components.raycaster.data.lineOpacity = 0;
+            }
+            
+            // Also disable the menu to prevent interactions
+            const menu = document.querySelector('#game-menu');
+            if (menu) {
+              menu.setAttribute('enabled', false);
+            }
+            
+            // Disable all menu buttons to prevent interactions
+            const menuButtons = document.querySelectorAll('.clickable');
+            menuButtons.forEach(button => {
+              button.setAttribute('enabled', false);
+              // Also disable the cursor-listener component if it exists
+              if (button.components['cursor-listener']) {
+                button.components['cursor-listener'].el.setAttribute('enabled', false);
+              }
+            });
+            
+            console.log('🔴 Laser pointers DISABLED - menu closed and properly disabled');
           }
           
           // Reset thruster states when menu opens
@@ -10943,7 +12483,8 @@ function setGameplayHUD(isPlaying) {
                 sendBotState({
                   botId: 'bot-red',
                   x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
-                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z
+                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z,
+                  qx: botBody.quaternion.x, qy: botBody.quaternion.y, qz: botBody.quaternion.z, qw: botBody.quaternion.w
                 });
               }
               
@@ -10952,7 +12493,8 @@ function setGameplayHUD(isPlaying) {
                 sendBotState({
                   botId: 'bot-blue',
                   x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
-                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z
+                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z,
+                  qx: botBody.quaternion.x, qy: botBody.quaternion.y, qz: botBody.quaternion.z, qw: botBody.quaternion.w
                 });
               }
               
@@ -11042,13 +12584,22 @@ function setGameplayHUD(isPlaying) {
         schema: {
           player: { type: 'string', default: 'player1' },
           maxVelocity: { type: 'number', default: 8 },
-          owner: { type: 'string', default: 'human' } // 'bot' or 'human'
+          owner: { type: 'string', default: 'human' }, // 'bot' or 'human'
+          isHomingMissile: { type: 'boolean', default: false },
+          targetId: { type: 'string', default: '' },
+          homingForce: { type: 'number', default: 15 },
+          explosionRadius: { type: 'number', default: 1.0 },
+          explosionDamage: { type: 'number', default: 50 },
+          bulletHits: { type: 'number', default: 0 },
+          maxBulletHits: { type: 'number', default: 5 }
         },
         
         init: function() {
           
-          // Make balls grabbable
+          // Make balls grabbable (unless it's a homing missile)
+          if (!this.data.isHomingMissile) {
           this.el.classList.add('grabbable-surface');
+          }
           
           // Track if ball is being grabbed
           this.isGrabbed = false;
@@ -11060,6 +12611,21 @@ function setGameplayHUD(isPlaying) {
           
           // Check if this is the special capture ball
           this.isCaptureBall = (this.data.player === 'capture');
+          
+          // Homing missile initialization
+          if (this.data.isHomingMissile) {
+            this.isHomingMissile = true;
+            this.target = null;
+            this.lastDistanceToTarget = Infinity;
+            this.distanceIncreasingFrames = 0;
+            this.maxDistanceIncreasingFrames = 10; // Explode after 10 frames of increasing distance
+            this.lifetime = 10000; // 10 seconds max lifetime
+            this.startTime = Date.now();
+            this.lastTargetUpdate = 0;
+            this.targetUpdateInterval = 100; // Update target every 100ms
+          } else {
+            this.isHomingMissile = false;
+          }
           
           // Capture ball has special collision properties
           
@@ -11126,6 +12692,9 @@ function setGameplayHUD(isPlaying) {
             collisionFilterGroup: 2, // All balls are in group 2
             collisionFilterMask: collisionMask
           });
+          
+          // Initialize lastPosition for collision detection
+          this.lastPosition = new THREE.Vector3().copy(this.body.position);
           
           if (this.isCaptureBall) {
           }
@@ -11249,6 +12818,11 @@ function setGameplayHUD(isPlaying) {
           this.el.object3D.position.copy(this.body.position);
           this.el.object3D.quaternion.copy(this.body.quaternion);
           
+          // Homing missile logic
+          if (this.isHomingMissile) {
+            this.updateHomingMissile(time, timeDelta);
+          }
+          
           // Check for environment collisions using Three.js raycasting
           this.checkEnvironmentCollision();
         },
@@ -11257,57 +12831,79 @@ function setGameplayHUD(isPlaying) {
           if (!this.body || this.isGrabbed) return;
           
           const currentPos = new THREE.Vector3().copy(this.body.position);
-          const velocity = new THREE.Vector3().copy(this.body.velocity);
+          const lastPos = this.lastPosition || currentPos.clone();
           
           // Only check collision if ball is moving
-          if (velocity.length() < 0.1) return;
+          if (currentPos.distanceTo(lastPos) < 0.01) return;
           
-          // Get all 3D meshes that can block the ball (same as bot line-of-sight)
-          const meshes = [];
+          // Use bullet collision logic - get all collidable meshes
+          const allMeshes = [];
           const models = [
             document.querySelector('#model-level'),
             document.querySelector('#model-spaceship'),
             document.querySelector('#model-asteroid-42')
           ];
           
+          // Collect all meshes first
           models.forEach(model => {
             if (model && model.object3D) {
               model.object3D.traverse(child => {
                 if (child.isMesh && child.geometry) {
-                  meshes.push(child);
+                  allMeshes.push(child);
                 }
               });
             }
           });
           
-          // Add grab-surface objects as blocking meshes
+          // Add grab-surface objects (only if visible)
           const surfaces = document.querySelectorAll('[grab-surface]');
           surfaces.forEach(surface => {
-            if (surface.object3D) {
+            if (surface.object3D && surface.getAttribute('visible') !== false && surface.getAttribute('visible') !== 'false') {
               surface.object3D.traverse(child => {
                 if (child.isMesh && child.geometry) {
-                  meshes.push(child);
+                  allMeshes.push(child);
                 }
               });
             }
           });
           
-          // Raycast in the direction the ball is moving
+          // Filter to only visible meshes using the same logic as bullet system
+          const meshes = this.getVisibleMeshes(allMeshes);
+          
+          // CCD - Raycast from last position to current position (same as bullets)
           const raycaster = new THREE.Raycaster();
-          const direction = velocity.clone().normalize();
-          raycaster.set(currentPos, direction);
-          raycaster.far = 0.2; // Check 20cm ahead of ball
+          const direction = new THREE.Vector3().subVectors(currentPos, lastPos);
+          const distance = direction.length();
+          
+          if (distance > 0) {
+            direction.normalize();
+            raycaster.set(lastPos, direction);
+            raycaster.far = distance + 0.02; // Add small buffer
           
           const intersects = raycaster.intersectObjects(meshes, false);
           
-          // If ball is about to hit something, remove it
           if (intersects.length > 0) {
-            const intersection = intersects[0];
-            if (intersection.distance < 0.15) { // Ball radius + small buffer
-              // Ball hit environment - remove it
+              const hit = intersects[0];
+              if (hit.distance <= distance + 0.01) {
+                // Ball hit environment - create impact effects and handle collision
+                const impactManager = document.querySelector('[impact-effects-manager]');
+                if (impactManager && impactManager.components['impact-effects-manager']) {
+                  impactManager.components['impact-effects-manager'].createImpactEffect(hit.point);
+                }
+                
+                if (this.isHomingMissile) {
+                  // Homing missile hit environment - explode
+                  this.explodeMissile();
+                } else {
+                  // Regular ball hit environment - remove it
               this.resetPosition();
             }
           }
+            }
+          }
+          
+          // Store current position for next frame
+          this.lastPosition = currentPos.clone();
         },
         
         resetPosition: function() {
@@ -11370,6 +12966,24 @@ function setGameplayHUD(isPlaying) {
           // Clear hit cooldown and auto-return when manually resetting
           this.lastHitTime = 0;
           // Auto-return removed for space shooter
+          
+          // Reset homing missile properties if this was a homing missile
+          if (this.isHomingMissile) {
+            this.el.setAttribute('zerog-ball', {
+              isHomingMissile: false,
+              targetId: '',
+              homingForce: 15,
+              explosionRadius: 1.0,
+              explosionDamage: 50,
+              bulletHits: 0,
+              maxBulletHits: 5
+            });
+            this.isHomingMissile = false;
+            this.target = null;
+            this.lastDistanceToTarget = Infinity;
+            this.distanceIncreasingFrames = 0;
+            console.log('🚀 Homing missile reset to regular ball');
+          }
           
           // Ball reset to position
         },
@@ -13180,6 +14794,7 @@ function setGameplayHUD(isPlaying) {
       // FPS counter
       AFRAME.registerComponent('fps-counter', {
         init: function() {
+          // FPS Counter component initialized
           this.frameCount = 0;
           this.lastTime = performance.now();
           this.fps = 0;
@@ -13204,6 +14819,7 @@ function setGameplayHUD(isPlaying) {
             const avgFPS = Math.round(this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length);
             this.fps = avgFPS;
             
+            // FPS logging removed to reduce console spam
             this.updateVersionDisplay();
             
             this.frameCount = 0;
@@ -13216,6 +14832,8 @@ function setGameplayHUD(isPlaying) {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
             versionDisplay.setAttribute('text', 'value', `Zero-G v1.36 | ${this.fps} FPS`);
+          } else {
+            console.warn('⚠️ FPS Counter: version-display element not found');
           }
         }
       });
@@ -14659,9 +16277,22 @@ function setGameplayHUD(isPlaying) {
           this.el.addEventListener('mouseenter', this.onHover.bind(this));
           this.el.addEventListener('mouseleave', this.onLeave.bind(this));
         },
+        
+        isEnabled: function() {
+          // Check if the element is enabled and menu is visible
+          const enabled = this.el.getAttribute('enabled') !== false;
+          const menuVisible = getMenuVisibility();
+          return enabled && menuVisible;
+        },
 
         onClick: function() {
           const id = this.el.id;
+          
+          // Check if component is enabled (menu visible and element enabled)
+          if (!this.isEnabled()) {
+            console.log('Ignoring click - menu is closed or element disabled');
+            return;
+          }
           
           // Prevent accidental clicks immediately after menu toggle
           const menuToggle = document.querySelector('[menu-toggle]');
@@ -14705,6 +16336,7 @@ function setGameplayHUD(isPlaying) {
             this.toggleSparks();
           } else if (id === 'menu-toggle-bloom') {
             this.toggleBloom();
+            // No longer auto-closing menu since we're not toggling bloom
           } else if (id === 'menu-toggle-level') {
             this.toggleModel('level');
           } else if (id === 'menu-restart-match') {
@@ -14713,6 +16345,11 @@ function setGameplayHUD(isPlaying) {
         },
 
         onHover: function() {
+          // Only highlight if component is enabled
+          if (!this.isEnabled()) {
+            return;
+          }
+          
           // Highlight button on hover
           const material = this.el.getAttribute('material');
           this.originalColor = material.color;
@@ -14721,6 +16358,11 @@ function setGameplayHUD(isPlaying) {
         },
 
         onLeave: function() {
+          // Only restore color if component is enabled
+          if (!this.isEnabled()) {
+            return;
+          }
+          
           // Restore original color
           if (this.originalColor) {
             this.el.setAttribute('material', 'color', this.originalColor);
@@ -15012,14 +16654,46 @@ function setGameplayHUD(isPlaying) {
           }
         },
         
+        closeMenu: function() {
+          // Force close the menu and disable laser pointers (only for Bloom button)
+          const menuToggle = document.querySelector('[menu-toggle]');
+          if (menuToggle && menuToggle.components['menu-toggle']) {
+            // Force close menu regardless of current state
+            menuToggle.components['menu-toggle'].menuVisible = false;
+            isMenuVisible = false; // Update global state
+            
+            const menu = document.querySelector('#game-menu');
+            const leftHand = document.querySelector('#leftHand');
+            const rightHand = document.querySelector('#rightHand');
+            
+            // Force hide menu
+            if (menu) {
+              menu.setAttribute('visible', false);
+            }
+            
+            // FORCE disable laser pointers - no matter what state they're in
+            if (leftHand && leftHand.components.raycaster && leftHand.components.raycaster.data) {
+              leftHand.components.raycaster.enabled = false;
+              leftHand.components.raycaster.data.objects = '';
+              leftHand.components.raycaster.data.lineOpacity = 0;
+            }
+            if (rightHand && rightHand.components.raycaster && rightHand.components.raycaster.data) {
+              rightHand.components.raycaster.enabled = false;
+              rightHand.components.raycaster.data.objects = '';
+              rightHand.components.raycaster.data.lineOpacity = 0;
+            }
+            
+            console.log('🔴 Laser pointers FORCE DISABLED - menu force closed after bloom toggle');
+          }
+        },
+        
         toggleModel: function(modelType) {
-          
           if (modelType === 'spaceship') {
             const spaceship = document.querySelector('#model-spaceship');
             const button = document.querySelector('#menu-toggle-spaceship');
             const buttonText = button.querySelector('a-text');
             
-            if (spaceship.getAttribute('visible') !== false) {
+            if (spaceship.getAttribute('visible') !== false && spaceship.getAttribute('visible') !== 'false') {
               spaceship.setAttribute('visible', false);
               button.setAttribute('material', 'color', '#aa0000');
               buttonText.setAttribute('text', 'value', 'Spaceship: OFF');
@@ -15044,7 +16718,7 @@ function setGameplayHUD(isPlaying) {
             const button = document.querySelector('#menu-toggle-asteroid-42');
             const buttonText = button.querySelector('a-text');
             
-            if (asteroid.getAttribute('visible') !== false) {
+            if (asteroid.getAttribute('visible') !== false && asteroid.getAttribute('visible') !== 'false') {
               asteroid.setAttribute('visible', false);
               button.setAttribute('material', 'color', '#aa0000');
               buttonText.setAttribute('text', 'value', 'Asteroid: OFF');
@@ -15067,7 +16741,7 @@ function setGameplayHUD(isPlaying) {
             const button = document.querySelector('#menu-toggle-level');
             const buttonText = button.querySelector('a-text');
             
-            if (level.getAttribute('visible') !== false) {
+            if (level.getAttribute('visible') !== false && level.getAttribute('visible') !== 'false') {
               level.setAttribute('visible', false);
               button.setAttribute('material', 'color', '#aa0000');
               buttonText.setAttribute('text', 'value', 'Level: OFF');
@@ -15123,7 +16797,7 @@ function setGameplayHUD(isPlaying) {
             buttonText.setAttribute('text', 'value', 'Bots: OFF');
             // Store the manual disable state in a reliable way
             button.setAttribute('data-bots-manually-disabled', 'true');
-            console.log('🤖 All bots disabled - AI logic stopped for performance');
+            // All bots disabled - AI logic stopped for performance
           } else {
             // Enable all bots
             bots.forEach(bot => {
@@ -15135,15 +16809,15 @@ function setGameplayHUD(isPlaying) {
             buttonText.setAttribute('text', 'value', 'Bots: ON');
             // Clear the manual disable state
             button.removeAttribute('data-bots-manually-disabled');
-            console.log('🤖 All bots enabled - AI logic active');
+            // All bots enabled - AI logic active
           }
           
           // Trigger bot management to respect the new state
           manageActivePlayersAndBots();
         },
         
+        
         toggleMeshDebug: function() {
-          
           // Get the zerog-player component to access showMeshDebug
           const player = document.querySelector('[zerog-player]');
           if (player && player.components && player.components['zerog-player']) {
@@ -15303,40 +16977,86 @@ function setGameplayHUD(isPlaying) {
         },
         
         toggleBloom: function() {
+          console.log('🔧 Bloom button clicked - reordered bloom toggle sequence');
+          
           const scene = document.querySelector('a-scene');
-          if (!scene) {
-            console.warn('Scene not found for bloom toggle');
-            return;
+          const leftHand = document.querySelector('#leftHand');
+          const rightHand = document.querySelector('#rightHand');
+          const menuToggle = document.querySelector('[menu-toggle]');
+          
+          // Step 1: Turn off laser pointers immediately
+          if (leftHand && leftHand.components.raycaster && leftHand.components.raycaster.data) {
+            leftHand.components.raycaster.enabled = false;
+            leftHand.components.raycaster.data.objects = '';
+            leftHand.components.raycaster.data.lineOpacity = 0;
+            console.log('🔴 Step 1: Left laser pointer disabled');
+          }
+          if (rightHand && rightHand.components.raycaster && rightHand.components.raycaster.data) {
+            rightHand.components.raycaster.enabled = false;
+            rightHand.components.raycaster.data.objects = '';
+            rightHand.components.raycaster.data.lineOpacity = 0;
+            console.log('🔴 Step 1: Right laser pointer disabled');
           }
           
-          // Check if bloom is currently enabled
-          const hasBloom = scene.hasAttribute('bloom');
-          
-          if (hasBloom) {
-            // Disable bloom
-            scene.removeAttribute('bloom');
-            console.log('Bloom effect disabled');
-          } else {
-            // Enable bloom with the same settings as originally configured
-            scene.setAttribute('bloom', 'threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0');
-            console.log('Bloom effect enabled');
+          // Step 2: Close menu immediately and properly disable it
+          if (menuToggle && menuToggle.components['menu-toggle']) {
+            menuToggle.components['menu-toggle'].menuVisible = false;
+            isMenuVisible = false; // Update global state
+            
+            const menu = document.querySelector('#game-menu');
+            if (menu) {
+              menu.setAttribute('visible', false);
+              // Also disable the menu to prevent interactions
+              menu.setAttribute('enabled', false);
+            }
+            
+            // Disable all menu buttons to prevent interactions
+            const menuButtons = document.querySelectorAll('.clickable');
+            menuButtons.forEach(button => {
+              button.setAttribute('enabled', false);
+              button.setAttribute('visible', false);
+            });
+            
+            console.log('🔴 Step 2: Menu closed and properly disabled immediately');
           }
           
-          // Update button appearance
+          // Update button to show it's processing
           const button = document.querySelector('#menu-toggle-bloom');
           const buttonText = button.querySelector('a-text');
-          
-          if (hasBloom) {
-            // Bloom was enabled, now disabled
-            button.setAttribute('material', 'color', '#aa0000');
-            buttonText.setAttribute('text', 'value', 'Bloom: OFF');
-          } else {
-            // Bloom was disabled, now enabled
-            button.setAttribute('material', 'color', '#00aa00');
-            buttonText.setAttribute('text', 'value', 'Bloom: ON');
+          if (buttonText) {
+            button.setAttribute('material', 'color', '#ff6600');
+            buttonText.setAttribute('text', 'value', 'Bloom: WAIT...');
           }
           
-          console.log('Bloom:', hasBloom ? 'OFF' : 'ON');
+          console.log('⏳ Step 3: Waiting 100ms before toggling bloom effect...');
+          
+          // Step 3: Wait 100ms, then toggle bloom effect
+          setTimeout(() => {
+            if (scene) {
+              const hasBloom = scene.hasAttribute('bloom');
+              
+              if (hasBloom) {
+                scene.removeAttribute('bloom');
+                console.log('🔧 Step 3: Bloom effect disabled after 3-second delay');
+              } else {
+                scene.setAttribute('bloom', 'threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0');
+                console.log('🔧 Step 3: Bloom effect enabled after 3-second delay');
+              }
+              
+              // Update button appearance
+              if (buttonText) {
+                if (hasBloom) {
+                  button.setAttribute('material', 'color', '#aa0000');
+                  buttonText.setAttribute('text', 'value', 'Bloom: OFF');
+                } else {
+                  button.setAttribute('material', 'color', '#00aa00');
+                  buttonText.setAttribute('text', 'value', 'Bloom: ON');
+                }
+              }
+              
+              console.log('🔧 Step 3: Bloom:', hasBloom ? 'OFF' : 'ON');
+            }
+          }, 100); // 100ms delay
         }
       });
       
@@ -15344,21 +17064,53 @@ function setGameplayHUD(isPlaying) {
       
       // Wait for all critical components to be fully initialized
       function waitForCriticalComponents() {
+        let timeoutId;
+        let checkCount = 0;
+        const maxChecks = 100; // 10 seconds at 100ms intervals
+        
         const checkInterval = setInterval(() => {
+          checkCount++;
           const scene = document.querySelector('a-scene');
           const playerController = scene?.querySelector('#player')?.components?.['zerog-player'];
           const fpsCounter = scene?.components?.['fps-counter'];
           const gameManager = scene?.components?.['game-manager'];
           
+          // Debug component attachment - removed console spam
+          
+          // Debug logging every 10 checks (1 second) - removed console spam
+          
           if (playerController && fpsCounter && gameManager) {
             clearInterval(checkInterval);
+            clearTimeout(timeoutId); // Clear the timeout since we found components
             
             // CRITICAL: Ensure scene is playing and tick loop is active
             if (scene && !scene.is('vr-mode')) {
+              console.log('🎬 Scene state before forcing play:', {
+                isPlaying: scene.isPlaying,
+                hasLoaded: scene.hasLoaded,
+                time: scene.time,
+                renderStarted: scene.renderStarted
+              });
+              
+              // CRITICAL: Ensure FPS counter component is properly enabled
+              if (fpsCounter) {
+                // FPS Counter component found, ensuring it's enabled
+                fpsCounter.enabled = true;
+                // Force reinitialize if needed
+                if (typeof fpsCounter.init === 'function') {
+                  fpsCounter.init();
+                  // FPS Counter component reinitialized
+                }
+              } else {
+                console.warn('⚠️ FPS Counter component not found on scene!');
+              }
+              
               // Force scene to play if it's not already
               if (!scene.isPlaying) {
                 console.log('🎬 Scene not playing - forcing scene.play()');
                 scene.play();
+              } else {
+                console.log('🎬 Scene already playing');
               }
               
               // Verify scene tick is working
@@ -15369,15 +17121,151 @@ function setGameplayHUD(isPlaying) {
                   time: scene.time,
                   renderStarted: scene.renderStarted
                 });
+                
+                // Test if tick loop is actually running by checking if time is advancing
+                const initialTime = scene.time;
+                setTimeout(() => {
+                  const finalTime = scene.time;
+                  const timeAdvancing = finalTime > initialTime;
+                  console.log('🎬 Tick loop test:', {
+                    initialTime: initialTime,
+                    finalTime: finalTime,
+                    timeAdvancing: timeAdvancing,
+                    timeDelta: finalTime - initialTime
+                  });
+                  
+                  if (!timeAdvancing) {
+                    console.error('🚨 CRITICAL: Scene tick loop is not running!');
+                    console.log('🎬 Attempting to force scene restart...');
+                    
+                    // More aggressive restart
+                    scene.pause();
+                    setTimeout(() => {
+                      // Force remove and re-add critical components to restart them
+                      const fpsComponent = scene.components['fps-counter'];
+                      if (fpsComponent) {
+                        console.log('🎬 Restarting FPS counter component...');
+                        // Force reinitialize the component
+                        fpsComponent.init();
+                      }
+                      
+                      scene.play();
+                      console.log('🎬 Scene restarted with component reinitialization');
+                    }, 100);
+                  } else {
+                    console.log('✅ Scene tick loop is running correctly');
+                  }
+                }, 100);
               }, 1000);
             }
             
             console.log('✅ All critical components initialized and operational');
+            
+            // CRITICAL: Track the complete initialization sequence
+            // Starting post-initialization sequence check
+            
+            // Check if all critical systems are actually working
+            setTimeout(() => {
+              // Post-initialization sequence check (2 seconds later)
+              
+              // Check FPS counter tick function
+              const fpsComponent = scene.components['fps-counter'];
+              if (fpsComponent) {
+                // FPS Counter status - removed console spam
+              }
+              
+              // Check if performance optimization is running
+              const playerComponent = scene.querySelector('#player')?.components?.['zerog-player'];
+              if (playerComponent) {
+                console.log('🎮 Player component status:', {
+                  enabled: playerComponent.data?.enabled,
+                  hasTickFunction: typeof playerComponent.tick === 'function',
+                  velocity: playerComponent.velocity ? playerComponent.velocity.length() : 'N/A'
+                });
+              }
+              
+              // Check if other critical components are working
+              const gameManagerComponent = scene.components['game-manager'];
+              if (gameManagerComponent) {
+                console.log('🎮 Game Manager status:', {
+                  enabled: gameManagerComponent.enabled,
+                  hasTickFunction: typeof gameManagerComponent.tick === 'function',
+                  matchState: gameManagerComponent.matchState
+                });
+              }
+              
+              // Force trigger some systems to see if they respond
+              // Testing system responsiveness
+              if (fpsComponent && typeof fpsComponent.tick === 'function') {
+                // Manually calling FPS counter tick function
+                fpsComponent.tick(performance.now());
+              }
+              
+              // CRITICAL: If systems are not responding, force restart the entire scene
+              const systemsWorking = fpsComponent && fpsComponent.frameCount > 0;
+              if (!systemsWorking) {
+                console.error('🚨 CRITICAL: Systems not responding after initialization!');
+                console.log('🔧 Attempting complete scene restart...');
+                
+                // AGGRESSIVE RESTART: Force scene to completely restart
+                scene.pause();
+                
+                // Wait a bit, then force restart everything
+        setTimeout(() => {
+                  console.log('🔧 Force restarting scene and all components...');
+                  
+                  // Force restart all critical components
+                  if (fpsComponent) {
+                    fpsComponent.init();
+                    // FPS Counter force restarted
+                  }
+                  
+                  if (playerComponent) {
+                    playerComponent.init();
+                    console.log('🎮 Player component force restarted');
+                  }
+                  
+                  if (gameManagerComponent) {
+                    gameManagerComponent.init();
+                    console.log('🎮 Game Manager force restarted');
+                  }
+                  
+                  // Force scene to play
+                  scene.play();
+                  console.log('🎬 Scene force restarted');
+                  
+                  // Wait and verify the restart worked
+                  setTimeout(() => {
+                    const fpsAfterRestart = scene.components['fps-counter'];
+                    if (fpsAfterRestart && fpsAfterRestart.frameCount > 0) {
+                      console.log('✅ Scene restart successful - systems now working');
+                    } else {
+                      console.error('🚨 Scene restart failed - attempting page reload...');
+                      // Last resort: reload the page
+                      window.location.reload();
+                    }
+                  }, 2000);
+                  
+                }, 500);
+              } else {
+                console.log('✅ All systems responding correctly');
+              }
+              
+            }, 2000);
+            
+            return;
+          }
+          
+          // Check if we've exceeded max checks
+          if (checkCount >= maxChecks) {
+            clearInterval(checkInterval);
+            clearTimeout(timeoutId);
+            console.log('⚠️ Timeout reached - proceeding anyway');
           }
         }, 100);
         
-        // Fallback timeout after 10 seconds
-        setTimeout(() => {
+        // Fallback timeout after 10 seconds (only if interval hasn't cleared it)
+        timeoutId = setTimeout(() => {
           clearInterval(checkInterval);
           console.log('⚠️ Timeout reached - proceeding anyway');
         }, 10000);
@@ -15629,6 +17517,7 @@ function setGameplayHUD(isPlaying) {
                       material="shader: standard; emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
                       position="0 0 0"
                       impact-effect="color: #888888"
+                      player-damage=""
                       class="grabbable-player"
                       data-player-id="player_0">
               <a-entity light="type: point; color: #888888; intensity: 1; distance: 3"></a-entity>
@@ -15650,6 +17539,8 @@ function setGameplayHUD(isPlaying) {
             <a-entity id="hud-score" position="0 0.1 -0.5" visible="false">
               <a-entity position="-0.15 0 0" text="value: 0; align: center; width: 1.5; color: #0099ff"></a-entity>
               <a-entity position="0.15 0 0" text="value: 0; align: center; width: 1.5; color: #ff4444"></a-entity>
+              <a-entity position="-0.15 -0.1 0" text="value: Team; align: center; width: 0.8; color: #0099ff"></a-entity>
+              <a-entity position="0.15 -0.1 0" text="value: Bots; align: center; width: 0.8; color: #ff4444"></a-entity>
             </a-entity>
             
             <!-- Timer Display in HUD -->
@@ -15782,11 +17673,10 @@ function setGameplayHUD(isPlaying) {
               <!-- Bot AI Toggle -->
               <a-entity id="menu-toggle-bots" position="0 -0.12 0"
                         geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #aa0000; transparent: true; opacity: 0.8"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
                         cursor-listener
                         class="clickable"
-                        data-bots-manually-disabled="true">
-                <a-text value="Bots: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+                <a-text value="Bots: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
               <!-- Single Asteroid Toggle -->
@@ -15911,6 +17801,11 @@ function setGameplayHUD(isPlaying) {
                      material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
                      visible="true">
             </a-sphere>
+            
+            <!-- Left hand shooting sound -->
+            <a-entity id="left-hand-laser-sound"
+                     sound="src: url(audio/laser-45816.mp3); volume: 0.3; autoplay: false; loop: false; positional: true; distanceModel: linear; refDistance: 1; maxDistance: 25">
+            </a-entity>
           </a-entity>
           
           <a-entity id="rightHand" 
@@ -15956,6 +17851,11 @@ function setGameplayHUD(isPlaying) {
                      material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5"
                      visible="true">
             </a-sphere>
+            
+            <!-- Right hand shooting sound -->
+            <a-entity id="right-hand-laser-sound"
+                     sound="src: url(audio/laser-45816.mp3); volume: 0.3; autoplay: false; loop: false; positional: true; distanceModel: linear; refDistance: 1; maxDistance: 25">
+            </a-entity>
           </a-entity>
         </a-entity>
       </a-entity>
@@ -16086,7 +17986,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Red Team (for singleplayer) -->
-      <a-entity id="zerog-bot-red" position="4 5.8 10" zerog-bot="enabled: false; difficulty: medium; team: red; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-red" position="4 5.8 10" zerog-bot="enabled: true; difficulty: medium; team: red; throwInterval: 12000" visible="true">
         <a-sphere id="bot-target" 
                   radius="0.2" 
                   color="#ff0000" 
@@ -16105,7 +18005,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Blue Team (for singleplayer) -->
-      <a-entity id="zerog-bot-blue" position="0 5.8 14" zerog-bot="enabled: false; difficulty: medium; team: blue; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-blue" position="0 5.8 14" zerog-bot="enabled: true; difficulty: medium; team: blue; throwInterval: 12000" visible="true">
         <a-sphere id="bot-blue-target" 
                   radius="0.2" 
                   color="#0000ff" 
@@ -16124,7 +18024,7 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Zero-G Bot Green (additional bot for 4-player support) -->
-      <a-entity id="zerog-bot-green" position="-2 5.8 10" zerog-bot="enabled: false; difficulty: medium; team: green; throwInterval: 2000" visible="true">
+      <a-entity id="zerog-bot-green" position="-2 5.8 10" zerog-bot="enabled: true; difficulty: medium; team: green; throwInterval: 12000" visible="true">
         <a-sphere id="bot-green-target" 
                    radius="0.2" 
                    color="#ff00ff" 
@@ -16223,6 +18123,62 @@ function setGameplayHUD(isPlaying) {
                                         rate: 1.5;">
       </a-entity>
 
+      <!-- Add laser sound entity -->
+      <a-entity id="laser-sound" sound="src: url(audio/laser-45816.mp3); 
+                                         autoplay: false; 
+                                         loop: false; 
+                                         volume: 0.8;
+                                         positional: true;
+                                         distanceModel: linear;
+                                         refDistance: 1;
+                                         maxDistance: 15;
+                                         poolSize: 50;">
+      </a-entity>
+
+      <!-- Add electric hum sound entity -->
+      <a-entity id="electric-hum-sound" sound="src: url(audio/electric-hum.wav); 
+                                               autoplay: false; 
+                                               loop: false; 
+                                               volume: 0.8;
+                                               positional: true;
+                                               distanceModel: linear;
+                                               refDistance: 1;
+                                               maxDistance: 15;
+                                               poolSize: 10;">
+      </a-entity>
+
+      <!-- Add metal hit sound entities -->
+      <a-entity id="metal-hit-sound-1" sound="src: url(audio/metal-hit-92-200420.mp3); 
+                                               autoplay: false; 
+                                               loop: false; 
+                                               volume: 0.1;
+                                               positional: true;
+                                               distanceModel: linear;
+                                               refDistance: 1;
+                                               maxDistance: 20;
+                                               poolSize: 5;">
+      </a-entity>
+      <a-entity id="metal-hit-sound-2" sound="src: url(audio/metal-hit-94-200422.mp3); 
+                                               autoplay: false; 
+                                               loop: false; 
+                                               volume: 0.1;
+                                               positional: true;
+                                               distanceModel: linear;
+                                               refDistance: 1;
+                                               maxDistance: 20;
+                                               poolSize: 5;">
+      </a-entity>
+      <a-entity id="metal-hit-sound-3" sound="src: url(audio/metal-hit-95-200424.mp3); 
+                                               autoplay: false; 
+                                               loop: false; 
+                                               volume: 0.1;
+                                               positional: true;
+                                               distanceModel: linear;
+                                               refDistance: 1;
+                                               maxDistance: 20;
+                                               poolSize: 5;">
+      </a-entity>
+
       <!-- Goal sound entity -->
       <a-entity id="goal-sound" sound="src: url(audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); 
                                       autoplay: false; 
@@ -16312,9 +18268,9 @@ function setGameplayHUD(isPlaying) {
           }
         }
         
-        // Send to all connections
+        // Send to all OTHER players (not to self)
         connections.forEach((conn, playerId) => {
-          if (conn && conn.open) {
+          if (conn && conn.open && playerId !== myPlayerId) {
             conn.send(data);
           }
         });
@@ -16331,9 +18287,9 @@ function setGameplayHUD(isPlaying) {
                 playerId: myPlayerId
               };
               
-              // Send to all connections
+        // Send to all OTHER players (not to self)
               connections.forEach((conn, playerId) => {
-                if (conn && conn.open) {
+          if (conn && conn.open && playerId !== myPlayerId) {
                   conn.send(data);
                 }
               });
@@ -16368,6 +18324,128 @@ function setGameplayHUD(isPlaying) {
           }
         }
       }
+      
+      function sendDamageEffect(position, targetPlayerId) {
+        if (!isMultiplayer || activePlayers.size <= 1) return;
+        
+        console.log('💥 Sending damage effect:', {
+          targetPlayerId: targetPlayerId,
+          shooterPlayerId: myPlayerId,
+          position: position,
+          isHost: isHost
+        });
+        
+        const damageData = {
+          type: 'damage-effect',
+          position: { x: position.x, y: position.y, z: position.z },
+          targetPlayerId: targetPlayerId,
+          shooterPlayerId: myPlayerId,
+          timestamp: Date.now()
+        };
+        
+        // Send to all connected players
+        if (isHost) {
+          console.log('💥 Host sending damage effect to all clients');
+          connections.forEach(conn => {
+            if (conn.open) {
+              conn.send(damageData);
+            }
+          });
+        } else {
+          // Client sends to host, who will broadcast to all
+          console.log('💥 Client sending damage effect to host');
+          const hostConnection = connections.get('host');
+          if (hostConnection && hostConnection.open) {
+            hostConnection.send(damageData);
+          }
+        }
+      }
+      
+      function sendExplosionEffect(targetSelector, targetPlayerId) {
+        if (!isMultiplayer || activePlayers.size <= 1) return;
+        
+        const explosionData = {
+          type: 'explosion-effect',
+          targetSelector: targetSelector,
+          targetPlayerId: targetPlayerId,
+          shooterPlayerId: myPlayerId,
+          timestamp: Date.now()
+        };
+        
+        console.log('💥 Sending explosion effect:', explosionData);
+        
+        // Send to all connected players
+        if (isHost) {
+          connections.forEach(conn => {
+            if (conn.open) {
+              conn.send(explosionData);
+            }
+          });
+        } else {
+          // Client sends to host, who will broadcast to all
+          const hostConnection = connections.get('host');
+          if (hostConnection && hostConnection.open) {
+            hostConnection.send(explosionData);
+          }
+        }
+      }
+      
+      function sendHitSound(position, soundSelector, targetPlayerId) {
+        if (!isMultiplayer || activePlayers.size <= 1) return;
+        
+        const soundData = {
+          type: 'hit-sound',
+          position: { x: position.x, y: position.y, z: position.z },
+          soundSelector: soundSelector,
+          targetPlayerId: targetPlayerId,
+          shooterPlayerId: myPlayerId,
+          timestamp: Date.now()
+        };
+        
+        // Send to all connected players
+        if (isHost) {
+          connections.forEach(conn => {
+            if (conn.open) {
+              conn.send(soundData);
+            }
+          });
+        } else {
+          // Client sends to host, who will broadcast to all
+          const hostConnection = connections.get('host');
+          if (hostConnection && hostConnection.open) {
+            hostConnection.send(soundData);
+          }
+        }
+      }
+      
+      function sendBotDamageState(botSelector, hitCount, isDead, respawn, position) {
+        if (!isMultiplayer || activePlayers.size <= 1) return;
+        
+        const botDamageData = {
+          type: 'bot-damage-state',
+          botSelector: botSelector,
+          hitCount: hitCount,
+          isDead: isDead,
+          respawn: respawn,
+          position: position ? { x: position.x, y: position.y, z: position.z } : null,
+          timestamp: Date.now()
+        };
+        
+        // Send to all connected players
+        if (isHost) {
+          connections.forEach(conn => {
+            if (conn.open) {
+              conn.send(botDamageData);
+            }
+          });
+        } else {
+          // Client sends to host, who will broadcast to all
+          const hostConnection = connections.get('host');
+          if (hostConnection && hostConnection.open) {
+            hostConnection.send(botDamageData);
+          }
+        }
+      }
 
       function handleHitEffect(data) {
         if (!data.targetPlayerId) return;
@@ -16389,52 +18467,9 @@ function setGameplayHUD(isPlaying) {
           }
         }
         
-        // Play impact effect on the appropriate target for this viewer
-        let targetToAnimate = null;
-        
-        if (targetPlayerId === myPlayerId) {
-          // This is the local player being hit - animate local target
-          targetToAnimate = document.querySelector('#player-target');
-        } else if (targetPlayerId.startsWith('bot-')) {
-          // This is a bot being hit - animate bot target
-          if (targetPlayerId === 'bot-red') {
-            targetToAnimate = document.querySelector('#bot-target');
-          } else if (targetPlayerId === 'bot-blue') {
-            targetToAnimate = document.querySelector('#bot-blue-target');
-          } else if (targetPlayerId === 'bot-green') {
-            targetToAnimate = document.querySelector('#bot-green-target');
-          }
-        } else {
-          // This is a remote player being hit - animate remote target
-          targetToAnimate = document.querySelector(`#remote-target-${playerIndex}`);
-          
-          // CRITICAL: Ensure remote target and parent are visible for hit effect
-          if (targetToAnimate) {
-            const remotePlayer = targetToAnimate.parentElement;
-            if (remotePlayer) {
-              remotePlayer.setAttribute('visible', true);
-            }
-            targetToAnimate.setAttribute('visible', true);
-            
-            // CRITICAL FIX: Use correct player color for hit effects, not white
-            // Get the player's assigned color based on their slot
-            const playerColors = {
-              0: '#ff0000', // red
-              1: '#0000ff', // blue
-              2: '#00ff00', // green
-              3: '#ffff00'  // yellow
-            };
-            const teamColor = playerColors[playerIndex] || '#ffffff';
-            
-            targetToAnimate.setAttribute('color', teamColor);
-            targetToAnimate.setAttribute('material', `shader: standard; emissive: ${teamColor}; emissiveIntensity: 0.5; transparent: true; opacity: 0.7`);
-            targetToAnimate.setAttribute('impact-effect', `color: ${teamColor}`);
-          }
-        }
-        
-        if (targetToAnimate && targetToAnimate.components['impact-effect']) {
-          targetToAnimate.components['impact-effect'].playEffect();
-        }
+        // DON'T play explosion effects for individual hits anymore
+        // The bullet/missile damage systems (player-damage, zerog-bot) handle all hit effects and sounds
+        // This function is only used for scoring purposes now
       }
 
       function sendBallState(ballState) {
@@ -16511,9 +18546,9 @@ function setGameplayHUD(isPlaying) {
           if (bot) {
             // Only set visibility and enabled if not manually disabled
             if (!isManuallyDisabled) {
-              bot.setAttribute('visible', shouldEnable);
-              if (bot.components['zerog-bot']) {
-                bot.setAttribute('zerog-bot', 'enabled', shouldEnable);
+            bot.setAttribute('visible', shouldEnable);
+            if (bot.components['zerog-bot']) {
+              bot.setAttribute('zerog-bot', 'enabled', shouldEnable);
               }
             } else {
               // When manually disabled, force both visible and enabled to false
