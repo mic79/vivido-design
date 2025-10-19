@@ -2069,6 +2069,9 @@
             case 'bot-state':
               handleBotState(data);
               break;
+            case 'door-animation':
+              handleDoorAnimation(data);
+              break;
             case 'bullet-create':
               handleBulletCreate(data);
               break;
@@ -3020,6 +3023,36 @@
                 botState: data.botState,
                 playerId: data.playerId
               });
+            }
+          });
+        }
+      }
+      
+      function handleDoorAnimation(data) {
+        // Handle door animation synchronization from other players
+        const doorEntity = document.querySelector(`#${data.doorEntityId}`);
+        
+        if (doorEntity) {
+          // Find the door system component on the entity
+          const doorComponent = doorEntity.components['door-proximity-trigger'] || 
+                               doorEntity.components['door-proximity-trigger-2'] || 
+                               doorEntity.components['door-proximity-trigger-3'];
+          
+          if (doorComponent) {
+            // Trigger the appropriate door animation (from multiplayer, so don't send another message)
+            if (data.animationType === 'open') {
+              doorComponent.openDoors(true);
+            } else if (data.animationType === 'close') {
+              doorComponent.closeDoors(true);
+            }
+          }
+        }
+        
+        // Host forwards door animation to other clients
+        if (isHost && isMultiplayer && activePlayers.size > 1) {
+          connections.forEach((conn, connectionKey) => {
+            if (conn && conn.open && connectionKey !== data.playerId) {
+              conn.send(data);
             }
           });
         }
@@ -14964,13 +14997,58 @@ function setGameplayHUD(isPlaying) {
             }
           }
           
-          // Get player world position from rig (which actually moves)
+          // Check all players (local and remote) for proximity to doors
+          let minDistance = Infinity;
+          let closestDoor = null;
+          
+          // Check local player
           const playerWorldPos = new THREE.Vector3();
           const positionSource = this.rig || this.player;
           positionSource.object3D.getWorldPosition(playerWorldPos);
           
-          let minDistance = Infinity;
-          let closestDoor = null;
+          // Check remote players in multiplayer
+          if (isMultiplayer && activePlayers.size > 1) {
+            activePlayers.forEach(playerId => {
+              if (playerId !== myPlayerId) {
+                const remotePlayer = document.querySelector(`#remote-target-${playerId.split('_')[1]}`);
+                if (remotePlayer) {
+                  const remoteWorldPos = new THREE.Vector3();
+                  remotePlayer.object3D.getWorldPosition(remoteWorldPos);
+                  
+                  // Check distance to doors for this remote player
+                  if (this.doorMeshes.length > 0) {
+                    this.doorMeshes.forEach(doorMesh => {
+                      const doorWorldPos = new THREE.Vector3();
+                      doorMesh.getWorldPosition(doorWorldPos);
+                      const distance = remoteWorldPos.distanceTo(doorWorldPos);
+                      if (distance < minDistance) {
+                        minDistance = distance;
+                        closestDoor = doorMesh;
+                      }
+                    });
+                  }
+                }
+              }
+            });
+          }
+          
+          // Check local player distance
+          if (this.doorMeshes.length > 0) {
+            this.doorMeshes.forEach(doorMesh => {
+              const doorWorldPos = new THREE.Vector3();
+              doorMesh.getWorldPosition(doorWorldPos);
+              const distance = playerWorldPos.distanceTo(doorWorldPos);
+              if (distance < minDistance) {
+                minDistance = distance;
+                closestDoor = doorMesh;
+              }
+            });
+          } else {
+            // Fallback: use spaceship center for proximity detection
+            const spaceshipWorldPos = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(spaceshipWorldPos);
+            minDistance = playerWorldPos.distanceTo(spaceshipWorldPos);
+          }
           
           if (this.doorMeshes.length > 0) {
             // Calculate minimum distance to any door
@@ -14998,8 +15076,10 @@ function setGameplayHUD(isPlaying) {
           // 1. The desired state is different from current state
           // 2. We're not currently animating, OR enough time has passed since last state change
           // 3. Enough time has passed since the last state change (debounce)
+          // 4. In multiplayer, only the host can trigger door animations
           if (shouldOpen !== this.isDoorsOpen && 
-              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay)) {
+              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay) &&
+              (!isMultiplayer || isHost)) {
             
             this.lastStateChange = now;
             
@@ -15013,9 +15093,14 @@ function setGameplayHUD(isPlaying) {
           this.lastPlayerDistance = minDistance;
         },
         
-        openDoors: function() {
+        openDoors: function(fromMultiplayer = false) {
           this.isDoorsOpen = true;
           this.isAnimating = true;
+          
+          // Send door animation state to other players in multiplayer (only if not triggered by multiplayer)
+          if (!fromMultiplayer && isMultiplayer && activePlayers.size > 1) {
+            sendDoorAnimation('open', this.el.id);
+          }
           
           let completedAnimations = 0;
           const totalAnimations = this.doorActions.length;
@@ -15065,9 +15150,14 @@ function setGameplayHUD(isPlaying) {
           });
         },
         
-        closeDoors: function() {
+        closeDoors: function(fromMultiplayer = false) {
           this.isDoorsOpen = false;
           this.isAnimating = true;
+          
+          // Send door animation state to other players in multiplayer (only if not triggered by multiplayer)
+          if (!fromMultiplayer && isMultiplayer && activePlayers.size > 1) {
+            sendDoorAnimation('close', this.el.id);
+          }
           
           let completedAnimations = 0;
           const totalAnimations = this.doorActions.length;
@@ -15261,14 +15351,42 @@ function setGameplayHUD(isPlaying) {
             if (!this.player) return;
           }
           
-          // Get player world position from rig (which actually moves)
+          // Check all players (local and remote) for proximity to doors
+          let minDistance = Infinity;
+          let closestDoor = null;
+          
+          // Check local player
           const playerWorldPos = new THREE.Vector3();
           const positionSource = this.rig || this.player;
           positionSource.object3D.getWorldPosition(playerWorldPos);
           
-          let minDistance = Infinity;
-          let closestDoor = null;
+          // Check remote players in multiplayer
+          if (isMultiplayer && activePlayers.size > 1) {
+            activePlayers.forEach(playerId => {
+              if (playerId !== myPlayerId) {
+                const remotePlayer = document.querySelector(`#remote-target-${playerId.split('_')[1]}`);
+                if (remotePlayer) {
+                  const remoteWorldPos = new THREE.Vector3();
+                  remotePlayer.object3D.getWorldPosition(remoteWorldPos);
+                  
+                  // Check distance to doors for this remote player
+                  if (this.doorMeshes.length > 0) {
+                    this.doorMeshes.forEach(doorMesh => {
+                      const doorWorldPos = new THREE.Vector3();
+                      doorMesh.getWorldPosition(doorWorldPos);
+                      const distance = remoteWorldPos.distanceTo(doorWorldPos);
+                      if (distance < minDistance) {
+                        minDistance = distance;
+                        closestDoor = doorMesh;
+                      }
+                    });
+                  }
+                }
+              }
+            });
+          }
           
+          // Check local player distance
           if (this.doorMeshes.length > 0) {
             // Calculate minimum distance to any door in this group
             this.doorMeshes.forEach(doorMesh => {
@@ -15308,8 +15426,10 @@ function setGameplayHUD(isPlaying) {
           const now = Date.now();
           
           // Only change state if conditions are met
+          // In multiplayer, only the host can trigger door animations
           if (shouldOpen !== this.isDoorsOpen && 
-              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay)) {
+              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay) &&
+              (!isMultiplayer || isHost)) {
             
             this.lastStateChange = now;
             
@@ -15323,9 +15443,14 @@ function setGameplayHUD(isPlaying) {
           this.lastPlayerDistance = minDistance;
         },
         
-        openDoors: function() {
+        openDoors: function(fromMultiplayer = false) {
           this.isDoorsOpen = true;
           this.isAnimating = true;
+          
+          // Send door animation state to other players in multiplayer (only if not triggered by multiplayer)
+          if (!fromMultiplayer && isMultiplayer && activePlayers.size > 1) {
+            sendDoorAnimation('open', this.el.id);
+          }
           
           let completedAnimations = 0;
           const totalAnimations = this.doorActions.length;
@@ -15375,9 +15500,14 @@ function setGameplayHUD(isPlaying) {
           });
         },
         
-        closeDoors: function() {
+        closeDoors: function(fromMultiplayer = false) {
           this.isDoorsOpen = false;
           this.isAnimating = true;
+          
+          // Send door animation state to other players in multiplayer (only if not triggered by multiplayer)
+          if (!fromMultiplayer && isMultiplayer && activePlayers.size > 1) {
+            sendDoorAnimation('close', this.el.id);
+          }
           
           let completedAnimations = 0;
           const totalAnimations = this.doorActions.length;
@@ -15574,14 +15704,42 @@ function setGameplayHUD(isPlaying) {
             if (!this.player) return;
           }
           
-          // Get player world position from rig (which actually moves)
+          // Check all players (local and remote) for proximity to doors
+          let minDistance = Infinity;
+          let closestDoor = null;
+          
+          // Check local player
           const playerWorldPos = new THREE.Vector3();
           const positionSource = this.rig || this.player;
           positionSource.object3D.getWorldPosition(playerWorldPos);
           
-          let minDistance = Infinity;
-          let closestDoor = null;
+          // Check remote players in multiplayer
+          if (isMultiplayer && activePlayers.size > 1) {
+            activePlayers.forEach(playerId => {
+              if (playerId !== myPlayerId) {
+                const remotePlayer = document.querySelector(`#remote-target-${playerId.split('_')[1]}`);
+                if (remotePlayer) {
+                  const remoteWorldPos = new THREE.Vector3();
+                  remotePlayer.object3D.getWorldPosition(remoteWorldPos);
+                  
+                  // Check distance to doors for this remote player
+                  if (this.doorMeshes.length > 0) {
+                    this.doorMeshes.forEach(doorMesh => {
+                      const doorWorldPos = new THREE.Vector3();
+                      doorMesh.getWorldPosition(doorWorldPos);
+                      const distance = remoteWorldPos.distanceTo(doorWorldPos);
+                      if (distance < minDistance) {
+                        minDistance = distance;
+                        closestDoor = doorMesh;
+                      }
+                    });
+                  }
+                }
+              }
+            });
+          }
           
+          // Check local player distance
           if (this.doorMeshes.length > 0) {
             // Calculate minimum distance to any door in this group
             this.doorMeshes.forEach(doorMesh => {
@@ -15621,8 +15779,10 @@ function setGameplayHUD(isPlaying) {
           const now = Date.now();
           
           // Only change state if conditions are met
+          // In multiplayer, only the host can trigger door animations
           if (shouldOpen !== this.isDoorsOpen && 
-              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay)) {
+              (!this.isAnimating || (now - this.lastStateChange) > this.debounceDelay) &&
+              (!isMultiplayer || isHost)) {
             
             this.lastStateChange = now;
             
@@ -15636,9 +15796,14 @@ function setGameplayHUD(isPlaying) {
           this.lastPlayerDistance = minDistance;
         },
         
-        openDoors: function() {
+        openDoors: function(fromMultiplayer = false) {
           this.isDoorsOpen = true;
           this.isAnimating = true;
+          
+          // Send door animation state to other players in multiplayer (only if not triggered by multiplayer)
+          if (!fromMultiplayer && isMultiplayer && activePlayers.size > 1) {
+            sendDoorAnimation('open', this.el.id);
+          }
           
           let completedAnimations = 0;
           const totalAnimations = this.doorActions.length;
@@ -15688,9 +15853,14 @@ function setGameplayHUD(isPlaying) {
           });
         },
         
-        closeDoors: function() {
+        closeDoors: function(fromMultiplayer = false) {
           this.isDoorsOpen = false;
           this.isAnimating = true;
+          
+          // Send door animation state to other players in multiplayer (only if not triggered by multiplayer)
+          if (!fromMultiplayer && isMultiplayer && activePlayers.size > 1) {
+            sendDoorAnimation('close', this.el.id);
+          }
           
           let completedAnimations = 0;
           const totalAnimations = this.doorActions.length;
@@ -18472,6 +18642,34 @@ function setGameplayHUD(isPlaying) {
         // This function is only used for scoring purposes now
       }
 
+      function sendDoorAnimation(animationType, doorEntityId) {
+        if (!isMultiplayer || activePlayers.size <= 1) return;
+        
+        const doorData = {
+          type: 'door-animation',
+          animationType: animationType, // 'open' or 'close'
+          doorEntityId: doorEntityId,
+          playerId: myPlayerId,
+          timestamp: Date.now()
+        };
+        
+        // Send to host if client, or to all clients if host
+        if (isHost) {
+          // Host broadcasts to all clients
+          connections.forEach((conn, playerId) => {
+            if (conn && conn.open && playerId !== myPlayerId) {
+              conn.send(doorData);
+            }
+          });
+        } else {
+          // Client sends to host
+          const hostConnection = connections.get('host');
+          if (hostConnection && hostConnection.open) {
+            hostConnection.send(doorData);
+          }
+        }
+      }
+      
       function sendBallState(ballState) {
         if (!isMultiplayer || activePlayers.size <= 1) return;
         
