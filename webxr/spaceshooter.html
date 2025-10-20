@@ -1223,6 +1223,16 @@
           },
           
           updatePowerDisplay: function() {
+            // PERFORMANCE: Skip if power display is disabled (for performance testing)
+            if (!powerDisplayEnabled) {
+              return;
+            }
+            
+            // PERFORMANCE: Skip expensive DOM queries and setAttribute when menu is open
+            if (isMenuVisible) {
+              return;
+            }
+            
             // Update power bar for this specific hand
             const powerBarId = this.handType === 'left' ? '#power-bar-left' : '#power-bar-right';
             const powerBar = document.querySelector(powerBarId);
@@ -1456,6 +1466,9 @@
       // PERFORMANCE OPTIMIZATION: Track 3D model visibility for conditional BVH collision detection
       let any3DModelsVisible = false; // Will be updated by toggle functions
       
+      // PERFORMANCE OPTIMIZATION: Track power display state for conditional updates
+      let powerDisplayEnabled = true; // Start enabled, can be toggled for performance testing
+      
       // Helper function to check if any 3D models are currently visible
       function updateModelVisibilityState() {
         const level = document.querySelector('#model-level');
@@ -1510,7 +1523,6 @@
 
       // Global toggles for effects - START AS OFF
       let smokeEnabled = false;
-      let iceCubeEnabled = false;
       let sparksEnabled = false;
 
       // Keyboard controls for toggles
@@ -1519,11 +1531,6 @@
           const cursorListener = document.querySelector('[cursor-listener]');
           if (cursorListener && cursorListener.components['cursor-listener']) {
             cursorListener.components['cursor-listener'].toggleSmoke();
-          }
-        } else if (event.code === 'Digit5') {
-          const cursorListener = document.querySelector('[cursor-listener]');
-          if (cursorListener && cursorListener.components['cursor-listener']) {
-            cursorListener.components['cursor-listener'].toggleIceCube();
           }
         } else if (event.code === 'Digit6') {
           const cursorListener = document.querySelector('[cursor-listener]');
@@ -7598,6 +7605,11 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateGrabFeedback: function() {
+          // PERFORMANCE: Skip expensive DOM queries when menu is open
+          if (getMenuVisibility()) {
+            return;
+          }
+          
           // Show visual feedback for grabbable objects in range
           if (!this.leftHand || !this.rightHand) return;
           
@@ -8128,6 +8140,11 @@ function setGameplayHUD(isPlaying) {
         
         // NEW: Continuous grabbing while grip is held (balls and static objects)
         updateGripBallGrabbing: function() {
+          // PERFORMANCE: Skip expensive DOM queries when menu is open
+          if (getMenuVisibility()) {
+            return;
+          }
+          
           // Check each hand
           ['left', 'right'].forEach(handKey => {
             const hand = handKey === 'left' ? this.leftHand : this.rightHand;
@@ -16635,8 +16652,8 @@ function setGameplayHUD(isPlaying) {
             this.toggleMeshDebug();
           } else if (id === 'menu-toggle-smoke') {
             this.toggleSmoke();
-          } else if (id === 'menu-toggle-ice-cube') {
-            this.toggleIceCube();
+          } else if (id === 'menu-toggle-power-display') {
+            this.togglePowerDisplay();
           } else if (id === 'menu-toggle-sparks') {
             this.toggleSparks();
           } else if (id === 'menu-toggle-bloom') {
@@ -17211,38 +17228,29 @@ function setGameplayHUD(isPlaying) {
           console.log('Smoke:', smokeEnabled ? 'ON' : 'OFF');
         },
         
-        toggleIceCube: function() {
-          iceCubeEnabled = !iceCubeEnabled;
-          const iceCubeEntity = document.querySelector('#ice-cube');
-          if (iceCubeEntity) {
-            iceCubeEntity.setAttribute('visible', iceCubeEnabled);
-              // Enable/disable the component logic
-              if (iceCubeEnabled) {
-                iceCubeEntity.setAttribute('webgpu-parallax-uv', 
-                  'colorMap: assets/textures/ice002/Ice002_2K-JPG_Color.jpg; ' +
-                  'normalMap: assets/textures/ice002/Ice002_2K-JPG_NormalGL.jpg; ' +
-                  'roughnessMap: assets/textures/ice002/Ice002_2K-JPG_Roughness.jpg; ' +
-                  'displacementMap: assets/textures/ice002/Ice002_2K-JPG_Displacement.jpg');
-                iceCubeEntity.setAttribute('grab-surface', '');
-              } else {
-                iceCubeEntity.removeAttribute('webgpu-parallax-uv');
-                iceCubeEntity.removeAttribute('grab-surface');
-              }
-          }
+        togglePowerDisplay: function() {
+          powerDisplayEnabled = !powerDisplayEnabled;
           
-          // Update button appearance
-          const button = document.querySelector('#menu-toggle-ice-cube');
+          const button = document.querySelector('#menu-toggle-power-display');
           const buttonText = button.querySelector('a-text');
           
-          if (iceCubeEnabled) {
+          if (powerDisplayEnabled) {
             button.setAttribute('material', 'color', '#00aa00');
-            buttonText.setAttribute('text', 'value', 'Ice: ON');
+            buttonText.setAttribute('text', 'value', 'Power: ON');
+            
+            // Show power bars
+            const powerBarsElement = document.querySelector('#power-bars-container');
+            if (powerBarsElement) powerBarsElement.setAttribute('visible', true);
           } else {
             button.setAttribute('material', 'color', '#aa0000');
-            buttonText.setAttribute('text', 'value', 'Ice: OFF');
+            buttonText.setAttribute('text', 'value', 'Power: OFF');
+            
+            // Hide power bars
+            const powerBarsElement = document.querySelector('#power-bars-container');
+            if (powerBarsElement) powerBarsElement.setAttribute('visible', false);
           }
           
-          console.log('Ice Cube:', iceCubeEnabled ? 'ON' : 'OFF');
+          console.log('✅ Power Display:', powerDisplayEnabled ? 'ON' : 'OFF', '- Test FPS difference!');
         },
         
         toggleSparks: function() {
@@ -17778,18 +17786,6 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
        <!-- Three.js WebGPU parallax UV ice cube (exact from reference, with physics and grabbable) -->
-       <a-box id="ice-cube" 
-              position="2 5.8 12" 
-              width="1" height="1" depth="1"
-              visible="false"
-              material="color: #88ccff; transparent: true; opacity: 0.8"
-              webgpu-parallax-uv="
-                colorMap: assets/textures/ice002/Ice002_2K-JPG_Color.jpg;
-                normalMap: assets/textures/ice002/Ice002_2K-JPG_NormalGL.jpg;
-                roughnessMap: assets/textures/ice002/Ice002_2K-JPG_Roughness.jpg;
-                displacementMap: assets/textures/ice002/Ice002_2K-JPG_Displacement.jpg">
-       </a-box>
-
       <!-- DEBUG: Enhanced emissive sphere at player start position -->
       <a-sphere id="bloom-debug-sphere"
                 position="0 5.3 12"
@@ -17999,13 +17995,13 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="Smoke: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
-              <!-- Ice Cube Effect Toggle -->
-              <a-entity id="menu-toggle-ice-cube" position="0.3 -0.18 0"
+              <!-- Power Display Toggle (Performance Testing) -->
+              <a-entity id="menu-toggle-power-display" position="0.3 -0.18 0"
                         geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #aa0000; transparent: true; opacity: 0.8"
+                        material="color: #00aa00; transparent: true; opacity: 0.8"
                         cursor-listener
                         class="clickable">
-                <a-text value="Ice: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+                <a-text value="Power: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
               <!-- Sparks Effect Toggle -->
