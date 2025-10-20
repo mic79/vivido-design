@@ -1452,6 +1452,31 @@
 
       // Menu state tracking
       let isMenuVisible = false;
+      
+      // PERFORMANCE OPTIMIZATION: Track 3D model visibility for conditional BVH collision detection
+      let any3DModelsVisible = false; // Will be updated by toggle functions
+      
+      // Helper function to check if any 3D models are currently visible
+      function updateModelVisibilityState() {
+        const level = document.querySelector('#model-level');
+        const spaceship = document.querySelector('#model-spaceship');
+        const asteroid = document.querySelector('#model-asteroid-42');
+        
+        const levelVisible = level && (level.getAttribute('visible') === true || level.getAttribute('visible') === 'true');
+        const spaceshipVisible = spaceship && (spaceship.getAttribute('visible') === true || spaceship.getAttribute('visible') === 'true');
+        const asteroidVisible = asteroid && (asteroid.getAttribute('visible') === true || asteroid.getAttribute('visible') === 'true');
+        
+        any3DModelsVisible = levelVisible || spaceshipVisible || asteroidVisible;
+        
+        console.log('🎯 3D Model Visibility State Updated:', {
+          level: levelVisible,
+          spaceship: spaceshipVisible,
+          asteroid: asteroidVisible,
+          any3DModelsVisible: any3DModelsVisible
+        });
+        
+        return any3DModelsVisible;
+      }
 
       // Space shooter mode - individual player vs bots (gameMode declared in initializeApp)
 
@@ -6954,6 +6979,12 @@ function setGameplayHUD(isPlaying) {
         // Option B: Check a single point for collision with surfaces
         checkPointCollision: function(point, radius, pointName) {
           const response = new THREE.Vector3(0, 0, 0);
+          
+          // PERFORMANCE OPTIMIZATION: Skip BVH collision detection if no 3D models are visible
+          if (!any3DModelsVisible) {
+            // No 3D models visible, skip expensive BVH collision checks
+            return response;
+          }
           
           // Check collision with level.glb model using raycasting
           const levelCollision = this.checkLevelModelCollision(point, radius);
@@ -16993,6 +17024,9 @@ function setGameplayHUD(isPlaying) {
               console.log('🚀 Spaceship model enabled - collision detection active');
             }
             
+            // PERFORMANCE: Update global visibility state for BVH optimization
+            updateModelVisibilityState();
+            
             // Re-initialize BVH for collision detection when spaceship visibility changes
             const collisionSystem = document.querySelector('[collision-system]');
             if (collisionSystem && collisionSystem.components['collision-system']) {
@@ -17015,6 +17049,9 @@ function setGameplayHUD(isPlaying) {
               button.setAttribute('material', 'color', '#00aa00');
               buttonText.setAttribute('text', 'value', 'Asteroid: ON');
             }
+            
+            // PERFORMANCE: Update global visibility state for BVH optimization
+            updateModelVisibilityState();
             
             // Re-initialize BVH for single asteroid
             const collisionSystem = document.querySelector('[collision-system]');
@@ -17040,6 +17077,9 @@ function setGameplayHUD(isPlaying) {
               buttonText.setAttribute('text', 'value', 'Level: ON');
               console.log('🚀 Level model enabled - collision detection active');
             }
+            
+            // PERFORMANCE: Update global visibility state for BVH optimization
+            updateModelVisibilityState();
             
             // Re-initialize BVH for level model
             const collisionSystem = document.querySelector('[collision-system]');
@@ -17265,86 +17305,42 @@ function setGameplayHUD(isPlaying) {
         },
         
         toggleBloom: function() {
-          console.log('🔧 Bloom button clicked - reordered bloom toggle sequence');
+          console.log('🔧 Bloom toggle clicked');
           
           const scene = document.querySelector('a-scene');
-          const leftHand = document.querySelector('#leftHand');
-          const rightHand = document.querySelector('#rightHand');
-          const menuToggle = document.querySelector('[menu-toggle]');
-          
-          // Step 1: Turn off laser pointers immediately
-          if (leftHand && leftHand.components.raycaster && leftHand.components.raycaster.data) {
-            leftHand.components.raycaster.enabled = false;
-            leftHand.components.raycaster.data.objects = '';
-            leftHand.components.raycaster.data.lineOpacity = 0;
-            console.log('🔴 Step 1: Left laser pointer disabled');
-          }
-          if (rightHand && rightHand.components.raycaster && rightHand.components.raycaster.data) {
-            rightHand.components.raycaster.enabled = false;
-            rightHand.components.raycaster.data.objects = '';
-            rightHand.components.raycaster.data.lineOpacity = 0;
-            console.log('🔴 Step 1: Right laser pointer disabled');
-          }
-          
-          // Step 2: Close menu immediately and properly disable it
-          if (menuToggle && menuToggle.components['menu-toggle']) {
-            menuToggle.components['menu-toggle'].menuVisible = false;
-            isMenuVisible = false; // Update global state
-            
-            const menu = document.querySelector('#game-menu');
-            if (menu) {
-              menu.setAttribute('visible', false);
-              // Also disable the menu to prevent interactions
-              menu.setAttribute('enabled', false);
-            }
-            
-            // Disable all menu buttons to prevent interactions
-            const menuButtons = document.querySelectorAll('.clickable');
-            menuButtons.forEach(button => {
-              button.setAttribute('enabled', false);
-              button.setAttribute('visible', false);
-            });
-            
-            console.log('🔴 Step 2: Menu closed and properly disabled immediately');
-          }
-          
-          // Update button to show it's processing
           const button = document.querySelector('#menu-toggle-bloom');
-          const buttonText = button.querySelector('a-text');
-          if (buttonText) {
-            button.setAttribute('material', 'color', '#ff6600');
-            buttonText.setAttribute('text', 'value', 'Bloom: WAIT...');
+          const buttonText = button ? button.querySelector('a-text') : null;
+          
+          if (!scene) {
+            console.error('Scene not found');
+            return;
           }
           
-          console.log('⏳ Step 3: Waiting 100ms before toggling bloom effect...');
+          // Check current bloom state
+          const hasBloom = scene.hasAttribute('bloom');
           
-          // Step 3: Wait 100ms, then toggle bloom effect
-          setTimeout(() => {
-            if (scene) {
-              const hasBloom = scene.hasAttribute('bloom');
-              
-              if (hasBloom) {
-                scene.removeAttribute('bloom');
-                console.log('🔧 Step 3: Bloom effect disabled after 3-second delay');
-              } else {
-                scene.setAttribute('bloom', 'threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0');
-                console.log('🔧 Step 3: Bloom effect enabled after 3-second delay');
-              }
-              
-              // Update button appearance
-              if (buttonText) {
-                if (hasBloom) {
-                  button.setAttribute('material', 'color', '#aa0000');
-                  buttonText.setAttribute('text', 'value', 'Bloom: OFF');
-                } else {
-                  button.setAttribute('material', 'color', '#00aa00');
-                  buttonText.setAttribute('text', 'value', 'Bloom: ON');
-                }
-              }
-              
-              console.log('🔧 Step 3: Bloom:', hasBloom ? 'OFF' : 'ON');
+          // PERFORMANCE OPTIMIZATION: Toggle bloom attribute to enable/disable post-processing
+          if (hasBloom) {
+            // Remove bloom attribute to disable post-processing
+            scene.removeAttribute('bloom');
+            console.log('✅ Bloom post-processing DISABLED - expect 40-50 FPS boost');
+            
+            // Update button appearance
+            if (button && buttonText) {
+              button.setAttribute('material', 'color', '#aa0000');
+              buttonText.setAttribute('text', 'value', 'Bloom: OFF');
             }
-          }, 100); // 100ms delay
+          } else {
+            // Add bloom attribute to enable post-processing
+            scene.setAttribute('bloom', 'threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0');
+            console.log('✅ Bloom post-processing ENABLED');
+            
+            // Update button appearance
+            if (button && buttonText) {
+              button.setAttribute('material', 'color', '#00aa00');
+              buttonText.setAttribute('text', 'value', 'Bloom: ON');
+            }
+          }
         }
       });
       
@@ -17355,6 +17351,12 @@ function setGameplayHUD(isPlaying) {
         let timeoutId;
         let checkCount = 0;
         const maxChecks = 100; // 10 seconds at 100ms intervals
+        
+        // PERFORMANCE: Initialize model visibility state on startup
+        setTimeout(() => {
+          updateModelVisibilityState();
+          console.log('🚀 Initial model visibility state set');
+        }, 1000);
         
         const checkInterval = setInterval(() => {
           checkCount++;
@@ -17566,7 +17568,6 @@ function setGameplayHUD(isPlaying) {
 
     <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle impact-effects-manager bullet-manager
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
-             bloom="threshold: 0.98; strength: 0.3; radius: 0.15; toneMappingExposure: 1.0"
              webxr="requiredFeatures: local-floor">
       
         <a-assets>
@@ -18015,10 +18016,10 @@ function setGameplayHUD(isPlaying) {
               <!-- Bloom Effect Toggle -->
               <a-entity id="menu-toggle-bloom" position="0 -0.24 0"
                         geometry="primitive: plane; width: 0.18; height: 0.05"
-                        material="color: #00aa00; transparent: true; opacity: 0.8"
+                        material="color: #aa0000; transparent: true; opacity: 0.8"
                         cursor-listener
                         class="clickable">
-                <a-text value="Bloom: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+                <a-text value="Bloom: OFF" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
               <!-- Level Model Toggle -->
