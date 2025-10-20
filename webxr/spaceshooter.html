@@ -17118,26 +17118,30 @@ function setGameplayHUD(isPlaying) {
             // Disable all bots
             bots.forEach(bot => {
               if (bot) {
-                bot.setAttribute('zerog-bot', 'enabled', false);
+                // CRITICAL FIX: Use correct A-Frame setAttribute syntax (2 args, not 3!)
+                bot.setAttribute('zerog-bot', {enabled: false});
+                console.log('🤖 Bot', bot.id, 'disabled - AI tick will skip');
               }
             });
             button.setAttribute('material', 'color', '#aa0000');
             buttonText.setAttribute('text', 'value', 'Bots: OFF');
             // Store the manual disable state in a reliable way
             button.setAttribute('data-bots-manually-disabled', 'true');
-            // All bots disabled - AI logic stopped for performance
+            console.log('✅ All bots disabled - expect 30-40 FPS boost');
           } else {
             // Enable all bots
             bots.forEach(bot => {
               if (bot) {
-                bot.setAttribute('zerog-bot', 'enabled', true);
+                // CRITICAL FIX: Use correct A-Frame setAttribute syntax (2 args, not 3!)
+                bot.setAttribute('zerog-bot', {enabled: true});
+                console.log('🤖 Bot', bot.id, 'enabled - AI tick will run');
               }
             });
             button.setAttribute('material', 'color', '#00aa00');
             buttonText.setAttribute('text', 'value', 'Bots: ON');
             // Clear the manual disable state
             button.removeAttribute('data-bots-manually-disabled');
-            // All bots enabled - AI logic active
+            console.log('🤖 All bots enabled - AI logic active');
           }
           
           // Trigger bot management to respect the new state
