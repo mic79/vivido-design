@@ -11993,17 +11993,18 @@ function setGameplayHUD(isPlaying) {
             }, 100); // Small delay to ensure menu is fully opened
             console.log('🟢 Laser pointers ENABLED - menu opened');
           } else {
-            // Menu is closed - disable laser pointers completely
+            // Menu is closed - keep raycasters enabled but hide the line and clear targets
+            // PERFORMANCE FIX: Disabling raycasters causes ~50 FPS drop. Keep them enabled but invisible.
             if (leftHand && leftHand.components.raycaster && leftHand.components.raycaster.data) {
-              leftHand.components.raycaster.enabled = false;
-              leftHand.components.raycaster.data.objects = '';
-              leftHand.components.raycaster.data.lineOpacity = 0;
+              // Keep enabled=true, just hide the visual line and clear targets
+              leftHand.components.raycaster.data.objects = '.menu-only-dummy-selector'; // Non-existent selector
+              leftHand.components.raycaster.data.lineOpacity = 0; // Hide the line
             }
             if (rightHand && rightHand.components.raycaster && rightHand.components.raycaster.data) {
-              rightHand.components.raycaster.enabled = false;
-              rightHand.components.raycaster.data.objects = '';
-              rightHand.components.raycaster.data.lineOpacity = 0;
+              rightHand.components.raycaster.data.objects = '.menu-only-dummy-selector'; // Non-existent selector
+              rightHand.components.raycaster.data.lineOpacity = 0; // Hide the line
             }
+            console.log('🔴 Laser pointers HIDDEN (but still enabled) - menu closed');
             
             // Also disable the menu to prevent interactions
             const menu = document.querySelector('#game-menu');
@@ -14198,6 +14199,11 @@ function setGameplayHUD(isPlaying) {
         },
         
         checkBallCollisionWithFeedback: function(targetPos, ballRadius) {
+          // PERFORMANCE: Skip expensive collision checks when menu is open
+          if (getMenuVisibility()) {
+            return { position: targetPos.clone(), force: new THREE.Vector3(0, 0, 0) };
+          }
+          
           const correctedPos = targetPos.clone();
           const collisionMargin = 0.02; // 2cm safety margin like player
           const totalRadius = ballRadius + collisionMargin;
@@ -14360,6 +14366,14 @@ function setGameplayHUD(isPlaying) {
         
         // CUSTOM COLLISION DETECTION (identical to player collision system)
         checkCustomCollision: function() {
+          // DEBUG: Log to see if this is even called when menu is open
+          if (!this._debugLogTime) this._debugLogTime = 0;
+          if (Date.now() - this._debugLogTime > 1000) {
+            const surfaces = document.querySelectorAll('[grab-surface]');
+            console.log('🔍 checkCustomCollision - menuVisible:', isMenuVisible, 'surfaces found:', surfaces.length);
+            this._debugLogTime = Date.now();
+          }
+          
           // Convert CANNON.Vec3 to THREE.Vector3 for collision math
           const ballPos = new THREE.Vector3(this.body.position.x, this.body.position.y, this.body.position.z);
           const ballRadius = this.isCaptureBall ? 0.2 : 0.1; // Use actual ball radius
