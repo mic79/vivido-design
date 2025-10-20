@@ -5423,6 +5423,35 @@ function setGameplayHUD(isPlaying) {
 
 
         setupHandEvents: function() {
+          // Set up trigger detection for menu interactions
+          console.log('🔧 Setting up trigger listeners in setupHandEvents');
+          console.log('Left hand element:', this.leftHand);
+          console.log('Right hand element:', this.rightHand);
+          
+          if (this.leftHand) {
+            // Try multiple event names
+            ['triggerdown', 'triggertouchstart', 'selectstart'].forEach(eventName => {
+              this.leftHand.addEventListener(eventName, function(evt) {
+                console.log('🎮 Left', eventName, 'event fired');
+                lastTriggerController = 'leftHand';
+                triggerPressTime = Date.now();
+              });
+            });
+            console.log('✅ Left hand trigger listeners attached');
+          }
+          
+          if (this.rightHand) {
+            // Try multiple event names
+            ['triggerdown', 'triggertouchstart', 'selectstart'].forEach(eventName => {
+              this.rightHand.addEventListener(eventName, function(evt) {
+                console.log('🎮 Right', eventName, 'event fired');
+                lastTriggerController = 'rightHand';
+                triggerPressTime = Date.now();
+              });
+            });
+            console.log('✅ Right hand trigger listeners attached');
+          }
+          
           // Grip controls for grabbing surfaces AND balls (EchoVR style)
           this.el.sceneEl.addEventListener('gripdown', (evt) => {
             // Safety check for controller state
@@ -16440,12 +16469,57 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
+      // Global tracking for which controller is hovering over which button
+      const buttonHoverState = new Map(); // Maps button element ID to controller ID
+      
+      // Global tracking for which controller just pressed the trigger
+      let lastTriggerController = null;
+      let triggerPressTime = 0;
+      const TRIGGER_TIMEOUT = 500; // ms to keep track of trigger press (increased for debugging)
+      
       // Cursor listener component for menu interactions
       AFRAME.registerComponent('cursor-listener', {
         init: function() {
           this.el.addEventListener('click', this.onClick.bind(this));
           this.el.addEventListener('mouseenter', this.onHover.bind(this));
           this.el.addEventListener('mouseleave', this.onLeave.bind(this));
+          
+          // Track which controller is hovering
+          this.hoveringControllerId = null;
+        },
+        
+        getControllerIdFromRaycaster: function() {
+          // Check which controller's raycaster is currently intersecting this button
+          const leftHand = document.querySelector('#leftHand');
+          const rightHand = document.querySelector('#rightHand');
+          
+          // Check left hand raycaster
+          if (leftHand && leftHand.components.raycaster) {
+            const intersections = leftHand.components.raycaster.intersections;
+            if (intersections && intersections.length > 0) {
+              // Check if this button is in the intersections
+              for (let i = 0; i < intersections.length; i++) {
+                if (intersections[i].object.el === this.el) {
+                  return 'leftHand';
+                }
+              }
+            }
+          }
+          
+          // Check right hand raycaster
+          if (rightHand && rightHand.components.raycaster) {
+            const intersections = rightHand.components.raycaster.intersections;
+            if (intersections && intersections.length > 0) {
+              // Check if this button is in the intersections
+              for (let i = 0; i < intersections.length; i++) {
+                if (intersections[i].object.el === this.el) {
+                  return 'rightHand';
+                }
+              }
+            }
+          }
+          
+          return null;
         },
         
         isEnabled: function() {
@@ -16455,14 +16529,44 @@ function setGameplayHUD(isPlaying) {
           return enabled && menuVisible;
         },
 
-        onClick: function() {
+        onClick: function(evt) {
           const id = this.el.id;
+          
+          console.log('🔵 onClick fired for:', id);
+          console.log('  - Menu visible:', getMenuVisibility());
+          console.log('  - Element enabled:', this.el.getAttribute('enabled'));
+          console.log('  - lastTriggerController:', lastTriggerController);
+          console.log('  - triggerPressTime:', triggerPressTime);
+          console.log('  - timeSinceTrigger:', Date.now() - triggerPressTime);
+          console.log('  - buttonHoverState:', buttonHoverState.get(id));
           
           // Check if component is enabled (menu visible and element enabled)
           if (!this.isEnabled()) {
-            console.log('Ignoring click - menu is closed or element disabled');
+            console.log('❌ Ignoring click - menu is closed or element disabled');
             return;
           }
+          
+          // CRITICAL: Check if a trigger was recently pressed
+          const timeSinceTrigger = Date.now() - triggerPressTime;
+          if (timeSinceTrigger > TRIGGER_TIMEOUT) {
+            console.log('❌ Ignoring click on', id, '- no recent trigger press (timeSinceTrigger:', timeSinceTrigger, 'ms)');
+            return;
+          }
+          
+          // CRITICAL: Only allow the controller that is hovering over THIS button to trigger it
+          const currentHoveringController = buttonHoverState.get(id);
+          if (!currentHoveringController) {
+            console.log('❌ Ignoring click on', id, '- no controller hovering');
+            return;
+          }
+          
+          // CRITICAL: Check if the controller that pressed the trigger matches the controller hovering this button
+          if (lastTriggerController !== currentHoveringController) {
+            console.log('❌ Ignoring click on', id, '- trigger from', lastTriggerController, 'but hovering controller is', currentHoveringController);
+            return;
+          }
+          
+          console.log('✅ Button clicked:', id, 'by controller:', currentHoveringController);
           
           // Prevent accidental clicks immediately after menu toggle
           const menuToggle = document.querySelector('[menu-toggle]');
@@ -16514,10 +16618,19 @@ function setGameplayHUD(isPlaying) {
           }
         },
 
-        onHover: function() {
+        onHover: function(evt) {
           // Only highlight if component is enabled
           if (!this.isEnabled()) {
             return;
+          }
+          
+          // Determine which controller is hovering
+          const controllerId = this.getControllerIdFromRaycaster();
+          if (controllerId) {
+            // Store which controller is hovering over this button
+            buttonHoverState.set(this.el.id, controllerId);
+            this.hoveringControllerId = controllerId;
+            console.log('Button', this.el.id, 'hovered by', controllerId);
           }
           
           // Highlight button on hover
@@ -16532,6 +16645,11 @@ function setGameplayHUD(isPlaying) {
           if (!this.isEnabled()) {
             return;
           }
+          
+          // Clear the hover state for this button
+          buttonHoverState.delete(this.el.id);
+          this.hoveringControllerId = null;
+          console.log('Button', this.el.id, 'no longer hovered');
           
           // Restore original color
           if (this.originalColor) {
@@ -17845,7 +17963,7 @@ function setGameplayHUD(isPlaying) {
                         geometry="primitive: plane; width: 0.18; height: 0.05"
                         material="color: #00aa00; transparent: true; opacity: 0.8"
                         cursor-listener
-                        class="clickable"
+                        class="clickable">
                 <a-text value="Bots: ON" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
               </a-entity>
               
