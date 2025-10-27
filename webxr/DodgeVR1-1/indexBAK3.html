@@ -698,18 +698,6 @@
             case 'game-state':
               handleGameState(data);
               break;
-            case 'arena-state':
-              handleArenaState(data);
-              break;
-            case 'arena-update':
-              handleArenaUpdate(data);
-              break;
-            case 'arena-delete':
-              handleArenaDelete(data);
-              break;
-            case 'arena-add':
-              handleArenaAdd(data);
-              break;
             case 'match-start-sync':
               handleMatchStartSync(data);
               break;
@@ -1196,34 +1184,6 @@
                 countdownStartTime: gameManagerComp.countdownStartTime,
                 countdownDuration: gameManagerComp.countdownDuration
               });
-              
-              // ARENA SYNC: Send arena state to new client
-              setTimeout(() => {
-                const arenaObjects = document.querySelectorAll('[grab-surface]');
-                const arenaState = [];
-                arenaObjects.forEach(entity => {
-                  if (entity.id) {
-                    const pos = entity.object3D.position;
-                    const rot = entity.object3D.rotation;
-                    arenaState.push({
-                      id: entity.id,
-                      position: { x: pos.x, y: pos.y, z: pos.z },
-                      rotation: { 
-                        x: THREE.MathUtils.radToDeg(rot.x), 
-                        y: THREE.MathUtils.radToDeg(rot.y), 
-                        z: THREE.MathUtils.radToDeg(rot.z) 
-                      }
-                    });
-                  }
-                });
-                
-                conn.send({
-                  type: 'arena-state',
-                  objects: arenaState
-                });
-                
-                console.log(`🏗️ HOST: Sent arena state (${arenaState.length} objects) to new client`);
-              }, 150); // Small delay after game-state
             }
           }, 100);
         } else {
@@ -1237,57 +1197,6 @@
           remotePlayer.setAttribute('position', data.position);
           // Add more state updates as needed
         }
-      }
-      
-      // ARENA SYNC: Handle initial arena state from host
-      function handleArenaState(data) {
-        console.log(`🏗️ CLIENT: Received arena state with ${data.objects.length} objects`);
-        
-        data.objects.forEach(objData => {
-          const entity = document.getElementById(objData.id);
-          if (entity) {
-            entity.setAttribute('position', objData.position);
-            entity.setAttribute('rotation', `${objData.rotation.x} ${objData.rotation.y} ${objData.rotation.z}`);
-          }
-        });
-        
-        console.log('✅ CLIENT: Arena state synchronized');
-      }
-      
-      // ARENA SYNC: Handle arena object updates from host
-      function handleArenaUpdate(data) {
-        const entity = document.getElementById(data.id);
-        if (entity) {
-          entity.setAttribute('position', data.position);
-          entity.setAttribute('rotation', `${data.rotation.x} ${data.rotation.y} ${data.rotation.z}`);
-          console.log(`🏗️ CLIENT: Updated ${data.id}`);
-        }
-      }
-      
-      // ARENA SYNC: Handle arena object deletion from host
-      function handleArenaDelete(data) {
-        const entity = document.getElementById(data.id);
-        if (entity && entity.parentNode) {
-          entity.parentNode.removeChild(entity);
-          console.log(`🏗️ CLIENT: Deleted ${data.id}`);
-        }
-      }
-      
-      // ARENA SYNC: Handle arena object addition from host
-      function handleArenaAdd(data) {
-        const entity = document.createElement(data.tagName);
-        entity.setAttribute('id', data.id);
-        entity.setAttribute('position', data.position);
-        entity.setAttribute('rotation', `${data.rotation.x} ${data.rotation.y} ${data.rotation.z}`);
-        entity.setAttribute('grab-surface', '');
-        
-        // Set attributes
-        for (const [key, value] of Object.entries(data.attributes)) {
-          entity.setAttribute(key, value);
-        }
-        
-        document.querySelector('a-scene').appendChild(entity);
-        console.log(`🏗️ CLIENT: Added ${data.id}`);
       }
 
       function handleMatchStartSync(data) {
@@ -1536,28 +1445,6 @@
               );
               leftHand.setAttribute('position', `${localPos.x} ${localPos.y} ${localPos.z}`);
               leftHand.setAttribute('rotation', `${data.state.leftHand.rx} ${data.state.leftHand.ry} ${data.state.leftHand.rz}`);
-              
-              // NEW: Update thruster visual and sound for left hand
-              if (data.state.thrusters) {
-                const thrusterVFX = leftHand.querySelector('.thruster-vfx');
-                const thrusterSound = leftHand.querySelector('.thruster-sound');
-                
-                if (data.state.thrusters.left) {
-                  // Thruster active - show VFX and play sound
-                  if (thrusterVFX) thrusterVFX.setAttribute('visible', true);
-                  if (thrusterSound && thrusterSound.components.sound) {
-                    if (!thrusterSound.components.sound.isPlaying) {
-                      thrusterSound.components.sound.playSound();
-                    }
-                  }
-                } else {
-                  // Thruster inactive - hide VFX and stop sound
-                  if (thrusterVFX) thrusterVFX.setAttribute('visible', false);
-                  if (thrusterSound && thrusterSound.components.sound) {
-                    thrusterSound.components.sound.stopSound();
-                  }
-                }
-              }
             }
           }
           
@@ -1572,37 +1459,6 @@
               );
               rightHand.setAttribute('position', `${localPos.x} ${localPos.y} ${localPos.z}`);
               rightHand.setAttribute('rotation', `${data.state.rightHand.rx} ${data.state.rightHand.ry} ${data.state.rightHand.rz}`);
-              
-              // NEW: Update thruster visual and sound for right hand
-              if (data.state.thrusters) {
-                const thrusterVFX = rightHand.querySelector('.thruster-vfx');
-                const thrusterSound = rightHand.querySelector('.thruster-sound');
-                
-                if (data.state.thrusters.right) {
-                  // Thruster active - show VFX and play sound
-                  if (thrusterVFX) thrusterVFX.setAttribute('visible', true);
-                  if (thrusterSound && thrusterSound.components.sound) {
-                    if (!thrusterSound.components.sound.isPlaying) {
-                      thrusterSound.components.sound.playSound();
-                    }
-                  }
-                } else {
-                  // Thruster inactive - hide VFX and stop sound
-                  if (thrusterVFX) thrusterVFX.setAttribute('visible', false);
-                  if (thrusterSound && thrusterSound.components.sound) {
-                    thrusterSound.components.sound.stopSound();
-                  }
-                }
-              }
-            }
-          }
-          
-          // NEW: Handle boost sound for remote players
-          if (data.state.boost) {
-            const boostSound = remotePlayer.querySelector('.boost-sound');
-            if (boostSound && boostSound.components.sound) {
-              boostSound.components.sound.stopSound();
-              boostSound.components.sound.playSound();
             }
           }
           
@@ -1673,7 +1529,6 @@
                       playerComponent.grabInfo[handKey].surface === captureBall) {
                     playerComponent.grabInfo[handKey] = null;
                     playerComponent.isGrabbing[handKey] = false;
-                    playerComponent.grabbedSurface[handKey] = null; // CRITICAL FIX: Clear grabbedSurface so isHoldingCaptureBall() returns false
                   }
                 });
                 
@@ -1791,13 +1646,6 @@
       // CENTRALIZED GOAL PROCESSING SYSTEM
       function processGoalScored(scoringTeam, goalTeam) {
         console.log(`🏆 GOAL! ${scoringTeam} team scored into ${goalTeam} goal!`);
-        
-        // Play goal sound for all players
-        const goalSound = document.querySelector('#goal-sound');
-        if (goalSound && goalSound.components.sound) {
-          goalSound.components.sound.stopSound();
-          goalSound.components.sound.playSound();
-        }
         
         // Get game manager for time/state checks - FIND THE ACTIVE ONE
         let gameManager = null;
@@ -3035,10 +2883,6 @@ function setGameplayHUD(isPlaying) {
           this.lastSpeedBoostTime = 0;
           this.captureBallReleaseTimeout = 0; // 2 second timeout after releasing capture ball
           
-          // NEW: Boost sound sync for multiplayer
-          this.boostActive = false;
-          this.boostActiveTime = 0;
-          
           // Player-to-player grabbing system
           this.playerGrabTimeouts = new Map(); // playerId -> timeout timestamp
           this.grabbedByPlayer = null; // which player is grabbing this player
@@ -3338,16 +3182,7 @@ function setGameplayHUD(isPlaying) {
           let nearestSurface = null;
           let minDistance = Infinity;
           
-          // Check if level editor is active and has a selected object
-          const levelEditor = this.el.sceneEl.components['level-editor'];
-          const selectedObject = levelEditor ? levelEditor.selectedObject : null;
-          
           allElements.forEach(element => {
-            // Skip the selected object in editor mode (it's ghosted)
-            if (selectedObject && element === selectedObject) {
-              return;
-            }
-            
             const distance = this.getDistanceToSurface(handPos, handRadius, element);
             
             // If hand is touching or very close to surface (within 5cm)
@@ -3387,8 +3222,6 @@ function setGameplayHUD(isPlaying) {
             return this.distanceToCylinder(handPos, handRadius, elementPos, geometry);
           } else if (geometry.primitive === 'octahedron') {
             return this.distanceToOctahedron(handPos, handRadius, elementPos, geometry);
-          } else if (geometry.primitive === 'tetrahedron') {
-            return this.distanceToTetrahedron(handPos, handRadius, elementPos, geometry, element);
           } else if (geometry.primitive === 'torus') {
             return this.distanceToTorus(handPos, handRadius, elementPos, geometry, element);
           } else {
@@ -3478,61 +3311,6 @@ function setGameplayHUD(isPlaying) {
           
           // Return distance to surface minus hand radius (minimum 0)
           return Math.max(0, distanceToSurface - handRadius);
-        },
-
-        distanceToTetrahedron: function(handPos, handRadius, tetrahedronPos, geometry, element) {
-          const tetrahedronRadius = geometry.radius;
-          const relativePos = handPos.clone().sub(tetrahedronPos);
-          
-          // Apply inverse rotation to transform point into tetrahedron's local space
-          const rotation = element ? element.getAttribute('rotation') : null;
-          let localPos = relativePos.clone();
-          if (rotation) {
-            const inverseQuat = new THREE.Quaternion();
-            const euler = new THREE.Euler(
-              THREE.MathUtils.degToRad(rotation.x || 0),
-              THREE.MathUtils.degToRad(rotation.y || 0),
-              THREE.MathUtils.degToRad(rotation.z || 0),
-              'XYZ'
-            );
-            inverseQuat.setFromEuler(euler).invert();
-            localPos.applyQuaternion(inverseQuat);
-          }
-          
-          // Scale factor for vertices
-          const scale = tetrahedronRadius / Math.sqrt(3);
-          
-          const v0 = new THREE.Vector3(-scale, -scale, scale);
-          const v1 = new THREE.Vector3(scale, scale, scale);
-          const v2 = new THREE.Vector3(-scale, scale, -scale);
-          const v3 = new THREE.Vector3(scale, -scale, -scale);
-          
-          // Compute face normals (pointing OUTWARD)
-          const faces = [
-            {p0: v0, p1: v1, p2: v2},
-            {p0: v0, p1: v3, p2: v1},
-            {p0: v0, p1: v2, p2: v3},
-            {p0: v1, p1: v3, p2: v2}
-          ];
-          
-          let maxSignedDistance = -Infinity;
-          
-          for (const face of faces) {
-            const edge1 = new THREE.Vector3().subVectors(face.p1, face.p0);
-            const edge2 = new THREE.Vector3().subVectors(face.p2, face.p0);
-            const normal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
-            
-            const toPoint = new THREE.Vector3().subVectors(localPos, face.p0);
-            const signedDist = toPoint.dot(normal);
-            
-            if (signedDist > maxSignedDistance) {
-              maxSignedDistance = signedDist;
-            }
-          }
-          
-          // maxSignedDistance is the distance to the surface (negative = inside)
-          // Return distance minus hand radius (minimum 0)
-          return Math.max(0, maxSignedDistance - handRadius);
         },
         
         distanceToTorus: function(handPos, handRadius, torusPos, geometry, element) {
@@ -3696,24 +3474,12 @@ function setGameplayHUD(isPlaying) {
             thrusterVFX.setAttribute('visible', true);
             thrusterVFX.setAttribute('material', 'opacity', 0.8);
           }
-          
-          // NEW: Play thruster sound (spatial, positioned at controller)
-          const thrusterSound = hand.querySelector('.thruster-sound');
-          if (thrusterSound && thrusterSound.components.sound) {
-            thrusterSound.components.sound.playSound();
-          }
         },
         
         hideThrusterEffect: function(hand) {
           const thrusterVFX = hand.querySelector('.thruster-vfx');
           if (thrusterVFX) {
             thrusterVFX.setAttribute('visible', false);
-          }
-          
-          // NEW: Stop thruster sound
-          const thrusterSound = hand.querySelector('.thruster-sound');
-          if (thrusterSound && thrusterSound.components.sound) {
-            thrusterSound.components.sound.stopSound();
           }
         },
         
@@ -3875,11 +3641,6 @@ function setGameplayHUD(isPlaying) {
           // Check speed boost cooldown
           if (!this.speedBoostAvailable && Date.now() - this.lastSpeedBoostTime >= this.speedBoostCooldown) {
             this.speedBoostAvailable = true;
-          }
-          
-          // NEW: Reset boost active flag after 100ms (enough time for network sync)
-          if (this.boostActive && Date.now() - this.boostActiveTime > 100) {
-            this.boostActive = false;
           }
           }
         },
@@ -4311,17 +4072,6 @@ function setGameplayHUD(isPlaying) {
           const boostForce = boostDirection.multiplyScalar(this.speedBoostForce);
           this.velocity.add(boostForce);
           
-          // NEW: Play boost sound
-          const boostSound = document.querySelector('#boost-sound');
-          if (boostSound && boostSound.components.sound) {
-            boostSound.components.sound.stopSound(); // Stop any previous boost sound
-            boostSound.components.sound.playSound();
-          }
-          
-          // NEW: Set boost active flag for network sync
-          this.boostActive = true;
-          this.boostActiveTime = Date.now();
-          
           // Start cooldown
           this.speedBoostAvailable = false;
           this.lastSpeedBoostTime = Date.now();
@@ -4523,18 +4273,9 @@ function setGameplayHUD(isPlaying) {
         checkPointCollision: function(point, radius, pointName) {
           const response = new THREE.Vector3(0, 0, 0);
           
-          // Check if level editor is active and has a selected object
-          const levelEditor = this.el.sceneEl.components['level-editor'];
-          const selectedObject = levelEditor ? levelEditor.selectedObject : null;
-          
           // Check against all grab-surface objects
           const surfaces = document.querySelectorAll('[grab-surface]');
           surfaces.forEach(surface => {
-            // Skip the selected object in editor mode (it's ghosted)
-            if (selectedObject && surface === selectedObject) {
-              return;
-            }
-            
             const surfacePos = new THREE.Vector3();
             surface.object3D.getWorldPosition(surfacePos);
             const geometry = surface.getAttribute('geometry');
@@ -4635,81 +4376,6 @@ function setGameplayHUD(isPlaying) {
               }
               
               response.copy(direction.multiplyScalar(penetration));
-            }
-          } else if (geometry.primitive === 'tetrahedron') {
-            // Tetrahedron collision - using signed distance to each face plane
-            const tetrahedronRadius = geometry.radius || 1.0;
-            const relativePos = point.clone().sub(surfacePos);
-            
-            // Apply inverse rotation to transform point into tetrahedron's local space
-            const rotation = element ? element.getAttribute('rotation') : null;
-            let localPos = relativePos.clone();
-            if (rotation) {
-              const inverseQuat = new THREE.Quaternion();
-              const euler = new THREE.Euler(
-                THREE.MathUtils.degToRad(rotation.x || 0),
-                THREE.MathUtils.degToRad(rotation.y || 0),
-                THREE.MathUtils.degToRad(rotation.z || 0),
-                'XYZ'
-              );
-              inverseQuat.setFromEuler(euler).invert();
-              localPos.applyQuaternion(inverseQuat);
-            }
-            
-            // Scale factor for vertices
-            const scale = tetrahedronRadius / Math.sqrt(3);
-            
-            const v0 = new THREE.Vector3(-scale, -scale, scale);
-            const v1 = new THREE.Vector3(scale, scale, scale);
-            const v2 = new THREE.Vector3(-scale, scale, -scale);
-            const v3 = new THREE.Vector3(scale, -scale, -scale);
-            
-            // Compute face normals (pointing OUTWARD)
-            const faces = [
-              {p0: v0, p1: v1, p2: v2},
-              {p0: v0, p1: v3, p2: v1},
-              {p0: v0, p1: v2, p2: v3},
-              {p0: v1, p1: v3, p2: v2}
-            ];
-            
-            let maxSignedDistance = -Infinity;
-            let bestNormal = new THREE.Vector3(0, 1, 0);
-            
-            for (const face of faces) {
-              // Compute normal (v1-v0) x (v2-v0)
-              const edge1 = new THREE.Vector3().subVectors(face.p1, face.p0);
-              const edge2 = new THREE.Vector3().subVectors(face.p2, face.p0);
-              const normal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
-              
-              // Signed distance from point to plane (using local position)
-              const toPoint = new THREE.Vector3().subVectors(localPos, face.p0);
-              const signedDist = toPoint.dot(normal);
-              
-              // Track the maximum signed distance (closest to being outside)
-              if (signedDist > maxSignedDistance) {
-                maxSignedDistance = signedDist;
-                bestNormal = normal.clone();
-              }
-            }
-            
-            const penetration = (radius + this.collisionMargin) - maxSignedDistance;
-            
-            if (penetration > 0) {
-              // Transform normal back to world space
-              if (rotation) {
-                const quat = new THREE.Quaternion();
-                const euler = new THREE.Euler(
-                  THREE.MathUtils.degToRad(rotation.x || 0),
-                  THREE.MathUtils.degToRad(rotation.y || 0),
-                  THREE.MathUtils.degToRad(rotation.z || 0),
-                  'XYZ'
-                );
-                quat.setFromEuler(euler);
-                bestNormal.applyQuaternion(quat);
-              }
-              
-              // Push along the normal of the closest face
-              response.copy(bestNormal.multiplyScalar(penetration));
             }
           } else if (geometry.primitive === 'torus') {
             // Torus collision (check rotation to determine orientation)
@@ -4928,11 +4594,6 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateGrabFeedback: function() {
-          // DISABLED: User requested to turn off green hue proximity feedback
-          // This was interfering with editor mode and was visually distracting
-          return;
-          
-          /* OLD CODE - DISABLED
           // Show visual feedback for grabbable objects in range
           if (!this.leftHand || !this.rightHand) return;
           
@@ -4956,7 +4617,6 @@ function setGameplayHUD(isPlaying) {
           if (rightNearby && !this.isGrabbing.right && rightNearby !== leftNearby) {
             rightNearby.setAttribute('material', 'color', '#00ff00');
           }
-          */
         },
         
         // Option B: Apply rotation to VR rig only (no physics body)
@@ -5489,30 +5149,6 @@ function setGameplayHUD(isPlaying) {
             ];
             
             shape = new CANNON.ConvexPolyhedron(vertices, faces);
-          } else if (geometry && geometry.primitive === 'tetrahedron') {
-            // Tetrahedron: Create proper ConvexPolyhedron matching A-Frame's actual vertices
-            const radius = geometry.radius || 1.0;
-            
-            // A-Frame's actual vertex order (confirmed from geometry inspection):
-            // v0: (-1, -1, +1), v1: (+1, +1, +1), v2: (-1, +1, -1), v3: (+1, -1, -1)
-            const scale = radius / Math.sqrt(3);
-            const vertices = [
-              new CANNON.Vec3(-scale, -scale, scale),     // v0
-              new CANNON.Vec3(scale, scale, scale),       // v1
-              new CANNON.Vec3(-scale, scale, -scale),     // v2
-              new CANNON.Vec3(scale, -scale, -scale)      // v3
-            ];
-            
-            // 4 triangular faces - REVERSED winding to point OUTWARD
-            // CANNON.js requires CCW when viewed from OUTSIDE
-            const faces = [
-              [0, 1, 2],  // v0-v1-v2 (reversed from [0,2,1])
-              [0, 3, 1],  // v0-v3-v1 (reversed from [0,1,3])
-              [0, 2, 3],  // v0-v2-v3 (reversed from [0,3,2])
-              [1, 3, 2]   // v1-v3-v2 (reversed from [1,2,3])
-            ];
-            
-            shape = new CANNON.ConvexPolyhedron(vertices, faces);
           } else if (geometry && geometry.primitive === 'torus') {
             // Torus: Skip CANNON.js physics body - use custom collision detection instead
             return; // Don't create physics body for torus
@@ -5530,25 +5166,27 @@ function setGameplayHUD(isPlaying) {
             collisionFilterMask: 3   // Surfaces collide with groups 1 (player) + 2 (balls) = 3
           });
           
-          // Get position including parent transforms - USE WORLD POSITION
-          const worldPos = new THREE.Vector3();
-          this.el.object3D.getWorldPosition(worldPos);
+          // Get position including parent transforms
+          const position = this.el.getAttribute('position') || {x: 0, y: 0, z: 0};
+          const parentPosition = this.el.parentEl ? this.el.parentEl.getAttribute('position') : {x: 0, y: 0, z: 0};
+          
+          const finalPosition = {
+            x: position.x + (parentPosition.x || 0),
+            y: position.y + (parentPosition.y || 0), 
+            z: position.z + (parentPosition.z || 0)
+          };
           
           const rotation = this.el.getAttribute('rotation');
-          this.body.position.set(worldPos.x, worldPos.y, worldPos.z);
+          this.body.position.set(finalPosition.x, finalPosition.y, finalPosition.z);
           
           // Apply rotation if present
           if (rotation) {
             const rad = Math.PI / 180;
-            // Use THREE.js Euler to ensure correct rotation order (XYZ is default)
-            const euler = new THREE.Euler(
+            this.body.quaternion.setFromEuler(
               rotation.x * rad,
               rotation.y * rad,
-              rotation.z * rad,
-              'XYZ' // Rotation order
+              rotation.z * rad
             );
-            const quat = new THREE.Quaternion().setFromEuler(euler);
-            this.body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
           }
           
           world.addBody(this.body);
@@ -5577,7 +5215,7 @@ function setGameplayHUD(isPlaying) {
         // NEW: Add wireframe visualization for collision shape
         addCollisionWireframe: function(geometry, shape) {
           // Only show wireframes in debug mode or when explicitly enabled
-          const showWireframes = false; // Set to false to disable
+          const showWireframes = true; // Set to false to disable
           
           if (!showWireframes) return;
           
@@ -5598,11 +5236,6 @@ function setGameplayHUD(isPlaying) {
           } else if (geometry && geometry.primitive === 'octahedron') {
             // Octahedron wireframe (use actual octahedron)
             wireframe = document.createElement('a-octahedron');
-            wireframe.setAttribute('radius', geometry.radius || 1.0);
-            wireframe.setAttribute('material', 'wireframe: true; color: #ff00ff; opacity: 0.3; transparent: true');
-          } else if (geometry && geometry.primitive === 'tetrahedron') {
-            // Tetrahedron wireframe (use actual tetrahedron)
-            wireframe = document.createElement('a-tetrahedron');
             wireframe.setAttribute('radius', geometry.radius || 1.0);
             wireframe.setAttribute('material', 'wireframe: true; color: #ff00ff; opacity: 0.3; transparent: true');
           } else if (geometry && geometry.primitive === 'torus') {
@@ -5975,183 +5608,6 @@ function setGameplayHUD(isPlaying) {
           
           // Apply persistent velocity to physics body
           this.body.velocity.set(this.velocity.x, this.velocity.y, this.velocity.z);
-          
-          // CRITICAL: Add custom collision detection for surfaces (same as player system)
-          this.checkCustomCollisionWithSurfaces();
-        },
-        
-        checkCustomCollisionWithSurfaces: function() {
-          // Get bot position and radius
-          const botPos = new THREE.Vector3(this.body.position.x, this.body.position.y, this.body.position.z);
-          const botRadius = 0.2; // Bot collision radius
-          const collisionMargin = 0.1; // Small margin for safety
-          
-          // Query ALL grab-surface elements (dynamically updated list)
-          const surfaces = document.querySelectorAll('[grab-surface]');
-          
-          surfaces.forEach(surface => {
-            const surfacePos = new THREE.Vector3();
-            surface.object3D.getWorldPosition(surfacePos);
-            const geometry = surface.getAttribute('geometry');
-            
-            if (!geometry) return;
-            
-            // Use the same getCollisionResponse logic as zerog-ball
-            const collision = this.getCollisionResponse(botPos, botRadius, surfacePos, geometry, surface);
-            if (collision.length() > 0) {
-              // Push bot away from surface
-              botPos.add(collision);
-              this.body.position.set(botPos.x, botPos.y, botPos.z);
-              
-              // Also dampen velocity in collision direction
-              const collisionDir = collision.clone().normalize();
-              const velocityAlongCollision = this.velocity.dot(collisionDir);
-              if (velocityAlongCollision < 0) {
-                // Remove velocity component towards the surface
-                this.velocity.sub(collisionDir.multiplyScalar(velocityAlongCollision));
-              }
-            }
-          });
-        },
-        
-        getCollisionResponse: function(point, radius, surfacePos, geometry, element) {
-          // EXACT SAME collision logic as zerog-ball component
-          const response = new THREE.Vector3();
-          const collisionMargin = 0.1;
-          
-          if (geometry.primitive === 'box') {
-            const width = geometry.width || 1.0;
-            const height = geometry.height || 1.0;
-            const depth = geometry.depth || 1.0;
-            
-            const relativePos = point.clone().sub(surfacePos);
-            const halfExtents = { x: width / 2, y: height / 2, z: depth / 2 };
-            
-            const closestPoint = new THREE.Vector3(
-              Math.max(-halfExtents.x, Math.min(halfExtents.x, relativePos.x)),
-              Math.max(-halfExtents.y, Math.min(halfExtents.y, relativePos.y)),
-              Math.max(-halfExtents.z, Math.min(halfExtents.z, relativePos.z))
-            );
-            
-            const distance = relativePos.distanceTo(closestPoint);
-            const penetration = radius + collisionMargin - distance;
-            
-            if (penetration > 0) {
-              const direction = relativePos.clone().sub(closestPoint);
-              if (direction.length() === 0) {
-                direction.set(0, 1, 0);
-              }
-              direction.normalize();
-              response.copy(direction.multiplyScalar(penetration));
-            }
-          } else if (geometry.primitive === 'sphere') {
-            const sphereRadius = geometry.radius || 1.0;
-            const distance = point.distanceTo(surfacePos);
-            const penetration = radius + sphereRadius + collisionMargin - distance;
-            
-            if (penetration > 0) {
-              const direction = point.clone().sub(surfacePos);
-              if (direction.length() === 0) {
-                direction.set(0, 1, 0);
-              }
-              direction.normalize();
-              response.copy(direction.multiplyScalar(penetration));
-            }
-          } else if (geometry.primitive === 'octahedron') {
-            const octahedronRadius = geometry.radius || 1.0;
-            const relativePos = point.clone().sub(surfacePos);
-            const absX = Math.abs(relativePos.x);
-            const absY = Math.abs(relativePos.y);
-            const absZ = Math.abs(relativePos.z);
-            const manhattanDistance = absX + absY + absZ;
-            const distanceToSurface = manhattanDistance - octahedronRadius;
-            const penetration = (radius + collisionMargin) - distanceToSurface;
-          
-            if (penetration > 0) {
-              let direction = new THREE.Vector3();
-              
-              if (manhattanDistance > 0.001) {
-                direction.x = relativePos.x >= 0 ? 1 : -1;
-                direction.y = relativePos.y >= 0 ? 1 : -1;
-                direction.z = relativePos.z >= 0 ? 1 : -1;
-                direction.normalize();
-              } else {
-                direction.set(0, 1, 0);
-              }
-              
-              response.copy(direction.multiplyScalar(penetration));
-            }
-          } else if (geometry.primitive === 'tetrahedron') {
-            const tetrahedronRadius = geometry.radius || 1.0;
-            const relativePos = point.clone().sub(surfacePos);
-            
-            // Apply inverse rotation to transform point into tetrahedron's local space
-            const rotation = element ? element.getAttribute('rotation') : null;
-            let localPos = relativePos.clone();
-            if (rotation) {
-              const inverseQuat = new THREE.Quaternion();
-              const euler = new THREE.Euler(
-                THREE.MathUtils.degToRad(rotation.x || 0),
-                THREE.MathUtils.degToRad(rotation.y || 0),
-                THREE.MathUtils.degToRad(rotation.z || 0),
-                'XYZ'
-              );
-              inverseQuat.setFromEuler(euler).invert();
-              localPos.applyQuaternion(inverseQuat);
-            }
-            
-            const scale = tetrahedronRadius / Math.sqrt(3);
-            
-            const v0 = new THREE.Vector3(-scale, -scale, scale);
-            const v1 = new THREE.Vector3(scale, scale, scale);
-            const v2 = new THREE.Vector3(-scale, scale, -scale);
-            const v3 = new THREE.Vector3(scale, -scale, -scale);
-            
-            const faces = [
-              {p0: v0, p1: v1, p2: v2},
-              {p0: v0, p1: v3, p2: v1},
-              {p0: v0, p1: v2, p2: v3},
-              {p0: v1, p1: v3, p2: v2}
-            ];
-            
-            let maxSignedDistance = -Infinity;
-            let bestNormal = new THREE.Vector3(0, 1, 0);
-            
-            for (const face of faces) {
-              const edge1 = new THREE.Vector3().subVectors(face.p1, face.p0);
-              const edge2 = new THREE.Vector3().subVectors(face.p2, face.p0);
-              const normal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
-              
-              const toPoint = new THREE.Vector3().subVectors(localPos, face.p0);
-              const signedDist = toPoint.dot(normal);
-              
-              if (signedDist > maxSignedDistance) {
-                maxSignedDistance = signedDist;
-                bestNormal = normal.clone();
-              }
-            }
-            
-            const penetration = (radius + collisionMargin) - maxSignedDistance;
-            
-            if (penetration > 0) {
-              // Transform normal back to world space
-              if (rotation) {
-                const quat = new THREE.Quaternion();
-                const euler = new THREE.Euler(
-                  THREE.MathUtils.degToRad(rotation.x || 0),
-                  THREE.MathUtils.degToRad(rotation.y || 0),
-                  THREE.MathUtils.degToRad(rotation.z || 0),
-                  'XYZ'
-                );
-                quat.setFromEuler(euler);
-                bestNormal.applyQuaternion(quat);
-              }
-              
-              response.copy(bestNormal.multiplyScalar(penetration));
-            }
-          }
-          
-          return response;
         },
         
         intelligentNavigation: function(dt) {
@@ -6813,7 +6269,7 @@ function setGameplayHUD(isPlaying) {
         // NEW: Add wireframe visualization for collision shape
         addCollisionWireframe: function() {
           // Only show wireframes in debug mode or when explicitly enabled
-          const showWireframes = false; // Set to false to disable
+          const showWireframes = true; // Set to false to disable
           
           if (!showWireframes) return;
           
@@ -6897,8 +6353,11 @@ function setGameplayHUD(isPlaying) {
           const otherBody = evt.target === this.body ? evt.body : evt.target;
           
           // Check if the colliding object is the capture ball
+          // Method 1: Check by element ID
           const isCaptureBallById = otherBody.el && otherBody.el.id === 'capture-ball';
+          // Method 2: Check by physics properties (capture ball has radius 0.2, others have 0.1)
           const isCaptureBallBySize = otherBody.shape && otherBody.shape.radius === 0.2;
+          
           
           if (isCaptureBallById || isCaptureBallBySize) {
             
@@ -7006,65 +6465,6 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // NEW: Goal ring component for metal hit sounds when ball bounces off torus
-      AFRAME.registerComponent('goal-ring', {
-        init: function() {
-          // Collision cooldown to prevent sound spam
-          this.lastCollisionTime = 0;
-          this.collisionCooldown = 200; // 200ms between sounds
-          
-          // Wait for physics body to be created by grab-surface component
-          // Try multiple times with longer delays
-          this.tryAttachCollisionListener(0);
-        },
-        
-        tryAttachCollisionListener: function(attempt) {
-          if (attempt > 10) {
-            return;
-          }
-          
-          setTimeout(() => {
-            if (this.el.body) {
-              // Listen for collisions with the torus ring
-              this.el.body.addEventListener('collide', (evt) => {
-                this.handleCollision(evt);
-              });
-            } else {
-              this.tryAttachCollisionListener(attempt + 1);
-            }
-          }, 100 + (attempt * 100)); // Increase delay with each attempt
-        },
-        
-        handleCollision: function(evt) {
-          const now = Date.now();
-          
-          // Cooldown check
-          if (now - this.lastCollisionTime < this.collisionCooldown) {
-            return;
-          }
-          
-          const otherBody = evt.target === this.el.body ? evt.body : evt.target;
-          
-          // Check if colliding with capture ball
-          const isCaptureBallById = otherBody.el && otherBody.el.id === 'capture-ball';
-          const isCaptureBallBySize = otherBody.shape && otherBody.shape.radius === 0.2;
-          
-          if (isCaptureBallById || isCaptureBallBySize) {
-            // Play random metal hit sound (1-3)
-            const randomSound = Math.floor(Math.random() * 3) + 1;
-            const metalHitSound = this.el.querySelector(`.metal-hit-sound-${randomSound}`);
-            
-            if (metalHitSound && metalHitSound.components.sound) {
-              metalHitSound.components.sound.stopSound(); // Stop any previous sound
-              metalHitSound.components.sound.playSound();
-              
-              // Update cooldown timestamp
-              this.lastCollisionTime = now;
-            }
-          }
-        }
-      });
-
       // Game manager component for zero-g multiplayer
       // Add glow component (copied from index.html)
       AFRAME.registerComponent('glow', {
@@ -7093,268 +6493,157 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // Component to add emissive edges to octahedrons
-      AFRAME.registerComponent('octahedron-edges', {
-        schema: {
-          edgeColor: { type: 'color', default: '#ffffff' },
-          edgeThickness: { type: 'number', default: 0.1 },
-          emissiveIntensity: { type: 'number', default: 1.5 }
-        },
-        
+      // Component for tube launcher
+      AFRAME.registerComponent('tube-launcher', {
         init: function() {
-          this.edgesCreated = false;
-          this.attemptCount = 0;
+          this.container = this.el.parentElement;
           
-          // Try multiple times with delays to catch when geometry is ready
-          this.tryCreateEdges();
+          // Determine launcher position and direction based on container ID
+          const containerId = this.container.id;
+          if (containerId === 'tube-launcher-container-2') {
+            // Back launcher (negative Z)
+            this.startPosition = {x: 0, y: 2, z: -3};
+            this.launchDirection = 1; // Launch toward positive Z
+          } else {
+            // Front launcher (original, positive Z)
+            this.startPosition = {x: 0, y: 2, z: 3};
+            this.launchDirection = -1; // Launch toward negative Z
+          }
+          
+          this.isLaunching = false;
+          this.isReturning = false;
+          this.launchSpeed = 10;
+          this.returnTime = 3000;
+          this.wasGrabbed = false;
         },
         
-        tryCreateEdges: function() {
-          if (this.edgesCreated) return;
+        tick: function() {
+          const player = document.querySelector('[zerog-player]');
+          let isCurrentlyGrabbed = false;
           
-          this.attemptCount++;
-          
-          const mesh = this.el.getObject3D('mesh');
-          if (!mesh || !mesh.geometry) {
-            // Not ready yet, retry
-            if (this.attemptCount < 5) {
-              setTimeout(() => this.tryCreateEdges(), 100 * this.attemptCount);
-            }
-            return;
+          if (player && player.components['zerog-player']) {
+            const playerComponent = player.components['zerog-player'];
+            ['left', 'right'].forEach(handKey => {
+              if (playerComponent.grabInfo[handKey] && 
+                  playerComponent.grabInfo[handKey].surface === this.el) {
+                isCurrentlyGrabbed = true;
+              }
+            });
           }
           
-          this.edgesCreated = true;
-          this.createEdges(mesh.geometry);
+          if (isCurrentlyGrabbed && !this.wasGrabbed && !this.isLaunching && !this.isReturning) {
+            this.wasGrabbed = true;
+            if (player) {
+              this.launchPlayer(player);
+            }
+          } else if (!isCurrentlyGrabbed) {
+            this.wasGrabbed = false;
+          }
         },
         
-        createEdges: function(geometry) {
-          const radius = parseFloat(this.el.getAttribute('radius')) || 20;
-          const edgeColor = this.data.edgeColor;
-          const thickness = this.data.edgeThickness;
-          const emissive = this.data.emissiveIntensity;
-          
-          const positionAttr = geometry.attributes.position;
-          
-          if (!positionAttr) {
-            console.error('❌ octahedron-edges: No position attribute');
+        onGrabStart: function(event) {
+          if (this.isLaunching || this.isReturning) {
             return;
           }
           
-          const vertexMap = new Map();
-          const vertices = [];
+          let player = null;
           
-          for (let i = 0; i < positionAttr.count; i++) {
-            const x = Math.round(positionAttr.getX(i) * 1000) / 1000;
-            const y = Math.round(positionAttr.getY(i) * 1000) / 1000;
-            const z = Math.round(positionAttr.getZ(i) * 1000) / 1000;
-            const key = `${x},${y},${z}`;
-            
-            if (!vertexMap.has(key)) {
-              vertexMap.set(key, vertices.length);
-              vertices.push(new THREE.Vector3(x, y, z));
-            }
+          if (event.detail && event.detail.hand) {
+            player = event.detail.hand.el.closest('[zerog-player]');
           }
           
-          const eps = 0.1;
-          let topV = null, bottomV = null, rightV = null, leftV = null, frontV = null, backV = null;
-          
-          vertices.forEach(v => {
-            if (Math.abs(v.y - radius) < eps && Math.abs(v.x) < eps && Math.abs(v.z) < eps) topV = v;
-            else if (Math.abs(v.y + radius) < eps && Math.abs(v.x) < eps && Math.abs(v.z) < eps) bottomV = v;
-            else if (Math.abs(v.x - radius) < eps && Math.abs(v.y) < eps && Math.abs(v.z) < eps) rightV = v;
-            else if (Math.abs(v.x + radius) < eps && Math.abs(v.y) < eps && Math.abs(v.z) < eps) leftV = v;
-            else if (Math.abs(v.z - radius) < eps && Math.abs(v.x) < eps && Math.abs(v.y) < eps) frontV = v;
-            else if (Math.abs(v.z + radius) < eps && Math.abs(v.x) < eps && Math.abs(v.y) < eps) backV = v;
-          });
-          
-          if (!topV || !bottomV || !rightV || !leftV || !frontV || !backV) {
-            console.error('❌ octahedron-edges: Missing vertices');
-            return;
+          if (!player) {
+            player = document.querySelector('#player');
           }
           
-          const edges = [
-            [topV, rightV], [topV, leftV], [topV, frontV], [topV, backV],
-            [bottomV, rightV], [bottomV, leftV], [bottomV, frontV], [bottomV, backV],
-            [rightV, frontV], [frontV, leftV], [leftV, backV], [backV, rightV]
-          ];
+          if (!player) {
+            player = document.querySelector('[zerog-player]');
+          }
           
-          edges.forEach(([v1, v2]) => {
-            const midpoint = new THREE.Vector3().addVectors(v1, v2).multiplyScalar(0.5);
-            const direction = new THREE.Vector3().subVectors(v2, v1);
-            const length = direction.length();
-            direction.normalize();
-            
-            const edge = document.createElement('a-cylinder');
-            edge.setAttribute('position', `${midpoint.x} ${midpoint.y} ${midpoint.z}`);
-            edge.setAttribute('radius', thickness);
-            edge.setAttribute('height', length);
-            edge.setAttribute('color', edgeColor);
-            edge.setAttribute('material', `shader: standard; emissive: ${edgeColor}; emissiveIntensity: ${emissive}; metalness: 0.3; roughness: 0.7`);
-            
-            const isMiddleEdge = Math.abs(v1.y) < 0.1 && Math.abs(v2.y) < 0.1;
-            
-            let rotDeg;
-            if (isMiddleEdge) {
-              const cylinder = new THREE.Object3D();
-              cylinder.position.copy(midpoint);
-              cylinder.lookAt(v2);
-              cylinder.rotateX(Math.PI / 2);
-              
-              const euler = new THREE.Euler().setFromQuaternion(cylinder.quaternion, 'XYZ');
-              rotDeg = {
-                x: THREE.MathUtils.radToDeg(euler.x),
-                y: THREE.MathUtils.radToDeg(euler.y),
-                z: THREE.MathUtils.radToDeg(euler.z)
+          if (player) {
+            this.launchPlayer(player);
+          }
+        },
+        
+        launchPlayer: function(player) {
+          this.isLaunching = true;
+          
+          const currentPosStr = this.container.getAttribute('position');
+          let currentPos;
+          
+          if (typeof currentPosStr === 'string') {
+            const parts = currentPosStr.split(' ');
+            currentPos = {
+              x: parseFloat(parts[0]) || 0,
+              y: parseFloat(parts[1]) || 0,
+              z: parseFloat(parts[2]) || 0
             };
           } else {
-              const quaternion = new THREE.Quaternion();
-              const up = new THREE.Vector3(0, 1, 0);
-              quaternion.setFromUnitVectors(up, direction);
-              
-              const euler = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ');
-              rotDeg = {
-                x: THREE.MathUtils.radToDeg(euler.x),
-                y: THREE.MathUtils.radToDeg(euler.y),
-                z: THREE.MathUtils.radToDeg(euler.z)
-              };
-            }
-            
-            edge.setAttribute('rotation', `${rotDeg.x} ${rotDeg.y} ${rotDeg.z}`);
-            this.el.appendChild(edge);
+            currentPos = currentPosStr || this.startPosition;
+          }
+          
+          const targetZ = currentPos.z + (this.launchDirection * 6); // Launch 6m in the determined direction
+          const launchDirectionVector = new THREE.Vector3(0, 0, this.launchDirection);
+          
+          let playerComponent = null;
+          if (player && player.components && player.components['zerog-player']) {
+            playerComponent = player.components['zerog-player'];
+          }
+          
+          // Force release player from grab system
+          if (playerComponent) {
+            ['left', 'right'].forEach(handKey => {
+              if (playerComponent.grabInfo[handKey] && 
+                  playerComponent.grabInfo[handKey].surface === this.el) {
+                playerComponent.grabInfo[handKey] = null;
+              }
+            });
+          }
+          
+          // Apply launch velocity to player
+          if (playerComponent && playerComponent.velocity) {
+            playerComponent.velocity.set(
+              launchDirectionVector.x * this.launchSpeed,
+              launchDirectionVector.y * this.launchSpeed,
+              launchDirectionVector.z * this.launchSpeed
+            );
+          }
+          
+          // Animate ring to target position
+          const newPos = {
+            x: currentPos.x,
+            y: currentPos.y,
+            z: targetZ
+          };
+          
+          this.container.removeAttribute('animation');
+          this.container.setAttribute('animation', {
+            property: 'position',
+            to: `${newPos.x} ${newPos.y} ${newPos.z}`,
+            dur: 500,
+            easing: 'easeOutQuad'
           });
-        }
-      });
-
-      // Component to add emissive edges to tetrahedrons
-      AFRAME.registerComponent('tetrahedron-edges', {
-        schema: {
-          edgeColor: { type: 'color', default: '#ffffff' },
-          edgeThickness: { type: 'number', default: 0.1 },
-          emissiveIntensity: { type: 'number', default: 1.5 }
+          
+          setTimeout(() => {
+            this.returnToStart();
+          }, 500);
         },
         
-        init: function() {
-          this.edgesCreated = false;
-          this.attemptCount = 0;
+        returnToStart: function() {
+          this.isReturning = true;
           
-          // Try multiple times with delays to catch when geometry is ready
-          this.tryCreateEdges();
-        },
-        
-        tryCreateEdges: function() {
-          if (this.edgesCreated) return;
-          
-          this.attemptCount++;
-          
-          const mesh = this.el.getObject3D('mesh');
-          if (!mesh || !mesh.geometry) {
-            // Not ready yet, retry
-            if (this.attemptCount < 5) {
-              setTimeout(() => this.tryCreateEdges(), 100 * this.attemptCount);
-            }
-            return;
-          }
-          
-          this.edgesCreated = true;
-          this.createEdges(mesh.geometry);
-        },
-        
-        createEdges: function(geometry) {
-          const radius = parseFloat(this.el.getAttribute('radius')) || 1.0;
-          const edgeColor = this.data.edgeColor;
-          const thickness = this.data.edgeThickness;
-          const emissive = this.data.emissiveIntensity;
-          
-          // Read ACTUAL vertices from the A-Frame mesh geometry
-          const mesh = this.el.getObject3D('mesh');
-          if (!mesh || !mesh.geometry) {
-            console.error('❌ No mesh geometry available');
-            return;
-          }
-          
-          const positionAttr = mesh.geometry.attributes.position;
-          if (!positionAttr) {
-            console.error('❌ No position attribute');
-            return;
-          }
-          
-          // Extract unique vertices
-          const vertexMap = new Map();
-          const vertices = [];
-          
-          for (let i = 0; i < positionAttr.count; i++) {
-            const x = positionAttr.getX(i);
-            const y = positionAttr.getY(i);
-            const z = positionAttr.getZ(i);
-            const key = `${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)}`;
-            
-            if (!vertexMap.has(key)) {
-              vertexMap.set(key, vertices.length);
-              vertices.push(new THREE.Vector3(x, y, z));
-            }
-          }
-          
-          if (vertices.length !== 4) {
-            console.error(`❌ Expected 4 unique vertices, found ${vertices.length}`);
-            return;
-          }
-          
-          // Create all 6 edges (connect every pair of vertices)
-          const edges = [];
-          for (let i = 0; i < 4; i++) {
-            for (let j = i + 1; j < 4; j++) {
-              edges.push([vertices[i], vertices[j]]);
-            }
-          }
-          
-          edges.forEach(([start, end], index) => {
-            const midpoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
-            const direction = new THREE.Vector3().subVectors(end, start);
-            const length = direction.length();
-            direction.normalize();
-            
-            const edge = document.createElement('a-cylinder');
-            edge.setAttribute('position', `${midpoint.x} ${midpoint.y} ${midpoint.z}`);
-            edge.setAttribute('radius', thickness);
-            edge.setAttribute('height', length);
-            edge.setAttribute('color', edgeColor);
-            edge.setAttribute('material', `shader: standard; emissive: ${edgeColor}; emissiveIntensity: ${emissive}; metalness: 0.3; roughness: 0.7`);
-            
-            // Rotate cylinder to align with edge
-            // Check if this is a horizontal edge (Y component near zero)
-            const isHorizontal = Math.abs(direction.y) < 0.01;
-            
-            let rotDeg;
-            if (isHorizontal) {
-              // For horizontal edges, use lookAt + 90° X rotation
-              const tempObj = new THREE.Object3D();
-              tempObj.position.copy(midpoint);
-              tempObj.lookAt(end);
-              tempObj.rotateX(Math.PI / 2);
-              
-              const euler = new THREE.Euler().setFromQuaternion(tempObj.quaternion, 'XYZ');
-              rotDeg = {
-                x: THREE.MathUtils.radToDeg(euler.x),
-                y: THREE.MathUtils.radToDeg(euler.y),
-                z: THREE.MathUtils.radToDeg(euler.z)
-              };
-            } else {
-              // For non-horizontal edges, use standard quaternion rotation
-              const quaternion = new THREE.Quaternion();
-              const up = new THREE.Vector3(0, 1, 0);
-              quaternion.setFromUnitVectors(up, direction);
-              
-              const euler = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ');
-              rotDeg = {
-                x: THREE.MathUtils.radToDeg(euler.x),
-                y: THREE.MathUtils.radToDeg(euler.y),
-                z: THREE.MathUtils.radToDeg(euler.z)
-              };
-            }
-            
-            edge.setAttribute('rotation', `${rotDeg.x} ${rotDeg.y} ${rotDeg.z}`);
-            this.el.appendChild(edge);
+          this.container.removeAttribute('animation');
+          this.container.setAttribute('animation', {
+            property: 'position',
+            to: `${this.startPosition.x} ${this.startPosition.y} ${this.startPosition.z}`,
+            dur: this.returnTime,
+            easing: 'easeInOutQuad'
           });
+          
+          setTimeout(() => {
+            this.isLaunching = false;
+            this.isReturning = false;
+          }, this.returnTime);
         }
       });
 
@@ -7380,12 +6669,7 @@ function setGameplayHUD(isPlaying) {
             this.bounceSound.components.sound.pauseSound();
           }
           
-          // NEW: Initialize sounds when player enters VR or on first interaction
-          this.el.sceneEl.addEventListener('enter-vr', () => {
-            this.initializeSounds();
-          });
-          
-          // Also listen for game start (for non-VR mode)
+          // Listen for game start
           this.el.sceneEl.addEventListener('gameStarted', () => {
             this.initializeSounds();
           });
@@ -7394,16 +6678,6 @@ function setGameplayHUD(isPlaying) {
           this.el.sceneEl.addEventListener('abuttondown', () => {
             this.tryStartSounds();
           });
-          
-          // NEW: Also try on any button press
-          this.el.sceneEl.addEventListener('triggerdown', () => {
-            this.tryStartSounds();
-          });
-          
-          // NEW: Auto-initialize after a short delay (for desktop mode)
-          setTimeout(() => {
-            this.tryStartSounds();
-          }, 1000);
         },
         
         initializeSounds: function() {
@@ -7416,9 +6690,9 @@ function setGameplayHUD(isPlaying) {
             audioContext.resume();
           }
           
-          // NEW: Start ALL ball hum sounds (not just red and blue)
+          // Start all ball hum sounds
           this.ballSounds.forEach((sound, index) => {
-            if (sound.id && sound.id.includes('-ball-hum')) {
+            if (sound.id && (sound.id === 'red-ball-hum' || sound.id === 'blue-ball-hum')) {
               try {
                 sound.components.sound.playSound();
               } catch (e) {
@@ -8287,87 +7561,37 @@ function setGameplayHUD(isPlaying) {
           this.toggleHUDLayers(this.menuVisible);
           
           // Show/hide laser pointers based on menu visibility
-          // CRITICAL FIX: Menu takes priority over editor mode
-          const editorComponent = this.el.sceneEl.components['level-editor'];
-          const isEditorActive = editorComponent && editorComponent.data.enabled;
+          // CRITICAL FIX: Properly disable raycaster interactions when menu is closed
+          const leftRaycastSettings = this.menuVisible ? 
+            `objects: .clickable; lineColor: #ffffff; lineOpacity: 1; far: 10; enabled: true` :
+            `objects: ; lineColor: #ffffff; lineOpacity: 0; far: 10; enabled: false`;
+          const rightRaycastSettings = this.menuVisible ? 
+            `objects: .clickable; lineColor: #ffffff; lineOpacity: 1; far: 10; enabled: true` :
+            `objects: ; lineColor: #ffffff; lineOpacity: 0; far: 10; enabled: false`;
           
-          if (this.menuVisible) {
-            // Menu is open - ALWAYS show white lasers for menu interaction (takes priority)
-            if (leftHand) {
-              leftHand.setAttribute('raycaster', {
-                objects: '.clickable',
-                lineColor: '#ffffff',
-                lineOpacity: 1,
-                far: 10,
-                enabled: true
-              });
+          if (leftHand) {
+            leftHand.setAttribute('raycaster', leftRaycastSettings);
+            // Left hand raycaster updated
+            
+            // If opening menu, force disable any active thrusters
+            if (this.menuVisible) {
+              const leftThruster = leftHand.querySelector('.thruster-vfx');
+              if (leftThruster) leftThruster.setAttribute('visible', false);
             }
-            if (rightHand) {
-              rightHand.setAttribute('raycaster', {
-                objects: '.clickable',
-                lineColor: '#ffffff',
-                lineOpacity: 1,
-                far: 10,
-                enabled: true
-              });
-            }
-          } else if (isEditorActive) {
-            // Menu is closed and editor is active - restore editor raycaster settings
-            // CRITICAL: Don't set 'far' to allow full-range raycasting
-            if (leftHand) {
-              leftHand.setAttribute('raycaster', {
-                objects: '[grab-surface], .gizmo-axis',
-                lineColor: '#ffff00',
-                lineOpacity: 0.8,
-                far: 100,
-                enabled: true
-              });
-              console.log('🔧 DEBUG: Left hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, far: 100');
-            }
-            if (rightHand) {
-              rightHand.setAttribute('raycaster', {
-                objects: '[grab-surface], .gizmo-axis',
-                lineColor: '#ffff00',
-                lineOpacity: 0.8,
-                far: 100,
-                enabled: true
-              });
-              console.log('🔧 DEBUG: Right hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, far: 100');
-            }
-          } else {
-            // Normal mode - hide lasers
-            if (leftHand) {
-              leftHand.setAttribute('raycaster', {
-                objects: '',
-                lineColor: '#ffffff',
-                lineOpacity: 0,
-                far: 10,
-                enabled: false
-              });
-            }
-            if (rightHand) {
-              rightHand.setAttribute('raycaster', {
-                objects: '',
-                lineColor: '#ffffff',
-                lineOpacity: 0,
-                far: 10,
-                enabled: false
-              });
+          }
+          if (rightHand) {
+            rightHand.setAttribute('raycaster', rightRaycastSettings);
+            // Right hand raycaster updated
+            
+            // If opening menu, force disable any active thrusters
+            if (this.menuVisible) {
+              const rightThruster = rightHand.querySelector('.thruster-vfx');
+              if (rightThruster) rightThruster.setAttribute('visible', false);
             }
           }
           
           // Reset thruster states when menu opens
           if (this.menuVisible) {
-            // Force disable any active thrusters when menu is visible
-            if (leftHand) {
-              const leftThruster = leftHand.querySelector('.thruster-vfx');
-              if (leftThruster) leftThruster.setAttribute('visible', false);
-            }
-            if (rightHand) {
-              const rightThruster = rightHand.querySelector('.thruster-vfx');
-              if (rightThruster) rightThruster.setAttribute('visible', false);
-            }
-            
             const zerogPlayer = document.querySelector('[zerog-player]');
             if (zerogPlayer && zerogPlayer.components['zerog-player']) {
               const player = zerogPlayer.components['zerog-player'];
@@ -8842,19 +8066,6 @@ function setGameplayHUD(isPlaying) {
                 };
               }
               
-              // NEW: Add thruster states for multiplayer sync
-              const player = document.querySelector('[zerog-player]');
-              if (player && player.components['zerog-player']) {
-                const playerComponent = player.components['zerog-player'];
-                playerState.thrusters = {
-                  left: playerComponent.thrusterActive.left,
-                  right: playerComponent.thrusterActive.right
-                };
-                
-                // NEW: Add boost state for multiplayer sync
-                playerState.boost = playerComponent.boostActive;
-              }
-              
               sendPlayerState(playerState);
               
               // Debug: Log when client sends data (throttled to once per 30 seconds)
@@ -9144,31 +8355,6 @@ function setGameplayHUD(isPlaying) {
                 // Handle shield logic - this will deactivate shields and restore collision masks
                 this.handleShieldCollision(otherBody, otherBallComponent, evt.contact);
               }
-              
-              // NEW: Add haptic feedback when held ball is hit by another ball
-              // If this ball is currently grabbed by a player and gets hit by another ball
-              if (this.isGrabbed && this.grabbingHand) {
-                // Calculate impact strength based on relative velocity
-                const relativeVelocity = new THREE.Vector3(
-                  otherBody.velocity.x - this.body.velocity.x,
-                  otherBody.velocity.y - this.body.velocity.y,
-                  otherBody.velocity.z - this.body.velocity.z
-                );
-                const impactSpeed = relativeVelocity.length();
-                
-                // Only vibrate on significant impacts (> 0.5 m/s relative velocity)
-                if (impactSpeed > 0.5) {
-                  // Scale haptic intensity based on impact (0.2 to 0.8 intensity)
-                  const hapticIntensity = Math.min(0.8, 0.2 + (impactSpeed * 0.1));
-                  const hapticDuration = Math.min(150, 50 + (impactSpeed * 10));
-                  
-                  // Trigger haptic feedback on the hand holding the ball
-                  if (this.grabbingHand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
-                    const haptics = this.grabbingHand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
-                    haptics.pulse(hapticIntensity, hapticDuration).catch(() => {});
-                  }
-                }
-              }
             }
             
             // Capture ball collision detection
@@ -9212,12 +8398,6 @@ function setGameplayHUD(isPlaying) {
           this.hitCooldown = 2000; // 2 seconds cooldown
           
           this.el.sceneEl.addEventListener('triggerdown', (evt) => {
-            // NEW: Block tractor beam in editor mode
-            const editorComponent = this.el.sceneEl.components['level-editor'];
-            if (editorComponent && editorComponent.data.enabled) {
-              return; // Don't activate tractor beam in editor mode
-            }
-            
             // Check if player is stunned
             const player = document.querySelector('[zerog-player]');
             if (player && player.components['zerog-player'] && player.components['zerog-player'].isStunned) {
@@ -9234,10 +8414,10 @@ function setGameplayHUD(isPlaying) {
             
             // FIXED: Only allow tractor beam on player's own ball, NOT capture ball
             // Check if this ball is owned by the current player (excludes capture ball)
-            // CRITICAL FIX: Removed owner === 'human' check - isMyBall is sufficient since it validates the ball belongs to current player
-            if (isMyBall && !this.isCaptureBall) {
+            if (this.data.owner === 'human' && isMyBall && !this.isCaptureBall) {
               this.tractorBeamActive = true;
             }
+            // Bots cannot be controlled by humans
           });
           
           this.el.sceneEl.addEventListener('triggerup', (evt) => {
@@ -9251,8 +8431,7 @@ function setGameplayHUD(isPlaying) {
             
             // FIXED: Only allow tractor beam on player's own ball, NOT capture ball
             // Check if this ball is owned by the current player (excludes capture ball)
-            // CRITICAL FIX: Removed owner === 'human' check - isMyBall is sufficient since it validates the ball belongs to current player
-            if (isMyBall && !this.isCaptureBall) {
+            if (this.data.owner === 'human' && isMyBall && !this.isCaptureBall) {
               this.tractorBeamActive = false;
             }
           });
@@ -10426,8 +9605,7 @@ function setGameplayHUD(isPlaying) {
               // Keep zero gravity
               this.body.gravity.set(0, 0, 0);
               
-              // TEMPORARILY DISABLED: Apply Magnus effect for spinning balls
-              /*
+              // Apply Magnus effect for spinning balls (matching index.html exactly)
               if (this.body.velocity.length() > 0.1) {
                 const velocity = new THREE.Vector3(
                   this.body.velocity.x,
@@ -10443,6 +9621,10 @@ function setGameplayHUD(isPlaying) {
 
                 const angularSpeed = angularVelocity.length();
                 const linearSpeed = velocity.length();
+                
+                // Debug: Always log spin and speed when ball is moving to see what we're working with
+                // if (linearSpeed > 0.5) {
+                // }
                 
                 // Apply Magnus effect - subtle curve to existing motion
                 if (angularSpeed > 0.1 && linearSpeed > 0.5) { // Much lower thresholds
@@ -10461,51 +9643,40 @@ function setGameplayHUD(isPlaying) {
                   this.body.velocity.x += magnusAcceleration.x;
                   this.body.velocity.y += magnusAcceleration.y;
                   this.body.velocity.z += magnusAcceleration.z;
+                  
+                  // Log Magnus effect very rarely
+                  // Magnus effect logging removed
                 }
-              }
-              */
 
-              // Get velocity for damping and speed limits (moved outside Magnus effect block)
-              const velocity = new THREE.Vector3(
-                this.body.velocity.x,
-                this.body.velocity.y,
-                this.body.velocity.z
-              );
-
-              const angularVelocity = new THREE.Vector3(
-                this.body.angularVelocity.x,
-                this.body.angularVelocity.y,
-                this.body.angularVelocity.z
-              );
-
-              // Add minimal damping only for very slow balls to prevent infinite bouncing
-              const speed = velocity.length();
-              const currentAngularSpeed = angularVelocity.length();
-              if (speed < 0.5 && currentAngularSpeed < 1.0) { // Only damp if both linear and angular are slow
-                const damping = 0.995;
-                this.body.velocity.x *= damping;
-                this.body.velocity.y *= damping;
-                this.body.velocity.z *= damping;
-                this.body.angularVelocity.x *= damping;
-                this.body.angularVelocity.y *= damping;
-                this.body.angularVelocity.z *= damping;
-              }
-              
-              // GLOBAL SPEED LIMIT: Prevent any ball from escaping the environment
-              const maxGlobalSpeed = 12.0; // Maximum speed for any ball movement
-              if (speed > maxGlobalSpeed) {
-                const scale = maxGlobalSpeed / speed;
-                this.body.velocity.x *= scale;
-                this.body.velocity.y *= scale;
-                this.body.velocity.z *= scale;
+                // Add minimal damping only for very slow balls to prevent infinite bouncing
+                const speed = velocity.length();
+                const currentAngularSpeed = angularVelocity.length();
+                if (speed < 0.5 && currentAngularSpeed < 1.0) { // Only damp if both linear and angular are slow
+                  const damping = 0.995;
+                  this.body.velocity.x *= damping;
+                  this.body.velocity.y *= damping;
+                  this.body.velocity.z *= damping;
+                  this.body.angularVelocity.x *= damping;
+                  this.body.angularVelocity.y *= damping;
+                  this.body.angularVelocity.z *= damping;
+                }
                 
-                // Also limit angular velocity to prevent excessive spinning
-                const maxAngularSpeed = 20.0;
-                if (currentAngularSpeed > maxAngularSpeed) {
-                  const angularScale = maxAngularSpeed / currentAngularSpeed;
-                  this.body.angularVelocity.x *= angularScale;
-                  this.body.angularVelocity.y *= angularScale;
-                  this.body.angularVelocity.z *= angularScale;
+                // GLOBAL SPEED LIMIT: Prevent any ball from escaping the environment
+                const maxGlobalSpeed = 12.0; // Maximum speed for any ball movement
+                if (speed > maxGlobalSpeed) {
+                  const scale = maxGlobalSpeed / speed;
+                  this.body.velocity.x *= scale;
+                  this.body.velocity.y *= scale;
+                  this.body.velocity.z *= scale;
+                  
+                  // Also limit angular velocity to prevent excessive spinning
+                  const maxAngularSpeed = 20.0;
+                  if (currentAngularSpeed > maxAngularSpeed) {
+                    const angularScale = maxAngularSpeed / currentAngularSpeed;
+                    this.body.angularVelocity.x *= angularScale;
+                    this.body.angularVelocity.y *= angularScale;
+                    this.body.angularVelocity.z *= angularScale;
+                  }
                 }
               }
             }
@@ -10654,11 +9825,6 @@ function setGameplayHUD(isPlaying) {
                 force: force
               };
             }
-          } else if (geometry.primitive === 'tetrahedron') {
-            // Tetrahedron collision - DISABLED (using CANNON.js physics only)
-            // Custom collision was causing phantom collisions across the arena
-            // CANNON.js ConvexPolyhedron handles this correctly
-            return { safePos: null, force: new THREE.Vector3(0, 0, 0) };
           }
           
           return { safePos: null, force: new THREE.Vector3(0, 0, 0) }; // No collision
@@ -10683,24 +9849,6 @@ function setGameplayHUD(isPlaying) {
             // Use the EXACT same collision response function as player
             const collision = this.getCollisionResponse(ballPos, ballRadius, surfacePos, geometry, surface);
             if (collision.length() > 0) {
-              // NEW: Check if this is a goal ring torus and capture ball - play metal hit sound
-              if (this.isCaptureBall && geometry.primitive === 'torus' && surface.hasAttribute('goal-ring')) {
-                // Check cooldown
-                const now = Date.now();
-                surface._lastMetalHitTime = surface._lastMetalHitTime || 0;
-                if (now - surface._lastMetalHitTime > 200) { // 200ms cooldown
-                  // Play random metal hit sound (1-3)
-                  const randomSound = Math.floor(Math.random() * 3) + 1;
-                  const metalHitSound = surface.querySelector(`.metal-hit-sound-${randomSound}`);
-                  
-                  if (metalHitSound && metalHitSound.components.sound) {
-                    metalHitSound.components.sound.stopSound();
-                    metalHitSound.components.sound.playSound();
-                    surface._lastMetalHitTime = now;
-                  }
-                }
-              }
-              
               // Apply collision response to ball physics
               const newPos = ballPos.clone().add(collision);
               this.body.position.set(newPos.x, newPos.y, newPos.z);
@@ -10790,77 +9938,6 @@ function setGameplayHUD(isPlaying) {
               }
               
               response.copy(direction.multiplyScalar(penetration));
-            }
-          } else if (geometry.primitive === 'tetrahedron') {
-            // Tetrahedron collision - using signed distance to each face plane (SAME as player)
-            const tetrahedronRadius = geometry.radius || 1.0;
-            const relativePos = point.clone().sub(surfacePos);
-            
-            // Apply inverse rotation to transform point into tetrahedron's local space
-            const rotation = element ? element.getAttribute('rotation') : null;
-            let localPos = relativePos.clone();
-            if (rotation) {
-              const inverseQuat = new THREE.Quaternion();
-              const euler = new THREE.Euler(
-                THREE.MathUtils.degToRad(rotation.x || 0),
-                THREE.MathUtils.degToRad(rotation.y || 0),
-                THREE.MathUtils.degToRad(rotation.z || 0),
-                'XYZ'
-              );
-              inverseQuat.setFromEuler(euler).invert();
-              localPos.applyQuaternion(inverseQuat);
-            }
-            
-            // Scale factor for vertices
-            const scale = tetrahedronRadius / Math.sqrt(3);
-            
-            const v0 = new THREE.Vector3(-scale, -scale, scale);
-            const v1 = new THREE.Vector3(scale, scale, scale);
-            const v2 = new THREE.Vector3(-scale, scale, -scale);
-            const v3 = new THREE.Vector3(scale, -scale, -scale);
-            
-            // Compute face normals (pointing OUTWARD)
-            const faces = [
-              {p0: v0, p1: v1, p2: v2},
-              {p0: v0, p1: v3, p2: v1},
-              {p0: v0, p1: v2, p2: v3},
-              {p0: v1, p1: v3, p2: v2}
-            ];
-            
-            let maxSignedDistance = -Infinity;
-            let bestNormal = new THREE.Vector3(0, 1, 0);
-            
-            for (const face of faces) {
-              const edge1 = new THREE.Vector3().subVectors(face.p1, face.p0);
-              const edge2 = new THREE.Vector3().subVectors(face.p2, face.p0);
-              const normal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
-              
-              const toPoint = new THREE.Vector3().subVectors(localPos, face.p0);
-              const signedDist = toPoint.dot(normal);
-              
-              if (signedDist > maxSignedDistance) {
-                maxSignedDistance = signedDist;
-                bestNormal = normal.clone();
-              }
-            }
-            
-            const penetration = (radius + collisionMargin) - maxSignedDistance;
-            
-            if (penetration > 0) {
-              // Transform normal back to world space
-              if (rotation) {
-                const quat = new THREE.Quaternion();
-                const euler = new THREE.Euler(
-                  THREE.MathUtils.degToRad(rotation.x || 0),
-                  THREE.MathUtils.degToRad(rotation.y || 0),
-                  THREE.MathUtils.degToRad(rotation.z || 0),
-                  'XYZ'
-                );
-                quat.setFromEuler(euler);
-                bestNormal.applyQuaternion(quat);
-              }
-              
-              response.copy(bestNormal.multiplyScalar(penetration));
             }
           } else if (geometry.primitive === 'torus') {
             // Torus collision (exact copy from player system)
@@ -11360,7 +10437,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.36 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.35 | ${this.fps} FPS`);
           }
         }
       });
@@ -12087,1027 +11164,9 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // DEBUG: Grid generator component using THREE.js GridHelper (much better performance)
-      AFRAME.registerComponent('debug-grid-generator', {
-        init: function() {
-          // Floor grid (XZ plane at Y=0)
-          const gridXZ = new THREE.GridHelper(80, 80, 0x00ffff, 0x00ffff);
-          gridXZ.material.opacity = 0.3;
-          gridXZ.material.transparent = true;
-          gridXZ.position.set(0, 0, 0);
-          this.el.object3D.add(gridXZ);
-          
-          // Left wall grid (YZ plane at X=-15)
-          const gridYZ_left = new THREE.GridHelper(80, 80, 0x00ffff, 0x00ffff);
-          gridYZ_left.rotation.z = Math.PI / 2;
-          gridYZ_left.material.opacity = 0.2;
-          gridYZ_left.material.transparent = true;
-          gridYZ_left.position.set(-15, 0, 0);
-          this.el.object3D.add(gridYZ_left);
-          
-          // Right wall grid (YZ plane at X=15)
-          const gridYZ_right = new THREE.GridHelper(80, 80, 0x00ffff, 0x00ffff);
-          gridYZ_right.rotation.z = Math.PI / 2;
-          gridYZ_right.material.opacity = 0.2;
-          gridYZ_right.material.transparent = true;
-          gridYZ_right.position.set(15, 0, 0);
-          this.el.object3D.add(gridYZ_right);
-          
-          // Back wall grid (XY plane at Z=-40)
-          const gridXY_back = new THREE.GridHelper(30, 30, 0x00ffff, 0x00ffff);
-          gridXY_back.rotation.x = Math.PI / 2;
-          gridXY_back.material.opacity = 0.2;
-          gridXY_back.material.transparent = true;
-          gridXY_back.position.set(0, 0, -40);
-          this.el.object3D.add(gridXY_back);
-          
-          // Front wall grid (XY plane at Z=40)
-          const gridXY_front = new THREE.GridHelper(30, 30, 0x00ffff, 0x00ffff);
-          gridXY_front.rotation.x = Math.PI / 2;
-          gridXY_front.material.opacity = 0.2;
-          gridXY_front.material.transparent = true;
-          gridXY_front.position.set(0, 0, 40);
-          this.el.object3D.add(gridXY_front);
-        }
-      });
-
-      // Transform Gizmo Component (3-axis arrows for VR manipulation)
-      AFRAME.registerComponent('transform-gizmo', {
-        schema: {
-          target: { type: 'selector' },
-          axis: { type: 'string', default: 'xyz' } // Which axes to show
-        },
-        
-        init: function() {
-          this.createGizmo();
-        },
-        
-        createGizmo: function() {
-          const arrowLength = 1.5;
-          const arrowRadius = 0.05;
-          const coneHeight = 0.3;
-          const coneRadius = 0.1;
-          
-          // X-axis (Red)
-          const xAxis = document.createElement('a-entity');
-          xAxis.setAttribute('class', 'gizmo-axis gizmo-x');
-          
-          const xShaft = document.createElement('a-cylinder');
-          xShaft.setAttribute('class', 'gizmo-axis gizmo-x'); // Add class to children too
-          xShaft.setAttribute('radius', arrowRadius);
-          xShaft.setAttribute('height', arrowLength);
-          xShaft.setAttribute('position', `${arrowLength/2} 0 0`);
-          xShaft.setAttribute('rotation', '0 0 -90');
-          xShaft.setAttribute('color', '#ff0000');
-          xShaft.setAttribute('material', 'shader: standard; emissive: #ff0000; emissiveIntensity: 0.5');
-          xAxis.appendChild(xShaft);
-          
-          const xCone = document.createElement('a-cone');
-          xCone.setAttribute('class', 'gizmo-axis gizmo-x'); // Add class to children too
-          xCone.setAttribute('radius-bottom', coneRadius);
-          xCone.setAttribute('radius-top', '0');
-          xCone.setAttribute('height', coneHeight);
-          xCone.setAttribute('position', `${arrowLength} 0 0`);
-          xCone.setAttribute('rotation', '0 0 -90');
-          xCone.setAttribute('color', '#ff0000');
-          xCone.setAttribute('material', 'shader: standard; emissive: #ff0000; emissiveIntensity: 0.8');
-          xAxis.appendChild(xCone);
-          
-          this.el.appendChild(xAxis);
-          
-          // Y-axis (Green)
-          const yAxis = document.createElement('a-entity');
-          yAxis.setAttribute('class', 'gizmo-axis gizmo-y');
-          
-          const yShaft = document.createElement('a-cylinder');
-          yShaft.setAttribute('class', 'gizmo-axis gizmo-y'); // Add class to children too
-          yShaft.setAttribute('radius', arrowRadius);
-          yShaft.setAttribute('height', arrowLength);
-          yShaft.setAttribute('position', `0 ${arrowLength/2} 0`);
-          yShaft.setAttribute('color', '#00ff00');
-          yShaft.setAttribute('material', 'shader: standard; emissive: #00ff00; emissiveIntensity: 0.5');
-          yAxis.appendChild(yShaft);
-          
-          const yCone = document.createElement('a-cone');
-          yCone.setAttribute('class', 'gizmo-axis gizmo-y'); // Add class to children too
-          yCone.setAttribute('radius-bottom', coneRadius);
-          yCone.setAttribute('radius-top', '0');
-          yCone.setAttribute('height', coneHeight);
-          yCone.setAttribute('position', `0 ${arrowLength} 0`);
-          yCone.setAttribute('color', '#00ff00');
-          yCone.setAttribute('material', 'shader: standard; emissive: #00ff00; emissiveIntensity: 0.8');
-          yAxis.appendChild(yCone);
-          
-          this.el.appendChild(yAxis);
-          
-          // Z-axis (Blue)
-          const zAxis = document.createElement('a-entity');
-          zAxis.setAttribute('class', 'gizmo-axis gizmo-z');
-          
-          const zShaft = document.createElement('a-cylinder');
-          zShaft.setAttribute('class', 'gizmo-axis gizmo-z'); // Add class to children too
-          zShaft.setAttribute('radius', arrowRadius);
-          zShaft.setAttribute('height', arrowLength);
-          zShaft.setAttribute('position', `0 0 ${arrowLength/2}`);
-          zShaft.setAttribute('rotation', '90 0 0');
-          zShaft.setAttribute('color', '#0000ff');
-          zShaft.setAttribute('material', 'shader: standard; emissive: #0000ff; emissiveIntensity: 0.5');
-          zAxis.appendChild(zShaft);
-          
-          const zCone = document.createElement('a-cone');
-          zCone.setAttribute('class', 'gizmo-axis gizmo-z'); // Add class to children too
-          zCone.setAttribute('radius-bottom', coneRadius);
-          zCone.setAttribute('radius-top', '0');
-          zCone.setAttribute('height', coneHeight);
-          zCone.setAttribute('position', `0 0 ${arrowLength}`);
-          zCone.setAttribute('rotation', '90 0 0');
-          zCone.setAttribute('color', '#0000ff');
-          zCone.setAttribute('material', 'shader: standard; emissive: #0000ff; emissiveIntensity: 0.8');
-          zAxis.appendChild(zCone);
-          
-          this.el.appendChild(zAxis);
-          
-          console.log('✅ Transform gizmo created with 3 axes');
-        },
-        
-        update: function() {
-          // Position gizmo at target location
-          if (this.data.target && this.data.target.object3D) {
-            const pos = this.data.target.object3D.position;
-            this.el.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
-          }
-        }
-      });
-
-      // Level Editor Mode Component (VR and Desktop compatible)
-      AFRAME.registerComponent('level-editor', {
-        schema: {
-          enabled: { type: 'boolean', default: false }
-        },
-        
-        init: function() {
-          this.selectedObject = null;
-          this.raycaster = new THREE.Raycaster();
-          this.gridSize = 1; // 1 meter grid
-          
-          // Get hand controllers
-          this.leftHand = null;
-          this.rightHand = null;
-          
-          // VR transform controls
-          this.activeTransformHand = null;
-          this.isTransforming = false;
-          this.transformAxis = null; // 'x', 'y', 'z', or null for free movement
-          this.transformOffset = new THREE.Vector3();
-          this.transformStartPos = new THREE.Vector3();
-          this.controllerStartPos = new THREE.Vector3();
-          this.transformStartDepth = 0; // Distance from camera when grab started
-          this.currentDepthOffset = 0; // Depth change from thumbstick
-          
-          // NEW: A button state tracking for duplicate functionality
-          this.aButtonPressed = false;
-          
-          // Transform gizmo
-          this.gizmoEntity = null;
-          
-          // Ensure all arena objects have IDs for multiplayer sync
-          this.ensureArenaObjectIds();
-          
-          // Wait for hands to be available
-          setTimeout(() => {
-            this.leftHand = document.querySelector('#leftHand');
-            this.rightHand = document.querySelector('#rightHand');
-            this.setupVRTransformControls();
-            this.setupAButtonListeners();
-          }, 1000);
-          
-          // Keyboard controls
-          window.addEventListener('keydown', (e) => {
-            // Debug logging for E key
-            if (e.key === 'e' || e.key === 'E') {
-              console.log('🔑 DEBUG: E key pressed - isMultiplayer:', isMultiplayer, 'current enabled:', this.data.enabled);
-            }
-            
-            if (e.key === 'e' || e.key === 'E') {
-              // MULTIPLAYER: Only host can enable editor mode
-              if (isMultiplayer && !isHost && !this.data.enabled) {
-                console.log('⚠️ Level Editor: Only the host can edit in multiplayer mode');
-                return;
-              }
-              
-              this.data.enabled = !this.data.enabled;
-              console.log(`📝 Level Editor: ${this.data.enabled ? 'ENABLED' : 'DISABLED'}`);
-              if (this.data.enabled) {
-                console.log('   Desktop: Click to select, WASD/QZ to move, Shift=5m, Delete to remove');
-                console.log('   VR: Trigger=select, Point at axis arrow + Grip=move on that axis');
-                console.log('   VR: While holding Grip, use thumbstick up/down to move closer/farther');
-                console.log('   Ctrl+Alt+I: Open A-Frame Inspector for advanced editing');
-                
-              } else {
-                // NEW: Deselect object when editor is disabled (re-enables collision)
-                this.deselectObject();
-                
-              }
-              
-              // Show/hide grid
-              const grid = document.querySelector('#debug-grid');
-              if (grid) {
-                grid.setAttribute('visible', this.data.enabled);
-              }
-              
-              // Toggle raycaster visibility and targets for VR controllers
-              this.updateVRRaycasters();
-              
-              // BUGFIX: Force raycaster refresh with a small delay to ensure it's fully initialized
-              if (this.data.enabled) {
-                setTimeout(() => {
-                  this.updateVRRaycasters();
-                }, 100);
-              }
-            }
-            
-            // Keyboard movement (desktop)
-            if (this.data.enabled && this.selectedObject) {
-              const moveAmount = e.shiftKey ? 5 : 1;
-              const pos = this.selectedObject.object3D.position;
-              
-              switch(e.key.toLowerCase()) {
-                case 'arrowup':
-                case 'w':
-                  pos.z -= moveAmount;
-                  break;
-                case 'arrowdown':
-                case 's':
-                  pos.z += moveAmount;
-                  break;
-                case 'arrowleft':
-                case 'a':
-                  pos.x -= moveAmount;
-                  break;
-                case 'arrowright':
-                case 'd':
-                  pos.x += moveAmount;
-                  break;
-                case 'q':
-                  pos.y -= moveAmount;
-                  break;
-                case 'z':
-                  pos.y += moveAmount;
-                  break;
-                case 'delete':
-                case 'backspace':
-                  e.preventDefault();
-                const deletedId = this.selectedObject.id;
-                const deletedTag = this.selectedObject.tagName;
-                console.log('🗑️ Deleted:', deletedTag);
-                this.selectedObject.parentNode.removeChild(this.selectedObject);
-                this.deselectObject();
-                
-                // MULTIPLAYER: Broadcast object delete
-                if (isMultiplayer && isHost && deletedId) {
-                    const message = { type: 'arena-delete', id: deletedId };
-                    connections.forEach(conn => {
-                      if (conn && conn.open) {
-                        conn.send(message);
-                      }
-                    });
-                    console.log(`🏗️ HOST: Broadcast arena delete for ${deletedId}`);
-                }
-                  break;
-                case 'c':
-                  if (e.ctrlKey || e.metaKey) {
-                    e.preventDefault();
-                    this.copyObject();
-                  }
-                  break;
-                case 'escape':
-                  this.deselectObject();
-                  break;
-              }
-              
-              if (this.selectedObject) {
-                this.snapToGrid(pos);
-                this.updateGizmoPosition();
-                
-                  // MULTIPLAYER: Broadcast object move after keyboard adjustment
-                  if (isMultiplayer && isHost && this.selectedObject.id) {
-                    const rot = this.selectedObject.object3D.rotation;
-                    const message = {
-                      type: 'arena-update',
-                      id: this.selectedObject.id,
-                      position: pos,
-                      rotation: { 
-                        x: THREE.MathUtils.radToDeg(rot.x), 
-                        y: THREE.MathUtils.radToDeg(rot.y), 
-                        z: THREE.MathUtils.radToDeg(rot.z) 
-                      }
-                    };
-                    // Send to all clients
-                    connections.forEach(conn => {
-                      if (conn && conn.open) {
-                        conn.send(message);
-                      }
-                    });
-                    console.log(`🏗️ HOST: Broadcast arena update for ${this.selectedObject.id}`);
-                  }
-              }
-            }
-          });
-          
-          // Mouse selection (desktop)
-          this.el.sceneEl.addEventListener('click', (e) => {
-            if (!this.data.enabled) return;
-            
-            const canvas = this.el.sceneEl.canvas;
-            const camera = this.el.sceneEl.camera;
-            
-            const mouse = new THREE.Vector2(
-              (e.clientX / canvas.width) * 2 - 1,
-              -(e.clientY / canvas.height) * 2 + 1
-            );
-            
-            this.raycaster.setFromCamera(mouse, camera);
-            this.checkSelection();
-          });
-          
-          // VR controller selection
-          this.setupVRControls();
-        },
-        
-        setupVRTransformControls: function() {
-          [this.leftHand, this.rightHand].forEach(hand => {
-            if (hand) {
-              // Grip button: grab and move selected object
-              hand.addEventListener('gripdown', (e) => {
-                if (!this.data.enabled || !this.selectedObject) return;
-                
-                // NEW: Debug logging for duplicate functionality
-                console.log(`🔍 DEBUG: Gripdown fired - aButtonPressed=${this.aButtonPressed}, selectedObject=${this.selectedObject ? this.selectedObject.tagName : 'null'}`);
-                
-                // NEW: Check if A button is pressed - if so, duplicate the object
-                if (this.aButtonPressed) {
-                  console.log('🔄 Duplicating object...');
-                  const duplicate = this.duplicateObject(this.selectedObject);
-                  if (duplicate) {
-                    // Deselect original, select duplicate
-                    this.deselectObject();
-                    this.selectedObject = duplicate;
-                    this.selectObject(duplicate);
-                    console.log('✅ Duplicate created and selected');
-                    
-                    // Continue to transform the duplicate
-                  } else {
-                    console.log('❌ Failed to duplicate object');
-                    return;
-                  }
-                } else {
-                  console.log('🔍 DEBUG: A button NOT pressed, normal grab');
-                }
-                
-                // NEW: Check if raycaster is actually pointing at the selected object or gizmo
-                const handRaycaster = hand.components['raycaster'];
-                let isPointingAtTarget = false;
-                
-                if (handRaycaster && handRaycaster.intersectedEls.length > 0) {
-                  const target = handRaycaster.intersectedEls[0];
-                  
-                  // Check if pointing at selected object or its gizmo
-                  if (target === this.selectedObject || 
-                      target.classList.contains('gizmo-x') || target.parentElement?.classList.contains('gizmo-x') ||
-                      target.classList.contains('gizmo-y') || target.parentElement?.classList.contains('gizmo-y') ||
-                      target.classList.contains('gizmo-z') || target.parentElement?.classList.contains('gizmo-z') ||
-                      target.classList.contains('gizmo-axis')) {
-                    isPointingAtTarget = true;
-                  }
-                }
-                
-                // If not pointing at the target, don't allow grab
-                if (!isPointingAtTarget) {
-                  console.log('❌ Not pointing at selected object or gizmo - grip ignored');
-                  return;
-                }
-                
-                // Check if pointing at a gizmo axis
-                if (handRaycaster && handRaycaster.intersectedEls.length > 0) {
-                  const target = handRaycaster.intersectedEls[0];
-                  
-                  // Check if hitting gizmo axis
-                  if (target.classList.contains('gizmo-x') || target.parentElement?.classList.contains('gizmo-x')) {
-                    this.transformAxis = 'x';
-                    console.log('🔴 Moving on X axis (Red)');
-                  } else if (target.classList.contains('gizmo-y') || target.parentElement?.classList.contains('gizmo-y')) {
-                    this.transformAxis = 'y';
-                    console.log('🟢 Moving on Y axis (Green)');
-                  } else if (target.classList.contains('gizmo-z') || target.parentElement?.classList.contains('gizmo-z')) {
-                    this.transformAxis = 'z';
-                    console.log('🔵 Moving on Z axis (Blue)');
-                  } else {
-                    this.transformAxis = null;
-                    console.log('🤏 Free movement (no axis constraint)');
-                  }
-                } else {
-                  this.transformAxis = null;
-                }
-                
-                this.isTransforming = true;
-                this.activeTransformHand = hand;
-                this.currentDepthOffset = 0; // Reset depth offset
-                
-                // Store initial raycaster intersection point (where laser hits)
-                const raycaster = hand.components.raycaster;
-                if (raycaster && raycaster.raycaster) {
-                  const intersection = new THREE.Vector3();
-                  const ray = raycaster.raycaster;
-                  
-                  // Calculate where the ray would intersect a plane at the object's position
-                  const objectPos = this.selectedObject.object3D.position.clone();
-                  const cameraPos = new THREE.Vector3();
-                  this.el.sceneEl.camera.getWorldPosition(cameraPos);
-                  
-                  // Store the initial depth (distance from camera)
-                  this.transformStartDepth = objectPos.distanceTo(cameraPos);
-                  
-                  // Create a plane perpendicular to camera view at object position
-                  const planeNormal = new THREE.Vector3().subVectors(cameraPos, objectPos).normalize();
-                  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, objectPos);
-                  
-                  ray.ray.intersectPlane(plane, intersection);
-                  
-                  if (intersection) {
-                    this.controllerStartPos.copy(intersection);
-                    this.transformStartPos.copy(objectPos);
-                    console.log(`🤏 Grabbed at depth: ${this.transformStartDepth.toFixed(2)}m from camera`);
-                  } else {
-                    // Fallback to controller position
-                    hand.object3D.getWorldPosition(this.controllerStartPos);
-                    this.transformStartPos.copy(objectPos);
-                    this.transformStartDepth = objectPos.distanceTo(cameraPos);
-                  }
-                } else {
-                  // Fallback to controller position
-                  const cameraPos = new THREE.Vector3();
-                  this.el.sceneEl.camera.getWorldPosition(cameraPos);
-                  hand.object3D.getWorldPosition(this.controllerStartPos);
-                  this.transformStartPos.copy(this.selectedObject.object3D.position);
-                  this.transformStartDepth = this.transformStartPos.distanceTo(cameraPos);
-                }
-                
-                console.log(`🤏 Grabbed object with controller ${this.transformAxis ? `(${this.transformAxis.toUpperCase()} axis only)` : '(free)'}`);
-              });
-              
-              hand.addEventListener('gripup', (e) => {
-                if (this.isTransforming && this.activeTransformHand === hand) {
-                  this.isTransforming = false;
-                  this.activeTransformHand = null;
-                  this.transformAxis = null;
-                  
-                  // Snap to grid on release
-                  if (this.selectedObject) {
-                    this.snapToGrid(this.selectedObject.object3D.position);
-                    this.updateGizmoPosition();
-                    
-                      // MULTIPLAYER: Broadcast object move
-                      if (isMultiplayer && isHost && this.selectedObject.id) {
-                        const pos = this.selectedObject.object3D.position;
-                        const rot = this.selectedObject.object3D.rotation;
-                        const message = {
-                          type: 'arena-update',
-                          id: this.selectedObject.id,
-                          position: { x: pos.x, y: pos.y, z: pos.z },
-                          rotation: { 
-                            x: THREE.MathUtils.radToDeg(rot.x), 
-                            y: THREE.MathUtils.radToDeg(rot.y), 
-                            z: THREE.MathUtils.radToDeg(rot.z) 
-                          }
-                        };
-                        // Send to all clients
-                        connections.forEach(conn => {
-                          if (conn && conn.open) {
-                            conn.send(message);
-                          }
-                        });
-                        console.log(`🏗️ HOST: Broadcast arena update for ${this.selectedObject.id}`);
-                      }
-                  }
-                  
-                  console.log('✅ Released object (snapped to grid)');
-                }
-              });
-            }
-          });
-        },
-        
-        updateVRRaycasters: function() {
-          [this.leftHand, this.rightHand].forEach(hand => {
-            if (hand) {
-              const raycasterComponent = hand.components.raycaster;
-              if (raycasterComponent) {
-                if (this.data.enabled) {
-                  // Editor mode: show laser, target grab-surface objects AND gizmo axes
-                  // CRITICAL: Set far to 100 for longer range
-                  hand.setAttribute('raycaster', {
-                    objects: '[grab-surface], .gizmo-axis',
-                    lineColor: '#ffff00',
-                    lineOpacity: 0.8,
-                    far: 100,
-                    enabled: true
-                  });
-                  console.log('🔧 DEBUG: updateVRRaycasters - Editor mode enabled, far: 100');
-                } else {
-                  // Normal mode: hide laser, target clickable UI
-                  hand.setAttribute('raycaster', {
-                    objects: '.clickable',
-                    lineColor: '#ffffff',
-                    lineOpacity: 0,
-                    enabled: false
-                  });
-                  console.log('🔧 DEBUG: updateVRRaycasters - Normal mode, lasers hidden');
-                }
-              }
-            }
-          });
-        },
-        
-        setupAButtonListeners: function() {
-          // Track A button state for duplicate functionality
-          this.el.sceneEl.addEventListener('abuttondown', () => {
-            this.aButtonPressed = true;
-            console.log('🅰️ DEBUG: A button DOWN - aButtonPressed set to TRUE');
-            if (this.data.enabled && this.selectedObject) {
-              console.log('💡 A button held - Grip now to duplicate and drag');
-            }
-          });
-          
-          this.el.sceneEl.addEventListener('abuttonup', () => {
-            this.aButtonPressed = false;
-            console.log('🅰️ DEBUG: A button UP - aButtonPressed set to FALSE');
-          });
-        },
-        
-        setupVRControls: function() {
-          const leftHand = document.querySelector('#leftHand');
-          const rightHand = document.querySelector('#rightHand');
-          
-          this.lastSelectionTime = 0;
-          this.selectionDebounce = 300; // 300ms debounce
-          
-          [leftHand, rightHand].forEach(hand => {
-            if (hand) {
-              // Trigger: select object
-              hand.addEventListener('triggerdown', () => {
-                if (!this.data.enabled) return;
-                
-                // Debounce to prevent rapid select/deselect
-                const now = Date.now();
-                if (now - this.lastSelectionTime < this.selectionDebounce) {
-                  return;
-                }
-                this.lastSelectionTime = now;
-                
-                const handRaycaster = hand.components['raycaster'];
-                if (handRaycaster && handRaycaster.intersectedEls.length > 0) {
-                  const target = handRaycaster.intersectedEls[0];
-                  
-                  // Don't select if hitting gizmo
-                  if (target.classList.contains('gizmo-axis') || target.parentElement?.classList.contains('gizmo-axis')) {
-                    return;
-                  }
-                  
-                  if (target.hasAttribute('grab-surface')) {
-                    // If same object, deselect it; otherwise select new one
-                    if (this.selectedObject === target) {
-                      this.deselectObject();
-                    } else {
-                      this.selectObject(target);
-                    }
-                  }
-                }
-              });
-            }
-          });
-        },
-        
-        tick: function() {
-          // Handle VR transform controls
-          if (this.isTransforming && this.activeTransformHand && this.selectedObject) {
-            // Check for thumbstick input to adjust depth
-            const gamepad = this.activeTransformHand.components['tracked-controls']?.controller?.gamepad;
-            if (gamepad && gamepad.axes && gamepad.axes.length >= 4) {
-              const thumbstickY = gamepad.axes[3]; // Y-axis of thumbstick (up/down)
-              
-              // Adjust depth based on thumbstick (0.05 meters per frame at full deflection)
-              if (Math.abs(thumbstickY) > 0.1) { // Deadzone
-                this.currentDepthOffset += thumbstickY * 0.05;
-              }
-            }
-            
-            // Use raycaster intersection point (where the laser hits)
-            const raycaster = this.activeTransformHand.components.raycaster;
-            if (raycaster && raycaster.raycaster) {
-              const currentIntersection = new THREE.Vector3();
-              const ray = raycaster.raycaster;
-              const cameraPos = new THREE.Vector3();
-              this.el.sceneEl.camera.getWorldPosition(cameraPos);
-              
-              // Create a sphere at the locked depth (+ thumbstick offset)
-              const lockedDepth = this.transformStartDepth + this.currentDepthOffset;
-              
-              // Cast ray and find point at the locked depth
-              const rayOrigin = ray.ray.origin.clone();
-              const rayDirection = ray.ray.direction.clone().normalize();
-              
-              // Calculate intersection point at locked depth
-              const intersectionPoint = rayOrigin.clone().add(rayDirection.multiplyScalar(lockedDepth));
-              
-              // Calculate movement delta from where we started
-              const movement = intersectionPoint.clone().sub(this.controllerStartPos);
-              
-              // Apply axis constraint if active
-              if (this.transformAxis === 'x') {
-                movement.y = 0;
-                movement.z = 0;
-              } else if (this.transformAxis === 'y') {
-                movement.x = 0;
-                movement.z = 0;
-              } else if (this.transformAxis === 'z') {
-                movement.x = 0;
-                movement.y = 0;
-              }
-              
-              // Update object position (1:1 with laser pointer movement at locked depth)
-              const newPos = this.transformStartPos.clone().add(movement);
-              this.selectedObject.object3D.position.copy(newPos);
-              
-              // Update gizmo position
-              this.updateGizmoPosition();
-            } else {
-              // Fallback to controller position (shouldn't normally happen)
-              const currentControllerPos = new THREE.Vector3();
-              this.activeTransformHand.object3D.getWorldPosition(currentControllerPos);
-              
-              const movement = currentControllerPos.clone().sub(this.controllerStartPos);
-              
-              if (this.transformAxis === 'x') {
-                movement.y = 0;
-                movement.z = 0;
-              } else if (this.transformAxis === 'y') {
-                movement.x = 0;
-                movement.z = 0;
-              } else if (this.transformAxis === 'z') {
-                movement.x = 0;
-                movement.y = 0;
-              }
-              
-              const newPos = this.transformStartPos.clone().add(movement);
-              this.selectedObject.object3D.position.copy(newPos);
-              this.updateGizmoPosition();
-            }
-          }
-        },
-        
-        checkSelection: function() {
-          const editableObjects = Array.from(document.querySelectorAll('[grab-surface]'))
-            .map(el => el.object3D)
-            .filter(obj => obj);
-          
-          const intersects = this.raycaster.intersectObjects(editableObjects, true);
-          
-          if (intersects.length > 0) {
-            let obj = intersects[0].object;
-            while (obj.parent && !obj.el) {
-              obj = obj.parent;
-            }
-            
-            if (obj.el) {
-              this.selectObject(obj.el);
-            }
-          }
-        },
-        
-        selectObject: function(entity) {
-          // Don't reselect the same object
-          if (this.selectedObject === entity) {
-            console.log('⏭️  Same object already selected, skipping');
-            return;
-          }
-          
-          this.deselectObject();
-          
-          this.selectedObject = entity;
-          
-          console.log(`🔍 DEBUG: Selecting object - hasBody=${!!entity.body}, tagName=${entity.tagName}`);
-          
-          // NEW: Add green wireframe to the actual object (not a box)
-          // Save the original material settings
-          const mesh = entity.getObject3D('mesh');
-          if (mesh && mesh.material) {
-            entity._editorOriginalWireframe = mesh.material.wireframe;
-            entity._editorOriginalColor = mesh.material.color ? mesh.material.color.clone() : null;
-            
-            // Enable wireframe and set to green
-            mesh.material.wireframe = true;
-            mesh.material.color.set('#00ff00');
-            mesh.material.transparent = true;
-            mesh.material.opacity = 0.8;
-            mesh.material.needsUpdate = true;
-          }
-          
-          // NEW: Disable collision for selected object (with retry logic)
-          this.disableCollisionForSelected(entity);
-          
-          // Create transform gizmo
-          this.gizmoEntity = document.createElement('a-entity');
-          this.gizmoEntity.setAttribute('class', 'editor-gizmo');
-          this.gizmoEntity.setAttribute('transform-gizmo', `target: #${entity.id || 'selected-object'}`);
-          this.el.sceneEl.appendChild(this.gizmoEntity);
-          
-          // Update gizmo position
-          this.updateGizmoPosition();
-          
-          const pos = entity.object3D.position;
-          console.log(`✅ Selected: ${entity.tagName} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
-          console.log(`💡 TIP: Point at axis arrow (R/G/B) + Grip to move on that axis only`);
-        },
-        
-        disableCollisionForSelected: function(entity, attempt = 0) {
-          console.log(`🔍 DEBUG: disableCollision attempt ${attempt}, hasBody=${!!entity.body}`);
-          
-          if (attempt > 10) {
-            console.log('⚠️ Could not disable collision - physics body not found after 10 attempts');
-            console.log('⚠️ This object will still have collision - it may not have grab-surface physics enabled');
-            return;
-          }
-          
-          if (entity.body) {
-            console.log(`🔍 DEBUG: Found body, removing from world...`);
-            // Store the physics body and completely remove it from the physics world
-            entity._editorOriginalBody = entity.body;
-            
-            // Get the physics world (global CANNON.World instance)
-            const physicsWorld = typeof world !== 'undefined' ? world : null;
-            console.log(`🔍 DEBUG: physicsWorld=${!!physicsWorld}`);
-            
-            if (physicsWorld) {
-              physicsWorld.removeBody(entity.body);
-              console.log('🚫 Physics body removed from world - object is now ghost');
-            } else {
-              console.log('⚠️ Physics world not available');
-            }
-            
-            // Also set collision filters to 0 as backup
-            entity.body.collisionFilterGroup = 0;
-            entity.body.collisionFilterMask = 0;
-          } else {
-            // Physics body not ready yet, retry after a delay
-            console.log(`⏳ Physics body not ready, retrying in ${50 + (attempt * 50)}ms...`);
-            setTimeout(() => {
-              this.disableCollisionForSelected(entity, attempt + 1);
-            }, 50 + (attempt * 50)); // Increasing delay
-          }
-        },
-        
-        deselectObject: function() {
-          if (this.selectedObject) {
-            // NEW: Restore original wireframe/material settings
-            const mesh = this.selectedObject.getObject3D('mesh');
-            if (mesh && mesh.material && this.selectedObject._editorOriginalWireframe !== undefined) {
-              mesh.material.wireframe = this.selectedObject._editorOriginalWireframe;
-              if (this.selectedObject._editorOriginalColor) {
-                mesh.material.color.copy(this.selectedObject._editorOriginalColor);
-              }
-              mesh.material.needsUpdate = true;
-              
-              // Clean up stored properties
-              delete this.selectedObject._editorOriginalWireframe;
-              delete this.selectedObject._editorOriginalColor;
-            }
-            
-            // NEW: Re-add physics body to world
-            if (this.selectedObject._editorOriginalBody) {
-              const physicsWorld = typeof world !== 'undefined' ? world : null;
-              if (physicsWorld) {
-                physicsWorld.addBody(this.selectedObject._editorOriginalBody);
-                console.log('✅ Physics body restored to world - collision re-enabled');
-              } else {
-                console.log('⚠️ Physics world not available for restoration');
-              }
-              
-              // Clean up stored property
-              delete this.selectedObject._editorOriginalBody;
-            }
-            
-            this.selectedObject = null;
-          }
-          
-          // Remove gizmo
-          if (this.gizmoEntity) {
-            this.el.sceneEl.removeChild(this.gizmoEntity);
-            this.gizmoEntity = null;
-          }
-        },
-        
-        updateGizmoPosition: function() {
-          if (this.gizmoEntity && this.selectedObject) {
-            const pos = this.selectedObject.object3D.position;
-            this.gizmoEntity.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
-          }
-        },
-        
-        copyObject: function() {
-          if (!this.selectedObject) return;
-          
-          const pos = this.selectedObject.object3D.position;
-          const rot = this.selectedObject.object3D.rotation;
-          const scale = this.selectedObject.object3D.scale;
-          
-          const objectData = {
-            tag: this.selectedObject.tagName.toLowerCase(),
-            position: `${pos.x} ${pos.y} ${pos.z}`,
-            rotation: `${THREE.MathUtils.radToDeg(rot.x)} ${THREE.MathUtils.radToDeg(rot.y)} ${THREE.MathUtils.radToDeg(rot.z)}`,
-            scale: `${scale.x} ${scale.y} ${scale.z}`,
-            attributes: {}
-          };
-          
-          ['radius', 'width', 'height', 'depth', 'color', 'material'].forEach(attr => {
-            const val = this.selectedObject.getAttribute(attr);
-            if (val !== null && val !== undefined) {
-              objectData.attributes[attr] = typeof val === 'object' ? JSON.stringify(val) : val;
-            }
-          });
-          
-          const htmlString = this.generateHTML(objectData);
-          navigator.clipboard.writeText(htmlString);
-          console.log('📋 Copied HTML to clipboard');
-        },
-        
-        generateHTML: function(data) {
-          let html = `<${data.tag} position="${data.position}" rotation="${data.rotation}" scale="${data.scale}"`;
-          for (const [key, value] of Object.entries(data.attributes)) {
-            html += ` ${key}="${value}"`;
-          }
-          html += `></${data.tag}>`;
-          return html;
-        },
-        
-        duplicateObject: function(entity) {
-          if (!entity) return null;
-          
-          try {
-            // Clone the entity
-            const clone = entity.cloneNode(true);
-            
-            // Generate a unique ID
-            const timestamp = Date.now();
-            const random = Math.floor(Math.random() * 10000);
-            const newId = `duplicate-${timestamp}-${random}`;
-            clone.setAttribute('id', newId);
-            
-            // Copy transform (position will be at same location, ready to drag)
-            const pos = entity.object3D.position;
-            const rot = entity.object3D.rotation;
-            const scale = entity.object3D.scale;
-            
-            clone.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
-            clone.setAttribute('rotation', `${THREE.MathUtils.radToDeg(rot.x)} ${THREE.MathUtils.radToDeg(rot.y)} ${THREE.MathUtils.radToDeg(rot.z)}`);
-            clone.setAttribute('scale', `${scale.x} ${scale.y} ${scale.z}`);
-            
-            // Add to scene
-            this.el.sceneEl.appendChild(clone);
-            
-            console.log(`✅ Duplicated ${entity.tagName} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
-            
-            // MULTIPLAYER: Broadcast object add
-            if (isMultiplayer && isHost) {
-              const pos = clone.object3D.position;
-              const rot = clone.object3D.rotation;
-              const message = {
-                type: 'arena-add',
-                tagName: clone.tagName.toLowerCase(),
-                id: clone.id,
-                position: { x: pos.x, y: pos.y, z: pos.z },
-                rotation: { 
-                  x: THREE.MathUtils.radToDeg(rot.x), 
-                  y: THREE.MathUtils.radToDeg(rot.y), 
-                  z: THREE.MathUtils.radToDeg(rot.z) 
-                },
-                attributes: {}
-              };
-              
-              // Copy relevant attributes
-              ['radius', 'detail', 'segments', 'width', 'height', 'depth'].forEach(attr => {
-                const val = clone.getAttribute(attr);
-                if (val !== null && val !== undefined) {
-                  message.attributes[attr] = val;
-                }
-              });
-              
-              connections.forEach(conn => {
-                if (conn && conn.open) {
-                  conn.send(message);
-                }
-              });
-              console.log(`🏗️ HOST: Broadcast arena add for ${clone.id}`);
-            }
-            
-            return clone;
-          } catch (err) {
-            console.error('❌ Error duplicating object:', err);
-            return null;
-          }
-        },
-        
-        snapToGrid: function(position) {
-          position.x = Math.round(position.x / this.gridSize) * this.gridSize;
-          position.y = Math.round(position.y / this.gridSize) * this.gridSize;
-          position.z = Math.round(position.z / this.gridSize) * this.gridSize;
-        },
-        
-        ensureArenaObjectIds: function() {
-          // Find all grab-surface objects and ensure they have IDs
-          const arenaObjects = document.querySelectorAll('[grab-surface]');
-          let assignedCount = 0;
-          
-          arenaObjects.forEach((obj, index) => {
-            if (!obj.id) {
-              const tag = obj.tagName.toLowerCase();
-              obj.setAttribute('id', `arena-${tag}-${index}`);
-              assignedCount++;
-            }
-          });
-          
-          if (assignedCount > 0) {
-            console.log(`🏷️ Assigned IDs to ${assignedCount} arena objects for multiplayer sync`);
-          }
-        },
-        
-        // Note: Arena multiplayer sync is handled via standard peer connections
-        // See handleArenaState, handleArenaUpdate, handleArenaDelete, handleArenaAdd at top of file
-        
-        // Serialize an entity into a transferable object
-        serializeEntity: function(entity) {
-          const pos = entity.object3D.position;
-          const rot = entity.object3D.rotation;
-          const scale = entity.object3D.scale;
-          
-          const data = {
-            id: entity.id || `entity-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-            tag: entity.tagName.toLowerCase(),
-            position: { x: pos.x, y: pos.y, z: pos.z },
-            rotation: { 
-              x: THREE.MathUtils.radToDeg(rot.x), 
-              y: THREE.MathUtils.radToDeg(rot.y), 
-              z: THREE.MathUtils.radToDeg(rot.z) 
-            },
-            scale: { x: scale.x, y: scale.y, z: scale.z },
-            attributes: {}
-          };
-          
-          // Capture relevant attributes
-          const attrs = ['radius', 'width', 'height', 'depth', 'color', 'material', 
-                        'grab-surface', 'octahedron-edges', 'tetrahedron-edges'];
-          
-          attrs.forEach(attr => {
-            const val = entity.getAttribute(attr);
-            if (val !== null && val !== undefined) {
-              data.attributes[attr] = typeof val === 'object' ? JSON.stringify(val) : val;
-            }
-          });
-          
-          return data;
-        },
-        
-        // Deserialize and create an entity from data
-        deserializeEntity: function(data) {
-          const entity = document.createElement(data.tag);
-          
-          // Set ID
-          entity.setAttribute('id', data.id);
-          
-          // Set transform
-          entity.setAttribute('position', `${data.position.x} ${data.position.y} ${data.position.z}`);
-          entity.setAttribute('rotation', `${data.rotation.x} ${data.rotation.y} ${data.rotation.z}`);
-          entity.setAttribute('scale', `${data.scale.x} ${data.scale.y} ${data.scale.z}`);
-          
-          // Set attributes
-          for (const [key, value] of Object.entries(data.attributes)) {
-            try {
-              // Try to parse JSON strings back to objects
-              const parsedValue = typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))
-                ? JSON.parse(value) 
-                : value;
-              entity.setAttribute(key, parsedValue);
-            } catch (e) {
-              entity.setAttribute(key, value);
-            }
-          }
-          
-          return entity;
-        }
-      });
-
     </script>
 
-    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle level-editor
+    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              webxr="requiredFeatures: local-floor">
       
@@ -13193,7 +11252,7 @@ function setGameplayHUD(isPlaying) {
                   height="0.1"
                   rotation="90 0 0"
                   color="#ff0000"
-                  material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.3; transparent: true; opacity: 0.3"
+                  material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.3; transparent: true; opacity: 0.7"
                   goal="team: red"
                   visible="false">
         <a-entity light="type: point; color: #ff0000; intensity: 2; distance: 8"></a-entity>
@@ -13202,48 +11261,10 @@ function setGameplayHUD(isPlaying) {
         <a-torus radius="1"
                  radius-tubular="0.0375"
                  rotation="90 0 0"
-                 color="#ff0000"
-                 material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.8; metalness: 0.8; roughness: 0.2"
+                 color="#444444"
+                 material="shader: standard; metalness: 0.8; roughness: 0.2"
                  grab-surface="type: static"
-                 class="grabbable-surface"
-                 goal-ring>
-          <!-- NEW: Metal hit sounds (3 variants for random selection) -->
-          <a-entity class="metal-hit-sound-1"
-                    sound="src: url(../audio/metal-hit-92-200420.mp3);
-                           autoplay: false;
-                           loop: false;
-                           volume: 1.0;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 2;
-                           maxDistance: 20;
-                           rolloffFactor: 1.5;
-                           poolSize: 1;">
-          </a-entity>
-          <a-entity class="metal-hit-sound-2"
-                    sound="src: url(../audio/metal-hit-94-200422.mp3);
-                           autoplay: false;
-                           loop: false;
-                           volume: 1.0;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 2;
-                           maxDistance: 20;
-                           rolloffFactor: 1.5;
-                           poolSize: 1;">
-          </a-entity>
-          <a-entity class="metal-hit-sound-3"
-                    sound="src: url(../audio/metal-hit-95-200424.mp3);
-                           autoplay: false;
-                           loop: false;
-                           volume: 1.0;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 2;
-                           maxDistance: 20;
-                           rolloffFactor: 1.5;
-                           poolSize: 1;">
-          </a-entity>
+                 class="grabbable-surface">
         </a-torus>
       </a-cylinder>
 
@@ -13254,7 +11275,7 @@ function setGameplayHUD(isPlaying) {
                   height="0.1"
                   rotation="90 0 0"
                   color="#0000ff"
-                  material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.3; transparent: true; opacity: 0.3"
+                  material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.3; transparent: true; opacity: 0.7"
                   goal="team: blue"
                   visible="false">
         <a-entity light="type: point; color: #0000ff; intensity: 2; distance: 8"></a-entity>
@@ -13263,57 +11284,156 @@ function setGameplayHUD(isPlaying) {
         <a-torus radius="1"
                  radius-tubular="0.0375"
                  rotation="90 0 0"
-                 color="#0000ff"
-                 material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.8; metalness: 0.8; roughness: 0.2"
+                 color="#444444"
+                 material="shader: standard; metalness: 0.8; roughness: 0.2"
                  grab-surface="type: static"
-                 class="grabbable-surface"
-                 goal-ring>
-          <!-- NEW: Metal hit sounds (3 variants for random selection) -->
-          <a-entity class="metal-hit-sound-1"
-                    sound="src: url(../audio/metal-hit-92-200420.mp3);
-                           autoplay: false;
-                           loop: false;
-                           volume: 1.0;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 2;
-                           maxDistance: 20;
-                           rolloffFactor: 1.5;
-                           poolSize: 1;">
-          </a-entity>
-          <a-entity class="metal-hit-sound-2"
-                    sound="src: url(../audio/metal-hit-94-200422.mp3);
-                           autoplay: false;
-                           loop: false;
-                           volume: 1.0;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 2;
-                           maxDistance: 20;
-                           rolloffFactor: 1.5;
-                           poolSize: 1;">
-          </a-entity>
-          <a-entity class="metal-hit-sound-3"
-                    sound="src: url(../audio/metal-hit-95-200424.mp3);
-                           autoplay: false;
-                           loop: false;
-                           volume: 1.0;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 2;
-                           maxDistance: 20;
-                           rolloffFactor: 1.5;
-                           poolSize: 1;">
-          </a-entity>
+                 class="grabbable-surface">
         </a-torus>
       </a-cylinder>
+
+      <!-- Central Circular Tube Structure (2m diameter, 4m length, made from 16 cubes) -->
+      <!-- First Group of 8 blocks - positioned at 1m radius from center (0,2,0) -->
+      <!-- 0° - Top/Bottom pair (horizontal blocks) -->
+      <a-box position="0 3 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0 1 0" width="2.30" height="0.35" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 45° - Diagonal pair -->
+      <a-box position="0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 90° - Left/Right pair (vertical blocks) -->
+      <a-box position="1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-1 2 0" width="0.35" height="2.30" depth="8" rotation="0 0 0" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 135° - Diagonal pair -->
+      <a-box position="-0.707 2.707 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0.707 1.293 0" width="0.35" height="0.45" depth="8" rotation="0 0 -45" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- Second Group of 8 blocks - filling the gaps -->
+      <!-- 22.5° - Between 0° and 45° -->
+      <a-box position="0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 67.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 67.5° - Between 45° and 90° -->
+      <a-box position="0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 202.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 112.5° - Between 90° and 135° -->
+      <a-box position="0.383 1.076 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="-0.383 2.924 0" width="0.35" height="0.45" depth="8" rotation="0 0 112.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      
+      <!-- 157.5° - Between 135° and 180° -->
+      <a-box position="-0.924 2.383 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+      <a-box position="0.924 1.617 0" width="0.35" height="0.45" depth="8" rotation="0 0 157.5" color="#666666" material="shader: standard; metalness: 0.8; roughness: 0.2" grab-surface="type: static"></a-box>
+
+      <!-- Tube Launcher (based on goal structure) -->
+      <a-cylinder id="tube-launcher-container"
+                  position="0 2 3"
+                  radius="0.95"
+                  height="0.01"
+                  rotation="90 0 0"
+                  color="#ff8800"
+                  material="shader: standard; transparent: true; opacity: 0"
+                  visible="true">
+        
+        <!-- Launcher Torus (exact copy of goal border structure) -->
+        <a-torus id="tube-launcher"
+                 radius="0.7"
+                 radius-tubular="0.05"
+                 rotation="90 0 0"
+                 color="#ff8800"
+                 material="shader: standard; emissive: #ff8800; emissiveIntensity: 0.3; metalness: 0.8; roughness: 0.2"
+                 tube-launcher
+                 grab-surface="type: static"
+                 class="grabbable-surface">
+        </a-torus>
+      </a-cylinder>
+      
+      <!-- Tube Launcher 2 (opposite side) -->
+      <a-cylinder id="tube-launcher-container-2"
+                  position="0 2 -3"
+                  radius="0.95"
+                  height="0.01"
+                  rotation="90 0 0"
+                  color="#ff8800"
+                  material="shader: standard; transparent: true; opacity: 0"
+                  visible="true">
+        
+        <!-- Launcher Torus (exact copy of goal border structure) -->
+        <a-torus id="tube-launcher-2"
+                 radius="0.7"
+                 radius-tubular="0.05"
+                 rotation="90 0 0"
+                 color="#ff8800"
+                 material="shader: standard; emissive: #ff8800; emissiveIntensity: 0.3; metalness: 0.8; roughness: 0.2"
+                 tube-launcher
+                 grab-surface="type: static"
+                 class="grabbable-surface">
+        </a-torus>
+      </a-cylinder>
+
+      <!-- Randomly positioned 1m cubes throughout the space -->
+      <a-box position="-5 1 -10" 
+             width="1" height="1" depth="1" 
+             src="#boxTexture"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="3 4 -5" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="-2 3 8" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="6 2 -12" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="-7 5 3" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="1 1 -8" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="-4 4 -2" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
+      
+      <a-box position="5 3 12" 
+             width="1" height="1" depth="1" 
+             color="#888888"
+             material="shader: standard; metalness: 0.7; roughness: 0.3"
+             grab-surface="type: static">
+      </a-box>
       
       <a-octahedron position="-15 10 40" 
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Duplicate octahedron at floor corner -->
@@ -13321,8 +11441,7 @@ function setGameplayHUD(isPlaying) {
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Center left wall octahedrons -->
@@ -13330,16 +11449,14 @@ function setGameplayHUD(isPlaying) {
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <a-octahedron position="-15 -10 0" 
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Blue side left wall - vertically centered octahedron -->
@@ -13347,8 +11464,7 @@ function setGameplayHUD(isPlaying) {
              radius="10" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.08; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Red side back wall corner octahedrons -->
@@ -13356,16 +11472,14 @@ function setGameplayHUD(isPlaying) {
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <a-octahedron position="-15 -10 -40" 
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Right wall octahedrons (mirroring left wall) -->
@@ -13375,16 +11489,14 @@ function setGameplayHUD(isPlaying) {
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <a-octahedron position="15 -10 40" 
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Center right wall octahedrons -->
@@ -13392,16 +11504,14 @@ function setGameplayHUD(isPlaying) {
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <a-octahedron position="15 -10 0" 
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Red side corner (back wall) -->
@@ -13409,16 +11519,14 @@ function setGameplayHUD(isPlaying) {
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <a-octahedron position="15 -10 -40" 
              radius="20" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.12; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Blue side right wall - vertically centered octahedron -->
@@ -13426,8 +11534,7 @@ function setGameplayHUD(isPlaying) {
              radius="10" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.08; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Red side left wall - vertically centered octahedron -->
@@ -13435,8 +11542,7 @@ function setGameplayHUD(isPlaying) {
              radius="10" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.08; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
       <!-- Red side right wall - vertically centered octahedron -->
@@ -13444,39 +11550,29 @@ function setGameplayHUD(isPlaying) {
              radius="10" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.08; emissiveIntensity: 2">
+             grab-surface="type: static">
       </a-octahedron>
       
-      <!-- TEST: Small octahedron at center for debugging edge alignment -->
-      <a-octahedron position="0 0 0" 
-             radius="2" 
+      <a-box position="7 5 -6" 
+             width="1" height="1" depth="1" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.03; emissiveIntensity: 3">
-      </a-octahedron>
+             grab-surface="type: static">
+      </a-box>
       
-      <a-tetrahedron position="3 0 0" 
-             radius="1.75" 
+      <a-box position="-6 1 -14" 
+             width="1" height="1" depth="1" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             tetrahedron-edges="edgeColor: #ffffff; edgeThickness: 0.03; emissiveIntensity: 3">
-      </a-tetrahedron>
+             grab-surface="type: static">
+      </a-box>
       
-      <!-- Tetrahedron rotated 90 degrees (yaw) for gap filling -->
-      <a-tetrahedron position="-3 0 0" 
-             radius="1.75" 
-             rotation="0 90 0"
+      <a-box position="2 4 9" 
+             width="1" height="1" depth="1" 
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             tetrahedron-edges="edgeColor: #ffffff; edgeThickness: 0.03; emissiveIntensity: 3">
-      </a-tetrahedron>
-
-      <!-- DEBUG: Grid visualization container (generated dynamically) -->
-      <a-entity id="debug-grid" debug-grid-generator visible="false"></a-entity>
+             grab-surface="type: static">
+      </a-box>
 
       <!-- Floating objects/balls (spawned at center) -->
       <a-sphere position="0 2 0" 
@@ -13640,35 +11736,11 @@ function setGameplayHUD(isPlaying) {
                         rolloffFactor: 1;
                         poolSize: 1;">
         </a-entity>
-        
-        <!-- NEW: Goal sound effect (non-spatial, global sound) -->
-        <a-entity id="goal-sound"
-                  sound="src: url(../audio/dark-engine-logo-141942.mp3);
-                         autoplay: false;
-                         loop: false;
-                         volume: 1.0;
-                         positional: false;
-                        poolSize: 1;">
-        </a-entity>
       </a-sphere>
 
       <!-- Player with zero-g physics -->
       <a-entity id="player" position="0 2 12" zerog-player="mass: 70; thrusterForce: 0.8">
         <a-entity id="rig" position="0 0 0">
-          <!-- NEW: Boost sound effect (spatial, positioned at player body) -->
-          <a-entity id="boost-sound"
-                    sound="src: url(../audio/burst-128424-shorter.mp3);
-                           autoplay: false;
-                           loop: false;
-                           volume: 0.8;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 1;
-                           maxDistance: 15;
-                           rolloffFactor: 1.5;
-                           poolSize: 1;">
-          </a-entity>
-          
           <a-entity camera look-controls="pointerLockEnabled: false">
             <!-- Player target sphere (like in original dodgeball project) -->
             <a-sphere id="player-target" 
@@ -13869,21 +11941,6 @@ function setGameplayHUD(isPlaying) {
                     visible="false">
             </a-cone>
             
-            <!-- NEW: Thruster sound effect (spatial, looping, higher pitch) -->
-            <a-entity class="thruster-sound"
-                      sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                             autoplay: false;
-                             loop: true;
-                             volume: 0.7;
-                             playbackRate: 1.4;
-                             positional: true;
-                             distanceModel: inverse;
-                             refDistance: 0.5;
-                             maxDistance: 10;
-                             rolloffFactor: 2;
-                             poolSize: 1;">
-            </a-entity>
-            
             <!-- IK Arm Visualization -->
             <!-- Forearm model (wrist to elbow) -->
             <a-entity class="forearm-model" 
@@ -13928,21 +11985,6 @@ function setGameplayHUD(isPlaying) {
                     visible="false">
             </a-cone>
             
-            <!-- NEW: Thruster sound effect (spatial, looping, higher pitch) -->
-            <a-entity class="thruster-sound"
-                      sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                             autoplay: false;
-                             loop: true;
-                             volume: 0.7;
-                             playbackRate: 1.4;
-                             positional: true;
-                             distanceModel: inverse;
-                             refDistance: 0.5;
-                             maxDistance: 10;
-                             rolloffFactor: 2;
-                             poolSize: 1;">
-            </a-entity>
-            
             <!-- IK Arm Visualization -->
             <!-- Forearm model (wrist to elbow) -->
             <a-entity class="forearm-model" 
@@ -13969,20 +12011,6 @@ function setGameplayHUD(isPlaying) {
 
       <!-- Remote players (for multiplayer) -->
       <a-entity id="remote-player-0" position="-2 0 -2" visible="false">
-        <!-- NEW: Boost sound effect (spatial, positioned at remote player body) -->
-        <a-entity class="boost-sound"
-                  sound="src: url(../audio/burst-128424-shorter.mp3);
-                         autoplay: false;
-                         loop: false;
-                         volume: 0.8;
-                         positional: true;
-                         distanceModel: inverse;
-                         refDistance: 1;
-                         maxDistance: 15;
-                         rolloffFactor: 1.5;
-                         poolSize: 1;">
-        </a-entity>
-        
         <a-sphere id="remote-target-0" 
                   radius="0.2" 
                   color="#ff0000" 
@@ -14003,32 +12031,6 @@ function setGameplayHUD(isPlaying) {
         <a-entity class="remote-left-hand" 
                   arm-ik-visualizer="hand: left"
                   position="0 0 0">
-          <!-- NEW: Thruster visual effect -->
-          <a-cone class="thruster-vfx"
-                  position="0 0 0.1"
-                  radius-bottom="0.02"
-                  radius-top="0.01"
-                  height="0.1"
-                  color="#00ffff"
-                  material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
-                  visible="false">
-          </a-cone>
-          
-          <!-- NEW: Thruster sound effect -->
-          <a-entity class="thruster-sound"
-                    sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                           autoplay: false;
-                           loop: true;
-                           volume: 0.7;
-                           playbackRate: 1.4;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 0.5;
-                           maxDistance: 10;
-                           rolloffFactor: 2;
-                           poolSize: 1;">
-          </a-entity>
-          
           <!-- Forearm model (wrist to elbow) -->
           <a-entity class="forearm-model" 
                     arm-segment-model="segmentLength: 0.25; segmentType: forearm"
@@ -14054,32 +12056,6 @@ function setGameplayHUD(isPlaying) {
         <a-entity class="remote-right-hand" 
                   arm-ik-visualizer="hand: right"
                   position="0 0 0">
-          <!-- NEW: Thruster visual effect -->
-          <a-cone class="thruster-vfx"
-                  position="0 0 0.1"
-                  radius-bottom="0.02"
-                  radius-top="0.01"
-                  height="0.1"
-                  color="#00ffff"
-                  material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
-                  visible="false">
-          </a-cone>
-          
-          <!-- NEW: Thruster sound effect -->
-          <a-entity class="thruster-sound"
-                    sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                           autoplay: false;
-                           loop: true;
-                           volume: 0.7;
-                           playbackRate: 1.4;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 0.5;
-                           maxDistance: 10;
-                           rolloffFactor: 2;
-                           poolSize: 1;">
-          </a-entity>
-          
           <!-- Forearm model (wrist to elbow) -->
           <a-entity class="forearm-model" 
                     arm-segment-model="segmentLength: 0.25; segmentType: forearm"
@@ -14103,20 +12079,6 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <a-entity id="remote-player-1" position="2 0 -2" visible="false">
-        <!-- NEW: Boost sound effect (spatial, positioned at remote player body) -->
-        <a-entity class="boost-sound"
-                  sound="src: url(../audio/burst-128424-shorter.mp3);
-                         autoplay: false;
-                         loop: false;
-                         volume: 0.8;
-                         positional: true;
-                         distanceModel: inverse;
-                         refDistance: 1;
-                         maxDistance: 15;
-                         rolloffFactor: 1.5;
-                         poolSize: 1;">
-        </a-entity>
-        
         <a-sphere id="remote-target-1" 
                   radius="0.2" 
                   color="#ff0000" 
@@ -14137,32 +12099,6 @@ function setGameplayHUD(isPlaying) {
         <a-entity class="remote-left-hand" 
                   arm-ik-visualizer="hand: left"
                   position="0 0 0">
-          <!-- NEW: Thruster visual effect -->
-          <a-cone class="thruster-vfx"
-                  position="0 0 0.1"
-                  radius-bottom="0.02"
-                  radius-top="0.01"
-                  height="0.1"
-                  color="#00ffff"
-                  material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
-                  visible="false">
-          </a-cone>
-          
-          <!-- NEW: Thruster sound effect -->
-          <a-entity class="thruster-sound"
-                    sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                           autoplay: false;
-                           loop: true;
-                           volume: 0.7;
-                           playbackRate: 1.4;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 0.5;
-                           maxDistance: 10;
-                           rolloffFactor: 2;
-                           poolSize: 1;">
-          </a-entity>
-          
           <!-- Forearm model (wrist to elbow) -->
           <a-entity class="forearm-model" 
                     arm-segment-model="segmentLength: 0.25; segmentType: forearm"
@@ -14188,32 +12124,6 @@ function setGameplayHUD(isPlaying) {
         <a-entity class="remote-right-hand" 
                   arm-ik-visualizer="hand: right"
                   position="0 0 0">
-          <!-- NEW: Thruster visual effect -->
-          <a-cone class="thruster-vfx"
-                  position="0 0 0.1"
-                  radius-bottom="0.02"
-                  radius-top="0.01"
-                  height="0.1"
-                  color="#00ffff"
-                  material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
-                  visible="false">
-          </a-cone>
-          
-          <!-- NEW: Thruster sound effect -->
-          <a-entity class="thruster-sound"
-                    sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                           autoplay: false;
-                           loop: true;
-                           volume: 0.7;
-                           playbackRate: 1.4;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 0.5;
-                           maxDistance: 10;
-                           rolloffFactor: 2;
-                           poolSize: 1;">
-          </a-entity>
-          
           <!-- Forearm model (wrist to elbow) -->
           <a-entity class="forearm-model" 
                     arm-segment-model="segmentLength: 0.25; segmentType: forearm"
@@ -14237,20 +12147,6 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <a-entity id="remote-player-2" position="-2 0 2" visible="false">
-        <!-- NEW: Boost sound effect (spatial, positioned at remote player body) -->
-        <a-entity class="boost-sound"
-                  sound="src: url(../audio/burst-128424-shorter.mp3);
-                         autoplay: false;
-                         loop: false;
-                         volume: 0.8;
-                         positional: true;
-                         distanceModel: inverse;
-                         refDistance: 1;
-                         maxDistance: 15;
-                         rolloffFactor: 1.5;
-                         poolSize: 1;">
-        </a-entity>
-        
         <a-sphere id="remote-target-2" 
                   radius="0.2" 
                   color="#ff00ff" 
@@ -14271,32 +12167,6 @@ function setGameplayHUD(isPlaying) {
         <a-entity class="remote-left-hand" 
                   arm-ik-visualizer="hand: left"
                   position="0 0 0">
-          <!-- NEW: Thruster visual effect -->
-          <a-cone class="thruster-vfx"
-                  position="0 0 0.1"
-                  radius-bottom="0.02"
-                  radius-top="0.01"
-                  height="0.1"
-                  color="#00ffff"
-                  material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
-                  visible="false">
-          </a-cone>
-          
-          <!-- NEW: Thruster sound effect -->
-          <a-entity class="thruster-sound"
-                    sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                           autoplay: false;
-                           loop: true;
-                           volume: 0.7;
-                           playbackRate: 1.4;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 0.5;
-                           maxDistance: 10;
-                           rolloffFactor: 2;
-                           poolSize: 1;">
-          </a-entity>
-          
           <!-- Forearm model (wrist to elbow) -->
           <a-entity class="forearm-model" 
                     arm-segment-model="segmentLength: 0.25; segmentType: forearm"
@@ -14322,32 +12192,6 @@ function setGameplayHUD(isPlaying) {
         <a-entity class="remote-right-hand" 
                   arm-ik-visualizer="hand: right"
                   position="0 0 0">
-          <!-- NEW: Thruster visual effect -->
-          <a-cone class="thruster-vfx"
-                  position="0 0 0.1"
-                  radius-bottom="0.02"
-                  radius-top="0.01"
-                  height="0.1"
-                  color="#00ffff"
-                  material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
-                  visible="false">
-          </a-cone>
-          
-          <!-- NEW: Thruster sound effect -->
-          <a-entity class="thruster-sound"
-                    sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                           autoplay: false;
-                           loop: true;
-                           volume: 0.7;
-                           playbackRate: 1.4;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 0.5;
-                           maxDistance: 10;
-                           rolloffFactor: 2;
-                           poolSize: 1;">
-          </a-entity>
-          
           <!-- Forearm model (wrist to elbow) -->
           <a-entity class="forearm-model" 
                     arm-segment-model="segmentLength: 0.25; segmentType: forearm"
@@ -14371,20 +12215,6 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <a-entity id="remote-player-3" position="2 0 2" visible="false">
-        <!-- NEW: Boost sound effect (spatial, positioned at remote player body) -->
-        <a-entity class="boost-sound"
-                  sound="src: url(../audio/burst-128424-shorter.mp3);
-                         autoplay: false;
-                         loop: false;
-                         volume: 0.8;
-                         positional: true;
-                         distanceModel: inverse;
-                         refDistance: 1;
-                         maxDistance: 15;
-                         rolloffFactor: 1.5;
-                         poolSize: 1;">
-        </a-entity>
-        
         <a-sphere id="remote-target-3" 
                   radius="0.2" 
                   color="#ffff00" 
@@ -14405,32 +12235,6 @@ function setGameplayHUD(isPlaying) {
         <a-entity class="remote-left-hand" 
                   arm-ik-visualizer="hand: left"
                   position="0 0 0">
-          <!-- NEW: Thruster visual effect -->
-          <a-cone class="thruster-vfx"
-                  position="0 0 0.1"
-                  radius-bottom="0.02"
-                  radius-top="0.01"
-                  height="0.1"
-                  color="#00ffff"
-                  material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
-                  visible="false">
-          </a-cone>
-          
-          <!-- NEW: Thruster sound effect -->
-          <a-entity class="thruster-sound"
-                    sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                           autoplay: false;
-                           loop: true;
-                           volume: 0.7;
-                           playbackRate: 1.4;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 0.5;
-                           maxDistance: 10;
-                           rolloffFactor: 2;
-                           poolSize: 1;">
-          </a-entity>
-          
           <!-- Forearm model (wrist to elbow) -->
           <a-entity class="forearm-model" 
                     arm-segment-model="segmentLength: 0.25; segmentType: forearm"
@@ -14456,32 +12260,6 @@ function setGameplayHUD(isPlaying) {
         <a-entity class="remote-right-hand" 
                   arm-ik-visualizer="hand: right"
                   position="0 0 0">
-          <!-- NEW: Thruster visual effect -->
-          <a-cone class="thruster-vfx"
-                  position="0 0 0.1"
-                  radius-bottom="0.02"
-                  radius-top="0.01"
-                  height="0.1"
-                  color="#00ffff"
-                  material="shader: standard; emissive: #00ffff; emissiveIntensity: 1; transparent: true; opacity: 0.8"
-                  visible="false">
-          </a-cone>
-          
-          <!-- NEW: Thruster sound effect -->
-          <a-entity class="thruster-sound"
-                    sound="src: url(../audio/thrusters_loopwav-14699.mp3);
-                           autoplay: false;
-                           loop: true;
-                           volume: 0.7;
-                           playbackRate: 1.4;
-                           positional: true;
-                           distanceModel: inverse;
-                           refDistance: 0.5;
-                           maxDistance: 10;
-                           rolloffFactor: 2;
-                           poolSize: 1;">
-          </a-entity>
-          
           <!-- Forearm model (wrist to elbow) -->
           <a-entity class="forearm-model" 
                     arm-segment-model="segmentLength: 0.25; segmentType: forearm"
