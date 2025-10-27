@@ -8237,6 +8237,7 @@ function setGameplayHUD(isPlaying) {
           this.menuVisible = false;
           this.lastBButtonPress = 0;
           this.lastMenuToggle = 0; // Track menu toggle time to prevent accidental clicks
+          this.lastYButtonPress = 0; // Track Y button for secret editor toggle
           
           // X button to toggle menu with debouncing
           this.el.sceneEl.addEventListener('xbuttondown', () => {
@@ -8245,6 +8246,54 @@ function setGameplayHUD(isPlaying) {
             this.lastBButtonPress = now;
             this.toggleMenu();
           });
+          
+          // SECRET: Y button to toggle editor mode when menu is open
+          this.el.sceneEl.addEventListener('ybuttondown', () => {
+            const now = Date.now();
+            if (now - this.lastYButtonPress < 500) return; // 500ms debounce
+            this.lastYButtonPress = now;
+            
+            // Only work when menu is open
+            if (this.menuVisible) {
+              this.toggleEditorMode();
+            }
+          });
+        },
+        
+        toggleEditorMode: function() {
+          // In multiplayer, only host can edit
+          if (isMultiplayer && !isHost) {
+            console.log('⚠️ Level Editor: Only the host can edit in multiplayer mode');
+            return;
+          }
+          
+          const editorComponent = this.el.sceneEl.components['level-editor'];
+          if (editorComponent) {
+            // Toggle editor state
+            editorComponent.data.enabled = !editorComponent.data.enabled;
+            
+            if (editorComponent.data.enabled) {
+              console.log('🔓 SECRET: Level Editor ENABLED via Y button');
+            } else {
+              console.log('🔒 SECRET: Level Editor DISABLED via Y button');
+              // Deselect any selected object
+              if (editorComponent.deselectObject) {
+                editorComponent.deselectObject();
+              }
+            }
+            
+            // Update grid visibility
+            const grid = document.querySelector('#debug-grid');
+            if (grid) {
+              grid.setAttribute('visible', editorComponent.data.enabled);
+            }
+            
+            // Update VR raycasters if menu is still open
+            if (this.menuVisible) {
+              // Keep white menu lasers, but editor state is changed for when menu closes
+              editorComponent.updateVRRaycasters();
+            }
+          }
         },
 
         toggleMenu: function() {
