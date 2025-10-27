@@ -1283,7 +1283,17 @@
         
         // Set attributes
         for (const [key, value] of Object.entries(data.attributes)) {
-          entity.setAttribute(key, value);
+          // If the value is a JSON string (component data), parse it
+          let attrValue = value;
+          if (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) {
+            try {
+              attrValue = JSON.parse(value);
+            } catch (e) {
+              // If parsing fails, use as-is
+              attrValue = value;
+            }
+          }
+          entity.setAttribute(key, attrValue);
         }
         
         document.querySelector('a-scene').appendChild(entity);
@@ -3148,6 +3158,13 @@ function setGameplayHUD(isPlaying) {
             if (getMenuVisibility()) {
               return; // Don't activate thrusters when menu is visible
             }
+            
+            // Don't activate thrusters if in editor mode with right grip pressed (delete command)
+            const editorComponent = this.el.sceneEl.components['level-editor'];
+            if (editorComponent && editorComponent.data.enabled && editorComponent.rightGripPressed) {
+              return; // Delete command takes priority
+            }
+            
             const hand = evt.target;
             this.handleThruster(hand, true);
           });
@@ -3161,6 +3178,13 @@ function setGameplayHUD(isPlaying) {
             if (getMenuVisibility()) {
               return; // Don't deactivate thrusters when menu is visible
             }
+            
+            // Don't deactivate thrusters if in editor mode with right grip pressed
+            const editorComponent = this.el.sceneEl.components['level-editor'];
+            if (editorComponent && editorComponent.data.enabled && editorComponent.rightGripPressed) {
+              return;
+            }
+            
             const hand = evt.target;
             this.handleThruster(hand, false);
           });
@@ -3175,6 +3199,13 @@ function setGameplayHUD(isPlaying) {
             if (getMenuVisibility()) {
               return; // Don't activate thrusters when menu is visible
             }
+            
+            // Don't activate thrusters if in editor mode with left grip pressed (undo command)
+            const editorComponent = this.el.sceneEl.components['level-editor'];
+            if (editorComponent && editorComponent.data.enabled && editorComponent.leftGripPressed) {
+              return; // Undo command takes priority
+            }
+            
             const hand = evt.target;
             this.handleThruster(hand, true);
           });
@@ -3188,6 +3219,13 @@ function setGameplayHUD(isPlaying) {
             if (getMenuVisibility()) {
               return; // Don't deactivate thrusters when menu is visible
             }
+            
+            // Don't deactivate thrusters if in editor mode with left grip pressed
+            const editorComponent = this.el.sceneEl.components['level-editor'];
+            if (editorComponent && editorComponent.data.enabled && editorComponent.leftGripPressed) {
+              return;
+            }
+            
             const hand = evt.target;
             this.handleThruster(hand, false);
           });
@@ -8238,9 +8276,29 @@ function setGameplayHUD(isPlaying) {
           this.lastBButtonPress = 0;
           this.lastMenuToggle = 0; // Track menu toggle time to prevent accidental clicks
           this.lastYButtonPress = 0; // Track Y button for secret editor toggle
+          this.leftGripPressed = false; // Track left grip for undo/redo prevention
+          
+          // Track left grip state
+          setTimeout(() => {
+            const leftHand = document.querySelector('#leftHand');
+            if (leftHand) {
+              leftHand.addEventListener('gripdown', () => {
+                this.leftGripPressed = true;
+              });
+              leftHand.addEventListener('gripup', () => {
+                this.leftGripPressed = false;
+              });
+            }
+          }, 1000);
           
           // X button to toggle menu with debouncing
+          // Only works when left grip is NOT pressed (to allow redo with Left Grip + X)
           this.el.sceneEl.addEventListener('xbuttondown', () => {
+            // Don't toggle menu if left grip is pressed (redo command takes priority)
+            if (this.leftGripPressed) {
+              return;
+            }
+            
             const now = Date.now();
             if (now - this.lastBButtonPress < 500) return; // 500ms debounce
             this.lastBButtonPress = now;
@@ -12319,6 +12377,12 @@ function setGameplayHUD(isPlaying) {
           // Transform gizmo
           this.gizmoEntity = null;
           
+          // UNDO/REDO SYSTEM
+          this.undoStack = [];
+          this.redoStack = [];
+          this.maxUndoSteps = 50;
+          this.preActionState = null; // Store state before action starts
+          
           // Ensure all arena objects have IDs for multiplayer sync
           this.ensureArenaObjectIds();
           
@@ -12328,6 +12392,7 @@ function setGameplayHUD(isPlaying) {
             this.rightHand = document.querySelector('#rightHand');
             this.setupVRTransformControls();
             this.setupAButtonListeners();
+            this.setupUndoRedoControls();
           }, 1000);
           
           // Keyboard controls
@@ -12511,6 +12576,9 @@ function setGameplayHUD(isPlaying) {
                   }
                 } else {
                   console.log('🔍 DEBUG: A button NOT pressed, normal grab');
+                  
+                  // UNDO SYSTEM: Capture state before move (not for duplicates, they're already recorded)
+                  this.capturePreActionState();
                 }
                 
                 // NEW: Check if raycaster is actually pointing at the selected object or gizmo
@@ -12639,6 +12707,9 @@ function setGameplayHUD(isPlaying) {
                       }
                   }
                   
+                  // UNDO SYSTEM: Record move command after release
+                  this.recordMoveCommand();
+                  
                   console.log('✅ Released object (snapped to grid)');
                 }
               });
@@ -12691,6 +12762,74 @@ function setGameplayHUD(isPlaying) {
             this.aButtonPressed = false;
             console.log('🅰️ DEBUG: A button UP - aButtonPressed set to FALSE');
           });
+        },
+        
+        setupUndoRedoControls: function() {
+          if (!this.leftHand || !this.rightHand) {
+            console.warn('⚠️ Undo/Redo: Controllers not found');
+            return;
+          }
+          
+          // Track grip button states
+          this.leftGripPressed = false;
+          this.rightGripPressed = false;
+          
+          // Debounce tracking for undo/redo
+          this.lastUndoTime = 0;
+          this.lastRedoTime = 0;
+          this.undoRedoDebounce = 300; // 300ms debounce
+          
+          // Left grip state
+          this.leftHand.addEventListener('gripdown', () => {
+            this.leftGripPressed = true;
+          });
+          this.leftHand.addEventListener('gripup', () => {
+            this.leftGripPressed = false;
+          });
+          
+          // Right grip state
+          this.rightHand.addEventListener('gripdown', () => {
+            this.rightGripPressed = true;
+          });
+          this.rightHand.addEventListener('gripup', () => {
+            this.rightGripPressed = false;
+          });
+          
+          // UNDO: Left Grip + Y (only from LEFT controller)
+          this.leftHand.addEventListener('ybuttondown', () => {
+            if (this.data.enabled && this.leftGripPressed && !this.isTransforming) {
+              const now = Date.now();
+              if (now - this.lastUndoTime < this.undoRedoDebounce) {
+                return; // Debounce
+              }
+              this.lastUndoTime = now;
+              this.undo();
+            }
+          });
+          
+          // REDO: Left Grip + X (only from LEFT controller)
+          this.leftHand.addEventListener('xbuttondown', () => {
+            if (this.data.enabled && this.leftGripPressed && !this.isTransforming) {
+              const now = Date.now();
+              if (now - this.lastRedoTime < this.undoRedoDebounce) {
+                return; // Debounce
+              }
+              this.lastRedoTime = now;
+              this.redo();
+            }
+          });
+          
+          // DELETE: Right Grip + B (only from RIGHT controller)
+          this.rightHand.addEventListener('bbuttondown', () => {
+            if (this.data.enabled && this.rightGripPressed && this.selectedObject && !this.isTransforming) {
+              this.deleteSelectedObject();
+            }
+          });
+          
+          console.log('✅ Undo/Redo controls initialized');
+          console.log('   Undo: Left Grip + Y');
+          console.log('   Redo: Left Grip + X');
+          console.log('   Delete: Right Grip + B');
         },
         
         setupVRControls: function() {
@@ -12948,11 +13087,22 @@ function setGameplayHUD(isPlaying) {
             this.selectedObject = null;
           }
           
-          // Remove gizmo
+          // Remove gizmo from scene
           if (this.gizmoEntity) {
-            this.el.sceneEl.removeChild(this.gizmoEntity);
+            if (this.gizmoEntity.parentNode) {
+              this.gizmoEntity.parentNode.removeChild(this.gizmoEntity);
+            }
             this.gizmoEntity = null;
           }
+          
+          // ADDITIONAL CLEANUP: Remove any orphaned gizmos
+          const orphanedGizmos = document.querySelectorAll('.editor-gizmo');
+          orphanedGizmos.forEach(gizmo => {
+            if (gizmo.parentNode) {
+              gizmo.parentNode.removeChild(gizmo);
+              console.log('🧹 Cleaned up orphaned gizmo');
+            }
+          });
         },
         
         updateGizmoPosition: function() {
@@ -13058,6 +13208,9 @@ function setGameplayHUD(isPlaying) {
               console.log(`🏗️ HOST: Broadcast arena add for ${clone.id}`);
             }
             
+            // UNDO SYSTEM: Record add command for duplicate
+            this.recordAddCommand(clone);
+            
             return clone;
           } catch (err) {
             console.error('❌ Error duplicating object:', err);
@@ -13088,6 +13241,396 @@ function setGameplayHUD(isPlaying) {
             console.log(`🏷️ Assigned IDs to ${assignedCount} arena objects for multiplayer sync`);
           }
         },
+        
+        // =====================================================================
+        // UNDO/REDO COMMAND SYSTEM
+        // =====================================================================
+        
+        capturePreActionState: function() {
+          if (!this.selectedObject) return;
+          
+          const pos = this.selectedObject.object3D.position;
+          const rot = this.selectedObject.object3D.rotation;
+          
+          this.preActionState = {
+            entityId: this.selectedObject.id,
+            position: { x: pos.x, y: pos.y, z: pos.z },
+            rotation: { 
+              x: THREE.MathUtils.radToDeg(rot.x), 
+              y: THREE.MathUtils.radToDeg(rot.y), 
+              z: THREE.MathUtils.radToDeg(rot.z) 
+            }
+          };
+        },
+        
+        recordMoveCommand: function() {
+          if (!this.selectedObject || !this.preActionState) return;
+          
+          const pos = this.selectedObject.object3D.position;
+          const rot = this.selectedObject.object3D.rotation;
+          
+          const newState = {
+            position: { x: pos.x, y: pos.y, z: pos.z },
+            rotation: { 
+              x: THREE.MathUtils.radToDeg(rot.x), 
+              y: THREE.MathUtils.radToDeg(rot.y), 
+              z: THREE.MathUtils.radToDeg(rot.z) 
+            }
+          };
+          
+          // Check if actually moved
+          const moved = 
+            this.preActionState.position.x !== newState.position.x ||
+            this.preActionState.position.y !== newState.position.y ||
+            this.preActionState.position.z !== newState.position.z ||
+            this.preActionState.rotation.x !== newState.rotation.x ||
+            this.preActionState.rotation.y !== newState.rotation.y ||
+            this.preActionState.rotation.z !== newState.rotation.z;
+          
+          if (moved) {
+            const command = {
+              type: 'move',
+              entityId: this.preActionState.entityId,
+              oldState: this.preActionState,
+              newState: newState,
+              timestamp: Date.now()
+            };
+            
+            this.pushCommand(command);
+            console.log(`⏺️ Recorded MOVE command for ${command.entityId}`);
+          }
+          
+          this.preActionState = null;
+        },
+        
+        recordAddCommand: function(entity) {
+          const pos = entity.object3D.position;
+          const rot = entity.object3D.rotation;
+          const scale = entity.object3D.scale;
+          
+          const command = {
+            type: 'add',
+            entityId: entity.id,
+            entityData: {
+              tagName: entity.tagName.toLowerCase(),
+              position: { x: pos.x, y: pos.y, z: pos.z },
+              rotation: { 
+                x: THREE.MathUtils.radToDeg(rot.x), 
+                y: THREE.MathUtils.radToDeg(rot.y), 
+                z: THREE.MathUtils.radToDeg(rot.z) 
+              },
+              scale: { x: scale.x, y: scale.y, z: scale.z },
+              attributes: {}
+            },
+            timestamp: Date.now()
+          };
+          
+          // Copy relevant attributes
+          ['radius', 'detail', 'segments', 'width', 'height', 'depth', 'color'].forEach(attr => {
+            const val = entity.getAttribute(attr);
+            if (val !== null && val !== undefined) {
+              command.entityData.attributes[attr] = val;
+            }
+          });
+          
+          this.pushCommand(command);
+          console.log(`⏺️ Recorded ADD command for ${command.entityId}`);
+        },
+        
+        recordDeleteCommand: function(entity) {
+          const pos = entity.object3D.position;
+          const rot = entity.object3D.rotation;
+          const scale = entity.object3D.scale;
+          
+          const command = {
+            type: 'delete',
+            entityId: entity.id,
+            entityData: {
+              tagName: entity.tagName.toLowerCase(),
+              position: { x: pos.x, y: pos.y, z: pos.z },
+              rotation: { 
+                x: THREE.MathUtils.radToDeg(rot.x), 
+                y: THREE.MathUtils.radToDeg(rot.y), 
+                z: THREE.MathUtils.radToDeg(rot.z) 
+              },
+              scale: { x: scale.x, y: scale.y, z: scale.z },
+              attributes: {}
+            },
+            timestamp: Date.now()
+          };
+          
+          // Copy relevant attributes (including edge components)
+          ['radius', 'detail', 'segments', 'width', 'height', 'depth', 'color', 'grab-surface', 
+           'octahedron-edges', 'tetrahedron-edges', 'material'].forEach(attr => {
+            const val = entity.getAttribute(attr);
+            if (val !== null && val !== undefined) {
+              // For component attributes, serialize as string if it's an object
+              command.entityData.attributes[attr] = typeof val === 'object' ? JSON.stringify(val) : val;
+            }
+          });
+          
+          this.pushCommand(command);
+          console.log(`⏺️ Recorded DELETE command for ${command.entityId}`);
+        },
+        
+        pushCommand: function(command) {
+          this.undoStack.push(command);
+          
+          // Limit stack size
+          if (this.undoStack.length > this.maxUndoSteps) {
+            this.undoStack.shift();
+          }
+          
+          // Clear redo stack when new action happens
+          this.redoStack = [];
+        },
+        
+        undo: function() {
+          if (this.undoStack.length === 0) {
+            console.log('⏮️ Nothing to undo');
+            return;
+          }
+          
+          const command = this.undoStack.pop();
+          this.redoStack.push(command);
+          
+          console.log(`⏮️ UNDO: ${command.type} on ${command.entityId}`);
+          
+          switch (command.type) {
+            case 'move':
+              this.undoMove(command);
+              break;
+            case 'add':
+              this.undoAdd(command);
+              break;
+            case 'delete':
+              this.undoDelete(command);
+              break;
+          }
+        },
+        
+        redo: function() {
+          if (this.redoStack.length === 0) {
+            console.log('⏭️ Nothing to redo');
+            return;
+          }
+          
+          const command = this.redoStack.pop();
+          this.undoStack.push(command);
+          
+          console.log(`⏭️ REDO: ${command.type} on ${command.entityId}`);
+          
+          switch (command.type) {
+            case 'move':
+              this.redoMove(command);
+              break;
+            case 'add':
+              this.redoAdd(command);
+              break;
+            case 'delete':
+              this.redoDelete(command);
+              break;
+          }
+        },
+        
+        undoMove: function(command) {
+          const entity = document.getElementById(command.entityId);
+          if (entity) {
+            entity.setAttribute('position', command.oldState.position);
+            entity.setAttribute('rotation', `${command.oldState.rotation.x} ${command.oldState.rotation.y} ${command.oldState.rotation.z}`);
+            
+            // Broadcast to multiplayer if host
+            if (isMultiplayer && isHost) {
+              const message = {
+                type: 'arena-update',
+                id: command.entityId,
+                position: command.oldState.position,
+                rotation: command.oldState.rotation
+              };
+              connections.forEach(conn => {
+                if (conn && conn.open) {
+                  conn.send(message);
+                }
+              });
+            }
+          }
+        },
+        
+        redoMove: function(command) {
+          const entity = document.getElementById(command.entityId);
+          if (entity) {
+            entity.setAttribute('position', command.newState.position);
+            entity.setAttribute('rotation', `${command.newState.rotation.x} ${command.newState.rotation.y} ${command.newState.rotation.z}`);
+            
+            // Broadcast to multiplayer if host
+            if (isMultiplayer && isHost) {
+              const message = {
+                type: 'arena-update',
+                id: command.entityId,
+                position: command.newState.position,
+                rotation: command.newState.rotation
+              };
+              connections.forEach(conn => {
+                if (conn && conn.open) {
+                  conn.send(message);
+                }
+              });
+            }
+          }
+        },
+        
+        undoAdd: function(command) {
+          // Remove the added entity
+          const entity = document.getElementById(command.entityId);
+          if (entity && entity.parentNode) {
+            entity.parentNode.removeChild(entity);
+            
+            // Deselect if it was selected
+            if (this.selectedObject === entity) {
+              this.deselectObject();
+            }
+            
+            // Broadcast to multiplayer if host
+            if (isMultiplayer && isHost) {
+              const message = { type: 'arena-delete', id: command.entityId };
+              connections.forEach(conn => {
+                if (conn && conn.open) {
+                  conn.send(message);
+                }
+              });
+            }
+          }
+        },
+        
+        redoAdd: function(command) {
+          // Recreate the entity
+          const entity = document.createElement(command.entityData.tagName);
+          entity.setAttribute('id', command.entityId);
+          entity.setAttribute('position', command.entityData.position);
+          entity.setAttribute('rotation', `${command.entityData.rotation.x} ${command.entityData.rotation.y} ${command.entityData.rotation.z}`);
+          entity.setAttribute('scale', `${command.entityData.scale.x} ${command.entityData.scale.y} ${command.entityData.scale.z}`);
+          
+          // Set attributes
+          for (const [key, value] of Object.entries(command.entityData.attributes)) {
+            entity.setAttribute(key, value);
+          }
+          
+          this.el.sceneEl.appendChild(entity);
+          
+          // Broadcast to multiplayer if host
+          if (isMultiplayer && isHost) {
+            const message = {
+              type: 'arena-add',
+              tagName: command.entityData.tagName,
+              id: command.entityId,
+              position: command.entityData.position,
+              rotation: command.entityData.rotation,
+              attributes: command.entityData.attributes
+            };
+            connections.forEach(conn => {
+              if (conn && conn.open) {
+                conn.send(message);
+              }
+            });
+          }
+        },
+        
+        undoDelete: function(command) {
+          // Recreate the deleted entity
+          const entity = document.createElement(command.entityData.tagName);
+          entity.setAttribute('id', command.entityId);
+          entity.setAttribute('position', command.entityData.position);
+          entity.setAttribute('rotation', `${command.entityData.rotation.x} ${command.entityData.rotation.y} ${command.entityData.rotation.z}`);
+          entity.setAttribute('scale', `${command.entityData.scale.x} ${command.entityData.scale.y} ${command.entityData.scale.z}`);
+          
+          // Set attributes
+          for (const [key, value] of Object.entries(command.entityData.attributes)) {
+            // If the value is a JSON string (component data), parse it
+            let attrValue = value;
+            if (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) {
+              try {
+                attrValue = JSON.parse(value);
+              } catch (e) {
+                // If parsing fails, use as-is
+                attrValue = value;
+              }
+            }
+            entity.setAttribute(key, attrValue);
+          }
+          
+          this.el.sceneEl.appendChild(entity);
+          
+          // Broadcast to multiplayer if host
+          if (isMultiplayer && isHost) {
+            const message = {
+              type: 'arena-add',
+              tagName: command.entityData.tagName,
+              id: command.entityId,
+              position: command.entityData.position,
+              rotation: command.entityData.rotation,
+              attributes: command.entityData.attributes
+            };
+            connections.forEach(conn => {
+              if (conn && conn.open) {
+                conn.send(message);
+              }
+            });
+          }
+        },
+        
+        redoDelete: function(command) {
+          // Remove the entity again
+          const entity = document.getElementById(command.entityId);
+          if (entity && entity.parentNode) {
+            entity.parentNode.removeChild(entity);
+            
+            // Deselect if it was selected
+            if (this.selectedObject === entity) {
+              this.deselectObject();
+            }
+            
+            // Broadcast to multiplayer if host
+            if (isMultiplayer && isHost) {
+              const message = { type: 'arena-delete', id: command.entityId };
+              connections.forEach(conn => {
+                if (conn && conn.open) {
+                  conn.send(message);
+                }
+              });
+            }
+          }
+        },
+        
+        deleteSelectedObject: function() {
+          if (!this.selectedObject) return;
+          
+          const deletedEntity = this.selectedObject;
+          const deletedId = deletedEntity.id;
+          
+          console.log(`🗑️ DELETE: Removing ${deletedEntity.tagName} (${deletedId})`);
+          
+          // Record delete command for undo
+          this.recordDeleteCommand(deletedEntity);
+          
+          // Remove from scene
+          deletedEntity.parentNode.removeChild(deletedEntity);
+          this.deselectObject();
+          
+          // Broadcast to multiplayer if host
+          if (isMultiplayer && isHost) {
+            const message = { type: 'arena-delete', id: deletedId };
+            connections.forEach(conn => {
+              if (conn && conn.open) {
+                conn.send(message);
+              }
+            });
+            console.log(`🏗️ HOST: Broadcast arena delete for ${deletedId}`);
+          }
+        },
+        
+        // =====================================================================
+        // END UNDO/REDO SYSTEM
+        // =====================================================================
         
         // Note: Arena multiplayer sync is handled via standard peer connections
         // See handleArenaState, handleArenaUpdate, handleArenaDelete, handleArenaAdd at top of file
