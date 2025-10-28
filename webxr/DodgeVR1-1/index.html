@@ -10,6 +10,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
+    <script src="arena-templates.js"></script>
   </head>
   <body>
     <script>
@@ -1201,19 +1202,13 @@
               setTimeout(() => {
                 const arenaObjects = document.querySelectorAll('[grab-surface]');
                 const arenaState = [];
+                
                 arenaObjects.forEach(entity => {
                   if (entity.id) {
-                    const pos = entity.object3D.position;
-                    const rot = entity.object3D.rotation;
-                    arenaState.push({
-                      id: entity.id,
-                      position: { x: pos.x, y: pos.y, z: pos.z },
-                      rotation: { 
-                        x: THREE.MathUtils.radToDeg(rot.x), 
-                        y: THREE.MathUtils.radToDeg(rot.y), 
-                        z: THREE.MathUtils.radToDeg(rot.z) 
-                      }
-                    });
+                    const serialized = serializeArenaObject(entity);
+                    if (serialized) {
+                      arenaState.push(serialized);
+                    }
                   }
                 });
                 
@@ -1246,8 +1241,8 @@
         data.objects.forEach(objData => {
           const entity = document.getElementById(objData.id);
           if (entity) {
-            entity.setAttribute('position', objData.position);
-            entity.setAttribute('rotation', `${objData.rotation.x} ${objData.rotation.y} ${objData.rotation.z}`);
+            // Update existing entity using template system
+            applyArenaObjectData(entity, objData);
           }
         });
         
@@ -1258,8 +1253,8 @@
       function handleArenaUpdate(data) {
         const entity = document.getElementById(data.id);
         if (entity) {
-          entity.setAttribute('position', data.position);
-          entity.setAttribute('rotation', `${data.rotation.x} ${data.rotation.y} ${data.rotation.z}`);
+          // Apply transform updates using template system
+          applyArenaObjectData(entity, data);
           console.log(`🏗️ CLIENT: Updated ${data.id}`);
         }
       }
@@ -1275,29 +1270,14 @@
       
       // ARENA SYNC: Handle arena object addition from host
       function handleArenaAdd(data) {
-        const entity = document.createElement(data.tagName);
-        entity.setAttribute('id', data.id);
-        entity.setAttribute('position', data.position);
-        entity.setAttribute('rotation', `${data.rotation.x} ${data.rotation.y} ${data.rotation.z}`);
-        entity.setAttribute('grab-surface', '');
-        
-        // Set attributes
-        for (const [key, value] of Object.entries(data.attributes)) {
-          // If the value is a JSON string (component data), parse it
-          let attrValue = value;
-          if (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) {
-            try {
-              attrValue = JSON.parse(value);
-            } catch (e) {
-              // If parsing fails, use as-is
-              attrValue = value;
-            }
-          }
-          entity.setAttribute(key, attrValue);
+        // Use template system to create entity from serialized data
+        const entity = createArenaObjectFromData(data);
+        if (entity) {
+          document.querySelector('a-scene').appendChild(entity);
+          console.log(`🏗️ CLIENT: Added ${data.id}`);
+        } else {
+          console.error(`❌ CLIENT: Failed to create entity from data:`, data);
         }
-        
-        document.querySelector('a-scene').appendChild(entity);
-        console.log(`🏗️ CLIENT: Added ${data.id}`);
       }
 
       function handleMatchStartSync(data) {
@@ -1779,6 +1759,14 @@
       function handleGoalNotification(data) {
         // CLIENT: Handle goal notification from host
         console.log(`📡 CLIENT: Received goal notification - ${data.scoringTeam} scored!`);
+        
+        // CRITICAL: Play goal sound for all clients
+        const goalSound = document.querySelector('#goal-sound');
+        if (goalSound && goalSound.components.sound) {
+          goalSound.components.sound.stopSound();
+          goalSound.components.sound.playSound();
+          console.log('🔊 CLIENT: Playing goal sound');
+        }
         
         // Update local team scores
         teamScores = data.teamScores;
@@ -7166,6 +7154,18 @@ function setGameplayHUD(isPlaying) {
         },
         
         createEdges: function(geometry) {
+          // CRITICAL: Remove any existing edge cylinders first (from cloning)
+          // This prevents grey leftover cylinders when objects are duplicated
+          const existingEdges = this.el.querySelectorAll('a-cylinder');
+          existingEdges.forEach(cylinder => {
+            // Only remove cylinders that look like edges (not other cylinders user might have added)
+            const parent = cylinder.parentNode;
+            if (parent === this.el) {
+              this.el.removeChild(cylinder);
+              console.log('🧹 Removed old edge cylinder from cloned octahedron');
+            }
+          });
+          
           const radius = parseFloat(this.el.getAttribute('radius')) || 20;
           const edgeColor = this.data.edgeColor;
           const thickness = this.data.edgeThickness;
@@ -7298,6 +7298,18 @@ function setGameplayHUD(isPlaying) {
         },
         
         createEdges: function(geometry) {
+          // CRITICAL: Remove any existing edge cylinders first (from cloning)
+          // This prevents grey leftover cylinders when objects are duplicated
+          const existingEdges = this.el.querySelectorAll('a-cylinder');
+          existingEdges.forEach(cylinder => {
+            // Only remove cylinders that look like edges (not other cylinders user might have added)
+            const parent = cylinder.parentNode;
+            if (parent === this.el) {
+              this.el.removeChild(cylinder);
+              console.log('🧹 Removed old edge cylinder from cloned tetrahedron');
+            }
+          });
+          
           const radius = parseFloat(this.el.getAttribute('radius')) || 1.0;
           const edgeColor = this.data.edgeColor;
           const thickness = this.data.edgeThickness;
@@ -8398,6 +8410,8 @@ function setGameplayHUD(isPlaying) {
           const editorComponent = this.el.sceneEl.components['level-editor'];
           const isEditorActive = editorComponent && editorComponent.data.enabled;
           
+          console.log('🔧 DEBUG: toggleMenu raycaster update - menuVisible:', this.menuVisible, 'isEditorActive:', isEditorActive, 'isHost:', isHost, 'isMultiplayer:', isMultiplayer);
+          
           if (this.menuVisible) {
             // Menu is open - ALWAYS show white lasers for menu interaction (takes priority)
             if (leftHand) {
@@ -8443,6 +8457,7 @@ function setGameplayHUD(isPlaying) {
             }
           } else {
             // Normal mode - hide lasers
+            console.log('🔧 DEBUG: Menu closed, hiding lasers (normal mode)');
             if (leftHand) {
               leftHand.setAttribute('raycaster', {
                 objects: '',
@@ -8451,6 +8466,15 @@ function setGameplayHUD(isPlaying) {
                 far: 10,
                 enabled: false
               });
+              // Force immediate update and hide the line mesh
+              if (leftHand.components.raycaster) {
+                leftHand.components.raycaster.data.enabled = false;
+                leftHand.components.raycaster.data.lineOpacity = 0;
+                // CRITICAL: Directly hide the line mesh
+                if (leftHand.components.raycaster.line) {
+                  leftHand.components.raycaster.line.visible = false;
+                }
+              }
             }
             if (rightHand) {
               rightHand.setAttribute('raycaster', {
@@ -8460,6 +8484,15 @@ function setGameplayHUD(isPlaying) {
                 far: 10,
                 enabled: false
               });
+              // Force immediate update and hide the line mesh
+              if (rightHand.components.raycaster) {
+                rightHand.components.raycaster.data.enabled = false;
+                rightHand.components.raycaster.data.lineOpacity = 0;
+                // CRITICAL: Directly hide the line mesh
+                if (rightHand.components.raycaster.line) {
+                  rightHand.components.raycaster.line.visible = false;
+                }
+              }
             }
           }
           
@@ -9206,7 +9239,13 @@ function setGameplayHUD(isPlaying) {
             collisionFilterMask: collisionMask
           });
           
+          // CRITICAL: Enable CCD (Continuous Collision Detection) to prevent tunneling through thin walls
+          // This applies to ALL balls since they can all be pushed at high speeds
+          this.body.ccdSpeedThreshold = 1; // Enable CCD for velocities > 1 m/s
+          this.body.ccdIterations = 10; // Number of iterations for CCD (higher = more accurate but slower)
+          
           if (this.isCaptureBall) {
+            console.log('✅ CCD enabled for capture ball to prevent wall tunneling');
           }
           
           // Zero gravity
@@ -10654,8 +10693,8 @@ function setGameplayHUD(isPlaying) {
             
             if (!geometry) return;
             
-            // Get the safe position and collision force
-            const result = this.getSafePositionAndForce(correctedPos, totalRadius, surfacePos, geometry, targetPos);
+            // Get the safe position and collision force (pass surface element for rotation)
+            const result = this.getSafePositionAndForce(correctedPos, totalRadius, surfacePos, geometry, surface);
             if (result.safePos) {
               correctedPos.copy(result.safePos);
               totalForce.add(result.force);
@@ -10762,10 +10801,95 @@ function setGameplayHUD(isPlaying) {
               };
             }
           } else if (geometry.primitive === 'tetrahedron') {
-            // Tetrahedron collision - DISABLED (using CANNON.js physics only)
-            // Custom collision was causing phantom collisions across the arena
-            // CANNON.js ConvexPolyhedron handles this correctly
-            return { safePos: null, force: new THREE.Vector3(0, 0, 0) };
+            // Tetrahedron collision - RE-ENABLED with proper INSIDE check
+            const tetrahedronRadius = geometry.radius || 1.0;
+            const relativePos = point.clone().sub(surfacePos);
+            
+            // Apply inverse rotation to transform point into tetrahedron's local space
+            const rotation = originalTarget ? originalTarget.getAttribute('rotation') : null;
+            let localPos = relativePos.clone();
+            if (rotation) {
+              const inverseQuat = new THREE.Quaternion();
+              const euler = new THREE.Euler(
+                THREE.MathUtils.degToRad(rotation.x || 0),
+                THREE.MathUtils.degToRad(rotation.y || 0),
+                THREE.MathUtils.degToRad(rotation.z || 0),
+                'XYZ'
+              );
+              inverseQuat.setFromEuler(euler).invert();
+              localPos.applyQuaternion(inverseQuat);
+            }
+            
+            // Scale factor for vertices (matching CANNON.js shape)
+            const scale = tetrahedronRadius / Math.sqrt(3);
+            
+            // Vertices in local space
+            const v0 = new THREE.Vector3(-scale, -scale, scale);
+            const v1 = new THREE.Vector3(scale, scale, scale);
+            const v2 = new THREE.Vector3(-scale, scale, -scale);
+            const v3 = new THREE.Vector3(scale, -scale, -scale);
+            
+            // 4 triangular faces with OUTWARD pointing normals
+            const faces = [
+              {p0: v0, p1: v1, p2: v2},  // Face 0
+              {p0: v0, p1: v3, p2: v1},  // Face 1
+              {p0: v0, p1: v2, p2: v3},  // Face 2
+              {p0: v1, p1: v3, p2: v2}   // Face 3
+            ];
+            
+            // Check if point is inside tetrahedron: must be on NEGATIVE side of ALL faces
+            let maxSignedDistance = -Infinity;
+            let closestFaceNormal = new THREE.Vector3(0, 1, 0);
+            let isInside = true;
+            
+            for (const face of faces) {
+              const edge1 = new THREE.Vector3().subVectors(face.p1, face.p0);
+              const edge2 = new THREE.Vector3().subVectors(face.p2, face.p0);
+              const normal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
+              
+              // Signed distance from point to plane (positive = outside, negative = inside)
+              const pointToPlane = new THREE.Vector3().subVectors(localPos, face.p0);
+              const signedDistance = pointToPlane.dot(normal);
+              
+              // If point is on positive side of ANY face, it's outside
+              if (signedDistance > 0) {
+                isInside = false;
+              }
+              
+              // Track the face with maximum (least negative) signed distance
+              if (signedDistance > maxSignedDistance) {
+                maxSignedDistance = signedDistance;
+                closestFaceNormal.copy(normal);
+              }
+            }
+            
+            // CRITICAL: Only apply force if point is INSIDE (or within radius of surface)
+            // maxSignedDistance tells us how far outside (positive) or inside (negative) we are
+            const distanceToSurface = maxSignedDistance; // Positive = outside, Negative = inside
+            const penetration = radius - distanceToSurface;
+            
+            if (penetration > 0 && isInside || distanceToSurface < radius && distanceToSurface > -radius) {
+              // Transform normal back to world space if rotated
+              if (rotation) {
+                const quat = new THREE.Quaternion();
+                const euler = new THREE.Euler(
+                  THREE.MathUtils.degToRad(rotation.x || 0),
+                  THREE.MathUtils.degToRad(rotation.y || 0),
+                  THREE.MathUtils.degToRad(rotation.z || 0),
+                  'XYZ'
+                );
+                quat.setFromEuler(euler);
+                closestFaceNormal.applyQuaternion(quat);
+              }
+              
+              const force = closestFaceNormal.clone().multiplyScalar(penetration * forceMultiplier);
+              const safePos = point.clone().add(closestFaceNormal.clone().multiplyScalar(penetration));
+              
+              return {
+                safePos: safePos,
+                force: force
+              };
+            }
           }
           
           return { safePos: null, force: new THREE.Vector3(0, 0, 0) }; // No collision
@@ -12373,6 +12497,7 @@ function setGameplayHUD(isPlaying) {
           
           // NEW: A button state tracking for duplicate functionality
           this.aButtonPressed = false;
+          this.lastDuplicateTime = 0; // Debounce for duplicate
           
           // Transform gizmo
           this.gizmoEntity = null;
@@ -12506,6 +12631,7 @@ function setGameplayHUD(isPlaying) {
                   // MULTIPLAYER: Broadcast object move after keyboard adjustment
                   if (isMultiplayer && isHost && this.selectedObject.id) {
                     const rot = this.selectedObject.object3D.rotation;
+                    const scale = this.selectedObject.object3D.scale;
                     const message = {
                       type: 'arena-update',
                       id: this.selectedObject.id,
@@ -12514,7 +12640,8 @@ function setGameplayHUD(isPlaying) {
                         x: THREE.MathUtils.radToDeg(rot.x), 
                         y: THREE.MathUtils.radToDeg(rot.y), 
                         z: THREE.MathUtils.radToDeg(rot.z) 
-                      }
+                      },
+                      scale: { x: scale.x, y: scale.y, z: scale.z }
                     };
                     // Send to all clients
                     connections.forEach(conn => {
@@ -12561,15 +12688,32 @@ function setGameplayHUD(isPlaying) {
                 // NEW: Check if A button is pressed - if so, duplicate the object
                 if (this.aButtonPressed) {
                   console.log('🔄 Duplicating object...');
+                  
+                  // CRITICAL: Force immediate gizmo cleanup BEFORE duplicating
+                  // This prevents any race conditions where gizmo axes might get cloned
+                  if (this.gizmoEntity) {
+                    console.log('🧹 PRE-DUPLICATE: Force removing gizmo');
+                    if (this.gizmoEntity.components['transform-gizmo']) {
+                      this.gizmoEntity.removeAttribute('transform-gizmo');
+                    }
+                    while (this.gizmoEntity.firstChild) {
+                      this.gizmoEntity.removeChild(this.gizmoEntity.firstChild);
+                    }
+                    if (this.gizmoEntity.parentNode) {
+                      this.gizmoEntity.parentNode.removeChild(this.gizmoEntity);
+                    }
+                    this.gizmoEntity = null;
+                  }
+                  
                   const duplicate = this.duplicateObject(this.selectedObject);
                   if (duplicate) {
-                    // Deselect original, select duplicate
+                    // Deselect original (removes gizmo) - DO NOT reselect the duplicate
+                    // Let the user manually select it if they want to edit it
                     this.deselectObject();
-                    this.selectedObject = duplicate;
-                    this.selectObject(duplicate);
-                    console.log('✅ Duplicate created and selected');
+                    console.log('✅ Duplicate created (not auto-selected)');
                     
-                    // Continue to transform the duplicate
+                    // Don't continue to transform - user needs to manually select
+                    return;
                   } else {
                     console.log('❌ Failed to duplicate object');
                     return;
@@ -12687,6 +12831,7 @@ function setGameplayHUD(isPlaying) {
                       if (isMultiplayer && isHost && this.selectedObject.id) {
                         const pos = this.selectedObject.object3D.position;
                         const rot = this.selectedObject.object3D.rotation;
+                        const scale = this.selectedObject.object3D.scale;
                         const message = {
                           type: 'arena-update',
                           id: this.selectedObject.id,
@@ -12695,7 +12840,8 @@ function setGameplayHUD(isPlaying) {
                             x: THREE.MathUtils.radToDeg(rot.x), 
                             y: THREE.MathUtils.radToDeg(rot.y), 
                             z: THREE.MathUtils.radToDeg(rot.z) 
-                          }
+                          },
+                          scale: { x: scale.x, y: scale.y, z: scale.z }
                         };
                         // Send to all clients
                         connections.forEach(conn => {
@@ -12876,6 +13022,31 @@ function setGameplayHUD(isPlaying) {
         },
         
         tick: function() {
+          // GIZMO CLEANUP: Remove orphaned gizmos every frame (silent cleanup)
+          if (this.data.enabled) {
+            const allGizmos = this.el.sceneEl.querySelectorAll('.editor-gizmo');
+            allGizmos.forEach(gizmo => {
+              if (gizmo !== this.gizmoEntity) {
+                // Remove all children first
+                while (gizmo.firstChild) {
+                  gizmo.removeChild(gizmo.firstChild);
+                }
+                if (gizmo.parentNode) {
+                  gizmo.parentNode.removeChild(gizmo);
+                }
+              }
+            });
+            
+            // Clean up loose axes
+            const allAxes = this.el.sceneEl.querySelectorAll('.gizmo-axis, .gizmo-x, .gizmo-y, .gizmo-z');
+            allAxes.forEach(axis => {
+              const isPartOfCurrentGizmo = this.gizmoEntity && this.gizmoEntity.contains(axis);
+              if (!isPartOfCurrentGizmo && axis.parentNode) {
+                axis.parentNode.removeChild(axis);
+              }
+            });
+          }
+          
           // Handle VR transform controls
           if (this.isTransforming && this.activeTransformHand && this.selectedObject) {
             // Check for thumbstick input to adjust depth
@@ -12979,6 +13150,13 @@ function setGameplayHUD(isPlaying) {
             return;
           }
           
+          // CRITICAL: Don't create new selections during deselection
+          if (this._isDeselecting) {
+            console.log('⚠️ Ignoring selectObject - currently deselecting');
+            return;
+          }
+          
+          console.log(`🎯 selectObject called for ${entity.tagName} (${entity.id})`);
           this.deselectObject();
           
           this.selectedObject = entity;
@@ -13004,10 +13182,12 @@ function setGameplayHUD(isPlaying) {
           this.disableCollisionForSelected(entity);
           
           // Create transform gizmo
+          console.log(`🔧 Creating new gizmo for ${entity.id}`);
           this.gizmoEntity = document.createElement('a-entity');
           this.gizmoEntity.setAttribute('class', 'editor-gizmo');
           this.gizmoEntity.setAttribute('transform-gizmo', `target: #${entity.id || 'selected-object'}`);
           this.el.sceneEl.appendChild(this.gizmoEntity);
+          console.log(`✅ Gizmo created and added to scene`);
           
           // Update gizmo position
           this.updateGizmoPosition();
@@ -13055,6 +13235,11 @@ function setGameplayHUD(isPlaying) {
         },
         
         deselectObject: function() {
+          console.log(`🔴 deselectObject called - current selectedObject: ${this.selectedObject ? this.selectedObject.id : 'null'}, gizmoEntity: ${this.gizmoEntity ? 'exists' : 'null'}`);
+          
+          // CRITICAL: Set a flag to prevent any new gizmos from being created
+          this._isDeselecting = true;
+          
           if (this.selectedObject) {
             // NEW: Restore original wireframe/material settings
             const mesh = this.selectedObject.getObject3D('mesh');
@@ -13087,22 +13272,59 @@ function setGameplayHUD(isPlaying) {
             this.selectedObject = null;
           }
           
-          // Remove gizmo from scene
+          // CRITICAL: Remove gizmo AND all its children recursively
           if (this.gizmoEntity) {
+            console.log(`🗑️ Removing gizmoEntity and all children`);
+            
+            // CRITICAL: Remove the transform-gizmo component FIRST to prevent async axis creation
+            if (this.gizmoEntity.components['transform-gizmo']) {
+              this.gizmoEntity.removeAttribute('transform-gizmo');
+            }
+            
+            // First, remove all children (the axes that were created by the component)
+            while (this.gizmoEntity.firstChild) {
+              this.gizmoEntity.removeChild(this.gizmoEntity.firstChild);
+            }
+            
+            // Then remove the gizmo entity itself
             if (this.gizmoEntity.parentNode) {
               this.gizmoEntity.parentNode.removeChild(this.gizmoEntity);
+              console.log(`✅ GizmoEntity removed from parent`);
+            } else {
+              console.log(`⚠️ GizmoEntity has no parent!`);
             }
             this.gizmoEntity = null;
+          } else {
+            console.log(`ℹ️ No gizmoEntity to remove`);
           }
           
-          // ADDITIONAL CLEANUP: Remove any orphaned gizmos
-          const orphanedGizmos = document.querySelectorAll('.editor-gizmo');
-          orphanedGizmos.forEach(gizmo => {
+          // NUCLEAR OPTION: Remove ALL gizmo-related elements from the entire scene
+          // This catches anything that slipped through
+          const allGizmos = this.el.sceneEl.querySelectorAll('.editor-gizmo');
+          allGizmos.forEach(gizmo => {
+            // Remove all children first
+            while (gizmo.firstChild) {
+              gizmo.removeChild(gizmo.firstChild);
+            }
+            // Then remove the gizmo itself
             if (gizmo.parentNode) {
               gizmo.parentNode.removeChild(gizmo);
-              console.log('🧹 Cleaned up orphaned gizmo');
             }
           });
+          
+          const allAxes = this.el.sceneEl.querySelectorAll('.gizmo-axis, .gizmo-x, .gizmo-y, .gizmo-z');
+          allAxes.forEach(axis => {
+            if (axis.parentNode) {
+              axis.parentNode.removeChild(axis);
+            }
+          });
+          
+          if (allGizmos.length > 0 || allAxes.length > 0) {
+            console.log(`🧹 Cleaned up ${allGizmos.length} gizmos and ${allAxes.length} axes`);
+          }
+          
+          // Clear the deselecting flag
+          this._isDeselecting = false;
         },
         
         updateGizmoPosition: function() {
@@ -13151,9 +13373,26 @@ function setGameplayHUD(isPlaying) {
         duplicateObject: function(entity) {
           if (!entity) return null;
           
+          // Prevent rapid duplicate calls (debounce 500ms)
+          const now = Date.now();
+          if (this.lastDuplicateTime && (now - this.lastDuplicateTime) < 500) {
+            console.log('⏸️  Duplicate debounced - too soon after last duplicate');
+            return null;
+          }
+          this.lastDuplicateTime = now;
+          
           try {
             // Clone the entity
             const clone = entity.cloneNode(true);
+            
+            // CRITICAL: Remove any gizmo elements that might have been cloned
+            const gizmoChildren = clone.querySelectorAll('.gizmo-axis, .editor-gizmo');
+            gizmoChildren.forEach(child => {
+              if (child.parentNode) {
+                child.parentNode.removeChild(child);
+                console.log('🧹 Removed gizmo from cloned entity');
+              }
+            });
             
             // Generate a unique ID
             const timestamp = Date.now();
@@ -13173,39 +13412,31 @@ function setGameplayHUD(isPlaying) {
             // Add to scene
             this.el.sceneEl.appendChild(clone);
             
-            console.log(`✅ Duplicated ${entity.tagName} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
+            // CRITICAL: Manually update object3D to match attributes BEFORE serialization
+            // A-Frame won't update object3D until next tick, but we need to serialize NOW
+            clone.object3D.position.set(pos.x, pos.y, pos.z);
+            clone.object3D.rotation.set(rot.x, rot.y, rot.z);
+            clone.object3D.scale.set(scale.x, scale.y, scale.z);
             
-            // MULTIPLAYER: Broadcast object add
+            console.log(`✅ Duplicated ${entity.tagName} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
+            console.log(`   Rotation: (${THREE.MathUtils.radToDeg(rot.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(rot.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(rot.z).toFixed(1)}°)`);
+            
+            // MULTIPLAYER: Broadcast object add using template system
             if (isMultiplayer && isHost) {
-              const pos = clone.object3D.position;
-              const rot = clone.object3D.rotation;
-              const message = {
-                type: 'arena-add',
-                tagName: clone.tagName.toLowerCase(),
-                id: clone.id,
-                position: { x: pos.x, y: pos.y, z: pos.z },
-                rotation: { 
-                  x: THREE.MathUtils.radToDeg(rot.x), 
-                  y: THREE.MathUtils.radToDeg(rot.y), 
-                  z: THREE.MathUtils.radToDeg(rot.z) 
-                },
-                attributes: {}
-              };
-              
-              // Copy relevant attributes
-              ['radius', 'detail', 'segments', 'width', 'height', 'depth'].forEach(attr => {
-                const val = clone.getAttribute(attr);
-                if (val !== null && val !== undefined) {
-                  message.attributes[attr] = val;
-                }
-              });
-              
-              connections.forEach(conn => {
-                if (conn && conn.open) {
-                  conn.send(message);
-                }
-              });
-              console.log(`🏗️ HOST: Broadcast arena add for ${clone.id}`);
+              const serialized = serializeArenaObject(clone);
+              if (serialized) {
+                const message = {
+                  type: 'arena-add',
+                  ...serialized
+                };
+                
+                connections.forEach(conn => {
+                  if (conn && conn.open) {
+                    conn.send(message);
+                  }
+                });
+                console.log(`🏗️ HOST: Broadcast arena add for ${clone.id}`);
+              }
             }
             
             // UNDO SYSTEM: Record add command for duplicate
@@ -13304,70 +13535,38 @@ function setGameplayHUD(isPlaying) {
         },
         
         recordAddCommand: function(entity) {
-          const pos = entity.object3D.position;
-          const rot = entity.object3D.rotation;
-          const scale = entity.object3D.scale;
+          // Use template system to serialize entity data
+          const serialized = serializeArenaObject(entity);
+          if (!serialized) {
+            console.warn('⚠️ Could not serialize entity for add command:', entity);
+            return;
+          }
           
           const command = {
             type: 'add',
             entityId: entity.id,
-            entityData: {
-              tagName: entity.tagName.toLowerCase(),
-              position: { x: pos.x, y: pos.y, z: pos.z },
-              rotation: { 
-                x: THREE.MathUtils.radToDeg(rot.x), 
-                y: THREE.MathUtils.radToDeg(rot.y), 
-                z: THREE.MathUtils.radToDeg(rot.z) 
-              },
-              scale: { x: scale.x, y: scale.y, z: scale.z },
-              attributes: {}
-            },
+            entityData: serialized,
             timestamp: Date.now()
           };
-          
-          // Copy relevant attributes
-          ['radius', 'detail', 'segments', 'width', 'height', 'depth', 'color'].forEach(attr => {
-            const val = entity.getAttribute(attr);
-            if (val !== null && val !== undefined) {
-              command.entityData.attributes[attr] = val;
-            }
-          });
           
           this.pushCommand(command);
           console.log(`⏺️ Recorded ADD command for ${command.entityId}`);
         },
         
         recordDeleteCommand: function(entity) {
-          const pos = entity.object3D.position;
-          const rot = entity.object3D.rotation;
-          const scale = entity.object3D.scale;
+          // Use template system to serialize entity data
+          const serialized = serializeArenaObject(entity);
+          if (!serialized) {
+            console.warn('⚠️ Could not serialize entity for delete command:', entity);
+            return;
+          }
           
           const command = {
             type: 'delete',
             entityId: entity.id,
-            entityData: {
-              tagName: entity.tagName.toLowerCase(),
-              position: { x: pos.x, y: pos.y, z: pos.z },
-              rotation: { 
-                x: THREE.MathUtils.radToDeg(rot.x), 
-                y: THREE.MathUtils.radToDeg(rot.y), 
-                z: THREE.MathUtils.radToDeg(rot.z) 
-              },
-              scale: { x: scale.x, y: scale.y, z: scale.z },
-              attributes: {}
-            },
+            entityData: serialized,
             timestamp: Date.now()
           };
-          
-          // Copy relevant attributes (including edge components)
-          ['radius', 'detail', 'segments', 'width', 'height', 'depth', 'color', 'grab-surface', 
-           'octahedron-edges', 'tetrahedron-edges', 'material'].forEach(attr => {
-            const val = entity.getAttribute(attr);
-            if (val !== null && val !== undefined) {
-              // For component attributes, serialize as string if it's an object
-              command.entityData.attributes[attr] = typeof val === 'object' ? JSON.stringify(val) : val;
-            }
-          });
           
           this.pushCommand(command);
           console.log(`⏺️ Recorded DELETE command for ${command.entityId}`);
@@ -13503,16 +13702,11 @@ function setGameplayHUD(isPlaying) {
         },
         
         redoAdd: function(command) {
-          // Recreate the entity
-          const entity = document.createElement(command.entityData.tagName);
-          entity.setAttribute('id', command.entityId);
-          entity.setAttribute('position', command.entityData.position);
-          entity.setAttribute('rotation', `${command.entityData.rotation.x} ${command.entityData.rotation.y} ${command.entityData.rotation.z}`);
-          entity.setAttribute('scale', `${command.entityData.scale.x} ${command.entityData.scale.y} ${command.entityData.scale.z}`);
-          
-          // Set attributes
-          for (const [key, value] of Object.entries(command.entityData.attributes)) {
-            entity.setAttribute(key, value);
+          // Recreate the entity using template system
+          const entity = createArenaObjectFromData(command.entityData);
+          if (!entity) {
+            console.error('❌ Failed to recreate entity from command data:', command);
+            return;
           }
           
           this.el.sceneEl.appendChild(entity);
@@ -13521,11 +13715,7 @@ function setGameplayHUD(isPlaying) {
           if (isMultiplayer && isHost) {
             const message = {
               type: 'arena-add',
-              tagName: command.entityData.tagName,
-              id: command.entityId,
-              position: command.entityData.position,
-              rotation: command.entityData.rotation,
-              attributes: command.entityData.attributes
+              ...command.entityData
             };
             connections.forEach(conn => {
               if (conn && conn.open) {
@@ -13536,26 +13726,11 @@ function setGameplayHUD(isPlaying) {
         },
         
         undoDelete: function(command) {
-          // Recreate the deleted entity
-          const entity = document.createElement(command.entityData.tagName);
-          entity.setAttribute('id', command.entityId);
-          entity.setAttribute('position', command.entityData.position);
-          entity.setAttribute('rotation', `${command.entityData.rotation.x} ${command.entityData.rotation.y} ${command.entityData.rotation.z}`);
-          entity.setAttribute('scale', `${command.entityData.scale.x} ${command.entityData.scale.y} ${command.entityData.scale.z}`);
-          
-          // Set attributes
-          for (const [key, value] of Object.entries(command.entityData.attributes)) {
-            // If the value is a JSON string (component data), parse it
-            let attrValue = value;
-            if (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) {
-              try {
-                attrValue = JSON.parse(value);
-              } catch (e) {
-                // If parsing fails, use as-is
-                attrValue = value;
-              }
-            }
-            entity.setAttribute(key, attrValue);
+          // Recreate the deleted entity using template system
+          const entity = createArenaObjectFromData(command.entityData);
+          if (!entity) {
+            console.error('❌ Failed to recreate entity from command data:', command);
+            return;
           }
           
           this.el.sceneEl.appendChild(entity);
@@ -13564,11 +13739,7 @@ function setGameplayHUD(isPlaying) {
           if (isMultiplayer && isHost) {
             const message = {
               type: 'arena-add',
-              tagName: command.entityData.tagName,
-              id: command.entityId,
-              position: command.entityData.position,
-              rotation: command.entityData.rotation,
-              attributes: command.entityData.attributes
+              ...command.entityData
             };
             connections.forEach(conn => {
               if (conn && conn.open) {
@@ -13609,12 +13780,32 @@ function setGameplayHUD(isPlaying) {
           
           console.log(`🗑️ DELETE: Removing ${deletedEntity.tagName} (${deletedId})`);
           
-          // Record delete command for undo
+          // CRITICAL: Deselect FIRST to clean up gizmos while entity is still in DOM
+          this.deselectObject();
+          
+          // Record delete command for undo (after deselect to avoid issues)
           this.recordDeleteCommand(deletedEntity);
           
           // Remove from scene
           deletedEntity.parentNode.removeChild(deletedEntity);
-          this.deselectObject();
+          
+          // NUCLEAR CLEANUP: Remove ALL gizmo elements from scene
+          const allGizmos = this.el.sceneEl.querySelectorAll('.editor-gizmo');
+          allGizmos.forEach(gizmo => {
+            while (gizmo.firstChild) {
+              gizmo.removeChild(gizmo.firstChild);
+            }
+            if (gizmo.parentNode) {
+              gizmo.parentNode.removeChild(gizmo);
+            }
+          });
+          
+          const allAxes = this.el.sceneEl.querySelectorAll('.gizmo-axis, .gizmo-x, .gizmo-y, .gizmo-z');
+          allAxes.forEach(axis => {
+            if (axis.parentNode) {
+              axis.parentNode.removeChild(axis);
+            }
+          });
           
           // Broadcast to multiplayer if host
           if (isMultiplayer && isHost) {
@@ -13719,7 +13910,7 @@ function setGameplayHUD(isPlaying) {
       <!-- Main chamber floor (Echo Arena size) -->
       <a-box position="0 -10 0" 
              width="30" 
-             height="0.2" 
+             height="1.0" 
              depth="80" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
@@ -13729,7 +13920,7 @@ function setGameplayHUD(isPlaying) {
       <!-- Main chamber ceiling (Echo Arena size) -->
       <a-box position="0 10 0" 
              width="30" 
-             height="0.2" 
+             height="1.0" 
              depth="80" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
@@ -13738,7 +13929,7 @@ function setGameplayHUD(isPlaying) {
 
       <!-- Left wall (Echo Arena size) -->
       <a-box position="-15 0 0"
-             width="0.2"
+             width="1.0"
              height="20"
              depth="80"
              src="#panelAlbedo"
@@ -13749,7 +13940,7 @@ function setGameplayHUD(isPlaying) {
       
       <!-- Right wall (Echo Arena size) -->
       <a-box position="15 0 0" 
-             width="0.2" 
+             width="1.0" 
              height="20" 
              depth="80" 
              src="#panelAlbedo"
@@ -13762,7 +13953,7 @@ function setGameplayHUD(isPlaying) {
       <a-box position="0 0 -40" 
              width="30" 
              height="20" 
-             depth="0.2" 
+             depth="1.0" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
              grab-surface="type: static">
@@ -13772,7 +13963,7 @@ function setGameplayHUD(isPlaying) {
       <a-box position="0 0 40" 
              width="30" 
              height="20" 
-             depth="0.2" 
+             depth="1.0" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
              grab-surface="type: static">
@@ -14238,7 +14429,7 @@ function setGameplayHUD(isPlaying) {
                   sound="src: url(../audio/dark-engine-logo-141942.mp3);
                          autoplay: false;
                          loop: false;
-                         volume: 1.0;
+                         volume: 0.6;
                          positional: false;
                         poolSize: 1;">
         </a-entity>
