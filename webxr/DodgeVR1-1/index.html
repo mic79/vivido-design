@@ -5948,11 +5948,11 @@ function setGameplayHUD(isPlaying) {
               this.el.object3D.quaternion.w
             );
             
-            // Debug logging for red bot rotation issues (reduced frequency)
-            if (this.el.id === 'zerog-bot-red' && (!this.lastRotationDebug || Date.now() - this.lastRotationDebug > 3000)) {
-              console.log(`Red bot 3D rotation: angle=${angle.toFixed(3)}, tolerance=${this.rotationTolerance}, targetDir=[${targetDir.x.toFixed(2)}, ${targetDir.y.toFixed(2)}, ${targetDir.z.toFixed(2)}]`);
-              this.lastRotationDebug = Date.now();
-            }
+            // Debug logging for red bot rotation issues (reduced frequency) - DISABLED
+            // if (this.el.id === 'zerog-bot-red' && (!this.lastRotationDebug || Date.now() - this.lastRotationDebug > 3000)) {
+            //   console.log(`Red bot 3D rotation: angle=${angle.toFixed(3)}, tolerance=${this.rotationTolerance}, targetDir=[${targetDir.x.toFixed(2)}, ${targetDir.y.toFixed(2)}, ${targetDir.z.toFixed(2)}]`);
+            //   this.lastRotationDebug = Date.now();
+            // }
             
             return false; // Still rotating
           }
@@ -6704,7 +6704,7 @@ function setGameplayHUD(isPlaying) {
               }
             }
             
-            console.log(`🤖 Bot ${this.el.id}: Attempting to steal ball from ${ballComponent.currentOwner}`);
+            // console.log(`🤖 Bot ${this.el.id}: Attempting to steal ball from ${ballComponent.currentOwner}`);
             
             // Force release from current owner
             ballComponent.onRelease();
@@ -6729,7 +6729,7 @@ function setGameplayHUD(isPlaying) {
                 const previousBotComponent = previousBot.components['zerog-bot'];
                 previousBotComponent.ballStealTimeout = Date.now() + 5000;
                 previousBotComponent.isGrabbingBall = false;
-                console.log(`⏰ Bot ${previousBot.id}: Ball stolen, timeout set for 5 seconds`);
+                // console.log(`⏰ Bot ${previousBot.id}: Ball stolen, timeout set for 5 seconds`);
               }
             }
           }
@@ -6746,7 +6746,7 @@ function setGameplayHUD(isPlaying) {
           // Update steal time to prevent rapid re-stealing
           this.lastStealTime = Date.now();
           
-          console.log(`🤖 Bot ${this.el.id}: Successfully grabbed ball, set as owner`);
+          // console.log(`🤖 Bot ${this.el.id}: Successfully grabbed ball, set as owner`);
           return true;
         },
         
