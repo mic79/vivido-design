@@ -1207,7 +1207,11 @@
                 const arenaState = [];
                 
                 arenaObjects.forEach(entity => {
-                  if (entity.id) {
+                  // CRITICAL: Skip goal rings and children of goals
+                  const hasGoalRing = entity.hasAttribute('goal-ring');
+                  const isChildOfGoal = entity.closest('[goal]') !== null;
+                  
+                  if (!hasGoalRing && !isChildOfGoal && entity.id) {
                     const serialized = serializeArenaObject(entity);
                     if (serialized) {
                       arenaState.push(serialized);
@@ -1241,11 +1245,27 @@
       function handleArenaState(data) {
         console.log(`🏗️ CLIENT: Received arena state with ${data.objects.length} objects`);
         
+        const scene = document.querySelector('a-scene');
+        if (!scene) {
+          console.error('❌ Cannot sync arena: scene not found');
+          return;
+        }
+        
         data.objects.forEach(objData => {
           const entity = document.getElementById(objData.id);
           if (entity) {
             // Update existing entity using template system
             applyArenaObjectData(entity, objData);
+            console.log(`🏗️ CLIENT: Updated existing ${objData.id}`);
+          } else {
+            // CRITICAL FIX: Create missing entity if it doesn't exist
+            const newEntity = createArenaObjectFromData(objData);
+            if (newEntity) {
+              scene.appendChild(newEntity);
+              console.log(`🏗️ CLIENT: Created missing ${objData.id}`);
+            } else {
+              console.error(`❌ CLIENT: Failed to create entity from data:`, objData);
+            }
           }
         });
         
@@ -8355,18 +8375,21 @@ function setGameplayHUD(isPlaying) {
             
             // CRITICAL: If arena selector is open, close EVERYTHING (arena selector + main menu)
             const arenaSelector = document.querySelector('#arena-selector');
-            if (arenaSelector && arenaSelector.getAttribute('visible') === true) {
+            const arenaSelectorVisible = arenaSelector && arenaSelector.getAttribute('visible');
+            
+            // Check if visible (handle both string "true" and boolean true)
+            if (arenaSelectorVisible === true || arenaSelectorVisible === 'true' || arenaSelectorVisible === '') {
+              console.log('❌ X button pressed - closing arena selector completely');
               // Get arena-menu component
               const arenaMenuEl = document.querySelector('[arena-menu]');
               if (arenaMenuEl && arenaMenuEl.components['arena-menu']) {
                 // Close arena selector WITHOUT reopening main menu
                 arenaMenuEl.components['arena-menu'].closeArenaSelectorCompletely();
+                
+                // CRITICAL: Update menu visibility state
+                this.menuVisible = false;
               }
-              // Also close the main menu
-              if (this.menuVisible) {
-                this.toggleMenu();
-              }
-              return;
+              return; // Don't call toggleMenu() below
             }
             
             this.toggleMenu();
@@ -12471,6 +12494,7 @@ function setGameplayHUD(isPlaying) {
             
             // CRITICAL: Disable ALL arena selector buttons at THREE.js level
             const allButtons = selector.querySelectorAll('[cursor-listener]');
+            console.log(`🔒 Disabling ${allButtons.length} arena selector buttons`);
             allButtons.forEach(btn => {
               btn.classList.remove('clickable');
               if (btn.object3D) btn.object3D.visible = false;
@@ -12493,12 +12517,31 @@ function setGameplayHUD(isPlaying) {
             // Give object3D time to update
             setTimeout(() => {
               const mainMenuButtons = mainMenu.querySelectorAll('[cursor-listener]');
+              console.log(`✅ Re-enabling ${mainMenuButtons.length} main menu buttons`);
               mainMenuButtons.forEach(btn => {
                 btn.classList.add('clickable');
-                if (btn.object3D) btn.object3D.visible = true;
+                if (btn.object3D) {
+                  btn.object3D.visible = true;
+                } else {
+                  console.warn('⚠️ Button object3D not ready:', btn.id || btn.getAttribute('id'));
+                }
               });
               
-              this.forceRaycasterUpdate();
+              // Force raycaster update
+              try {
+                this.forceRaycasterUpdate();
+              } catch (e) {
+                console.error('❌ Error in forceRaycasterUpdate:', e);
+                // Fallback: refresh raycasters directly
+                const leftHand = document.querySelector('#leftHand');
+                const rightHand = document.querySelector('#rightHand');
+                if (leftHand && leftHand.components.raycaster) {
+                  leftHand.components.raycaster.refreshObjects();
+                }
+                if (rightHand && rightHand.components.raycaster) {
+                  rightHand.components.raycaster.refreshObjects();
+                }
+              }
             }, 100);
           }
         },
@@ -12519,8 +12562,10 @@ function setGameplayHUD(isPlaying) {
             });
           }
           
-          // CRITICAL: Also disable main menu buttons (don't reopen main menu)
+          // CRITICAL: Also HIDE main menu (not just disable buttons)
           if (mainMenu) {
+            mainMenu.setAttribute('visible', false);
+            
             const mainMenuButtons = mainMenu.querySelectorAll('[cursor-listener]');
             mainMenuButtons.forEach(btn => {
               btn.classList.remove('clickable');
@@ -12860,27 +12905,26 @@ function setGameplayHUD(isPlaying) {
           });
         },
         
-        loadArena: function(buttonId) {
+        loadArena: async function(buttonId) {
           console.log('🗺️ Load arena clicked:', buttonId);
           
           if (typeof ArenaManager === 'undefined') return;
           
           if (buttonId.startsWith('arena-load-official-')) {
             const arenaId = buttonId.replace('arena-load-official-', '');
-            ArenaManager.loadOfficialArena(arenaId);
+            const layout = await ArenaManager.loadOfficialArena(arenaId);
             
-            // Broadcast to clients if host
-            if (isHost && isMultiplayer) {
-              const layout = ArenaManager.getCurrentLayout();
+            // Broadcast to clients if host - CRITICAL: Use the layout that was just loaded,
+            // not getCurrentLayout() which would read from object3D positions that haven't updated yet
+            if (isHost && isMultiplayer && layout) {
               ArenaManager.broadcastArenaLoad(layout);
             }
           } else if (buttonId.startsWith('arena-load-personal-')) {
             const slot = parseInt(buttonId.replace('arena-load-personal-', ''));
-            ArenaManager.loadFromPersonalSlot(slot);
+            const layout = ArenaManager.loadFromPersonalSlot(slot);
             
-            // Broadcast to clients if host
-            if (isHost && isMultiplayer) {
-              const layout = ArenaManager.getCurrentLayout();
+            // Broadcast to clients if host - CRITICAL: Use the layout that was just loaded
+            if (isHost && isMultiplayer && layout) {
               ArenaManager.broadcastArenaLoad(layout);
             }
           }

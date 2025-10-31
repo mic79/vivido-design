@@ -153,7 +153,29 @@ function serializeArenaObject(entity) {
   COMMON_ATTRIBUTES.forEach(attrName => {
     const value = entity.getAttribute(attrName);
     if (value !== null && value !== undefined) {
-      data.attributes[attrName] = value;
+      // CRITICAL: For material attribute, stringify it to avoid non-serializable references
+      if (attrName === 'material' && typeof value === 'object') {
+        try {
+          // Only keep serializable properties from material
+          const cleanMaterial = {};
+          for (const key in value) {
+            const val = value[key];
+            // Skip non-serializable values (HTMLElements, functions, etc.)
+            if (typeof val !== 'function' && 
+                typeof val !== 'object' &&
+                val !== null) {
+              cleanMaterial[key] = val;
+            }
+          }
+          data.attributes[attrName] = cleanMaterial;
+        } catch (e) {
+          console.warn(`⚠️ Could not serialize material:`, e);
+          // Fallback to basic material string
+          data.attributes[attrName] = 'shader: standard';
+        }
+      } else {
+        data.attributes[attrName] = value;
+      }
     }
   });
   
@@ -590,10 +612,16 @@ const ArenaManager = {
     const layout = this.getCurrentLayout();
     layout.metadata.name = name;
     
+    // CRITICAL: Log what we're saving to debug position issues
+    if (layout.objects && layout.objects.length > 0) {
+      console.log(`💾 SAVING: First object position:`, layout.objects[0].position);
+      console.log(`💾 SAVING: First object data:`, JSON.stringify(layout.objects[0]).substring(0, 200));
+    }
+    
     const key = `${this.STORAGE_KEY_PREFIX}personal_${slotNumber}`;
     try {
       localStorage.setItem(key, JSON.stringify(layout));
-      console.log(`✅ Saved arena "${name}" to slot ${slotNumber}`);
+      console.log(`✅ Saved arena "${name}" to slot ${slotNumber} with ${layout.objects.length} objects`);
       return true;
     } catch (e) {
       console.error('Failed to save arena:', e);
@@ -688,16 +716,16 @@ const ArenaManager = {
       };
       this.loadLayout(emptyLayout, 'Zero');
       this.currentArenaSource = 'official';
-      return true;
+      return emptyLayout; // Return the layout for broadcasting
     } else if (arenaId === 'one') {
       const defaultLayout = this.getDefaultArenaLayout();
       this.loadLayout(defaultLayout, 'One');
       this.currentArenaSource = 'official';
-      return true;
+      return defaultLayout; // Return the layout for broadcasting
     }
     
     console.warn('Arena not found:', arenaId);
-    return false;
+    return null;
   },
   
   /**
@@ -770,19 +798,44 @@ const ArenaManager = {
    */
   broadcastArenaLoad: function(layoutData) {
     if (typeof connections !== 'undefined' && typeof isHost !== 'undefined' && isHost) {
-      const message = {
-        type: 'arena-load',
-        arenaName: this.currentArenaName,
-        arenaSource: this.currentArenaSource,
-        arenaData: layoutData
-      };
+      console.log(`📡 HOST: Broadcasting arena "${this.currentArenaName}" with ${layoutData.objects?.length || 0} objects`);
       
-      connections.forEach((conn, playerId) => {
-        if (conn && conn.open) {
-          conn.send(message);
-          console.log(`📡 Sent arena to client: ${playerId}`);
+      // Log first object before sanitization for debugging
+      if (layoutData.objects && layoutData.objects.length > 0) {
+        console.log(`📊 HOST: Sample object before sanitization:`, JSON.stringify(layoutData.objects[0]).substring(0, 200));
+      }
+      
+      // CRITICAL: Sanitize the layout data by doing a JSON round-trip
+      // This removes non-serializable objects like HTMLImageElement
+      try {
+        const sanitizedData = JSON.parse(JSON.stringify(layoutData));
+        
+        // Log first object after sanitization for debugging
+        if (sanitizedData.objects && sanitizedData.objects.length > 0) {
+          console.log(`📊 HOST: Sample object after sanitization:`, JSON.stringify(sanitizedData.objects[0]).substring(0, 200));
         }
-      });
+        
+        const message = {
+          type: 'arena-load',
+          arenaName: this.currentArenaName,
+          arenaSource: this.currentArenaSource,
+          arenaData: sanitizedData
+        };
+        
+        connections.forEach((conn, playerId) => {
+          if (conn && conn.open) {
+            try {
+              conn.send(message);
+              console.log(`📡 Sent arena "${this.currentArenaName}" to client: ${playerId}`);
+            } catch (e) {
+              console.error(`❌ Failed to send arena to client ${playerId}:`, e);
+            }
+          }
+        });
+      } catch (e) {
+        console.error(`❌ Failed to sanitize arena data for broadcast:`, e);
+        console.error('Layout data:', layoutData);
+      }
     }
   },
   
@@ -790,7 +843,19 @@ const ArenaManager = {
    * Handle arena load message from host (client side)
    */
   handleArenaLoadMessage: function(data) {
-    console.log(`📡 Received arena from host: ${data.arenaName}`);
+    console.log(`📡 CLIENT: Received arena from host: ${data.arenaName}`);
+    console.log(`📡 CLIENT: Arena has ${data.arenaData?.objects?.length || 0} objects`);
+    
+    // Log first object received for debugging
+    if (data.arenaData && data.arenaData.objects && data.arenaData.objects.length > 0) {
+      console.log(`📊 CLIENT: Sample object received:`, JSON.stringify(data.arenaData.objects[0]).substring(0, 200));
+    }
+    
+    if (!data.arenaData || !data.arenaData.objects) {
+      console.error('❌ CLIENT: Invalid arena data received:', data);
+      return;
+    }
+    
     this.loadLayout(data.arenaData, data.arenaName);
     this.currentArenaSource = data.arenaSource;
   }
