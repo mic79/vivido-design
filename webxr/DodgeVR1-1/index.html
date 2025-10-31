@@ -711,6 +711,9 @@
             case 'arena-add':
               handleArenaAdd(data);
               break;
+            case 'arena-load':
+              handleArenaLoad(data);
+              break;
             case 'match-start-sync':
               handleMatchStartSync(data);
               break;
@@ -1277,6 +1280,16 @@
           console.log(`🏗️ CLIENT: Added ${data.id}`);
         } else {
           console.error(`❌ CLIENT: Failed to create entity from data:`, data);
+        }
+      }
+      
+      function handleArenaLoad(data) {
+        // CLIENT: Host has loaded a new arena, load it locally
+        console.log(`📡 CLIENT: Received arena load message`);
+        if (typeof ArenaManager !== 'undefined') {
+          ArenaManager.handleArenaLoadMessage(data);
+        } else {
+          console.error('❌ ArenaManager not available');
         }
       }
 
@@ -5650,6 +5663,18 @@ function setGameplayHUD(isPlaying) {
             wireframe.setAttribute('position', '0 0 0'); // Relative to parent
             this.el.appendChild(wireframe);
           }
+        },
+        
+        remove: function() {
+          // CRITICAL: Clean up physics body when entity is removed
+          if (this.el.body) {
+            const physicsWorld = typeof world !== 'undefined' ? world : null;
+            if (physicsWorld) {
+              physicsWorld.removeBody(this.el.body);
+              console.log(`🗑️ Removed physics body for ${this.el.tagName} (${this.el.id})`);
+            }
+            this.el.body = null;
+          }
         }
       });
 
@@ -8290,6 +8315,19 @@ function setGameplayHUD(isPlaying) {
           this.lastYButtonPress = 0; // Track Y button for secret editor toggle
           this.leftGripPressed = false; // Track left grip for undo/redo prevention
           
+          // CRITICAL: Initialize menu buttons as disabled since menu starts hidden
+          setTimeout(() => {
+            const menu = document.querySelector('#game-menu');
+            if (menu && !this.menuVisible) {
+              const menuButtons = menu.querySelectorAll('[cursor-listener]');
+              menuButtons.forEach(btn => {
+                btn.classList.remove('clickable');
+                if (btn.object3D) btn.object3D.visible = false;
+              });
+              console.log(`🔒 Initialized ${menuButtons.length} menu buttons as disabled`);
+            }
+          }, 500); // Wait for scene to load
+          
           // Track left grip state
           setTimeout(() => {
             const leftHand = document.querySelector('#leftHand');
@@ -8314,6 +8352,23 @@ function setGameplayHUD(isPlaying) {
             const now = Date.now();
             if (now - this.lastBButtonPress < 500) return; // 500ms debounce
             this.lastBButtonPress = now;
+            
+            // CRITICAL: If arena selector is open, close EVERYTHING (arena selector + main menu)
+            const arenaSelector = document.querySelector('#arena-selector');
+            if (arenaSelector && arenaSelector.getAttribute('visible') === true) {
+              // Get arena-menu component
+              const arenaMenuEl = document.querySelector('[arena-menu]');
+              if (arenaMenuEl && arenaMenuEl.components['arena-menu']) {
+                // Close arena selector WITHOUT reopening main menu
+                arenaMenuEl.components['arena-menu'].closeArenaSelectorCompletely();
+              }
+              // Also close the main menu
+              if (this.menuVisible) {
+                this.toggleMenu();
+              }
+              return;
+            }
+            
             this.toggleMenu();
           });
           
@@ -8331,8 +8386,9 @@ function setGameplayHUD(isPlaying) {
         },
         
         toggleEditorMode: function() {
-          // In multiplayer, only host can edit
-          if (isMultiplayer && !isHost) {
+          // In multiplayer, only host can edit (but only if actually connected)
+          const hasConnections = typeof connections !== 'undefined' && connections.size > 0;
+          if (isMultiplayer && !isHost && hasConnections) {
             console.log('⚠️ Level Editor: Only the host can edit in multiplayer mode');
             return;
           }
@@ -8378,6 +8434,29 @@ function setGameplayHUD(isPlaying) {
           // Toggle menu visibility
           if (menu) {
             menu.setAttribute('visible', this.menuVisible);
+            
+            // CRITICAL: Enable/disable THREE.js visibility on all menu buttons
+            const menuButtons = menu.querySelectorAll('[cursor-listener]');
+            menuButtons.forEach(btn => {
+              if (this.menuVisible) {
+                // Menu is open - enable buttons at THREE.js level
+                btn.classList.add('clickable');
+                btn.removeAttribute('raycast');
+                if (btn.object3D) btn.object3D.visible = true;
+              } else {
+                // Menu is closed - disable buttons at THREE.js level
+                btn.classList.remove('clickable');
+                if (btn.object3D) btn.object3D.visible = false;
+              }
+            });
+            
+            // Refresh raycasters after changing button states
+            if (leftHand && leftHand.components.raycaster) {
+              leftHand.components.raycaster.refreshObjects();
+            }
+            if (rightHand && rightHand.components.raycaster) {
+              rightHand.components.raycaster.refreshObjects();
+            }
           }
           
           // Show/hide start/restart button for hosts and update button text
@@ -8437,23 +8516,23 @@ function setGameplayHUD(isPlaying) {
             // CRITICAL: Don't set 'far' to allow full-range raycasting
             if (leftHand) {
               leftHand.setAttribute('raycaster', {
-                objects: '[grab-surface], .gizmo-axis',
+                objects: '[grab-surface], .gizmo-axis, .clickable',
                 lineColor: '#ffff00',
                 lineOpacity: 0.8,
                 far: 100,
                 enabled: true
               });
-              console.log('🔧 DEBUG: Left hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, far: 100');
+              console.log('🔧 DEBUG: Left hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, .clickable, far: 100');
             }
             if (rightHand) {
               rightHand.setAttribute('raycaster', {
-                objects: '[grab-surface], .gizmo-axis',
+                objects: '[grab-surface], .gizmo-axis, .clickable',
                 lineColor: '#ffff00',
                 lineOpacity: 0.8,
                 far: 100,
                 enabled: true
               });
-              console.log('🔧 DEBUG: Right hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, far: 100');
+              console.log('🔧 DEBUG: Right hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, .clickable, far: 100');
             }
           } else {
             // Normal mode - hide lasers
@@ -12014,6 +12093,24 @@ function setGameplayHUD(isPlaying) {
             this.selectTeam('blue');
           } else if (id === 'menu-restart-match') {
             this.restartMatch();
+          } else if (id === 'menu-change-arena') {
+            this.openArenaSelector();
+          } else if (id === 'arena-selector-close') {
+            this.closeArenaSelector();
+          } else if (id === 'arena-tab-official') {
+            this.switchArenaTab('official');
+          } else if (id === 'arena-tab-personal') {
+            this.switchArenaTab('personal');
+          } else if (id === 'arena-import-file') {
+            this.importArenaFile();
+          } else if (id === 'arena-export-current') {
+            this.exportCurrentArena();
+          } else if (id.startsWith('arena-load-')) {
+            this.loadArena(id);
+          } else if (id.startsWith('arena-save-')) {
+            this.saveToSlot(id);
+          } else if (id.startsWith('arena-delete-')) {
+            this.deleteArena(id);
           }
         },
 
@@ -12314,6 +12411,564 @@ function setGameplayHUD(isPlaying) {
           const menuToggle = document.querySelector('[menu-toggle]');
           if (menuToggle && menuToggle.components['menu-toggle']) {
             menuToggle.components['menu-toggle'].toggleMenu();
+          }
+        },
+        
+        // Arena Selector Functions
+        openArenaSelector: function() {
+          console.log('🗺️ Opening arena selector...');
+          const selector = document.querySelector('#arena-selector');
+          const mainMenu = document.querySelector('#game-menu');
+          
+          if (selector) {
+            selector.setAttribute('visible', true);
+            
+            // CRITICAL: Re-enable static UI buttons (tabs and close button)
+            const closeBtn = document.querySelector('#arena-selector-close');
+            const officialTab = document.querySelector('#arena-tab-official');
+            const personalTab = document.querySelector('#arena-tab-personal');
+            
+            if (closeBtn) {
+              closeBtn.classList.add('clickable');
+              if (closeBtn.object3D) closeBtn.object3D.visible = true;
+            }
+            if (officialTab) {
+              officialTab.classList.add('clickable');
+              if (officialTab.object3D) officialTab.object3D.visible = true;
+            }
+            if (personalTab) {
+              personalTab.classList.add('clickable');
+              if (personalTab.object3D) personalTab.object3D.visible = true;
+            }
+            
+            // CRITICAL: Hide main menu and disable ALL its buttons
+            if (mainMenu) {
+              mainMenu.setAttribute('visible', false);
+              const mainMenuButtons = mainMenu.querySelectorAll('[cursor-listener]');
+              mainMenuButtons.forEach(btn => {
+                btn.classList.remove('clickable');
+                if (btn.object3D) btn.object3D.visible = false;
+              });
+            }
+            
+            // Populate arena lists
+            this.populateArenaLists();
+            
+            // CRITICAL: Wait for object3D to be initialized before setting tab
+            setTimeout(() => {
+              this.switchArenaTab('official');
+            }, 150);
+          }
+        },
+        
+        closeArenaSelector: function() {
+          console.log('🗺️ Closing arena selector');
+          const selector = document.querySelector('#arena-selector');
+          const mainMenu = document.querySelector('#game-menu');
+          
+          if (selector) {
+            selector.setAttribute('visible', false);
+            
+            // CRITICAL: Disable ALL arena selector buttons at THREE.js level
+            const allButtons = selector.querySelectorAll('[cursor-listener]');
+            allButtons.forEach(btn => {
+              btn.classList.remove('clickable');
+              if (btn.object3D) btn.object3D.visible = false;
+            });
+            
+            // Refresh raycasters
+            const leftHand = document.querySelector('#leftHand');
+            const rightHand = document.querySelector('#rightHand');
+            if (leftHand && leftHand.components.raycaster) {
+              leftHand.components.raycaster.refreshObjects();
+            }
+            if (rightHand && rightHand.components.raycaster) {
+              rightHand.components.raycaster.refreshObjects();
+            }
+          }
+          // CRITICAL: Re-show main menu and re-enable ALL its buttons
+          if (mainMenu) {
+            mainMenu.setAttribute('visible', true);
+            
+            // Give object3D time to update
+            setTimeout(() => {
+              const mainMenuButtons = mainMenu.querySelectorAll('[cursor-listener]');
+              mainMenuButtons.forEach(btn => {
+                btn.classList.add('clickable');
+                if (btn.object3D) btn.object3D.visible = true;
+              });
+              
+              this.forceRaycasterUpdate();
+            }, 100);
+          }
+        },
+        
+        closeArenaSelectorCompletely: function() {
+          console.log('🗺️ Closing arena selector completely (without reopening main menu)');
+          const selector = document.querySelector('#arena-selector');
+          const mainMenu = document.querySelector('#game-menu');
+          
+          if (selector) {
+            selector.setAttribute('visible', false);
+            
+            // CRITICAL: Disable ALL arena selector buttons at THREE.js level
+            const allButtons = selector.querySelectorAll('[cursor-listener]');
+            allButtons.forEach(btn => {
+              btn.classList.remove('clickable');
+              if (btn.object3D) btn.object3D.visible = false;
+            });
+          }
+          
+          // CRITICAL: Also disable main menu buttons (don't reopen main menu)
+          if (mainMenu) {
+            const mainMenuButtons = mainMenu.querySelectorAll('[cursor-listener]');
+            mainMenuButtons.forEach(btn => {
+              btn.classList.remove('clickable');
+              if (btn.object3D) btn.object3D.visible = false;
+            });
+          }
+          
+          this.forceRaycasterUpdate();
+        },
+        
+        switchArenaTab: function(tab) {
+          console.log(`🗺️ Switching to ${tab} tab`);
+          
+          // Update tab button colors
+          const officialTab = document.querySelector('#arena-tab-official');
+          const personalTab = document.querySelector('#arena-tab-personal');
+          
+          // Get Import/Export buttons
+          const importBtn = document.querySelector('#arena-import-file');
+          const exportBtn = document.querySelector('#arena-export-current');
+          
+          // Get lists
+          const officialList = document.querySelector('#arena-list-official');
+          const personalList = document.querySelector('#arena-list-personal');
+          
+          if (tab === 'official') {
+            officialTab.setAttribute('material', 'color', '#0066ff');
+            officialTab.setAttribute('material', 'opacity', 0.9);
+            personalTab.setAttribute('material', 'color', '#666666');
+            personalTab.setAttribute('material', 'opacity', 0.8);
+            
+            // Hide Import/Export buttons
+            if (importBtn) {
+              importBtn.setAttribute('visible', false);
+              importBtn.classList.remove('clickable');
+              if (importBtn.object3D) importBtn.object3D.visible = false;
+            }
+            if (exportBtn) {
+              exportBtn.setAttribute('visible', false);
+              exportBtn.classList.remove('clickable');
+              if (exportBtn.object3D) exportBtn.object3D.visible = false;
+            }
+            
+            // Show/hide lists
+            if (officialList) officialList.setAttribute('visible', true);
+            if (personalList) personalList.setAttribute('visible', false);
+            
+            // Enable official list buttons, disable personal list buttons
+            this.setListInteractable(officialList, true);
+            this.setListInteractable(personalList, false);
+          } else {
+            officialTab.setAttribute('material', 'color', '#666666');
+            officialTab.setAttribute('material', 'opacity', 0.8);
+            personalTab.setAttribute('material', 'color', '#0066ff');
+            personalTab.setAttribute('material', 'opacity', 0.9);
+            
+            // Show Import/Export buttons
+            if (importBtn) {
+              importBtn.setAttribute('visible', true);
+              importBtn.classList.add('clickable');
+              if (importBtn.object3D) importBtn.object3D.visible = true;
+            }
+            if (exportBtn) {
+              exportBtn.setAttribute('visible', true);
+              exportBtn.classList.add('clickable');
+              if (exportBtn.object3D) exportBtn.object3D.visible = true;
+            }
+            
+            // Show/hide lists
+            if (officialList) officialList.setAttribute('visible', false);
+            if (personalList) personalList.setAttribute('visible', true);
+            
+            // Enable personal list buttons, disable official list buttons
+            this.setListInteractable(officialList, false);
+            this.setListInteractable(personalList, true);
+          }
+          
+          // Force raycaster to update immediately
+          this.forceRaycasterUpdate();
+        },
+        
+        // Properly enable/disable ALL interaction on a list
+        setListInteractable: function(listContainer, enabled) {
+          if (!listContainer) return;
+          
+          const buttons = listContainer.querySelectorAll('[cursor-listener]');
+          buttons.forEach(btn => {
+            if (enabled) {
+              // Enable: add to clickable class, make visible
+              btn.classList.add('clickable');
+              btn.removeAttribute('raycast');
+              // Set THREE.js visibility if object3D exists
+              if (btn.object3D) {
+                btn.object3D.visible = true;
+              }
+            } else {
+              // Disable: remove clickable class, hide from raycaster
+              btn.classList.remove('clickable');
+              // Set THREE.js visibility if object3D exists
+              if (btn.object3D) {
+                btn.object3D.visible = false;
+              }
+            }
+          });
+        },
+        
+        // Force raycasters to rebuild their target lists immediately
+        forceRaycasterUpdate: function() {
+          const leftHand = document.querySelector('#leftHand');
+          const rightHand = document.querySelector('#rightHand');
+          
+          if (leftHand && leftHand.components.raycaster) {
+            const raycaster = leftHand.components.raycaster;
+            raycaster.refreshObjects();
+            // Force immediate update
+            if (raycaster.raycaster) {
+              raycaster.treeNeedsUpdate = true;
+            }
+          }
+          
+          if (rightHand && rightHand.components.raycaster) {
+            const raycaster = rightHand.components.raycaster;
+            raycaster.refreshObjects();
+            // Force immediate update
+            if (raycaster.raycaster) {
+              raycaster.treeNeedsUpdate = true;
+            }
+          }
+        },
+        
+        // Helper to enable/disable raycasting on all buttons in a list
+        setListRaycastable: function(listContainer, enabled) {
+          if (!listContainer) return;
+          
+          // CRITICAL: Query ALL buttons, not just .clickable, since disabled buttons lose the class
+          const buttons = listContainer.querySelectorAll('[cursor-listener]');
+          buttons.forEach(btn => {
+            if (enabled) {
+              // Ensure button has clickable class and no raycast attribute
+              btn.classList.add('clickable');
+              btn.removeAttribute('raycast');
+            } else {
+              // CRITICAL: Disable raycasting AND remove clickable class to prevent raycaster from targeting it
+              btn.setAttribute('raycast', 'enabled: false');
+              btn.classList.remove('clickable');
+            }
+          });
+        },
+        
+        populateArenaLists: function() {
+          console.log('🗺️ Populating arena lists...');
+          
+          // Ensure ArenaManager is initialized
+          if (typeof ArenaManager !== 'undefined' && ArenaManager.officialArenas) {
+            console.log(`   Official arenas count: ${ArenaManager.officialArenas.length}`);
+          }
+          
+          // Populate official arenas
+          this.populateOfficialArenas();
+          
+          // Populate personal arenas
+          this.populatePersonalArenas();
+        },
+        
+        populateOfficialArenas: function() {
+          const container = document.querySelector('#arena-list-official');
+          if (!container || typeof ArenaManager === 'undefined') return;
+          
+          // Clear existing
+          while (container.firstChild) {
+            container.removeChild(container.firstChild);
+          }
+          
+          // Ensure ArenaManager is initialized
+          const arenas = ArenaManager.officialArenas || [];
+          
+          console.log('🗺️ Populating official arenas:', arenas.length, 'arenas');
+          console.log('   Arena list:', arenas.map(a => a.name).join(', '));
+          
+          // If empty, show a message
+          if (arenas.length === 0) {
+            const msgText = document.createElement('a-text');
+            msgText.setAttribute('value', 'Loading official arenas...');
+            msgText.setAttribute('position', '0 0.2 0');
+            msgText.setAttribute('align', 'center');
+            msgText.setAttribute('width', '0.8');
+            msgText.setAttribute('color', '#888888');
+            container.appendChild(msgText);
+            return;
+          }
+          
+          const startY = 0.20;  // MOVED DOWN from 0.25 to create more space below tabs
+          const spacing = 0.08;
+          
+          // Show only first 5 arenas
+          arenas.slice(0, 5).forEach((arena, index) => {
+            const y = startY - (index * spacing);
+            
+            // Arena item
+            const item = document.createElement('a-entity');
+            item.setAttribute('position', `0 ${y} 0`);
+            
+            // Arena name text
+            const nameText = document.createElement('a-text');
+            nameText.setAttribute('value', arena.name);
+            nameText.setAttribute('position', '-0.5 0 0');
+            nameText.setAttribute('align', 'left');
+            nameText.setAttribute('width', '0.8');
+            nameText.setAttribute('color', '#ffffff');
+            // Prevent raycasting on text elements
+            nameText.setAttribute('raycast', 'enabled: false');
+            item.appendChild(nameText);
+            
+            // Load button (using same structure as working menu buttons)
+            const loadBtn = document.createElement('a-entity');
+            loadBtn.setAttribute('id', `arena-load-official-${arena.id}`);
+            loadBtn.setAttribute('position', '0.4 0 0');
+            loadBtn.setAttribute('geometry', 'primitive: plane; width: 0.18; height: 0.05');
+            loadBtn.setAttribute('material', 'color: #44ff44; transparent: true; opacity: 0.8');
+            loadBtn.setAttribute('cursor-listener', '');
+            loadBtn.classList.add('clickable');
+            
+            const loadText = document.createElement('a-text');
+            loadText.setAttribute('value', 'LOAD');
+            loadText.setAttribute('position', '0 0 0.01');
+            loadText.setAttribute('align', 'center');
+            loadText.setAttribute('width', '0.7');
+            loadText.setAttribute('color', '#ffffff');
+            loadBtn.appendChild(loadText);
+            
+            item.appendChild(loadBtn);
+            container.appendChild(item);
+          });
+        },
+        
+        populatePersonalArenas: function() {
+          const container = document.querySelector('#arena-list-personal');
+          if (!container || typeof ArenaManager === 'undefined') {
+            console.log('⚠️ Cannot populate personal arenas - container or ArenaManager missing');
+            return;
+          }
+          
+          console.log('🗺️ Populating personal arenas...');
+          
+          // Clear existing
+          while (container.firstChild) {
+            container.removeChild(container.firstChild);
+          }
+          
+          const arenas = ArenaManager.getPersonalArenas();
+          console.log(`   Found ${arenas.length} personal arena slots`);
+          const startY = 0.20;  // MOVED DOWN from 0.25 to create more space below tabs
+          const spacing = 0.08;
+          
+          // Show only first 5 arenas
+          arenas.slice(0, 5).forEach((arena, index) => {
+            const y = startY - (index * spacing);
+            
+            // Arena item
+            const item = document.createElement('a-entity');
+            item.setAttribute('position', `0 ${y} 0`);
+            
+            // Arena name/status text
+            const nameText = document.createElement('a-text');
+            if (arena.empty) {
+              nameText.setAttribute('value', `Slot ${arena.slot}: [Empty]`);
+              nameText.setAttribute('color', '#888888');
+            } else {
+              nameText.setAttribute('value', `${arena.slot}. ${arena.name}`);
+              nameText.setAttribute('color', '#ffffff');
+            }
+            nameText.setAttribute('position', '-0.5 0 0');
+            nameText.setAttribute('align', 'left');
+            nameText.setAttribute('width', '0.5');
+            item.appendChild(nameText);
+            
+            if (arena.empty) {
+              // Save button (using same structure as working menu buttons)
+              const saveBtn = document.createElement('a-entity');
+              saveBtn.setAttribute('id', `arena-save-slot-${arena.slot}`);
+              saveBtn.setAttribute('position', '0.35 0 0');
+              saveBtn.setAttribute('geometry', 'primitive: plane; width: 0.2; height: 0.05');
+              saveBtn.setAttribute('material', 'color: #4444ff; transparent: true; opacity: 0.8');
+              saveBtn.setAttribute('cursor-listener', '');
+              saveBtn.classList.add('clickable');
+              
+              const saveText = document.createElement('a-text');
+              saveText.setAttribute('value', 'SAVE AS');
+              saveText.setAttribute('position', '0 0 0.01');
+              saveText.setAttribute('align', 'center');
+              saveText.setAttribute('width', '0.7');
+              saveText.setAttribute('color', '#ffffff');
+              saveBtn.appendChild(saveText);
+              
+              item.appendChild(saveBtn);
+            } else {
+              // Load button (using same structure as working menu buttons)
+              const loadBtn = document.createElement('a-entity');
+              loadBtn.setAttribute('id', `arena-load-personal-${arena.slot}`);
+              loadBtn.setAttribute('position', '0.25 0 0');
+              loadBtn.setAttribute('geometry', 'primitive: plane; width: 0.18; height: 0.05');
+              loadBtn.setAttribute('material', 'color: #44ff44; transparent: true; opacity: 0.8');
+              loadBtn.setAttribute('cursor-listener', '');
+              loadBtn.classList.add('clickable');
+              
+              const loadText = document.createElement('a-text');
+              loadText.setAttribute('value', 'LOAD');
+              loadText.setAttribute('position', '0 0 0.01');
+              loadText.setAttribute('align', 'center');
+              loadText.setAttribute('width', '0.7');
+              loadText.setAttribute('color', '#ffffff');
+              loadBtn.appendChild(loadText);
+              
+              item.appendChild(loadBtn);
+              
+              // Delete button (using same structure as working menu buttons)
+              const delBtn = document.createElement('a-entity');
+              delBtn.setAttribute('id', `arena-delete-slot-${arena.slot}`);
+              delBtn.setAttribute('position', '0.48 0 0');
+              delBtn.setAttribute('geometry', 'primitive: plane; width: 0.15; height: 0.05');
+              delBtn.setAttribute('material', 'color: #ff4444; transparent: true; opacity: 0.8');
+              delBtn.setAttribute('cursor-listener', '');
+              delBtn.classList.add('clickable');
+              
+              const delText = document.createElement('a-text');
+              delText.setAttribute('value', 'DEL');
+              delText.setAttribute('position', '0 0 0.01');
+              delText.setAttribute('align', 'center');
+              delText.setAttribute('width', '0.7');
+              delText.setAttribute('color', '#ffffff');
+              delBtn.appendChild(delText);
+              
+              item.appendChild(delBtn);
+            }
+            
+            container.appendChild(item);
+          });
+        },
+        
+        loadArena: function(buttonId) {
+          console.log('🗺️ Load arena clicked:', buttonId);
+          
+          if (typeof ArenaManager === 'undefined') return;
+          
+          if (buttonId.startsWith('arena-load-official-')) {
+            const arenaId = buttonId.replace('arena-load-official-', '');
+            ArenaManager.loadOfficialArena(arenaId);
+            
+            // Broadcast to clients if host
+            if (isHost && isMultiplayer) {
+              const layout = ArenaManager.getCurrentLayout();
+              ArenaManager.broadcastArenaLoad(layout);
+            }
+          } else if (buttonId.startsWith('arena-load-personal-')) {
+            const slot = parseInt(buttonId.replace('arena-load-personal-', ''));
+            ArenaManager.loadFromPersonalSlot(slot);
+            
+            // Broadcast to clients if host
+            if (isHost && isMultiplayer) {
+              const layout = ArenaManager.getCurrentLayout();
+              ArenaManager.broadcastArenaLoad(layout);
+            }
+          }
+          
+          // Close arena selector
+          this.closeArenaSelector();
+        },
+        
+        saveToSlot: function(buttonId) {
+          console.log('🗺️ Save to slot clicked:', buttonId);
+          
+          if (typeof ArenaManager === 'undefined') {
+            console.error('❌ ArenaManager not available!');
+            return;
+          }
+          
+          const slot = parseInt(buttonId.replace('arena-save-slot-', ''));
+          console.log('   Saving to slot:', slot);
+          
+          // Auto-generate name using date+time
+          const now = new Date();
+          const name = `Arena ${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+          console.log('   Generated name:', name);
+          
+          ArenaManager.saveToPersonalSlot(slot, name);
+          console.log('   Save completed, refreshing list...');
+          
+          // Refresh the list
+          this.populatePersonalArenas();
+          
+          console.log(`✅ Saved arena as: ${name}`);
+        },
+        
+        deleteArena: function(buttonId) {
+          console.log('🗺️ Delete arena clicked:', buttonId);
+          
+          if (typeof ArenaManager === 'undefined') return;
+          
+          const slot = parseInt(buttonId.replace('arena-delete-slot-', ''));
+          
+          // Simple confirm for now
+          if (confirm('Delete this arena?')) {
+            ArenaManager.deletePersonalArena(slot);
+            // Refresh the list
+            this.populatePersonalArenas();
+          }
+        },
+        
+        importArenaFile: function() {
+          console.log('🗺️ Import arena file clicked');
+          
+          if (typeof ArenaManager === 'undefined') return;
+          
+          // Create hidden file input
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = '.arena.json,.json';
+          input.onchange = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+              ArenaManager.importFromFile(file, (layout) => {
+                if (layout) {
+                  ArenaManager.loadLayout(layout, layout.metadata.name);
+                  console.log('✅ Arena imported and loaded');
+                  
+                  // Broadcast if host
+                  if (isHost && isMultiplayer) {
+                    ArenaManager.broadcastArenaLoad(layout);
+                  }
+                  
+                  this.closeArenaSelector();
+                } else {
+                  console.error('❌ Failed to import arena');
+                }
+              });
+            }
+          };
+          input.click();
+        },
+        
+        exportCurrentArena: function() {
+          console.log('🗺️ Export current arena clicked');
+          
+          if (typeof ArenaManager === 'undefined') return;
+          
+          const filename = prompt('Enter filename:', ArenaManager.currentArenaName || 'my-arena');
+          if (filename) {
+            ArenaManager.exportToFile(filename);
           }
         }
       });
@@ -12864,6 +13519,15 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateVRRaycasters: function() {
+          // CRITICAL: Check if menu is open - menu has priority over editor settings
+          const menuToggle = document.querySelector('[menu-toggle]');
+          const isMenuOpen = menuToggle && menuToggle.components['menu-toggle'] && menuToggle.components['menu-toggle'].menuVisible;
+          
+          if (isMenuOpen) {
+            console.log('🔧 DEBUG: updateVRRaycasters - Menu is open, skipping update (menu has priority)');
+            return; // Don't change raycaster settings when menu is open
+          }
+          
           [this.leftHand, this.rightHand].forEach(hand => {
             if (hand) {
               const raycasterComponent = hand.components.raycaster;
@@ -12880,13 +13544,17 @@ function setGameplayHUD(isPlaying) {
                   });
                   console.log('🔧 DEBUG: updateVRRaycasters - Editor mode enabled, far: 100');
                 } else {
-                  // Normal mode: hide laser, target clickable UI
+                  // Normal mode: hide laser completely
                   hand.setAttribute('raycaster', {
-                    objects: '.clickable',
+                    objects: '',
                     lineColor: '#ffffff',
                     lineOpacity: 0,
                     enabled: false
                   });
+                  // CRITICAL: Force hide the line mesh immediately
+                  if (raycasterComponent.line) {
+                    raycasterComponent.line.visible = false;
+                  }
                   console.log('🔧 DEBUG: updateVRRaycasters - Normal mode, lasers hidden');
                 }
               }
@@ -13418,6 +14086,17 @@ function setGameplayHUD(isPlaying) {
             clone.object3D.rotation.set(rot.x, rot.y, rot.z);
             clone.object3D.scale.set(scale.x, scale.y, scale.z);
             
+            // CRITICAL: Re-apply edge components to ensure correct thickness
+            // cloneNode doesn't properly preserve component data in all cases
+            if (entity.hasAttribute('tetrahedron-edges')) {
+              const edgeData = entity.getAttribute('tetrahedron-edges');
+              clone.setAttribute('tetrahedron-edges', edgeData);
+            }
+            if (entity.hasAttribute('octahedron-edges')) {
+              const edgeData = entity.getAttribute('octahedron-edges');
+              clone.setAttribute('octahedron-edges', edgeData);
+            }
+            
             console.log(`✅ Duplicated ${entity.tagName} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
             console.log(`   Rotation: (${THREE.MathUtils.radToDeg(rot.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(rot.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(rot.z).toFixed(1)}°)`);
             
@@ -13885,6 +14564,20 @@ function setGameplayHUD(isPlaying) {
           }
           
           return entity;
+        }
+      });
+
+      // Initialize Arena Manager on page load
+      window.addEventListener('DOMContentLoaded', () => {
+        console.log('🗺️ Initializing Arena System...');
+        if (typeof ArenaManager !== 'undefined') {
+          ArenaManager.init().then(() => {
+            console.log('✅ Arena System ready');
+          }).catch(err => {
+            console.error('❌ Arena System initialization failed:', err);
+          });
+        } else {
+          console.error('❌ ArenaManager not found - arena-templates.js not loaded?');
         }
       });
 
@@ -14614,8 +15307,20 @@ function setGameplayHUD(isPlaying) {
                 </a-entity>
               </a-entity>
               
+              <!-- Arena Selection Section -->
+              <a-entity id="menu-arena-section" position="0 -0.19 0">
+                <a-text id="menu-arena-name" value="Arena: One" position="0 0 0" align="center" width="0.6" color="#ffaa00"></a-text>
+                <a-entity id="menu-change-arena" position="0 -0.04 0"
+                          geometry="primitive: plane; width: 0.3; height: 0.05"
+                          material="color: #ffaa00; transparent: true; opacity: 0.8"
+                          cursor-listener
+                          class="clickable">
+                  <a-text value="CHANGE ARENA" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+                </a-entity>
+              </a-entity>
+              
               <!-- Start/Restart Match Button (only visible for host) -->
-              <a-entity id="menu-restart-match" position="0 -0.25 0"
+              <a-entity id="menu-restart-match" position="0 -0.3 0"
                         geometry="primitive: plane; width: 0.3; height: 0.06"
                         material="color: #ff4400; transparent: true; opacity: 0.8"
                         cursor-listener
@@ -14626,8 +15331,75 @@ function setGameplayHUD(isPlaying) {
               
               <!-- Instructions -->
                <a-text value="X to close" 
-                      position="0 -0.35 0" align="center" width="0.6" color="#ffffff"></a-text>
+                      position="0 -0.4 0" align="center" width="0.6" color="#ffffff"></a-text>
             </a-entity>
+            
+            <!-- Arena Selector Overlay (hidden by default) -->
+            <a-entity id="arena-selector" position="0 0 -0.8" visible="false">
+              <!-- Background panel (larger to cover main menu) -->
+              <a-plane width="1.4" height="1.0" color="#000000" material="opacity: 0.95; transparent: true" position="0 0 -0.01"></a-plane>
+              
+              <!-- Title with close button -->
+              <a-text value="SELECT ARENA" position="0 0.45 0" align="center" width="1.2" color="#ffffff" raycast="enabled: false"></a-text>
+              <a-entity id="arena-selector-close" position="0.6 0.45 0"
+                        geometry="primitive: plane; width: 0.06; height: 0.06"
+                        material="color: #ff0000; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="✕" position="0 0 0.01" align="center" width="1.5" color="#ffffff" raycast="enabled: false"></a-text>
+              </a-entity>
+              
+              <!-- Tab buttons -->
+              <a-entity id="arena-tab-official" position="-0.25 0.35 0"
+                        geometry="primitive: plane; width: 0.3; height: 0.06"
+                        material="color: #0066ff; transparent: true; opacity: 0.9"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="OFFICIAL" position="0 0 0.01" align="center" width="0.9" color="#ffffff" raycast="enabled: false"></a-text>
+              </a-entity>
+              
+              <a-entity id="arena-tab-personal" position="0.25 0.35 0"
+                        geometry="primitive: plane; width: 0.3; height: 0.06"
+                        material="color: #666666; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="MY ARENAS" position="0 0 0.01" align="center" width="0.9" color="#ffffff" raycast="enabled: false"></a-text>
+              </a-entity>
+              
+              <!-- Arena list container (content changes based on tab) -->
+              <a-entity id="arena-list-container" position="0 0 0">
+                <!-- Official arenas list (visible by default) -->
+                <a-entity id="arena-list-official" visible="true">
+                  <!-- Dynamic content will be added here by JavaScript -->
+                </a-entity>
+                
+                <!-- Personal arenas list (hidden by default) -->
+                <a-entity id="arena-list-personal" visible="false">
+                  <!-- Dynamic content will be added here by JavaScript -->
+                </a-entity>
+              </a-entity>
+              
+              <!-- Bottom buttons (moved further down to avoid overlap with list) -->
+              <!-- Hidden by default since official tab is default -->
+              <a-entity id="arena-import-file" position="-0.25 -0.47 0"
+                        geometry="primitive: plane; width: 0.35; height: 0.05"
+                        material="color: #4444ff; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable"
+                        visible="false">
+                <a-text value="IMPORT FILE" position="0 0 0.01" align="center" width="0.7" color="#ffffff" raycast="enabled: false"></a-text>
+              </a-entity>
+              
+              <a-entity id="arena-export-current" position="0.25 -0.47 0"
+                        geometry="primitive: plane; width: 0.35; height: 0.05"
+                        material="color: #44ff44; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable"
+                        visible="false">
+                <a-text value="EXPORT CURRENT" position="0 0 0.01" align="center" width="0.7" color="#ffffff" raycast="enabled: false"></a-text>
+              </a-entity>
+            </a-entity>
+            
           </a-entity>
           
           <a-entity id="leftHand" 
