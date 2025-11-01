@@ -439,7 +439,8 @@ const ArenaManager = {
   currentArenaSource: 'official', // 'official' or 'personal'
   officialArenas: [
     { id: 'zero', name: 'Zero', description: 'Empty arena for testing', file: 'zero.json' },
-    { id: 'one', name: 'One', description: 'The classic DodgeVR arena', file: 'one.json' }
+    { id: 'one', name: 'One', description: 'The classic DodgeVR arena', file: 'one.json' },
+    { id: 'two', name: 'Two', description: 'Stress test with 120 octahedrons', file: 'two.json' }
   ], // Initialize with default arenas immediately
   defaultArenaSnapshot: null, // Will be captured on init
   
@@ -487,7 +488,8 @@ const ArenaManager = {
     if (!this.officialArenas || this.officialArenas.length === 0) {
       this.officialArenas = [
         { id: 'zero', name: 'Zero', description: 'Empty arena for testing', file: 'zero.json' },
-        { id: 'one', name: 'One', description: 'The classic DodgeVR arena', file: 'one.json' }
+        { id: 'one', name: 'One', description: 'The classic DodgeVR arena', file: 'one.json' },
+        { id: 'two', name: 'Two', description: 'Stress test with 120 octahedrons', file: 'two.json' }
       ];
     }
     return this.officialArenas;
@@ -722,6 +724,26 @@ const ArenaManager = {
       this.loadLayout(defaultLayout, 'One');
       this.currentArenaSource = 'official';
       return defaultLayout; // Return the layout for broadcasting
+    } else if (arenaId === 'two') {
+      // Load "Two" arena from JSON file
+      try {
+        console.log('📥 Fetching Two arena from arenas/two.json...');
+        const response = await fetch('arenas/two.json');
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const layout = await response.json();
+        console.log(`✅ Loaded Two arena: ${layout.metadata.objectCount} objects`);
+        this.loadLayout(layout, 'Two');
+        this.currentArenaSource = 'official';
+        return layout; // Return the layout for broadcasting
+      } catch (error) {
+        console.error('❌ Failed to load Two arena:', error);
+        console.warn('⚠️ Falling back to default arena');
+        const defaultLayout = this.getDefaultArenaLayout();
+        this.loadLayout(defaultLayout, 'One');
+        return defaultLayout;
+      }
     }
     
     console.warn('Arena not found:', arenaId);
