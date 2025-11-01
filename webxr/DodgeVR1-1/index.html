@@ -8463,18 +8463,21 @@ function setGameplayHUD(isPlaying) {
       
       function toggleEdgesEmissive() {
         perfConfig.edgesEmissive = !perfConfig.edgesEmissive;
-        console.log('✨ Edges:', perfConfig.edgesEmissive ? 'EMISSIVE' : 'FLAT');
+        console.log('✨ Edges:', perfConfig.edgesEmissive ? 'ON' : 'OFF');
         
-        // Toggle emissive intensity on all edge cylinders
+        // Toggle visibility of all edge cylinders (massive performance gain)
         const edges = document.querySelectorAll('[octahedron-edges], [tetrahedron-edges]');
+        let totalEdges = 0;
+        
         edges.forEach(shape => {
           const edgeCylinders = shape.querySelectorAll('a-cylinder');
           edgeCylinders.forEach(cyl => {
-            const currentColor = cyl.getAttribute('color');
-            cyl.setAttribute('material', `emissive: ${currentColor}; emissiveIntensity: ${perfConfig.edgesEmissive ? 2 : 0}`);
+            cyl.setAttribute('visible', perfConfig.edgesEmissive);
+            totalEdges++;
           });
         });
         
+        console.log(`✨ Toggled visibility of ${totalEdges} edge cylinders (reduces draw calls by ${totalEdges} and triangles by ~${totalEdges * 64})`);
         updateConfigDisplay();
       }
       
@@ -8565,7 +8568,7 @@ function setGameplayHUD(isPlaying) {
         updateButton('config-textures', `Textures: ${perfConfig.texturesEnabled ? 'ON' : 'OFF'}`);
         updateButton('config-physics', `Physics: ${perfConfig.physicsTimestep}Hz`);
         updateButton('config-lights', `Lights: ${perfConfig.pointLightsEnabled ? 'ON' : 'OFF'}`);
-        updateButton('config-edges', `Edges: ${perfConfig.edgesEmissive ? 'EMISSIVE' : 'FLAT'}`);
+        updateButton('config-edges', `Edges: ${perfConfig.edgesEmissive ? 'ON' : 'OFF'}`);
         updateButton('config-ccd', `CCD: ${perfConfig.ccdIterations}`);
         updateButton('config-bots', `Bots: ${perfConfig.botLogicEnabled ? 'ON' : 'OFF'}`);
         updateButton('config-glow', `Glow: ${perfConfig.glowEnabled ? 'ON' : 'OFF'}`);
@@ -15786,7 +15789,7 @@ function setGameplayHUD(isPlaying) {
                         material="color: #006644; transparent: true; opacity: 0.8"
                         cursor-listener
                         class="clickable">
-                <a-text value="Edges: EMISSIVE" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+                <a-text value="Edges: ON" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
               </a-entity>
               
               <a-entity id="config-ccd" position="0 0 0"
