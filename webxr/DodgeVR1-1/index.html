@@ -72,7 +72,6 @@
         texturesEnabled: true,
         physicsTimestep: 240,
         pointLightsEnabled: true,
-        edgesEmissive: true,
         ccdIterations: 10,
         botLogicEnabled: true,
         glowEnabled: true
@@ -7180,295 +7179,6 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
-      // Component to add emissive edges to octahedrons
-      AFRAME.registerComponent('octahedron-edges', {
-        schema: {
-          edgeColor: { type: 'color', default: '#ffffff' },
-          edgeThickness: { type: 'number', default: 0.1 },
-          emissiveIntensity: { type: 'number', default: 1.5 }
-        },
-        
-        init: function() {
-          this.edgesCreated = false;
-          this.attemptCount = 0;
-          
-          // Try multiple times with delays to catch when geometry is ready
-          this.tryCreateEdges();
-        },
-        
-        tryCreateEdges: function() {
-          if (this.edgesCreated) return;
-          
-          this.attemptCount++;
-          
-          const mesh = this.el.getObject3D('mesh');
-          if (!mesh || !mesh.geometry) {
-            // Not ready yet, retry
-            if (this.attemptCount < 5) {
-              setTimeout(() => this.tryCreateEdges(), 100 * this.attemptCount);
-            }
-            return;
-          }
-          
-          this.edgesCreated = true;
-          this.createEdges(mesh.geometry);
-        },
-        
-        createEdges: function(geometry) {
-          // CRITICAL: Remove any existing edge cylinders first (from cloning)
-          // This prevents grey leftover cylinders when objects are duplicated
-          const existingEdges = this.el.querySelectorAll('a-cylinder');
-          existingEdges.forEach(cylinder => {
-            // Only remove cylinders that look like edges (not other cylinders user might have added)
-            const parent = cylinder.parentNode;
-            if (parent === this.el) {
-              this.el.removeChild(cylinder);
-              console.log('🧹 Removed old edge cylinder from cloned octahedron');
-            }
-          });
-          
-          const radius = parseFloat(this.el.getAttribute('radius')) || 20;
-          const edgeColor = this.data.edgeColor;
-          const thickness = this.data.edgeThickness;
-          const emissive = this.data.emissiveIntensity;
-          
-          const positionAttr = geometry.attributes.position;
-          
-          if (!positionAttr) {
-            console.error('❌ octahedron-edges: No position attribute');
-            return;
-          }
-          
-          const vertexMap = new Map();
-          const vertices = [];
-          
-          for (let i = 0; i < positionAttr.count; i++) {
-            const x = Math.round(positionAttr.getX(i) * 1000) / 1000;
-            const y = Math.round(positionAttr.getY(i) * 1000) / 1000;
-            const z = Math.round(positionAttr.getZ(i) * 1000) / 1000;
-            const key = `${x},${y},${z}`;
-            
-            if (!vertexMap.has(key)) {
-              vertexMap.set(key, vertices.length);
-              vertices.push(new THREE.Vector3(x, y, z));
-            }
-          }
-          
-          const eps = 0.1;
-          let topV = null, bottomV = null, rightV = null, leftV = null, frontV = null, backV = null;
-          
-          vertices.forEach(v => {
-            if (Math.abs(v.y - radius) < eps && Math.abs(v.x) < eps && Math.abs(v.z) < eps) topV = v;
-            else if (Math.abs(v.y + radius) < eps && Math.abs(v.x) < eps && Math.abs(v.z) < eps) bottomV = v;
-            else if (Math.abs(v.x - radius) < eps && Math.abs(v.y) < eps && Math.abs(v.z) < eps) rightV = v;
-            else if (Math.abs(v.x + radius) < eps && Math.abs(v.y) < eps && Math.abs(v.z) < eps) leftV = v;
-            else if (Math.abs(v.z - radius) < eps && Math.abs(v.x) < eps && Math.abs(v.y) < eps) frontV = v;
-            else if (Math.abs(v.z + radius) < eps && Math.abs(v.x) < eps && Math.abs(v.y) < eps) backV = v;
-          });
-          
-          if (!topV || !bottomV || !rightV || !leftV || !frontV || !backV) {
-            console.error('❌ octahedron-edges: Missing vertices');
-            return;
-          }
-          
-          const edges = [
-            [topV, rightV], [topV, leftV], [topV, frontV], [topV, backV],
-            [bottomV, rightV], [bottomV, leftV], [bottomV, frontV], [bottomV, backV],
-            [rightV, frontV], [frontV, leftV], [leftV, backV], [backV, rightV]
-          ];
-          
-          edges.forEach(([v1, v2]) => {
-            const midpoint = new THREE.Vector3().addVectors(v1, v2).multiplyScalar(0.5);
-            const direction = new THREE.Vector3().subVectors(v2, v1);
-            const length = direction.length();
-            direction.normalize();
-            
-            const edge = document.createElement('a-cylinder');
-            edge.setAttribute('position', `${midpoint.x} ${midpoint.y} ${midpoint.z}`);
-            edge.setAttribute('radius', thickness);
-            edge.setAttribute('height', length);
-            edge.setAttribute('color', edgeColor);
-            edge.setAttribute('material', `shader: standard; emissive: ${edgeColor}; emissiveIntensity: ${emissive}; metalness: 0.3; roughness: 0.7`);
-            
-            const isMiddleEdge = Math.abs(v1.y) < 0.1 && Math.abs(v2.y) < 0.1;
-            
-            let rotDeg;
-            if (isMiddleEdge) {
-              const cylinder = new THREE.Object3D();
-              cylinder.position.copy(midpoint);
-              cylinder.lookAt(v2);
-              cylinder.rotateX(Math.PI / 2);
-              
-              const euler = new THREE.Euler().setFromQuaternion(cylinder.quaternion, 'XYZ');
-              rotDeg = {
-                x: THREE.MathUtils.radToDeg(euler.x),
-                y: THREE.MathUtils.radToDeg(euler.y),
-                z: THREE.MathUtils.radToDeg(euler.z)
-            };
-          } else {
-              const quaternion = new THREE.Quaternion();
-              const up = new THREE.Vector3(0, 1, 0);
-              quaternion.setFromUnitVectors(up, direction);
-              
-              const euler = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ');
-              rotDeg = {
-                x: THREE.MathUtils.radToDeg(euler.x),
-                y: THREE.MathUtils.radToDeg(euler.y),
-                z: THREE.MathUtils.radToDeg(euler.z)
-              };
-            }
-            
-            edge.setAttribute('rotation', `${rotDeg.x} ${rotDeg.y} ${rotDeg.z}`);
-            this.el.appendChild(edge);
-          });
-        }
-      });
-
-      // Component to add emissive edges to tetrahedrons
-      AFRAME.registerComponent('tetrahedron-edges', {
-        schema: {
-          edgeColor: { type: 'color', default: '#ffffff' },
-          edgeThickness: { type: 'number', default: 0.1 },
-          emissiveIntensity: { type: 'number', default: 1.5 }
-        },
-        
-        init: function() {
-          this.edgesCreated = false;
-          this.attemptCount = 0;
-          
-          // Try multiple times with delays to catch when geometry is ready
-          this.tryCreateEdges();
-        },
-        
-        tryCreateEdges: function() {
-          if (this.edgesCreated) return;
-          
-          this.attemptCount++;
-          
-          const mesh = this.el.getObject3D('mesh');
-          if (!mesh || !mesh.geometry) {
-            // Not ready yet, retry
-            if (this.attemptCount < 5) {
-              setTimeout(() => this.tryCreateEdges(), 100 * this.attemptCount);
-            }
-            return;
-          }
-          
-          this.edgesCreated = true;
-          this.createEdges(mesh.geometry);
-        },
-        
-        createEdges: function(geometry) {
-          // CRITICAL: Remove any existing edge cylinders first (from cloning)
-          // This prevents grey leftover cylinders when objects are duplicated
-          const existingEdges = this.el.querySelectorAll('a-cylinder');
-          existingEdges.forEach(cylinder => {
-            // Only remove cylinders that look like edges (not other cylinders user might have added)
-            const parent = cylinder.parentNode;
-            if (parent === this.el) {
-              this.el.removeChild(cylinder);
-              console.log('🧹 Removed old edge cylinder from cloned tetrahedron');
-            }
-          });
-          
-          const radius = parseFloat(this.el.getAttribute('radius')) || 1.0;
-          const edgeColor = this.data.edgeColor;
-          const thickness = this.data.edgeThickness;
-          const emissive = this.data.emissiveIntensity;
-          
-          // Read ACTUAL vertices from the A-Frame mesh geometry
-          const mesh = this.el.getObject3D('mesh');
-          if (!mesh || !mesh.geometry) {
-            console.error('❌ No mesh geometry available');
-            return;
-          }
-          
-          const positionAttr = mesh.geometry.attributes.position;
-          if (!positionAttr) {
-            console.error('❌ No position attribute');
-            return;
-          }
-          
-          // Extract unique vertices
-          const vertexMap = new Map();
-          const vertices = [];
-          
-          for (let i = 0; i < positionAttr.count; i++) {
-            const x = positionAttr.getX(i);
-            const y = positionAttr.getY(i);
-            const z = positionAttr.getZ(i);
-            const key = `${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)}`;
-            
-            if (!vertexMap.has(key)) {
-              vertexMap.set(key, vertices.length);
-              vertices.push(new THREE.Vector3(x, y, z));
-            }
-          }
-          
-          if (vertices.length !== 4) {
-            console.error(`❌ Expected 4 unique vertices, found ${vertices.length}`);
-            return;
-          }
-          
-          // Create all 6 edges (connect every pair of vertices)
-          const edges = [];
-          for (let i = 0; i < 4; i++) {
-            for (let j = i + 1; j < 4; j++) {
-              edges.push([vertices[i], vertices[j]]);
-            }
-          }
-          
-          edges.forEach(([start, end], index) => {
-            const midpoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
-            const direction = new THREE.Vector3().subVectors(end, start);
-            const length = direction.length();
-            direction.normalize();
-            
-            const edge = document.createElement('a-cylinder');
-            edge.setAttribute('position', `${midpoint.x} ${midpoint.y} ${midpoint.z}`);
-            edge.setAttribute('radius', thickness);
-            edge.setAttribute('height', length);
-            edge.setAttribute('color', edgeColor);
-            edge.setAttribute('material', `shader: standard; emissive: ${edgeColor}; emissiveIntensity: ${emissive}; metalness: 0.3; roughness: 0.7`);
-            
-            // Rotate cylinder to align with edge
-            // Check if this is a horizontal edge (Y component near zero)
-            const isHorizontal = Math.abs(direction.y) < 0.01;
-            
-            let rotDeg;
-            if (isHorizontal) {
-              // For horizontal edges, use lookAt + 90° X rotation
-              const tempObj = new THREE.Object3D();
-              tempObj.position.copy(midpoint);
-              tempObj.lookAt(end);
-              tempObj.rotateX(Math.PI / 2);
-              
-              const euler = new THREE.Euler().setFromQuaternion(tempObj.quaternion, 'XYZ');
-              rotDeg = {
-                x: THREE.MathUtils.radToDeg(euler.x),
-                y: THREE.MathUtils.radToDeg(euler.y),
-                z: THREE.MathUtils.radToDeg(euler.z)
-              };
-            } else {
-              // For non-horizontal edges, use standard quaternion rotation
-              const quaternion = new THREE.Quaternion();
-              const up = new THREE.Vector3(0, 1, 0);
-              quaternion.setFromUnitVectors(up, direction);
-              
-              const euler = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ');
-              rotDeg = {
-                x: THREE.MathUtils.radToDeg(euler.x),
-                y: THREE.MathUtils.radToDeg(euler.y),
-                z: THREE.MathUtils.radToDeg(euler.z)
-              };
-            }
-            
-            edge.setAttribute('rotation', `${rotDeg.x} ${rotDeg.y} ${rotDeg.z}`);
-            this.el.appendChild(edge);
-          });
-        }
-      });
-
       // Add sound manager component
       AFRAME.registerComponent('sound-manager', {
         init: function() {
@@ -8461,26 +8171,6 @@ function setGameplayHUD(isPlaying) {
         updateConfigDisplay();
       }
       
-      function toggleEdgesEmissive() {
-        perfConfig.edgesEmissive = !perfConfig.edgesEmissive;
-        console.log('✨ Edges:', perfConfig.edgesEmissive ? 'ON' : 'OFF');
-        
-        // Toggle visibility of all edge cylinders (massive performance gain)
-        const edges = document.querySelectorAll('[octahedron-edges], [tetrahedron-edges]');
-        let totalEdges = 0;
-        
-        edges.forEach(shape => {
-          const edgeCylinders = shape.querySelectorAll('a-cylinder');
-          edgeCylinders.forEach(cyl => {
-            cyl.setAttribute('visible', perfConfig.edgesEmissive);
-            totalEdges++;
-          });
-        });
-        
-        console.log(`✨ Toggled visibility of ${totalEdges} edge cylinders (reduces draw calls by ${totalEdges} and triangles by ~${totalEdges * 64})`);
-        updateConfigDisplay();
-      }
-      
       function toggleCCD() {
         perfConfig.ccdIterations = perfConfig.ccdIterations === 10 ? 3 : 10;
         console.log('🎯 CCD iterations:', perfConfig.ccdIterations);
@@ -8568,7 +8258,6 @@ function setGameplayHUD(isPlaying) {
         updateButton('config-textures', `Textures: ${perfConfig.texturesEnabled ? 'ON' : 'OFF'}`);
         updateButton('config-physics', `Physics: ${perfConfig.physicsTimestep}Hz`);
         updateButton('config-lights', `Lights: ${perfConfig.pointLightsEnabled ? 'ON' : 'OFF'}`);
-        updateButton('config-edges', `Edges: ${perfConfig.edgesEmissive ? 'ON' : 'OFF'}`);
         updateButton('config-ccd', `CCD: ${perfConfig.ccdIterations}`);
         updateButton('config-bots', `Bots: ${perfConfig.botLogicEnabled ? 'ON' : 'OFF'}`);
         updateButton('config-glow', `Glow: ${perfConfig.glowEnabled ? 'ON' : 'OFF'}`);
@@ -12474,8 +12163,6 @@ function setGameplayHUD(isPlaying) {
             togglePhysicsTimestep();
           } else if (id === 'config-lights') {
             togglePointLights();
-          } else if (id === 'config-edges') {
-            toggleEdgesEmissive();
           } else if (id === 'config-ccd') {
             toggleCCD();
           } else if (id === 'config-bots') {
@@ -15784,15 +15471,7 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="Lights: ON" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
               </a-entity>
               
-              <a-entity id="config-edges" position="0 0.08 0"
-                        geometry="primitive: plane; width: 0.5; height: 0.06"
-                        material="color: #006644; transparent: true; opacity: 0.8"
-                        cursor-listener
-                        class="clickable">
-                <a-text value="Edges: ON" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
-              </a-entity>
-              
-              <a-entity id="config-ccd" position="0 0 0"
+              <a-entity id="config-ccd" position="0 0.08 0"
                         geometry="primitive: plane; width: 0.5; height: 0.06"
                         material="color: #006644; transparent: true; opacity: 0.8"
                         cursor-listener
