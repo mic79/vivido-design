@@ -65,6 +65,21 @@
 
       // Menu state tracking
       let isMenuVisible = false;
+      let isConfigMenuVisible = false;
+
+      // Performance config state
+      let perfConfig = {
+        texturesEnabled: true,
+        physicsTimestep: 240,
+        pointLightsEnabled: true,
+        edgesEmissive: true,
+        ccdIterations: 10,
+        botLogicEnabled: true,
+        glowEnabled: true
+      };
+      
+      // Store original textures for restoration
+      let originalWallTextures = new Map();
 
       // Team system
       let playerTeams = new Map(); // playerId -> 'red' or 'blue'
@@ -6561,7 +6576,8 @@ function setGameplayHUD(isPlaying) {
         },
         
         tick: function(time) {
-          if (!this.data.enabled) return;
+          // CRITICAL: Check manual override from performance config
+          if (this.manualOverride || !this.data.enabled) return;
           
           // Debug logging removed to reduce console spam
           
@@ -8257,8 +8273,8 @@ function setGameplayHUD(isPlaying) {
         tick: function(time) {
           const deltaTime = (time - this.lastTime) / 1000;
           if (deltaTime > 0) {
-            // Use smaller timesteps to prevent tunneling at high speeds in zero-g
-            const maxStep = 1/240; // 240Hz timestep for better collision detection
+            // Use variable timestep based on performance config
+            const maxStep = 1 / perfConfig.physicsTimestep; // 60Hz or 240Hz based on config
             const steps = Math.ceil(deltaTime / maxStep);
             
             // Clamp to reasonable step count to prevent performance issues
@@ -8326,6 +8342,322 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
+      // Performance toggle functions
+      function toggleTextures() {
+        perfConfig.texturesEnabled = !perfConfig.texturesEnabled;
+        console.log('🎨 Textures:', perfConfig.texturesEnabled ? 'ON' : 'OFF');
+        
+        // Find walls with textures
+        const walls = document.querySelectorAll('.grabbable-surface');
+        let wallCount = 0;
+        
+        walls.forEach(wall => {
+          // Only target walls that have the panelAlbedo texture
+          const hasPanelTexture = wall.getAttribute('src') === '#panelAlbedo';
+          if (!hasPanelTexture) return;
+          
+          wallCount++;
+          const wallId = wall.getAttribute('position');
+          console.log('🎨 Processing wall:', wallId);
+          
+          // Access the Three.js material directly
+          wall.object3D.traverse(node => {
+            if (node.isMesh && node.material) {
+              if (perfConfig.texturesEnabled) {
+                // RESTORE textures from our saved copy
+                console.log('🎨 Restoring textures from saved copy');
+                const saved = originalWallTextures.get(wallId);
+                if (saved) {
+                  node.material.map = saved.map;
+                  node.material.aoMap = saved.aoMap;
+                  node.material.normalMap = saved.normalMap;
+                  node.material.roughnessMap = saved.roughnessMap;
+                  node.material.metalnessMap = saved.metalnessMap;
+                  node.material.displacementMap = saved.displacementMap;
+                  console.log('✅ Textures restored');
+                } else {
+                  console.warn('⚠️ No saved textures found for wall:', wallId);
+                }
+              } else {
+                // SAVE textures first, then remove
+                console.log('🎨 Saving original textures before removing');
+                originalWallTextures.set(wallId, {
+                  map: node.material.map,
+                  aoMap: node.material.aoMap,
+                  normalMap: node.material.normalMap,
+                  roughnessMap: node.material.roughnessMap,
+                  metalnessMap: node.material.metalnessMap,
+                  displacementMap: node.material.displacementMap
+                });
+                
+                // Remove all textures
+                node.material.map = null;
+                node.material.aoMap = null;
+                node.material.normalMap = null;
+                node.material.roughnessMap = null;
+                node.material.metalnessMap = null;
+                node.material.displacementMap = null;
+                node.material.color.setHex(0x00ff00); // Keep green color
+                console.log('✅ All texture maps removed, saved for restoration');
+              }
+              node.material.needsUpdate = true;
+            }
+          });
+        });
+        
+        console.log(`🎨 Toggled textures on ${wallCount} walls. Textures are now: ${perfConfig.texturesEnabled ? 'ON' : 'OFF'}`);
+        if (wallCount === 0) {
+          console.error('❌ No textured walls found!');
+        }
+        updateConfigDisplay();
+      }
+      
+      function togglePhysicsTimestep() {
+        perfConfig.physicsTimestep = perfConfig.physicsTimestep === 240 ? 60 : 240;
+        console.log('⚙️ Physics timestep:', perfConfig.physicsTimestep + 'Hz');
+        updateConfigDisplay();
+      }
+      
+      function togglePointLights() {
+        perfConfig.pointLightsEnabled = !perfConfig.pointLightsEnabled;
+        console.log('💡 Point lights:', perfConfig.pointLightsEnabled ? 'ON' : 'OFF');
+        
+        // Toggle all point lights - need to query all entities with light component
+        const allLights = document.querySelectorAll('[light]');
+        let pointLightCount = 0;
+        
+        allLights.forEach(lightEntity => {
+          const lightAttr = lightEntity.getAttribute('light');
+          if (lightAttr && lightAttr.type === 'point') {
+            pointLightCount++;
+            if (perfConfig.pointLightsEnabled) {
+              // Restore original intensity based on color
+              const color = lightAttr.color;
+              let intensity = 1.5; // default
+              if (color === '#ffffff') intensity = 2.0;
+              if (color === '#ff0000' || color === '#0000ff') intensity = 2.0;
+              
+              lightEntity.setAttribute('light', {
+                type: 'point',
+                color: color,
+                intensity: intensity,
+                distance: lightAttr.distance || 5,
+                decay: lightAttr.decay || 2
+              });
+            } else {
+              // Set intensity to 0 instead of removing
+              lightEntity.setAttribute('light', {
+                type: 'point',
+                color: lightAttr.color,
+                intensity: 0,
+                distance: lightAttr.distance || 5,
+                decay: lightAttr.decay || 2
+              });
+            }
+          }
+        });
+        
+        console.log(`💡 Toggled ${pointLightCount} point lights`);
+        updateConfigDisplay();
+      }
+      
+      function toggleEdgesEmissive() {
+        perfConfig.edgesEmissive = !perfConfig.edgesEmissive;
+        console.log('✨ Edges:', perfConfig.edgesEmissive ? 'EMISSIVE' : 'FLAT');
+        
+        // Toggle emissive intensity on all edge cylinders
+        const edges = document.querySelectorAll('[octahedron-edges], [tetrahedron-edges]');
+        edges.forEach(shape => {
+          const edgeCylinders = shape.querySelectorAll('a-cylinder');
+          edgeCylinders.forEach(cyl => {
+            const currentColor = cyl.getAttribute('color');
+            cyl.setAttribute('material', `emissive: ${currentColor}; emissiveIntensity: ${perfConfig.edgesEmissive ? 2 : 0}`);
+          });
+        });
+        
+        updateConfigDisplay();
+      }
+      
+      function toggleCCD() {
+        perfConfig.ccdIterations = perfConfig.ccdIterations === 10 ? 3 : 10;
+        console.log('🎯 CCD iterations:', perfConfig.ccdIterations);
+        
+        // Update all balls
+        const balls = document.querySelectorAll('[zerog-ball]');
+        balls.forEach(ball => {
+          if (ball.body) {
+            ball.body.ccdIterations = perfConfig.ccdIterations;
+          }
+        });
+        
+        updateConfigDisplay();
+      }
+      
+      function toggleBotLogic() {
+        perfConfig.botLogicEnabled = !perfConfig.botLogicEnabled;
+        console.log('🤖 Bot logic:', perfConfig.botLogicEnabled ? 'ON' : 'OFF');
+        
+        // Toggle bot AI
+        const bots = document.querySelectorAll('[zerog-bot]');
+        console.log(`🤖 Found ${bots.length} bots to toggle`);
+        
+        bots.forEach(bot => {
+          if (bot.components['zerog-bot']) {
+            const botComponent = bot.components['zerog-bot'];
+            
+            // CRITICAL: Update schema data, not just the runtime data property
+            botComponent.data.enabled = perfConfig.botLogicEnabled;
+            
+            // Also set a flag to prevent manageActivePlayersAndBots from overriding
+            botComponent.manualOverride = !perfConfig.botLogicEnabled;
+            
+            // Freeze bots in place when disabled
+            if (!perfConfig.botLogicEnabled && botComponent.body) {
+              botComponent.body.velocity.set(0, 0, 0);
+              botComponent.body.angularVelocity.set(0, 0, 0);
+              botComponent.velocity.set(0, 0, 0); // Also clear persistent velocity
+              console.log(`🤖 Froze bot: ${bot.id}`);
+            } else {
+              console.log(`🤖 Enabled bot: ${bot.id}`);
+            }
+          }
+        });
+        
+        updateConfigDisplay();
+      }
+      
+      function toggleGlow() {
+        perfConfig.glowEnabled = !perfConfig.glowEnabled;
+        console.log('✨ Glow effects:', perfConfig.glowEnabled ? 'ON' : 'OFF');
+        
+        // Toggle glow component on balls
+        const balls = document.querySelectorAll('[zerog-ball]');
+        console.log(`✨ Found ${balls.length} balls to toggle glow`);
+        
+        balls.forEach(ball => {
+          const color = ball.getAttribute('color');
+          if (perfConfig.glowEnabled) {
+            // Re-enable glow
+            ball.setAttribute('glow', `color: ${color}; intensity: 1.5`);
+            console.log(`✨ Enabled glow on ball: ${ball.id}`);
+          } else {
+            // Remove glow component
+            ball.removeAttribute('glow');
+            console.log(`✨ Disabled glow on ball: ${ball.id}`);
+          }
+        });
+        
+        updateConfigDisplay();
+      }
+      
+      function updateConfigDisplay() {
+        // Update all config button displays
+        const updateButton = (id, value) => {
+          const btn = document.querySelector(`#${id}`);
+          if (btn) {
+            const text = btn.querySelector('a-text');
+            if (text) {
+              text.setAttribute('text', 'value', value);
+            }
+          }
+        };
+        
+        updateButton('config-textures', `Textures: ${perfConfig.texturesEnabled ? 'ON' : 'OFF'}`);
+        updateButton('config-physics', `Physics: ${perfConfig.physicsTimestep}Hz`);
+        updateButton('config-lights', `Lights: ${perfConfig.pointLightsEnabled ? 'ON' : 'OFF'}`);
+        updateButton('config-edges', `Edges: ${perfConfig.edgesEmissive ? 'EMISSIVE' : 'FLAT'}`);
+        updateButton('config-ccd', `CCD: ${perfConfig.ccdIterations}`);
+        updateButton('config-bots', `Bots: ${perfConfig.botLogicEnabled ? 'ON' : 'OFF'}`);
+        updateButton('config-glow', `Glow: ${perfConfig.glowEnabled ? 'ON' : 'OFF'}`);
+      }
+      
+      function openConfigMenu() {
+        console.log('🔧 Opening config menu');
+        isConfigMenuVisible = true;
+        
+        const mainMenu = document.querySelector('#game-menu');
+        const configMenu = document.querySelector('#config-menu');
+        
+        if (mainMenu && configMenu) {
+          // Hide main menu
+          mainMenu.setAttribute('visible', false);
+          
+          // Disable main menu buttons
+          const mainMenuButtons = mainMenu.querySelectorAll('[cursor-listener]');
+          mainMenuButtons.forEach(btn => {
+            btn.classList.remove('clickable');
+            if (btn.object3D) btn.object3D.visible = false;
+          });
+          
+          // Show config menu
+          configMenu.setAttribute('visible', true);
+          
+          // Enable config menu buttons
+          setTimeout(() => {
+            const configButtons = configMenu.querySelectorAll('[cursor-listener]');
+            configButtons.forEach(btn => {
+              btn.classList.add('clickable');
+              if (btn.object3D) btn.object3D.visible = true;
+            });
+            
+            // Refresh raycasters
+            const leftHand = document.querySelector('#leftHand');
+            const rightHand = document.querySelector('#rightHand');
+            if (leftHand && leftHand.components.raycaster) {
+              leftHand.components.raycaster.refreshObjects();
+            }
+            if (rightHand && rightHand.components.raycaster) {
+              rightHand.components.raycaster.refreshObjects();
+            }
+          }, 100);
+          
+          // Update display
+          updateConfigDisplay();
+        }
+      }
+      
+      function closeConfigMenu() {
+        console.log('🔧 Closing config menu');
+        isConfigMenuVisible = false;
+        
+        const mainMenu = document.querySelector('#game-menu');
+        const configMenu = document.querySelector('#config-menu');
+        
+        if (mainMenu && configMenu) {
+          // Hide config menu
+          configMenu.setAttribute('visible', false);
+          
+          // Disable config menu buttons
+          const configButtons = configMenu.querySelectorAll('[cursor-listener]');
+          configButtons.forEach(btn => {
+            btn.classList.remove('clickable');
+            if (btn.object3D) btn.object3D.visible = false;
+          });
+          
+          // Show main menu
+          mainMenu.setAttribute('visible', true);
+          
+          // Enable main menu buttons
+          setTimeout(() => {
+            const mainMenuButtons = mainMenu.querySelectorAll('[cursor-listener]');
+            mainMenuButtons.forEach(btn => {
+              btn.classList.add('clickable');
+              if (btn.object3D) btn.object3D.visible = true;
+            });
+            
+            // Refresh raycasters
+            const leftHand = document.querySelector('#leftHand');
+            const rightHand = document.querySelector('#rightHand');
+            if (leftHand && leftHand.components.raycaster) {
+              leftHand.components.raycaster.refreshObjects();
+            }
+            if (rightHand && rightHand.components.raycaster) {
+              rightHand.components.raycaster.refreshObjects();
+            }
+          }, 100);
+        }
+      }
+
       // B button for menu system
       AFRAME.registerComponent('menu-toggle', {
         init: function() {
@@ -8345,6 +8677,17 @@ function setGameplayHUD(isPlaying) {
                 if (btn.object3D) btn.object3D.visible = false;
               });
               console.log(`🔒 Initialized ${menuButtons.length} menu buttons as disabled`);
+            }
+            
+            // CRITICAL: Also initialize config menu buttons as disabled
+            const configMenu = document.querySelector('#config-menu');
+            if (configMenu) {
+              const configButtons = configMenu.querySelectorAll('[cursor-listener]');
+              configButtons.forEach(btn => {
+                btn.classList.remove('clickable');
+                if (btn.object3D) btn.object3D.visible = false;
+              });
+              console.log(`🔒 Initialized ${configButtons.length} config menu buttons as disabled`);
             }
           }, 500); // Wait for scene to load
           
@@ -12118,6 +12461,24 @@ function setGameplayHUD(isPlaying) {
             this.restartMatch();
           } else if (id === 'menu-change-arena') {
             this.openArenaSelector();
+          } else if (id === 'menu-config') {
+            openConfigMenu();
+          } else if (id === 'config-back') {
+            closeConfigMenu();
+          } else if (id === 'config-textures') {
+            toggleTextures();
+          } else if (id === 'config-physics') {
+            togglePhysicsTimestep();
+          } else if (id === 'config-lights') {
+            togglePointLights();
+          } else if (id === 'config-edges') {
+            toggleEdgesEmissive();
+          } else if (id === 'config-ccd') {
+            toggleCCD();
+          } else if (id === 'config-bots') {
+            toggleBotLogic();
+          } else if (id === 'config-glow') {
+            toggleGlow();
           } else if (id === 'arena-selector-close') {
             this.closeArenaSelector();
           } else if (id === 'arena-tab-official') {
@@ -15354,12 +15715,21 @@ function setGameplayHUD(isPlaying) {
               <!-- Arena Selection Section -->
               <a-entity id="menu-arena-section" position="0 -0.19 0">
                 <a-text id="menu-arena-name" value="Arena: One" position="0 0 0" align="center" width="0.6" color="#ffaa00"></a-text>
-                <a-entity id="menu-change-arena" position="0 -0.04 0"
-                          geometry="primitive: plane; width: 0.3; height: 0.05"
+                <a-entity id="menu-change-arena" position="-0.16 -0.04 0"
+                          geometry="primitive: plane; width: 0.26; height: 0.05"
                           material="color: #ffaa00; transparent: true; opacity: 0.8"
                           cursor-listener
                           class="clickable">
                   <a-text value="CHANGE ARENA" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
+                </a-entity>
+                
+                <!-- Config Button -->
+                <a-entity id="menu-config" position="0.16 -0.04 0"
+                          geometry="primitive: plane; width: 0.26; height: 0.05"
+                          material="color: #00ff88; transparent: true; opacity: 0.8"
+                          cursor-listener
+                          class="clickable">
+                  <a-text value="CONFIG" position="0 0 0.01" align="center" width="0.8" color="#ffffff"></a-text>
                 </a-entity>
               </a-entity>
               
@@ -15376,6 +15746,85 @@ function setGameplayHUD(isPlaying) {
               <!-- Instructions -->
                <a-text value="X to close" 
                       position="0 -0.4 0" align="center" width="0.6" color="#ffffff"></a-text>
+            </a-entity>
+            
+            <!-- Config Menu Overlay (hidden by default) -->
+            <a-entity id="config-menu" position="0 0 -0.8" visible="false">
+              <!-- Background panel -->
+              <a-plane width="1.2" height="1.0" color="#000000" material="opacity: 0.95; transparent: true" position="0 0 -0.01"></a-plane>
+              
+              <!-- Title -->
+              <a-text value="PERFORMANCE CONFIG" position="0 0.45 0" align="center" width="1.1" color="#00ff88"></a-text>
+              
+              <!-- Toggle Buttons -->
+              <a-entity id="config-textures" position="0 0.32 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #006644; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Textures: ON" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <a-entity id="config-physics" position="0 0.24 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #006644; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Physics: 240Hz" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <a-entity id="config-lights" position="0 0.16 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #006644; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Lights: ON" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <a-entity id="config-edges" position="0 0.08 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #006644; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Edges: EMISSIVE" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <a-entity id="config-ccd" position="0 0 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #006644; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="CCD: 10" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <a-entity id="config-bots" position="0 -0.08 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #006644; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Bots: ON" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <a-entity id="config-glow" position="0 -0.16 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #006644; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Glow: ON" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Back Button -->
+              <a-entity id="config-back" position="0 -0.35 0"
+                        geometry="primitive: plane; width: 0.3; height: 0.06"
+                        material="color: #ff4400; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="BACK" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
+              <!-- Info text -->
+              <a-text value="Toggle features to test performance" 
+                      position="0 -0.44 0" align="center" width="0.6" color="#888888"></a-text>
             </a-entity>
             
             <!-- Arena Selector Overlay (hidden by default) -->
