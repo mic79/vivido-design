@@ -564,6 +564,12 @@ const ArenaManager = {
     this.currentArenaName = arenaName;
     console.log(`✅ Loaded arena "${arenaName}" with ${layoutData.objects?.length || 0} objects`);
     
+    // Emit event for other systems to react to arena change
+    const sceneEl = document.querySelector('a-scene');
+    if (sceneEl) {
+      sceneEl.emit('arena-loaded', { arenaName, objectCount: layoutData.objects?.length || 0 });
+    }
+    
     // Update menu display
     this.updateMenuDisplay();
   },

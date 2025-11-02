@@ -3046,6 +3046,9 @@ function setGameplayHUD(isPlaying) {
           this.damping = 0.996; // 0.4% velocity loss per frame (much gentler)
           this.minVelocity = 0.01; // Stop very slow movement
           
+          // DEBUG: Collision culling flag
+          this.debugCullingOnce = true;
+          
           // Movement state
           this.isGrabbing = { left: false, right: false };
           this.grabbedSurface = { left: null, right: null };
@@ -4600,8 +4603,24 @@ function setGameplayHUD(isPlaying) {
           const levelEditor = this.el.sceneEl.components['level-editor'];
           const selectedObject = levelEditor ? levelEditor.selectedObject : null;
           
-          // Check against all grab-surface objects
-          const surfaces = document.querySelectorAll('[grab-surface]');
+          // OPTIMIZATION: Use spatially culled surfaces from collision-culling component
+          const collisionCulling = this.el.sceneEl.components['collision-culling'];
+          const useCulling = collisionCulling && collisionCulling.data.enabled && collisionCulling.culledSurfaces.player.length > 0;
+          const surfaces = useCulling
+            ? collisionCulling.culledSurfaces.player
+            : document.querySelectorAll('[grab-surface]');
+          
+          // DEBUG: Log when using culled vs full list
+          if (this.debugCullingOnce) {
+            console.log(`🎯 Player collision check:`);
+            console.log(`   Culling component: ${collisionCulling ? 'EXISTS' : 'MISSING'}`);
+            console.log(`   Culling enabled: ${collisionCulling?.data.enabled}`);
+            console.log(`   Player list length: ${collisionCulling?.culledSurfaces.player.length}`);
+            console.log(`   Using: ${useCulling ? 'CULLED LIST' : 'FULL QUERY'} (${surfaces.length} surfaces)`);
+            this.debugCullingOnce = false;
+            setTimeout(() => this.debugCullingOnce = true, 3000); // Log again in 3 seconds
+          }
+          
           surfaces.forEach(surface => {
             // Skip the selected object in editor mode (it's ghosted)
             if (selectedObject && surface === selectedObject) {
@@ -6071,8 +6090,14 @@ function setGameplayHUD(isPlaying) {
           const botRadius = 0.2; // Bot collision radius
           const collisionMargin = 0.1; // Small margin for safety
           
-          // Query ALL grab-surface elements (dynamically updated list)
-          const surfaces = document.querySelectorAll('[grab-surface]');
+          // OPTIMIZATION: Use spatially culled surfaces from collision-culling component
+          const collisionCulling = this.el.sceneEl.components['collision-culling'];
+          const botId = this.el.id;
+          const surfaces = collisionCulling && collisionCulling.data.enabled && 
+                          collisionCulling.culledSurfaces.bots[botId] && 
+                          collisionCulling.culledSurfaces.bots[botId].length > 0
+            ? collisionCulling.culledSurfaces.bots[botId]
+            : document.querySelectorAll('[grab-surface]');
           
           surfaces.forEach(surface => {
             const surfacePos = new THREE.Vector3();
@@ -7999,6 +8024,351 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
+      // Spatial Collision Culling System - Distance-based optimization
+      AFRAME.registerComponent('collision-culling', {
+        schema: {
+          enabled: { type: 'boolean', default: true },
+          collisionRange: { type: 'number', default: 5 }, // 5m collision detection radius (optimized)
+          debugVisualization: { type: 'boolean', default: false }
+        },
+        
+        init: function() {
+          console.log('🔧 Initializing Collision Culling System');
+          
+          // Initialize data structures FIRST
+          this.allSurfaces = [];
+          
+          // Store original materials for debug visualization
+          this.originalMaterials = new Map();
+          
+          // Per-entity culled surface lists (updated each frame)
+          this.culledSurfaces = {
+            player: [],
+            balls: {}, // indexed by ball ID
+            bots: {}   // indexed by bot ID
+          };
+          
+          // Stats for debugging
+          this.stats = {
+            totalSurfaces: 0,
+            culledForPlayer: 0,
+            culledForBalls: {},
+            culledForBots: {},
+            lastUpdate: 0
+          };
+          
+          // NOW cache all grab surfaces (after stats is initialized)
+          this.updateSurfaceCache();
+          
+          // Listen for arena changes
+          this.onArenaLoaded = this.onArenaLoaded.bind(this);
+          this.el.addEventListener('arena-loaded', this.onArenaLoaded);
+          
+          // Keyboard listener for toggling debug visualization
+          this.onKeyDown = this.onKeyDown.bind(this);
+          window.addEventListener('keydown', this.onKeyDown);
+          
+          console.log(`✅ Collision Culling initialized with ${this.allSurfaces.length} surfaces`);
+        },
+        
+        onArenaLoaded: function(evt) {
+          console.log(`🔧 CULLING: Arena changed, refreshing surface cache...`);
+          // Wait a frame for new objects to be fully initialized
+          setTimeout(() => {
+            this.updateSurfaceCache();
+            console.log(`✅ CULLING: Surface cache updated (${this.allSurfaces.length} surfaces)`);
+          }, 100);
+        },
+        
+        onKeyDown: function(evt) {
+          // Toggle debug visualization with 'V' key
+          if (evt.key === 'v' || evt.key === 'V') {
+            this.data.debugVisualization = !this.data.debugVisualization;
+            console.log(`🎨 Collision Debug Visualization: ${this.data.debugVisualization ? 'ON' : 'OFF'}`);
+            
+            if (!this.data.debugVisualization) {
+              // Restore original materials when turning off
+              this.restoreOriginalMaterials();
+            }
+          }
+        },
+        
+        updateSurfaceCache: function() {
+          // Re-query all surfaces (call this when arena changes)
+          const surfaces = document.querySelectorAll('[grab-surface]');
+          this.allSurfaces = Array.from(surfaces);
+          this.stats.totalSurfaces = this.allSurfaces.length;
+          
+          // Store original materials for each surface
+          this.allSurfaces.forEach(surface => {
+            if (!this.originalMaterials.has(surface)) {
+              surface.object3D.traverse((node) => {
+                if (node.isMesh && node.material) {
+                  if (!this.originalMaterials.has(node)) {
+                    // Clone material to avoid modifying shared materials
+                    if (!node.userData.hasOwnMaterial) {
+                      node.material = node.material.clone();
+                      node.userData.hasOwnMaterial = true;
+                    }
+                    this.originalMaterials.set(node, {
+                      color: node.material.color ? node.material.color.getHex() : 0x888888,
+                      emissive: node.material.emissive ? node.material.emissive.getHex() : 0x000000,
+                      emissiveIntensity: node.material.emissiveIntensity || 0
+                    });
+                  }
+                }
+              });
+            }
+          });
+        },
+        
+        getCulledSurfacesForEntity: function(entityPosition, entityId, entityType) {
+          if (!this.data.enabled) {
+            // If culling is disabled, return all surfaces
+            return this.allSurfaces;
+          }
+          
+          const culled = [];
+          const range = this.data.collisionRange;
+          
+          this.allSurfaces.forEach(surface => {
+            // Calculate closest point on surface's bounding box to entity
+            // This ensures large objects like walls are included when player is near their edge
+            let minDistance = Infinity;
+            
+            surface.object3D.traverse((node) => {
+              if (node.isMesh && node.geometry) {
+                // Compute bounding box if not already done
+                if (!node.geometry.boundingBox) {
+                  node.geometry.computeBoundingBox();
+                }
+                
+                if (node.geometry.boundingBox) {
+                  // Get world space bounding box
+                  const bbox = node.geometry.boundingBox.clone();
+                  bbox.applyMatrix4(node.matrixWorld);
+                  
+                  // Find closest point on bbox to entity position
+                  const closestPoint = new THREE.Vector3(
+                    Math.max(bbox.min.x, Math.min(entityPosition.x, bbox.max.x)),
+                    Math.max(bbox.min.y, Math.min(entityPosition.y, bbox.max.y)),
+                    Math.max(bbox.min.z, Math.min(entityPosition.z, bbox.max.z))
+                  );
+                  
+                  const distance = entityPosition.distanceTo(closestPoint);
+                  minDistance = Math.min(minDistance, distance);
+                }
+              }
+            });
+            
+            // If no mesh found, fall back to center point distance
+            if (minDistance === Infinity) {
+              const surfacePos = new THREE.Vector3();
+              surface.object3D.getWorldPosition(surfacePos);
+              minDistance = entityPosition.distanceTo(surfacePos);
+            }
+            
+            if (minDistance <= range) {
+              culled.push(surface);
+            }
+          });
+          
+          // Store in cache for this entity
+          if (entityType === 'player') {
+            this.culledSurfaces.player = culled;
+            this.stats.culledForPlayer = culled.length;
+            
+            // Debug logging for player
+            if (!this.playerCulledLogged) {
+              console.log(`🎯 CULLING: Player has ${culled.length} surfaces in ${this.data.collisionRange}m range (out of ${this.allSurfaces.length} total)`);
+              this.playerCulledLogged = true;
+              setTimeout(() => this.playerCulledLogged = false, 5000);
+            }
+          } else if (entityType === 'ball') {
+            this.culledSurfaces.balls[entityId] = culled;
+            this.stats.culledForBalls[entityId] = culled.length;
+          } else if (entityType === 'bot') {
+            this.culledSurfaces.bots[entityId] = culled;
+            this.stats.culledForBots[entityId] = culled.length;
+          }
+          
+          return culled;
+        },
+        
+        tick: function(time, deltaTime) {
+          // Update culled surfaces for all entities
+          
+          // 1. Player (use camera position as that's where collision detection happens)
+          const camera = document.querySelector('[camera]');
+          if (camera) {
+            const playerPos = new THREE.Vector3();
+            camera.object3D.getWorldPosition(playerPos);
+            
+            // Debug logging for first few frames
+            if (!this.playerPosLogged) {
+              console.log(`🎯 CULLING: Player camera at ${playerPos.x.toFixed(2)}, ${playerPos.y.toFixed(2)}, ${playerPos.z.toFixed(2)}`);
+              console.log(`🎯 CULLING: Collision range = ${this.data.collisionRange}m`);
+              console.log(`🎯 CULLING: Total surfaces = ${this.allSurfaces.length}`);
+              this.playerPosLogged = true;
+              setTimeout(() => this.playerPosLogged = false, 5000);
+            }
+            
+            this.getCulledSurfacesForEntity(playerPos, 'player', 'player');
+          } else {
+            if (!this.cameraWarningLogged) {
+              console.warn('⚠️ CULLING: Camera not found for player collision culling');
+              this.cameraWarningLogged = true;
+            }
+          }
+          
+          // 2. Balls (track all balls - both grabbed and thrown)
+          const balls = document.querySelectorAll('[zerog-ball]');
+          balls.forEach(ball => {
+            const ballComponent = ball.components['zerog-ball'];
+            if (!ballComponent) return;
+            
+            // Use player attribute as ID (e.g., "player1", "player2", "capture")
+            const ballId = ballComponent.data.player;
+            const ballPos = new THREE.Vector3();
+            
+            // If ball is grabbed, use the hand position (where collision actually happens)
+            if (ballComponent.isGrabbed && ballComponent.grabbingHand) {
+              ballComponent.grabbingHand.object3D.getWorldPosition(ballPos);
+              
+              // Debug log once for grabbed ball positioning
+              if (!this.grabbedBallPosLogged) {
+                console.log(`🎾 CULLING: Grabbed ball ${ballId} at hand position ${ballPos.x.toFixed(2)}, ${ballPos.y.toFixed(2)}, ${ballPos.z.toFixed(2)}`);
+                this.grabbedBallPosLogged = true;
+                setTimeout(() => this.grabbedBallPosLogged = false, 5000);
+              }
+            } else {
+              // Otherwise use ball's actual position (for thrown/stationary balls)
+              ball.object3D.getWorldPosition(ballPos);
+            }
+            
+            // Always update culled surfaces for all balls (affects green/red tinting)
+            this.getCulledSurfacesForEntity(ballPos, ballId, 'ball');
+          });
+          
+          // 3. Bots
+          const bots = document.querySelectorAll('[zerog-bot]');
+          bots.forEach(bot => {
+            const botPos = new THREE.Vector3();
+            bot.object3D.getWorldPosition(botPos);
+            this.getCulledSurfacesForEntity(botPos, bot.id, 'bot');
+          });
+          
+          // Apply debug visualization if enabled
+          if (this.data.debugVisualization) {
+            this.applyDebugVisualization();
+          }
+          
+          // Log stats every 3 seconds (and show culling details when debug is on)
+          if (time - this.stats.lastUpdate > 3000) {
+            this.logStats();
+            if (this.data.debugVisualization) {
+              console.log(`   🟢 GREEN surfaces: ${this.culledSurfaces.player.length} for player`);
+              console.log(`   🔴 RED surfaces: ${this.stats.totalSurfaces - this.culledSurfaces.player.length} culled`);
+            }
+            this.stats.lastUpdate = time;
+          }
+        },
+        
+        applyDebugVisualization: function() {
+          // Collect all surfaces that are in range for ANY entity
+          const inRangeSurfaces = new Set();
+          
+          // Add player's culled surfaces
+          this.culledSurfaces.player.forEach(s => inRangeSurfaces.add(s));
+          
+          // Add all balls' culled surfaces
+          Object.values(this.culledSurfaces.balls).forEach(list => {
+            list.forEach(s => inRangeSurfaces.add(s));
+          });
+          
+          // Add all bots' culled surfaces
+          Object.values(this.culledSurfaces.bots).forEach(list => {
+            list.forEach(s => inRangeSurfaces.add(s));
+          });
+          
+          // Color all surfaces based on whether they're in range
+          this.allSurfaces.forEach(surface => {
+            const isInRange = inRangeSurfaces.has(surface);
+            
+            surface.object3D.traverse((node) => {
+              if (node.isMesh && node.material) {
+                // Ensure material has color and emissive properties
+                if (!node.material.color) {
+                  node.material.color = new THREE.Color(0x888888);
+                }
+                if (!node.material.emissive) {
+                  node.material.emissive = new THREE.Color(0x000000);
+                }
+                
+                if (isInRange) {
+                  // GREEN = in collision range
+                  node.material.color.setHex(0x00ff00);
+                  node.material.emissive.setHex(0x00ff00);
+                  node.material.emissiveIntensity = 0.3;
+                } else {
+                  // RED = culled (out of range)
+                  node.material.color.setHex(0xff0000);
+                  node.material.emissive.setHex(0xff0000);
+                  node.material.emissiveIntensity = 0.3;
+                }
+                node.material.needsUpdate = true;
+              }
+            });
+          });
+        },
+        
+        restoreOriginalMaterials: function() {
+          this.allSurfaces.forEach(surface => {
+            surface.object3D.traverse((node) => {
+              if (node.isMesh && node.material && this.originalMaterials.has(node)) {
+                const original = this.originalMaterials.get(node);
+                
+                // Ensure material has color and emissive properties before restoring
+                if (!node.material.color) {
+                  node.material.color = new THREE.Color();
+                }
+                if (!node.material.emissive) {
+                  node.material.emissive = new THREE.Color();
+                }
+                
+                node.material.color.setHex(original.color);
+                node.material.emissive.setHex(original.emissive);
+                node.material.emissiveIntensity = original.emissiveIntensity;
+                node.material.needsUpdate = true;
+              }
+            });
+          });
+        },
+        
+        logStats: function() {
+          const playerCount = this.stats.culledForPlayer;
+          const ballCounts = Object.values(this.stats.culledForBalls);
+          const botCounts = Object.values(this.stats.culledForBots);
+          
+          const avgBallCount = ballCounts.length > 0 ? 
+            Math.round(ballCounts.reduce((a, b) => a + b, 0) / ballCounts.length) : 0;
+          const avgBotCount = botCounts.length > 0 ? 
+            Math.round(botCounts.reduce((a, b) => a + b, 0) / botCounts.length) : 0;
+          
+          console.log(`🎯 Collision Culling Stats (${this.data.collisionRange}m range):`);
+          console.log(`   Total surfaces: ${this.stats.totalSurfaces}`);
+          console.log(`   Player: ${playerCount}/${this.stats.totalSurfaces} (${Math.round(playerCount/this.stats.totalSurfaces*100)}%)`);
+          console.log(`   Balls (avg): ${avgBallCount}/${this.stats.totalSurfaces} (${Math.round(avgBallCount/this.stats.totalSurfaces*100)}%)`);
+          console.log(`   Bots (avg): ${avgBotCount}/${this.stats.totalSurfaces} (${Math.round(avgBotCount/this.stats.totalSurfaces*100)}%)`);
+          console.log(`   Estimated collision check reduction: ${Math.round((1 - (playerCount + avgBallCount*3 + avgBotCount*2) / (this.stats.totalSurfaces * 6)) * 100)}%`);
+        },
+        
+        remove: function() {
+          window.removeEventListener('keydown', this.onKeyDown);
+          this.restoreOriginalMaterials();
+        }
+      });
+
       // Impact effect component
       AFRAME.registerComponent('impact-effect', {
         schema: {
@@ -8243,6 +8613,25 @@ function setGameplayHUD(isPlaying) {
         updateConfigDisplay();
       }
       
+      function toggleDebugCollision() {
+        const sceneEl = document.querySelector('a-scene');
+        const collisionCulling = sceneEl ? sceneEl.components['collision-culling'] : null;
+        
+        if (collisionCulling) {
+          collisionCulling.data.debugVisualization = !collisionCulling.data.debugVisualization;
+          console.log(`🎨 Collision Debug Visualization: ${collisionCulling.data.debugVisualization ? 'ON' : 'OFF'}`);
+          
+          if (!collisionCulling.data.debugVisualization) {
+            // Restore original materials when turning off
+            collisionCulling.restoreOriginalMaterials();
+          }
+        } else {
+          console.warn('⚠️ Collision culling component not found');
+        }
+        
+        updateConfigDisplay();
+      }
+      
       function updateConfigDisplay() {
         // Update all config button displays
         const updateButton = (id, value) => {
@@ -8261,6 +8650,12 @@ function setGameplayHUD(isPlaying) {
         updateButton('config-ccd', `CCD: ${perfConfig.ccdIterations}`);
         updateButton('config-bots', `Bots: ${perfConfig.botLogicEnabled ? 'ON' : 'OFF'}`);
         updateButton('config-glow', `Glow: ${perfConfig.glowEnabled ? 'ON' : 'OFF'}`);
+        
+        // Update debug collision button
+        const sceneEl = document.querySelector('a-scene');
+        const collisionCulling = sceneEl ? sceneEl.components['collision-culling'] : null;
+        const debugEnabled = collisionCulling ? collisionCulling.data.debugVisualization : false;
+        updateButton('config-debug-collision', `Debug Viz: ${debugEnabled ? 'ON' : 'OFF'}`);
       }
       
       function openConfigMenu() {
@@ -10821,8 +11216,30 @@ function setGameplayHUD(isPlaying) {
           const totalRadius = ballRadius + collisionMargin;
           let totalForce = new THREE.Vector3(0, 0, 0);
           
-          // Check against all grab-surface objects (walls, floors, etc.)
-          const surfaces = document.querySelectorAll('[grab-surface]');
+          // OPTIMIZATION: Use spatially culled surfaces from collision-culling component
+          const collisionCulling = this.el.sceneEl.components['collision-culling'];
+          // Use player attribute as ID (e.g., "player2" for your ball)
+          const ballId = this.data.player;
+          
+          // Check if we have a culled list for this specific ball
+          const useCulling = collisionCulling && collisionCulling.data.enabled && 
+                            collisionCulling.culledSurfaces.balls[ballId] && 
+                            collisionCulling.culledSurfaces.balls[ballId].length > 0;
+          
+          const surfaces = useCulling
+            ? collisionCulling.culledSurfaces.balls[ballId]
+            : document.querySelectorAll('[grab-surface]');
+          
+          // Debug logging once for grabbed ball
+          if (!this.debugGrabbedBallCulling) {
+            console.log(`🎾 GRABBED BALL collision check (${ballId}):`);
+            console.log(`   Culling: ${useCulling ? 'ACTIVE' : 'DISABLED'}`);
+            console.log(`   Checking ${surfaces.length} surfaces`);
+            this.debugGrabbedBallCulling = true;
+            setTimeout(() => this.debugGrabbedBallCulling = false, 3000);
+          }
+          
+          // Check against surfaces (either culled list or all surfaces)
           surfaces.forEach(surface => {
             const surfacePos = new THREE.Vector3();
             surface.object3D.getWorldPosition(surfacePos);
@@ -11039,8 +11456,15 @@ function setGameplayHUD(isPlaying) {
           const ballRadius = this.isCaptureBall ? 0.2 : 0.1; // Use actual ball radius
           const ballVelocity = new THREE.Vector3(this.body.velocity.x, this.body.velocity.y, this.body.velocity.z);
           
-          // Use EXACT same selector as player collision system
-          const surfaces = document.querySelectorAll('[grab-surface]');
+          // OPTIMIZATION: Use spatially culled surfaces from collision-culling component
+          const collisionCulling = this.el.sceneEl.components['collision-culling'];
+          const ballId = this.el.id;
+          const surfaces = collisionCulling && collisionCulling.data.enabled && 
+                          collisionCulling.culledSurfaces.balls[ballId] && 
+                          collisionCulling.culledSurfaces.balls[ballId].length > 0
+            ? collisionCulling.culledSurfaces.balls[ballId]
+            : document.querySelectorAll('[grab-surface]');
+          
           surfaces.forEach(surface => {
             const surfacePos = new THREE.Vector3();
             surface.object3D.getWorldPosition(surfacePos);
@@ -12169,6 +12593,8 @@ function setGameplayHUD(isPlaying) {
             toggleBotLogic();
           } else if (id === 'config-glow') {
             toggleGlow();
+          } else if (id === 'config-debug-collision') {
+            toggleDebugCollision();
           } else if (id === 'arena-selector-close') {
             this.closeArenaSelector();
           } else if (id === 'arena-tab-official') {
@@ -14678,7 +15104,7 @@ function setGameplayHUD(isPlaying) {
 
     </script>
 
-    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle level-editor
+    <a-scene physics-world fps-counter game-manager sound-manager multiplayer-sync menu-toggle level-editor collision-culling
              renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
              webxr="requiredFeatures: local-floor">
       
@@ -15495,8 +15921,17 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="Glow: ON" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
               </a-entity>
               
+              <!-- Debug Collision Visualization Toggle -->
+              <a-entity id="config-debug-collision" position="0 -0.23 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #ff00ff; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Debug Viz: OFF" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+              
               <!-- Back Button -->
-              <a-entity id="config-back" position="0 -0.35 0"
+              <a-entity id="config-back" position="0 -0.37 0"
                         geometry="primitive: plane; width: 0.3; height: 0.06"
                         material="color: #ff4400; transparent: true; opacity: 0.8"
                         cursor-listener
@@ -15506,7 +15941,7 @@ function setGameplayHUD(isPlaying) {
               
               <!-- Info text -->
               <a-text value="Toggle features to test performance" 
-                      position="0 -0.44 0" align="center" width="0.6" color="#888888"></a-text>
+                      position="0 -0.46 0" align="center" width="0.6" color="#888888"></a-text>
             </a-entity>
             
             <!-- Arena Selector Overlay (hidden by default) -->
