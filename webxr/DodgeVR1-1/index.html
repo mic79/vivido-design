@@ -11475,21 +11475,20 @@ function setGameplayHUD(isPlaying) {
             // Use the EXACT same collision response function as player
             const collision = this.getCollisionResponse(ballPos, ballRadius, surfacePos, geometry, surface);
             if (collision.length() > 0) {
-              // NEW: Check if this is a goal ring torus and capture ball - play metal hit sound
-              if (this.isCaptureBall && geometry.primitive === 'torus' && surface.hasAttribute('goal-ring')) {
-                // Check cooldown
-                const now = Date.now();
-                surface._lastMetalHitTime = surface._lastMetalHitTime || 0;
-                if (now - surface._lastMetalHitTime > 200) { // 200ms cooldown
-                  // Play random metal hit sound (1-3)
-                  const randomSound = Math.floor(Math.random() * 3) + 1;
-                  const metalHitSound = surface.querySelector(`.metal-hit-sound-${randomSound}`);
-                  
-                  if (metalHitSound && metalHitSound.components.sound) {
-                    metalHitSound.components.sound.stopSound();
-                    metalHitSound.components.sound.playSound();
-                    surface._lastMetalHitTime = now;
-                  }
+              // Play hit sound for grabbed ball collisions (matching thrown ball behavior)
+              const now = Date.now();
+              this._lastHitSoundTime = this._lastHitSoundTime || 0;
+              const ballVelocityMag = ballVelocity.length();
+              
+              // Only play sound if ball is moving fast enough and cooldown has passed
+              if (ballVelocityMag > 0.5 && now - this._lastHitSoundTime > 100) { // 100ms cooldown, matching thrown ball
+                const bounceSound = document.querySelector('#bounce-sound');
+                if (bounceSound) {
+                  // Position sound at collision point
+                  bounceSound.object3D.position.copy(ballPos);
+                  bounceSound.components.sound.stopSound();
+                  bounceSound.components.sound.playSound();
+                  this._lastHitSoundTime = now;
                 }
               }
               
