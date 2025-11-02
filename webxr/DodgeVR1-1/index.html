@@ -5733,6 +5733,72 @@ function setGameplayHUD(isPlaying) {
 
 
 
+      // Wireframe Overlay Component - Adds flat white wireframe on top of solid material
+      AFRAME.registerComponent('wireframe-overlay', {
+        schema: {
+          color: { type: 'color', default: '#ffffff' },
+          opacity: { type: 'number', default: 1.0 }
+        },
+        
+        init: function() {
+          this.wireframeEntity = null;
+          
+          // Wait for geometry to be ready
+          if (this.el.object3D && this.el.object3D.children.length > 0) {
+            this.createWireframe();
+          } else {
+            this.el.addEventListener('object3dset', () => {
+              this.createWireframe();
+            });
+          }
+        },
+        
+        createWireframe: function() {
+          const geometry = this.el.getAttribute('geometry');
+          if (!geometry) return;
+          
+          // Create a duplicate entity with wireframe material
+          let wireframe;
+          
+          if (geometry.primitive === 'octahedron') {
+            wireframe = document.createElement('a-octahedron');
+            wireframe.setAttribute('radius', geometry.radius);
+          } else if (geometry.primitive === 'tetrahedron') {
+            wireframe = document.createElement('a-tetrahedron');
+            wireframe.setAttribute('radius', geometry.radius);
+          } else {
+            return; // Only support octahedron and tetrahedron for now
+          }
+          
+          // Set wireframe material with flat shading (no lighting)
+          wireframe.setAttribute('material', {
+            shader: 'flat',
+            color: this.data.color,
+            wireframe: true,
+            opacity: this.data.opacity,
+            transparent: this.data.opacity < 1,
+            side: 'double'
+          });
+          
+          // Position at same location as parent (child of parent)
+          wireframe.setAttribute('position', '0 0 0');
+          wireframe.setAttribute('rotation', '0 0 0');
+          wireframe.setAttribute('scale', '1.001 1.001 1.001'); // Slightly larger to prevent z-fighting
+          
+          // Add as child
+          this.el.appendChild(wireframe);
+          this.wireframeEntity = wireframe;
+          
+          console.log(`✅ Added wireframe overlay to ${geometry.primitive}`);
+        },
+        
+        remove: function() {
+          if (this.wireframeEntity && this.wireframeEntity.parentNode) {
+            this.wireframeEntity.parentNode.removeChild(this.wireframeEntity);
+          }
+        }
+      });
+
       // Zero-G Bot Component - AI opponent for singleplayer
       AFRAME.registerComponent('zerog-bot', {
         schema: {
@@ -15304,13 +15370,13 @@ function setGameplayHUD(isPlaying) {
         </a-torus>
       </a-cylinder>
       
-      <a-octahedron position="-15 10 40" 
-             radius="20" 
-             color="#888888"
-             material="shader: standard; metalness: 0.7; roughness: 0.3"
-             grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.12; emissiveIntensity: 2">
-      </a-octahedron>
+        <a-octahedron position="-15 10 40" 
+               radius="20" 
+               color="#888888"
+               material="shader: standard; metalness: 0.7; roughness: 0.3"
+               grab-surface="type: static"
+               wireframe-overlay>
+        </a-octahedron>
       
       <!-- Duplicate octahedron at floor corner -->
       <a-octahedron position="-15 -10 40" 
@@ -15318,7 +15384,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Center left wall octahedrons -->
@@ -15327,7 +15393,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <a-octahedron position="-15 -10 0" 
@@ -15335,7 +15401,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Blue side left wall - vertically centered octahedron -->
@@ -15344,7 +15410,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.08; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Red side back wall corner octahedrons -->
@@ -15353,7 +15419,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <a-octahedron position="-15 -10 -40" 
@@ -15361,7 +15427,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Right wall octahedrons (mirroring left wall) -->
@@ -15372,7 +15438,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <a-octahedron position="15 -10 40" 
@@ -15380,7 +15446,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Center right wall octahedrons -->
@@ -15389,7 +15455,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <a-octahedron position="15 -10 0" 
@@ -15397,7 +15463,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Red side corner (back wall) -->
@@ -15406,7 +15472,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <a-octahedron position="15 -10 -40" 
@@ -15414,7 +15480,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.12; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Blue side right wall - vertically centered octahedron -->
@@ -15423,7 +15489,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #0000ff; edgeThickness: 0.08; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Red side left wall - vertically centered octahedron -->
@@ -15432,7 +15498,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.08; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- Red side right wall - vertically centered octahedron -->
@@ -15441,7 +15507,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ff0000; edgeThickness: 0.08; emissiveIntensity: 2">
+             wireframe-overlay>
       </a-octahedron>
       
       <!-- TEST: Small octahedron at center for debugging edge alignment -->
@@ -15450,7 +15516,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             octahedron-edges="edgeColor: #ffffff; edgeThickness: 0.03; emissiveIntensity: 3">
+             wireframe-overlay>
       </a-octahedron>
       
       <a-tetrahedron position="3 0 0" 
@@ -15458,7 +15524,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             tetrahedron-edges="edgeColor: #ffffff; edgeThickness: 0.03; emissiveIntensity: 3">
+             wireframe-overlay>
       </a-tetrahedron>
       
       <!-- Tetrahedron rotated 90 degrees (yaw) for gap filling -->
@@ -15468,7 +15534,7 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             tetrahedron-edges="edgeColor: #ffffff; edgeThickness: 0.03; emissiveIntensity: 3">
+             wireframe-overlay>
       </a-tetrahedron>
 
       <!-- DEBUG: Grid visualization container (generated dynamically) -->

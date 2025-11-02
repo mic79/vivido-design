@@ -352,6 +352,14 @@ function applyArenaObjectData(entity, data) {
       entity.setAttribute(key, attrValue);
     }
   }
+  
+  // AUTOMATIC: Add wireframe-overlay to octahedrons and tetrahedrons
+  // This ensures dynamically loaded shapes have consistent wireframe rendering
+  const tagName = entity.tagName.toLowerCase();
+  if (tagName === 'a-octahedron' || tagName === 'a-tetrahedron') {
+    entity.setAttribute('wireframe-overlay', '');
+    console.log(`🎨 Auto-added wireframe-overlay to ${tagName}`);
+  }
 }
 
 /**
