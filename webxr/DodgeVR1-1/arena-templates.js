@@ -591,10 +591,8 @@ const ArenaManager = {
         return;
       }
       
-      // Wait for physics world to settle after clearing
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      await new Promise(resolve => requestAnimationFrame(resolve));
+      // Wait for physics world to settle after clearing (use setTimeout to avoid render loop dependency)
+      await new Promise(resolve => setTimeout(resolve, 50));
       
       // Now load the actual arena
       if (layoutData.objects && Array.isArray(layoutData.objects)) {
@@ -610,12 +608,8 @@ const ArenaManager = {
         });
       }
       
-      // Wait multiple frames for entities to be fully positioned AND rendered
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      await new Promise(resolve => requestAnimationFrame(resolve));
+      // Wait for entities to be fully positioned AND rendered (use setTimeout to avoid render loop dependency)
+      await new Promise(resolve => setTimeout(resolve, 100));
       
       // Now it's safe to create physics bodies
       window.ARENA_LOADING = false;
