@@ -358,7 +358,6 @@ function applyArenaObjectData(entity, data) {
   const tagName = entity.tagName.toLowerCase();
   if (tagName === 'a-octahedron' || tagName === 'a-tetrahedron') {
     entity.setAttribute('wireframe-overlay', '');
-    console.log(`🎨 Auto-added wireframe-overlay to ${tagName}`);
   }
 }
 
@@ -456,8 +455,6 @@ const ArenaManager = {
    * Initialize the arena manager
    */
   init: async function() {
-    console.log('🗺️ Initializing Arena Manager...');
-    
     // Wait for scene to fully load before capturing default snapshot
     const scene = document.querySelector('a-scene');
     if (scene.hasLoaded) {
@@ -472,10 +469,8 @@ const ArenaManager = {
     try {
       await this.loadOfficialManifest();
     } catch (e) {
-      console.warn('⚠️ Could not load official arenas from GitHub, using defaults', e);
+      // Silently fail and use defaults
     }
-    
-    console.log(`✅ Arena Manager initialized with ${this.officialArenas.length} official arenas`);
   },
   
   captureDefaultSnapshot: function() {
@@ -497,7 +492,8 @@ const ArenaManager = {
       this.officialArenas = [
         { id: 'zero', name: 'Zero', description: 'Empty arena for testing', file: 'zero.json' },
         { id: 'one', name: 'One', description: 'The classic DodgeVR arena', file: 'one.json' },
-        { id: 'two', name: 'Two', description: 'Stress test with 120 octahedrons', file: 'two.json' }
+        { id: 'two', name: 'Two', description: 'Stress test with 120 octahedrons', file: 'two.json' },
+        { id: 'three', name: 'Three', description: 'Custom arena with 107 objects', file: 'three.json' }
       ];
     }
     return this.officialArenas;
@@ -541,36 +537,108 @@ const ArenaManager = {
   /**
    * Load arena layout (replace all current objects)
    */
-  loadLayout: function(layoutData, arenaName) {
-    console.log(`🗺️ Loading arena: ${arenaName}`);
-    
-    // Clear existing arena objects
-    this.clearArena();
-    
-    // Get the scene element
-    const scene = document.querySelector('a-scene');
-    if (!scene) {
-      console.error('❌ Cannot load arena: scene not found');
+  loadLayout: async function(layoutData, arenaName) {
+    // CRITICAL: If already in this arena, don't reload
+    if (this.currentArenaName === arenaName) {
       return;
     }
     
-    // Create new objects from layout
-    if (layoutData.objects && Array.isArray(layoutData.objects)) {
-      layoutData.objects.forEach(objData => {
-        try {
-          const entity = createArenaObjectFromData(objData);
-          if (entity) {
-            // CRITICAL: Add the entity to the scene!
-            scene.appendChild(entity);
+    // Set global flag to prevent physics bodies from being created prematurely
+    window.ARENA_LOADING = true;
+    
+    // CRITICAL FIX: If loading a non-Zero arena, first clear to avoid physics collision issues
+    if (arenaName !== 'Zero') {
+      // CRITICAL: Disable player collision detection during arena loading
+      const player = document.querySelector('#player');
+      let playerComponent = null;
+      if (player && player.components['zerog-player']) {
+        playerComponent = player.components['zerog-player'];
+        playerComponent.collisionDisabled = true;
+      }
+      
+      // Remove all bot bodies
+      const removedBodies = [];
+      const bots = document.querySelectorAll('[zerog-bot]');
+      bots.forEach(bot => {
+        if (bot.components['zerog-bot'] && bot.components['zerog-bot'].body) {
+          const botBody = bot.components['zerog-bot'].body;
+          if (typeof world !== 'undefined' && world.bodies.includes(botBody)) {
+            world.removeBody(botBody);
+            removedBodies.push({ type: 'bot', body: botBody });
           }
-        } catch (e) {
-          console.error('Failed to create arena object:', objData, e);
         }
       });
+      
+      // Remove all ball bodies
+      const balls = document.querySelectorAll('[zerog-ball]');
+      balls.forEach(ball => {
+        if (ball.body && typeof world !== 'undefined' && world.bodies.includes(ball.body)) {
+          world.removeBody(ball.body);
+          removedBodies.push({ type: 'ball', body: ball.body });
+        }
+      });
+      
+      // Clear current arena
+      this.clearArena();
+      
+      // Get the scene element
+      const scene = document.querySelector('a-scene');
+      if (!scene) {
+        console.error('❌ Cannot load arena: scene not found');
+        window.ARENA_LOADING = false;
+        if (playerComponent) playerComponent.collisionDisabled = false;
+        return;
+      }
+      
+      // Wait for physics world to settle after clearing
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      
+      // Now load the actual arena
+      if (layoutData.objects && Array.isArray(layoutData.objects)) {
+        layoutData.objects.forEach(objData => {
+          try {
+            const entity = createArenaObjectFromData(objData);
+            if (entity) {
+              scene.appendChild(entity);
+            }
+          } catch (e) {
+            console.error('Failed to create arena object:', objData, e);
+          }
+        });
+      }
+      
+      // Wait multiple frames for entities to be fully positioned AND rendered
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      
+      // Now it's safe to create physics bodies
+      window.ARENA_LOADING = false;
+      document.dispatchEvent(new Event('arena-physics-ready'));
+      
+      // CRITICAL: Re-add all removed physics bodies
+      removedBodies.forEach(({ type, body }) => {
+        if (typeof world !== 'undefined') {
+          world.addBody(body);
+        }
+      });
+      
+      // CRITICAL: Re-enable player collision detection
+      if (playerComponent) {
+        playerComponent.collisionDisabled = false;
+      }
+      
+    } else {
+      // Loading Zero - just clear
+      this.clearArena();
+      window.ARENA_LOADING = false;
     }
     
     this.currentArenaName = arenaName;
-    console.log(`✅ Loaded arena "${arenaName}" with ${layoutData.objects?.length || 0} objects`);
     
     // Emit event for other systems to react to arena change
     const sceneEl = document.querySelector('a-scene');
@@ -590,8 +658,6 @@ const ArenaManager = {
     const arenaObjects = document.querySelectorAll('[grab-surface]');
     let removedCount = 0;
     
-    console.log(`🗑️ Clearing ${arenaObjects.length} arena objects...`);
-    
     arenaObjects.forEach(entity => {
       // CRITICAL: Don't remove goal rings or any children of goals
       // Check if this entity has goal-ring attribute or is a child of a goal
@@ -605,15 +671,6 @@ const ArenaManager = {
         removedCount++;
       }
     });
-    
-    console.log(`🗑️ Cleared ${removedCount} arena objects (preserved goal rings)`);
-    
-    // CRITICAL: Verify physics bodies were actually removed
-    // Count physics bodies in the world
-    if (typeof world !== 'undefined') {
-      const bodyCount = world.bodies.length;
-      console.log(`🔍 Physics world now has ${bodyCount} bodies`);
-    }
   },
   
   /**
@@ -715,8 +772,6 @@ const ArenaManager = {
    * Load official arena
    */
   loadOfficialArena: async function(arenaId) {
-    console.log(`🌐 Loading official arena: ${arenaId}`);
-    
     // For now, load from embedded defaults
     // Later, this will fetch from GitHub
     if (arenaId === 'zero') {
@@ -741,26 +796,23 @@ const ArenaManager = {
     } else if (arenaId === 'two') {
       // Load "Two" arena from JSON file
       try {
-        console.log('📥 Fetching Two arena from arenas/two.json...');
-        const response = await fetch('arenas/two.json');
+        // Add cache-busting timestamp to force fresh load
+        const cacheBuster = `?t=${Date.now()}`;
+        const response = await fetch(`arenas/two.json${cacheBuster}`);
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         const layout = await response.json();
-        console.log(`✅ Loaded Two arena: ${layout.metadata.objectCount} objects`);
         this.loadLayout(layout, 'Two');
         this.currentArenaSource = 'official';
         return layout; // Return the layout for broadcasting
       } catch (error) {
         console.error('❌ Failed to load Two arena:', error);
-        console.warn('⚠️ Falling back to default arena');
         const defaultLayout = this.getDefaultArenaLayout();
         this.loadLayout(defaultLayout, 'One');
         return defaultLayout;
       }
     }
-    
-    console.warn('Arena not found:', arenaId);
     return null;
   },
   
@@ -798,8 +850,6 @@ const ArenaManager = {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    
-    console.log(`📥 Exported arena to ${filename}.arena.json`);
   },
   
   /**

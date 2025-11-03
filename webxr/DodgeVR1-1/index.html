@@ -4597,6 +4597,11 @@ function setGameplayHUD(isPlaying) {
         
         // Option B: Check a single point for collision with surfaces
         checkPointCollision: function(point, radius, pointName) {
+          // CRITICAL: Skip collision detection if disabled during arena loading
+          if (this.collisionDisabled) {
+            return new THREE.Vector3(0, 0, 0);
+          }
+          
           const response = new THREE.Vector3(0, 0, 0);
           
           // Check if level editor is active and has a selected object
@@ -4610,20 +4615,14 @@ function setGameplayHUD(isPlaying) {
             ? collisionCulling.culledSurfaces.player
             : document.querySelectorAll('[grab-surface]');
           
-          // DEBUG: Log when using culled vs full list
-          if (this.debugCullingOnce) {
-            console.log(`🎯 Player collision check:`);
-            console.log(`   Culling component: ${collisionCulling ? 'EXISTS' : 'MISSING'}`);
-            console.log(`   Culling enabled: ${collisionCulling?.data.enabled}`);
-            console.log(`   Player list length: ${collisionCulling?.culledSurfaces.player.length}`);
-            console.log(`   Using: ${useCulling ? 'CULLED LIST' : 'FULL QUERY'} (${surfaces.length} surfaces)`);
-            this.debugCullingOnce = false;
-            setTimeout(() => this.debugCullingOnce = true, 3000); // Log again in 3 seconds
-          }
-          
           surfaces.forEach(surface => {
             // Skip the selected object in editor mode (it's ghosted)
             if (selectedObject && surface === selectedObject) {
+              return;
+            }
+            
+            // CRITICAL: Skip visual-only wireframe entities
+            if (surface.hasAttribute('data-visual-only') || surface.classList.contains('wireframe-visual-only')) {
               return;
             }
             
@@ -5524,6 +5523,9 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
+      // Global flag to prevent physics body creation during arena loading
+      window.ARENA_LOADING = false;
+
       // Surface Grab Points - Interactive surfaces for grabbing
       AFRAME.registerComponent('grab-surface', {
         schema: {
@@ -5535,13 +5537,29 @@ function setGameplayHUD(isPlaying) {
           // Add grabbable class
           this.el.classList.add('grabbable-surface');
           
-          // Wait for parent transforms to be applied
-          setTimeout(() => {
-            this.createPhysicsBody();
-          }, 100);
+          // CRITICAL: Wait for arena loading to complete and entity positioning
+          if (window.ARENA_LOADING) {
+            // If arena is loading, wait for load-complete event
+            document.addEventListener('arena-physics-ready', () => {
+              this.createPhysicsBody();
+            }, { once: true });
+          } else {
+            // Normal initialization
+            setTimeout(() => {
+              if (!window.ARENA_LOADING) {
+                this.createPhysicsBody();
+              }
+            }, 100);
+          }
         },
         
         createPhysicsBody: function() {
+          // Safety check: Ensure data is populated
+          if (!this.data || this.data.type === undefined) {
+            console.warn('⚠️ grab-surface: data not ready, skipping physics body creation', this.el);
+            return;
+          }
+          
           // Create physics body for surface
           const geometry = this.el.getAttribute('geometry');
           let shape;
@@ -5641,6 +5659,8 @@ function setGameplayHUD(isPlaying) {
             );
             const quat = new THREE.Quaternion().setFromEuler(euler);
             this.body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+            
+            console.log(`🔧 INIT: Created physics body for ${this.el.tagName} (${this.el.id}) with rotation [${rotation.x.toFixed(1)}°, ${rotation.y.toFixed(1)}°, ${rotation.z.toFixed(1)}°]`);
           }
           
           world.addBody(this.body);
@@ -5724,7 +5744,7 @@ function setGameplayHUD(isPlaying) {
             const physicsWorld = typeof world !== 'undefined' ? world : null;
             if (physicsWorld) {
               physicsWorld.removeBody(this.el.body);
-              console.log(`🗑️ Removed physics body for ${this.el.tagName} (${this.el.id})`);
+              // console.log(`🗑️ Removed physics body for ${this.el.tagName} (${this.el.id})`);
             }
             this.el.body = null;
           }
@@ -5733,10 +5753,10 @@ function setGameplayHUD(isPlaying) {
 
 
 
-      // Wireframe Overlay Component - Adds flat white wireframe on top of solid material
+      // Wireframe Overlay Component - Adds team-colored wireframe on top of solid material
       AFRAME.registerComponent('wireframe-overlay', {
         schema: {
-          color: { type: 'color', default: '#ffffff' },
+          color: { type: 'color', default: '' }, // Empty = auto-detect from position
           opacity: { type: 'number', default: 1.0 }
         },
         
@@ -5750,6 +5770,47 @@ function setGameplayHUD(isPlaying) {
             this.el.addEventListener('object3dset', () => {
               this.createWireframe();
             });
+          }
+        },
+        
+        update: function(oldData) {
+          // If color changed, update wireframe color
+          if (this.wireframeEntity && oldData.color !== this.data.color) {
+            const newColor = this.getTeamColor();
+            const material = this.wireframeEntity.getAttribute('material');
+            if (material) {
+              this.wireframeEntity.setAttribute('material', {
+                shader: 'flat',
+                color: newColor,
+                wireframe: true,
+                opacity: this.data.opacity,
+                transparent: this.data.opacity < 1,
+                side: 'double'
+              });
+            }
+          }
+        },
+        
+        // Determine team color based on Z position in arena
+        getTeamColor: function() {
+          // If color is manually specified, use it
+          if (this.data.color) {
+            return this.data.color;
+          }
+          
+          // Auto-detect based on position
+          const position = this.el.getAttribute('position');
+          if (!position) return '#ffffff';
+          
+          const z = position.z;
+          
+          // Center is ONLY at Z=0 (with small tolerance of 0.5m)
+          if (Math.abs(z) < 0.5) {
+            return '#ffffff'; // Center/neutral (white)
+          } else if (z > 0) {
+            return '#0088ff'; // Blue team (ANY positive Z)
+          } else {
+            return '#ff0000'; // Red team (ANY negative Z)
           }
         },
         
@@ -5770,10 +5831,13 @@ function setGameplayHUD(isPlaying) {
             return; // Only support octahedron and tetrahedron for now
           }
           
+          // Determine wireframe color based on team zone
+          const wireframeColor = this.getTeamColor();
+          
           // Set wireframe material with flat shading (no lighting)
           wireframe.setAttribute('material', {
             shader: 'flat',
-            color: this.data.color,
+            color: wireframeColor,
             wireframe: true,
             opacity: this.data.opacity,
             transparent: this.data.opacity < 1,
@@ -5785,11 +5849,13 @@ function setGameplayHUD(isPlaying) {
           wireframe.setAttribute('rotation', '0 0 0');
           wireframe.setAttribute('scale', '1.001 1.001 1.001'); // Slightly larger to prevent z-fighting
           
+          // CRITICAL: Mark as visual-only to exclude from collision detection
+          wireframe.classList.add('wireframe-visual-only');
+          wireframe.setAttribute('data-visual-only', 'true');
+          
           // Add as child
           this.el.appendChild(wireframe);
           this.wireframeEntity = wireframe;
-          
-          console.log(`✅ Added wireframe overlay to ${geometry.primitive}`);
         },
         
         remove: function() {
@@ -5890,8 +5956,6 @@ function setGameplayHUD(isPlaying) {
           // Initialize ball assignment - will be updated when game mode changes
           this.updateBallAssignment();
           
-          console.log(`Bot ${this.el.id} initialized with team: ${this.data.team}`);
-          
           // Add collision detection for bot being hit
           this.body.addEventListener('collide', (evt) => {
             this.checkPlayerBallHit(evt);
@@ -5927,8 +5991,6 @@ function setGameplayHUD(isPlaying) {
           const ballIndex = getBallForPlayer(botId);
           const ballPlayer = `player${ballIndex}`;
           this.ball = this.el.sceneEl.querySelector(`[zerog-ball*="player: ${ballPlayer}"]`);
-          
-          console.log(`Bot ${this.el.id} ball assignment: botId=${botId}, ballIndex=${ballIndex}, ballPlayer=${ballPlayer}, ball=${!!this.ball}`);
         },
         
         createDirectionIndicator: function() {
@@ -6166,6 +6228,11 @@ function setGameplayHUD(isPlaying) {
             : document.querySelectorAll('[grab-surface]');
           
           surfaces.forEach(surface => {
+            // CRITICAL: Skip visual-only wireframe entities
+            if (surface.hasAttribute('data-visual-only') || surface.classList.contains('wireframe-visual-only')) {
+              return;
+            }
+            
             const surfacePos = new THREE.Vector3();
             surface.object3D.getWorldPosition(surfacePos);
             const geometry = surface.getAttribute('geometry');
@@ -8099,8 +8166,6 @@ function setGameplayHUD(isPlaying) {
         },
         
         init: function() {
-          console.log('🔧 Initializing Collision Culling System');
-          
           // Initialize data structures FIRST
           this.allSurfaces = [];
           
@@ -8133,16 +8198,12 @@ function setGameplayHUD(isPlaying) {
           // Keyboard listener for toggling debug visualization
           this.onKeyDown = this.onKeyDown.bind(this);
           window.addEventListener('keydown', this.onKeyDown);
-          
-          console.log(`✅ Collision Culling initialized with ${this.allSurfaces.length} surfaces`);
         },
         
         onArenaLoaded: function(evt) {
-          console.log(`🔧 CULLING: Arena changed, refreshing surface cache...`);
           // Wait a frame for new objects to be fully initialized
           setTimeout(() => {
             this.updateSurfaceCache();
-            console.log(`✅ CULLING: Surface cache updated (${this.allSurfaces.length} surfaces)`);
           }, 100);
         },
         
@@ -8243,13 +8304,6 @@ function setGameplayHUD(isPlaying) {
           if (entityType === 'player') {
             this.culledSurfaces.player = culled;
             this.stats.culledForPlayer = culled.length;
-            
-            // Debug logging for player
-            if (!this.playerCulledLogged) {
-              console.log(`🎯 CULLING: Player has ${culled.length} surfaces in ${this.data.collisionRange}m range (out of ${this.allSurfaces.length} total)`);
-              this.playerCulledLogged = true;
-              setTimeout(() => this.playerCulledLogged = false, 5000);
-            }
           } else if (entityType === 'ball') {
             this.culledSurfaces.balls[entityId] = culled;
             this.stats.culledForBalls[entityId] = culled.length;
@@ -8269,15 +8323,6 @@ function setGameplayHUD(isPlaying) {
           if (camera) {
             const playerPos = new THREE.Vector3();
             camera.object3D.getWorldPosition(playerPos);
-            
-            // Debug logging for first few frames
-            if (!this.playerPosLogged) {
-              console.log(`🎯 CULLING: Player camera at ${playerPos.x.toFixed(2)}, ${playerPos.y.toFixed(2)}, ${playerPos.z.toFixed(2)}`);
-              console.log(`🎯 CULLING: Collision range = ${this.data.collisionRange}m`);
-              console.log(`🎯 CULLING: Total surfaces = ${this.allSurfaces.length}`);
-              this.playerPosLogged = true;
-              setTimeout(() => this.playerPosLogged = false, 5000);
-            }
             
             this.getCulledSurfacesForEntity(playerPos, 'player', 'player');
           } else {
@@ -8412,21 +8457,8 @@ function setGameplayHUD(isPlaying) {
         },
         
         logStats: function() {
-          const playerCount = this.stats.culledForPlayer;
-          const ballCounts = Object.values(this.stats.culledForBalls);
-          const botCounts = Object.values(this.stats.culledForBots);
-          
-          const avgBallCount = ballCounts.length > 0 ? 
-            Math.round(ballCounts.reduce((a, b) => a + b, 0) / ballCounts.length) : 0;
-          const avgBotCount = botCounts.length > 0 ? 
-            Math.round(botCounts.reduce((a, b) => a + b, 0) / botCounts.length) : 0;
-          
-          console.log(`🎯 Collision Culling Stats (${this.data.collisionRange}m range):`);
-          console.log(`   Total surfaces: ${this.stats.totalSurfaces}`);
-          console.log(`   Player: ${playerCount}/${this.stats.totalSurfaces} (${Math.round(playerCount/this.stats.totalSurfaces*100)}%)`);
-          console.log(`   Balls (avg): ${avgBallCount}/${this.stats.totalSurfaces} (${Math.round(avgBallCount/this.stats.totalSurfaces*100)}%)`);
-          console.log(`   Bots (avg): ${avgBotCount}/${this.stats.totalSurfaces} (${Math.round(avgBotCount/this.stats.totalSurfaces*100)}%)`);
-          console.log(`   Estimated collision check reduction: ${Math.round((1 - (playerCount + avgBallCount*3 + avgBotCount*2) / (this.stats.totalSurfaces * 6)) * 100)}%`);
+          // Stats logging disabled to reduce console clutter
+          // Stats are still being tracked and can be checked via collision-culling component
         },
         
         remove: function() {
@@ -8840,7 +8872,6 @@ function setGameplayHUD(isPlaying) {
                 btn.classList.remove('clickable');
                 if (btn.object3D) btn.object3D.visible = false;
               });
-              console.log(`🔒 Initialized ${configButtons.length} config menu buttons as disabled`);
             }
           }, 500); // Wait for scene to load
           
@@ -9032,26 +9063,26 @@ function setGameplayHUD(isPlaying) {
             }
           } else if (isEditorActive) {
             // Menu is closed and editor is active - restore editor raycaster settings
-            // CRITICAL: Don't set 'far' to allow full-range raycasting
+            // CRITICAL: Don't include .clickable to avoid hitting hidden menu elements
             if (leftHand) {
               leftHand.setAttribute('raycaster', {
-                objects: '[grab-surface], .gizmo-axis, .clickable',
+                objects: '[grab-surface], .gizmo-axis',
                 lineColor: '#ffff00',
                 lineOpacity: 0.8,
                 far: 100,
                 enabled: true
               });
-              console.log('🔧 DEBUG: Left hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, .clickable, far: 100');
+              console.log('🔧 DEBUG: Left hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, far: 100');
             }
             if (rightHand) {
               rightHand.setAttribute('raycaster', {
-                objects: '[grab-surface], .gizmo-axis, .clickable',
+                objects: '[grab-surface], .gizmo-axis',
                 lineColor: '#ffff00',
                 lineOpacity: 0.8,
                 far: 100,
                 enabled: true
               });
-              console.log('🔧 DEBUG: Right hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, .clickable, far: 100');
+              console.log('🔧 DEBUG: Right hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, far: 100');
             }
           } else {
             // Normal mode - hide lasers
@@ -11002,7 +11033,6 @@ function setGameplayHUD(isPlaying) {
           if (this.body.collisionFilterMask !== newMask) {
             const oldMask = this.body.collisionFilterMask;
             this.body.collisionFilterMask = newMask;
-            console.log(`🎯 FIXED: Collision mask updated for ${this.data.player}: grabbed=${this.isGrabbed}, shield=${hasActiveShield}, mask=${oldMask}->${newMask} - Ball is now always hittable!`);
           } else {
             // console.log(`🎯 Collision mask unchanged for ${this.data.player}: grabbed=${this.isGrabbed}, shield=${hasActiveShield}, mask=${newMask} (group=${this.body.collisionFilterGroup})`);
           }
@@ -11307,6 +11337,11 @@ function setGameplayHUD(isPlaying) {
           
           // Check against surfaces (either culled list or all surfaces)
           surfaces.forEach(surface => {
+            // CRITICAL: Skip visual-only wireframe entities
+            if (surface.hasAttribute('data-visual-only') || surface.classList.contains('wireframe-visual-only')) {
+              return;
+            }
+            
             const surfacePos = new THREE.Vector3();
             surface.object3D.getWorldPosition(surfacePos);
             const geometry = surface.getAttribute('geometry');
@@ -11532,6 +11567,11 @@ function setGameplayHUD(isPlaying) {
             : document.querySelectorAll('[grab-surface]');
           
           surfaces.forEach(surface => {
+            // CRITICAL: Skip visual-only wireframe entities
+            if (surface.hasAttribute('data-visual-only') || surface.classList.contains('wireframe-visual-only')) {
+              return;
+            }
+            
             const surfacePos = new THREE.Vector3();
             surface.object3D.getWorldPosition(surfacePos);
             const geometry = surface.getAttribute('geometry');
@@ -12611,6 +12651,22 @@ function setGameplayHUD(isPlaying) {
         onClick: function() {
           const id = this.el.id;
           console.log('🖱️ Button clicked:', id);
+          
+          // CRITICAL: Check if element is visible before allowing interaction
+          if (!this.el.getAttribute('visible')) {
+            console.log(`🚫 Ignoring click on hidden element: ${id}`);
+            return;
+          }
+          
+          // CRITICAL: Check if parent containers are visible
+          let parent = this.el.parentNode;
+          while (parent && parent.tagName !== 'A-SCENE') {
+            if (parent.hasAttribute && parent.hasAttribute('visible') && !parent.getAttribute('visible')) {
+              console.log(`🚫 Ignoring click - parent container hidden: ${id}`);
+              return;
+            }
+            parent = parent.parentNode;
+          }
           
           // Prevent accidental clicks immediately after menu toggle
           const menuToggle = document.querySelector('[menu-toggle]');
@@ -13722,6 +13778,10 @@ function setGameplayHUD(isPlaying) {
           this.raycaster = new THREE.Raycaster();
           this.gridSize = 1; // 1 meter grid
           
+          // SYMMETRY SYSTEM: Track mirrored pairs for red/blue sides
+          this.mirrorPairs = new Map(); // Maps object ID to its mirror's ID
+          this.centerTolerance = 0.5; // Objects within 0.5m of Z=0 are considered center
+          
           // Get hand controllers
           this.leftHand = null;
           this.rightHand = null;
@@ -13751,6 +13811,11 @@ function setGameplayHUD(isPlaying) {
           
           // Ensure all arena objects have IDs for multiplayer sync
           this.ensureArenaObjectIds();
+          
+          // Initialize symmetry system (detect existing mirrored pairs)
+          setTimeout(() => {
+            this.initializeSymmetry();
+          }, 500);
           
           // Wait for hands to be available
           setTimeout(() => {
@@ -13810,41 +13875,50 @@ function setGameplayHUD(isPlaying) {
             if (this.data.enabled && this.selectedObject) {
               const moveAmount = e.shiftKey ? 5 : 1;
               const pos = this.selectedObject.object3D.position;
+              let moved = false;
               
               switch(e.key.toLowerCase()) {
                 case 'arrowup':
                 case 'w':
                   pos.z -= moveAmount;
+                  moved = true;
                   break;
                 case 'arrowdown':
                 case 's':
                   pos.z += moveAmount;
+                  moved = true;
                   break;
                 case 'arrowleft':
                 case 'a':
                   pos.x -= moveAmount;
+                  moved = true;
                   break;
                 case 'arrowright':
                 case 'd':
                   pos.x += moveAmount;
+                  moved = true;
                   break;
                 case 'q':
                   pos.y -= moveAmount;
+                  moved = true;
                   break;
                 case 'z':
                   pos.y += moveAmount;
+                  moved = true;
                   break;
                 case 'delete':
                 case 'backspace':
                   e.preventDefault();
-                const deletedId = this.selectedObject.id;
-                const deletedTag = this.selectedObject.tagName;
-                console.log('🗑️ Deleted:', deletedTag);
-                this.selectedObject.parentNode.removeChild(this.selectedObject);
-                this.deselectObject();
-                
-                // MULTIPLAYER: Broadcast object delete
-                if (isMultiplayer && isHost && deletedId) {
+                  const deletedId = this.selectedObject.id;
+                  const deletedTag = this.selectedObject.tagName;
+                  const wasSelected = this.selectedObject;
+                  
+                  // Use symmetry-aware deletion
+                  this.deleteMirrorPair(this.selectedObject);
+                  this.deselectObject();
+                  
+                  // MULTIPLAYER: Broadcast object delete
+                  if (isMultiplayer && isHost && deletedId) {
                     const message = { type: 'arena-delete', id: deletedId };
                     connections.forEach(conn => {
                       if (conn && conn.open) {
@@ -13868,6 +13942,11 @@ function setGameplayHUD(isPlaying) {
               if (this.selectedObject) {
                 this.snapToGrid(pos);
                 this.updateGizmoPosition();
+                
+                // Update mirror AFTER position is finalized
+                if (moved) {
+                  this.enforceSymmetry(this.selectedObject);
+                }
                 
                   // MULTIPLAYER: Broadcast object move after keyboard adjustment
                   if (isMultiplayer && isHost && this.selectedObject.id) {
@@ -14068,6 +14147,9 @@ function setGameplayHUD(isPlaying) {
                     this.snapToGrid(this.selectedObject.object3D.position);
                     this.updateGizmoPosition();
                     
+                    // Update mirror after VR transform
+                    this.enforceSymmetry(this.selectedObject);
+                    
                       // MULTIPLAYER: Broadcast object move
                       if (isMultiplayer && isHost && this.selectedObject.id) {
                         const pos = this.selectedObject.object3D.position;
@@ -14225,11 +14307,6 @@ function setGameplayHUD(isPlaying) {
               this.deleteSelectedObject();
             }
           });
-          
-          console.log('✅ Undo/Redo controls initialized');
-          console.log('   Undo: Left Grip + Y');
-          console.log('   Redo: Left Grip + X');
-          console.log('   Delete: Right Grip + B');
         },
         
         setupVRControls: function() {
@@ -14423,6 +14500,8 @@ function setGameplayHUD(isPlaying) {
           if (mesh && mesh.material) {
             entity._editorOriginalWireframe = mesh.material.wireframe;
             entity._editorOriginalColor = mesh.material.color ? mesh.material.color.clone() : null;
+            entity._editorOriginalOpacity = mesh.material.opacity;
+            entity._editorOriginalTransparent = mesh.material.transparent;
             
             // Enable wireframe and set to green
             mesh.material.wireframe = true;
@@ -14502,11 +14581,20 @@ function setGameplayHUD(isPlaying) {
               if (this.selectedObject._editorOriginalColor) {
                 mesh.material.color.copy(this.selectedObject._editorOriginalColor);
               }
+              // Restore opacity and transparent properties
+              if (this.selectedObject._editorOriginalOpacity !== undefined) {
+                mesh.material.opacity = this.selectedObject._editorOriginalOpacity;
+              }
+              if (this.selectedObject._editorOriginalTransparent !== undefined) {
+                mesh.material.transparent = this.selectedObject._editorOriginalTransparent;
+              }
               mesh.material.needsUpdate = true;
               
               // Clean up stored properties
               delete this.selectedObject._editorOriginalWireframe;
               delete this.selectedObject._editorOriginalColor;
+              delete this.selectedObject._editorOriginalOpacity;
+              delete this.selectedObject._editorOriginalTransparent;
             }
             
             // NEW: Re-add physics body to world
@@ -14666,6 +14754,11 @@ function setGameplayHUD(isPlaying) {
             // Add to scene
             this.el.sceneEl.appendChild(clone);
             
+            // Enforce symmetry for the new duplicate
+            setTimeout(() => {
+              this.enforceSymmetry(clone);
+            }, 100);
+            
             // CRITICAL: Manually update object3D to match attributes BEFORE serialization
             // A-Frame won't update object3D until next tick, but we need to serialize NOW
             clone.object3D.position.set(pos.x, pos.y, pos.z);
@@ -14720,6 +14813,468 @@ function setGameplayHUD(isPlaying) {
           position.z = Math.round(position.z / this.gridSize) * this.gridSize;
         },
         
+        
+        // =====================================================================
+        // SYMMETRY SYSTEM - Automatic mirroring for red/blue sides
+        // =====================================================================
+        
+        /**
+         * MASTER SYMMETRY FUNCTION - Call this after ANY action (move/duplicate/delete/undo/redo)
+         * This ensures symmetry is maintained in all cases
+         */
+        enforceSymmetry: function(entity) {
+          if (!entity || !entity.id) return;
+          
+          const pos = {
+            x: entity.object3D.position.x,
+            y: entity.object3D.position.y,
+            z: entity.object3D.position.z
+          };
+          
+          const zone = this.getZone(pos.z);
+          const mirrorId = this.mirrorPairs.get(entity.id);
+          const mirror = mirrorId ? document.getElementById(mirrorId) : null;
+          
+          console.log(`🔄 ENFORCE SYMMETRY: ${entity.id} at Z=${pos.z.toFixed(1)} → ${zone}`);
+          
+          // Step 1: Update wireframe color ALWAYS
+          if (entity.hasAttribute('wireframe-overlay')) {
+            const color = this.getTeamColorForPosition(pos.z);
+            entity.setAttribute('wireframe-overlay', { color: color });
+            
+            // FORCE wireframe color update by directly accessing the component
+            // Use longer timeout and check if wireframe exists
+            setTimeout(() => {
+              const wireframeComp = entity.components['wireframe-overlay'];
+              if (wireframeComp && wireframeComp.wireframeEntity) {
+                console.log(`   🎨 Updating wireframe color to ${color} for ${entity.id}`);
+                
+                // Access THREE.js material directly
+                const mesh = wireframeComp.wireframeEntity.getObject3D('mesh');
+                if (mesh && mesh.material) {
+                  mesh.material.color.set(color);
+                  mesh.material.needsUpdate = true;
+                  console.log(`   ✅ THREE.js material updated directly`);
+                } else {
+                  console.warn(`   ⚠️ No THREE.js mesh/material found for ${entity.id}`);
+                }
+              } else {
+                console.warn(`   ⚠️ No wireframe entity found for ${entity.id}`);
+              }
+            }, 100); // Increased from 10ms to 100ms
+          }
+          
+          // Step 2: Handle mirror based on zone
+          if (zone === 'center') {
+            // In center - delete mirror if exists
+            if (mirror && mirror.parentNode) {
+              mirror.parentNode.removeChild(mirror);
+              this.mirrorPairs.delete(entity.id);
+              this.mirrorPairs.delete(mirrorId);
+              console.log(`   ❌ Deleted mirror ${mirrorId}`);
+            }
+          } else {
+            // In red/blue zone - create or update mirror
+            if (mirror) {
+              // Update existing mirror
+              const mirrorPos = { x: pos.x, y: pos.y, z: -pos.z };
+              mirror.setAttribute('position', mirrorPos);
+              
+              // Mirror the rotation based on object type
+              const rot = entity.object3D.rotation;
+              let mirrorRot;
+              
+              // Special case for tetrahedrons: toggle between 0° and 90°
+              if (entity.tagName.toLowerCase() === 'a-tetrahedron') {
+                // Check if ANY axis has ~90° rotation
+                const rotXDeg = THREE.MathUtils.radToDeg(rot.x);
+                const rotYDeg = THREE.MathUtils.radToDeg(rot.y);
+                const rotZDeg = THREE.MathUtils.radToDeg(rot.z);
+                const hasRotation = Math.abs(rotXDeg) > 45 || Math.abs(rotYDeg) > 45 || Math.abs(rotZDeg) > 45;
+                mirrorRot = hasRotation 
+                  ? { x: 0, y: 0, z: 0 }    // Original has rotation → Mirror is 0°
+                  : { x: 0, y: 90, z: 0 };  // Original is 0° → Mirror is 90° (Y-axis)
+                console.log(`   🔄 Tetrahedron rotation toggle: [${rotXDeg.toFixed(1)}°, ${rotYDeg.toFixed(1)}°, ${rotZDeg.toFixed(1)}°] → [${mirrorRot.x}°, ${mirrorRot.y}°, ${mirrorRot.z}°]`);
+              } else {
+                // For all other shapes: standard mirror (keep X, negate Y and Z)
+                mirrorRot = { 
+                  x: THREE.MathUtils.radToDeg(rot.x), 
+                  y: -THREE.MathUtils.radToDeg(rot.y), 
+                  z: -THREE.MathUtils.radToDeg(rot.z) 
+                };
+              }
+              mirror.setAttribute('rotation', mirrorRot);
+              
+              // CRITICAL: Force physics body rotation update for static bodies
+              // Static bodies require removal/re-adding to update rotation
+              setTimeout(() => {
+                if (mirror.components['grab-surface'] && mirror.components['grab-surface'].body) {
+                  const grabSurface = mirror.components['grab-surface'];
+                  const rad = Math.PI / 180;
+                  
+                  // CRITICAL: Remove body from world before updating rotation (required for static bodies)
+                  if (typeof world !== 'undefined' && world.bodies.includes(grabSurface.body)) {
+                    world.removeBody(grabSurface.body);
+                    
+                    const euler = new THREE.Euler(
+                      mirrorRot.x * rad,
+                      mirrorRot.y * rad,
+                      mirrorRot.z * rad,
+                      'XYZ'
+                    );
+                    const quat = new THREE.Quaternion().setFromEuler(euler);
+                    grabSurface.body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+                    
+                    // Re-add body to world
+                    world.addBody(grabSurface.body);
+                    
+                    console.log(`   🔧 Updated physics body rotation for mirror ${mirrorId}: [${mirrorRot.x}°, ${mirrorRot.y}°, ${mirrorRot.z}°] (removed and re-added to world)`);
+                  }
+                }
+              }, 50);
+              
+              if (mirror.hasAttribute('wireframe-overlay')) {
+                const mirrorColor = this.getTeamColorForPosition(mirrorPos.z);
+                mirror.setAttribute('wireframe-overlay', { color: mirrorColor });
+                
+                // FORCE mirror wireframe color update
+                setTimeout(() => {
+                  const mirrorWireframeComp = mirror.components['wireframe-overlay'];
+                  if (mirrorWireframeComp && mirrorWireframeComp.wireframeEntity) {
+                    console.log(`   🎨 Updating MIRROR wireframe color to ${mirrorColor} for ${mirrorId}`);
+                    
+                    // Access THREE.js material directly
+                    const mesh = mirrorWireframeComp.wireframeEntity.getObject3D('mesh');
+                    if (mesh && mesh.material) {
+                      mesh.material.color.set(mirrorColor);
+                      mesh.material.needsUpdate = true;
+                      console.log(`   ✅ MIRROR THREE.js material updated directly`);
+                    } else {
+                      console.warn(`   ⚠️ No THREE.js mesh/material found for mirror ${mirrorId}`);
+                    }
+                  } else {
+                    console.warn(`   ⚠️ No wireframe entity found for mirror ${mirrorId}`);
+                  }
+                }, 100); // Increased from 10ms to 100ms
+              }
+              console.log(`   ✅ Updated mirror ${mirrorId} at Z=${mirrorPos.z.toFixed(1)}`);
+            } else {
+              // Create new mirror
+              this.createMirror(entity);
+              console.log(`   ✨ Created new mirror`);
+            }
+          }
+        },
+        
+        /**
+         * Determine which zone an object is in based on Z position
+         * @returns 'center', 'red', or 'blue'
+         */
+        getZone: function(zPos) {
+          // Center is ONLY at Z=0 (with small tolerance)
+          if (Math.abs(zPos) < this.centerTolerance) return 'center';
+          // Blue side is ANY positive Z
+          if (zPos > 0) return 'blue';
+          // Red side is ANY negative Z
+          return 'red';
+        },
+        
+        /**
+         * Get the mirrored Z position across the center plane (Z=0)
+         */
+        getMirroredZ: function(z) {
+          return -z;
+        },
+        
+        /**
+         * Get the team color for wireframe based on position
+         */
+        getTeamColorForPosition: function(z) {
+          const zone = this.getZone(z);
+          if (zone === 'red') return '#ff0000';
+          if (zone === 'blue') return '#0088ff';
+          return '#ffffff'; // center = white (at Z=0)
+        },
+        
+        /**
+         * Create a mirrored duplicate of an object
+         * @param {Element} original - The original entity
+         * @returns {Element} The mirrored entity
+         */
+        createMirror: function(original) {
+          const pos = original.getAttribute('position');
+          if (!pos) return null; // Safety check
+          
+          const zone = this.getZone(pos.z);
+          
+          // Only create mirrors for objects in red/blue zones
+          if (zone === 'center') return null;
+          
+          // Ensure original has an ID
+          if (!original.id) {
+            original.setAttribute('id', `obj-${Date.now()}-${Math.floor(Math.random() * 1000)}`);
+          }
+          
+          // Check if mirror already exists
+          const existingMirrorId = this.mirrorPairs.get(original.id);
+          if (existingMirrorId && document.getElementById(existingMirrorId)) {
+            console.log(`⚠️ Mirror already exists for ${original.id}`);
+            return document.getElementById(existingMirrorId);
+          }
+          
+          // Create duplicate
+          const mirror = original.cloneNode(true);
+          
+          // Generate new ID for mirror
+          const originalId = original.id;
+          const mirrorId = `${originalId}-mirror`;
+          mirror.setAttribute('id', mirrorId);
+          
+          // Mirror the position across Z=0
+          const mirrorPos = { x: pos.x, y: pos.y, z: this.getMirroredZ(pos.z) };
+          mirror.setAttribute('position', mirrorPos);
+          
+          // Mirror the rotation based on object type
+          const rot = original.getAttribute('rotation');
+          if (rot) {
+            let mirrorRot;
+            
+            // Special case for tetrahedrons: toggle between 0° and 90°
+            if (original.tagName.toLowerCase() === 'a-tetrahedron') {
+              // Check if ANY axis has ~90° rotation
+              const hasRotation = Math.abs(rot.x) > 45 || Math.abs(rot.y) > 45 || Math.abs(rot.z) > 45;
+              mirrorRot = hasRotation 
+                ? { x: 0, y: 0, z: 0 }    // Original has rotation → Mirror is 0°
+                : { x: 0, y: 90, z: 0 };  // Original is 0° → Mirror is 90° (Y-axis)
+              console.log(`   🔄 CREATE Tetrahedron rotation toggle: [${rot.x.toFixed(1)}°, ${rot.y.toFixed(1)}°, ${rot.z.toFixed(1)}°] → [${mirrorRot.x}°, ${mirrorRot.y}°, ${mirrorRot.z}°]`);
+            } else {
+              // For all other shapes: standard mirror (keep X, negate Y and Z)
+              mirrorRot = { x: rot.x, y: -rot.y, z: -rot.z };
+            }
+            
+            mirror.setAttribute('rotation', mirrorRot);
+          }
+          
+          // Update wireframe color for the mirrored position
+          if (mirror.hasAttribute('wireframe-overlay')) {
+            const mirrorColor = this.getTeamColorForPosition(mirrorPos.z);
+            mirror.setAttribute('wireframe-overlay', { color: mirrorColor });
+          }
+          
+          // Add to scene
+          this.el.sceneEl.appendChild(mirror);
+          
+          // CRITICAL: Ensure physics body is created for mirror
+          // Wait for component initialization, then force creation if needed
+          setTimeout(() => {
+            const grabSurface = mirror.components['grab-surface'];
+            
+            if (!grabSurface) {
+              console.error(`❌ Mirror ${mirrorId} has no grab-surface component!`);
+              return;
+            }
+            
+            // Force physics body creation if it doesn't exist
+            if (!grabSurface.body) {
+              console.warn(`⚠️ Mirror ${mirrorId} has no physics body, forcing creation...`);
+              grabSurface.createPhysicsBody();
+            }
+            
+            // Now update rotation for tetrahedrons
+            if (rot && grabSurface.body && typeof world !== 'undefined') {
+              const rad = Math.PI / 180;
+              let mirrorRot;
+              
+              if (original.tagName.toLowerCase() === 'a-tetrahedron') {
+                const hasRotation = Math.abs(rot.x) > 45 || Math.abs(rot.y) > 45 || Math.abs(rot.z) > 45;
+                mirrorRot = hasRotation 
+                  ? { x: 0, y: 0, z: 0 }
+                  : { x: 0, y: 90, z: 0 };
+              } else {
+                mirrorRot = { x: rot.x, y: -rot.y, z: -rot.z };
+              }
+              
+              // CRITICAL: Remove body from world before updating rotation (required for static bodies)
+              world.removeBody(grabSurface.body);
+              
+              const euler = new THREE.Euler(
+                mirrorRot.x * rad,
+                mirrorRot.y * rad,
+                mirrorRot.z * rad,
+                'XYZ'
+              );
+              const quat = new THREE.Quaternion().setFromEuler(euler);
+              grabSurface.body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+              
+              // Re-add body to world
+              world.addBody(grabSurface.body);
+              
+              // Verify body is in world
+              const isInWorld = world.bodies.includes(grabSurface.body);
+              const totalBodies = world.bodies.length;
+              const filterGroup = grabSurface.body.collisionFilterGroup;
+              const filterMask = grabSurface.body.collisionFilterMask;
+              console.log(`   🔧 FORCED physics body rotation for mirror ${mirrorId}: [${mirrorRot.x}°, ${mirrorRot.y}°, ${mirrorRot.z}°] (removed and re-added to world)`);
+              console.log(`      ✅ Body in world: ${isInWorld}, Total bodies: ${totalBodies}, FilterGroup: ${filterGroup}, FilterMask: ${filterMask}`);
+            }
+          }, 200); // Wait 200ms for physics body creation
+          
+          // Register the pair
+          this.mirrorPairs.set(originalId, mirrorId);
+          this.mirrorPairs.set(mirrorId, originalId);
+          
+          // CRITICAL: Refresh collision surface cache to include the new mirror
+          const collisionCulling = this.el.sceneEl.components['collision-culling'];
+          if (collisionCulling && collisionCulling.updateSurfaceCache) {
+            collisionCulling.updateSurfaceCache();
+            console.log(`   🔄 Refreshed collision surface cache (now ${collisionCulling.allSurfaces.length} surfaces)`);
+          }
+          
+          console.log(`🪞 Created mirror: ${originalId} ↔ ${mirrorId}`);
+          
+          return mirror;
+        },
+        
+        /**
+         * Delete a mirror pair (both original and mirror)
+         * @param {Element} entity - Either the original or the mirror
+         */
+        deleteMirrorPair: function(entity) {
+          const entityId = entity.id;
+          const mirrorId = this.mirrorPairs.get(entityId);
+          
+          if (mirrorId) {
+            // Find and remove the mirror
+            const mirror = document.getElementById(mirrorId);
+            if (mirror && mirror.parentNode) {
+              mirror.parentNode.removeChild(mirror);
+            }
+            
+            // Clean up the pair mapping
+            this.mirrorPairs.delete(entityId);
+            this.mirrorPairs.delete(mirrorId);
+          }
+          
+          // Remove the entity itself
+          if (entity.parentNode) {
+            entity.parentNode.removeChild(entity);
+          }
+        },
+        
+        /**
+         * Update mirror position when original moves
+         * @param {Element} original - The original entity that moved
+         */
+        updateMirror: function(original) {
+          if (!original || !original.id) {
+            console.warn('⚠️ updateMirror: Invalid entity or missing ID');
+            return;
+          }
+          
+          const originalId = original.id;
+          
+          // CRITICAL: Use object3D.position for real-time position, not getAttribute
+          const pos = {
+            x: original.object3D.position.x,
+            y: original.object3D.position.y,
+            z: original.object3D.position.z
+          };
+          
+          const newZone = this.getZone(pos.z);
+          const mirrorId = this.mirrorPairs.get(originalId);
+          
+          console.log(`🔍 SYMMETRY CHECK: ${originalId} at Z=${pos.z.toFixed(1)} → Zone: ${newZone} (center tolerance: ±${this.centerTolerance}m from Z=0)`);
+          
+          // Update wireframe color for current position FIRST
+          if (original.hasAttribute('wireframe-overlay')) {
+            const newColor = this.getTeamColorForPosition(pos.z);
+            original.setAttribute('wireframe-overlay', { color: newColor });
+            console.log(`🎨 Updated ${originalId} wireframe to ${newColor} at Z=${pos.z.toFixed(1)} (zone: ${newZone})`);
+          }
+          
+          // Case 1: Object moved INTO center zone - delete its mirror
+          if (newZone === 'center' && mirrorId) {
+            const mirror = document.getElementById(mirrorId);
+            if (mirror && mirror.parentNode) {
+              mirror.parentNode.removeChild(mirror);
+              console.log(`🗑️ Removed mirror (moved to center): ${mirrorId}`);
+            }
+            this.mirrorPairs.delete(originalId);
+            this.mirrorPairs.delete(mirrorId);
+            return;
+          }
+          
+          // Case 2: Object moved OUT OF center zone - create a mirror
+          if (newZone !== 'center' && !mirrorId) {
+            const mirror = this.createMirror(original);
+            console.log(`✨ Created mirror for ${originalId} at Z=${pos.z.toFixed(1)} (moved to ${newZone} zone)`);
+            return;
+          }
+          
+          // Case 3: Object stayed in red/blue zone - update mirror position
+          if (newZone !== 'center' && mirrorId) {
+            const mirror = document.getElementById(mirrorId);
+            if (mirror) {
+              const mirrorPos = { x: pos.x, y: pos.y, z: this.getMirroredZ(pos.z) };
+              mirror.setAttribute('position', mirrorPos);
+              
+              // Update mirror wireframe color
+              if (mirror.hasAttribute('wireframe-overlay')) {
+                const mirrorColor = this.getTeamColorForPosition(mirrorPos.z);
+                mirror.setAttribute('wireframe-overlay', { color: mirrorColor });
+              }
+            } else {
+              // Mirror is missing but should exist - recreate it
+              console.warn(`⚠️ Mirror ${mirrorId} missing, recreating...`);
+              this.mirrorPairs.delete(originalId);
+              this.mirrorPairs.delete(mirrorId);
+              this.createMirror(original);
+            }
+          }
+        },
+        
+        /**
+         * Initialize symmetry system by finding existing mirrored pairs
+         */
+        initializeSymmetry: function() {
+          const allObjects = document.querySelectorAll('[grab-surface]');
+          const processed = new Set();
+          
+          allObjects.forEach(obj => {
+            if (processed.has(obj.id)) return;
+            
+            const pos = obj.getAttribute('position');
+            const zone = this.getZone(pos.z);
+            
+            // Skip center objects
+            if (zone === 'center') return;
+            
+            // Look for its mirror
+            const mirrorZ = this.getMirroredZ(pos.z);
+            let foundMirror = null;
+            
+            allObjects.forEach(potential => {
+              if (potential === obj || processed.has(potential.id)) return;
+              
+              const potentialPos = potential.getAttribute('position');
+              // Check if positions match (mirrored Z, same X and Y)
+              if (Math.abs(potentialPos.x - pos.x) < 0.1 &&
+                  Math.abs(potentialPos.y - pos.y) < 0.1 &&
+                  Math.abs(potentialPos.z - mirrorZ) < 0.1) {
+                foundMirror = potential;
+              }
+            });
+            
+            if (foundMirror) {
+              // Register the pair
+              this.mirrorPairs.set(obj.id, foundMirror.id);
+              this.mirrorPairs.set(foundMirror.id, obj.id);
+              processed.add(obj.id);
+              processed.add(foundMirror.id);
+            }
+          });
+        },
+        
         ensureArenaObjectIds: function() {
           // Find all grab-surface objects and ensure they have IDs
           const arenaObjects = document.querySelectorAll('[grab-surface]');
@@ -14732,10 +15287,6 @@ function setGameplayHUD(isPlaying) {
               assignedCount++;
             }
           });
-          
-          if (assignedCount > 0) {
-            console.log(`🏷️ Assigned IDs to ${assignedCount} arena objects for multiplayer sync`);
-          }
         },
         
         // =====================================================================
@@ -14903,6 +15454,11 @@ function setGameplayHUD(isPlaying) {
             entity.setAttribute('position', command.oldState.position);
             entity.setAttribute('rotation', `${command.oldState.rotation.x} ${command.oldState.rotation.y} ${command.oldState.rotation.z}`);
             
+            // Enforce symmetry after position change
+            setTimeout(() => {
+              this.enforceSymmetry(entity);
+            }, 50);
+            
             // Broadcast to multiplayer if host
             if (isMultiplayer && isHost) {
               const message = {
@@ -14925,6 +15481,11 @@ function setGameplayHUD(isPlaying) {
           if (entity) {
             entity.setAttribute('position', command.newState.position);
             entity.setAttribute('rotation', `${command.newState.rotation.x} ${command.newState.rotation.y} ${command.newState.rotation.z}`);
+            
+            // Enforce symmetry after position change
+            setTimeout(() => {
+              this.enforceSymmetry(entity);
+            }, 50);
             
             // Broadcast to multiplayer if host
             if (isMultiplayer && isHost) {
@@ -14976,6 +15537,11 @@ function setGameplayHUD(isPlaying) {
           
           this.el.sceneEl.appendChild(entity);
           
+          // Enforce symmetry for newly added entity
+          setTimeout(() => {
+            this.enforceSymmetry(entity);
+          }, 100);
+          
           // Broadcast to multiplayer if host
           if (isMultiplayer && isHost) {
             const message = {
@@ -14999,6 +15565,11 @@ function setGameplayHUD(isPlaying) {
           }
           
           this.el.sceneEl.appendChild(entity);
+          
+          // Enforce symmetry for restored entity
+          setTimeout(() => {
+            this.enforceSymmetry(entity);
+          }, 100);
           
           // Broadcast to multiplayer if host
           if (isMultiplayer && isHost) {
@@ -15051,8 +15622,8 @@ function setGameplayHUD(isPlaying) {
           // Record delete command for undo (after deselect to avoid issues)
           this.recordDeleteCommand(deletedEntity);
           
-          // Remove from scene
-          deletedEntity.parentNode.removeChild(deletedEntity);
+          // Use symmetry-aware deletion
+          this.deleteMirrorPair(deletedEntity);
           
           // NUCLEAR CLEANUP: Remove ALL gizmo elements from scene
           const allGizmos = this.el.sceneEl.querySelectorAll('.editor-gizmo');
@@ -17238,11 +17809,8 @@ function setGameplayHUD(isPlaying) {
         const maxPlayers = 4; // Always 4 players total in both modes
         const botsNeeded = Math.max(0, maxPlayers - humanPlayerCount); // Aim for 4 total players
         
-        // Throttle logging to reduce spam
-        if (!window.lastBotManageLog || Date.now() - window.lastBotManageLog > 5000) {
-          console.log(`🤖 Managing bots: humanPlayerCount=${humanPlayerCount}, botsNeeded=${botsNeeded}, isMultiplayer=${isMultiplayer}`);
-          window.lastBotManageLog = Date.now();
-        }
+        // Bot management logging disabled to reduce console clutter
+
         
         // Get bot entities
         const redBot = document.querySelector('#zerog-bot-red');

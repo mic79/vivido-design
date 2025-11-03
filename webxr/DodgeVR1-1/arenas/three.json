@@ -1,0 +1,6333 @@
+{
+  "metadata": {
+    "name": "Arena 2025-11-03 02:25",
+    "version": "1.0",
+    "created": "2025-11-03T07:42:54.608Z",
+    "objectCount": 107
+  },
+  "objects": [
+    {
+      "id": "arena-a-box-0",
+      "tagName": "a-box",
+      "position": {
+        "x": 0,
+        "y": -10,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "width": "30",
+        "height": "1.0",
+        "depth": "80",
+        "color": "#444444",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.8,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.2,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-box-1",
+      "tagName": "a-box",
+      "position": {
+        "x": 0,
+        "y": 10,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "width": "30",
+        "height": "1.0",
+        "depth": "80",
+        "color": "#444444",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.8,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.2,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-box-2",
+      "tagName": "a-box",
+      "position": {
+        "x": -15,
+        "y": 0,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "width": "1.0",
+        "height": "20",
+        "depth": "80",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 0,
+          "displacementBias": 0,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.5,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 1,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-box-3",
+      "tagName": "a-box",
+      "position": {
+        "x": 15,
+        "y": 0,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "width": "1.0",
+        "height": "20",
+        "depth": "80",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 0,
+          "displacementBias": 0,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.5,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 1,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-box-4",
+      "tagName": "a-box",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": -40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "width": "30",
+        "height": "20",
+        "depth": "1.0",
+        "color": "#444444",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.8,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.2,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-box-5",
+      "tagName": "a-box",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "width": "30",
+        "height": "20",
+        "depth": "1.0",
+        "color": "#444444",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.8,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.2,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-8",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -15,
+        "y": 10,
+        "z": 40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-9",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -15,
+        "y": -10,
+        "z": 40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-10",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -15,
+        "y": 10,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-11",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -15,
+        "y": -10,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-12",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -15,
+        "y": 0,
+        "z": 20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "10",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-13",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -15,
+        "y": 10,
+        "z": -40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-14",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -15,
+        "y": -10,
+        "z": -40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-15",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 15,
+        "y": 10,
+        "z": 40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-16",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 15,
+        "y": -10,
+        "z": 40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-17",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 15,
+        "y": 10,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-18",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 15,
+        "y": -10,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-19",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 15,
+        "y": 10,
+        "z": -40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-20",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 15,
+        "y": -10,
+        "z": -40
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "20",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-21",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -14,
+        "z": 20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "10",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-22",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -15,
+        "y": 0,
+        "z": -20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "10",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-octahedron-23",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -14,
+        "z": -20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "10",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-tetrahedron-25",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": 1,
+        "z": -9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-tetrahedron-26",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": -1,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-tetrahedron-25-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": 1,
+        "z": 9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "arena-a-tetrahedron-26-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": -1,
+        "z": 21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152058054-6536",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": -1,
+        "z": 9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152058054-6536-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": -1,
+        "z": -9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152069500-3025",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": -1,
+        "z": 9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152069500-3025-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": -1,
+        "z": -9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0.7,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.3,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152285079-4812",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": -8
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152285079-4812-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 8
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152366030-4332",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -3,
+        "y": -1,
+        "z": -27
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152366030-4332-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -3,
+        "y": -1,
+        "z": 27
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152412159-2506-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152467220-2750",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": -1,
+        "z": -1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152467220-2750-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": -1,
+        "z": 1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152499910-4946",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 2,
+        "z": -10
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152499910-4946-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 2,
+        "z": 10
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152759292-4549",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -4,
+        "z": -5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152759292-4549-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -4,
+        "z": 5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152832538-8617",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": 1,
+        "z": -1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152832538-8617-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": 1,
+        "z": 1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152845996-196",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": 1,
+        "z": -1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152845996-196-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152879382-9241",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -2,
+        "z": -10
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762152879382-9241-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -2,
+        "z": 10
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153196913-5457",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 3,
+        "y": -1,
+        "z": -29
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153196913-5457-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 3,
+        "y": -1,
+        "z": 29
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153223280-3709",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -4,
+        "y": 0,
+        "z": -28
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153223280-3709-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -4,
+        "y": 0,
+        "z": 28
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153277300-5521",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": -1,
+        "z": -19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153277300-5521-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": -1,
+        "z": 19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153285078-8609",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 3,
+        "y": 1,
+        "z": -29
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153285078-8609-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 3,
+        "y": 1,
+        "z": 29
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153298961-8350",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 4,
+        "y": 0,
+        "z": -28
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153298961-8350-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 4,
+        "y": 0,
+        "z": 28
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153348437-4317",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": -22
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153348437-4317-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 22
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153414315-3956",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 3,
+        "y": -1,
+        "z": -27
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153414315-3956-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 3,
+        "y": -1,
+        "z": 27
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153426146-2855",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -6,
+        "z": -31
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153426146-2855-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -6,
+        "z": 31
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153462592-6663",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -3,
+        "y": 1,
+        "z": -29
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762153462592-6663-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -3,
+        "y": 1,
+        "z": 29
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154013405-7031",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 15,
+        "y": 0,
+        "z": -20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "10",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154013405-7031-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 15,
+        "y": 0,
+        "z": 20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "10",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154099452-1956",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": -18
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154099452-1956-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 18
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154168665-7083",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -2,
+        "z": -20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154168665-7083-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": -2,
+        "z": 20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154181598-6061",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 2,
+        "y": 0,
+        "z": -20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154181598-6061-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 2,
+        "y": 0,
+        "z": 20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154192654-1520",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -2,
+        "y": 0,
+        "z": -20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154192654-1520-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -2,
+        "y": 0,
+        "z": 20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154234991-5075",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 2,
+        "z": -20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154234991-5075-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 2,
+        "z": 20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154248440-9538",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -3,
+        "y": -1,
+        "z": -29
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154248440-9538-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -3,
+        "y": -1,
+        "z": 29
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154264200-8697",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": 1,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154264200-8697-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": 1,
+        "z": 21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154291490-1091",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": -1,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154291490-1091-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": -1,
+        "z": 21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154307636-7127",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": 1,
+        "z": -19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154307636-7127-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": 1,
+        "z": 19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154382482-9933",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": -1,
+        "z": -1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154382482-9933-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": -1,
+        "z": 1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154434782-7447",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": 1,
+        "z": -9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154434782-7447-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": 1,
+        "z": 9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154462020-635",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": -1,
+        "z": -19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154462020-635-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": -1,
+        "z": 19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154481588-9054",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": 1,
+        "z": -19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154481588-9054-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": 1,
+        "y": 1,
+        "z": 19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154503162-9377",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": 1,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154503162-9377-mirror",
+      "tagName": "a-tetrahedron",
+      "position": {
+        "x": -1,
+        "y": 1,
+        "z": 21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "1.75",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154774706-5508",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 4,
+        "z": -5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154774706-5508-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 4,
+        "z": 5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154847455-6148",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 6,
+        "y": 5,
+        "z": -14
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154847455-6148-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 6,
+        "y": 5,
+        "z": 14
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154868647-6095",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -6,
+        "y": 5,
+        "z": -14
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154868647-6095-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -6,
+        "y": 5,
+        "z": 14
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154926274-292",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 5,
+        "z": -13
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762154926274-292-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 5,
+        "z": 13
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762155432433-4299",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 6,
+        "z": -31
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762155432433-4299-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 6,
+        "z": 31
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "2",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762155602874-3879",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 14,
+        "z": -20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "10",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#ffffff",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    },
+    {
+      "id": "duplicate-1762155602874-3879-mirror",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0,
+        "y": 14,
+        "z": 20
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "radius": "10",
+        "color": "#888888",
+        "material": {
+          "alphaTest": 0,
+          "depthTest": true,
+          "depthWrite": true,
+          "flatShading": false,
+          "npot": false,
+          "opacity": 1,
+          "shader": "standard",
+          "side": "front",
+          "transparent": false,
+          "vertexColorsEnabled": false,
+          "visible": true,
+          "blending": "normal",
+          "dithering": true,
+          "anisotropy": 0,
+          "ambientOcclusionMap": "",
+          "ambientOcclusionMapIntensity": 1,
+          "color": "#888888",
+          "displacementMap": "",
+          "displacementScale": 1,
+          "displacementBias": 0.5,
+          "emissive": "#000",
+          "emissiveIntensity": 1,
+          "envMap": "",
+          "fog": true,
+          "metalness": 0,
+          "metalnessMap": "",
+          "normalMap": "",
+          "roughness": 0.5,
+          "roughnessMap": "",
+          "sphericalEnvMap": "",
+          "src": "",
+          "wireframe": false,
+          "wireframeLinewidth": 2
+        },
+        "grab-surface": "{\"type\":\"static\",\"strength\":1}"
+      }
+    }
+  ]
+}
