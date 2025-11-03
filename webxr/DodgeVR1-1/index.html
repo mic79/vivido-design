@@ -5647,21 +5647,19 @@ function setGameplayHUD(isPlaying) {
           const rotation = this.el.getAttribute('rotation');
           this.body.position.set(worldPos.x, worldPos.y, worldPos.z);
           
-          // Apply rotation if present
-          if (rotation) {
-            const rad = Math.PI / 180;
-            // Use THREE.js Euler to ensure correct rotation order (XYZ is default)
-            const euler = new THREE.Euler(
-              rotation.x * rad,
-              rotation.y * rad,
-              rotation.z * rad,
-              'XYZ' // Rotation order
-            );
-            const quat = new THREE.Quaternion().setFromEuler(euler);
-            this.body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
-            
-            console.log(`🔧 INIT: Created physics body for ${this.el.tagName} (${this.el.id}) with rotation [${rotation.x.toFixed(1)}°, ${rotation.y.toFixed(1)}°, ${rotation.z.toFixed(1)}°]`);
-          }
+              // Apply rotation if present
+              if (rotation) {
+                const rad = Math.PI / 180;
+                // Use THREE.js Euler to ensure correct rotation order (XYZ is default)
+                const euler = new THREE.Euler(
+                  rotation.x * rad,
+                  rotation.y * rad,
+                  rotation.z * rad,
+                  'XYZ' // Rotation order
+                );
+                const quat = new THREE.Quaternion().setFromEuler(euler);
+                this.body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+              }
           
           world.addBody(this.body);
           
@@ -13037,7 +13035,6 @@ function setGameplayHUD(isPlaying) {
         
         // Arena Selector Functions
         openArenaSelector: function() {
-          console.log('🗺️ Opening arena selector...');
           const selector = document.querySelector('#arena-selector');
           const mainMenu = document.querySelector('#game-menu');
           
@@ -13314,13 +13311,6 @@ function setGameplayHUD(isPlaying) {
         },
         
         populateArenaLists: function() {
-          console.log('🗺️ Populating arena lists...');
-          
-          // Ensure ArenaManager is initialized
-          if (typeof ArenaManager !== 'undefined' && ArenaManager.officialArenas) {
-            console.log(`   Official arenas count: ${ArenaManager.officialArenas.length}`);
-          }
-          
           // Populate official arenas
           this.populateOfficialArenas();
           
@@ -13339,9 +13329,6 @@ function setGameplayHUD(isPlaying) {
           
           // Ensure ArenaManager is initialized
           const arenas = ArenaManager.officialArenas || [];
-          
-          console.log('🗺️ Populating official arenas:', arenas.length, 'arenas');
-          console.log('   Arena list:', arenas.map(a => a.name).join(', '));
           
           // If empty, show a message
           if (arenas.length === 0) {

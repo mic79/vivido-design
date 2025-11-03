@@ -447,7 +447,8 @@ const ArenaManager = {
   officialArenas: [
     { id: 'zero', name: 'Zero', description: 'Empty arena for testing', file: 'zero.json' },
     { id: 'one', name: 'One', description: 'The classic DodgeVR arena', file: 'one.json' },
-    { id: 'two', name: 'Two', description: 'Stress test with 120 octahedrons', file: 'two.json' }
+    { id: 'two', name: 'Two', description: 'Stress test with 120 octahedrons', file: 'two.json' },
+    { id: 'three', name: 'Three', description: 'Custom arena with 107 objects', file: 'three.json' }
   ], // Initialize with default arenas immediately
   defaultArenaSnapshot: null, // Will be captured on init
   
@@ -685,16 +686,9 @@ const ArenaManager = {
     const layout = this.getCurrentLayout();
     layout.metadata.name = name;
     
-    // CRITICAL: Log what we're saving to debug position issues
-    if (layout.objects && layout.objects.length > 0) {
-      console.log(`💾 SAVING: First object position:`, layout.objects[0].position);
-      console.log(`💾 SAVING: First object data:`, JSON.stringify(layout.objects[0]).substring(0, 200));
-    }
-    
     const key = `${this.STORAGE_KEY_PREFIX}personal_${slotNumber}`;
     try {
       localStorage.setItem(key, JSON.stringify(layout));
-      console.log(`✅ Saved arena "${name}" to slot ${slotNumber} with ${layout.objects.length} objects`);
       return true;
     } catch (e) {
       console.error('Failed to save arena:', e);
@@ -765,7 +759,6 @@ const ArenaManager = {
   deletePersonalArena: function(slotNumber) {
     const key = `${this.STORAGE_KEY_PREFIX}personal_${slotNumber}`;
     localStorage.removeItem(key);
-    console.log(`🗑️ Deleted arena from slot ${slotNumber}`);
   },
   
   /**
@@ -812,6 +805,25 @@ const ArenaManager = {
         this.loadLayout(defaultLayout, 'One');
         return defaultLayout;
       }
+    } else if (arenaId === 'three') {
+      // Load "Three" arena from JSON file
+      try {
+        // Add cache-busting timestamp to force fresh load
+        const cacheBuster = `?t=${Date.now()}`;
+        const response = await fetch(`arenas/three.json${cacheBuster}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const layout = await response.json();
+        this.loadLayout(layout, 'Three');
+        this.currentArenaSource = 'official';
+        return layout; // Return the layout for broadcasting
+      } catch (error) {
+        console.error('❌ Failed to load Three arena:', error);
+        const defaultLayout = this.getDefaultArenaLayout();
+        this.loadLayout(defaultLayout, 'One');
+        return defaultLayout;
+      }
     }
     return null;
   },
@@ -822,7 +834,6 @@ const ArenaManager = {
   getDefaultArenaLayout: function() {
     // Return the snapshot captured at initialization
     if (this.defaultArenaSnapshot) {
-      console.log(`📸 Returning default arena snapshot: ${this.defaultArenaSnapshot.metadata.objectCount} objects`);
       return this.defaultArenaSnapshot;
     }
     
@@ -884,22 +895,10 @@ const ArenaManager = {
    */
   broadcastArenaLoad: function(layoutData) {
     if (typeof connections !== 'undefined' && typeof isHost !== 'undefined' && isHost) {
-      console.log(`📡 HOST: Broadcasting arena "${this.currentArenaName}" with ${layoutData.objects?.length || 0} objects`);
-      
-      // Log first object before sanitization for debugging
-      if (layoutData.objects && layoutData.objects.length > 0) {
-        console.log(`📊 HOST: Sample object before sanitization:`, JSON.stringify(layoutData.objects[0]).substring(0, 200));
-      }
-      
       // CRITICAL: Sanitize the layout data by doing a JSON round-trip
       // This removes non-serializable objects like HTMLImageElement
       try {
         const sanitizedData = JSON.parse(JSON.stringify(layoutData));
-        
-        // Log first object after sanitization for debugging
-        if (sanitizedData.objects && sanitizedData.objects.length > 0) {
-          console.log(`📊 HOST: Sample object after sanitization:`, JSON.stringify(sanitizedData.objects[0]).substring(0, 200));
-        }
         
         const message = {
           type: 'arena-load',
@@ -912,7 +911,6 @@ const ArenaManager = {
           if (conn && conn.open) {
             try {
               conn.send(message);
-              console.log(`📡 Sent arena "${this.currentArenaName}" to client: ${playerId}`);
             } catch (e) {
               console.error(`❌ Failed to send arena to client ${playerId}:`, e);
             }
@@ -929,14 +927,6 @@ const ArenaManager = {
    * Handle arena load message from host (client side)
    */
   handleArenaLoadMessage: function(data) {
-    console.log(`📡 CLIENT: Received arena from host: ${data.arenaName}`);
-    console.log(`📡 CLIENT: Arena has ${data.arenaData?.objects?.length || 0} objects`);
-    
-    // Log first object received for debugging
-    if (data.arenaData && data.arenaData.objects && data.arenaData.objects.length > 0) {
-      console.log(`📊 CLIENT: Sample object received:`, JSON.stringify(data.arenaData.objects[0]).substring(0, 200));
-    }
-    
     if (!data.arenaData || !data.arenaData.objects) {
       console.error('❌ CLIENT: Invalid arena data received:', data);
       return;
@@ -952,5 +942,4 @@ const ArenaManager = {
 // ============================================================================
 
 console.log('✅ Arena Templates System Loaded');
-console.log(`   Registered templates: ${Object.keys(ARENA_OBJECT_TEMPLATES).join(', ')}`);
 console.log(`   Official arenas: ${ArenaManager.officialArenas.map(a => a.name).join(', ')}`);

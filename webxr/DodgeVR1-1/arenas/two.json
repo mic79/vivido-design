@@ -1,10 +1,10 @@
 {
   "metadata": {
     "name": "Two",
-    "description": "Arena One + 45 fill octahedrons (70 total objects)",
+    "description": "Arena One + 50 fill octahedrons (75 total objects)",
     "version": "1.0",
-    "created": "2025-11-01T09:32:02.489Z",
-    "objectCount": 70
+    "created": "2025-11-03T01:50:38.464Z",
+    "objectCount": 75
   },
   "objects": [
     {
@@ -108,7 +108,7 @@
           "repeat": "20 5",
           "ambientOcclusionMap": "#panelAo",
           "ambientOcclusionTextureRepeat": "20 5",
-          "color": "#00ff00",
+          "color": "#ffffff",
           "displacementMap": "#panelHeightmap",
           "displacementScale": 0,
           "displacementBias": 0,
@@ -158,7 +158,7 @@
           "repeat": "20 5",
           "ambientOcclusionMap": "#panelAo",
           "ambientOcclusionTextureRepeat": "20 5",
-          "color": "#00ff00",
+          "color": "#ffffff",
           "displacementMap": "#panelHeightmap",
           "displacementScale": 0,
           "displacementBias": 0,
@@ -937,7 +937,7 @@
       "position": {
         "x": -3,
         "y": -3.5,
-        "z": 19
+        "z": 22.5
       },
       "rotation": {
         "x": 0,
@@ -970,8 +970,8 @@
       "tagName": "a-octahedron",
       "position": {
         "x": -3,
-        "y": -3.5,
-        "z": 22.5
+        "y": 0,
+        "z": 15.5
       },
       "rotation": {
         "x": 0,
@@ -1005,7 +1005,7 @@
       "position": {
         "x": -3,
         "y": 0,
-        "z": 15.5
+        "z": 19
       },
       "rotation": {
         "x": 0,
@@ -1020,7 +1020,7 @@
       "attributes": {
         "geometry": {
           "primitive": "octahedron",
-          "radius": 1.2
+          "radius": 1
         },
         "material": {
           "color": "#888888",
@@ -1039,7 +1039,7 @@
       "position": {
         "x": -3,
         "y": 0,
-        "z": 19
+        "z": 22.5
       },
       "rotation": {
         "x": 0,
@@ -1054,7 +1054,7 @@
       "attributes": {
         "geometry": {
           "primitive": "octahedron",
-          "radius": 0.8
+          "radius": 1.5
         },
         "material": {
           "color": "#888888",
@@ -1088,7 +1088,7 @@
       "attributes": {
         "geometry": {
           "primitive": "octahedron",
-          "radius": 1.2
+          "radius": 1
         },
         "material": {
           "color": "#888888",
@@ -1106,8 +1106,8 @@
       "tagName": "a-octahedron",
       "position": {
         "x": -3,
-        "y": 7,
-        "z": 19
+        "y": 3.5,
+        "z": 22.5
       },
       "rotation": {
         "x": 0,
@@ -1137,6 +1137,74 @@
     },
     {
       "id": "fill-octa-107",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -3,
+        "y": 7,
+        "z": 19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 2
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-108",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -3,
+        "y": 7,
+        "z": 22.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 0.8
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-109",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
@@ -1170,7 +1238,7 @@
       }
     },
     {
-      "id": "fill-octa-108",
+      "id": "fill-octa-110",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
@@ -1204,7 +1272,41 @@
       }
     },
     {
-      "id": "fill-octa-109",
+      "id": "fill-octa-111",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": -3.5,
+        "z": 15.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 0.8
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-112",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
@@ -1238,79 +1340,11 @@
       }
     },
     {
-      "id": "fill-octa-110",
+      "id": "fill-octa-113",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
-        "y": 0,
-        "z": 12
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 0.8
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
-      "id": "fill-octa-111",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": 0,
-        "z": 19
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 1.5
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
-      "id": "fill-octa-112",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": 0,
+        "y": -3.5,
         "z": 22.5
       },
       "rotation": {
@@ -1340,45 +1374,11 @@
       }
     },
     {
-      "id": "fill-octa-113",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": 0,
-        "z": 26
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 2
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
       "id": "fill-octa-114",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
-        "y": 3.5,
+        "y": 0,
         "z": 15.5
       },
       "rotation": {
@@ -1412,8 +1412,76 @@
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
-        "y": 3.5,
+        "y": 0,
         "z": 19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 2
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-116",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": 0,
+        "z": 26
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 0.8
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-117",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": 3.5,
+        "z": 15.5
       },
       "rotation": {
         "x": 0,
@@ -1442,7 +1510,7 @@
       }
     },
     {
-      "id": "fill-octa-116",
+      "id": "fill-octa-118",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
@@ -1462,75 +1530,7 @@
       "attributes": {
         "geometry": {
           "primitive": "octahedron",
-          "radius": 1.2
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
-      "id": "fill-octa-117",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": 7,
-        "z": 15.5
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 0.8
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
-      "id": "fill-octa-118",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": 7,
-        "z": 19
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 0.8
+          "radius": 1.5
         },
         "material": {
           "color": "#888888",
@@ -1549,7 +1549,7 @@
       "position": {
         "x": 0.5,
         "y": 7,
-        "z": 22.5
+        "z": 19
       },
       "rotation": {
         "x": 0,
@@ -1581,8 +1581,76 @@
       "id": "fill-octa-120",
       "tagName": "a-octahedron",
       "position": {
-        "x": 4,
+        "x": 0.5,
         "y": 7,
+        "z": 22.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 0.8
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-121",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 4,
+        "y": -7,
+        "z": 19
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 1.5
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-122",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 4,
+        "y": -3.5,
         "z": 19
       },
       "rotation": {
@@ -1612,80 +1680,46 @@
       }
     },
     {
-      "id": "fill-octa-121",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": -3,
-        "y": -7,
-        "z": -21
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 2
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
-      "id": "fill-octa-122",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": -3,
-        "y": -3.5,
-        "z": -17.5
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 1.5
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
       "id": "fill-octa-123",
       "tagName": "a-octahedron",
       "position": {
-        "x": -3,
+        "x": 4,
         "y": 0,
-        "z": -21
+        "z": 15.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 0.8
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-124",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 4,
+        "y": 3.5,
+        "z": 19
       },
       "rotation": {
         "x": 0,
@@ -1714,46 +1748,12 @@
       }
     },
     {
-      "id": "fill-octa-124",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": -3,
-        "y": 0,
-        "z": -17.5
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 1.5
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
       "id": "fill-octa-125",
       "tagName": "a-octahedron",
       "position": {
-        "x": -3,
-        "y": 3.5,
-        "z": -21
+        "x": 4,
+        "y": 7,
+        "z": 19
       },
       "rotation": {
         "x": 0,
@@ -1786,8 +1786,8 @@
       "tagName": "a-octahedron",
       "position": {
         "x": -3,
-        "y": 3.5,
-        "z": -17.5
+        "y": -7,
+        "z": -21
       },
       "rotation": {
         "x": 0,
@@ -1802,7 +1802,7 @@
       "attributes": {
         "geometry": {
           "primitive": "octahedron",
-          "radius": 1
+          "radius": 1.2
         },
         "material": {
           "color": "#888888",
@@ -1820,7 +1820,7 @@
       "tagName": "a-octahedron",
       "position": {
         "x": -3,
-        "y": 7,
+        "y": -3.5,
         "z": -21
       },
       "rotation": {
@@ -1853,9 +1853,9 @@
       "id": "fill-octa-128",
       "tagName": "a-octahedron",
       "position": {
-        "x": 0.5,
-        "y": -7,
-        "z": -21
+        "x": -3,
+        "y": -3.5,
+        "z": -17.5
       },
       "rotation": {
         "x": 0,
@@ -1887,42 +1887,8 @@
       "id": "fill-octa-129",
       "tagName": "a-octahedron",
       "position": {
-        "x": 0.5,
-        "y": -7,
-        "z": -17.5
-      },
-      "rotation": {
-        "x": 0,
+        "x": -3,
         "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 2
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
-      "id": "fill-octa-130",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": -3.5,
         "z": -24.5
       },
       "rotation": {
@@ -1952,12 +1918,46 @@
       }
     },
     {
+      "id": "fill-octa-130",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -3,
+        "y": 0,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 1
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
       "id": "fill-octa-131",
       "tagName": "a-octahedron",
       "position": {
-        "x": 0.5,
-        "y": -3.5,
-        "z": -21
+        "x": -3,
+        "y": 0,
+        "z": -17.5
       },
       "rotation": {
         "x": 0,
@@ -1989,8 +1989,42 @@
       "id": "fill-octa-132",
       "tagName": "a-octahedron",
       "position": {
-        "x": 0.5,
-        "y": -3.5,
+        "x": -3,
+        "y": 3.5,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 2
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-133",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": -3,
+        "y": 3.5,
         "z": -17.5
       },
       "rotation": {
@@ -2020,11 +2054,45 @@
       }
     },
     {
-      "id": "fill-octa-133",
+      "id": "fill-octa-134",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
+        "y": -7,
+        "z": -17.5
+      },
+      "rotation": {
+        "x": 0,
         "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 2
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-135",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": -3.5,
         "z": -24.5
       },
       "rotation": {
@@ -2040,7 +2108,7 @@
       "attributes": {
         "geometry": {
           "primitive": "octahedron",
-          "radius": 1.5
+          "radius": 1.2
         },
         "material": {
           "color": "#888888",
@@ -2054,11 +2122,11 @@
       }
     },
     {
-      "id": "fill-octa-134",
+      "id": "fill-octa-136",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
-        "y": 0,
+        "y": -3.5,
         "z": -21
       },
       "rotation": {
@@ -2088,11 +2156,11 @@
       }
     },
     {
-      "id": "fill-octa-135",
+      "id": "fill-octa-137",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
-        "y": 0,
+        "y": -3.5,
         "z": -17.5
       },
       "rotation": {
@@ -2122,80 +2190,12 @@
       }
     },
     {
-      "id": "fill-octa-136",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": 0,
-        "z": -14
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 2
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
-      "id": "fill-octa-137",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": 3.5,
-        "z": -24.5
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 1.5
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
       "id": "fill-octa-138",
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
-        "y": 3.5,
-        "z": -21
+        "y": 0,
+        "z": -24.5
       },
       "rotation": {
         "x": 0,
@@ -2228,7 +2228,41 @@
       "tagName": "a-octahedron",
       "position": {
         "x": 0.5,
-        "y": 3.5,
+        "y": 0,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 1.5
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-140",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": 0,
         "z": -17.5
       },
       "rotation": {
@@ -2258,46 +2292,12 @@
       }
     },
     {
-      "id": "fill-octa-140",
-      "tagName": "a-octahedron",
-      "position": {
-        "x": 0.5,
-        "y": 7,
-        "z": -21
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      },
-      "scale": {
-        "x": 1,
-        "y": 1,
-        "z": 1
-      },
-      "attributes": {
-        "geometry": {
-          "primitive": "octahedron",
-          "radius": 0.8
-        },
-        "material": {
-          "color": "#888888",
-          "shader": "standard",
-          "metalness": 0.7,
-          "roughness": 0.3
-        },
-        "grab-surface": {
-          "type": "static"
-        }
-      }
-    },
-    {
       "id": "fill-octa-141",
       "tagName": "a-octahedron",
       "position": {
-        "x": 4,
-        "y": -7,
-        "z": -21
+        "x": 0.5,
+        "y": 3.5,
+        "z": -24.5
       },
       "rotation": {
         "x": 0,
@@ -2327,6 +2327,142 @@
     },
     {
       "id": "fill-octa-142",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": 3.5,
+        "z": -17.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 1
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-143",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": 7,
+        "z": -24.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 0.8
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-144",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": 7,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 1.2
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-145",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 0.5,
+        "y": 7,
+        "z": -17.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 1.2
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-146",
       "tagName": "a-octahedron",
       "position": {
         "x": 4,
@@ -2360,7 +2496,41 @@
       }
     },
     {
-      "id": "fill-octa-143",
+      "id": "fill-octa-147",
+      "tagName": "a-octahedron",
+      "position": {
+        "x": 4,
+        "y": 3.5,
+        "z": -21
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "attributes": {
+        "geometry": {
+          "primitive": "octahedron",
+          "radius": 1
+        },
+        "material": {
+          "color": "#888888",
+          "shader": "standard",
+          "metalness": 0.7,
+          "roughness": 0.3
+        },
+        "grab-surface": {
+          "type": "static"
+        }
+      }
+    },
+    {
+      "id": "fill-octa-148",
       "tagName": "a-octahedron",
       "position": {
         "x": 4,
@@ -2394,7 +2564,7 @@
       }
     },
     {
-      "id": "fill-octa-144",
+      "id": "fill-octa-149",
       "tagName": "a-octahedron",
       "position": {
         "x": 4,
@@ -2414,7 +2584,7 @@
       "attributes": {
         "geometry": {
           "primitive": "octahedron",
-          "radius": 1
+          "radius": 1.5
         },
         "material": {
           "color": "#888888",
