@@ -13490,32 +13490,36 @@ function setGameplayHUD(isPlaying) {
           });
         },
         
-        loadArena: async function(buttonId) {
+        loadArena: function(buttonId) {
           console.log('🗺️ Load arena clicked:', buttonId);
           
           if (typeof ArenaManager === 'undefined') return;
           
+          // Close arena selector immediately
+          this.closeArenaSelector();
+          
+          // Load arena asynchronously WITHOUT blocking (fire and forget)
           if (buttonId.startsWith('arena-load-official-')) {
             const arenaId = buttonId.replace('arena-load-official-', '');
-            const layout = await ArenaManager.loadOfficialArena(arenaId);
-            
-            // Broadcast to clients if host - CRITICAL: Use the layout that was just loaded,
-            // not getCurrentLayout() which would read from object3D positions that haven't updated yet
-            if (isHost && isMultiplayer && layout) {
-              ArenaManager.broadcastArenaLoad(layout);
-            }
+            // Don't await - let it run in background
+            ArenaManager.loadOfficialArena(arenaId).then(layout => {
+              // Broadcast to clients if host after loading completes
+              if (isHost && isMultiplayer && layout) {
+                ArenaManager.broadcastArenaLoad(layout);
+              }
+            }).catch(err => {
+              console.error('❌ Arena load failed:', err);
+            });
           } else if (buttonId.startsWith('arena-load-personal-')) {
             const slot = parseInt(buttonId.replace('arena-load-personal-', ''));
+            // Personal arenas load synchronously, so no await needed
             const layout = ArenaManager.loadFromPersonalSlot(slot);
             
-            // Broadcast to clients if host - CRITICAL: Use the layout that was just loaded
+            // Broadcast to clients if host
             if (isHost && isMultiplayer && layout) {
               ArenaManager.broadcastArenaLoad(layout);
             }
           }
-          
-          // Close arena selector
-          this.closeArenaSelector();
         },
         
         saveToSlot: function(buttonId) {
