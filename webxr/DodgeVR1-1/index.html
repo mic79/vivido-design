@@ -1059,6 +1059,11 @@
             // Skip if this is the current player's slot
             if (myPlayerId === `player_${i}`) {
               remotePlayer.setAttribute('visible', false);
+              // Also explicitly hide the arms
+              const leftArm = remotePlayer.querySelector('.remote-left-hand');
+              const rightArm = remotePlayer.querySelector('.remote-right-hand');
+              if (leftArm) leftArm.setAttribute('visible', false);
+              if (rightArm) rightArm.setAttribute('visible', false);
               continue;
             }
             
@@ -1553,8 +1558,18 @@
         const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
         if (remotePlayer) {
           remotePlayer.setAttribute('position', `${data.state.x} ${data.state.y} ${data.state.z}`);
-          remotePlayer.setAttribute('rotation', `${data.state.rx} ${data.state.ry} ${data.state.rz}`);
+          remotePlayer.setAttribute('rotation', `${THREE.MathUtils.radToDeg(data.state.rx)} ${THREE.MathUtils.radToDeg(data.state.ry)} ${THREE.MathUtils.radToDeg(data.state.rz)}`);
           remotePlayer.setAttribute('visible', true);
+          
+          // Apply camera Y rotation to drone model
+          // The drone model rotation should be relative to its parent (the sphere)
+          // Since the remote-player entity already has the camera rotation applied,
+          // we just need the static -90 degree offset to match the local player
+          const droneModel = remotePlayer.querySelector('a-gltf-model');
+          if (droneModel) {
+            // Static -90 degree offset (or 270 degrees)
+            droneModel.object3D.rotation.y = -Math.PI / 2;
+          }
           
           // Store rig rotation data for IK calculations
           if (data.state.rig) {
@@ -1566,11 +1581,20 @@
             const leftHand = remotePlayer.querySelector('.remote-left-hand');
             if (leftHand) {
               // Convert world position to local position relative to remote player
-              const localPos = new THREE.Vector3(
-                data.state.leftHand.x - data.state.x,
-                data.state.leftHand.y - data.state.y,
-                data.state.leftHand.z - data.state.z
+              // Account for remote player's rotation by transforming into local space
+              const worldHandPos = new THREE.Vector3(
+                data.state.leftHand.x,
+                data.state.leftHand.y,
+                data.state.leftHand.z
               );
+              const remotePlayerWorldPos = new THREE.Vector3(data.state.x, data.state.y, data.state.z);
+              const remotePlayerWorldQuat = new THREE.Quaternion();
+              remotePlayer.object3D.getWorldQuaternion(remotePlayerWorldQuat);
+              
+              // Get local position by transforming through inverse rotation
+              const localPos = worldHandPos.sub(remotePlayerWorldPos);
+              localPos.applyQuaternion(remotePlayerWorldQuat.invert());
+              
               leftHand.setAttribute('position', `${localPos.x} ${localPos.y} ${localPos.z}`);
               leftHand.setAttribute('rotation', `${data.state.leftHand.rx} ${data.state.leftHand.ry} ${data.state.leftHand.rz}`);
               
@@ -1602,11 +1626,20 @@
             const rightHand = remotePlayer.querySelector('.remote-right-hand');
             if (rightHand) {
               // Convert world position to local position relative to remote player
-              const localPos = new THREE.Vector3(
-                data.state.rightHand.x - data.state.x,
-                data.state.rightHand.y - data.state.y,
-                data.state.rightHand.z - data.state.z
+              // Account for remote player's rotation by transforming into local space
+              const worldHandPos = new THREE.Vector3(
+                data.state.rightHand.x,
+                data.state.rightHand.y,
+                data.state.rightHand.z
               );
+              const remotePlayerWorldPos = new THREE.Vector3(data.state.x, data.state.y, data.state.z);
+              const remotePlayerWorldQuat = new THREE.Quaternion();
+              remotePlayer.object3D.getWorldQuaternion(remotePlayerWorldQuat);
+              
+              // Get local position by transforming through inverse rotation
+              const localPos = worldHandPos.sub(remotePlayerWorldPos);
+              localPos.applyQuaternion(remotePlayerWorldQuat.invert());
+              
               rightHand.setAttribute('position', `${localPos.x} ${localPos.y} ${localPos.z}`);
               rightHand.setAttribute('rotation', `${data.state.rightHand.rx} ${data.state.rightHand.ry} ${data.state.rightHand.rz}`);
               
@@ -3020,44 +3053,43 @@ function setGameplayHUD(isPlaying) {
       );
       world.addContactMaterial(ballSurfaceContact);
 
+      // Component to sync remote player drone rotation with sphere (physics body)
+      // NOTE: This is now handled directly in the network update code
+      AFRAME.registerComponent('sync-drone-rotation', {
+        tick: function() {
+          // Rotation is now applied directly when network data arrives
+          // This component is kept for compatibility but does nothing
+        }
+      });
+
       // Component to fix overexposed GLB model materials
       AFRAME.registerComponent('fix-model-exposure', {
         init: function() {
           let fixed = false; // Only fix once
-          
-          const getParentId = () => {
-            const parent = this.el.parentElement;
-            return parent ? (parent.id || parent.getAttribute('data-player-id') || 'unknown') : 'unknown';
-          };
           
           const fixMaterials = () => {
             if (fixed) return true; // Already fixed, don't apply again
             
             const mesh = this.el.getObject3D('mesh');
             if (!mesh) {
-              console.log('⏳ Waiting for model to load for', getParentId());
               return false;
             }
             
             let foundMaterials = false;
             mesh.traverse((node) => {
               if (node.isMesh && node.material) {
-                // Handle both single material and material arrays
                 const materials = Array.isArray(node.material) ? node.material : [node.material];
                 
                 materials.forEach((mat) => {
-                  // Remove or reduce emissive properties
                   if (mat.emissive) {
-                    mat.emissive.setScalar(0); // Set to black (no emission)
+                    mat.emissive.setScalar(0);
                   }
                   if (mat.emissiveIntensity !== undefined) {
                     mat.emissiveIntensity = 0;
                   }
-                  // Reduce overall brightness slightly (less aggressive)
                   if (mat.color) {
-                    mat.color.multiplyScalar(0.8); // Reduce brightness by 20% only
+                    mat.color.multiplyScalar(0.8); // Reduce brightness by 20%
                   }
-                  // Ensure metalness and roughness are reasonable
                   if (mat.metalness !== undefined) {
                     mat.metalness = Math.min(mat.metalness, 0.3);
                   }
@@ -3071,23 +3103,17 @@ function setGameplayHUD(isPlaying) {
             });
             
             if (foundMaterials) {
-              fixed = true; // Mark as fixed so we don't do it again
-              console.log('✅ Fixed model exposure for', getParentId());
+              fixed = true;
               return true;
             }
             return false;
           };
           
-          // Try on model-loaded event
           this.el.addEventListener('model-loaded', fixMaterials);
-          
-          // Try with multiple delays to catch late-loading models
           setTimeout(fixMaterials, 100);
           setTimeout(fixMaterials, 500);
           setTimeout(fixMaterials, 1000);
           setTimeout(fixMaterials, 2000);
-          setTimeout(fixMaterials, 3000);
-          setTimeout(fixMaterials, 5000);
         }
       });
 
@@ -5127,19 +5153,16 @@ function setGameplayHUD(isPlaying) {
             return;
           }
           
-          // Apply rotation from right thumbstick
+          // Apply thumbstick rotation to accumulated rotationY
           const rotationInput = this.thumbstickRotation.right;
           if (Math.abs(rotationInput) > 0.1) {
-            const rotationSpeed = this.data.rotationSpeed * deltaTime; // deltaTime is already in seconds
+            const rotationSpeed = this.data.rotationSpeed * deltaTime;
             this.rotationY += rotationInput * rotationSpeed;
-            
-            // Apply rotation to the rig only (Option B: no physics body)
-            this.rig.object3D.rotation.y = this.rotationY;
-            
-            // Debug output
-            if (this.debugMode) {
-            }
           }
+          
+          // Apply only thumbstick rotation to rig
+          // Camera rotation is naturally relative to rig, so physical head rotation works automatically
+          this.rig.object3D.rotation.y = this.rotationY;
         },
         
         // Option B: Apply thruster forces to velocity
@@ -12560,35 +12583,28 @@ function setGameplayHUD(isPlaying) {
           
           // Use different rotation logic for remote vs local players
           if (this.isRemotePlayer) {
-            // For remote players, use the synced rig rotation data
+            // For remote players, use the remote player entity's rotation (camera rotation)
             const remotePlayerEntity = this.el.closest('[id^="remote-player"]');
-            const rigRotationData = remotePlayerEntity ? remotePlayerEntity.getAttribute('data-rig-rotation') : null;
+            const remotePlayerRotation = remotePlayerEntity ? remotePlayerEntity.getAttribute('rotation') : null;
             
-            if (rigRotationData) {
-              const rigRotParts = rigRotationData.split(' ');
-              const rigEuler = new THREE.Euler(
-                parseFloat(rigRotParts[0]),
-                parseFloat(rigRotParts[1]), 
-                parseFloat(rigRotParts[2]),
+            if (remotePlayerRotation) {
+              // Use camera rotation (includes both thumbstick and physical rotation)
+              const remoteEuler = new THREE.Euler(
+                THREE.MathUtils.degToRad(remotePlayerRotation.x),
+                THREE.MathUtils.degToRad(remotePlayerRotation.y), 
+                THREE.MathUtils.degToRad(remotePlayerRotation.z),
                 'YXZ'
               );
               // Only use Y-axis rotation for stability (same as local player)
-              const bodyYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rigEuler.y);
+              const bodyYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), remoteEuler.y);
               shoulderOffset.applyQuaternion(bodyYaw);
             }
-            // If no rig data available, use shoulder offset as-is
+            // If no rotation data available, use shoulder offset as-is
           } else {
-            // For local player, use rig (body) rotation instead of headset rotation for shoulders
-            const rigWorldQuat = new THREE.Quaternion();
-            if (this.rig) {
-              this.rig.object3D.getWorldQuaternion(rigWorldQuat);
-              shoulderOffset.applyQuaternion(rigWorldQuat);
-            } else {
-              // Fallback: use headset rotation but only Y-axis (yaw) to keep shoulders level
-              const headsetEuler = new THREE.Euler().setFromQuaternion(headsetWorldQuat, 'YXZ');
-              const bodyYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), headsetEuler.y);
-              shoulderOffset.applyQuaternion(bodyYaw);
-            }
+            // For local player, use camera (headset) rotation for shoulders so physical rotation works
+            const headsetEuler = new THREE.Euler().setFromQuaternion(headsetWorldQuat, 'YXZ');
+            const bodyYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), headsetEuler.y);
+            shoulderOffset.applyQuaternion(bodyYaw);
           }
           
           const shoulderWorldPos = new THREE.Vector3().addVectors(headsetWorldPos, shoulderOffset);
@@ -12646,36 +12662,28 @@ function setGameplayHUD(isPlaying) {
           // Get body orientation for elbow bend direction
           let bodyRotation;
           if (this.isRemotePlayer) {
-            // For remote players, use the synced rig rotation data
+            // For remote players, use the remote player entity's rotation (camera rotation)
             const remotePlayerEntity = this.el.closest('[id^="remote-player"]');
-            const rigRotationData = remotePlayerEntity ? remotePlayerEntity.getAttribute('data-rig-rotation') : null;
+            const remotePlayerRotation = remotePlayerEntity ? remotePlayerEntity.getAttribute('rotation') : null;
             
-            if (rigRotationData) {
-              const rigRotParts = rigRotationData.split(' ');
-              const rigEuler = new THREE.Euler(
-                parseFloat(rigRotParts[0]),
-                parseFloat(rigRotParts[1]), 
-                parseFloat(rigRotParts[2]),
+            if (remotePlayerRotation) {
+              // Use camera rotation (includes both thumbstick and physical rotation)
+              const remoteEuler = new THREE.Euler(
+                THREE.MathUtils.degToRad(remotePlayerRotation.x),
+                THREE.MathUtils.degToRad(remotePlayerRotation.y), 
+                THREE.MathUtils.degToRad(remotePlayerRotation.z),
                 'YXZ'
               );
               // Only use Y-axis rotation for stability (same as local player)
-              bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rigEuler.y);
+              bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), remoteEuler.y);
             } else {
               // Fallback to identity rotation
               bodyRotation = new THREE.Quaternion();
             }
           } else {
-            // For local player, prefer rig rotation but only Y-axis for stability
-            if (this.rig) {
-              const rigEuler = new THREE.Euler();
-              const rigQuat = new THREE.Quaternion();
-              this.rig.object3D.getWorldQuaternion(rigQuat);
-              rigEuler.setFromQuaternion(rigQuat, 'YXZ');
-              bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rigEuler.y);
-            } else {
-              const headsetEuler = new THREE.Euler().setFromQuaternion(headsetWorldQuat, 'YXZ');
-              bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), headsetEuler.y);
-            }
+            // For local player, use camera (headset) rotation for body so physical rotation works
+            const headsetEuler = new THREE.Euler().setFromQuaternion(headsetWorldQuat, 'YXZ');
+            bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), headsetEuler.y);
           }
           
           // Create stable bend direction based on controller's up vector
@@ -16398,8 +16406,7 @@ function setGameplayHUD(isPlaying) {
                       class="grabbable-player"
                       data-player-id="player_0">
               <!-- Drone body visual -->
-              <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
-                           position="0 -0.15 -0.13"
+              <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                            scale="0.4 0.4 0.4"
                            rotation="0 90 0"
                            visible="false"
@@ -16886,10 +16893,9 @@ function setGameplayHUD(isPlaying) {
                   class="grabbable-player"
                   data-player-id="player_0">
           <!-- Drone body visual -->
-          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
-                       position="0 -0.15 -0.13"
+          <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
-                       rotation="0 90 0"
+                       sync-drone-rotation
                        fix-model-exposure>
           </a-gltf-model>
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
@@ -17027,10 +17033,9 @@ function setGameplayHUD(isPlaying) {
                    class="grabbable-player"
                    data-player-id="player_1">
           <!-- Drone body visual -->
-          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
-                       position="0 -0.15 -0.13"
+          <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
-                       rotation="0 90 0"
+                       sync-drone-rotation
                        fix-model-exposure>
           </a-gltf-model>
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
@@ -17168,10 +17173,9 @@ function setGameplayHUD(isPlaying) {
                    class="grabbable-player"
                    data-player-id="player_2">
           <!-- Drone body visual -->
-          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
-                       position="0 -0.15 -0.13"
+          <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
-                       rotation="0 90 0"
+                       sync-drone-rotation
                        fix-model-exposure>
           </a-gltf-model>
           <a-entity light="type: point; color: #ff00ff; intensity: 1; distance: 3"></a-entity>
@@ -17309,10 +17313,9 @@ function setGameplayHUD(isPlaying) {
                    class="grabbable-player"
                    data-player-id="player_3">
           <!-- Drone body visual -->
-          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
-                       position="0 -0.15 -0.13"
+          <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
-                       rotation="0 90 0"
+                       sync-drone-rotation
                        fix-model-exposure>
           </a-gltf-model>
           <a-entity light="type: point; color: #ffff00; intensity: 1; distance: 3"></a-entity>
@@ -17437,8 +17440,7 @@ function setGameplayHUD(isPlaying) {
                    class="grabbable-player"
                    data-player-id="bot_red">
           <!-- Drone body visual -->
-          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
-                       position="0 -0.15 -0.13"
+          <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        rotation="0 90 0"
                        fix-model-exposure>
@@ -17463,8 +17465,7 @@ function setGameplayHUD(isPlaying) {
                    class="grabbable-player"
                    data-player-id="bot_blue">
           <!-- Drone body visual -->
-          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
-                       position="0 -0.15 -0.13"
+          <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        rotation="0 90 0"
                        fix-model-exposure>
@@ -17489,8 +17490,7 @@ function setGameplayHUD(isPlaying) {
                    class="grabbable-player"
                    data-player-id="bot_green">
           <!-- Drone body visual -->
-          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
-                       position="0 -0.15 -0.13"
+          <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        rotation="0 90 0"
                        fix-model-exposure>
