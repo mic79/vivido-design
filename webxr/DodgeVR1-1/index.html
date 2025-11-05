@@ -3020,6 +3020,77 @@ function setGameplayHUD(isPlaying) {
       );
       world.addContactMaterial(ballSurfaceContact);
 
+      // Component to fix overexposed GLB model materials
+      AFRAME.registerComponent('fix-model-exposure', {
+        init: function() {
+          let fixed = false; // Only fix once
+          
+          const getParentId = () => {
+            const parent = this.el.parentElement;
+            return parent ? (parent.id || parent.getAttribute('data-player-id') || 'unknown') : 'unknown';
+          };
+          
+          const fixMaterials = () => {
+            if (fixed) return true; // Already fixed, don't apply again
+            
+            const mesh = this.el.getObject3D('mesh');
+            if (!mesh) {
+              console.log('⏳ Waiting for model to load for', getParentId());
+              return false;
+            }
+            
+            let foundMaterials = false;
+            mesh.traverse((node) => {
+              if (node.isMesh && node.material) {
+                // Handle both single material and material arrays
+                const materials = Array.isArray(node.material) ? node.material : [node.material];
+                
+                materials.forEach((mat) => {
+                  // Remove or reduce emissive properties
+                  if (mat.emissive) {
+                    mat.emissive.setScalar(0); // Set to black (no emission)
+                  }
+                  if (mat.emissiveIntensity !== undefined) {
+                    mat.emissiveIntensity = 0;
+                  }
+                  // Reduce overall brightness slightly (less aggressive)
+                  if (mat.color) {
+                    mat.color.multiplyScalar(0.8); // Reduce brightness by 20% only
+                  }
+                  // Ensure metalness and roughness are reasonable
+                  if (mat.metalness !== undefined) {
+                    mat.metalness = Math.min(mat.metalness, 0.3);
+                  }
+                  if (mat.roughness !== undefined) {
+                    mat.roughness = Math.max(mat.roughness, 0.7);
+                  }
+                  mat.needsUpdate = true;
+                  foundMaterials = true;
+                });
+              }
+            });
+            
+            if (foundMaterials) {
+              fixed = true; // Mark as fixed so we don't do it again
+              console.log('✅ Fixed model exposure for', getParentId());
+              return true;
+            }
+            return false;
+          };
+          
+          // Try on model-loaded event
+          this.el.addEventListener('model-loaded', fixMaterials);
+          
+          // Try with multiple delays to catch late-loading models
+          setTimeout(fixMaterials, 100);
+          setTimeout(fixMaterials, 500);
+          setTimeout(fixMaterials, 1000);
+          setTimeout(fixMaterials, 2000);
+          setTimeout(fixMaterials, 3000);
+          setTimeout(fixMaterials, 5000);
+        }
+      });
+
       // Zero-G Player Controller - Physics-based movement
       AFRAME.registerComponent('zerog-player', {
         schema: {
@@ -6792,6 +6863,29 @@ function setGameplayHUD(isPlaying) {
           // Update visual position from physics
           this.el.object3D.position.copy(this.body.position);
           this.el.object3D.quaternion.copy(this.body.quaternion);
+          
+          // Keep bot upright by constraining angular velocity - only allow Y-axis rotation
+          this.body.angularVelocity.x = 0;
+          this.body.angularVelocity.z = 0;
+          // Y-axis (yaw) rotation is preserved for turning
+          
+          // Also gradually correct any pitch/roll in the physics body
+          const euler = new THREE.Euler();
+          const quat = new THREE.Quaternion(
+            this.body.quaternion.x,
+            this.body.quaternion.y,
+            this.body.quaternion.z,
+            this.body.quaternion.w
+          );
+          euler.setFromQuaternion(quat, 'YXZ');
+          
+          // Smoothly correct pitch and roll back to zero
+          const correctionSpeed = 0.1;
+          euler.x *= (1 - correctionSpeed);
+          euler.z *= (1 - correctionSpeed);
+          
+          quat.setFromEuler(euler);
+          this.body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
           
           // Position debugging removed to reduce console spam
           
@@ -16298,11 +16392,19 @@ function setGameplayHUD(isPlaying) {
             <a-sphere id="player-target" 
                       radius="0.2" 
                       color="#888888" 
-                      material="shader: standard; emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
+                      material="shader: standard; emissive: #888888; emissiveIntensity: 0.5; transparent: true; opacity: 0.1"
                       position="0 0 0"
                       impact-effect="color: #888888"
                       class="grabbable-player"
                       data-player-id="player_0">
+              <!-- Drone body visual -->
+              <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
+                           position="0 -0.15 -0.13"
+                           scale="0.4 0.4 0.4"
+                           rotation="0 90 0"
+                           visible="false"
+                           fix-model-exposure>
+              </a-gltf-model>
               <a-entity light="type: point; color: #888888; intensity: 1; distance: 3"></a-entity>
               <!-- Impact sphere with animation component -->
               <a-sphere id="player-impact" radius="0.1" color="#888888" opacity="0" visible="false" material="side: double; transparent: true"
@@ -16778,11 +16880,18 @@ function setGameplayHUD(isPlaying) {
         <a-sphere id="remote-target-0" 
                   radius="0.2" 
                   color="#ff0000" 
-                  material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
+                  material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; transparent: true; opacity: 0.1"
                   position="0 0 0"
                   impact-effect="color: #ff0000"
                   class="grabbable-player"
                   data-player-id="player_0">
+          <!-- Drone body visual -->
+          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
+                       position="0 -0.15 -0.13"
+                       scale="0.4 0.4 0.4"
+                       rotation="0 90 0"
+                       fix-model-exposure>
+          </a-gltf-model>
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-0" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -16912,11 +17021,18 @@ function setGameplayHUD(isPlaying) {
         <a-sphere id="remote-target-1" 
                   radius="0.2" 
                   color="#ff0000" 
-                  material="shader: standard; emissive: #000000; emissiveIntensity: 0; transparent: true; opacity: 0.7"
+                  material="shader: standard; emissive: #000000; emissiveIntensity: 0; transparent: true; opacity: 0.1"
                   position="0 0 0"
                    impact-effect="color: #ff0000"
                    class="grabbable-player"
                    data-player-id="player_1">
+          <!-- Drone body visual -->
+          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
+                       position="0 -0.15 -0.13"
+                       scale="0.4 0.4 0.4"
+                       rotation="0 90 0"
+                       fix-model-exposure>
+          </a-gltf-model>
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-1" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -17046,11 +17162,18 @@ function setGameplayHUD(isPlaying) {
         <a-sphere id="remote-target-2" 
                   radius="0.2" 
                   color="#ff00ff" 
-                  material="shader: standard; emissive: #ff00ff; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
+                  material="shader: standard; emissive: #ff00ff; emissiveIntensity: 0.5; transparent: true; opacity: 0.1"
                   position="0 0 0"
                    impact-effect="color: #ff00ff"
                    class="grabbable-player"
                    data-player-id="player_2">
+          <!-- Drone body visual -->
+          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
+                       position="0 -0.15 -0.13"
+                       scale="0.4 0.4 0.4"
+                       rotation="0 90 0"
+                       fix-model-exposure>
+          </a-gltf-model>
           <a-entity light="type: point; color: #ff00ff; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-2" radius="0.1" color="#ff00ff" opacity="0" visible="false" material="side: double; transparent: true"
@@ -17180,11 +17303,18 @@ function setGameplayHUD(isPlaying) {
         <a-sphere id="remote-target-3" 
                   radius="0.2" 
                   color="#ffff00" 
-                  material="shader: standard; emissive: #ffff00; emissiveIntensity: 0.5; transparent: true; opacity: 0.7"
+                  material="shader: standard; emissive: #ffff00; emissiveIntensity: 0.5; transparent: true; opacity: 0.1"
                   position="0 0 0"
                    impact-effect="color: #ffff00"
                    class="grabbable-player"
                    data-player-id="player_3">
+          <!-- Drone body visual -->
+          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
+                       position="0 -0.15 -0.13"
+                       scale="0.4 0.4 0.4"
+                       rotation="0 90 0"
+                       fix-model-exposure>
+          </a-gltf-model>
           <a-entity light="type: point; color: #ffff00; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-3" radius="0.1" color="#ffff00" opacity="0" visible="false" material="side: double; transparent: true"
@@ -17301,11 +17431,18 @@ function setGameplayHUD(isPlaying) {
         <a-sphere id="bot-target" 
                   radius="0.2" 
                   color="#ff0000" 
-                  material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; wireframe: false"
+                  material="shader: standard; emissive: #ff0000; emissiveIntensity: 0.5; wireframe: false; transparent: true; opacity: 0.1"
                   position="0 0 0"
                    impact-effect="color: #ff0000"
                    class="grabbable-player"
                    data-player-id="bot_red">
+          <!-- Drone body visual -->
+          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
+                       position="0 -0.15 -0.13"
+                       scale="0.4 0.4 0.4"
+                       rotation="0 90 0"
+                       fix-model-exposure>
+          </a-gltf-model>
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 4"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="bot-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -17320,11 +17457,18 @@ function setGameplayHUD(isPlaying) {
         <a-sphere id="bot-blue-target" 
                   radius="0.2" 
                   color="#0000ff" 
-                  material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.5; wireframe: false"
+                  material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.5; wireframe: false; transparent: true; opacity: 0.1"
                   position="0 0 0"
                    impact-effect="color: #0000ff"
                    class="grabbable-player"
                    data-player-id="bot_blue">
+          <!-- Drone body visual -->
+          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
+                       position="0 -0.15 -0.13"
+                       scale="0.4 0.4 0.4"
+                       rotation="0 90 0"
+                       fix-model-exposure>
+          </a-gltf-model>
           <a-entity light="type: point; color: #0000ff; intensity: 1; distance: 4"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="bot-blue-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"
@@ -17339,11 +17483,18 @@ function setGameplayHUD(isPlaying) {
         <a-sphere id="bot-green-target" 
                    radius="0.2" 
                    color="#0000ff" 
-                   material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.5; wireframe: false"
+                   material="shader: standard; emissive: #0000ff; emissiveIntensity: 0.5; wireframe: false; transparent: true; opacity: 0.1"
                    position="0 0 0"
                    impact-effect="color: #0000ff"
                    class="grabbable-player"
                    data-player-id="bot_green">
+          <!-- Drone body visual -->
+          <a-gltf-model src="assets/compressed_1762309733596_Drone Blender_2.90-edit.glb"
+                       position="0 -0.15 -0.13"
+                       scale="0.4 0.4 0.4"
+                       rotation="0 90 0"
+                       fix-model-exposure>
+          </a-gltf-model>
           <a-entity light="type: point; color: #0000ff; intensity: 1; distance: 4"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="bot-green-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"
