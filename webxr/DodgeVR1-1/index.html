@@ -707,6 +707,9 @@
             case 'player-assignment':
               handlePlayerAssignment(data);
               break;
+            case 'player-joined':
+              handlePlayerJoined(data);
+              break;
             case 'ready-update':
               handleReadyUpdate(data);
               break;
@@ -1046,6 +1049,11 @@
       }
 
       function makeAllRemotePlayersVisible() {
+        console.log('👥 makeAllRemotePlayersVisible called', {
+          myPlayerId,
+          activePlayers: Array.from(activePlayers),
+          remotePlayerStatesKeys: Array.from(remotePlayerStates.keys())
+        });
         
         // Get current player's position and rotation
         const rig = document.querySelector('#rig');
@@ -1064,11 +1072,12 @@
               const rightArm = remotePlayer.querySelector('.remote-right-hand');
               if (leftArm) leftArm.setAttribute('visible', false);
               if (rightArm) rightArm.setAttribute('visible', false);
+              console.log(`👤 Hidden own remote player: player_${i}`);
               continue;
             }
             
-            // Show remote players if they exist in remotePlayerStates (meaning we received data from them)
-            // or if they're in activePlayers (for host-side visibility)
+            // CRITICAL FIX: Show remote players if they're in activePlayers OR if we've received data
+            // This ensures remote players are visible immediately after lobby switches
             const playerId = `player_${i}`;
             const hasReceivedData = remotePlayerStates.has(playerId);
             const isInActivePlayers = activePlayers.has(playerId);
@@ -1081,6 +1090,14 @@
                 remotePlayer.setAttribute('position', slot.position);
                 remotePlayer.setAttribute('rotation', slot.rotation);
                 remotePlayer.setAttribute('visible', true);
+                
+                console.log(`👤 Showing remote player ${playerId} at ${slot.position} (hasData: ${hasReceivedData}, inActive: ${isInActivePlayers})`);
+                
+                // Show arms by default
+                const leftArm = remotePlayer.querySelector('.remote-left-hand');
+                const rightArm = remotePlayer.querySelector('.remote-right-hand');
+                if (leftArm) leftArm.setAttribute('visible', true);
+                if (rightArm) rightArm.setAttribute('visible', true);
                 
                 // Keep the sphere at the same size but HIDDEN by default to prevent color interference
                 const sphere = remotePlayer.querySelector(`#remote-target-${i}`);
@@ -1108,12 +1125,15 @@
                 }
                 
               } else {
+                console.warn(`⚠️ No slot data for player ${playerId}`);
               }
             } else {
               // Hide if not connected
               remotePlayer.setAttribute('visible', false);
+              console.log(`👤 Hidden inactive remote player: player_${i}`);
             }
           } else {
+            console.warn(`⚠️ Remote player entity not found: #remote-player-${i}`);
           }
         }
       }
@@ -1139,6 +1159,7 @@
           const playerTeam = (assignedSlot % 2 === 1) ? 'blue' : 'red';
           playerTeams.set(playerId, playerTeam);
           
+          // Send assignment to the requesting client
           conn.send({
             type: 'player-assignment',
             playerId: playerId,
@@ -1160,6 +1181,18 @@
           
           updateMenuDisplay();
           sendPlayerCountUpdate();
+          
+          // CRITICAL FIX: Broadcast to ALL clients that a new player has joined
+          // This ensures all clients update their activePlayers and remote player visibility
+          connections.forEach((otherConn, otherPlayerId) => {
+            if (otherConn !== conn && otherConn.open) {
+              otherConn.send({
+                type: 'player-joined',
+                playerId: playerId,
+                team: playerTeam
+              });
+            }
+          });
           
           // Send current team assignments to new client
           setTimeout(() => {
@@ -1220,30 +1253,82 @@
                 countdownDuration: gameManagerComp.countdownDuration
               });
               
-              // ARENA SYNC: Send arena state to new client
+              // CRITICAL FIX: Send current arena to new client using ArenaManager
+              // This ensures the client loads the same arena as the host, with proper physics
               setTimeout(() => {
-                const arenaObjects = document.querySelectorAll('[grab-surface]');
-                const arenaState = [];
-                
-                arenaObjects.forEach(entity => {
-                  // CRITICAL: Skip goal rings and children of goals
-                  const hasGoalRing = entity.hasAttribute('goal-ring');
-                  const isChildOfGoal = entity.closest('[goal]') !== null;
+                if (typeof ArenaManager !== 'undefined' && ArenaManager.currentArenaName) {
+                  console.log(`📡 HOST: Sending current arena "${ArenaManager.currentArenaName}" to new client`);
                   
-                  if (!hasGoalRing && !isChildOfGoal && entity.id) {
-                    const serialized = serializeArenaObject(entity);
-                    if (serialized) {
-                      arenaState.push(serialized);
+                  // Get the current arena layout
+                  const currentLayout = ArenaManager.getCurrentLayout();
+                  
+                  if (currentLayout && currentLayout.objects && currentLayout.objects.length > 0) {
+                    // Send full arena-load message (same as when host loads an arena)
+                    const message = {
+                      type: 'arena-load',
+                      arenaName: ArenaManager.currentArenaName,
+                      arenaSource: ArenaManager.currentArenaSource || 'unknown',
+                      arenaData: currentLayout
+                    };
+                    
+                    try {
+                      conn.send(message);
+                      console.log(`✅ HOST: Sent arena-load for "${ArenaManager.currentArenaName}" to new client (${currentLayout.objects.length} objects)`);
+                    } catch (e) {
+                      console.error(`❌ HOST: Failed to send arena to new client:`, e);
                     }
+                  } else {
+                    console.log(`📡 HOST: Current arena "${ArenaManager.currentArenaName}" has no objects, sending default arena state`);
+                    // Fallback to old arena-state method
+                    const arenaObjects = document.querySelectorAll('[grab-surface]');
+                    const arenaState = [];
+                    
+                    arenaObjects.forEach(entity => {
+                      // CRITICAL: Skip goal rings and children of goals
+                      const hasGoalRing = entity.hasAttribute('goal-ring');
+                      const isChildOfGoal = entity.closest('[goal]') !== null;
+                      
+                      if (!hasGoalRing && !isChildOfGoal && entity.id) {
+                        const serialized = serializeArenaObject(entity);
+                        if (serialized) {
+                          arenaState.push(serialized);
+                        }
+                      }
+                    });
+                    
+                    conn.send({
+                      type: 'arena-state',
+                      objects: arenaState
+                    });
+                    
+                    console.log(`🏗️ HOST: Sent arena state (${arenaState.length} objects) to new client`);
                   }
-                });
-                
-                conn.send({
-                  type: 'arena-state',
-                  objects: arenaState
-                });
-                
-                console.log(`🏗️ HOST: Sent arena state (${arenaState.length} objects) to new client`);
+                } else {
+                  console.log(`📡 HOST: No ArenaManager or no current arena, sending default arena state`);
+                  // Fallback: Send current arena objects one by one
+                  const arenaObjects = document.querySelectorAll('[grab-surface]');
+                  const arenaState = [];
+                  
+                  arenaObjects.forEach(entity => {
+                    // CRITICAL: Skip goal rings and children of goals
+                    const hasGoalRing = entity.hasAttribute('goal-ring');
+                    const isChildOfGoal = entity.closest('[goal]') !== null;
+                    
+                    if (!hasGoalRing && !isChildOfGoal && entity.id) {
+                      const serialized = serializeArenaObject(entity);
+                      if (serialized) {
+                        arenaState.push(serialized);
+                      }
+                    }
+                  });
+                  
+                  conn.send({
+                    type: 'arena-state',
+                    objects: arenaState
+                  });
+                  
+                  console.log(`🏗️ HOST: Sent arena state (${arenaState.length} objects) to new client`);
+                }
               }, 150); // Small delay after game-state
             }
           }, 100);
@@ -1324,9 +1409,52 @@
       
       function handleArenaLoad(data) {
         // CLIENT: Host has loaded a new arena, load it locally
-        console.log(`📡 CLIENT: Received arena load message`);
+        console.log(`📡 CLIENT: Received arena load message`, {
+          arenaName: data.arenaName,
+          objectCount: data.arenaData?.objects?.length || 0
+        });
+        
         if (typeof ArenaManager !== 'undefined') {
+          // CRITICAL FIX: Ensure physics world is ready before loading arena
+          if (typeof world === 'undefined' || !world) {
+            console.error('❌ CLIENT: Physics world not ready, delaying arena load');
+            setTimeout(() => {
+              if (typeof world !== 'undefined' && world) {
+                ArenaManager.handleArenaLoadMessage(data);
+              } else {
+                console.error('❌ CLIENT: Physics world still not ready after delay');
+              }
+            }, 500);
+            return;
+          }
+          
           ArenaManager.handleArenaLoadMessage(data);
+          
+          // CRITICAL FIX: After arena loads, manually trigger physics body creation
+          // for any entities that might have been created before physics was ready
+          setTimeout(() => {
+            console.log('🔧 CLIENT: Ensuring all arena physics bodies are created');
+            const arenaObjects = document.querySelectorAll('[grab-surface]');
+            arenaObjects.forEach(entity => {
+              const component = entity.components['grab-surface'];
+              if (component && !component.body) {
+                console.log('🔧 CLIENT: Recreating missing physics body for', entity.id);
+                component.createPhysicsBody();
+              }
+            });
+            console.log(`✅ CLIENT: Arena physics check complete (${arenaObjects.length} objects checked)`);
+            
+            // CRITICAL FIX: Update collision-culling component's surface cache
+            // This is essential for player collision detection to work with new arena objects
+            const scene = document.querySelector('a-scene');
+            if (scene && scene.components['collision-culling']) {
+              console.log('🔄 CLIENT: Updating collision-culling surface cache');
+              scene.components['collision-culling'].updateSurfaceCache();
+              console.log(`✅ CLIENT: Collision cache updated with ${scene.components['collision-culling'].allSurfaces.length} surfaces`);
+            } else {
+              console.warn('⚠️ CLIENT: collision-culling component not found');
+            }
+          }, 200);
         } else {
           console.error('❌ ArenaManager not available');
         }
@@ -1468,6 +1596,27 @@
           gameManager.components['game-manager'].updateReadyState();
         }
         
+        updateMenuDisplay();
+      }
+
+      function handlePlayerJoined(data) {
+        // CLIENT: Another player has joined the lobby
+        console.log('👋 CLIENT: Player joined:', data.playerId, 'Team:', data.team);
+        
+        // Add to active players
+        activePlayers.add(data.playerId);
+        
+        // Set their team
+        if (data.team) {
+          playerTeams.set(data.playerId, data.team);
+        }
+        
+        // Make remote players visible
+        setTimeout(() => {
+          makeAllRemotePlayersVisible();
+        }, 100);
+        
+        // Update displays
         updateMenuDisplay();
       }
 
@@ -2485,6 +2634,12 @@
           
           // Only update bot position on clients (not on host)
           if (!isHost && botComponent.body) {
+            // CRITICAL FIX: Ensure bot physics body exists before updating
+            if (!botComponent.body.world) {
+              console.warn(`⚠️ Bot ${botId} physics body not in world, skipping update`);
+              return;
+            }
+            
             // Update bot physics body position and velocity
             botComponent.body.position.set(data.botState.x, data.botState.y, data.botState.z);
             botComponent.body.velocity.set(data.botState.vx, data.botState.vy, data.botState.vz);
@@ -2492,6 +2647,10 @@
             // Update visual position
             botElement.object3D.position.set(data.botState.x, data.botState.y, data.botState.z);
           }
+        } else if (!botElement) {
+          console.warn(`⚠️ Bot element not found: #zerog-${botId}`);
+        } else if (!botElement.components['zerog-bot']) {
+          console.warn(`⚠️ Bot component not found on element: #zerog-${botId}`);
         }
         
         // Host forwards bot states to other clients
@@ -2523,11 +2682,16 @@
           connections.forEach((conn, connectionKey) => {
             if (conn && conn.open && connectionKey !== data.playerId) {
               // Only forward to connections that are NOT the original sender
-              conn.send({
-                type: 'ball-state',
-                ballState: data.ballState,
-                playerId: data.playerId
-              });
+              try {
+                conn.send({
+                  type: 'ball-state',
+                  ballState: data.ballState,
+                  playerId: data.playerId
+                });
+              } catch (error) {
+                console.warn('Failed to forward ball state to', connectionKey, ':', error);
+                connections.delete(connectionKey);
+              }
             }
           });
         }
@@ -2543,6 +2707,12 @@
             
             // Don't update capture ball if it's currently being controlled locally
             if (ballComponent.isGrabbed || ballComponent.tractorBeamActive) {
+              return;
+            }
+            
+            // CRITICAL FIX: Ensure ball body exists before updating
+            if (ballComponent.body && !ballComponent.body.world) {
+              console.warn('⚠️ Capture ball body not in physics world, skipping update');
               return;
             }
             
@@ -2856,6 +3026,20 @@
             connectionToPlayer.clear();
             activePlayers.clear();
             myPlayerId = null;
+            
+            // CRITICAL FIX: Reset remote player states map
+            remotePlayerStates.clear();
+            remoteBallStates.clear();
+            
+            // CRITICAL FIX: Hide and clean up all remote players before switching lobbies
+            for (let i = 0; i < 4; i++) {
+              const remotePlayer = document.querySelector(`#remote-player-${i}`);
+              if (remotePlayer) {
+                remotePlayer.setAttribute('visible', false);
+                // Reset position to prevent stale positioning
+                remotePlayer.setAttribute('position', '0 0 0');
+              }
+            }
             
             // Reset match state when switching lobbies
             const gameManager = document.querySelector('#game-manager');
@@ -13607,7 +13791,11 @@ function setGameplayHUD(isPlaying) {
             ArenaManager.loadOfficialArena(arenaId).then(layout => {
               // Broadcast to clients if host after loading completes
               if (isHost && isMultiplayer && layout) {
-                ArenaManager.broadcastArenaLoad(layout);
+                console.log(`📡 HOST: Broadcasting arena "${arenaId}" to ${connections.size} clients`);
+                // CRITICAL FIX: Pass arena name explicitly to avoid timing issues
+                ArenaManager.broadcastArenaLoad(layout, arenaId);
+              } else if (isHost && isMultiplayer && !layout) {
+                console.error('❌ HOST: Arena loaded but no layout data to broadcast');
               }
             }).catch(err => {
               console.error('❌ Arena load failed:', err);
@@ -13619,7 +13807,10 @@ function setGameplayHUD(isPlaying) {
             
             // Broadcast to clients if host
             if (isHost && isMultiplayer && layout) {
+              console.log(`📡 HOST: Broadcasting personal arena slot ${slot} to ${connections.size} clients`);
               ArenaManager.broadcastArenaLoad(layout);
+            } else if (isHost && isMultiplayer && !layout) {
+              console.error('❌ HOST: Personal arena loaded but no layout data to broadcast');
             }
           }
         },
@@ -15830,6 +16021,117 @@ function setGameplayHUD(isPlaying) {
           console.error('❌ ArenaManager not found - arena-templates.js not loaded?');
         }
       });
+
+      /**
+       * Reset all entities (players, bots, balls, capture ball) to their starting positions
+       * Called when a new arena is loaded
+       */
+      function resetAllEntitiesForArenaLoad() {
+        console.log('🔄 Resetting all entities for arena load...');
+        
+        try {
+          // 1. Reset player position (local player)
+          const rig = document.querySelector('#rig');
+          if (rig && myPlayerId) {
+            const playerIndex = parseInt(myPlayerId.split('_')[1]);
+            if (playerSlots[playerIndex]) {
+              rig.setAttribute('position', playerSlots[playerIndex].position);
+              rig.setAttribute('rotation', playerSlots[playerIndex].rotation);
+              console.log(`✅ Reset player position to ${playerSlots[playerIndex].position}`);
+            }
+          }
+          
+          // 2. Reset all player balls
+          for (let i = 1; i <= 4; i++) {
+            const ballId = `player${i}`;
+            const ballElement = document.querySelector(`#${ballId}`);
+            
+            if (ballElement && ballElement.components['zerog-ball']) {
+              const ballComponent = ballElement.components['zerog-ball'];
+              
+              // Calculate spawn position based on player slot
+              let spawnPos;
+              if (isMultiplayer) {
+                const playerIndex = i - 1;
+                if (playerIndex >= 0 && playerIndex < playerSlots.length) {
+                  const slot = playerSlots[playerIndex];
+                  const positionParts = slot.position.split(' ');
+                  spawnPos = {
+                    x: parseFloat(positionParts[0]),
+                    y: parseFloat(positionParts[1]) + 2,
+                    z: parseFloat(positionParts[2])
+                  };
+                } else {
+                  spawnPos = { x: 0, y: 2, z: 0 };
+                }
+              } else {
+                // Singleplayer positions
+                if (i === 1) {
+                  spawnPos = { x: 0, y: 2, z: -8 };
+                } else if (i === 2) {
+                  spawnPos = { x: 0, y: 2, z: 8 };
+                } else {
+                  spawnPos = { x: 0, y: 2, z: 0 };
+                }
+              }
+              
+              // Reset physics body
+              if (ballComponent.body && ballComponent.body.world) {
+                ballComponent.body.position.set(spawnPos.x, spawnPos.y, spawnPos.z);
+                ballComponent.body.velocity.set(0, 0, 0);
+                ballComponent.body.angularVelocity.set(0, 0, 0);
+                ballElement.setAttribute('position', `${spawnPos.x} ${spawnPos.y} ${spawnPos.z}`);
+                console.log(`✅ Reset player ball ${ballId} to ${spawnPos.x}, ${spawnPos.y}, ${spawnPos.z}`);
+              }
+            }
+          }
+          
+          // 3. Reset capture ball
+          const captureBall = document.querySelector('#capture-ball');
+          if (captureBall && captureBall.components['zerog-ball']) {
+            const captureBallComponent = captureBall.components['zerog-ball'];
+            
+            if (captureBallComponent.body && captureBallComponent.body.world) {
+              captureBallComponent.body.position.set(0, 2, 0);
+              captureBallComponent.body.velocity.set(0, 0, 0);
+              captureBallComponent.body.angularVelocity.set(0, 0, 0);
+              captureBall.setAttribute('position', '0 2 0');
+              console.log('✅ Reset capture ball to center (0, 2, 0)');
+            }
+          }
+          
+          // 4. Reset bot positions
+          const botIds = ['bot-red', 'bot-blue'];
+          botIds.forEach(botId => {
+            const botElement = document.querySelector(`#zerog-${botId}`);
+            
+            if (botElement && botElement.components['zerog-bot']) {
+              const botComponent = botElement.components['zerog-bot'];
+              
+              // Get bot's initial position from component
+              let botSpawnPos;
+              if (botId === 'bot-red') {
+                botSpawnPos = { x: -8, y: 0, z: -8 };
+              } else {
+                botSpawnPos = { x: 8, y: 0, z: 8 };
+              }
+              
+              // Reset physics body
+              if (botComponent.body && botComponent.body.world) {
+                botComponent.body.position.set(botSpawnPos.x, botSpawnPos.y, botSpawnPos.z);
+                botComponent.body.velocity.set(0, 0, 0);
+                botComponent.body.angularVelocity.set(0, 0, 0);
+                botElement.setAttribute('position', `${botSpawnPos.x} ${botSpawnPos.y} ${botSpawnPos.z}`);
+                console.log(`✅ Reset bot ${botId} to ${botSpawnPos.x}, ${botSpawnPos.y}, ${botSpawnPos.z}`);
+              }
+            }
+          });
+          
+          console.log('✅ All entities reset for arena load');
+        } catch (err) {
+          console.error('❌ Error resetting entities:', err);
+        }
+      }
 
     </script>
 

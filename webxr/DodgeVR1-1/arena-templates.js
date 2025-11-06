@@ -641,8 +641,23 @@ const ArenaManager = {
       sceneEl.emit('arena-loaded', { arenaName, objectCount: layoutData.objects?.length || 0 });
     }
     
+    // CRITICAL FIX: Update collision-culling component's surface cache
+    // This is essential for player collision detection to work with new arena objects
+    if (sceneEl && sceneEl.components['collision-culling']) {
+      console.log('🔄 HOST: Updating collision-culling surface cache');
+      sceneEl.components['collision-culling'].updateSurfaceCache();
+      console.log(`✅ HOST: Collision cache updated with ${sceneEl.components['collision-culling'].allSurfaces.length} surfaces`);
+    }
+    
     // Update menu display
     this.updateMenuDisplay();
+    
+    // CRITICAL: Reset all entities (players, bots, balls) after arena load
+    if (typeof resetAllEntitiesForArenaLoad === 'function') {
+      setTimeout(() => {
+        resetAllEntitiesForArenaLoad();
+      }, 500); // Wait for physics to stabilize
+    }
   },
   
   /**
@@ -886,9 +901,16 @@ const ArenaManager = {
   
   /**
    * Broadcast arena load to all clients (multiplayer)
+   * @param {Object} layoutData - The arena layout data to broadcast
+   * @param {string} arenaNameOverride - Optional arena name to use instead of this.currentArenaName
    */
-  broadcastArenaLoad: function(layoutData) {
+  broadcastArenaLoad: function(layoutData, arenaNameOverride) {
+    // CRITICAL FIX: Use the explicitly passed arena name if provided, otherwise fall back to currentArenaName
+    const arenaName = arenaNameOverride || this.currentArenaName;
+    
     if (typeof connections !== 'undefined' && typeof isHost !== 'undefined' && isHost) {
+      console.log(`📡 HOST: broadcastArenaLoad called for "${arenaName}" with ${connections.size} connections`);
+      
       // CRITICAL: Sanitize the layout data by doing a JSON round-trip
       // This removes non-serializable objects like HTMLImageElement
       try {
@@ -896,24 +918,42 @@ const ArenaManager = {
         
         const message = {
           type: 'arena-load',
-          arenaName: this.currentArenaName,
+          arenaName: arenaName,
           arenaSource: this.currentArenaSource,
           arenaData: sanitizedData
         };
+        
+        let successCount = 0;
+        let failCount = 0;
         
         connections.forEach((conn, playerId) => {
           if (conn && conn.open) {
             try {
               conn.send(message);
+              successCount++;
+              console.log(`✅ HOST: Sent arena "${arenaName}" to ${playerId}`);
             } catch (e) {
+              failCount++;
               console.error(`❌ Failed to send arena to client ${playerId}:`, e);
             }
+          } else {
+            failCount++;
+            console.warn(`⚠️ Connection to ${playerId} is not open (conn: ${!!conn}, open: ${conn?.open})`);
           }
         });
+        
+        console.log(`📊 HOST: Arena broadcast complete - Success: ${successCount}, Failed: ${failCount}`);
       } catch (e) {
         console.error(`❌ Failed to sanitize arena data for broadcast:`, e);
         console.error('Layout data:', layoutData);
       }
+    } else {
+      console.warn('⚠️ broadcastArenaLoad called but conditions not met:', {
+        connectionsExists: typeof connections !== 'undefined',
+        isHostExists: typeof isHost !== 'undefined',
+        isHostValue: isHost,
+        connectionsSize: connections?.size
+      });
     }
   },
   
@@ -926,8 +966,54 @@ const ArenaManager = {
       return;
     }
     
+    console.log(`📡 CLIENT: Loading arena "${data.arenaName}" with ${data.arenaData.objects.length} objects`);
+    
+    // Load the arena layout
     this.loadLayout(data.arenaData, data.arenaName);
     this.currentArenaSource = data.arenaSource;
+    
+    // CRITICAL FIX: Ensure physics bodies are created after arena loads on client
+    // Wait for entities to be fully created and positioned
+    setTimeout(() => {
+      console.log('🔧 CLIENT: Triggering arena-physics-ready event');
+      window.ARENA_LOADING = false;
+      document.dispatchEvent(new Event('arena-physics-ready'));
+      
+      // Double-check all physics bodies after a short delay
+      setTimeout(() => {
+        const arenaObjects = document.querySelectorAll('[grab-surface]');
+        let missingBodies = 0;
+        arenaObjects.forEach(entity => {
+          const component = entity.components['grab-surface'];
+          if (component && !component.body) {
+            missingBodies++;
+            console.warn('⚠️ CLIENT: Entity missing physics body, creating now:', entity.id);
+            component.createPhysicsBody();
+          }
+        });
+        if (missingBodies === 0) {
+          console.log(`✅ CLIENT: All ${arenaObjects.length} arena objects have physics bodies`);
+        } else {
+          console.log(`✅ CLIENT: Created ${missingBodies} missing physics bodies`);
+        }
+        
+        // CRITICAL FIX: Update collision-culling component's surface cache
+        // This is essential for player collision detection to work with new arena objects
+        const sceneEl = document.querySelector('a-scene');
+        if (sceneEl && sceneEl.components['collision-culling']) {
+          console.log('🔄 CLIENT: Updating collision-culling surface cache (from arena-templates.js)');
+          sceneEl.components['collision-culling'].updateSurfaceCache();
+          console.log(`✅ CLIENT: Collision cache updated with ${sceneEl.components['collision-culling'].allSurfaces.length} surfaces`);
+        } else {
+          console.warn('⚠️ CLIENT: collision-culling component not found in arena-templates.js');
+        }
+        
+        // CRITICAL: Reset all entities (players, bots, balls) after arena load on client
+        if (typeof resetAllEntitiesForArenaLoad === 'function') {
+          resetAllEntitiesForArenaLoad();
+        }
+      }, 300);
+    }, 150);
   }
 };
 
