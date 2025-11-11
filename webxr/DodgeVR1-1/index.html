@@ -152,6 +152,16 @@
             }
           }
         }
+        
+        // CRITICAL FIX: Hide "Change Arena" button for clients in multiplayer
+        const changeArenaButton = document.querySelector('#menu-change-arena');
+        if (changeArenaButton) {
+          if (isMultiplayer && !isHost) {
+            changeArenaButton.setAttribute('visible', false);
+          } else {
+            changeArenaButton.setAttribute('visible', true);
+          }
+        }
       }
 
       // Helper: switch game mode
@@ -957,6 +967,42 @@
                   if (isMultiplayer && !isHost && myPlayerId) {
                     menuToggle.components['menu-toggle'].toggleMenu();
                     console.log('✅ Menu auto-closed successfully for client');
+                    
+                    // CRITICAL FIX: Explicitly disable raycasters for clients after auto-close
+                    setTimeout(() => {
+                      const leftHand = document.querySelector('#leftHand');
+                      const rightHand = document.querySelector('#rightHand');
+                      
+                      if (leftHand) {
+                        leftHand.setAttribute('raycaster', {
+                          objects: '',
+                          lineColor: '#ffffff',
+                          lineOpacity: 0,
+                          far: 10,
+                          enabled: false
+                        });
+                        // Force immediate hide of line mesh
+                        if (leftHand.components.raycaster && leftHand.components.raycaster.line) {
+                          leftHand.components.raycaster.line.visible = false;
+                        }
+                      }
+                      
+                      if (rightHand) {
+                        rightHand.setAttribute('raycaster', {
+                          objects: '',
+                          lineColor: '#ffffff',
+                          lineOpacity: 0,
+                          far: 10,
+                          enabled: false
+                        });
+                        // Force immediate hide of line mesh
+                        if (rightHand.components.raycaster && rightHand.components.raycaster.line) {
+                          rightHand.components.raycaster.line.visible = false;
+                        }
+                      }
+                      
+                      console.log('✅ Raycasters explicitly disabled for client');
+                    }, 100);
                   } else {
                     console.log('❌ Skipping auto-close - client state changed:', {
                       isMultiplayer: isMultiplayer,
@@ -1118,6 +1164,12 @@
                     sphere.setAttribute('material', `shader: standard; emissive: ${teamColor}; emissiveIntensity: 0.5; transparent: true; opacity: 0.7`);
                     sphere.setAttribute('color', teamColor);
                     sphere.setAttribute('impact-effect', `color: ${teamColor}`);
+                    
+                    // CRITICAL FIX: Also update the light (glow) color inside the sphere
+                    const remoteLight = sphere.querySelector('a-entity[light]');
+                    if (remoteLight) {
+                      remoteLight.setAttribute('light', `type: point; color: ${teamColor}; intensity: 1; distance: 3`);
+                    }
                   } else {
                     // No team assigned yet - use neutral material
                   sphere.setAttribute('material', 'emissiveIntensity: 0.5; opacity: 0.7');
@@ -2646,6 +2698,11 @@
             
             // Update visual position
             botElement.object3D.position.set(data.botState.x, data.botState.y, data.botState.z);
+            
+            // CRITICAL FIX: Update visual rotation if included
+            if (data.botState.rx !== undefined && data.botState.ry !== undefined && data.botState.rz !== undefined) {
+              botElement.object3D.rotation.set(data.botState.rx, data.botState.ry, data.botState.rz);
+            }
           }
         } else if (!botElement) {
           console.warn(`⚠️ Bot element not found: #zerog-${botId}`);
@@ -10001,19 +10058,23 @@ function setGameplayHUD(isPlaying) {
               
               if (redBot && redBot.components['zerog-bot'] && redBot.components['zerog-bot'].body) {
                 const botBody = redBot.components['zerog-bot'].body;
+                const botRotation = redBot.object3D.rotation;
                 sendBotState({
                   botId: 'bot-red',
                   x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
-                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z
+                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z,
+                  rx: botRotation.x, ry: botRotation.y, rz: botRotation.z
                 });
               }
               
               if (blueBot && blueBot.components['zerog-bot'] && blueBot.components['zerog-bot'].body) {
                 const botBody = blueBot.components['zerog-bot'].body;
+                const botRotation = blueBot.object3D.rotation;
                 sendBotState({
                   botId: 'bot-blue',
                   x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
-                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z
+                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z,
+                  rx: botRotation.x, ry: botRotation.y, rz: botRotation.z
                 });
               }
             }
@@ -13321,6 +13382,12 @@ function setGameplayHUD(isPlaying) {
         
         // Arena Selector Functions
         openArenaSelector: function() {
+          // CRITICAL FIX: Only host can open arena selector in multiplayer
+          if (isMultiplayer && !isHost) {
+            console.log('⚠️ Clients cannot change arenas - only host can select arenas');
+            return;
+          }
+          
           const selector = document.querySelector('#arena-selector');
           const mainMenu = document.querySelector('#game-menu');
           
@@ -16674,7 +16741,7 @@ function setGameplayHUD(isPlaying) {
                   sound="src: url(../audio/dark-engine-logo-141942.mp3);
                          autoplay: false;
                          loop: false;
-                         volume: 0.6;
+                         volume: 0.3;
                          positional: false;
                         poolSize: 1;">
         </a-entity>
