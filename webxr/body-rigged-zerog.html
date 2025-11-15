@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>WebXR - Zero-G Body (Echo VR Style)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.173.0/examples/js/loaders/FBXLoader.js"></script>
+    <style>
+      body { margin: 0; overflow: hidden; }
+      #ui {
+        position: fixed; top: 10px; left: 10px;
+        background: rgba(0, 0, 0, 0.8); color: white;
+        padding: 15px; border-radius: 5px;
+        font-family: monospace; z-index: 1000; max-width: 400px;
+      }
+      #ui h3 { margin-top: 0; color: #4CAF50; }
+      .info { font-size: 11px; color: #888; margin-top: 10px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div id="ui">
+      <h3>🚀 Zero-G Body (Echo VR Style)</h3>
+      <div class="info">
+        <strong>Model:</strong> Y Bot.fbx<br>
+        <strong>Controls:</strong> Right thumbstick = rotate mirror<br>
+        <strong>Mode:</strong> Zero-Gravity Procedural Animation<br>
+        <strong>Status:</strong> <span id="status">Loading...</span>
+      </div>
+    </div>
+
+    <a-scene background="color: #000011">
+      <a-entity id="rig" position="0 1.6 0" vr-locomotion>
+        <a-entity id="camera" camera look-controls wasd-controls="acceleration: 20"></a-entity>
+        <a-entity id="left-hand" hand-controls="hand: left; handModelStyle: lowPoly"></a-entity>
+        <a-entity id="right-hand" hand-controls="hand: right; handModelStyle: lowPoly"></a-entity>
+      </a-entity>
+
+      <!-- Local Player Body (Zero-G) -->
+      <a-entity id="local-body" mixamo-zerog-body="isMirror: false"></a-entity>
+
+      <!-- Mirror Body (Zero-G) -->
+      <a-entity id="mirror-body" mixamo-zerog-body="isMirror: true; color: #66BB6A" position="0 0 -2"></a-entity>
+
+      <!-- Space environment -->
+      <a-sky color="#000011"></a-sky>
+      <a-entity light="type: ambient; intensity: 0.4"></a-entity>
+      <a-entity light="type: directional; intensity: 0.8" position="2 4 2"></a-entity>
+      
+      <!-- Grid floor for reference -->
+      <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#112233" opacity="0.5"></a-plane>
+      <a-text value="Zero-G Mirror" position="0 2.5 -2" align="center" color="#66BB6A" width="4"></a-text>
+    </a-scene>
+
+    <script>
+      // VR Locomotion component
+      AFRAME.registerComponent('vr-locomotion', {
+        schema: {
+          rotationSpeed: { type: 'number', default: 2.0 }
+        },
+
+        init: function() {
+          this.mirrorRotationY = 0;
+          this.thumbstickRotation = { right: 0 };
+          this.mirrorBody = null;
+          
+          setTimeout(() => {
+            this.mirrorBody = document.querySelector('#mirror-body');
+          }, 100);
+          
+          this.el.sceneEl.addEventListener('thumbstickmoved', (evt) => {
+            if (!evt.target || !evt.target.object3D) return;
+            const hand = evt.target;
+            this.handleThumbstick(hand, evt.detail);
+          });
+        },
+        
+        handleThumbstick: function(hand, detail) {
+          const isLeft = hand.id === 'left-hand';
+          if (!isLeft && Math.abs(detail.x) > 0.1) {
+            this.thumbstickRotation.right = -detail.x;
+          } else if (!isLeft) {
+            this.thumbstickRotation.right = 0;
+          }
+        },
+
+        tick: function(time, deltaTime) {
+          const dt = Math.min(deltaTime / 1000, 0.1);
+          const rotationInput = this.thumbstickRotation.right;
+          
+          if (Math.abs(rotationInput) > 0.1) {
+            this.mirrorRotationY += rotationInput * this.data.rotationSpeed * dt;
+          }
+          
+          if (this.mirrorBody && this.mirrorBody.components['mixamo-zerog-body']) {
+            this.mirrorBody.components['mixamo-zerog-body'].manualRotationY = this.mirrorRotationY;
+          }
+        }
+      });
+
+      // Zero-G Body component with procedural leg animation
+      AFRAME.registerComponent('mixamo-zerog-body', {
+        schema: {
+          isMirror: { type: 'boolean', default: false },
+          color: { type: 'color', default: '#4A90E2' },
+          modelPath: { type: 'string', default: 'BoltVR/assets/Y Bot.fbx' }
+        },
+
+        init: function() {
+          this.camera = document.querySelector('#camera');
+          this.leftController = document.querySelector('#left-hand');
+          this.rightController = document.querySelector('#right-hand');
+          this.rig = document.querySelector('#rig');
+          
+          this.skeleton = null;
+          this.bones = {};
+          this.model = null;
+          this.modelLoaded = false;
+          
+          // Mixamo bone names (including legs!)
+          this.boneNames = {
+            hips: 'mixamorigHips',
+            spine: 'mixamorigSpine',
+            spine1: 'mixamorigSpine1',
+            spine2: 'mixamorigSpine2',
+            neck: 'mixamorigNeck',
+            head: 'mixamorigHead',
+            // Arms
+            leftShoulder: 'mixamorigLeftShoulder',
+            leftArm: 'mixamorigLeftArm',
+            leftForeArm: 'mixamorigLeftForeArm',
+            leftHand: 'mixamorigLeftHand',
+            rightShoulder: 'mixamorigRightShoulder',
+            rightArm: 'mixamorigRightArm',
+            rightForeArm: 'mixamorigRightForeArm',
+            rightHand: 'mixamorigRightHand',
+            // Legs (NEW!)
+            leftUpLeg: 'mixamorigLeftUpLeg',
+            leftLeg: 'mixamorigLeftLeg',
+            leftFoot: 'mixamorigLeftFoot',
+            rightUpLeg: 'mixamorigRightUpLeg',
+            rightLeg: 'mixamorigRightLeg',
+            rightFoot: 'mixamorigRightFoot',
+            // Fingers
+            leftHandThumb1: 'mixamorigLeftHandThumb1',
+            leftHandThumb2: 'mixamorigLeftHandThumb2',
+            leftHandThumb3: 'mixamorigLeftHandThumb3',
+            leftHandIndex1: 'mixamorigLeftHandIndex1',
+            leftHandIndex2: 'mixamorigLeftHandIndex2',
+            leftHandIndex3: 'mixamorigLeftHandIndex3',
+            leftHandMiddle1: 'mixamorigLeftHandMiddle1',
+            leftHandMiddle2: 'mixamorigLeftHandMiddle2',
+            leftHandMiddle3: 'mixamorigLeftHandMiddle3',
+            leftHandRing1: 'mixamorigLeftHandRing1',
+            leftHandRing2: 'mixamorigLeftHandRing2',
+            leftHandRing3: 'mixamorigLeftHandRing3',
+            leftHandPinky1: 'mixamorigLeftHandPinky1',
+            leftHandPinky2: 'mixamorigLeftHandPinky2',
+            leftHandPinky3: 'mixamorigLeftHandPinky3',
+            rightHandThumb1: 'mixamorigRightHandThumb1',
+            rightHandThumb2: 'mixamorigRightHandThumb2',
+            rightHandThumb3: 'mixamorigRightHandThumb3',
+            rightHandIndex1: 'mixamorigRightHandIndex1',
+            rightHandIndex2: 'mixamorigRightHandIndex2',
+            rightHandIndex3: 'mixamorigRightHandIndex3',
+            rightHandMiddle1: 'mixamorigRightHandMiddle1',
+            rightHandMiddle2: 'mixamorigRightHandMiddle2',
+            rightHandMiddle3: 'mixamorigRightHandMiddle3',
+            rightHandRing1: 'mixamorigRightHandRing1',
+            rightHandRing2: 'mixamorigRightHandRing2',
+            rightHandRing3: 'mixamorigRightHandRing3',
+            rightHandPinky1: 'mixamorigRightHandPinky1',
+            rightHandPinky2: 'mixamorigRightHandPinky2',
+            rightHandPinky3: 'mixamorigRightHandPinky3'
+          };
+          
+          // IK config
+          this.config = {
+            shoulderWidth: 0.34,
+            upperArmLength: 0.31,
+            lowerArmLength: 0.31,
+            upperLegLength: 0.45,  // Thigh
+            lowerLegLength: 0.45   // Shin
+          };
+          
+          // Smoothing
+          this.torsoRotation = new THREE.Quaternion();
+          this.bodyTilt = new THREE.Quaternion();
+          this.smoothingFactor = 0.15;
+          this.mirrorDistance = 2.0;
+          this.manualRotationY = 0;
+          
+          // Finger curl smoothing
+          this.targetCurls = {
+            left: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 },
+            right: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 }
+          };
+          this.currentCurls = {
+            left: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 },
+            right: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 }
+          };
+          this.fingerSmoothingFactor = 0.3;
+          
+          // Breathing animation
+          this.breathingPhase = 0;
+          this.breathingRate = 0.25;
+          this.breathingAmount = 0.015;
+          
+          // Body dynamics
+          this.previousHeadPos = new THREE.Vector3();
+          this.previousHeadPosInitialized = false;
+          this.headVelocity = new THREE.Vector3();
+          this.headAcceleration = new THREE.Vector3();
+          this.previousHeadVelocity = new THREE.Vector3();
+          this.torsoLean = new THREE.Vector3();
+          this.torsoLeanVelocity = 0.15;
+          
+          // ZERO-G LEG PHYSICS
+          this.legTargetPositions = {
+            left: new THREE.Vector3(),
+            right: new THREE.Vector3()
+          };
+          this.legCurrentPositions = {
+            left: new THREE.Vector3(),
+            right: new THREE.Vector3()
+          };
+            this.legVelocities = {
+              left: new THREE.Vector3(),
+              right: new THREE.Vector3()
+            };
+            this.legDamping = 0.85; // Increased damping to reduce oscillation (was 0.92)
+            this.legSpringStrength = 0.06; // Reduced spring strength for smoother movement (was 0.08)
+            this.legSeparation = 0.15; // Distance between feet (left/right)
+          
+          // Load model
+          const loader = new THREE.FBXLoader();
+          loader.load(
+            this.data.modelPath,
+            (fbx) => this.onModelLoaded(fbx),
+            undefined,
+            (error) => console.error('[Zero-G Body] Load error:', error)
+          );
+        },
+
+        onModelLoaded: function(fbx) {
+          this.modelLoaded = true;
+          this.model = fbx;
+          
+          fbx.scale.set(0.01, 0.01, 0.01);
+          fbx.rotation.y = Math.PI;
+          
+          this.el.object3D.add(fbx);
+          
+          // Set up materials
+          fbx.traverse((node) => {
+            if (node.isSkinnedMesh && node.skeleton) {
+              this.skeleton = node.skeleton;
+              this.mapBones();
+              this.skinnedMesh = node;
+              node.material = node.material.clone();
+              console.log('[Zero-G Body] Found mesh');
+            }
+            if (node.isMesh && !node.isSkinnedMesh) {
+              node.material = node.material.clone();
+            }
+          });
+          
+          document.querySelector('#status').textContent = 'Active (Zero-G)';
+          document.querySelector('#status').style.color = '#4CAF50';
+        },
+
+        mapBones: function() {
+          this.initialBoneRotations = {};
+          
+          this.skeleton.bones.forEach((bone) => {
+            const name = bone.name;
+            this.initialBoneRotations[name] = bone.quaternion.clone();
+            
+            // Map all bones (including legs)
+            if (name === this.boneNames.hips) this.bones.hips = bone;
+            else if (name === this.boneNames.spine) this.bones.spine = bone;
+            else if (name === this.boneNames.spine1) this.bones.spine1 = bone;
+            else if (name === this.boneNames.spine2) this.bones.spine2 = bone;
+            else if (name === this.boneNames.neck) this.bones.neck = bone;
+            else if (name === this.boneNames.head) {
+              this.bones.head = bone;
+              // Hide head for local body only
+              if (!this.data.isMirror) {
+                bone.scale.set(0.001, 0.001, 0.001);
+              }
+            }
+            // Arms
+            else if (name === this.boneNames.leftShoulder) this.bones.leftShoulder = bone;
+            else if (name === this.boneNames.leftArm) this.bones.leftUpperArm = bone;
+            else if (name === this.boneNames.leftForeArm) this.bones.leftForearm = bone;
+            else if (name === this.boneNames.leftHand) this.bones.leftHandBone = bone;
+            else if (name === this.boneNames.rightShoulder) this.bones.rightShoulder = bone;
+            else if (name === this.boneNames.rightArm) this.bones.rightUpperArm = bone;
+            else if (name === this.boneNames.rightForeArm) this.bones.rightForearm = bone;
+            else if (name === this.boneNames.rightHand) this.bones.rightHandBone = bone;
+            // Legs (NEW!)
+            else if (name === this.boneNames.leftUpLeg) this.bones.leftUpLeg = bone;
+            else if (name === this.boneNames.leftLeg) this.bones.leftLeg = bone;
+            else if (name === this.boneNames.leftFoot) this.bones.leftFoot = bone;
+            else if (name === this.boneNames.rightUpLeg) this.bones.rightUpLeg = bone;
+            else if (name === this.boneNames.rightLeg) this.bones.rightLeg = bone;
+            else if (name === this.boneNames.rightFoot) this.bones.rightFoot = bone;
+            // Fingers
+            else if (name === this.boneNames.leftHandThumb1) this.bones.leftHandThumb1 = bone;
+            else if (name === this.boneNames.leftHandThumb2) this.bones.leftHandThumb2 = bone;
+            else if (name === this.boneNames.leftHandThumb3) this.bones.leftHandThumb3 = bone;
+            else if (name === this.boneNames.leftHandIndex1) this.bones.leftHandIndex1 = bone;
+            else if (name === this.boneNames.leftHandIndex2) this.bones.leftHandIndex2 = bone;
+            else if (name === this.boneNames.leftHandIndex3) this.bones.leftHandIndex3 = bone;
+            else if (name === this.boneNames.leftHandMiddle1) this.bones.leftHandMiddle1 = bone;
+            else if (name === this.boneNames.leftHandMiddle2) this.bones.leftHandMiddle2 = bone;
+            else if (name === this.boneNames.leftHandMiddle3) this.bones.leftHandMiddle3 = bone;
+            else if (name === this.boneNames.leftHandRing1) this.bones.leftHandRing1 = bone;
+            else if (name === this.boneNames.leftHandRing2) this.bones.leftHandRing2 = bone;
+            else if (name === this.boneNames.leftHandRing3) this.bones.leftHandRing3 = bone;
+            else if (name === this.boneNames.leftHandPinky1) this.bones.leftHandPinky1 = bone;
+            else if (name === this.boneNames.leftHandPinky2) this.bones.leftHandPinky2 = bone;
+            else if (name === this.boneNames.leftHandPinky3) this.bones.leftHandPinky3 = bone;
+            else if (name === this.boneNames.rightHandThumb1) this.bones.rightHandThumb1 = bone;
+            else if (name === this.boneNames.rightHandThumb2) this.bones.rightHandThumb2 = bone;
+            else if (name === this.boneNames.rightHandThumb3) this.bones.rightHandThumb3 = bone;
+            else if (name === this.boneNames.rightHandIndex1) this.bones.rightHandIndex1 = bone;
+            else if (name === this.boneNames.rightHandIndex2) this.bones.rightHandIndex2 = bone;
+            else if (name === this.boneNames.rightHandIndex3) this.bones.rightHandIndex3 = bone;
+            else if (name === this.boneNames.rightHandMiddle1) this.bones.rightHandMiddle1 = bone;
+            else if (name === this.boneNames.rightHandMiddle2) this.bones.rightHandMiddle2 = bone;
+            else if (name === this.boneNames.rightHandMiddle3) this.bones.rightHandMiddle3 = bone;
+            else if (name === this.boneNames.rightHandRing1) this.bones.rightHandRing1 = bone;
+            else if (name === this.boneNames.rightHandRing2) this.bones.rightHandRing2 = bone;
+            else if (name === this.boneNames.rightHandRing3) this.bones.rightHandRing3 = bone;
+            else if (name === this.boneNames.rightHandPinky1) this.bones.rightHandPinky1 = bone;
+            else if (name === this.boneNames.rightHandPinky2) this.bones.rightHandPinky2 = bone;
+            else if (name === this.boneNames.rightHandPinky3) this.bones.rightHandPinky3 = bone;
+          });
+        },
+
+        tick: function(time, deltaTime) {
+          if (!this.modelLoaded || !this.skeleton) return;
+          if (!this.camera || !this.leftController || !this.rightController) return;
+          
+          const dt = Math.min(deltaTime / 1000, 0.1);
+          
+          // Update breathing
+          this.breathingPhase += dt * this.breathingRate * Math.PI * 2;
+          if (this.breathingPhase > Math.PI * 2) {
+            this.breathingPhase -= Math.PI * 2;
+          }
+          
+          if (this.data.isMirror) {
+            this.updateMirrorBody(dt);
+          } else {
+            this.updateLocalBody(dt);
+          }
+          
+          this.updateFingerPoses();
+        },
+
+        updateLocalBody: function(dt) {
+          const headWorldPos = new THREE.Vector3();
+          const headWorldQuat = new THREE.Quaternion();
+          const leftHandWorldPos = new THREE.Vector3();
+          const leftHandWorldQuat = new THREE.Quaternion();
+          const rightHandWorldPos = new THREE.Vector3();
+          const rightHandWorldQuat = new THREE.Quaternion();
+          
+          this.camera.object3D.getWorldPosition(headWorldPos);
+          this.camera.object3D.getWorldQuaternion(headWorldQuat);
+          this.leftController.object3D.getWorldPosition(leftHandWorldPos);
+          this.leftController.object3D.getWorldQuaternion(leftHandWorldQuat);
+          this.rightController.object3D.getWorldPosition(rightHandWorldPos);
+          this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
+          
+          // Calculate head velocity AND acceleration (for zero-g physics)
+          if (this.previousHeadPosInitialized) {
+            const newVelocity = headWorldPos.clone().sub(this.previousHeadPos).divideScalar(dt);
+            this.headAcceleration.copy(newVelocity).sub(this.previousHeadVelocity).divideScalar(dt);
+            this.headVelocity.copy(newVelocity);
+            this.previousHeadVelocity.copy(newVelocity);
+          } else {
+            this.previousHeadPosInitialized = true;
+          }
+          this.previousHeadPos.copy(headWorldPos);
+          
+          this.calculateTorsoOrientation(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos, dt);
+          this.calculateBodyTilt(headWorldPos, leftHandWorldPos, rightHandWorldPos, dt);
+          
+          // Position body
+          const desiredHipsY = headWorldPos.y - 0.65;
+          const modelHipsLocalY = 1.0;
+          const bodyY = desiredHipsY - modelHipsLocalY;
+          
+          const backwardOffset = new THREE.Vector3(0, 0, 0.15);
+          backwardOffset.applyQuaternion(this.torsoRotation);
+          
+          this.el.object3D.position.set(
+            headWorldPos.x + backwardOffset.x,
+            bodyY,
+            headWorldPos.z + backwardOffset.z
+          );
+          
+          const combinedRotation = new THREE.Quaternion()
+            .copy(this.torsoRotation)
+            .multiply(this.bodyTilt);
+          this.el.object3D.quaternion.copy(combinedRotation);
+          
+          // Update bones (including legs!)
+          this.updateBones(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos,
+                          leftHandWorldQuat, rightHandWorldQuat, dt);
+        },
+
+        updateMirrorBody: function(dt) {
+          // Mirror body logic (same as local but with mirror transforms)
+          const headWorldPos = new THREE.Vector3();
+          const headWorldQuat = new THREE.Quaternion();
+          const leftHandWorldPos = new THREE.Vector3();
+          const leftHandWorldQuat = new THREE.Quaternion();
+          const rightHandWorldPos = new THREE.Vector3();
+          const rightHandWorldQuat = new THREE.Quaternion();
+          
+          this.camera.object3D.getWorldPosition(headWorldPos);
+          this.camera.object3D.getWorldQuaternion(headWorldQuat);
+          this.leftController.object3D.getWorldPosition(leftHandWorldPos);
+          this.leftController.object3D.getWorldQuaternion(leftHandWorldQuat);
+          this.rightController.object3D.getWorldPosition(rightHandWorldPos);
+          this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
+          
+          if (this.previousHeadPosInitialized) {
+            const newVelocity = headWorldPos.clone().sub(this.previousHeadPos).divideScalar(dt);
+            this.headAcceleration.copy(newVelocity).sub(this.previousHeadVelocity).divideScalar(dt);
+            this.headVelocity.copy(newVelocity);
+            this.previousHeadVelocity.copy(newVelocity);
+          } else {
+            this.previousHeadPosInitialized = true;
+          }
+          this.previousHeadPos.copy(headWorldPos);
+          
+          const mirrorCenter = new THREE.Vector3(headWorldPos.x, headWorldPos.y - 0.3, headWorldPos.z - this.mirrorDistance);
+          const offset = new THREE.Vector3(0, 0, -this.mirrorDistance);
+          let mirrorHeadPos = headWorldPos.clone().add(offset);
+          let mirrorLeftHandPos = leftHandWorldPos.clone().add(offset);
+          let mirrorRightHandPos = rightHandWorldPos.clone().add(offset);
+          
+          if (this.manualRotationY !== 0) {
+            const rotationMatrix = new THREE.Matrix4().makeRotationY(this.manualRotationY);
+            
+            mirrorHeadPos.sub(mirrorCenter).applyMatrix4(rotationMatrix).add(mirrorCenter);
+            mirrorLeftHandPos.sub(mirrorCenter).applyMatrix4(rotationMatrix).add(mirrorCenter);
+            mirrorRightHandPos.sub(mirrorCenter).applyMatrix4(rotationMatrix).add(mirrorCenter);
+            
+            const manualQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.manualRotationY);
+            headWorldQuat.premultiply(manualQuat);
+            leftHandWorldQuat.premultiply(manualQuat);
+            rightHandWorldQuat.premultiply(manualQuat);
+          }
+          
+          this.calculateTorsoOrientation(mirrorHeadPos, headWorldQuat, mirrorLeftHandPos, mirrorRightHandPos, dt);
+          this.calculateBodyTilt(mirrorHeadPos, mirrorLeftHandPos, mirrorRightHandPos, dt);
+          
+          const desiredHipsY = mirrorHeadPos.y - 0.65;
+          const modelHipsLocalY = 1.0;
+          const torsoY = desiredHipsY - modelHipsLocalY;
+          
+          const backwardOffset = new THREE.Vector3(0, 0, 0.15);
+          backwardOffset.applyQuaternion(this.torsoRotation);
+          
+          this.el.object3D.position.set(
+            mirrorHeadPos.x + backwardOffset.x,
+            torsoY,
+            mirrorHeadPos.z + backwardOffset.z
+          );
+          
+          const combinedRotation = new THREE.Quaternion()
+            .copy(this.torsoRotation)
+            .multiply(this.bodyTilt);
+          this.el.object3D.quaternion.copy(combinedRotation);
+          
+          this.updateBones(mirrorHeadPos, headWorldQuat, mirrorLeftHandPos, mirrorRightHandPos,
+                          leftHandWorldQuat, rightHandWorldQuat, dt);
+        },
+
+        calculateTorsoOrientation: function(headPos, headQuat, leftHandPos, rightHandPos, dt) {
+          const headForwardFlat = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
+          headForwardFlat.y = 0;
+          headForwardFlat.normalize();
+          
+          const shoulderLine = rightHandPos.clone().sub(leftHandPos);
+          shoulderLine.y = 0;
+          const shoulderDist = shoulderLine.length();
+          shoulderLine.normalize();
+          
+          const controllerForward = new THREE.Vector3().crossVectors(shoulderLine, new THREE.Vector3(0, 1, 0));
+          controllerForward.normalize();
+          
+          if (controllerForward.dot(headForwardFlat) < 0) {
+            controllerForward.negate();
+          }
+          
+          let controllerWeight = 0.8;
+          if (shoulderDist < 0.25) {
+            controllerWeight = 0.3;
+          } else if (shoulderDist > 0.35) {
+            controllerWeight = 1.0;
+          }
+          
+          const blendedForward = new THREE.Vector3()
+            .addScaledVector(controllerForward, controllerWeight)
+            .addScaledVector(headForwardFlat, 1.0 - controllerWeight)
+            .normalize();
+          
+          const targetRotation = new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(0, 0, -1),
+            blendedForward
+          );
+          
+          this.torsoRotation.slerp(targetRotation, this.smoothingFactor);
+        },
+
+        calculateBodyTilt: function(headPos, leftHandPos, rightHandPos, dt) {
+          this.bodyTilt.identity();
+        },
+
+        updateBones: function(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat, dt) {
+          // Reset bones
+          if (this.bones.hips) this.bones.hips.quaternion.identity();
+          if (this.bones.spine) this.bones.spine.quaternion.identity();
+          if (this.bones.spine1) this.bones.spine1.quaternion.identity();
+          if (this.bones.spine2) this.bones.spine2.quaternion.identity();
+          
+          // Spine bending (with velocity-based lean + breathing)
+          const bodyCenter = headPos.clone();
+          bodyCenter.y -= 0.5;
+          
+          const leftRelative = leftHandPos.clone().sub(bodyCenter);
+          const rightRelative = rightHandPos.clone().sub(bodyCenter);
+          const avgHandPos = new THREE.Vector3()
+            .addVectors(leftRelative, rightRelative)
+            .multiplyScalar(0.5);
+          
+          const invTorsoRot = this.torsoRotation.clone().invert();
+          avgHandPos.applyQuaternion(invTorsoRot);
+          
+          const handForwardLean = Math.max(-0.08, Math.min(0.05, -avgHandPos.z * 0.08));
+          const handSideLean = Math.max(-0.08, Math.min(0.08, avgHandPos.x * 0.1));
+          
+          const localVelocity = this.headVelocity.clone();
+          localVelocity.applyQuaternion(invTorsoRot);
+          
+          const targetLean = new THREE.Vector3(
+            localVelocity.z * 0.8,
+            0,
+            -localVelocity.x * 0.5
+          );
+          
+          this.torsoLean.lerp(targetLean, this.torsoLeanVelocity);
+          
+          const totalForwardLean = handForwardLean + this.torsoLean.x;
+          const totalSideLean = handSideLean + this.torsoLean.z;
+          
+          const breathingExpansion = Math.sin(this.breathingPhase) * this.breathingAmount;
+          
+          if (this.bones.spine || this.bones.spine1 || this.bones.spine2) {
+            const spineRotations = [
+              { bone: this.bones.spine, amount: 0.25, breathingAmount: 0.3 },
+              { bone: this.bones.spine1, amount: 0.35, breathingAmount: 0.4 },
+              { bone: this.bones.spine2, amount: 0.4, breathingAmount: 0.3 }
+            ];
+            
+            spineRotations.forEach(({ bone, amount, breathingAmount }) => {
+              if (bone) {
+                const breathingLean = -breathingExpansion * breathingAmount;
+                const euler = new THREE.Euler(
+                  -totalForwardLean * amount + breathingLean,
+                  0,
+                  -totalSideLean * amount,
+                  'YXZ'
+                );
+                bone.quaternion.setFromEuler(euler);
+              }
+            });
+          }
+          
+          // Head
+          if (this.bones.neck) {
+            const relativeHeadQuat = headQuat.clone();
+            const invBodyQuat = this.torsoRotation.clone().invert();
+            relativeHeadQuat.premultiply(invBodyQuat);
+            
+            const euler = new THREE.Euler().setFromQuaternion(relativeHeadQuat, 'YXZ');
+            euler.x = -euler.x;
+            euler.z = -euler.z;
+            
+            const correctedQuat = new THREE.Quaternion().setFromEuler(euler);
+            this.bones.neck.quaternion.copy(correctedQuat);
+          }
+          
+          // Arms (reuse existing IK)
+          this.solveArmIK('left', leftHandPos, leftHandQuat);
+          this.solveArmIK('right', rightHandPos, rightHandQuat);
+          
+          // ZERO-G LEGS (procedural animation)
+          this.updateZeroGLegs(headPos, leftHandPos, rightHandPos, dt);
+        },
+
+        updateZeroGLegs: function(headPos, leftHandPos, rightHandPos, dt) {
+          // Calculate center of mass of upper body
+          const upperBodyCOM = new THREE.Vector3()
+            .addVectors(headPos, leftHandPos)
+            .add(rightHandPos)
+            .divideScalar(3);
+          
+          // Convert velocity and acceleration to body-local space
+          const invTorsoRot = this.torsoRotation.clone().invert();
+          const localVel = this.headVelocity.clone().applyQuaternion(invTorsoRot);
+          const localAccel = this.headAcceleration.clone().applyQuaternion(invTorsoRot);
+          
+          // Calculate leg target positions (opposite to momentum direction)
+          // When moving forward, legs trail backward
+          const momentumOffset = localVel.clone().multiplyScalar(-0.3); // Legs trail 30cm per m/s
+          const accelOffset = localAccel.clone().multiplyScalar(-0.05); // React to acceleration
+          
+          // Base leg position: relaxed hanging pose (knees slightly bent, feet below hips)
+          const baseOffset = new THREE.Vector3(0, -0.9, -0.1); // Down 90cm, slightly back
+          
+          // Combine offsets
+          const legOffset = baseOffset.clone().add(momentumOffset).add(accelOffset);
+          
+          // Convert back to world space
+          const legOffsetWorld = legOffset.applyQuaternion(this.torsoRotation);
+          
+          // Set target positions for feet (relative to hips)
+          const hipsPos = this.el.object3D.position.clone();
+          hipsPos.y += 1.0; // Hip height in model
+          
+          // Spread legs left/right
+          const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.torsoRotation);
+          
+          this.legTargetPositions.left.copy(hipsPos)
+            .add(legOffsetWorld)
+            .add(bodyRight.clone().multiplyScalar(-this.legSeparation));
+          
+          this.legTargetPositions.right.copy(hipsPos)
+            .add(legOffsetWorld)
+            .add(bodyRight.clone().multiplyScalar(this.legSeparation));
+          
+          // Physics simulation: spring-damper system
+          ['left', 'right'].forEach(side => {
+            // Spring force toward target
+            const toTarget = this.legTargetPositions[side].clone()
+              .sub(this.legCurrentPositions[side]);
+            const springForce = toTarget.multiplyScalar(this.legSpringStrength);
+            
+            // Update velocity
+            this.legVelocities[side].add(springForce);
+            this.legVelocities[side].multiplyScalar(this.legDamping);
+            
+            // Update position
+            this.legCurrentPositions[side].add(
+              this.legVelocities[side].clone().multiplyScalar(dt)
+            );
+          });
+          
+          // Apply leg IK
+          this.solveLegIK('left', this.legCurrentPositions.left);
+          this.solveLegIK('right', this.legCurrentPositions.right);
+        },
+
+        solveLegIK: function(side, footTargetPos) {
+          const upLegBone = this.bones[`${side}UpLeg`];
+          const legBone = this.bones[`${side}Leg`];
+          const footBone = this.bones[`${side}Foot`];
+          
+          if (!upLegBone || !legBone || !footBone) return;
+          
+          // Get hip position
+          const hipPos = new THREE.Vector3();
+          upLegBone.getWorldPosition(hipPos);
+          
+          // Two-bone IK (same as arms)
+          const hipToFoot = footTargetPos.clone().sub(hipPos);
+          const distance = hipToFoot.length();
+          const maxReach = (this.config.upperLegLength + this.config.lowerLegLength) * 0.999;
+          const minReach = Math.abs(this.config.upperLegLength - this.config.lowerLegLength) * 1.001;
+          
+          let targetFootPos = footTargetPos.clone();
+          if (distance > maxReach) {
+            targetFootPos = hipPos.clone().add(hipToFoot.normalize().multiplyScalar(maxReach));
+          } else if (distance < minReach) {
+            targetFootPos = hipPos.clone().add(hipToFoot.normalize().multiplyScalar(minReach));
+          }
+          
+          // Law of cosines for knee angle
+          const toTarget = targetFootPos.clone().sub(hipPos);
+          const targetDist = toTarget.length();
+          const toTargetDir = toTarget.normalize();
+          
+          const upperSq = this.config.upperLegLength * this.config.upperLegLength;
+          const lowerSq = this.config.lowerLegLength * this.config.lowerLegLength;
+          const distSq = targetDist * targetDist;
+          
+          const cosAngle = (upperSq + distSq - lowerSq) / (2 * this.config.upperLegLength * targetDist);
+          const clampedCos = Math.max(-0.999, Math.min(0.999, cosAngle));
+          const angle = Math.acos(clampedCos);
+          
+          // Knee bend direction (forward for legs)
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+          let bendDir = bodyForward.clone().multiplyScalar(0.7);
+          bendDir.addScaledVector(new THREE.Vector3(0, -1, 0), 0.3);
+          bendDir.normalize();
+          
+          bendDir.addScaledVector(toTargetDir, -bendDir.dot(toTargetDir)).normalize();
+          
+          // Calculate knee position
+          const kneeDir = new THREE.Vector3()
+            .addScaledVector(toTargetDir, Math.cos(angle))
+            .addScaledVector(bendDir, Math.sin(angle))
+            .normalize();
+          
+          const kneeWorldPos = hipPos.clone().add(kneeDir.multiplyScalar(this.config.upperLegLength));
+          
+          // Convert to bone rotations
+          this.el.object3D.updateMatrixWorld(true);
+          
+          // Upper leg (thigh) - COMPLETELY LOCK TWIST using lookAt approach
+          upLegBone.parent.updateMatrixWorld(true);
+          
+          // Get positions in world space
+          const hipWorldPos = new THREE.Vector3();
+          upLegBone.getWorldPosition(hipWorldPos);
+          
+          // We want the bone to point at the knee
+          const boneDir = kneeWorldPos.clone().sub(hipWorldPos).normalize();
+          
+          // Get the "up" direction - this prevents twist
+          // For legs, "up" should be FORWARD (knees face forward, not sideways)
+          const upDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+          
+          // Create rotation matrix that points bone at target with no twist
+          // For Mixamo T-pose: legs point DOWN (Y-), so we map our direction to Y-axis
+          const yAxis = boneDir.clone(); // Bone's Y points from hip to knee (positive direction)
+          const zAxis = upDir.clone(); // Z axis = forward (knees face forward)
+          
+          // Make sure Z is perpendicular to Y
+          zAxis.addScaledVector(yAxis, -zAxis.dot(yAxis)).normalize();
+          
+          // X axis completes the right-handed system
+          const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
+          
+          // Build rotation matrix
+          const rotMatrix = new THREE.Matrix4();
+          rotMatrix.makeBasis(xAxis, yAxis, zAxis);
+          
+          // Convert to quaternion in parent's local space
+          const worldQuat = new THREE.Quaternion().setFromRotationMatrix(rotMatrix);
+          const parentWorldQuat = new THREE.Quaternion();
+          upLegBone.parent.getWorldQuaternion(parentWorldQuat);
+          
+          const localQuat = worldQuat.clone().premultiply(parentWorldQuat.clone().invert());
+          upLegBone.quaternion.copy(localQuat);
+          upLegBone.updateMatrixWorld(true);
+          
+          // Lower leg (shin) - same twist-lock approach
+          legBone.parent.updateMatrixWorld(true);
+          
+          const kneeWorldPosActual = new THREE.Vector3();
+          legBone.getWorldPosition(kneeWorldPosActual);
+          
+          const shinDir = targetFootPos.clone().sub(kneeWorldPosActual).normalize();
+          const shinUpDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+          
+          // Same mapping for shin
+          const shinY = shinDir.clone(); // Positive direction
+          const shinZ = shinUpDir.clone();
+          shinZ.addScaledVector(shinY, -shinZ.dot(shinY)).normalize();
+          const shinX = new THREE.Vector3().crossVectors(shinY, shinZ).normalize();
+          
+          const shinRotMatrix = new THREE.Matrix4();
+          shinRotMatrix.makeBasis(shinX, shinY, shinZ);
+          
+          const shinWorldQuat = new THREE.Quaternion().setFromRotationMatrix(shinRotMatrix);
+          const shinParentWorldQuat = new THREE.Quaternion();
+          legBone.parent.getWorldQuaternion(shinParentWorldQuat);
+          
+          const shinLocalQuat = shinWorldQuat.clone().premultiply(shinParentWorldQuat.clone().invert());
+          legBone.quaternion.copy(shinLocalQuat);
+          legBone.updateMatrixWorld(true);
+          
+          // Foot (dynamic ankle flex based on momentum)
+          if (footBone) {
+            legBone.updateMatrixWorld(true);
+            
+            // Get body's forward direction
+            const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+            
+            // Get velocity in body-local space for momentum calculation
+            const invTorsoRot = this.torsoRotation.clone().invert();
+            const localVel = this.headVelocity.clone().applyQuaternion(invTorsoRot);
+            
+            // Calculate ankle flex based on momentum
+            // When moving forward fast: feet point more forward (streamlined)
+            // When stationary: feet relax more downward
+            const forwardSpeed = Math.abs(localVel.z); // Forward/backward speed
+            const flexAmount = Math.min(1.0, forwardSpeed * 2.0); // 0-1, max at 0.5 m/s
+            
+            // Calculate target foot angle
+            // At rest: 90° (pointing down) = 0 radians from down
+            // Moving: ~45° (pointing forward-down) = blend toward forward
+            const downDir = new THREE.Vector3(0, -1, 0); // Straight down
+            const forwardDownDir = new THREE.Vector3()
+              .addScaledVector(bodyForward, 1.0)
+              .addScaledVector(downDir, 1.0)
+              .normalize(); // 45° between down and forward
+            
+            // Interpolate
+            const footTargetDir = new THREE.Vector3()
+              .addScaledVector(downDir, 1.0 - flexAmount)
+              .addScaledVector(forwardDownDir, flexAmount)
+              .normalize();
+            
+            // Apply using rotation matrix to prevent twist (same approach as legs)
+            footBone.parent.updateMatrixWorld(true);
+            
+            const footWorldPos = new THREE.Vector3();
+            footBone.getWorldPosition(footWorldPos);
+            
+            // Foot's Y-axis should point in target direction (Mixamo foot Y points forward in T-pose)
+            const footY = footTargetDir.clone();
+            
+            // Z-axis should be body's up (prevent foot twist)
+            const footZ = new THREE.Vector3(0, 1, 0); // World up
+            footZ.addScaledVector(footY, -footZ.dot(footY)).normalize();
+            
+            // X completes the system
+            const footX = new THREE.Vector3().crossVectors(footY, footZ).normalize();
+            
+            // Build rotation matrix
+            const footRotMatrix = new THREE.Matrix4();
+            footRotMatrix.makeBasis(footX, footY, footZ);
+            
+            // Convert to local space
+            const footWorldQuat = new THREE.Quaternion().setFromRotationMatrix(footRotMatrix);
+            const footParentWorldQuat = new THREE.Quaternion();
+            footBone.parent.getWorldQuaternion(footParentWorldQuat);
+            
+            const footLocalQuat = footWorldQuat.clone().premultiply(footParentWorldQuat.clone().invert());
+            footBone.quaternion.copy(footLocalQuat);
+          }
+        },
+
+        solveArmIK: function(hand, handWorldPos, handWorldQuat) {
+          const shoulderBone = this.bones[`${hand}Shoulder`];
+          const upperArmBone = this.bones[`${hand}UpperArm`];
+          const forearmBone = this.bones[`${hand}Forearm`];
+          const handBone = this.bones[`${hand}HandBone`];
+          
+          if (!shoulderBone || !upperArmBone || !forearmBone) {
+            return;
+          }
+          
+          const shoulderWorldPos = new THREE.Vector3();
+          shoulderBone.getWorldPosition(shoulderWorldPos);
+          
+          const adjustedHandPos = handWorldPos.clone();
+          const leftRightOffsetLocal = new THREE.Vector3(hand === 'left' ? 0.1 : -0.1, 0, 0);
+          const leftRightOffsetWorld = leftRightOffsetLocal.applyQuaternion(this.el.object3D.quaternion);
+          adjustedHandPos.add(leftRightOffsetWorld);
+          
+          // Two-bone IK
+          const shoulderToHand = adjustedHandPos.clone().sub(shoulderWorldPos);
+          const distance = shoulderToHand.length();
+          const maxReach = (this.config.upperArmLength + this.config.lowerArmLength) * 0.999;
+          const minReach = Math.abs(this.config.upperArmLength - this.config.lowerArmLength) * 1.001;
+          
+          let targetHandPos = adjustedHandPos.clone();
+          if (distance > maxReach) {
+            targetHandPos = shoulderWorldPos.clone().add(shoulderToHand.normalize().multiplyScalar(maxReach));
+          } else if (distance < minReach) {
+            targetHandPos = shoulderWorldPos.clone().add(shoulderToHand.normalize().multiplyScalar(minReach));
+          }
+          
+          // Law of cosines
+          const toTarget = targetHandPos.clone().sub(shoulderWorldPos);
+          const targetDist = toTarget.length();
+          const toTargetDir = toTarget.normalize();
+          
+          const upperSq = this.config.upperArmLength * this.config.upperArmLength;
+          const lowerSq = this.config.lowerArmLength * this.config.lowerArmLength;
+          const distSq = targetDist * targetDist;
+          
+          const cosAngle = (upperSq + distSq - lowerSq) / (2 * this.config.upperArmLength * targetDist);
+          const clampedCos = Math.max(-0.999, Math.min(0.999, cosAngle));
+          const angle = Math.acos(clampedCos);
+          
+          // Elbow bend direction
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+          const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.torsoRotation);
+          const bodyOutward = bodyRight.clone().multiplyScalar(hand === 'left' ? -1 : 1);
+          
+          let bendDir = new THREE.Vector3()
+            .addScaledVector(bodyOutward, 0.4)
+            .addScaledVector(new THREE.Vector3(0, -1, 0), 0.4)
+            .normalize();
+          
+          const handUp = new THREE.Vector3(0, 1, 0).applyQuaternion(handWorldQuat);
+          bendDir.addScaledVector(handUp, 0.3);
+          bendDir.normalize();
+          bendDir.addScaledVector(toTargetDir, -bendDir.dot(toTargetDir)).normalize();
+          
+          // Calculate elbow
+          const elbowDir = new THREE.Vector3()
+            .addScaledVector(toTargetDir, Math.cos(angle))
+            .addScaledVector(bendDir, Math.sin(angle))
+            .normalize();
+          
+          let elbowWorldPos = shoulderWorldPos.clone().add(elbowDir.multiplyScalar(this.config.upperArmLength));
+          
+          // Enforce exact lengths
+          const shoulderToElbow = elbowWorldPos.clone().sub(shoulderWorldPos);
+          if (Math.abs(shoulderToElbow.length() - this.config.upperArmLength) > 0.0001) {
+            elbowWorldPos.copy(shoulderWorldPos).add(shoulderToElbow.normalize().multiplyScalar(this.config.upperArmLength));
+          }
+          
+          const elbowToHand = targetHandPos.clone().sub(elbowWorldPos);
+          if (Math.abs(elbowToHand.length() - this.config.lowerArmLength) > 0.0001) {
+            targetHandPos.copy(elbowWorldPos).add(elbowToHand.normalize().multiplyScalar(this.config.lowerArmLength));
+          }
+          
+          // Convert to bone rotations
+          this.el.object3D.updateMatrixWorld(true);
+          
+          // Upper Arm
+          upperArmBone.parent.updateMatrixWorld(true);
+          const shoulderInParent = upperArmBone.parent.worldToLocal(shoulderWorldPos.clone());
+          const elbowInParent = upperArmBone.parent.worldToLocal(elbowWorldPos.clone());
+          const upperArmParentDir = shoulderInParent.clone().sub(elbowInParent).normalize();
+          const tPoseDir = new THREE.Vector3(0, -1, 0);
+          const upperArmQuat = new THREE.Quaternion().setFromUnitVectors(tPoseDir, upperArmParentDir);
+          upperArmBone.quaternion.copy(upperArmQuat);
+          upperArmBone.updateMatrixWorld(true);
+          
+          // Forearm
+          forearmBone.parent.updateMatrixWorld(true);
+          const elbowInUpperArm = forearmBone.parent.worldToLocal(elbowWorldPos.clone());
+          const handInUpperArm = forearmBone.parent.worldToLocal(targetHandPos.clone());
+          const forearmParentDir = elbowInUpperArm.clone().sub(handInUpperArm).normalize();
+          const forearmQuat = new THREE.Quaternion().setFromUnitVectors(tPoseDir, forearmParentDir);
+          
+          // Forearm twist
+          forearmBone.updateMatrixWorld(true);
+          const forearmWorldQuat = new THREE.Quaternion();
+          forearmBone.getWorldQuaternion(forearmWorldQuat);
+          const handRelativeForearm = handWorldQuat.clone();
+          handRelativeForearm.premultiply(forearmWorldQuat.clone().invert());
+          const handEuler = new THREE.Euler().setFromQuaternion(handRelativeForearm, 'YXZ');
+          const twistAngle = handEuler.y;
+          const forearmTwist = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0),
+            twistAngle * 0.5
+          );
+          forearmBone.quaternion.copy(forearmQuat).multiply(forearmTwist);
+          forearmBone.updateMatrixWorld(true);
+          
+          // Hand orientation
+          if (handBone) {
+            forearmBone.updateMatrixWorld(true);
+            const forearmWorldQuat2 = new THREE.Quaternion();
+            forearmBone.getWorldQuaternion(forearmWorldQuat2);
+            let handLocalQuat = handWorldQuat.clone();
+            handLocalQuat.premultiply(forearmWorldQuat2.clone().invert());
+            const localXFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+            handLocalQuat.multiply(localXFlip);
+            const rollCorrection = new THREE.Quaternion().setFromAxisAngle(
+              new THREE.Vector3(0, 1, 0),
+              hand === 'left' ? Math.PI / 2 : -Math.PI / 2
+            );
+            handLocalQuat.multiply(rollCorrection);
+            handBone.quaternion.copy(handLocalQuat);
+          }
+        },
+
+        updateFingerPoses: function() {
+          const leftGamepad = this.leftController.components['tracked-controls']?.controller?.gamepad;
+          const rightGamepad = this.rightController.components['tracked-controls']?.controller?.gamepad;
+          
+          if (!this.fingerDebugLogged) {
+            console.log('[Finger Tracking] Left gamepad buttons:', leftGamepad?.buttons?.length);
+            if (leftGamepad && leftGamepad.buttons) {
+              console.log('[Finger Tracking] Button details:');
+              leftGamepad.buttons.forEach((btn, i) => {
+                if (btn.touched || btn.pressed) {
+                  console.log(`  Button ${i}: pressed=${btn.pressed}, touched=${btn.touched}, value=${btn.value}`);
+                }
+              });
+              console.log('[Finger Tracking] Touch any button/surface and check console to see which index it is');
+            }
+            this.fingerDebugLogged = true;
+          }
+          
+          if (leftGamepad && leftGamepad.buttons) {
+            const trigger = leftGamepad.buttons[0]?.value || 0;
+            const grip = leftGamepad.buttons[1]?.value || 0;
+            
+            let anyThumbTouch = 0;
+            for (let i = 2; i <= 6; i++) {
+              if (leftGamepad.buttons[i]?.touched) {
+                anyThumbTouch = 1;
+                break;
+              }
+            }
+            
+            this.updateTargetCurls('left', trigger, grip, anyThumbTouch);
+          }
+          
+          if (rightGamepad && rightGamepad.buttons) {
+            const trigger = rightGamepad.buttons[0]?.value || 0;
+            const grip = rightGamepad.buttons[1]?.value || 0;
+            
+            let anyThumbTouch = 0;
+            for (let i = 2; i <= 6; i++) {
+              if (rightGamepad.buttons[i]?.touched) {
+                anyThumbTouch = 1;
+                break;
+              }
+            }
+            
+            this.updateTargetCurls('right', trigger, grip, anyThumbTouch);
+          }
+          
+          ['left', 'right'].forEach(hand => {
+            ['thumb', 'index', 'middle', 'ring', 'pinky'].forEach(finger => {
+              const current = this.currentCurls[hand][finger];
+              const target = this.targetCurls[hand][finger];
+              this.currentCurls[hand][finger] = current + (target - current) * this.fingerSmoothingFactor;
+            });
+          });
+          
+          this.applyFingerCurls('left', this.currentCurls.left);
+          this.applyFingerCurls('right', this.currentCurls.right);
+        },
+
+        updateTargetCurls: function(hand, trigger, grip, thumbTouch) {
+          const restingCurls = {
+            thumb: 0.1,
+            index: 0.15,
+            middle: 0.2,
+            ring: 0.25,
+            pinky: 0.25
+          };
+          
+          const activeCurls = {
+            thumb: thumbTouch * 0.8,
+            index: trigger,
+            middle: grip * 1.1,
+            ring: grip * 1.15,
+            pinky: grip * 1.2
+          };
+          
+          if (grip > 0.1 && trigger < 0.1) {
+            activeCurls.index = 0;
+          }
+          
+          const curls = {
+            thumb: Math.max(restingCurls.thumb, activeCurls.thumb),
+            index: Math.max(restingCurls.index, activeCurls.index),
+            middle: Math.max(restingCurls.middle, activeCurls.middle),
+            ring: Math.max(restingCurls.ring, activeCurls.ring),
+            pinky: Math.max(restingCurls.pinky, activeCurls.pinky)
+          };
+          
+          if (grip > 0.1 && trigger < 0.1) {
+            curls.index = 0.05;
+          }
+          
+          if (grip > 0.5 && thumbTouch < 0.5) {
+            curls.thumb = -0.15;
+          }
+          
+          this.targetCurls[hand] = curls;
+        },
+
+        applyFingerCurls: function(hand, curls) {
+          const fingerBones = {
+            thumb: hand === 'left' ? [this.bones.leftHandThumb1, this.bones.leftHandThumb2, this.bones.leftHandThumb3] : 
+                                     [this.bones.rightHandThumb1, this.bones.rightHandThumb2, this.bones.rightHandThumb3],
+            index: hand === 'left' ? [this.bones.leftHandIndex1, this.bones.leftHandIndex2, this.bones.leftHandIndex3] :
+                                     [this.bones.rightHandIndex1, this.bones.rightHandIndex2, this.bones.rightHandIndex3],
+            middle: hand === 'left' ? [this.bones.leftHandMiddle1, this.bones.leftHandMiddle2, this.bones.leftHandMiddle3] :
+                                      [this.bones.rightHandMiddle1, this.bones.rightHandMiddle2, this.bones.rightHandMiddle3],
+            ring: hand === 'left' ? [this.bones.leftHandRing1, this.bones.leftHandRing2, this.bones.leftHandRing3] :
+                                    [this.bones.rightHandRing1, this.bones.rightHandRing2, this.bones.rightHandRing3],
+            pinky: hand === 'left' ? [this.bones.leftHandPinky1, this.bones.leftHandPinky2, this.bones.leftHandPinky3] :
+                                     [this.bones.rightHandPinky1, this.bones.rightHandPinky2, this.bones.rightHandPinky3]
+          };
+          
+          Object.keys(fingerBones).forEach(fingerName => {
+            const bones = fingerBones[fingerName];
+            const curl = curls[fingerName];
+            
+            const isThumb = fingerName === 'thumb';
+            const axis = isThumb ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
+            const sign = isThumb ? (hand === 'left' ? -1 : 1) : 1;
+            
+            bones.forEach((bone, i) => {
+              if (!bone) return;
+              
+              const initialRot = this.initialBoneRotations[bone.name];
+              if (initialRot) {
+                bone.quaternion.copy(initialRot);
+              }
+              
+              const curlAmount = curl * (0.5 + i * 0.25);
+              const curlAngle = curlAmount * Math.PI * 0.6 * sign;
+              
+              const curlQuat = new THREE.Quaternion().setFromAxisAngle(axis, curlAngle);
+              bone.quaternion.multiply(curlQuat);
+            });
+          });
+        }
+      });
+    </script>
+  </body>
+</html>
+

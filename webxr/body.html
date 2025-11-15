@@ -1,0 +1,2125 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>WebXR - VR Body System v6.7 (3D Head 2x Scale)</title>
+    <meta name="description" content="Advanced VR body system with upper body IK for A-Frame WebXR">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+      
+      #ui {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 15px;
+        border-radius: 5px;
+        font-family: monospace;
+        z-index: 1000;
+        max-width: 300px;
+      }
+      
+      #ui h3 {
+        margin-top: 0;
+        color: #4CAF50;
+      }
+      
+      #ui button {
+        margin: 5px;
+        padding: 8px 15px;
+        background: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      
+      #ui button:hover {
+        background: #45a049;
+      }
+      
+      .control-group {
+        margin: 10px 0;
+      }
+      
+      .control-group label {
+        display: block;
+        margin-bottom: 5px;
+        color: #aaa;
+      }
+      
+      .control-group input[type="range"] {
+        width: 100%;
+      }
+      
+      .info {
+        font-size: 11px;
+        color: #888;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="ui">
+      <h3>🦾 VR Body System</h3>
+      
+      <div class="control-group">
+        <label>Body Visibility:</label>
+        <button id="toggle-body">Toggle Local Torso</button>
+        <button id="toggle-mirror">Toggle Mirror</button>
+      </div>
+      
+      <div class="control-group">
+        <label>Rendering:</label>
+        <button id="toggle-models">Toggle 3D Models</button>
+      </div>
+      
+      <div class="control-group">
+        <label>Mirror Options:</label>
+        <button id="toggle-mirror-head">Toggle Mirror Head</button>
+      </div>
+      
+      <div class="control-group">
+        <label>Show IK Debug:</label>
+        <button id="toggle-debug">Toggle Debug</button>
+      </div>
+      
+      <div class="control-group">
+        <label>Mirror Distance: <span id="mirror-dist-val">2.0</span>m</label>
+        <input type="range" id="mirror-dist" min="1" max="10" step="0.1" value="2.0">
+      </div>
+      
+      <div class="control-group">
+        <label>Shoulder Width: <span id="shoulder-width-val">0.4</span>m</label>
+        <input type="range" id="shoulder-width" min="0.3" max="0.6" step="0.01" value="0.4">
+      </div>
+      
+      <div class="control-group">
+        <label>Upper Arm: <span id="upper-arm-val">0.3</span>m</label>
+        <input type="range" id="upper-arm" min="0.2" max="0.4" step="0.01" value="0.3">
+      </div>
+      
+      <div class="control-group">
+        <label>Lower Arm: <span id="lower-arm-val">0.3</span>m</label>
+        <input type="range" id="lower-arm" min="0.2" max="0.4" step="0.01" value="0.3">
+      </div>
+      
+      <div class="info">
+            <strong>Version:</strong> 6.4 (Primitives + 3D Head)<br>
+        <strong>Local Body:</strong> Primitive body + 3D head model<br>
+        <strong>Mirror Body:</strong> Green primitive body + 3D head<br>
+        <strong>Rotation:</strong> 100% controllers when hands visible<br>
+        <strong>Controls:</strong> Right thumbstick=rotate<br>
+        <strong>Rendering:</strong> <span id="render-mode">Full Body Model (both)</span><br>
+        <strong>Model Status:</strong> <span id="model-status">Loading...</span>
+      </div>
+    </div>
+
+    <a-scene background="color: #87CEEB" physics="debug: false">
+      <!-- Assets -->
+      <a-assets>
+        <!-- Arm segment 3D model (optional - can use primitives if not available) -->
+        <a-asset-item id="arm-segment-model" src="assets/test-arm.glb"></a-asset-item>
+        <!-- Head model (optional) -->
+        <a-asset-item id="head-model" src="assets/head.glb"></a-asset-item>
+        <!-- Torso model (optional) -->
+        <a-asset-item id="torso-model" src="assets/torso.glb"></a-asset-item>
+        <!-- Full body model with named parts -->
+        <a-asset-item id="full-body-model" src="BoltVR/assets/body.glb"></a-asset-item>
+      </a-assets>
+      
+      <!-- Camera Rig -->
+      <a-entity id="rig" position="0 1.6 0" vr-locomotion>
+        <a-entity id="camera" camera look-controls wasd-controls="acceleration: 20" position="0 0 0"></a-entity>
+        
+        <!-- VR Controllers -->
+        <a-entity id="left-hand" 
+                  hand-controls="hand: left; handModelStyle: lowPoly"
+                  vr-body-controller="hand: left"></a-entity>
+        
+        <a-entity id="right-hand" 
+                  hand-controls="hand: right; handModelStyle: lowPoly"
+                  vr-body-controller="hand: right"></a-entity>
+      </a-entity>
+
+      <!--Local Player Body (actual body on player) -->
+      <a-entity id="local-body" vr-body="debug: false; visible: true; useModels: false; useFullBodyModel: false"></a-entity>
+
+      <!-- Mirror Body (positioned in front for viewing) -->
+      <a-entity id="mirror-body" 
+                vr-body="debug: false; visible: true; color: #66BB6A; isMirror: true; useModels: false; useFullBodyModel: false"
+                position="0 0 -2"></a-entity>
+
+      <!-- Test Environment -->
+      <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4" shadow></a-plane>
+      
+      <!-- Grid Floor -->
+      <a-entity position="0 0.01 0">
+        <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" 
+                 material="shader: flat; color: #666; wireframe: true; opacity: 0.3"></a-plane>
+      </a-entity>
+      
+      <!-- Reference Objects -->
+      <a-box position="-3 0.5 -3" color="#FF6B6B" depth="1" height="1" width="1"></a-box>
+      <a-sphere position="3 1 -3" radius="0.5" color="#4ECDC4"></a-sphere>
+      <a-cylinder position="0 0.5 -5" radius="0.3" height="1" color="#FFE66D"></a-cylinder>
+      
+      <!-- Label for mirror body -->
+      <a-text value="Your Body Preview" position="0 2.8 -2" align="center" color="#333" width="4"></a-text>
+      
+      <!-- Lighting -->
+      <a-entity light="type: ambient; intensity: 0.5"></a-entity>
+      <a-entity light="type: directional; intensity: 0.8" position="2 4 2"></a-entity>
+    </a-scene>
+
+    <script>
+      // ========================================
+      // PHYSICS WORLD SETUP
+      // ========================================
+      const world = new CANNON.World();
+      world.gravity.set(0, -9.82, 0);
+      world.broadphase = new CANNON.NaiveBroadphase();
+      world.solver.iterations = 10;
+
+      // ========================================
+      // VR LOCOMOTION COMPONENT (from DodgeVR1-1)
+      // ========================================
+      AFRAME.registerComponent('vr-locomotion', {
+        schema: {
+          speed: { type: 'number', default: 2.0 },
+          rotationSpeed: { type: 'number', default: 2.0 }
+        },
+
+        init: function() {
+          this.rotationY = 0;
+          this.thumbstickRotation = { left: 0, right: 0 };
+          this.leftHand = null;
+          this.rightHand = null;
+          
+          // Reference to mirror body entity
+          this.mirrorBody = null;
+          this.mirrorRotationY = 0; // Store mirror rotation separately
+          
+          setTimeout(() => {
+            this.leftHand = document.querySelector('#left-hand');
+            this.rightHand = document.querySelector('#right-hand');
+            this.mirrorBody = document.querySelector('#mirror-body');
+            
+            // Store initial mirror position
+            if (this.mirrorBody) {
+              this.mirrorBasePos = this.mirrorBody.getAttribute('position');
+            }
+          }, 100);
+          
+          this.el.sceneEl.addEventListener('thumbstickmoved', (evt) => {
+            if (!evt.target || !evt.target.object3D) return;
+            const hand = evt.target;
+            this.handleThumbstick(hand, evt.detail);
+          });
+        },
+        
+        handleThumbstick: function(hand, detail) {
+          const isLeft = hand.id === 'left-hand';
+          if (!isLeft && Math.abs(detail.x) > 0.1) {
+            this.thumbstickRotation.right = -detail.x;
+          } else if (!isLeft) {
+            this.thumbstickRotation.right = 0;
+          }
+        },
+
+        tick: function(time, deltaTime) {
+          const dt = Math.min(deltaTime / 1000, 0.1);
+          const rotationInput = this.thumbstickRotation.right;
+          
+          // Update mirror rotation value and pass to mirror body component
+          if (Math.abs(rotationInput) > 0.1) {
+            this.mirrorRotationY += rotationInput * this.data.rotationSpeed * dt;
+          }
+          
+          // Store rotation in mirror body component
+          if (this.mirrorBody && this.mirrorBody.components['vr-body']) {
+            this.mirrorBody.components['vr-body'].manualRotationY = this.mirrorRotationY;
+          }
+        }
+      });
+
+      // ========================================
+      // BODY CONFIGURATION
+      // ========================================
+      // Full Body Model Specs (BoltVR/assets/body.glb):
+      // - Total height: 1.2m (hips to head, upper body only)
+      // - Origin: At hips (pelvis)
+      // - Includes: Head, Chest, Waist, Hips, Shoulders, Upper Arms, Forearms, Elbows, Thighs
+      // - Based on 1.8m full body height (scaled to upper body)
+      const BODY_CONFIG = {
+        shoulderWidth: 0.34,       // Distance between shoulders (0.17m * 2, matches model)
+        shoulderHeight: -0.15,    // Relative to head
+        shoulderForward: 0.08,    // Shoulder offset forward (increased to move forward)
+        upperArmLength: 0.3,      // Shoulder to elbow - FIXED LENGTH
+        lowerArmLength: 0.3,      // Elbow to hand - FIXED LENGTH
+        neckLength: 0.1,          // Head to torso top
+        torsoLength: 0.5,         // Torso height (for primitives)
+        torsoWidth: 0.35,         // Torso width
+        torsoDepth: 0.2,          // Torso depth
+        headRadius: 0.12,         // Head size
+        useModels: true,          // Use 3D models instead of primitives
+        useConstraints: false,    // Use physics constraints (more realistic) vs IK (current)
+      };
+
+      // ========================================
+      // ARM SEGMENT MODEL COMPONENT (FIXED LENGTH)
+      // ========================================
+      AFRAME.registerComponent('arm-segment-model', {
+        schema: {
+          segmentLength: { type: 'number', default: 0.25 },
+          segmentType: { type: 'string', default: 'forearm' } // 'forearm' or 'upperarm'
+        },
+        
+        init: function() {
+          // Original model dimensions: 20cm diameter x 2m length (Z-axis, CENTERED)
+          this.originalLength = 2.0;
+          
+          // Target length with shrink factor to prevent poking through joints
+          this.shrinkFactor = 0.90; // 90% of IK length leaves small gaps at joints
+          this.targetLength = this.data.segmentLength * this.shrinkFactor;
+          
+          // UNIFORM SCALE: Scale the entire model uniformly to match target length
+          // This preserves proportions and avoids the axis-rotation problem
+          const uniformScale = this.targetLength / this.originalLength;
+          
+          // Try to load the model
+          this.el.setAttribute('gltf-model', '#arm-segment-model');
+          this.el.setAttribute('scale', `${uniformScale} ${uniformScale} ${uniformScale}`);
+          this.el.setAttribute('visible', true);
+          
+          // Fallback to primitive cylinder if model fails to load
+          this.modelLoaded = false;
+          this.el.addEventListener('model-loaded', () => {
+            this.modelLoaded = true;
+          });
+          
+          // Check after 2 seconds if model loaded, otherwise create fallback
+          setTimeout(() => {
+            if (!this.modelLoaded) {
+              this.createFallbackGeometry();
+            }
+          }, 2000);
+        },
+        
+        createFallbackGeometry: function() {
+          // Remove the failed gltf-model component
+          this.el.removeAttribute('gltf-model');
+          
+          // Create a cylinder as fallback with shrunk length (same as model)
+          const fallbackHeight = this.data.segmentLength * this.shrinkFactor;
+          
+          const cylinder = document.createElement('a-cylinder');
+          cylinder.setAttribute('radius', '0.04');
+          cylinder.setAttribute('height', fallbackHeight);
+          cylinder.setAttribute('color', '#888888');
+          cylinder.setAttribute('material', 'shader: standard; metalness: 0.2; roughness: 0.8');
+          
+          this.el.appendChild(cylinder);
+          this.fallbackCylinder = cylinder;
+        },
+        
+        update: function() {
+          // Don't dynamically update - causes console spam and doesn't fix the core issue
+          // The problem is that scale is applied in local space, so rotation affects which axis gets shortened
+        }
+      });
+
+      // ========================================
+      // FULL BODY MODEL LOADER
+      // ========================================
+      AFRAME.registerComponent('full-body-model-loader', {
+        schema: {
+          modelUrl: { type: 'string', default: '#full-body-model' },
+          useModel: { type: 'boolean', default: false }
+        },
+        
+        init: function() {
+          console.log('[Full Body Model Loader] Initializing...', this.data);
+          this.bodyParts = {};
+          this.modelLoaded = false;
+          
+          if (!this.data.useModel) {
+            console.warn('[Full Body Model Loader] useModel is false, skipping load');
+            return;
+          }
+          
+          console.log('[Full Body Model Loader] Loading model from:', this.data.modelUrl);
+          
+          // Load the GLB model
+          this.el.setAttribute('gltf-model', this.data.modelUrl);
+          
+          // Error handler
+          this.el.addEventListener('model-error', (e) => {
+            console.error('[Full Body Model] ❌ Failed to load model:', e);
+            const modelStatusEl = document.getElementById('model-status');
+            if (modelStatusEl) {
+              modelStatusEl.textContent = '❌ Model load failed';
+              modelStatusEl.style.color = '#F44336';
+            }
+          });
+          
+          this.el.addEventListener('model-loaded', () => {
+            const mesh = this.el.getObject3D('mesh');
+            if (!mesh) {
+              console.warn('[Full Body Model] No mesh found after loading');
+              return;
+            }
+            
+            console.log('[Full Body Model] Model loaded successfully. Scanning for parts...');
+            const allNodes = [];
+            
+            // Traverse and find all named parts
+            mesh.traverse((node) => {
+              if (node.isMesh || node.isGroup) {
+                const name = node.name;
+                allNodes.push({name, type: node.type});
+                
+                // Map model part names to body system
+                // Try multiple possible naming conventions
+                const lowerName = name.toLowerCase();
+                
+                if (lowerName.includes('head')) this.bodyParts.head = node;
+                if (lowerName.includes('chest')) this.bodyParts.chest = node;
+                if (lowerName.includes('waist') || lowerName.includes('spine') || lowerName.includes('abdomen')) this.bodyParts.waist = node;
+                if (lowerName.includes('hip') || lowerName.includes('pelvis')) this.bodyParts.hips = node;
+                if (lowerName.includes('shoulder') && lowerName.includes('l')) this.bodyParts.leftShoulder = node;
+                if (lowerName.includes('shoulder') && lowerName.includes('r')) this.bodyParts.rightShoulder = node;
+                if ((lowerName.includes('upper') || lowerName.includes('arm')) && lowerName.includes('l')) this.bodyParts.leftUpperArm = node;
+                if ((lowerName.includes('upper') || lowerName.includes('arm')) && lowerName.includes('r')) this.bodyParts.rightUpperArm = node;
+                if ((lowerName.includes('forearm') || lowerName.includes('lower')) && lowerName.includes('l')) this.bodyParts.leftLowerArm = node;
+                if ((lowerName.includes('forearm') || lowerName.includes('lower')) && lowerName.includes('r')) this.bodyParts.rightLowerArm = node;
+                if (lowerName.includes('elbow') && lowerName.includes('l')) this.bodyParts.leftElbow = node;
+                if (lowerName.includes('elbow') && lowerName.includes('r')) this.bodyParts.rightElbow = node;
+                if (lowerName.includes('thigh') || lowerName.includes('leg')) this.bodyParts.thighs = node;
+              }
+            });
+            
+            console.log(`[Full Body Model] Found ${allNodes.length} nodes in model:`, allNodes);
+            
+            this.modelLoaded = true;
+            const foundParts = Object.keys(this.bodyParts);
+            console.log(`[Full Body Model] ✅ Mapped ${foundParts.length} body parts:`, foundParts);
+            
+            // Make all parts visible
+            Object.values(this.bodyParts).forEach(part => {
+              part.visible = true;
+              part.matrixAutoUpdate = true;
+            });
+            
+            console.log('[Full Body Model] Model will be displayed as unified mesh (not repositioned per-part)');
+            
+            // Store reference on the vr-body component (PARENT entity, not this container)
+            const vrBody = this.el.parentEl.components['vr-body'];
+            if (vrBody) {
+              vrBody.modelParts = this.bodyParts;
+              vrBody.hasModelLoaded = true;
+              console.log('[Full Body Model] ✅ Body parts linked to vr-body component');
+              
+              // Update UI
+              const modelStatusEl = document.getElementById('model-status');
+              if (modelStatusEl) {
+                modelStatusEl.textContent = `✅ Model loaded (${foundParts.length} parts found)`;
+                modelStatusEl.style.color = '#4CAF50';
+              }
+            } else {
+              console.error('[Full Body Model] ❌ Could not find vr-body component on parent!');
+            }
+          });
+        },
+        
+        getBodyPart: function(partName) {
+          return this.bodyParts[partName];
+        }
+      });
+
+      // ========================================
+      // MAIN VR BODY COMPONENT
+      // ========================================
+      AFRAME.registerComponent('vr-body', {
+        schema: {
+          visible: { type: 'boolean', default: true },
+          debug: { type: 'boolean', default: false },
+          color: { type: 'color', default: '#4A90E2' },
+          isRemote: { type: 'boolean', default: false },
+          isMirror: { type: 'boolean', default: false },
+          playerId: { type: 'string', default: 'local' },
+          useModels: { type: 'boolean', default: false }, // Use 3D models instead of primitives
+          useFullBodyModel: { type: 'boolean', default: false } // Use full body GLB
+        },
+
+        init: function() {
+          this.config = Object.assign({}, BODY_CONFIG);
+          
+          // Get references
+          this.camera = document.querySelector('#camera');
+          this.rig = document.querySelector('#rig');
+          this.leftController = document.querySelector('#left-hand');
+          this.rightController = document.querySelector('#right-hand');
+          
+          // Create body parts
+          this.createBodyStructure();
+          
+          // Hide head on local body (you can't see your own head in VR)
+          if (!this.data.isRemote && !this.data.isMirror) {
+            this.head.object3D.visible = false;
+          }
+          
+          // IK state
+          this.leftIKState = { shoulder: new THREE.Vector3(), elbow: new THREE.Vector3() };
+          this.rightIKState = { shoulder: new THREE.Vector3(), elbow: new THREE.Vector3() };
+          
+          // Smoothing
+          this.torsoRotation = new THREE.Quaternion();
+          this.targetTorsoRotation = new THREE.Quaternion();
+          this.bodyTilt = new THREE.Quaternion(); // Natural body lean/tilt
+          this.smoothingFactor = 0.15;
+          
+          // Manual rotation from thumbstick (for mirror body)
+          this.manualRotationY = 0;
+          
+          // Mirror distance (for mirror body)
+          this.mirrorDistance = 2.0; // Default 2 meters
+        },
+
+        createBodyStructure: function() {
+          const color = this.data.color;
+          
+          // If using full body model, load it but ALSO create primitive markers
+          if (this.data.useFullBodyModel) {
+            console.log('[VR Body] Creating full body model structure with visual model...');
+            
+            // Create the model container - this will display the full model
+            this.bodyModelContainer = document.createElement('a-entity');
+            this.bodyModelContainer.setAttribute('full-body-model-loader', 'useModel: true');
+            this.bodyModelContainer.setAttribute('position', '0 0 0'); // Model origin is at hips
+            this.el.appendChild(this.bodyModelContainer);
+            
+            console.log('[VR Body] Model container created and attached');
+            
+            // Initialize references (will be populated when model loads)
+            this.modelParts = null;
+            this.hasModelLoaded = false;
+            
+            // Create INVISIBLE markers for IK calculations
+            // The full model will be displayed, these are just for IK math
+            this.head = this.createMarker();
+            this.neck = this.createMarker();
+            this.chest = this.createMarker();
+            this.waist = this.createMarker();
+            this.hips = this.createMarker();
+            this.leftShoulder = this.createMarker();
+            this.rightShoulder = this.createMarker();
+            this.leftUpperArm = this.createMarker();
+            this.leftElbow = this.createMarker();
+            this.leftLowerArm = this.createMarker();
+            this.rightUpperArm = this.createMarker();
+            this.rightElbow = this.createMarker();
+            this.rightLowerArm = this.createMarker();
+            
+            [this.head, this.neck, this.chest, this.waist, this.hips,
+             this.leftShoulder, this.rightShoulder,
+             this.leftUpperArm, this.leftElbow, this.leftLowerArm,
+             this.rightUpperArm, this.rightElbow, this.rightLowerArm].forEach(m => {
+              this.el.appendChild(m);
+            });
+            
+            // Store torso segment rotations
+            this.chestRotation = new THREE.Quaternion();
+            this.waistRotation = new THREE.Quaternion();
+            this.hipsRotation = new THREE.Quaternion();
+            
+            console.log('[VR Body] ✅ Full body model structure created (model will be displayed as-is)');
+            return; // Skip primitive creation
+          }
+          
+          // ===== OTHERWISE, CREATE PRIMITIVE BODY =====
+          console.log('[VR Body] Creating primitive body structure...');
+          
+          // ===== HEAD =====
+          // Create a container for the head that will be positioned/rotated by IK
+          this.head = document.createElement('a-entity');
+          this.el.appendChild(this.head);
+          
+          // Create a child entity with the 3D model
+          // This child will be offset so the head mesh center aligns with the parent's origin
+          this.headModel = document.createElement('a-entity');
+          this.headModel.setAttribute('gltf-model', '#full-body-model');
+          this.head.appendChild(this.headModel);
+          
+          // When model loads, show only the head mesh and apply offsets
+          this.headModel.addEventListener('model-loaded', () => {
+            const mesh = this.headModel.getObject3D('mesh');
+            if (mesh) {
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const name = node.name ? node.name.toLowerCase() : '';
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  // Show mesh only if it's part of the head
+                  if (name.includes('head') || parentName.includes('head')) {
+                    node.visible = true;
+                    // Keep original material
+                  } else {
+                    // Hide all other body part meshes
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Offset the model so the head mesh center is at the parent entity's origin
+              // Head is 0.62m above model origin (hips), so move model down
+              // Raise by 12.5cm (add 0.125)
+              this.headModel.object3D.position.set(0, -0.62 + 0.125, 0 - 0.025);
+              
+              // Rotate model 180° so it faces forward
+              this.headModel.object3D.rotation.y = Math.PI;
+              
+              console.log('[VR Body] ✅ Head mesh visible, centered for rotation');
+            }
+          });
+          
+          // ===== NECK =====
+          this.neck = document.createElement('a-cylinder');
+          this.neck.setAttribute('radius', '0.05');
+          this.neck.setAttribute('height', this.config.neckLength);
+          this.neck.setAttribute('color', color);
+          this.neck.setAttribute('material', 'shader: flat');
+          this.neck.setAttribute('visible', 'false'); // Hide neck cylinder
+          this.el.appendChild(this.neck);
+          
+          // ===== TORSO (3 segments for realistic motion) =====
+          // CHEST - Upper torso, attached to shoulders
+          this.chest = document.createElement('a-entity');
+          this.el.appendChild(this.chest);
+          
+          // Create child entity with 3D model for chest
+          this.chestModel = document.createElement('a-entity');
+          this.chestModel.setAttribute('gltf-model', '#full-body-model');
+          this.chest.appendChild(this.chestModel);
+          
+          // When model loads, show only the chest mesh
+          this.chestModel.addEventListener('model-loaded', () => {
+            const mesh = this.chestModel.getObject3D('mesh');
+            if (mesh) {
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const name = node.name ? node.name.toLowerCase() : '';
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  // Show mesh only if it's part of the chest
+                  if (name.includes('chest') || parentName.includes('chest')) {
+                    node.visible = true;
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Offset model down so chest doesn't block camera view
+              // Model origin is at hips, chest is above that
+              // Raise by 7.5cm (add 0.075), move back 7.5cm (Z offset)
+              this.chestModel.object3D.position.set(0, -0.25 + 0.075, 0.075);
+              this.chestModel.object3D.rotation.y = Math.PI;
+              
+              console.log('[VR Body] ✅ Chest mesh visible, positioned lower');
+            }
+          });
+          
+          // WAIST - Middle torso, can twist
+          this.waist = document.createElement('a-entity');
+          this.el.appendChild(this.waist);
+          
+          // Add 3D model for waist
+          this.waistModel = document.createElement('a-entity');
+          this.waistModel.setAttribute('gltf-model', '#full-body-model');
+          this.waist.appendChild(this.waistModel);
+          
+          this.waistModel.addEventListener('model-loaded', () => {
+            const mesh = this.waistModel.getObject3D('mesh');
+            if (mesh) {
+              let foundWaist = false;
+              let waistOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  if (parentName.includes('waist')) {
+                    node.visible = true;
+                    foundWaist = true;
+                    
+                    // Get the parent group's position
+                    if (node.parent) {
+                      waistOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Found waist mesh at offset:', waistOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Apply offset - negate X and Z for rotation, but keep Y as-is to preserve vertical spacing
+              this.waistModel.object3D.position.set(-waistOffset.x, 0, -waistOffset.z + 0.075);
+              this.waistModel.object3D.rotation.y = Math.PI;
+              console.log('[VR Body] Waist model offset:', this.waistModel.object3D.position.toArray());
+              
+              if (!foundWaist) {
+                console.warn('[VR Body] ⚠️ Waist mesh not found in model');
+              }
+            }
+          });
+          
+          // HIPS - Lower torso, relatively stable
+          this.hips = document.createElement('a-entity');
+          this.el.appendChild(this.hips);
+          
+          // Add 3D model for hips
+          this.hipsModel = document.createElement('a-entity');
+          this.hipsModel.setAttribute('gltf-model', '#full-body-model');
+          this.hips.appendChild(this.hipsModel);
+          
+          this.hipsModel.addEventListener('model-loaded', () => {
+            const mesh = this.hipsModel.getObject3D('mesh');
+            if (mesh) {
+              let foundHips = false;
+              let hipsOffset = new THREE.Vector3();
+              let hipsMeshes = []; // Store hip meshes for shader application
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  if (parentName.includes('hip')) {
+                    node.visible = true;
+                    foundHips = true;
+                    hipsMeshes.push(node); // Store for shader
+                    
+                    // Get the parent group's position
+                    if (node.parent) {
+                      hipsOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Found hip mesh at offset:', hipsOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Apply vertical fade shader to hip meshes
+              hipsMeshes.forEach((hipMesh) => {
+                // Get bounding box to determine vertical range
+                hipMesh.geometry.computeBoundingBox();
+                const bbox = hipMesh.geometry.boundingBox;
+                const minY = bbox.min.y;
+                const maxY = bbox.max.y;
+                
+                // Create custom shader material with vertical fade
+                const originalMaterial = hipMesh.material;
+                const shaderMaterial = new THREE.ShaderMaterial({
+                  uniforms: {
+                    diffuse: { value: originalMaterial.color || new THREE.Color(0xffffff) },
+                    minY: { value: minY },
+                    maxY: { value: maxY }
+                  },
+                  vertexShader: `
+                    varying vec3 vPosition;
+                    void main() {
+                      vPosition = position;
+                      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                  `,
+                  fragmentShader: `
+                    uniform vec3 diffuse;
+                    uniform float minY;
+                    uniform float maxY;
+                    varying vec3 vPosition;
+                    
+                    void main() {
+                      // Calculate fade: 1.0 at top (maxY), 0.0 at 50% height
+                      float midY = (minY + maxY) / 2.0;
+                      float fadeAmount = (vPosition.y - midY) / (maxY - midY);
+                      fadeAmount = clamp(fadeAmount, 0.0, 1.0);
+                      
+                      gl_FragColor = vec4(diffuse, fadeAmount);
+                    }
+                  `,
+                  transparent: true,
+                  side: THREE.DoubleSide
+                });
+                
+                hipMesh.material = shaderMaterial;
+              });
+              
+              // Apply offset - negate X and Z for rotation, but keep Y as-is to preserve vertical spacing
+              this.hipsModel.object3D.position.set(-hipsOffset.x, 0, -hipsOffset.z + 0.075);
+              this.hipsModel.object3D.rotation.y = Math.PI;
+              console.log('[VR Body] Hips model offset:', this.hipsModel.object3D.position.toArray());
+              
+              if (!foundHips) {
+                console.warn('[VR Body] ⚠️ Hip mesh not found in model');
+              }
+            }
+          });
+          
+          // Store torso segment rotations for twisting
+          this.chestRotation = new THREE.Quaternion();
+          this.waistRotation = new THREE.Quaternion();
+          this.hipsRotation = new THREE.Quaternion();
+          
+          // ===== SHOULDERS =====
+          // Left shoulder
+          this.leftShoulder = document.createElement('a-entity');
+          this.el.appendChild(this.leftShoulder);
+          
+          this.leftShoulderModel = document.createElement('a-entity');
+          this.leftShoulderModel.setAttribute('gltf-model', '#full-body-model');
+          this.leftShoulder.appendChild(this.leftShoulderModel);
+          
+          this.leftShoulderModel.addEventListener('model-loaded', () => {
+            const mesh = this.leftShoulderModel.getObject3D('mesh');
+            if (mesh) {
+              let foundShoulder = false;
+              let shoulderOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const name = node.name ? node.name.toLowerCase() : '';
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  // Show only left shoulder mesh (check parent name)
+                  if (parentName.includes('shoulderleft')) {
+                    node.visible = true;
+                    foundShoulder = true;
+                    
+                    // Get the parent group's position (shoulderLeft group)
+                    if (node.parent) {
+                      shoulderOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Found left shoulder mesh:', node.name, 'at offset:', shoulderOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Offset model to negate its internal position so mesh appears at entity origin
+              // Model's left shoulder is at [0.17, 0.397, -0.029], so negate it
+              // Move back 5cm (Z offset)
+              this.leftShoulderModel.object3D.position.set(-0.125, -shoulderOffset.y + 0.0125, -shoulderOffset.z + 0.05);
+              this.leftShoulderModel.object3D.rotation.y = Math.PI;
+              
+              console.log('[VR Body] ✅ Left shoulder model offset:', this.leftShoulderModel.object3D.position.toArray());
+              
+              if (!foundShoulder) {
+                console.warn('[VR Body] ⚠️ Left shoulder mesh not found in model');
+              }
+            }
+          });
+          
+          // Right shoulder
+          this.rightShoulder = document.createElement('a-entity');
+          this.el.appendChild(this.rightShoulder);
+          
+          this.rightShoulderModel = document.createElement('a-entity');
+          this.rightShoulderModel.setAttribute('gltf-model', '#full-body-model');
+          this.rightShoulder.appendChild(this.rightShoulderModel);
+          
+          this.rightShoulderModel.addEventListener('model-loaded', () => {
+            const mesh = this.rightShoulderModel.getObject3D('mesh');
+            if (mesh) {
+              let foundShoulder = false;
+              let shoulderOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const name = node.name ? node.name.toLowerCase() : '';
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  // Show only right shoulder mesh (check parent name)
+                  if (parentName.includes('shoulderright')) {
+                    node.visible = true;
+                    foundShoulder = true;
+                    
+                    // Get the parent group's position (shoulderRight group)
+                    if (node.parent) {
+                      shoulderOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Found right shoulder mesh:', node.name, 'at offset:', shoulderOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Offset model to negate its internal position so mesh appears at entity origin
+              // Model's right shoulder is at [-0.17, 0.383, -0.035], so negate it
+              // Move back 5cm (Z offset)
+              this.rightShoulderModel.object3D.position.set(0.125, -shoulderOffset.y + 0.0125, -shoulderOffset.z + 0.05);
+              this.rightShoulderModel.object3D.rotation.y = Math.PI;
+              
+              console.log('[VR Body] ✅ Right shoulder model offset:', this.rightShoulderModel.object3D.position.toArray());
+              
+              if (!foundShoulder) {
+                console.warn('[VR Body] ⚠️ Right shoulder mesh not found in model');
+              }
+            }
+          });
+          
+          // ===== LEFT ARM =====
+          // Left upper arm with 3D model
+          this.leftUpperArm = document.createElement('a-entity');
+          this.el.appendChild(this.leftUpperArm);
+          
+          this.leftUpperArmModel = document.createElement('a-entity');
+          this.leftUpperArmModel.setAttribute('gltf-model', '#full-body-model');
+          this.leftUpperArm.appendChild(this.leftUpperArmModel);
+          
+          this.leftUpperArmModel.addEventListener('model-loaded', () => {
+            const mesh = this.leftUpperArmModel.getObject3D('mesh');
+            if (mesh) {
+              let foundArm = false;
+              let armOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  if (parentName.includes('upperarmleft')) {
+                    node.visible = true;
+                    foundArm = true;
+                    
+                    // Get the parent group's position
+                    if (node.parent) {
+                      armOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Left upper arm at offset:', armOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Adjusted: 15cm up (Y), 20cm in X direction (left arm, opposite sign)
+              console.log('[VR Body] Left upper arm internal offset:', armOffset.toArray());
+              this.leftUpperArmModel.object3D.position.set(-0.175, 0.4, -0.175);
+              // Rotate 180° - 15° around X-axis to flip and correct anatomical twist
+              this.leftUpperArmModel.object3D.rotation.set(Math.PI - 0.262, 0, 0); // 165 degrees X
+              this.leftUpperArmModel.object3D.scale.set(1, 1.5, 1);
+              
+              if (!foundArm) {
+                console.warn('[VR Body] ⚠️ Left upper arm mesh not found in model');
+              }
+            }
+          });
+          
+          this.leftElbow = document.createElement('a-entity');
+          this.leftLowerArm = document.createElement('a-entity');
+          this.el.appendChild(this.leftElbow);
+          this.el.appendChild(this.leftLowerArm);
+          
+          // Add small yellow marker sphere for debugging (will be hidden when model loads)
+          const leftElbowMarker = document.createElement('a-sphere');
+          leftElbowMarker.setAttribute('radius', '0.035');
+          leftElbowMarker.setAttribute('color', '#FFE66D');
+          leftElbowMarker.setAttribute('material', 'shader: flat');
+          this.leftElbow.appendChild(leftElbowMarker);
+          
+          // Add 3D model for left elbow (hidden for now)
+          this.leftElbowModel = document.createElement('a-entity');
+          this.leftElbowModel.setAttribute('gltf-model', '#full-body-model');
+          this.leftElbowModel.setAttribute('visible', 'false');
+          this.leftElbow.appendChild(this.leftElbowModel);
+          
+          this.leftElbowModel.addEventListener('model-loaded', () => {
+            const mesh = this.leftElbowModel.getObject3D('mesh');
+            if (mesh) {
+              let foundElbow = false;
+              let elbowOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  if (parentName.includes('elbowleft')) {
+                    node.visible = true;
+                    foundElbow = true;
+                    
+                    // Get the parent group's position
+                    if (node.parent) {
+                      elbowOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Left elbow at offset:', elbowOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Apply offset to center the elbow mesh on the joint position
+              this.leftElbowModel.object3D.position.set(-elbowOffset.x, -elbowOffset.y, -elbowOffset.z);
+              console.log('[VR Body] Left elbow model offset:', this.leftElbowModel.object3D.position.toArray());
+              
+              // Hide the marker sphere when model is loaded
+              if (foundElbow) {
+                leftElbowMarker.setAttribute('visible', 'false');
+              } else {
+                console.warn('[VR Body] ⚠️ Left elbow mesh not found in model');
+              }
+            }
+          });
+          
+          // Add 3D model for left forearm (lower arm)
+          this.leftLowerArmModel = document.createElement('a-entity');
+          this.leftLowerArmModel.setAttribute('gltf-model', '#full-body-model');
+          this.leftLowerArm.appendChild(this.leftLowerArmModel);
+          
+          this.leftLowerArmModel.addEventListener('model-loaded', () => {
+            const mesh = this.leftLowerArmModel.getObject3D('mesh');
+            if (mesh) {
+              let foundArm = false;
+              let armOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  if (parentName.includes('forearmleft')) {
+                    node.visible = true;
+                    foundArm = true;
+                    
+                    // Get the parent group's position
+                    if (node.parent) {
+                      armOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Left forearm at offset:', armOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Apply offset to center the forearm mesh
+              this.leftLowerArmModel.object3D.position.set(-armOffset.x, -armOffset.y + 0.1, -armOffset.z - 0.25);
+              // Rotate 180° around X-axis
+              this.leftLowerArmModel.object3D.rotation.set(Math.PI, 0, 0);
+              this.leftLowerArmModel.object3D.scale.set(1, 1.25, 1);
+              console.log('[VR Body] Left forearm model offset:', this.leftLowerArmModel.object3D.position.toArray());
+              
+              if (!foundArm) {
+                console.warn('[VR Body] ⚠️ Left forearm mesh not found in model');
+              }
+            }
+          });
+          
+          // ===== RIGHT ARM =====
+          // Right upper arm with 3D model
+          this.rightUpperArm = document.createElement('a-entity');
+          this.el.appendChild(this.rightUpperArm);
+          
+          this.rightUpperArmModel = document.createElement('a-entity');
+          this.rightUpperArmModel.setAttribute('gltf-model', '#full-body-model');
+          this.rightUpperArm.appendChild(this.rightUpperArmModel);
+          
+          this.rightUpperArmModel.addEventListener('model-loaded', () => {
+            const mesh = this.rightUpperArmModel.getObject3D('mesh');
+            if (mesh) {
+              let foundArm = false;
+              let armOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  if (parentName.includes('upperarmright')) {
+                    node.visible = true;
+                    foundArm = true;
+                    
+                    // Get the parent group's position
+                    if (node.parent) {
+                      armOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Right upper arm at offset:', armOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Adjusted: 20cm up (Y), 20cm in X direction (right arm)
+              console.log('[VR Body] Right upper arm internal offset:', armOffset.toArray());
+              this.rightUpperArmModel.object3D.position.set(0.2, 0.4, -0.175);
+              // Rotate 180° - 15° around X-axis to flip and correct anatomical twist
+              this.rightUpperArmModel.object3D.rotation.set(Math.PI - 0.262, 0, 0); // 165 degrees X
+              this.rightUpperArmModel.object3D.scale.set(1, 1.7, 1);
+              
+              if (!foundArm) {
+                console.warn('[VR Body] ⚠️ Right upper arm mesh not found in model');
+              }
+            }
+          });
+          
+          this.rightElbow = document.createElement('a-entity');
+          this.rightLowerArm = document.createElement('a-entity');
+          this.el.appendChild(this.rightElbow);
+          this.el.appendChild(this.rightLowerArm);
+          
+          // Add small yellow marker sphere for debugging (will be hidden when model loads)
+          const rightElbowMarker = document.createElement('a-sphere');
+          rightElbowMarker.setAttribute('radius', '0.035');
+          rightElbowMarker.setAttribute('color', '#FFE66D');
+          rightElbowMarker.setAttribute('material', 'shader: flat');
+          this.rightElbow.appendChild(rightElbowMarker);
+          
+          // Add 3D model for right elbow (hidden for now)
+          this.rightElbowModel = document.createElement('a-entity');
+          this.rightElbowModel.setAttribute('gltf-model', '#full-body-model');
+          this.rightElbowModel.setAttribute('visible', 'false');
+          this.rightElbow.appendChild(this.rightElbowModel);
+          
+          this.rightElbowModel.addEventListener('model-loaded', () => {
+            const mesh = this.rightElbowModel.getObject3D('mesh');
+            if (mesh) {
+              let foundElbow = false;
+              let elbowOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  if (parentName.includes('elbowright')) {
+                    node.visible = true;
+                    foundElbow = true;
+                    
+                    // Get the parent group's position
+                    if (node.parent) {
+                      elbowOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Right elbow at offset:', elbowOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Apply offset to center the elbow mesh on the joint position
+              this.rightElbowModel.object3D.position.set(-elbowOffset.x, -elbowOffset.y, -elbowOffset.z);
+              console.log('[VR Body] Right elbow model offset:', this.rightElbowModel.object3D.position.toArray());
+              
+              // Hide the marker sphere when model is loaded
+              if (foundElbow) {
+                rightElbowMarker.setAttribute('visible', 'false');
+              } else {
+                console.warn('[VR Body] ⚠️ Right elbow mesh not found in model');
+              }
+            }
+          });
+          
+          // Add 3D model for right forearm (lower arm)
+          this.rightLowerArmModel = document.createElement('a-entity');
+          this.rightLowerArmModel.setAttribute('gltf-model', '#full-body-model');
+          this.rightLowerArm.appendChild(this.rightLowerArmModel);
+          
+          this.rightLowerArmModel.addEventListener('model-loaded', () => {
+            const mesh = this.rightLowerArmModel.getObject3D('mesh');
+            if (mesh) {
+              let foundArm = false;
+              let armOffset = new THREE.Vector3();
+              
+              mesh.traverse((node) => {
+                if (node.isMesh) {
+                  const parentName = node.parent && node.parent.name ? node.parent.name.toLowerCase() : '';
+                  
+                  if (parentName.includes('forearmright')) {
+                    node.visible = true;
+                    foundArm = true;
+                    
+                    // Get the parent group's position
+                    if (node.parent) {
+                      armOffset.copy(node.parent.position);
+                    }
+                    
+                    console.log('[VR Body] ✅ Right forearm at offset:', armOffset.toArray());
+                  } else {
+                    node.visible = false;
+                  }
+                }
+              });
+              
+              // Apply offset to center the forearm mesh
+              this.rightLowerArmModel.object3D.position.set(-armOffset.x, -armOffset.y + 0.05, -armOffset.z - 0.25);
+              // Rotate 180° around X-axis
+              this.rightLowerArmModel.object3D.rotation.set(Math.PI, 0, 0);
+              this.rightLowerArmModel.object3D.scale.set(1, 1.25, 1);
+              console.log('[VR Body] Right forearm model offset:', this.rightLowerArmModel.object3D.position.toArray());
+              
+              if (!foundArm) {
+                console.warn('[VR Body] ⚠️ Right forearm mesh not found in model');
+              }
+            }
+          });
+          
+          // ===== DEBUG HELPERS =====
+          if (this.data.debug) {
+            this.createDebugHelpers();
+          }
+          
+          // Set initial visibility
+          this.setVisibility(this.data.visible);
+        },
+
+        createArmSegment: function(color, id) {
+          const segment = document.createElement('a-entity');
+          segment.setAttribute('id', id);
+          
+          if (this.data.useModels) {
+            // Use 3D model - FIXED LENGTH (no dynamic scaling)
+            const segmentType = id.includes('lower') ? 'forearm' : 'upperarm';
+            const segmentLength = segmentType === 'forearm' ? this.config.lowerArmLength : this.config.upperArmLength;
+            segment.setAttribute('arm-segment-model', `segmentLength: ${segmentLength}; segmentType: ${segmentType}`);
+          } else {
+            // Use primitive cylinder with shrink factor (90% to leave small gaps at joints)
+            const shrinkFactor = 0.90;
+            const segmentType = id.includes('lower') ? 'forearm' : 'upperarm';
+            const segmentLength = segmentType === 'forearm' ? this.config.lowerArmLength : this.config.upperArmLength;
+            const cylinderHeight = segmentLength * shrinkFactor;
+            
+            const cylinder = document.createElement('a-cylinder');
+            cylinder.setAttribute('radius', '0.04');
+            cylinder.setAttribute('height', cylinderHeight);
+            cylinder.setAttribute('color', color);
+            cylinder.setAttribute('material', 'shader: standard; metalness: 0.2; roughness: 0.8');
+            segment.appendChild(cylinder);
+          }
+          
+          return segment;
+        },
+
+        createJoint: function(color, radius) {
+          const joint = document.createElement('a-sphere');
+          joint.setAttribute('radius', radius);
+          joint.setAttribute('color', color);
+          joint.setAttribute('material', 'shader: flat');
+          return joint;
+        },
+        
+        createMarker: function() {
+          // Invisible entity used for IK calculations when using full body model
+          const marker = document.createElement('a-entity');
+          marker.setAttribute('visible', 'false');
+          return marker;
+        },
+
+        rebuildArms: function() {
+          // Remove old arm segments
+          if (this.leftUpperArm) this.el.removeChild(this.leftUpperArm);
+          if (this.leftLowerArm) this.el.removeChild(this.leftLowerArm);
+          if (this.rightUpperArm) this.el.removeChild(this.rightUpperArm);
+          if (this.rightLowerArm) this.el.removeChild(this.rightLowerArm);
+          
+          // Recreate with current geometry type (models or primitives)
+          const color = this.data.color;
+          this.leftUpperArm = this.createArmSegment(color, 'left-upper');
+          this.leftLowerArm = this.createArmSegment(color, 'left-lower');
+          this.rightUpperArm = this.createArmSegment(color, 'right-upper');
+          this.rightLowerArm = this.createArmSegment(color, 'right-lower');
+          
+          // Re-add to scene
+          this.el.appendChild(this.leftUpperArm);
+          this.el.appendChild(this.leftLowerArm);
+          this.el.appendChild(this.rightUpperArm);
+          this.el.appendChild(this.rightLowerArm);
+        },
+
+        createDebugHelpers: function() {
+          // Coordinate axes at body origin
+          this.debugAxes = document.createElement('a-entity');
+          
+          // X axis (red)
+          const xAxis = document.createElement('a-cylinder');
+          xAxis.setAttribute('radius', '0.01');
+          xAxis.setAttribute('height', '0.3');
+          xAxis.setAttribute('color', '#FF0000');
+          xAxis.setAttribute('rotation', '0 0 90');
+          xAxis.setAttribute('position', '0.15 0 0');
+          
+          // Y axis (green)
+          const yAxis = document.createElement('a-cylinder');
+          yAxis.setAttribute('radius', '0.01');
+          yAxis.setAttribute('height', '0.3');
+          yAxis.setAttribute('color', '#00FF00');
+          yAxis.setAttribute('position', '0 0.15 0');
+          
+          // Z axis (blue)
+          const zAxis = document.createElement('a-cylinder');
+          zAxis.setAttribute('radius', '0.01');
+          zAxis.setAttribute('height', '0.3');
+          zAxis.setAttribute('color', '#0000FF');
+          zAxis.setAttribute('rotation', '90 0 0');
+          zAxis.setAttribute('position', '0 0 0.15');
+          
+          this.debugAxes.appendChild(xAxis);
+          this.debugAxes.appendChild(yAxis);
+          this.debugAxes.appendChild(zAxis);
+          this.el.appendChild(this.debugAxes);
+        },
+        
+        updateModelParts: function() {
+          // If using full body model, update the model parts to match IK markers
+          if (!this.data.useFullBodyModel || !this.hasModelLoaded || !this.modelParts) return;
+          
+          // Simple approach: Set each model part's world position/rotation directly from markers
+          const setWorldTransform = (modelPart, markerEntity) => {
+            if (!modelPart || !markerEntity) return;
+            
+            // Get marker's world transform
+            const markerWorldPos = new THREE.Vector3();
+            const markerWorldQuat = new THREE.Quaternion();
+            markerEntity.object3D.getWorldPosition(markerWorldPos);
+            markerEntity.object3D.getWorldQuaternion(markerWorldQuat);
+            
+            // Set model part's world position/rotation
+            // Since these are Groups in the scene, we can directly set their world transform
+            modelPart.position.copy(markerWorldPos);
+            modelPart.quaternion.copy(markerWorldQuat);
+            modelPart.updateMatrixWorld(true);
+          };
+          
+          // Update each body part to match its IK marker
+          setWorldTransform(this.modelParts.head, this.head);
+          setWorldTransform(this.modelParts.chest, this.chest);
+          setWorldTransform(this.modelParts.waist, this.waist);
+          setWorldTransform(this.modelParts.hips, this.hips);
+          setWorldTransform(this.modelParts.leftShoulder, this.leftShoulder);
+          setWorldTransform(this.modelParts.rightShoulder, this.rightShoulder);
+          setWorldTransform(this.modelParts.leftUpperArm, this.leftUpperArm);
+          setWorldTransform(this.modelParts.leftElbow, this.leftElbow);
+          setWorldTransform(this.modelParts.leftLowerArm, this.leftLowerArm);
+          setWorldTransform(this.modelParts.rightUpperArm, this.rightUpperArm);
+          setWorldTransform(this.modelParts.rightElbow, this.rightElbow);
+          setWorldTransform(this.modelParts.rightLowerArm, this.rightLowerArm);
+        },
+
+        tick: function(time, deltaTime) {
+          if (!this.camera) return;
+          
+          const dt = Math.min(deltaTime / 1000, 0.1); // Cap deltaTime for stability
+          
+          if (this.data.isRemote) {
+            this.updateRemoteBody();
+          } else if (this.data.isMirror) {
+            this.updateMirrorBody(dt);
+          } else {
+            this.updateLocalBody(dt);
+          }
+        },
+
+        updateLocalBody: function(dt) {
+          if (!this.camera || !this.leftController || !this.rightController) return;
+          
+          // Get world positions and rotations
+          const headWorldPos = new THREE.Vector3();
+          const headWorldQuat = new THREE.Quaternion();
+          const leftHandWorldPos = new THREE.Vector3();
+          const leftHandWorldQuat = new THREE.Quaternion();
+          const rightHandWorldPos = new THREE.Vector3();
+          const rightHandWorldQuat = new THREE.Quaternion();
+          
+          this.camera.object3D.getWorldPosition(headWorldPos);
+          this.camera.object3D.getWorldQuaternion(headWorldQuat);
+          this.leftController.object3D.getWorldPosition(leftHandWorldPos);
+          this.leftController.object3D.getWorldQuaternion(leftHandWorldQuat);
+          this.rightController.object3D.getWorldPosition(rightHandWorldPos);
+          this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
+          
+          // Calculate torso orientation from head and controllers
+          this.calculateTorsoOrientation(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos, dt);
+          
+          // Calculate natural body tilt/lean based on controller positions
+          this.calculateBodyTilt(headWorldPos, leftHandWorldPos, rightHandWorldPos, dt);
+          
+          // Position body root
+          // For primitives: body root is at chest level (30cm below head)
+          // For full body model: model origin is at hips, which is typically ~1.2m below head for a 1.8m person
+          let bodyY;
+          if (this.data.useFullBodyModel) {
+            // Model origin is at hips: head is at y=0, hips at y=-1.2m from head
+            // So body root (hips) should be 1.2m below head
+            bodyY = headWorldPos.y - 1.2;
+          } else {
+            // Primitives: body root at chest level
+            bodyY = headWorldPos.y - 0.3;
+          }
+          this.el.object3D.position.set(headWorldPos.x, bodyY, headWorldPos.z);
+          
+          // Apply both rotation and tilt to body
+          const combinedRotation = new THREE.Quaternion()
+            .copy(this.torsoRotation)
+            .multiply(this.bodyTilt);
+          this.el.object3D.quaternion.copy(combinedRotation);
+          
+          // Update head position (relative to body)
+          this.updateHead(headWorldPos, headWorldQuat);
+          
+          // Update neck
+          this.updateNeck(headWorldPos);
+          
+          // Update torso
+          this.updateTorso();
+          
+          // Update shoulders
+          this.updateShoulders(headWorldPos, headWorldQuat);
+          
+          // Calculate and update arms using IK
+          this.leftIKState = this.calculateArmIK('left', leftHandWorldPos, leftHandWorldQuat, headWorldPos, headWorldQuat);
+          this.rightIKState = this.calculateArmIK('right', rightHandWorldPos, rightHandWorldQuat, headWorldPos, headWorldQuat);
+          
+          this.updateArm('left', this.leftIKState);
+          this.updateArm('right', this.rightIKState);
+          
+          // Update model parts if using full body model
+          this.updateModelParts();
+        },
+
+        calculateTorsoOrientation: function(headPos, headQuat, leftHandPos, rightHandPos, dt) {
+          // TRACKING CONFIDENCE: Estimate if controllers are in headset's field of view
+          // VR headsets typically have ~110 degree FOV, but tracking works best within ~90 degrees
+          
+          // Get head forward direction
+          const headForward = new THREE.Vector3(0, 0, -1);
+          headForward.applyQuaternion(headQuat);
+          
+          // Calculate direction from head to each controller
+          const toLeftHand = new THREE.Vector3().subVectors(leftHandPos, headPos).normalize();
+          const toRightHand = new THREE.Vector3().subVectors(rightHandPos, headPos).normalize();
+          
+          // Calculate angle (dot product gives cosine of angle)
+          const leftAngleCos = headForward.dot(toLeftHand);
+          const rightAngleCos = headForward.dot(toRightHand);
+          
+          // Convert to confidence (1.0 = in front, 0.0 = behind/side)
+          // cos(90°) = 0, cos(60°) = 0.5, cos(0°) = 1.0
+          // We give full confidence from 0° to 60°, then linear falloff to 120°
+          const leftConfidence = Math.max(0, Math.min(1, (leftAngleCos + 0.5) / 1.0));
+          const rightConfidence = Math.max(0, Math.min(1, (rightAngleCos + 0.5) / 1.0));
+          const overallConfidence = (leftConfidence + rightConfidence) / 2;
+          
+          // PRIMARY: Controller shoulder line orientation
+          const shoulderLine = new THREE.Vector3().subVectors(rightHandPos, leftHandPos);
+          shoulderLine.y = 0;
+          const shoulderDist = shoulderLine.length();
+          shoulderLine.normalize();
+          
+          // Torso forward is perpendicular to shoulder line
+          const controllerForward = new THREE.Vector3().crossVectors(shoulderLine, new THREE.Vector3(0, 1, 0));
+          controllerForward.normalize();
+          
+          // SECONDARY: Head forward direction (flatten to XZ plane)
+          const headForwardFlat = new THREE.Vector3(0, 0, -1);
+          headForwardFlat.applyQuaternion(headQuat);
+          headForwardFlat.y = 0;
+          headForwardFlat.normalize();
+          
+          // Ensure controller forward aligns with head direction (not 180 degrees off)
+          if (controllerForward.dot(headForwardFlat) < 0) {
+            controllerForward.negate();
+          }
+          
+          // Calculate alignment between head and controller directions
+          const alignment = controllerForward.dot(headForwardFlat);
+          
+          // IMPROVED: Weight adjustment considers hand distance, tracking confidence, AND alignment
+          let controllerWeight = 0.8; // Base: 80% controller, 20% head
+          
+          // CRITICAL: If tracking confidence is low, reduce controller influence
+          if (overallConfidence < 0.4) {
+            // Controllers outside FOV or behind head - mostly follow head
+            controllerWeight = 0.2; // 20% controller, 80% head
+          } else if (overallConfidence < 0.7) {
+            // Controllers at edge of FOV - balanced blend
+            controllerWeight = 0.5; // 50% controller, 50% head
+          } else if (shoulderDist < 0.25) {
+            // Hands very close - body orientation is uncertain, follow head more
+            controllerWeight = 0.3; // 30% controller, 70% head
+          } else if (shoulderDist > 0.35 && overallConfidence >= 0.7) {
+            // Hands spread wide AND in FOV - body orientation is LOCKED to controllers
+            // Ignore head completely to prevent unwanted rotation at extreme neck angles
+            controllerWeight = 1.0; // 100% controller, 0% head
+          }
+          
+          // Blend forward directions
+          const blendedForward = new THREE.Vector3()
+            .addScaledVector(controllerForward, controllerWeight)
+            .addScaledVector(headForwardFlat, 1.0 - controllerWeight)
+            .normalize();
+          
+          // Calculate target rotation
+          const targetRotation = new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(0, 0, -1),
+            blendedForward
+          );
+          
+          // Smooth interpolation
+          this.torsoRotation.slerp(targetRotation, this.smoothingFactor);
+          
+          // Calculate torso segment rotations for natural spine motion
+          // HIPS: Most stable, follows overall body rotation mostly
+          this.hipsRotation.slerp(targetRotation, this.smoothingFactor * 0.8); // Slower, more stable
+          
+          // WAIST: Can twist independently - blend between hips and chest
+          const waistBlend = 0.6; // 60% toward chest rotation
+          const waistTarget = new THREE.Quaternion()
+            .copy(this.hipsRotation).slerp(targetRotation, waistBlend);
+          this.waistRotation.slerp(waistTarget, this.smoothingFactor);
+          
+          // CHEST: Most responsive, follows head/arms closely
+          this.chestRotation.slerp(targetRotation, this.smoothingFactor * 1.2); // Faster, more responsive
+        },
+
+        calculateBodyTilt: function(headPos, leftHandPos, rightHandPos, dt) {
+          // Calculate natural body tilt based on arm positions and implied movement
+          
+          // Get torso-space hand positions (relative to body center)
+          const bodyCenter = new THREE.Vector3(headPos.x, headPos.y - 0.3, headPos.z);
+          
+          // Transform hands to torso local space
+          const leftLocal = new THREE.Vector3().subVectors(leftHandPos, bodyCenter);
+          const rightLocal = new THREE.Vector3().subVectors(rightHandPos, bodyCenter);
+          leftLocal.applyQuaternion(this.torsoRotation.clone().invert());
+          rightLocal.applyQuaternion(this.torsoRotation.clone().invert());
+          
+          // SIDE LEAN: If one hand is significantly higher/lower than the other
+          const handHeightDiff = rightLocal.y - leftLocal.y;
+          const sideLeanAngle = Math.max(-15, Math.min(15, handHeightDiff * 20)) * (Math.PI / 180);
+          
+          // FORWARD/BACK LEAN: Based on average hand forward/back position
+          const avgHandZ = (leftLocal.z + rightLocal.z) / 2;
+          const forwardLeanAngle = Math.max(-10, Math.min(10, -avgHandZ * 15)) * (Math.PI / 180);
+          
+          // REACHING TILT: When reaching far to one side
+          const avgHandX = (leftLocal.x + rightLocal.x) / 2;
+          const reachTiltAngle = Math.max(-8, Math.min(8, avgHandX * 10)) * (Math.PI / 180);
+          
+          // Create tilt quaternion (subtle rotations for natural feel)
+          const tiltX = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), forwardLeanAngle);
+          const tiltZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), sideLeanAngle + reachTiltAngle);
+          
+          const targetTilt = new THREE.Quaternion().multiply(tiltX).multiply(tiltZ);
+          
+          // Smooth the tilt (slower than rotation for more natural feel)
+          this.bodyTilt.slerp(targetTilt, 0.08);
+        },
+
+        updateHead: function(headWorldPos, headWorldQuat) {
+          // Head is positioned above torso
+          // Since torso is now at chest level, head needs to be further up
+          const headLocalY = 0.3; // 30cm above torso center (torso is at chest, head above)
+          this.head.object3D.position.set(0, headLocalY, 0.1);
+          
+          // Head rotation relative to body
+          const localQuat = new THREE.Quaternion().copy(headWorldQuat);
+          const bodyQuatInverse = this.el.object3D.quaternion.clone().invert();
+          localQuat.premultiply(bodyQuatInverse);
+          this.head.object3D.quaternion.copy(localQuat);
+        },
+
+        updateNeck: function(headWorldPos) {
+          // Neck connects torso to head
+          const neckLocalY = 0.15; // Between torso and head
+          this.neck.object3D.position.set(0, neckLocalY, 0);
+        },
+
+        updateTorso: function() {
+          // Position torso segments leveraging GLB internal offsets
+          // Body origin is at chest level (y=0, ~30cm below head)
+          
+          // CHEST - At body origin (shoulder/chest level)
+          this.chest.object3D.position.set(0, 0, 0);
+          
+          // WAIST & HIPS - Positioned to account for their internal GLB offsets
+          // Waist has internal Y offset of +0.174m, hips +0.019m
+          // Waist moved 5cm backwards (positive Z from camera perspective)
+          // Hips moved 2.5cm backwards (positive Z from camera perspective)
+          // To get waist visually at 0m and hips at -0.15m:
+          this.waist.object3D.position.set(0, 0 - 0.174, 0.05);  // -0.174m Y, 0.05m Z
+          this.hips.object3D.position.set(0, -0.15 - 0.019, 0.025);    // -0.169m Y, 0.025m Z
+        },
+
+        updateShoulders: function(headWorldPos, headWorldQuat) {
+          // Shoulders at top of torso (chest level)
+          const shoulderY = 0.2; // Keep original height (was correct)
+          const shoulderZ = this.config.shoulderForward - 0.1; // Move 10cm forward (negative Z from player view)
+          
+          // Model shoulders are at X=±0.17m, reduce by 2.5cm each side = ±0.145m
+          const leftShoulderOffset = new THREE.Vector3(0.145, shoulderY, shoulderZ);
+          const rightShoulderOffset = new THREE.Vector3(-0.145, shoulderY, shoulderZ);
+          
+          this.leftShoulder.object3D.position.copy(leftShoulderOffset);
+          this.rightShoulder.object3D.position.copy(rightShoulderOffset);
+          
+          // Debug: log actual positions once
+          if (!this._loggedShoulders) {
+            console.log('[VR Body] Left shoulder entity position:', leftShoulderOffset.toArray());
+            console.log('[VR Body] Right shoulder entity position:', rightShoulderOffset.toArray());
+            console.log('[VR Body] Distance between shoulders:', Math.abs(0.145 - (-0.145)), 'm');
+            this._loggedShoulders = true;
+          }
+        },
+
+        calculateArmIK: function(hand, handWorldPos, handWorldQuat, headWorldPos, headWorldQuat) {
+          // CONSTRAINT-BASED APPROACH: Fixed-length segments with guaranteed connectivity
+          // No stretching, no complex IK math - just pure constraint satisfaction
+          
+          // Calculate shoulder position in world space
+          const shoulderY = 0.2;
+          const shoulderLocalOffset = new THREE.Vector3(
+            (hand === 'left' ? -1 : 1) * this.config.shoulderWidth / 2,
+            shoulderY,
+            this.config.shoulderForward
+          );
+          
+          const shoulderWorldPos = shoulderLocalOffset.clone();
+          shoulderWorldPos.applyQuaternion(this.el.object3D.quaternion);
+          shoulderWorldPos.add(this.el.object3D.position);
+          
+          // FIXED lengths - these NEVER change
+          const upperArmLength = this.config.upperArmLength;
+          const lowerArmLength = this.config.lowerArmLength;
+          
+          // STEP 1: Clamp hand to reachable sphere
+          const shoulderToHand = new THREE.Vector3().subVectors(handWorldPos, shoulderWorldPos);
+          const distance = shoulderToHand.length();
+          const maxReach = (upperArmLength + lowerArmLength) * 0.999; // Slightly less to avoid singularity
+          const minReach = Math.abs(upperArmLength - lowerArmLength) * 1.001;
+          
+          let targetHandPos = handWorldPos.clone();
+          if (distance > maxReach) {
+            targetHandPos = shoulderWorldPos.clone().add(
+              shoulderToHand.normalize().multiplyScalar(maxReach)
+            );
+          } else if (distance < minReach) {
+            targetHandPos = shoulderWorldPos.clone().add(
+              shoulderToHand.normalize().multiplyScalar(minReach)
+            );
+          }
+          
+          // STEP 2: Simple two-bone IK with EXACT length enforcement
+          const toTarget = new THREE.Vector3().subVectors(targetHandPos, shoulderWorldPos);
+          const targetDist = toTarget.length();
+          const toTargetDir = toTarget.normalize();
+          
+          // Law of cosines to find elbow angle
+          const upperSq = upperArmLength * upperArmLength;
+          const lowerSq = lowerArmLength * lowerArmLength;
+          const distSq = targetDist * targetDist;
+          
+          const cosAngle = (upperSq + distSq - lowerSq) / (2 * upperArmLength * targetDist);
+          const clampedCos = Math.max(-0.999, Math.min(0.999, cosAngle));
+          const angle = Math.acos(clampedCos);
+          
+          // Get bend direction
+          let bendDir = this.calculateElbowBendDirection(hand, handWorldQuat, headWorldQuat);
+          
+          // ANATOMICAL CONSTRAINT: Ensure bend direction is valid
+          // Get body-relative directions
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+          const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.torsoRotation);
+          const bodyOutward = bodyRight.clone().multiplyScalar(hand === 'left' ? -1 : 1);
+          
+          // Clamp bend direction to prevent backwards/inward bending
+          const bendForwardDot = bendDir.dot(bodyForward);
+          const bendOutwardDot = bendDir.dot(bodyOutward);
+          
+          if (bendForwardDot < -0.2) {
+            bendDir.addScaledVector(bodyForward, 0.5).normalize();
+          }
+          if (bendOutwardDot < -0.1) {
+            bendDir.addScaledVector(bodyOutward, 0.4).normalize();
+          }
+          
+          // Ensure perpendicular to toTargetDir
+          bendDir.addScaledVector(toTargetDir, -bendDir.dot(toTargetDir)).normalize();
+          
+          // Calculate elbow position
+          const elbowDir = new THREE.Vector3()
+            .addScaledVector(toTargetDir, Math.cos(angle))
+            .addScaledVector(bendDir, Math.sin(angle))
+            .normalize();
+          
+          let elbowWorldPos = shoulderWorldPos.clone().add(
+            elbowDir.multiplyScalar(upperArmLength)
+          );
+          
+          // FINAL CONSTRAINT ENFORCEMENT: Force exact lengths
+          // This ensures no poking through joints
+          
+          // Enforce upper arm: shoulder -> elbow must be exactly upperArmLength
+          const shoulderToElbow = new THREE.Vector3().subVectors(elbowWorldPos, shoulderWorldPos);
+          const upperDist = shoulderToElbow.length();
+          if (Math.abs(upperDist - upperArmLength) > 0.0001) {
+            elbowWorldPos.copy(shoulderWorldPos).add(
+              shoulderToElbow.normalize().multiplyScalar(upperArmLength)
+            );
+          }
+          
+          // Enforce lower arm: elbow -> hand must be exactly lowerArmLength
+          const elbowToHand = new THREE.Vector3().subVectors(targetHandPos, elbowWorldPos);
+          const lowerDist = elbowToHand.length();
+          if (Math.abs(lowerDist - lowerArmLength) > 0.0001) {
+            // Adjust hand position to be exactly lowerArmLength from elbow
+            targetHandPos.copy(elbowWorldPos).add(
+              elbowToHand.normalize().multiplyScalar(lowerArmLength)
+            );
+          }
+          
+          return {
+            shoulderWorld: shoulderWorldPos,
+            elbowWorld: elbowWorldPos,
+            handWorld: targetHandPos, // Now constraint-corrected!
+            upperArmLength: upperArmLength,
+            lowerArmLength: lowerArmLength
+          };
+        },
+
+        calculateElbowBendDirection: function(hand, handWorldQuat, headWorldQuat) {
+          const handSign = hand === 'left' ? -1 : 1;
+          
+          // IMPROVED APPROACH: Use controller's RIGHT vector for wrist twist detection
+          // When you rotate your wrist (pronation/supination), the controller's right vector
+          // rotates around the forearm axis, which should directly influence elbow position
+          
+          // Get controller's local axes in world space
+          const controllerRight = new THREE.Vector3(1, 0, 0);  // Palm right
+          const controllerUp = new THREE.Vector3(0, 1, 0);     // Palm up (knuckle side)
+          const controllerForward = new THREE.Vector3(0, 0, -1); // Pointing direction
+          
+          controllerRight.applyQuaternion(handWorldQuat);
+          controllerUp.applyQuaternion(handWorldQuat);
+          controllerForward.applyQuaternion(handWorldQuat);
+          
+          // For left hand, flip the right vector (mirror)
+          if (hand === 'left') {
+            controllerRight.negate();
+          }
+          
+          // PRIMARY: Use controller's UP vector - when palm faces down (pronation), 
+          // up vector points away from body, pushing elbow out
+          // When palm faces up (supination), up vector points toward body, pulling elbow in
+          const bendFromUp = controllerUp.clone();
+          
+          // SECONDARY: Use controller's RIGHT vector - adds lateral twist
+          // This captures the "rolling" motion of the wrist
+          const bendFromRight = controllerRight.clone();
+          
+          // Combine both influences
+          // UP vector is primary (70%), RIGHT vector adds refinement (30%)
+          const bendDir = new THREE.Vector3()
+            .addScaledVector(bendFromUp, 0.7)
+            .addScaledVector(bendFromRight, 0.3);
+          
+          // Add a baseline downward bias to keep elbows from flying upward unnaturally
+          // Real elbows tend to hang down due to gravity
+          const gravityBias = new THREE.Vector3(0, -0.4, 0);
+          bendDir.add(gravityBias);
+          
+          // Add slight outward bias (away from body) to prevent arm clipping through torso
+          const bodyOutwardBias = new THREE.Vector3(handSign * 0.3, 0, 0);
+          bodyOutwardBias.applyQuaternion(this.torsoRotation);
+          bendDir.add(bodyOutwardBias);
+          
+          bendDir.normalize();
+          
+          return bendDir;
+        },
+
+        updateArm: function(hand, ikState) {
+          // Convert world positions to local space
+          const shoulderLocal = this.el.object3D.worldToLocal(ikState.shoulderWorld.clone());
+          const elbowLocal = this.el.object3D.worldToLocal(ikState.elbowWorld.clone());
+          const handLocal = this.el.object3D.worldToLocal(ikState.handWorld.clone());
+          
+          // Get arm elements
+          let upperArm, elbow, lowerArm;
+          if (hand === 'left') {
+            upperArm = this.leftUpperArm;
+            elbow = this.leftElbow;
+            lowerArm = this.leftLowerArm;
+          } else {
+            upperArm = this.rightUpperArm;
+            elbow = this.rightElbow;
+            lowerArm = this.rightLowerArm;
+          }
+          
+          // Update elbow joint position
+          elbow.object3D.position.copy(elbowLocal);
+          
+          // Update upper arm (shoulder to elbow)
+          this.updateArmSegment(upperArm, shoulderLocal, elbowLocal, ikState.upperArmLength);
+          
+          // Update lower arm (elbow to hand)
+          this.updateArmSegment(lowerArm, elbowLocal, handLocal, ikState.lowerArmLength);
+        },
+
+        updateArmSegment: function(segment, startPos, endPos, length) {
+          // Calculate direction vector
+          const direction = new THREE.Vector3().subVectors(endPos, startPos);
+          const actualLength = direction.length();
+          
+          if (actualLength < 0.001) return; // Avoid division by zero
+          
+          direction.normalize();
+          
+          if (this.data.useModels) {
+            // For 3D models with shrink factor:
+            // Models are scaled once during init, positioned at midpoint, then rotated
+            // Note: This approach has limitations - scale is in model-local space
+            const modelCenter = new THREE.Vector3().addVectors(startPos, endPos).multiplyScalar(0.5);
+            segment.setAttribute('position', `${modelCenter.x} ${modelCenter.y} ${modelCenter.z}`);
+            
+            // Calculate rotation to align Z-axis with direction vector
+            const dx = direction.x;
+            const dy = direction.y;
+            const dz = direction.z;
+            
+            const pitch = Math.asin(-dy);
+            const yaw = Math.atan2(dx, dz);
+            
+            let pitchDeg = THREE.MathUtils.radToDeg(pitch);
+            const yawDeg = THREE.MathUtils.radToDeg(yaw);
+            
+            // Add 90° to align Blender Z-axis with direction vector
+            pitchDeg += 90;
+            
+            // Use setAttribute instead of object3D.rotation to ensure proper transformation order
+            segment.setAttribute('rotation', `${pitchDeg} ${yawDeg} 0`);
+          } else {
+            // For primitives: Position at midpoint (they're also shrunk by 70%)
+            const midpoint = new THREE.Vector3().addVectors(startPos, endPos).multiplyScalar(0.5);
+            segment.object3D.position.copy(midpoint);
+            
+            // Simple quaternion rotation (Y-axis aligned cylinders)
+            const quaternion = new THREE.Quaternion().setFromUnitVectors(
+              new THREE.Vector3(0, 1, 0),
+              direction
+            );
+            segment.object3D.quaternion.copy(quaternion);
+          }
+        },
+
+        updateMirrorBody: function(dt) {
+          // Mirror body is just local body logic offset at mirrorDistance forward
+          if (!this.camera || !this.leftController || !this.rightController || !this.rig) return;
+          
+          // Get player positions
+          const headWorldPos = new THREE.Vector3();
+          const headWorldQuat = new THREE.Quaternion();
+          const leftHandWorldPos = new THREE.Vector3();
+          const leftHandWorldQuat = new THREE.Quaternion();
+          const rightHandWorldPos = new THREE.Vector3();
+          const rightHandWorldQuat = new THREE.Quaternion();
+          
+          this.camera.object3D.getWorldPosition(headWorldPos);
+          this.camera.object3D.getWorldQuaternion(headWorldQuat);
+          this.leftController.object3D.getWorldPosition(leftHandWorldPos);
+          this.leftController.object3D.getWorldQuaternion(leftHandWorldQuat);
+          this.rightController.object3D.getWorldPosition(rightHandWorldPos);
+          this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
+          
+          // Mirror center point (at mirrorDistance in front of player at body height)
+          const mirrorCenter = new THREE.Vector3(headWorldPos.x, headWorldPos.y - 0.3, headWorldPos.z - this.mirrorDistance);
+          
+          // Apply offset based on mirrorDistance
+          const offset = new THREE.Vector3(0, 0, -this.mirrorDistance);
+          let mirrorHeadPos = headWorldPos.clone().add(offset);
+          let mirrorLeftHandPos = leftHandWorldPos.clone().add(offset);
+          let mirrorRightHandPos = rightHandWorldPos.clone().add(offset);
+          
+          // Apply manual rotation around mirror center
+          if (this.manualRotationY !== 0) {
+            const rotationMatrix = new THREE.Matrix4().makeRotationY(this.manualRotationY);
+            
+            // Rotate head position
+            mirrorHeadPos.sub(mirrorCenter);
+            mirrorHeadPos.applyMatrix4(rotationMatrix);
+            mirrorHeadPos.add(mirrorCenter);
+            
+            // Rotate left hand position
+            mirrorLeftHandPos.sub(mirrorCenter);
+            mirrorLeftHandPos.applyMatrix4(rotationMatrix);
+            mirrorLeftHandPos.add(mirrorCenter);
+            
+            // Rotate right hand position
+            mirrorRightHandPos.sub(mirrorCenter);
+            mirrorRightHandPos.applyMatrix4(rotationMatrix);
+            mirrorRightHandPos.add(mirrorCenter);
+            
+            // Rotate head quaternion
+            const manualQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.manualRotationY);
+            headWorldQuat.premultiply(manualQuat);
+            leftHandWorldQuat.premultiply(manualQuat);
+            rightHandWorldQuat.premultiply(manualQuat);
+          }
+          
+          // Calculate torso orientation
+          this.calculateTorsoOrientation(mirrorHeadPos, headWorldQuat, mirrorLeftHandPos, mirrorRightHandPos, dt);
+          
+          // Calculate natural body tilt/lean
+          this.calculateBodyTilt(mirrorHeadPos, mirrorLeftHandPos, mirrorRightHandPos, dt);
+          
+          
+          // Position body at chest level
+          const torsoY = mirrorHeadPos.y - 0.3;
+          this.el.object3D.position.set(mirrorHeadPos.x, torsoY, mirrorHeadPos.z);
+          
+          // Apply both rotation and tilt to body
+          const combinedRotation = new THREE.Quaternion()
+            .copy(this.torsoRotation)
+            .multiply(this.bodyTilt);
+          this.el.object3D.quaternion.copy(combinedRotation);
+          
+          // Update all body parts
+          this.updateHead(mirrorHeadPos, headWorldQuat);
+          this.updateNeck(mirrorHeadPos);
+          this.updateTorso();
+          this.updateShoulders(mirrorHeadPos, headWorldQuat);
+          
+          // Update arms with IK
+          this.leftIKState = this.calculateArmIK('left', mirrorLeftHandPos, leftHandWorldQuat, mirrorHeadPos, headWorldQuat);
+          this.rightIKState = this.calculateArmIK('right', mirrorRightHandPos, rightHandWorldQuat, mirrorHeadPos, headWorldQuat);
+          
+          this.updateArm('left', this.leftIKState);
+          this.updateArm('right', this.rightIKState);
+          
+          // Update model parts if using full body model
+          this.updateModelParts();
+        },
+
+        updateRemoteBody: function() {
+          // TODO: Implement remote player body update from network data
+        },
+
+        setVisibility: function(visible) {
+          this.el.object3D.visible = visible;
+        },
+
+        updateConfig: function(newConfig) {
+          Object.assign(this.config, newConfig);
+        }
+      });
+
+      // ========================================
+      // VR CONTROLLER COMPONENT (Helper)
+      // ========================================
+      AFRAME.registerComponent('vr-body-controller', {
+        schema: {
+          hand: { type: 'string', default: 'left' }
+        },
+
+        init: function() {
+          // Store reference for body system
+        }
+      });
+
+      // ========================================
+      // NETWORK SYNC COMPONENT (for multiplayer)
+      // ========================================
+      AFRAME.registerComponent('network-body', {
+        schema: {
+          playerId: { type: 'string', default: '' },
+          updateRate: { type: 'number', default: 60 } // Hz
+        },
+
+        init: function() {
+          this.lastUpdateTime = 0;
+          this.updateInterval = 1000 / this.data.updateRate;
+        },
+
+        tick: function(time, deltaTime) {
+          if (time - this.lastUpdateTime >= this.updateInterval) {
+            this.sendBodyUpdate();
+            this.lastUpdateTime = time;
+          }
+        },
+
+        sendBodyUpdate: function() {
+          // TODO: Send body state to other players via PeerJS
+          // Include: head pos/rot, hand pos/rot, torso rotation
+        },
+
+        receiveBodyUpdate: function(data) {
+          // TODO: Receive and apply body state from other players
+        }
+      });
+
+      // ========================================
+      // UI CONTROLS
+      // ========================================
+      window.addEventListener('DOMContentLoaded', () => {
+        const scene = document.querySelector('a-scene');
+        
+        // Wait for scene to load before accessing components
+        if (scene.hasLoaded) {
+          initializeControls();
+        } else {
+          scene.addEventListener('loaded', () => {
+            initializeControls();
+          });
+        }
+      });
+      
+      function initializeControls() {
+        const localBody = document.querySelector('#local-body');
+        const mirrorBody = document.querySelector('#mirror-body');
+        
+        // Wait for components to be ready
+        setTimeout(() => {
+          const bodyComponent = localBody.components['vr-body'];
+          const mirrorComponent = mirrorBody.components['vr-body'];
+          
+          if (!bodyComponent || !mirrorComponent) {
+            console.error('Components not ready yet, retrying...');
+            setTimeout(initializeControls, 500);
+            return;
+          }
+          
+          // Toggle local body visibility (torso/arms, head is always hidden)
+          document.getElementById('toggle-body').addEventListener('click', () => {
+            const currentVisibility = bodyComponent.data.visible;
+            bodyComponent.data.visible = !currentVisibility;
+            bodyComponent.setVisibility(!currentVisibility);
+            console.log('Local body visibility:', !currentVisibility);
+          });
+          
+          // Toggle mirror body visibility
+          document.getElementById('toggle-mirror').addEventListener('click', () => {
+            const currentVisibility = mirrorComponent.data.visible;
+            mirrorComponent.data.visible = !currentVisibility;
+            mirrorComponent.setVisibility(!currentVisibility);
+            console.log('Mirror body visibility:', !currentVisibility);
+          });
+          
+          // Toggle 3D models vs primitives
+          document.getElementById('toggle-models').addEventListener('click', () => {
+            const currentUseModels = bodyComponent.data.useModels;
+            const newUseModels = !currentUseModels;
+            
+            // Update data and rebuild arms
+            bodyComponent.data.useModels = newUseModels;
+            mirrorComponent.data.useModels = newUseModels;
+            
+            bodyComponent.rebuildArms();
+            mirrorComponent.rebuildArms();
+            
+            // Update UI
+            const renderModeText = document.getElementById('render-mode');
+            renderModeText.textContent = newUseModels ? '3D Models (Auto-fallback)' : 'Primitives (90% shrunk)';
+            
+            console.log('Toggled to:', newUseModels ? '3D Models' : 'Primitives');
+          });
+          
+          // Toggle mirror head visibility
+          document.getElementById('toggle-mirror-head').addEventListener('click', () => {
+            if (mirrorComponent.head) {
+              const currentVisibility = mirrorComponent.head.object3D.visible;
+              mirrorComponent.head.object3D.visible = !currentVisibility;
+              console.log('Mirror head visibility:', !currentVisibility);
+            }
+          });
+          
+          // Toggle debug mode
+          document.getElementById('toggle-debug').addEventListener('click', () => {
+            bodyComponent.data.debug = !bodyComponent.data.debug;
+            
+            if (bodyComponent.data.debug && !bodyComponent.debugAxes) {
+              bodyComponent.createDebugHelpers();
+            } else if (!bodyComponent.data.debug && bodyComponent.debugAxes) {
+              bodyComponent.debugAxes.parentNode.removeChild(bodyComponent.debugAxes);
+              bodyComponent.debugAxes = null;
+            }
+            console.log('Debug mode:', bodyComponent.data.debug);
+          });
+          
+          // Mirror distance slider
+          document.getElementById('mirror-dist').addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            document.getElementById('mirror-dist-val').textContent = value.toFixed(1);
+            
+            // Update mirror body distance
+            if (mirrorComponent) {
+              mirrorComponent.mirrorDistance = value;
+            }
+            console.log('Mirror distance:', value);
+          });
+          
+          // Shoulder width slider (affects both bodies)
+          const shoulderWidthSlider = document.getElementById('shoulder-width');
+          const shoulderWidthVal = document.getElementById('shoulder-width-val');
+          shoulderWidthSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            shoulderWidthVal.textContent = value.toFixed(2);
+            bodyComponent.config.shoulderWidth = value;
+            mirrorComponent.config.shoulderWidth = value;
+          });
+          
+          // Upper arm length slider (affects both bodies)
+          const upperArmSlider = document.getElementById('upper-arm');
+          const upperArmVal = document.getElementById('upper-arm-val');
+          upperArmSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            upperArmVal.textContent = value.toFixed(2);
+            bodyComponent.config.upperArmLength = value;
+            mirrorComponent.config.upperArmLength = value;
+          });
+          
+          // Lower arm length slider (affects both bodies)
+          const lowerArmSlider = document.getElementById('lower-arm');
+          const lowerArmVal = document.getElementById('lower-arm-val');
+          lowerArmSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            lowerArmVal.textContent = value.toFixed(2);
+            bodyComponent.config.lowerArmLength = value;
+            mirrorComponent.config.lowerArmLength = value;
+          });
+        }, 100);
+      }
+
+      // ========================================
+      // PHYSICS TICK
+      // ========================================
+      const fixedTimeStep = 1.0 / 60.0;
+      const maxSubSteps = 3;
+
+      AFRAME.registerSystem('physics-system', {
+        init: function() {
+          this.sceneEl.addEventListener('tick', (e) => {
+            world.step(fixedTimeStep, e.detail.delta / 1000, maxSubSteps);
+          });
+        }
+      });
+    </script>
+  </body>
+</html>
+
