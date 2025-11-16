@@ -32,8 +32,8 @@
     <a-scene background="color: #000011">
       <a-entity id="rig" position="0 1.6 0" zerog-thruster-movement>
         <a-entity id="camera" camera look-controls></a-entity>
-        <a-entity id="left-hand" hand-controls="hand: left; handModelStyle: lowPoly"></a-entity>
-        <a-entity id="right-hand" hand-controls="hand: right; handModelStyle: lowPoly"></a-entity>
+        <a-entity id="left-hand" hand-controls="hand: left; handModelStyle: lowPoly" visible="false"></a-entity>
+        <a-entity id="right-hand" hand-controls="hand: right; handModelStyle: lowPoly" visible="false"></a-entity>
       </a-entity>
 
       <!-- Local Player Body (Zero-G) -->
@@ -73,6 +73,24 @@
           this.leftHand = this.el.querySelector('#left-hand');
           this.rightHand = this.el.querySelector('#right-hand');
           this.mirrorBody = document.querySelector('#mirror-body');
+          
+          // Hide the white hand models after they load
+          setTimeout(() => {
+            if (this.leftHand && this.leftHand.object3D) {
+              this.leftHand.object3D.traverse((node) => {
+                if (node.isMesh) {
+                  node.visible = false;
+                }
+              });
+            }
+            if (this.rightHand && this.rightHand.object3D) {
+              this.rightHand.object3D.traverse((node) => {
+                if (node.isMesh) {
+                  node.visible = false;
+                }
+              });
+            }
+          }, 1000);
           
           // Mirror rotation control
           this.thumbstickRotation = { right: 0 };
@@ -407,6 +425,11 @@
           };
           this.legSmoothingFactor = 0.15; // Smooth out jitter
           
+          // Pose transition hysteresis to prevent rapid switching
+          this.currentDominantDirection = 'rest'; // Track which direction is dominant
+          this.directionSwitchThreshold = 0.35; // Need this much velocity to switch
+          this.directionMaintainThreshold = 0.15; // Stay in current direction until below this
+          
           // Leg pose-based animation (no IK, just predefined poses)
           // Using Z-rotation in applyLegPose to flip direction, X-rotation for flex
           this.legPoses = {
@@ -688,15 +711,23 @@
           const controllerForward = new THREE.Vector3().crossVectors(shoulderLine, new THREE.Vector3(0, 1, 0));
           controllerForward.normalize();
           
-          if (controllerForward.dot(headForwardFlat) < 0) {
+          // Prevent 180° flips - only accept controller direction if it's not opposite to current body direction
+          const currentBodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+          currentBodyForward.y = 0;
+          currentBodyForward.normalize();
+          
+          // If controller forward is more than 90° away, prefer head direction
+          const controllerDot = controllerForward.dot(currentBodyForward);
+          if (controllerDot < 0) {
             controllerForward.negate();
           }
           
+          // Reduce controller influence when hands are close (ambiguous direction)
           let controllerWeight = 0.8;
           if (shoulderDist < 0.25) {
-            controllerWeight = 0.3;
+            controllerWeight = 0.2; // Reduced from 0.3 - prefer head when hands close
           } else if (shoulderDist > 0.35) {
-            controllerWeight = 1.0;
+            controllerWeight = 0.9; // Reduced from 1.0 - still keep some head influence
           }
           
           const blendedForward = new THREE.Vector3()
@@ -709,7 +740,8 @@
             blendedForward
           );
           
-          this.torsoRotation.slerp(targetRotation, this.smoothingFactor);
+          // Reduced smoothing factor for even more stability
+          this.torsoRotation.slerp(targetRotation, this.smoothingFactor * 0.7);
         },
 
         calculateBodyTilt: function(headPos, leftHandPos, rightHandPos, dt) {
@@ -828,20 +860,43 @@
             // Normalize velocity to get direction
             const velNorm = localVel.clone().normalize();
             
-            // Blend between poses based on velocity direction
+            // Calculate direction strengths
             const forwardAmount = Math.max(0, -velNorm.z); // Moving forward (negative Z in body space)
             const backwardAmount = Math.max(0, velNorm.z);  // Moving backward
             const upAmount = Math.max(0, velNorm.y);       // Moving up
             const downAmount = Math.max(0, -velNorm.y);    // Moving down
             const sidewaysAmount = Math.abs(velNorm.x);    // Moving sideways
             
-            // Blend poses (weighted average)
+            // Find strongest direction
+            const directions = [
+              { name: 'forward', amount: forwardAmount },
+              { name: 'backward', amount: backwardAmount },
+              { name: 'up', amount: upAmount },
+              { name: 'down', amount: downAmount },
+              { name: 'sideways', amount: sidewaysAmount }
+            ];
+            const strongest = directions.reduce((max, d) => d.amount > max.amount ? d : max);
+            
+            // Hysteresis: Only switch direction if new direction is strong enough
+            const threshold = (this.currentDominantDirection === strongest.name) 
+              ? this.directionMaintainThreshold  // Lower threshold to stay in current direction
+              : this.directionSwitchThreshold;    // Higher threshold to switch to new direction
+            
+            if (strongest.amount > threshold || speed < 0.2) {
+              this.currentDominantDirection = strongest.name;
+            }
+            // If speed is very low, return to rest
+            if (speed < 0.2) {
+              this.currentDominantDirection = 'rest';
+            }
+            
+            // Blend poses (weighted average) but give extra weight to dominant direction
             const poseWeights = [
-              { pose: this.legPoses.forward, weight: forwardAmount },
-              { pose: this.legPoses.backward, weight: backwardAmount },
-              { pose: this.legPoses.up, weight: upAmount },
-              { pose: this.legPoses.down, weight: downAmount },
-              { pose: this.legPoses.sideways, weight: sidewaysAmount }
+              { pose: this.legPoses.forward, weight: forwardAmount * (this.currentDominantDirection === 'forward' ? 1.3 : 1.0) },
+              { pose: this.legPoses.backward, weight: backwardAmount * (this.currentDominantDirection === 'backward' ? 1.3 : 1.0) },
+              { pose: this.legPoses.up, weight: upAmount * (this.currentDominantDirection === 'up' ? 1.3 : 1.0) },
+              { pose: this.legPoses.down, weight: downAmount * (this.currentDominantDirection === 'down' ? 1.3 : 1.0) },
+              { pose: this.legPoses.sideways, weight: sidewaysAmount * (this.currentDominantDirection === 'sideways' ? 1.3 : 1.0) }
             ];
             
             // Reset target pose
