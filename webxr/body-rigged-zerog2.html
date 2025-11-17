@@ -6,7 +6,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.173.0/examples/js/loaders/FBXLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/FBXLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.0/umd/index.js"></script>
+    <script>
+      // Suppress the FBXLoader deprecation warnings
+      const originalWarn = console.warn;
+      console.warn = function(...args) {
+        const msg = args[0];
+        if (typeof msg === 'string' && msg.includes('decodeText() has been deprecated')) {
+          return; // Suppress this specific warning spam
+        }
+        originalWarn.apply(console, args);
+      };
+    </script>
     <style>
       body { margin: 0; overflow: hidden; }
       #ui {
@@ -64,7 +76,7 @@
           boostForce: { type: 'number', default: 2.0 },  // Instant velocity boost
           brakeForce: { type: 'number', default: 0.92 }
         },
-        
+
         init: function() {
           this.velocity = new THREE.Vector3(0, 0, 0);
           this.thrusterActive = { left: false, right: false };
@@ -133,8 +145,8 @@
         },
         
         onThumbstickMoved: function(evt) {
-          if (!evt.target || !evt.target.object3D) return;
-          const hand = evt.target;
+            if (!evt.target || !evt.target.object3D) return;
+            const hand = evt.target;
           const handId = hand.id || hand.getAttribute('id');
           const isLeft = handId === 'left-hand';
           
@@ -189,7 +201,7 @@
             this.mirrorBody.components['mixamo-zerog-body'].logRotationExtremes();
           }
         },
-        
+
         tick: function(time, deltaTime) {
           if (!deltaTime || deltaTime > 100) return; // Skip large deltas
           const dt = deltaTime / 1000; // Convert to seconds
