@@ -19672,23 +19672,32 @@ function setGameplayHUD(isPlaying) {
             // CRITICAL: Also show/hide and update bot body entities
             const botId = bot.getAttribute('id');
             let botBodyId = null;
-            let teamColor = null;
             
+            // Map bot entity ID to body entity ID
             if (botId === 'zerog-bot-red') {
               botBodyId = 'bot-red-body';
-              teamColor = '#ff0000'; // Red team
             } else if (botId === 'zerog-bot-blue') {
               botBodyId = 'bot-blue-body';
-              teamColor = '#0000ff'; // Blue team
             } else if (botId === 'zerog-bot-green') {
               botBodyId = 'bot-green-body';
-              teamColor = '#00ff00'; // Green team
             }
             
             if (botBodyId) {
               const botBody = document.querySelector(`#${botBodyId}`);
               if (botBody) {
                 botBody.setAttribute('visible', shouldEnable);
+                
+                // Get bot's team from its component data
+                const botComponent = bot.components['zerog-bot'];
+                const botTeam = botComponent ? botComponent.data.team : null;
+                
+                // Determine color based on team (NOT bot name)
+                let teamColor = null;
+                if (botTeam === 'red') {
+                  teamColor = '#ff0000';
+                } else if (botTeam === 'blue') {
+                  teamColor = '#0000ff';
+                }
                 
                 // Update bot body color to match team
                 if (shouldEnable && teamColor && botBody.components['mixamo-body-avatar']) {
