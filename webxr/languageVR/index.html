@@ -309,16 +309,18 @@
         </a-entity>
         <a-entity id="left-hand" 
                   hand-controls="hand: left; handModelStyle: lowPoly"
+                  oculus-touch-controls="hand: left"
                   visible="false"
-                  laser-controls
-                  raycaster="objects: .clickable; lineColor: red; lineOpacity: 0.75; showLine: true"
+                  laser-controls="hand: left"
+                  raycaster="objects: .clickable; far: 10; lineColor: red; lineOpacity: 0.75"
                   ui-toggle-controller
                   raycaster-debug></a-entity>
         <a-entity id="right-hand" 
                   hand-controls="hand: right; handModelStyle: lowPoly"
+                  oculus-touch-controls="hand: right"
                   visible="false"
-                  laser-controls
-                  raycaster="objects: .clickable; lineColor: red; lineOpacity: 0.75; showLine: true"
+                  laser-controls="hand: right"
+                  raycaster="objects: .clickable; far: 10; lineColor: red; lineOpacity: 0.75"
                   ui-toggle-controller
                   raycaster-debug></a-entity>
       </a-entity>
@@ -560,7 +562,8 @@
                  width="0.5" height="0.15" depth="0.05" 
                  color="#2196F3"
                  position="-0.6 0 0"
-                 class="clickable"></a-box>
+                 class="clickable"
+                 vr-button="action: repeat"></a-box>
           <a-text value="🔊 REPEAT" 
                   position="-0.6 0 0.03" 
                   align="center" 
@@ -572,7 +575,8 @@
                  width="0.5" height="0.15" depth="0.05" 
                  color="#4CAF50"
                  position="-0.1 0 0"
-                 class="clickable"></a-box>
+                 class="clickable"
+                 vr-button="action: next"></a-box>
           <a-text value="➡️ NEXT" 
                   position="-0.1 0 0.03" 
                   align="center" 
@@ -584,7 +588,8 @@
                  width="0.5" height="0.15" depth="0.05" 
                  color="#4CAF50"
                  position="0.4 0 0"
-                 class="clickable"></a-box>
+                 class="clickable"
+                 vr-button="action: play-pause"></a-box>
           <a-text id="play-pause-text"
                   value="⏸️ PAUSE" 
                   position="0.4 0 0.03" 
@@ -779,8 +784,8 @@
             // Listen for results from Vosk recognizer
             this.recognizer.on('result', (message) => {
               console.log('[Vosk] Result event:', message);
-              // Access the nested result.text property
-              const text = message.result?.text || message.text;
+              // Access the nested result.text property (Quest-compatible syntax)
+              const text = (message.result && message.result.text) || message.text;
               if (text && text.trim()) {
                 console.log('[Vosk] ✓ Recognized:', text);
                 if (this.onResult) {
@@ -790,8 +795,8 @@
             });
             
             this.recognizer.on('partialresult', (message) => {
-              // Access the nested result.partial property
-              const partial = message.result?.partial || message.partial;
+              // Access the nested result.partial property (Quest-compatible syntax)
+              const partial = (message.result && message.result.partial) || message.partial;
               if (partial && partial.trim()) {
                 console.log('[Vosk] Partial:', partial);
               }
@@ -1189,6 +1194,15 @@ assets/vosk-models/nl.tar.gz</pre>
           // Check if we're in VR mode or Quest browser
           const scene = document.querySelector('a-scene');
           const isQuestBrowser = /OculusBrowser|Quest/i.test(navigator.userAgent);
+          
+          // Listen for VR mode changes
+          scene.addEventListener('enter-vr', () => {
+            console.log('[Language App] ✓ Entered VR mode');
+          });
+          
+          scene.addEventListener('exit-vr', () => {
+            console.log('[Language App] ✗ Exited VR mode');
+          });
           
           if (scene.is('vr-mode')) {
             console.log('[Language App] Starting in VR mode');
@@ -1863,9 +1877,83 @@ assets/vosk-models/nl.tar.gz</pre>
         }
       });
       
+      // VR Button Click Handler Component (Quest-compatible)
+      AFRAME.registerComponent('vr-button', {
+        schema: {
+          action: { type: 'string', default: '' }
+        },
+        
+        init: function() {
+          this.onClick = this.onClick.bind(this);
+          this.onHover = this.onHover.bind(this);
+          this.onLeave = this.onLeave.bind(this);
+          
+          this.el.addEventListener('click', this.onClick);
+          this.el.addEventListener('mouseenter', this.onHover);
+          this.el.addEventListener('mouseleave', this.onLeave);
+          
+          this.originalColor = this.el.getAttribute('color');
+        },
+        
+        onClick: function() {
+          console.log('[VR Button] Clicked:', this.data.action);
+          
+          // Trigger the appropriate action
+          if (this.data.action === 'repeat') {
+            if (LanguageApp.currentPhrase && !LanguageApp.isPaused) {
+              LanguageApp.npcSpeak(LanguageApp.currentPhrase.text);
+            }
+          } else if (this.data.action === 'next') {
+            if (!LanguageApp.isPaused) {
+              LanguageApp.nextPhrase();
+            }
+          } else if (this.data.action === 'play-pause') {
+            LanguageApp.togglePause();
+          }
+        },
+        
+        onHover: function() {
+          // Darken the button color on hover
+          const currentColor = this.el.getAttribute('color');
+          if (currentColor === '#2196F3') {
+            this.el.setAttribute('color', '#1976D2');
+          } else if (currentColor === '#4CAF50') {
+            this.el.setAttribute('color', '#45a049');
+          }
+        },
+        
+        onLeave: function() {
+          // Restore original color
+          this.el.setAttribute('color', this.originalColor);
+        },
+        
+        remove: function() {
+          this.el.removeEventListener('click', this.onClick);
+          this.el.removeEventListener('mouseenter', this.onHover);
+          this.el.removeEventListener('mouseleave', this.onLeave);
+        }
+      });
+      
       AFRAME.registerComponent('raycaster-debug', {
         init: function() {
           const handName = this.el.id;
+          
+          console.log(`[${handName}] Raycaster debug component initialized`);
+          
+          // Log when controller is connected
+          this.el.addEventListener('controllerconnected', (evt) => {
+            console.log(`[${handName}] Controller connected:`, evt.detail.name);
+          });
+          
+          // Log raycaster component initialization
+          setTimeout(() => {
+            const raycaster = this.el.components.raycaster;
+            if (raycaster) {
+              console.log(`[${handName}] Raycaster component found:`, raycaster.data);
+            } else {
+              console.error(`[${handName}] NO raycaster component!`);
+            }
+          }, 1000);
           
           this.el.addEventListener('raycaster-intersection', (evt) => {
             console.log(`[${handName}] Raycaster Hit:`, evt.detail.els.map(el => el.id || el.className));
@@ -1877,6 +1965,11 @@ assets/vosk-models/nl.tar.gz</pre>
           
           this.el.addEventListener('triggerdown', () => {
             console.log(`[${handName}] Trigger pressed`);
+            // Manually check what's under the raycaster
+            const raycaster = this.el.components.raycaster;
+            if (raycaster && raycaster.intersectedEls) {
+              console.log(`[${handName}] Currently intersecting:`, raycaster.intersectedEls.map(el => el.id || el.className));
+            }
           });
           
           this.el.addEventListener('triggerup', () => {
@@ -2514,12 +2607,14 @@ assets/vosk-models/nl.tar.gz</pre>
         },
         
         updateFingerPoses: function() {
-          // Get gamepad data
-          const leftGamepad = this.leftController.components['tracked-controls']?.controller?.gamepad;
-          const rightGamepad = this.rightController.components['tracked-controls']?.controller?.gamepad;
+          // Get gamepad data (Quest-compatible syntax)
+          const leftController = this.leftController.components['tracked-controls'];
+          const rightController = this.rightController.components['tracked-controls'];
+          const leftGamepad = leftController && leftController.controller && leftController.controller.gamepad;
+          const rightGamepad = rightController && rightController.controller && rightController.controller.gamepad;
           
           if (!this.fingerDebugLogged) {
-            console.log('[Finger Tracking] Left gamepad buttons:', leftGamepad?.buttons?.length);
+            console.log('[Finger Tracking] Left gamepad buttons:', leftGamepad && leftGamepad.buttons && leftGamepad.buttons.length);
             if (leftGamepad && leftGamepad.buttons) {
               console.log('[Finger Tracking] Button details:');
               leftGamepad.buttons.forEach((btn, i) => {
@@ -2534,8 +2629,8 @@ assets/vosk-models/nl.tar.gz</pre>
           
           // Update target curls for LEFT hand
           if (leftGamepad && leftGamepad.buttons) {
-            const trigger = leftGamepad.buttons[0]?.value || 0; // Trigger - index finger
-            const grip = leftGamepad.buttons[1]?.value || 0;    // Grip - middle/ring/pinky
+            const trigger = (leftGamepad.buttons[0] && leftGamepad.buttons[0].value) || 0; // Trigger - index finger
+            const grip = (leftGamepad.buttons[1] && leftGamepad.buttons[1].value) || 0;    // Grip - middle/ring/pinky
             
             // Thumb curls when touching ANY touch-sensitive surface:
             // Button 2: Often grip button or touchpad
@@ -2545,7 +2640,7 @@ assets/vosk-models/nl.tar.gz</pre>
             // Button 6: Sometimes touchpad or additional surface
             let anyThumbTouch = 0;
             for (let i = 2; i <= 6; i++) {
-              if (leftGamepad.buttons[i]?.touched) {
+              if (leftGamepad.buttons[i] && leftGamepad.buttons[i].touched) {
                 anyThumbTouch = 1;
                 break;
               }
@@ -2556,12 +2651,12 @@ assets/vosk-models/nl.tar.gz</pre>
           
           // Update target curls for RIGHT hand
           if (rightGamepad && rightGamepad.buttons) {
-            const trigger = rightGamepad.buttons[0]?.value || 0;
-            const grip = rightGamepad.buttons[1]?.value || 0;
+            const trigger = (rightGamepad.buttons[0] && rightGamepad.buttons[0].value) || 0;
+            const grip = (rightGamepad.buttons[1] && rightGamepad.buttons[1].value) || 0;
             
             let anyThumbTouch = 0;
             for (let i = 2; i <= 6; i++) {
-              if (rightGamepad.buttons[i]?.touched) {
+              if (rightGamepad.buttons[i] && rightGamepad.buttons[i].touched) {
                 anyThumbTouch = 1;
                 break;
               }
