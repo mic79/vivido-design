@@ -372,6 +372,7 @@
                color="#4CAF50"
                position="0 0.4 0"
                class="clickable lang-button"
+               vr-button
                data-lang="es-ES"
                data-name="Spanish"></a-box>
         <a-text value="🇪🇸 Spanish" 
@@ -386,6 +387,7 @@
                color="#2196F3"
                position="0 0.1 0"
                class="clickable lang-button"
+               vr-button
                data-lang="fr-FR"
                data-name="French"></a-box>
         <a-text value="🇫🇷 French" 
@@ -400,6 +402,7 @@
                color="#2196F3"
                position="0 -0.2 0"
                class="clickable lang-button"
+               vr-button
                data-lang="de-DE"
                data-name="German"></a-box>
         <a-text value="🇩🇪 German" 
@@ -414,6 +417,7 @@
                color="#2196F3"
                position="0 -0.5 0"
                class="clickable lang-button"
+               vr-button
                data-lang="nl-NL"
                data-name="Dutch"></a-box>
         <a-text value="🇳🇱 Dutch" 
@@ -441,6 +445,7 @@
                color="#4CAF50"
                position="0 0.4 0"
                class="clickable scenario-button"
+               vr-button
                data-scenario="greetings"></a-box>
         <a-text value="👋 Greetings" 
                 position="0 0.4 0.03" 
@@ -454,6 +459,7 @@
                color="#2196F3"
                position="0 0.1 0"
                class="clickable scenario-button"
+               vr-button
                data-scenario="restaurant"></a-box>
         <a-text value="🍽️ Restaurant" 
                 position="0 0.1 0.03" 
@@ -467,6 +473,7 @@
                color="#2196F3"
                position="0 -0.2 0"
                class="clickable scenario-button"
+               vr-button
                data-scenario="shopping"></a-box>
         <a-text value="🛍️ Shopping" 
                 position="0 -0.2 0.03" 
@@ -480,6 +487,7 @@
                color="#2196F3"
                position="0 -0.5 0"
                class="clickable scenario-button"
+               vr-button
                data-scenario="directions"></a-box>
         <a-text value="🗺️ Directions" 
                 position="0 -0.5 0.03" 
@@ -1606,15 +1614,37 @@ assets/vosk-models/nl.tar.gz</pre>
           if (this.isPaused) return;
           
           console.log('[NPC Speak] Attempting to speak:', text);
+          console.log('[NPC Speak] User Agent:', navigator.userAgent);
+          console.log('[NPC Speak] Audio unlocked?:', this.audioUnlocked);
+          console.log('[NPC Speak] Available voices:', this.synthesis.getVoices().length);
           
           // Unlock audio on first user interaction (Quest requirement)
           if (!this.audioUnlocked) {
             console.log('[NPC Speak] Unlocking audio context...');
             this.audioUnlocked = true;
+            
+            // Quest-specific: Resume audio context if suspended
+            if (window.AudioContext || window.webkitAudioContext) {
+              const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+              if (!this.audioContext) {
+                this.audioContext = new AudioContextClass();
+              }
+              if (this.audioContext.state === 'suspended') {
+                console.log('[NPC Speak] Resuming suspended audio context...');
+                this.audioContext.resume().then(() => {
+                  console.log('[NPC Speak] ✓ Audio context resumed:', this.audioContext.state);
+                });
+              }
+            }
+            
             // Create a silent audio to unlock the audio context
             const silentAudio = new Audio();
             silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhQCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4X/////////////////////////////////////////////////';
-            silentAudio.play().catch(e => console.log('[Audio] Unlock attempt:', e));
+            silentAudio.play().then(() => {
+              console.log('[NPC Speak] ✓ Silent audio played successfully');
+            }).catch(e => {
+              console.log('[Audio] Unlock attempt error:', e);
+            });
           }
           
           this.synthesis.cancel();
@@ -1633,20 +1663,27 @@ assets/vosk-models/nl.tar.gz</pre>
               console.log('[NPC Speak] Using voice:', this.selectedVoice.name);
             } else {
               console.warn('[NPC Speak] No voice selected!');
+              // Try to get voices again
+              const voices = this.synthesis.getVoices();
+              if (voices.length > 0) {
+                this.selectedVoice = voices.find(v => v.lang.startsWith(this.currentLanguage.substring(0, 2))) || voices[0];
+                utterance.voice = this.selectedVoice;
+                console.log('[NPC Speak] Auto-selected voice:', this.selectedVoice.name);
+              }
             }
             
             let hasStarted = false;
             
             utterance.onstart = () => {
               hasStarted = true;
-              console.log('[NPC Speak] Audio started playing');
+              console.log('[NPC Speak] ✓ Audio started playing');
               this.updateVRText('vr-instruction-text', '🔊 Listening to NPC...');
             };
             
             utterance.onend = () => {
               console.log('[NPC Speak] Audio finished. hasStarted:', hasStarted);
               if (!hasStarted) {
-                console.error('[NPC] Audio blocked by browser - try clicking REPEAT button');
+                console.error('[NPC] ❌ Audio blocked by browser - try clicking REPEAT button');
                 this.updateVRText('vr-instruction-text', '❌ Audio blocked - click REPEAT');
               }
               setTimeout(() => {
@@ -1655,7 +1692,8 @@ assets/vosk-models/nl.tar.gz</pre>
             };
             
             utterance.onerror = (event) => {
-              console.error('[NPC Speak] Error:', event.error, event);
+              console.error('[NPC Speak] ❌ Error:', event.error, event);
+              this.updateVRText('vr-instruction-text', '❌ Speech error: ' + event.error);
             };
             
             console.log('[NPC Speak] Calling synthesis.speak()');
@@ -1664,6 +1702,10 @@ assets/vosk-models/nl.tar.gz</pre>
             // Check if it's actually speaking
             setTimeout(() => {
               console.log('[NPC Speak] Speaking status:', this.synthesis.speaking, 'Pending:', this.synthesis.pending);
+              if (!this.synthesis.speaking && !this.synthesis.pending) {
+                console.error('[NPC Speak] ❌ Speech synthesis not working!');
+                this.updateVRText('vr-instruction-text', '❌ Speech not working - check console');
+              }
             }, 200);
           }, 100);
         },
@@ -1880,7 +1922,9 @@ assets/vosk-models/nl.tar.gz</pre>
       // VR Button Click Handler Component (Quest-compatible)
       AFRAME.registerComponent('vr-button', {
         schema: {
-          action: { type: 'string', default: '' }
+          action: { type: 'string', default: '' },
+          lang: { type: 'string', default: '' },
+          scenario: { type: 'string', default: '' }
         },
         
         init: function() {
@@ -1893,22 +1937,60 @@ assets/vosk-models/nl.tar.gz</pre>
           this.el.addEventListener('mouseleave', this.onLeave);
           
           this.originalColor = this.el.getAttribute('color');
+          
+          // Also handle data attributes for backwards compatibility
+          if (!this.data.lang && this.el.getAttribute('data-lang')) {
+            this.data.lang = this.el.getAttribute('data-lang');
+          }
+          if (!this.data.scenario && this.el.getAttribute('data-scenario')) {
+            this.data.scenario = this.el.getAttribute('data-scenario');
+          }
         },
         
         onClick: function() {
-          console.log('[VR Button] Clicked:', this.data.action);
+          console.log('[VR Button] Clicked:', this.data.action || this.data.lang || this.data.scenario);
           
-          // Trigger the appropriate action
+          // Handle action buttons
           if (this.data.action === 'repeat') {
+            console.log('[VR Button] Repeat - current phrase:', LanguageApp.currentPhrase);
             if (LanguageApp.currentPhrase && !LanguageApp.isPaused) {
               LanguageApp.npcSpeak(LanguageApp.currentPhrase.text);
             }
           } else if (this.data.action === 'next') {
+            console.log('[VR Button] Next - paused?', LanguageApp.isPaused);
             if (!LanguageApp.isPaused) {
               LanguageApp.nextPhrase();
             }
           } else if (this.data.action === 'play-pause') {
+            console.log('[VR Button] Toggle pause - current state:', LanguageApp.isPaused);
             LanguageApp.togglePause();
+          }
+          
+          // Handle language buttons
+          else if (this.data.lang) {
+            console.log('[VR Button] Language selected:', this.data.lang);
+            const langName = this.el.getAttribute('data-name') || this.data.lang;
+            LanguageApp.changeLanguage(this.data.lang, langName);
+            
+            // Update button colors
+            const langButtons = document.querySelectorAll('.lang-button');
+            langButtons.forEach(btn => {
+              btn.setAttribute('color', '#2196F3');
+            });
+            this.el.setAttribute('color', '#4CAF50');
+          }
+          
+          // Handle scenario buttons
+          else if (this.data.scenario) {
+            console.log('[VR Button] Scenario selected:', this.data.scenario);
+            LanguageApp.changeScenario(this.data.scenario);
+            
+            // Update button colors
+            const scenarioButtons = document.querySelectorAll('.scenario-button');
+            scenarioButtons.forEach(btn => {
+              btn.setAttribute('color', '#2196F3');
+            });
+            this.el.setAttribute('color', '#4CAF50');
           }
         },
         
