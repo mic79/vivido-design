@@ -311,14 +311,16 @@
                   hand-controls="hand: left; handModelStyle: lowPoly"
                   visible="false"
                   laser-controls
-                  raycaster="objects: .clickable; lineColor: red; lineOpacity: 0.75"
-                  ui-toggle-controller></a-entity>
+                  raycaster="objects: .clickable; lineColor: red; lineOpacity: 0.75; showLine: true"
+                  ui-toggle-controller
+                  raycaster-debug></a-entity>
         <a-entity id="right-hand" 
                   hand-controls="hand: right; handModelStyle: lowPoly"
                   visible="false"
                   laser-controls
-                  raycaster="objects: .clickable; lineColor: red; lineOpacity: 0.75"
-                  ui-toggle-controller></a-entity>
+                  raycaster="objects: .clickable; lineColor: red; lineOpacity: 0.75; showLine: true"
+                  ui-toggle-controller
+                  raycaster-debug></a-entity>
       </a-entity>
 
       <!-- Player Body -->
@@ -707,14 +709,18 @@
             // Show progress
             if (onProgress) onProgress(10, 'Loading Vosk library...');
             
-            // Load model from assets
-            const modelPath = `assets/vosk-models/${this.currentLanguage}`;
+            // Load model from local assets - Vosk expects tar.gz archives
+            const modelPath = `assets/vosk-models/${this.currentLanguage}.tar.gz`;
             console.log('[Vosk] Loading model from:', modelPath);
             
             if (onProgress) onProgress(30, `Loading ${this.currentLanguage} model...`);
             
-            // Create model
-            this.model = await Vosk.createModel(modelPath);
+            // Create model - use relative path from current page location
+            const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
+            const fullModelPath = `${baseUrl}/${modelPath}`;
+            console.log('[Vosk] Full model URL:', fullModelPath);
+            
+            this.model = await Vosk.createModel(fullModelPath);
             console.log('[Vosk] ✓ Model loaded');
             
             if (onProgress) onProgress(60, 'Creating recognizer...');
@@ -724,6 +730,8 @@
             this.recognizer.setWords(true);
             
             console.log('[Vosk] ✓ Recognizer created');
+            console.log('[Vosk] Recognizer methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.recognizer)));
+            console.log('[Vosk] Recognizer object:', this.recognizer);
             
             if (onProgress) onProgress(80, 'Setting up microphone...');
             
@@ -766,31 +774,40 @@
             const bufferSize = 4096;
             this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
             
+            let audioChunkCount = 0;
+            
+            // Listen for results from Vosk recognizer
+            this.recognizer.on('result', (message) => {
+              console.log('[Vosk] Result event:', message);
+              // Access the nested result.text property
+              const text = message.result?.text || message.text;
+              if (text && text.trim()) {
+                console.log('[Vosk] ✓ Recognized:', text);
+                if (this.onResult) {
+                  this.onResult(text, 1.0);
+                }
+              }
+            });
+            
+            this.recognizer.on('partialresult', (message) => {
+              // Access the nested result.partial property
+              const partial = message.result?.partial || message.partial;
+              if (partial && partial.trim()) {
+                console.log('[Vosk] Partial:', partial);
+              }
+            });
+            
             this.processor.onaudioprocess = (e) => {
               if (!this.isListening || !this.recognizer) return;
               
-              const inputData = e.inputBuffer.getChannelData(0);
-              
-              // Convert Float32 to Int16 (Vosk requirement)
-              const int16Data = new Int16Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) {
-                const s = Math.max(-1, Math.min(1, inputData[i]));
-                int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+              audioChunkCount++;
+              if (audioChunkCount % 50 === 0) {
+                console.log('[Vosk] Processing audio chunks...', audioChunkCount);
               }
               
-              // Send to Vosk
+              // Vosk expects the AudioBuffer directly
               try {
-                const result = this.recognizer.acceptWaveform(int16Data);
-                
-                if (result) {
-                  const resultObj = JSON.parse(this.recognizer.result());
-                  if (resultObj.text && resultObj.text.trim()) {
-                    console.log('[Vosk] Result:', resultObj.text);
-                    if (this.onResult) {
-                      this.onResult(resultObj.text, 1.0); // Vosk doesn't provide confidence
-                    }
-                  }
-                }
+                this.recognizer.acceptWaveform(e.inputBuffer);
               } catch (err) {
                 console.error('[Vosk] Processing error:', err);
               }
@@ -820,16 +837,13 @@
         stop() {
           this.isListening = false;
           
-          // Get final result
+          // Get final result before stopping
           if (this.recognizer) {
             try {
-              const finalResult = JSON.parse(this.recognizer.finalResult());
-              if (finalResult.text && finalResult.text.trim()) {
-                console.log('[Vosk] Final result:', finalResult.text);
-                if (this.onResult) {
-                  this.onResult(finalResult.text, 1.0);
-                }
-              }
+              console.log('[Vosk] Stopping - getting final result...');
+              // Use retrieveFinalResult() method
+              this.recognizer.retrieveFinalResult();
+              // The result will come via the 'result' event listener
             } catch (err) {
               console.error('[Vosk] Final result error:', err);
             }
@@ -1011,10 +1025,14 @@
           const progressFill = document.getElementById('progress-fill');
           const loadingStatus = document.getElementById('loading-status');
           
+          // Check for URL parameter to force Vosk mode
+          const urlParams = new URLSearchParams(window.location.search);
+          const forceVosk = urlParams.get('vosk') === 'true';
+          
           // Check for Web Speech API
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
           
-          if (SpeechRecognition) {
+          if (SpeechRecognition && !forceVosk) {
             console.log('[Detection] Web Speech API available');
             document.getElementById('recognition-type').textContent = 'Web Speech API (Online)';
             this.useVosk = false;
@@ -1025,7 +1043,11 @@
             // Hide loading
             loadingOverlay.classList.add('hidden');
           } else {
-            console.log('[Detection] Web Speech API not available, using Vosk');
+            if (forceVosk) {
+              console.log('[Detection] Vosk mode forced via URL parameter');
+            } else {
+              console.log('[Detection] Web Speech API not available, using Vosk');
+            }
             document.getElementById('recognition-type').textContent = 'Vosk (Offline)';
             this.useVosk = true;
             
@@ -1050,11 +1072,34 @@
               }, 500);
             } catch (error) {
               console.error('[Detection] Vosk initialization failed:', error);
-              loadingStatus.textContent = '❌ Error loading speech models';
-              loadingStatus.style.color = '#f44336';
-              
-              // Show error message
-              alert('Could not load speech recognition models.\n\nPlease make sure you have downloaded the Vosk models to:\nlanguageVR/assets/vosk-models/\n\nSee VOSK_IMPLEMENTATION_GUIDE.md for instructions.');
+              loadingStatus.innerHTML = `
+                <div style="color: #f44336; max-width: 700px; text-align: left; padding: 20px; background: rgba(0,0,0,0.8); border-radius: 10px;">
+                  <h3 style="color: #f44336; margin-top: 0;">❌ Vosk Model Not Found</h3>
+                  <p style="color: white;"><strong>Error:</strong> ${error.message || 'Model files missing'}</p>
+                  <p style="color: white;"><strong>Expected:</strong> <code style="color: #4CAF50;">languageVR/assets/vosk-models/es.tar.gz</code></p>
+                  <br>
+                  <h4 style="color: white;">📦 Package Models:</h4>
+                  <p style="color: white;">The Vosk models need to be packaged as tar.gz files.</p>
+                  <ol style="color: white; line-height: 1.8;">
+                    <li>Open PowerShell or Command Prompt in the <code>languageVR</code> folder</li>
+                    <li>Run: <code style="color: #4CAF50;">package-vosk-models.bat</code></li>
+                    <li>This will create:
+                      <pre style="color: #4CAF50; background: black; padding: 10px; margin: 10px 0;">
+assets/vosk-models/es.tar.gz
+assets/vosk-models/fr.tar.gz
+assets/vosk-models/de.tar.gz
+assets/vosk-models/nl.tar.gz</pre>
+                    </li>
+                    <li>Reload this page</li>
+                  </ol>
+                  <br>
+                  <p style="color: #FFD700;"><strong>💡 Quick Test:</strong> Remove <code>?vosk=true</code> from URL to use Web Speech API (no packaging needed)</p>
+                  <br>
+                  <button onclick="window.location.href = window.location.pathname" style="padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+                    ← Back to Web Speech API
+                  </button>
+                </div>
+              `;
             }
           }
         },
@@ -1128,8 +1173,17 @@
           console.log('[Language App] Scene loaded');
           this.updateStatus('VR Scene loaded');
           
-          // Start experience
+          // Check if we're in VR mode
+          const scene = document.querySelector('a-scene');
+          if (scene.is('vr-mode')) {
+            console.log('[Language App] Starting in VR mode');
+          } else {
+            console.log('[Language App] Starting in desktop mode');
+          }
+          
+          // Start experience with a delay to allow everything to initialize
           setTimeout(() => {
+            console.log('[Language App] Starting first phrase...');
             this.nextPhrase();
           }, 2000);
         },
@@ -1269,8 +1323,18 @@
             const nextBtn = document.getElementById('next-btn');
             const playPauseBtn = document.getElementById('play-pause-btn');
             
+            console.log('[VR Buttons] Setting up button listeners...');
+            
             if (repeatBtn) {
+              // Try multiple event types for Quest compatibility
               repeatBtn.addEventListener('click', () => {
+                console.log('[VR Button] Repeat clicked!');
+                if (this.currentPhrase && !this.isPaused) {
+                  this.npcSpeak(this.currentPhrase.text);
+                }
+              });
+              repeatBtn.addEventListener('mousedown', () => {
+                console.log('[VR Button] Repeat mousedown!');
                 if (this.currentPhrase && !this.isPaused) {
                   this.npcSpeak(this.currentPhrase.text);
                 }
@@ -1281,6 +1345,11 @@
             
             if (nextBtn) {
               nextBtn.addEventListener('click', () => {
+                console.log('[VR Button] Next clicked!');
+                if (!this.isPaused) this.nextPhrase();
+              });
+              nextBtn.addEventListener('mousedown', () => {
+                console.log('[VR Button] Next mousedown!');
                 if (!this.isPaused) this.nextPhrase();
               });
               nextBtn.addEventListener('mouseenter', () => nextBtn.setAttribute('color', '#45a049'));
@@ -1288,7 +1357,14 @@
             }
             
             if (playPauseBtn) {
-              playPauseBtn.addEventListener('click', () => this.togglePause());
+              playPauseBtn.addEventListener('click', () => {
+                console.log('[VR Button] Play/Pause clicked!');
+                this.togglePause();
+              });
+              playPauseBtn.addEventListener('mousedown', () => {
+                console.log('[VR Button] Play/Pause mousedown!');
+                this.togglePause();
+              });
               playPauseBtn.addEventListener('mouseenter', () => playPauseBtn.setAttribute('color', '#388E3C'));
               playPauseBtn.addEventListener('mouseleave', () => playPauseBtn.setAttribute('color', '#4CAF50'));
             }
@@ -1404,6 +1480,11 @@
         nextPhrase() {
           if (this.isPaused) return;
           
+          // Stop current listening session and get final result if using Vosk
+          if (this.useVosk && this.isListening) {
+            VoskRecognizer.stop();
+          }
+          
           const scenarioPhrases = this.phrases[this.currentScenario][this.currentLanguage];
           if (!scenarioPhrases || scenarioPhrases.length === 0) return;
 
@@ -1477,6 +1558,7 @@
         npcSpeak(text) {
           if (this.isPaused) return;
           
+          console.log('[NPC Speak] Attempting to speak:', text);
           this.synthesis.cancel();
           this.showSpeechBubble(text);
           this.updateVRText('vr-instruction-text', '🔊 NPC is speaking...');
@@ -1490,25 +1572,40 @@
             
             if (this.selectedVoice) {
               utterance.voice = this.selectedVoice;
+              console.log('[NPC Speak] Using voice:', this.selectedVoice.name);
+            } else {
+              console.warn('[NPC Speak] No voice selected!');
             }
             
             let hasStarted = false;
             
             utterance.onstart = () => {
               hasStarted = true;
+              console.log('[NPC Speak] Audio started playing');
               this.updateVRText('vr-instruction-text', '🔊 Listening to NPC...');
             };
             
             utterance.onend = () => {
+              console.log('[NPC Speak] Audio finished. hasStarted:', hasStarted);
               if (!hasStarted) {
-                console.error('[NPC] Audio blocked by browser');
+                console.error('[NPC] Audio blocked by browser - try clicking REPEAT button');
               }
               setTimeout(() => {
                 this.hideSpeechBubble();
               }, 1000);
             };
             
+            utterance.onerror = (event) => {
+              console.error('[NPC Speak] Error:', event.error, event);
+            };
+            
+            console.log('[NPC Speak] Calling synthesis.speak()');
             this.synthesis.speak(utterance);
+            
+            // Check if it's actually speaking
+            setTimeout(() => {
+              console.log('[NPC Speak] Speaking status:', this.synthesis.speaking, 'Pending:', this.synthesis.pending);
+            }, 200);
           }, 100);
         },
 
@@ -1709,6 +1806,7 @@
         
         toggleUI: function() {
           this.uiVisible = !this.uiVisible;
+          console.log('[UI Toggle] UI now:', this.uiVisible ? 'visible' : 'hidden');
           
           const vrUIPanel = document.getElementById('vr-ui-panel');
           const vrLanguagePanel = document.getElementById('vr-language-panel');
@@ -1717,6 +1815,28 @@
           if (vrUIPanel) vrUIPanel.setAttribute('visible', this.uiVisible);
           if (vrLanguagePanel) vrLanguagePanel.setAttribute('visible', this.uiVisible);
           if (vrScenarioPanel) vrScenarioPanel.setAttribute('visible', this.uiVisible);
+        }
+      });
+      
+      AFRAME.registerComponent('raycaster-debug', {
+        init: function() {
+          const handName = this.el.id;
+          
+          this.el.addEventListener('raycaster-intersection', (evt) => {
+            console.log(`[${handName}] Raycaster Hit:`, evt.detail.els.map(el => el.id || el.className));
+          });
+          
+          this.el.addEventListener('raycaster-intersection-cleared', () => {
+            console.log(`[${handName}] Raycaster cleared`);
+          });
+          
+          this.el.addEventListener('triggerdown', () => {
+            console.log(`[${handName}] Trigger pressed`);
+          });
+          
+          this.el.addEventListener('triggerup', () => {
+            console.log(`[${handName}] Trigger released`);
+          });
         }
       });
       
