@@ -2,12 +2,14 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>WebXR Language Practice VR</title>
-    <meta name="description" content="Learn languages in VR with interactive NPCs">
+    <title>WebXR Language Practice VR (Quest Compatible)</title>
+    <meta name="description" content="Learn languages in VR with Vosk offline speech recognition">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.173.0/examples/js/loaders/FBXLoader.js"></script>
+    <!-- Vosk.js for Quest compatibility -->
+    <script src="https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js"></script>
     <style>
       body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
       
@@ -116,7 +118,7 @@
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        display: none; /* CHANGED: Hidden by default so VR works immediately */
+        display: none;
         align-items: center;
         justify-content: center;
         z-index: 3000;
@@ -161,26 +163,87 @@
         transform: translateY(-2px);
         box-shadow: 0 6px 20px rgba(0,0,0,0.4);
       }
+      
+      #loading-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.9);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 4000;
+        color: white;
+        flex-direction: column;
+      }
+      
+      #loading-overlay.hidden { display: none; }
+      
+      .loading-content {
+        text-align: center;
+        max-width: 500px;
+      }
+      
+      .loading-content h2 {
+        font-size: 32px;
+        margin-bottom: 20px;
+      }
+      
+      .progress-bar {
+        width: 100%;
+        height: 30px;
+        background: #333;
+        border-radius: 15px;
+        overflow: hidden;
+        margin: 20px 0;
+      }
+      
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #4CAF50, #81C784);
+        width: 0%;
+        transition: width 0.3s;
+      }
+      
+      .loading-status {
+        font-size: 16px;
+        color: #81C784;
+        margin-top: 10px;
+      }
     </style>
   </head>
   <body>
+    <!-- Loading Screen -->
+    <div id="loading-overlay">
+      <div class="loading-content">
+        <h2>🎤 Loading Speech Models...</h2>
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <div id="loading-status" class="loading-status">Initializing...</div>
+        <p style="font-size: 14px; color: #999; margin-top: 20px;">
+          First load may take 1-2 minutes<br>
+          Models are cached for future visits
+        </p>
+      </div>
+    </div>
+
     <!-- Start Screen -->
     <div id="start-screen">
       <div class="start-content">
         <h1>🗣️ Language Practice VR</h1>
-        <p>Step into virtual reality and practice real conversations with AI tutors. Improve your speaking skills in Spanish, French, German, or Dutch!</p>
+        <p>Quest-compatible offline speech recognition powered by Vosk</p>
         <button id="enter-vr-btn">Enter VR Experience</button>
         <div style="margin-top: 30px; font-size: 14px; opacity: 0.8;">
-          <p>✓ Speech recognition powered<br>
-          ✓ Interactive scenarios<br>
-          ✓ Real-time feedback</p>
+          <p>✓ Works on Meta Quest<br>
+          ✓ Offline speech recognition<br>
+          ✓ Interactive scenarios</p>
         </div>
       </div>
     </div>
 
     <!-- Desktop UI -->
     <div id="ui">
-      <h2>🎓 Language VR</h2>
+      <h2>🎓 Language VR (Vosk)</h2>
       
       <div class="status" id="status">Ready to start</div>
       <div class="status" id="speech-status">Speech: Initializing...</div>
@@ -212,6 +275,7 @@
       <div id="score">Score: 0 🌟</div>
       
       <div class="info">
+        <strong>Recognition:</strong> <span id="recognition-type">Detecting...</span><br>
         <strong>How to use:</strong><br>
         1. Put on your VR headset<br>
         2. Listen to the NPC speak<br>
@@ -240,7 +304,6 @@
       <!-- VR Camera Rig -->
       <a-entity id="rig" position="0 1.6 0" vr-locomotion>
         <a-entity id="camera" camera look-controls wasd-controls="acceleration: 20">
-          <!-- Raycaster for clicking buttons -->
           <a-entity cursor="fuse: false; rayOrigin: mouse"
                     raycaster="objects: .clickable; far: 10"></a-entity>
         </a-entity>
@@ -256,7 +319,7 @@
                   ui-toggle-controller></a-entity>
       </a-entity>
 
-      <!-- Player Body (local - head hidden) -->
+      <!-- Player Body -->
       <a-entity id="local-body" mixamo-body="isMirror: false"></a-entity>
 
       <!-- NPC Tutor Body -->
@@ -264,7 +327,6 @@
                 mixamo-body="isMirror: true; color: #FF6B6B" 
                 position="0 0 -2.5"
                 language-npc>
-        <!-- NPC Name Tag -->
         <a-text value="María - Spanish Tutor" 
                 position="0 2.2 0" 
                 align="center" 
@@ -274,7 +336,6 @@
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
                 id="npc-name"></a-text>
         
-        <!-- Speech Bubble -->
         <a-entity id="speech-bubble" position="0 2 0.3" visible="false">
           <a-plane width="1.5" height="0.5" color="#FFFFFF" opacity="0.95"></a-plane>
           <a-text value="¡Hola!" 
@@ -288,12 +349,10 @@
         </a-entity>
       </a-entity>
 
-      <!-- LEFT: Language Selection Panel in VR -->
+      <!-- LEFT: Language Selection Panel -->
       <a-entity id="vr-language-panel" position="-2.5 2 -2" rotation="0 30 0">
-        <!-- Background -->
         <a-plane width="1.2" height="1.8" color="#1a1a1a" opacity="0.9"></a-plane>
         
-        <!-- Title -->
         <a-text value="LANGUAGE" 
                 position="0 0.8 0.01" 
                 align="center" 
@@ -302,7 +361,6 @@
                 shader="msdf"
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
         
-        <!-- Language Buttons -->
         <a-box id="vr-lang-spanish" 
                width="1" height="0.2" depth="0.05" 
                color="#4CAF50"
@@ -360,12 +418,10 @@
                 scale="0.6 0.6 0.6"></a-text>
       </a-entity>
       
-      <!-- RIGHT: Scenario Selection Panel in VR -->
+      <!-- RIGHT: Scenario Selection Panel -->
       <a-entity id="vr-scenario-panel" position="2.5 2 -2" rotation="0 -30 0">
-        <!-- Background -->
         <a-plane width="1.2" height="1.8" color="#1a1a1a" opacity="0.9"></a-plane>
         
-        <!-- Title -->
         <a-text value="SCENARIOS" 
                 position="0 0.8 0.01" 
                 align="center" 
@@ -374,7 +430,6 @@
                 shader="msdf"
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
         
-        <!-- Scenario Buttons -->
         <a-box id="vr-scenario-greetings" 
                width="1" height="0.2" depth="0.05" 
                color="#4CAF50"
@@ -428,12 +483,10 @@
                 scale="0.6 0.6 0.6"></a-text>
       </a-entity>
 
-      <!-- CENTER: VR UI Panel (visible in VR) -->
+      <!-- CENTER: VR UI Panel -->
       <a-entity id="vr-ui-panel" position="0 2.5 -1.5">
-        <!-- Background panel -->
         <a-plane width="2" height="1.2" color="#1a1a1a" opacity="0.9"></a-plane>
         
-        <!-- Current phrase display -->
         <a-text id="vr-phrase-text" 
                 value="¡Hola!" 
                 position="0 0.45 0.01" 
@@ -444,7 +497,6 @@
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
                 wrap-count="30"></a-text>
         
-        <!-- Translation -->
         <a-text id="vr-translation-text" 
                 value="Hello!" 
                 position="0 0.3 0.01" 
@@ -455,7 +507,6 @@
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
                 wrap-count="30"></a-text>
         
-        <!-- Instruction text -->
         <a-text id="vr-instruction-text" 
                 value="🎤 Listening... Speak now!" 
                 position="0 0.1 0.01" 
@@ -466,7 +517,6 @@
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
                 wrap-count="40"></a-text>
         
-        <!-- What you said -->
         <a-text id="vr-heard-text" 
                 value="" 
                 position="0 -0.05 0.01" 
@@ -477,7 +527,6 @@
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
                 wrap-count="40"></a-text>
         
-        <!-- Score display -->
         <a-text id="vr-score-text" 
                 value="Score: 0" 
                 position="0 -0.25 0.01" 
@@ -487,11 +536,8 @@
                 shader="msdf"
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
         
-        <!-- Microphone visualizer -->
         <a-entity id="mic-visualizer" position="0 -0.45 0.01">
-          <!-- Background bar -->
           <a-plane width="1.5" height="0.08" color="#333333"></a-plane>
-          <!-- Active level bar -->
           <a-plane id="mic-level-bar" 
                    width="0" 
                    height="0.08" 
@@ -505,9 +551,7 @@
                   scale="0.5 0.5 0.5"></a-text>
         </a-entity>
         
-        <!-- Control Buttons -->
         <a-entity id="vr-buttons" position="0 -0.7 0.01">
-          <!-- Repeat button -->
           <a-box id="repeat-btn" 
                  width="0.5" height="0.15" depth="0.05" 
                  color="#2196F3"
@@ -520,7 +564,6 @@
                   width="1"
                   scale="0.5 0.5 0.5"></a-text>
           
-          <!-- Next button -->
           <a-box id="next-btn" 
                  width="0.5" height="0.15" depth="0.05" 
                  color="#4CAF50"
@@ -533,7 +576,6 @@
                   width="1"
                   scale="0.5 0.5 0.5"></a-text>
           
-          <!-- Play/Pause button -->
           <a-box id="play-pause-btn" 
                  width="0.5" height="0.15" depth="0.05" 
                  color="#4CAF50"
@@ -549,24 +591,17 @@
         </a-entity>
       </a-entity>
 
-      <!-- Environment -->
-      <!-- Default Environment (Classroom) - for greetings -->
+      <!-- Environments (same as index.html) -->
       <a-entity id="env-classroom" visible="true">
-        <!-- Floor -->
         <a-plane position="0 0 0" 
                  rotation="-90 0 0" 
                  width="20" 
                  height="20" 
                  color="#7BC8A4"
                  shadow="receive: true"></a-plane>
-        
-        <!-- Classroom Setting -->
-        <!-- Walls -->
         <a-box position="0 2 -8" width="20" height="4" depth="0.2" color="#F0E68C"></a-box>
         <a-box position="-10 2 0" width="0.2" height="4" depth="16" color="#F0E68C"></a-box>
         <a-box position="10 2 0" width="0.2" height="4" depth="16" color="#F0E68C"></a-box>
-        
-        <!-- Whiteboard -->
         <a-box position="0 2.5 -7.8" width="4" height="2" depth="0.1" color="#FFFFFF"></a-box>
         <a-text value="Language Practice" 
                 position="0 3.3 -7.7" 
@@ -575,17 +610,11 @@
                 width="3"
                 shader="msdf"
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
-        
-        <!-- Desk -->
         <a-box position="0 0.4 -2" width="1.5" height="0.8" depth="1" color="#8B4513"></a-box>
-        
-        <!-- Decorative elements -->
         <a-sphere position="-3 1.5 -5" radius="0.3" color="#FF6B6B"></a-sphere>
         <a-sphere position="3 1.5 -5" radius="0.3" color="#4ECDC4"></a-sphere>
         <a-cylinder position="-4 0.5 -6" radius="0.2" height="1" color="#2ECC71"></a-cylinder>
         <a-cylinder position="4 0.5 -6" radius="0.2" height="1" color="#E74C3C"></a-cylinder>
-        
-        <!-- Instructions on floor -->
         <a-text value="Stand here and speak clearly!" 
                 position="0 0.01 0.5" 
                 rotation="-90 0 0" 
@@ -596,17 +625,13 @@
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
       </a-entity>
       
-      <!-- Restaurant Environment (Bagan Temple) -->
       <a-entity id="env-restaurant" visible="false">
-        <!-- Bagan Temple Interior GLB - rotated 180 degrees, scaled 2x, moved 4m forward, 1m up -->
         <a-entity id="temple-model" 
                   gltf-model="url(assets/bagan_-_khayiminga_temple_interior.glb)" 
                   position="0 1 -4" 
                   rotation="0 180 0"
                   scale="2 2 2"
                   shadow="cast: true; receive: true"></a-entity>
-        
-        <!-- Simple floor backup -->
         <a-plane position="0 0 0" 
                  rotation="-90 0 0" 
                  width="50" 
@@ -616,16 +641,12 @@
                  shadow="receive: true"></a-plane>
       </a-entity>
       
-      <!-- Shopping Environment (Library of Celsus) -->
       <a-entity id="env-shopping" visible="false">
-        <!-- Library of Celsus GLB - moved 30m forward, 12m up, scaled 2x -->
-        <a-entity id="library-model" 
-                  gltf-model="url(assets/library_of_celsus_-_crowdsourced_photogrammetry.glb)" 
-                  position="0 12 -30" 
-                  scale="2 2 2"
+        <a-entity id="trevi-fountain-model" 
+                  gltf-model="url(assets/fontana_di_trevi_photogrammetry_scan.glb)" 
+                  position="0 0 -30" 
+                  scale="1 1 1"
                   shadow="cast: true; receive: true"></a-entity>
-        
-        <!-- Simple floor backup -->
         <a-plane position="0 0 0" 
                  rotation="-90 0 0" 
                  width="50" 
@@ -635,17 +656,13 @@
                  shadow="receive: true"></a-plane>
       </a-entity>
       
-      <!-- Directions Environment (Mansion Garden) -->
       <a-entity id="env-directions" visible="false">
-        <!-- Mansion Garden GLB - lowered by 50m, scaled 4x, moved 5m right and 5m forward -->
-        <a-entity id="mansion-garden-model" 
-                  gltf-model="url(assets/mansion_garden_scene.glb)" 
-                  position="5 -50 -5" 
-                  scale="4 4 4"
-                  shadow="cast: true; receive: true"
-                  mansion-garden-inspector></a-entity>
-        
-        <!-- Simple floor backup in case GLB doesn't have one -->
+        <a-entity id="hintze-hall-model" 
+                  gltf-model="url(https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/hintze_hall.glb)" 
+                  position="2.5 -0.5 -12.5" 
+                  rotation="0 180 0"
+                  scale="1 1 1"
+                  shadow="cast: true; receive: true"></a-entity>
         <a-plane position="0 0 0" 
                  rotation="-90 0 0" 
                  width="50" 
@@ -658,7 +675,188 @@
 
     <script>
       // ========================================
-      // LANGUAGE APP CORE
+      // VOSK SPEECH RECOGNITION
+      // ========================================
+      
+      const VoskRecognizer = {
+        model: null,
+        recognizer: null,
+        audioContext: null,
+        processor: null,
+        isInitialized: false,
+        isListening: false,
+        currentLanguage: 'es',
+        onResult: null,
+        
+        languageMap: {
+          'es-ES': 'es',
+          'fr-FR': 'fr',
+          'de-DE': 'de',
+          'nl-NL': 'nl'
+        },
+        
+        async init(language, onProgress, onResult) {
+          console.log('[Vosk] Initializing for language:', language);
+          this.currentLanguage = this.languageMap[language] || 'es';
+          this.onResult = onResult;
+          
+          try {
+            // Show progress
+            if (onProgress) onProgress(10, 'Loading Vosk library...');
+            
+            // Load model from assets
+            const modelPath = `assets/vosk-models/${this.currentLanguage}`;
+            console.log('[Vosk] Loading model from:', modelPath);
+            
+            if (onProgress) onProgress(30, `Loading ${this.currentLanguage} model...`);
+            
+            // Create model
+            this.model = await Vosk.createModel(modelPath);
+            console.log('[Vosk] ✓ Model loaded');
+            
+            if (onProgress) onProgress(60, 'Creating recognizer...');
+            
+            // Create recognizer with 16kHz sample rate
+            this.recognizer = new this.model.KaldiRecognizer(16000);
+            this.recognizer.setWords(true);
+            
+            console.log('[Vosk] ✓ Recognizer created');
+            
+            if (onProgress) onProgress(80, 'Setting up microphone...');
+            
+            // Setup audio processing
+            await this.setupAudio();
+            
+            if (onProgress) onProgress(100, 'Ready!');
+            
+            this.isInitialized = true;
+            console.log('[Vosk] ✓ Fully initialized');
+            
+            return true;
+          } catch (error) {
+            console.error('[Vosk] Initialization error:', error);
+            throw error;
+          }
+        },
+        
+        async setupAudio() {
+          try {
+            // Get microphone stream
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                sampleRate: 16000
+              } 
+            });
+            
+            console.log('[Vosk] Microphone access granted');
+            
+            // Create audio context with 16kHz sample rate (Vosk requirement)
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+              sampleRate: 16000
+            });
+            
+            const source = this.audioContext.createMediaStreamSource(stream);
+            
+            // Create script processor for audio processing
+            const bufferSize = 4096;
+            this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+            
+            this.processor.onaudioprocess = (e) => {
+              if (!this.isListening || !this.recognizer) return;
+              
+              const inputData = e.inputBuffer.getChannelData(0);
+              
+              // Convert Float32 to Int16 (Vosk requirement)
+              const int16Data = new Int16Array(inputData.length);
+              for (let i = 0; i < inputData.length; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[i]));
+                int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+              }
+              
+              // Send to Vosk
+              try {
+                const result = this.recognizer.acceptWaveform(int16Data);
+                
+                if (result) {
+                  const resultObj = JSON.parse(this.recognizer.result());
+                  if (resultObj.text && resultObj.text.trim()) {
+                    console.log('[Vosk] Result:', resultObj.text);
+                    if (this.onResult) {
+                      this.onResult(resultObj.text, 1.0); // Vosk doesn't provide confidence
+                    }
+                  }
+                }
+              } catch (err) {
+                console.error('[Vosk] Processing error:', err);
+              }
+            };
+            
+            // Connect audio pipeline
+            source.connect(this.processor);
+            this.processor.connect(this.audioContext.destination);
+            
+            console.log('[Vosk] ✓ Audio pipeline ready');
+          } catch (error) {
+            console.error('[Vosk] Audio setup error:', error);
+            throw error;
+          }
+        },
+        
+        start() {
+          if (!this.isInitialized) {
+            console.error('[Vosk] Not initialized');
+            return;
+          }
+          
+          this.isListening = true;
+          console.log('[Vosk] Started listening');
+        },
+        
+        stop() {
+          this.isListening = false;
+          
+          // Get final result
+          if (this.recognizer) {
+            try {
+              const finalResult = JSON.parse(this.recognizer.finalResult());
+              if (finalResult.text && finalResult.text.trim()) {
+                console.log('[Vosk] Final result:', finalResult.text);
+                if (this.onResult) {
+                  this.onResult(finalResult.text, 1.0);
+                }
+              }
+            } catch (err) {
+              console.error('[Vosk] Final result error:', err);
+            }
+          }
+          
+          console.log('[Vosk] Stopped listening');
+        },
+        
+        async switchLanguage(language, onProgress) {
+          console.log('[Vosk] Switching to language:', language);
+          
+          // Stop current recognition
+          this.stop();
+          
+          // Clean up old model
+          if (this.recognizer) {
+            this.recognizer = null;
+          }
+          if (this.model) {
+            this.model = null;
+          }
+          
+          // Reinitialize with new language
+          this.isInitialized = false;
+          await this.init(language, onProgress, this.onResult);
+        }
+      };
+      
+      // ========================================
+      // LANGUAGE APP CORE (Modified for Vosk)
       // ========================================
       
       const LanguageApp = {
@@ -678,8 +876,9 @@
         micLevelBar: null,
         voices: [],
         selectedVoice: null,
+        useVosk: false,
         
-        // Phrase database
+        // Phrase database (same as index.html)
         phrases: {
           'greetings': {
             'es-ES': [
@@ -777,11 +976,23 @@
           }
         },
 
-        init() {
-          console.log('[Language App] Initializing...');
-          console.log('[Language App] Testing console output...');
+        async init() {
+          console.log('[Language App] Initializing with Vosk support...');
           
-          // Wait for scene to load
+          // Detect which recognition system to use
+          await this.detectRecognitionSystem();
+          
+          // Load voices for TTS
+          this.loadVoices();
+          
+          // Initialize microphone visualizer
+          this.initMicrophoneVisualizer();
+          
+          // Setup UI
+          this.setupUIListeners();
+          this.setupVRButtons();
+          
+          // Wait for scene
           const scene = document.querySelector('a-scene');
           if (scene.hasLoaded) {
             this.onSceneLoaded();
@@ -789,180 +1000,111 @@
             scene.addEventListener('loaded', () => this.onSceneLoaded());
           }
           
-          // Load voices first
-          this.loadVoices();
-          
-          // Initialize Speech Recognition
-          this.initSpeechRecognition();
-          
-          // Initialize microphone visualizer (won't conflict if done right)
-          this.initMicrophoneVisualizer();
-          
-          // Setup UI event listeners
-          this.setupUIListeners();
-          
-          // Setup VR button listeners
-          this.setupVRButtons();
-          
-          // Auto-start without blocking screen
-          this.setupStartScreen();
-          
           console.log('[Language App] Initialization complete');
         },
 
-        setupStartScreen() {
-          // Auto-start without blocking screen
-          console.log('[Language App] Auto-starting (no start screen)');
-          this.startExperience();
-        },
-
-        startExperience() {
-          console.log('[Language App] Starting experience');
-          this.updateStatus('Ready! Listen to the NPC and repeat');
+        async detectRecognitionSystem() {
+          const loadingOverlay = document.getElementById('loading-overlay');
+          const progressFill = document.getElementById('progress-fill');
+          const loadingStatus = document.getElementById('loading-status');
           
-          // Start with first phrase after a moment
-          setTimeout(() => {
-            console.log('[Language App] Starting first phrase...');
-            this.nextPhrase();
-          }, 3000);
-        },
-
-        onSceneLoaded() {
-          console.log('[Language App] Scene loaded');
-          this.updateStatus('VR Scene loaded');
-          
-          // Test audio on scene load
-          this.testAudio();
-        },
-        
-        testAudio() {
-          console.log('[Audio] Testing audio output...');
-          console.log('[Audio] Speech synthesis available:', 'speechSynthesis' in window);
-          console.log('[Audio] Voices loaded:', this.voices.length);
-          
-          if (this.voices.length > 0) {
-            console.log('[Audio] Available voices:', this.voices.map(v => v.name).join(', '));
-          }
-        },
-        
-        loadVoices() {
-          // Load available voices
-          const loadVoicesImpl = () => {
-            this.voices = this.synthesis.getVoices();
-            console.log('[Voices] Loaded', this.voices.length, 'voices');
-            
-            if (this.voices.length > 0) {
-              // Try to find a Spanish voice
-              this.selectedVoice = this.voices.find(v => v.lang.startsWith('es')) || this.voices[0];
-              console.log('[Voices] Selected voice:', this.selectedVoice.name, this.selectedVoice.lang);
-            } else {
-              console.warn('[Voices] No voices loaded yet, will retry...');
-            }
-          };
-          
-          // Voices might load asynchronously
-          loadVoicesImpl();
-          
-          if (this.synthesis.onvoiceschanged !== undefined) {
-            this.synthesis.onvoiceschanged = loadVoicesImpl;
-          }
-          
-          // Also try after a delay
-          setTimeout(loadVoicesImpl, 500);
-          setTimeout(loadVoicesImpl, 1500);
-        },
-
-        initSpeechRecognition() {
-          // Check for browser support
+          // Check for Web Speech API
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
           
-          if (!SpeechRecognition) {
-            this.updateSpeechStatus('Speech recognition not supported in this browser', 'error');
-            console.error('[Speech] Web Speech API not supported');
-            return;
+          if (SpeechRecognition) {
+            console.log('[Detection] Web Speech API available');
+            document.getElementById('recognition-type').textContent = 'Web Speech API (Online)';
+            this.useVosk = false;
+            
+            // Initialize Web Speech API
+            this.initWebSpeechAPI();
+            
+            // Hide loading
+            loadingOverlay.classList.add('hidden');
+          } else {
+            console.log('[Detection] Web Speech API not available, using Vosk');
+            document.getElementById('recognition-type').textContent = 'Vosk (Offline)';
+            this.useVosk = true;
+            
+            // Show loading and initialize Vosk
+            loadingOverlay.classList.remove('hidden');
+            
+            try {
+              await VoskRecognizer.init(
+                this.currentLanguage,
+                (progress, status) => {
+                  progressFill.style.width = progress + '%';
+                  loadingStatus.textContent = status;
+                },
+                (text, confidence) => {
+                  this.onVoskResult(text, confidence);
+                }
+              );
+              
+              // Hide loading after success
+              setTimeout(() => {
+                loadingOverlay.classList.add('hidden');
+              }, 500);
+            } catch (error) {
+              console.error('[Detection] Vosk initialization failed:', error);
+              loadingStatus.textContent = '❌ Error loading speech models';
+              loadingStatus.style.color = '#f44336';
+              
+              // Show error message
+              alert('Could not load speech recognition models.\n\nPlease make sure you have downloaded the Vosk models to:\nlanguageVR/assets/vosk-models/\n\nSee VOSK_IMPLEMENTATION_GUIDE.md for instructions.');
+            }
           }
+        },
 
+        initWebSpeechAPI() {
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          
           this.recognition = new SpeechRecognition();
           this.recognition.continuous = false;
           this.recognition.interimResults = false;
           this.recognition.maxAlternatives = 3;
           this.recognition.lang = this.currentLanguage;
 
-          console.log('[Speech] Recognition initialized for language:', this.currentLanguage);
+          console.log('[Web Speech] Initialized for:', this.currentLanguage);
 
           this.recognition.onstart = () => {
             this.isListening = true;
             this.updateSpeechStatus('🎤 Listening...', 'active');
-            this.updateVRText('vr-instruction-text', '🎤 SPEAK NOW! Say: "' + (this.currentPhrase?.text || '...') + '"');
-            console.log('[Speech] Started listening for language:', this.recognition.lang);
+            this.updateVRText('vr-instruction-text', '🎤 SPEAK NOW!');
           };
 
           this.recognition.onresult = (event) => {
             const transcript = event.results[0][0].transcript;
             const confidence = event.results[0][0].confidence;
-            console.log('[Speech] Heard:', transcript, 'Confidence:', confidence);
+            console.log('[Web Speech] Heard:', transcript, 'Confidence:', confidence);
             
-            // Show what was heard in VR UI
             this.updateVRText('vr-heard-text', 'You said: "' + transcript + '"');
-            
             this.checkAnswer(transcript, confidence);
           };
 
           this.recognition.onerror = (event) => {
-            console.error('[Speech] Error:', event.error);
+            console.error('[Web Speech] Error:', event.error);
             
-            // Don't process errors if we're not supposed to be listening
-            if (!this.isListening) {
-              console.log('[Speech] Ignoring error - not actively listening');
-              return;
-            }
-            
-            if (event.error === 'aborted') {
-              console.log('[Speech] Recognition aborted (likely stopped intentionally)');
-              return; // Don't retry on abort
-            }
+            if (!this.isListening) return;
             
             if (event.error === 'no-speech') {
-              console.log('[Speech] No speech detected - MIC IS WORKING but heard nothing');
-              console.log('[Speech] Recognition language:', this.recognition.lang);
-              console.log('[Speech] Expected phrase:', this.currentPhrase?.text);
-              console.log('[Speech] TIP: Speak VERY LOUD and CLEAR in', this.currentLanguageName);
-              this.updateVRText('vr-instruction-text', '🎤 NO SPEECH HEARD! Speak LOUDER in ' + this.currentLanguageName);
-              this.updateVRText('vr-heard-text', '⚠️ Microphone working but too quiet or wrong language');
+              this.updateVRText('vr-instruction-text', '🎤 NO SPEECH HEARD! Speak LOUDER');
             } else if (event.error === 'not-allowed') {
-              this.updateSpeechStatus('Microphone permission denied', 'error');
-              this.updateVRText('vr-instruction-text', '⚠️ Microphone blocked! Allow access.');
-            } else if (event.error === 'audio-capture') {
-              console.error('[Speech] Audio capture failed - microphone not available');
-              this.updateVRText('vr-instruction-text', '⚠️ Microphone not found!');
-              this.updateVRText('vr-heard-text', 'Check microphone connection');
-            } else if (event.error === 'network') {
-              console.error('[Speech] Network error - speech recognition needs internet');
-              this.updateVRText('vr-instruction-text', '⚠️ No internet connection');
-            } else {
-              this.updateSpeechStatus(`Error: ${event.error}`, 'error');
-              this.updateVRText('vr-instruction-text', `⚠️ Error: ${event.error}`);
+              this.updateVRText('vr-instruction-text', '⚠️ Microphone blocked!');
             }
             
             this.isListening = false;
             
-            // Retry listening after error (except permission/hardware errors)
-            if (event.error !== 'not-allowed' && event.error !== 'audio-capture' && event.error !== 'aborted') {
+            // Retry
+            if (event.error !== 'not-allowed' && event.error !== 'aborted') {
               setTimeout(() => {
-                if (this.currentPhrase) {
-                  console.log('[Speech] Retrying...');
-                  this.startListening();
-                }
+                if (this.currentPhrase) this.startListening();
               }, 2000);
             }
           };
 
           this.recognition.onend = () => {
             this.isListening = false;
-            this.updateSpeechStatus('Ready to listen', '');
-            console.log('[Speech] Stopped listening');
-            
-            // Auto-restart listening if we have a current phrase
             setTimeout(() => {
               if (this.currentPhrase && !this.isListening) {
                 this.startListening();
@@ -970,50 +1112,67 @@
             }, 1000);
           };
 
-          this.updateSpeechStatus('Speech recognition ready!', 'active');
+          this.updateSpeechStatus('Web Speech API ready', 'active');
+        },
+
+        onVoskResult(text, confidence) {
+          console.log('[Vosk Result]:', text);
+          this.updateVRText('vr-heard-text', 'You said: "' + text + '"');
+          this.checkAnswer(text, confidence);
+        },
+
+        onSceneLoaded() {
+          console.log('[Language App] Scene loaded');
+          this.updateStatus('VR Scene loaded');
+          
+          // Start experience
+          setTimeout(() => {
+            this.nextPhrase();
+          }, 2000);
+        },
+
+        loadVoices() {
+          const loadVoicesImpl = () => {
+            this.voices = this.synthesis.getVoices();
+            if (this.voices.length > 0) {
+              this.selectedVoice = this.voices.find(v => v.lang.startsWith('es')) || this.voices[0];
+              console.log('[Voices] Selected:', this.selectedVoice.name);
+            }
+          };
+          
+          loadVoicesImpl();
+          if (this.synthesis.onvoiceschanged !== undefined) {
+            this.synthesis.onvoiceschanged = loadVoicesImpl;
+          }
+          setTimeout(loadVoicesImpl, 500);
         },
 
         async initMicrophoneVisualizer() {
           try {
-            console.log('[Mic Visualizer] Initializing...');
-            
-            // Request microphone access (same stream speech recognition uses)
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            console.log('[Mic Visualizer] Microphone access granted');
-            
-            // Create audio context
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             this.microphone = this.audioContext.createMediaStreamSource(stream);
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 256;
             this.analyser.smoothingTimeConstant = 0.8;
             
-            // IMPORTANT: Connect to analyser but NOT to destination
-            // This allows us to analyze without creating audio feedback
             this.microphone.connect(this.analyser);
-            // DO NOT: this.analyser.connect(this.audioContext.destination);
             
-            // Get reference to VR mic level bar
             setTimeout(() => {
               this.micLevelBar = document.getElementById('mic-level-bar');
               if (this.micLevelBar) {
-                console.log('[Mic Visualizer] Found mic level bar element');
-                this.updateMicLevel(); // Start updating
-              } else {
-                console.error('[Mic Visualizer] Could not find mic-level-bar element');
+                this.updateMicLevel();
               }
             }, 1000);
             
-            console.log('[Mic Visualizer] ✓ Initialized successfully');
+            console.log('[Mic Visualizer] ✓ Initialized');
           } catch (error) {
-            console.error('[Mic Visualizer] Could not access microphone:', error);
-            this.updateVRText('vr-instruction-text', '⚠️ Microphone access denied');
+            console.error('[Mic Visualizer] Error:', error);
           }
         },
 
         updateMicLevel() {
           if (!this.analyser || !this.micLevelBar) {
-            // Keep trying until elements are ready
             requestAnimationFrame(() => this.updateMicLevel());
             return;
           }
@@ -1021,58 +1180,67 @@
           const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
           this.analyser.getByteFrequencyData(dataArray);
           
-          // Calculate average volume
           let sum = 0;
           for (let i = 0; i < dataArray.length; i++) {
             sum += dataArray[i];
           }
           const average = sum / dataArray.length;
-          const normalized = average / 255; // 0 to 1
+          const normalized = average / 255;
           
-          // Update bar width (0 to 1.5 width)
           const barWidth = normalized * 1.5;
           this.micLevelBar.setAttribute('width', barWidth);
           
-          // Also update position so it grows from left
           const barX = -0.75 + (barWidth / 2);
           this.micLevelBar.setAttribute('position', barX + ' 0 0.01');
           
-          // Change color based on level
           if (normalized > 0.3) {
-            this.micLevelBar.setAttribute('color', '#4CAF50'); // Green - good level
+            this.micLevelBar.setAttribute('color', '#4CAF50');
           } else if (normalized > 0.1) {
-            this.micLevelBar.setAttribute('color', '#FFC107'); // Yellow - speak louder
+            this.micLevelBar.setAttribute('color', '#FFC107');
           } else {
-            this.micLevelBar.setAttribute('color', '#666666'); // Gray - too quiet
+            this.micLevelBar.setAttribute('color', '#666666');
           }
           
-          // Continue updating
           requestAnimationFrame(() => this.updateMicLevel());
         },
 
         setupUIListeners() {
           // Language buttons
           document.querySelectorAll('.lang-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
+            btn.addEventListener('click', async (e) => {
               document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
               btn.classList.add('active');
               
+              const oldLang = this.currentLanguage;
               this.currentLanguage = btn.dataset.lang;
               this.currentLanguageName = btn.dataset.name;
               
-              if (this.recognition) {
+              // Update recognition system
+              if (this.useVosk && oldLang !== this.currentLanguage) {
+                const loadingOverlay = document.getElementById('loading-overlay');
+                const progressFill = document.getElementById('progress-fill');
+                const loadingStatus = document.getElementById('loading-status');
+                
+                loadingOverlay.classList.remove('hidden');
+                
+                await VoskRecognizer.switchLanguage(
+                  this.currentLanguage,
+                  (progress, status) => {
+                    progressFill.style.width = progress + '%';
+                    loadingStatus.textContent = status;
+                  }
+                );
+                
+                loadingOverlay.classList.add('hidden');
+              } else if (this.recognition) {
                 this.recognition.lang = this.currentLanguage;
               }
               
-              // Update selected voice
+              // Update voice
               const langPrefix = this.currentLanguage.split('-')[0];
               this.selectedVoice = this.voices.find(v => v.lang.startsWith(langPrefix)) || this.voices[0];
-              console.log('[UI] Changed to:', this.currentLanguageName, 'Voice:', this.selectedVoice?.name);
               
-              // Update NPC name
               this.updateNPCName();
-              
-              // Reset to first phrase of current scenario
               this.currentPhraseIndex = 0;
               this.nextPhrase();
             });
@@ -1086,13 +1254,110 @@
               
               this.currentScenario = btn.dataset.scenario;
               this.currentPhraseIndex = 0;
-              
-              // Switch environment
               this.switchEnvironment(this.currentScenario);
-              
               this.nextPhrase();
             });
           });
+        },
+
+        setupVRButtons() {
+          setTimeout(() => {
+            const repeatBtn = document.getElementById('repeat-btn');
+            const nextBtn = document.getElementById('next-btn');
+            const playPauseBtn = document.getElementById('play-pause-btn');
+            
+            if (repeatBtn) {
+              repeatBtn.addEventListener('click', () => {
+                if (this.currentPhrase && !this.isPaused) {
+                  this.npcSpeak(this.currentPhrase.text);
+                }
+              });
+              repeatBtn.addEventListener('mouseenter', () => repeatBtn.setAttribute('color', '#1976D2'));
+              repeatBtn.addEventListener('mouseleave', () => repeatBtn.setAttribute('color', '#2196F3'));
+            }
+            
+            if (nextBtn) {
+              nextBtn.addEventListener('click', () => {
+                if (!this.isPaused) this.nextPhrase();
+              });
+              nextBtn.addEventListener('mouseenter', () => nextBtn.setAttribute('color', '#45a049'));
+              nextBtn.addEventListener('mouseleave', () => nextBtn.setAttribute('color', '#4CAF50'));
+            }
+            
+            if (playPauseBtn) {
+              playPauseBtn.addEventListener('click', () => this.togglePause());
+              playPauseBtn.addEventListener('mouseenter', () => playPauseBtn.setAttribute('color', '#388E3C'));
+              playPauseBtn.addEventListener('mouseleave', () => playPauseBtn.setAttribute('color', '#4CAF50'));
+            }
+            
+            // Language selection in VR
+            const langButtons = document.querySelectorAll('.lang-button');
+            langButtons.forEach(btn => {
+              btn.addEventListener('click', async () => {
+                const lang = btn.getAttribute('data-lang');
+                const langName = btn.getAttribute('data-name');
+                
+                langButtons.forEach(b => b.setAttribute('color', '#2196F3'));
+                btn.setAttribute('color', '#4CAF50');
+                
+                const oldLang = this.currentLanguage;
+                this.currentLanguage = lang;
+                this.currentLanguageName = langName;
+                
+                if (this.useVosk && oldLang !== lang) {
+                  this.updateVRText('vr-instruction-text', '⏳ Loading new language model...');
+                  await VoskRecognizer.switchLanguage(lang, null);
+                } else if (this.recognition) {
+                  this.recognition.lang = lang;
+                }
+                
+                const langPrefix = lang.split('-')[0];
+                this.selectedVoice = this.voices.find(v => v.lang.startsWith(langPrefix)) || this.voices[0];
+                
+                this.updateNPCName();
+                this.currentPhraseIndex = 0;
+                this.nextPhrase();
+              });
+              
+              btn.addEventListener('mouseenter', () => {
+                if (btn.getAttribute('color') !== '#4CAF50') {
+                  btn.setAttribute('color', '#1976D2');
+                }
+              });
+              btn.addEventListener('mouseleave', () => {
+                if (btn.getAttribute('color') !== '#4CAF50') {
+                  btn.setAttribute('color', '#2196F3');
+                }
+              });
+            });
+            
+            // Scenario selection in VR
+            const scenarioButtons = document.querySelectorAll('.scenario-button');
+            scenarioButtons.forEach(btn => {
+              btn.addEventListener('click', () => {
+                const scenario = btn.getAttribute('data-scenario');
+                
+                scenarioButtons.forEach(b => b.setAttribute('color', '#2196F3'));
+                btn.setAttribute('color', '#4CAF50');
+                
+                this.currentScenario = scenario;
+                this.currentPhraseIndex = 0;
+                this.switchEnvironment(scenario);
+                this.nextPhrase();
+              });
+              
+              btn.addEventListener('mouseenter', () => {
+                if (btn.getAttribute('color') !== '#4CAF50') {
+                  btn.setAttribute('color', '#1976D2');
+                }
+              });
+              btn.addEventListener('mouseleave', () => {
+                if (btn.getAttribute('color') !== '#4CAF50') {
+                  btn.setAttribute('color', '#2196F3');
+                }
+              });
+            });
+          }, 2000);
         },
 
         updateNPCName() {
@@ -1108,65 +1373,45 @@
             nameTag.setAttribute('value', npcNames[this.currentLanguage]);
           }
         },
-        
+
         switchEnvironment(scenario) {
-          console.log('[Environment] Switching to scenario:', scenario);
-          
-          // Get all environments
           const envClassroom = document.getElementById('env-classroom');
           const envRestaurant = document.getElementById('env-restaurant');
           const envShopping = document.getElementById('env-shopping');
           const envDirections = document.getElementById('env-directions');
           
-          if (!envClassroom || !envRestaurant || !envShopping || !envDirections) {
-            console.warn('[Environment] Environment entities not found yet');
-            return;
-          }
+          if (!envClassroom || !envRestaurant || !envShopping || !envDirections) return;
           
-          // Hide all environments first
           envClassroom.setAttribute('visible', 'false');
           envRestaurant.setAttribute('visible', 'false');
           envShopping.setAttribute('visible', 'false');
           envDirections.setAttribute('visible', 'false');
           
-          // Show appropriate environment based on scenario
           if (scenario === 'directions') {
             envDirections.setAttribute('visible', 'true');
-            console.log('[Environment] ✓ Switched to Mansion Garden');
           } else if (scenario === 'shopping') {
             envShopping.setAttribute('visible', 'true');
-            console.log('[Environment] ✓ Switched to Library of Celsus');
           } else if (scenario === 'restaurant') {
             envRestaurant.setAttribute('visible', 'true');
-            console.log('[Environment] ✓ Switched to Bagan Temple');
           } else {
-            // Default classroom for greetings
             envClassroom.setAttribute('visible', 'true');
-            console.log('[Environment] ✓ Switched to Classroom');
           }
         },
 
         nextPhrase() {
-          const scenarioPhrases = this.phrases[this.currentScenario][this.currentLanguage];
+          if (this.isPaused) return;
           
-          if (!scenarioPhrases || scenarioPhrases.length === 0) {
-            this.updateStatus('No phrases available for this combination');
-            return;
-          }
+          const scenarioPhrases = this.phrases[this.currentScenario][this.currentLanguage];
+          if (!scenarioPhrases || scenarioPhrases.length === 0) return;
 
-          // Get next phrase (cycle through)
           this.currentPhrase = scenarioPhrases[this.currentPhraseIndex];
           this.currentPhraseIndex = (this.currentPhraseIndex + 1) % scenarioPhrases.length;
 
           console.log('[App] Next phrase:', this.currentPhrase.text);
           
-          // Update UI
           this.displayPhrase(this.currentPhrase);
-          
-          // NPC speaks the phrase
           this.npcSpeak(this.currentPhrase.text);
           
-          // Wait a moment, then start listening
           setTimeout(() => {
             this.startListening();
           }, 3000);
@@ -1177,16 +1422,14 @@
           const phraseText = document.getElementById('phrase-text');
           const translation = document.getElementById('translation');
           
-          // Desktop UI
           phraseText.textContent = phrase.text;
           translation.textContent = phrase.translation;
           phraseEl.classList.add('active');
           
-          // VR UI
           this.updateVRText('vr-phrase-text', phrase.text);
           this.updateVRText('vr-translation-text', phrase.translation);
           this.updateVRText('vr-instruction-text', '🎤 Listening... Speak now!');
-          this.updateVRText('vr-heard-text', ''); // Clear previous
+          this.updateVRText('vr-heard-text', '');
         },
 
         updateVRText(elementId, text) {
@@ -1195,356 +1438,46 @@
             el.setAttribute('value', text);
           }
         },
-        
-        setupVRButtons() {
-          console.log('[VR Buttons] Setting up clickable buttons...');
-          
-          // Wait for scene to load
-          setTimeout(() => {
-            const repeatBtn = document.getElementById('repeat-btn');
-            const nextBtn = document.getElementById('next-btn');
-            const testEnglishBtn = document.getElementById('test-english-btn');
-            
-            if (repeatBtn) {
-              repeatBtn.addEventListener('click', () => {
-                console.log('[VR] Repeat button clicked!');
-                if (this.currentPhrase && !this.isPaused) {
-                  this.npcSpeak(this.currentPhrase.text);
-                } else if (this.isPaused) {
-                  console.log('[VR] Cannot repeat while paused');
-                  this.updateVRText('vr-instruction-text', '⏸️ App is paused - click PLAY first');
-                }
-              });
-              
-              // Also listen for mouseenter from controllers
-              repeatBtn.addEventListener('mouseenter', () => {
-                repeatBtn.setAttribute('color', '#1976D2');
-              });
-              repeatBtn.addEventListener('mouseleave', () => {
-                repeatBtn.setAttribute('color', '#2196F3');
-              });
-              
-              console.log('[VR] Repeat button listener added');
-            }
-            
-            if (nextBtn) {
-              nextBtn.addEventListener('click', () => {
-                console.log('[VR] Next button clicked!');
-                if (!this.isPaused) {
-                  this.nextPhrase();
-                } else {
-                  console.log('[VR] Cannot advance while paused');
-                  this.updateVRText('vr-instruction-text', '⏸️ App is paused - click PLAY first');
-                }
-              });
-              
-              nextBtn.addEventListener('mouseenter', () => {
-                nextBtn.setAttribute('color', '#45a049');
-              });
-              nextBtn.addEventListener('mouseleave', () => {
-                nextBtn.setAttribute('color', '#4CAF50');
-              });
-              
-              console.log('[VR] Next button listener added');
-            }
-            
-            const playPauseBtn = document.getElementById('play-pause-btn');
-            const playPauseText = document.getElementById('play-pause-text');
-            
-            if (playPauseBtn && playPauseText) {
-              playPauseBtn.addEventListener('click', () => {
-                console.log('[VR] Play/Pause button clicked!');
-                this.togglePause();
-              });
-              
-              playPauseBtn.addEventListener('mouseenter', () => {
-                if (this.isPaused) {
-                  playPauseBtn.setAttribute('color', '#66BB6A');
-                } else {
-                  playPauseBtn.setAttribute('color', '#388E3C');
-                }
-              });
-              playPauseBtn.addEventListener('mouseleave', () => {
-                if (this.isPaused) {
-                  playPauseBtn.setAttribute('color', '#4CAF50');
-                } else {
-                  playPauseBtn.setAttribute('color', '#4CAF50');
-                }
-              });
-              
-              console.log('[VR] Play/Pause button listener added');
-            }
-            
-            // Language selection buttons
-            const langButtons = document.querySelectorAll('.lang-button');
-            langButtons.forEach(btn => {
-              btn.addEventListener('click', () => {
-                const lang = btn.getAttribute('data-lang');
-                const langName = btn.getAttribute('data-name');
-                console.log('[VR] Language button clicked:', langName);
-                
-                // Update all buttons to inactive color
-                langButtons.forEach(b => b.setAttribute('color', '#2196F3'));
-                // Set this button to active color
-                btn.setAttribute('color', '#4CAF50');
-                
-                // Update language
-                this.currentLanguage = lang;
-                this.currentLanguageName = langName;
-                
-                // Update speech recognition language
-                if (this.recognition) {
-                  this.recognition.lang = lang;
-                }
-                
-                // Update selected voice
-                const langPrefix = lang.split('-')[0];
-                this.selectedVoice = this.voices.find(v => v.lang.startsWith(langPrefix)) || this.voices[0];
-                console.log('[VR] Changed to:', langName, 'Voice:', this.selectedVoice?.name);
-                
-                // Update NPC name
-                this.updateNPCName();
-                
-                // Reset to first phrase of current scenario
-                this.currentPhraseIndex = 0;
-                this.nextPhrase();
-              });
-              
-              // Hover effects
-              btn.addEventListener('mouseenter', () => {
-                if (btn.getAttribute('color') !== '#4CAF50') {
-                  btn.setAttribute('color', '#1976D2');
-                }
-              });
-              btn.addEventListener('mouseleave', () => {
-                if (btn.getAttribute('color') !== '#4CAF50') {
-                  btn.setAttribute('color', '#2196F3');
-                }
-              });
-            });
-            
-            // Scenario selection buttons
-            const scenarioButtons = document.querySelectorAll('.scenario-button');
-            scenarioButtons.forEach(btn => {
-              btn.addEventListener('click', () => {
-                const scenario = btn.getAttribute('data-scenario');
-                console.log('[VR] Scenario button clicked:', scenario);
-                
-                // Update all buttons to inactive color
-                scenarioButtons.forEach(b => b.setAttribute('color', '#2196F3'));
-                // Set this button to active color
-                btn.setAttribute('color', '#4CAF50');
-                
-                // Update scenario
-                this.currentScenario = scenario;
-                this.currentPhraseIndex = 0;
-                
-                // Switch environment
-                this.switchEnvironment(scenario);
-                
-                this.nextPhrase();
-              });
-              
-              // Hover effects
-              btn.addEventListener('mouseenter', () => {
-                if (btn.getAttribute('color') !== '#4CAF50') {
-                  btn.setAttribute('color', '#1976D2');
-                }
-              });
-              btn.addEventListener('mouseleave', () => {
-                if (btn.getAttribute('color') !== '#4CAF50') {
-                  btn.setAttribute('color', '#2196F3');
-                }
-              });
-            });
-            
-            console.log('[VR] All VR buttons initialized!');
-          }, 2000);
-        },
-        
+
         togglePause() {
           this.isPaused = !this.isPaused;
-          console.log('[App] Pause state:', this.isPaused ? 'PAUSED' : 'PLAYING');
-          
-          const playPauseBtn = document.getElementById('play-pause-btn');
           const playPauseText = document.getElementById('play-pause-text');
           
           if (this.isPaused) {
-            // PAUSED - Stop everything
-            console.log('[App] Pausing app...');
-            
-            // Stop listening
-            if (this.recognition && this.isListening) {
+            if (this.useVosk) {
+              VoskRecognizer.stop();
+            } else if (this.recognition && this.isListening) {
               try {
                 this.recognition.stop();
-              } catch (e) {
-                console.log('[App] Recognition already stopped');
-              }
+              } catch (e) {}
             }
             
-            // Stop speaking
             if (this.synthesis.speaking) {
               this.synthesis.cancel();
             }
             
-            // Update UI
             playPauseText.setAttribute('value', '▶️ PLAY');
-            playPauseBtn.setAttribute('color', '#FFC107'); // Amber when paused
-            this.updateVRText('vr-instruction-text', '⏸️ PAUSED - Click Play to continue');
-            this.updateVRText('vr-heard-text', 'App is paused');
-            
+            this.updateVRText('vr-instruction-text', '⏸️ PAUSED');
           } else {
-            // PLAYING - Resume
-            console.log('[App] Resuming app...');
-            
-            // Update UI
             playPauseText.setAttribute('value', '⏸️ PAUSE');
-            playPauseBtn.setAttribute('color', '#4CAF50'); // Green when playing
             
-            // Resume with current phrase
             if (this.currentPhrase) {
               this.displayPhrase(this.currentPhrase);
               this.npcSpeak(this.currentPhrase.text);
-              
-              // Start listening after NPC speaks
-              setTimeout(() => {
-                this.startListening();
-              }, 3000);
+              setTimeout(() => this.startListening(), 3000);
             } else {
-              // No current phrase, start fresh
               this.nextPhrase();
             }
           }
         },
-        
-        testMicrophoneEnglish() {
-          console.log('[Mic Test] Starting microphone test in ENGLISH...');
-          
-          // CRITICAL: Stop and disable main recognition completely
-          this.isListening = false;
-          if (this.recognition) {
-            try {
-              this.recognition.stop();
-              console.log('[Mic Test] Stopped main recognition');
-            } catch (e) {
-              console.log('[Mic Test] Main recognition already stopped');
-            }
-          }
-          
-          // Update UI
-          this.updateVRText('vr-phrase-text', 'MICROPHONE TEST');
-          this.updateVRText('vr-translation-text', 'Say "Hello" or "Test" in English');
-          this.updateVRText('vr-instruction-text', '🎤 SAY "HELLO" NOW (in English)');
-          this.updateVRText('vr-heard-text', 'Listening for ANY English words...');
-          
-          // Wait for main recognition to fully stop, then start test
-          setTimeout(() => {
-            console.log('[Mic Test] Starting English recognition...');
-            
-            // Create temporary English recognition
-            const tempRecognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-            tempRecognition.continuous = false;
-            tempRecognition.interimResults = false;
-            tempRecognition.lang = 'en-US'; // ENGLISH!
-            
-            let retryCount = 0;
-            const maxRetries = 3;
-            
-            tempRecognition.onresult = (event) => {
-              const transcript = event.results[0][0].transcript;
-              const confidence = event.results[0][0].confidence;
-              
-              console.log('[Mic Test] ✅✅✅ MICROPHONE WORKS! ✅✅✅');
-              console.log('[Mic Test] Heard in English:', transcript);
-              console.log('[Mic Test] Confidence:', confidence);
-              
-              this.updateVRText('vr-instruction-text', '✅ MICROPHONE WORKING!');
-              this.updateVRText('vr-heard-text', 'You said: "' + transcript + '"');
-              
-              // Show success message
-              this.showFeedback('✅ Microphone Works!<br>Heard: "' + transcript + '"', 'success');
-              
-              // Return to normal phrase after 3 seconds
-              setTimeout(() => {
-                this.nextPhrase();
-              }, 3000);
-            };
-            
-            tempRecognition.onerror = (event) => {
-              console.error('[Mic Test] Error:', event.error);
-              
-              if (event.error === 'aborted') {
-                console.log('[Mic Test] Recognition was aborted (conflict)');
-                return; // Don't retry on abort
-              }
-              
-              if (event.error === 'no-speech') {
-                retryCount++;
-                console.log('[Mic Test] No speech detected (attempt ' + retryCount + '/' + maxRetries + ')');
-                
-                if (retryCount < maxRetries) {
-                  this.updateVRText('vr-instruction-text', '🎤 Try ' + (retryCount + 1) + '/' + maxRetries + ': Say "HELLO" LOUDER!');
-                  
-                  // Retry
-                  setTimeout(() => {
-                    console.log('[Mic Test] Retrying...');
-                    try {
-                      tempRecognition.start();
-                    } catch (e) {
-                      console.error('[Mic Test] Could not restart:', e);
-                    }
-                  }, 1500);
-                } else {
-                  console.log('[Mic Test] ❌ Failed after ' + maxRetries + ' attempts');
-                  console.log('[Mic Test] Windows microphone input level is likely TOO LOW');
-                  
-                  this.updateVRText('vr-instruction-text', '❌ NO SPEECH DETECTED');
-                  this.updateVRText('vr-heard-text', 'Fix: Windows Settings > Sound > Input Volume to 80%');
-                  
-                  // Go back to normal after showing error
-                  setTimeout(() => {
-                    this.nextPhrase();
-                  }, 5000);
-                }
-              } else {
-                this.updateVRText('vr-instruction-text', '⚠️ Mic error: ' + event.error);
-              }
-            };
-            
-            tempRecognition.onend = () => {
-              console.log('[Mic Test] Recognition ended');
-            };
-            
-            // Start listening in English
-            try {
-              tempRecognition.start();
-              console.log('[Mic Test] ✓ English recognition started');
-            } catch (e) {
-              console.error('[Mic Test] Failed to start:', e);
-              this.updateVRText('vr-instruction-text', '⚠️ Could not start test: ' + e.message);
-            }
-          }, 500); // Wait 500ms for main recognition to fully stop
-        },
 
         npcSpeak(text) {
-          // Don't speak if paused
-          if (this.isPaused) {
-            console.log('[NPC] Skipping speak (app is paused)');
-            return;
-          }
+          if (this.isPaused) return;
           
-          console.log('[NPC] Attempting to speak:', text);
-          
-          // CRITICAL FIX: Cancel and wait before speaking
           this.synthesis.cancel();
-          
-          // Show speech bubble
           this.showSpeechBubble(text);
-          
-          // Update VR UI
           this.updateVRText('vr-instruction-text', '🔊 NPC is speaking...');
 
-          // Wait for cancel to complete, then speak
           setTimeout(() => {
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = this.currentLanguage;
@@ -1552,84 +1485,28 @@
             utterance.pitch = 1.0;
             utterance.volume = 1.0;
             
-            // Use selected voice if available
             if (this.selectedVoice) {
               utterance.voice = this.selectedVoice;
-              console.log('[NPC] Using voice:', this.selectedVoice.name);
             }
             
             let hasStarted = false;
-            let speakingCheckInterval = null;
             
             utterance.onstart = () => {
               hasStarted = true;
-              console.log('[NPC] ✅ AUDIO PLAYING:', text);
               this.updateVRText('vr-instruction-text', '🔊 Listening to NPC...');
             };
             
             utterance.onend = () => {
-              console.log('[NPC] ✓ Speaking ended, hasStarted:', hasStarted);
-              
-              if (speakingCheckInterval) {
-                clearInterval(speakingCheckInterval);
-              }
-              
               if (!hasStarted) {
-                console.error('[NPC] ❌ Audio never started playing!');
-                console.log('[NPC] This is likely a browser autoplay policy issue');
-                console.log('[NPC] Try: 1) Click anywhere on page, 2) Unmute browser, 3) Check volume');
-                this.updateVRText('vr-instruction-text', '⚠️ Audio blocked. Check browser volume/mute');
-              } else {
-                // Audio played successfully, start listening
-                setTimeout(() => {
-                  this.updateVRText('vr-instruction-text', '🎤 Your turn! Repeat the phrase...');
-                }, 500);
+                console.error('[NPC] Audio blocked by browser');
               }
-              
-              // Hide speech bubble
               setTimeout(() => {
                 this.hideSpeechBubble();
               }, 1000);
             };
             
-            utterance.onerror = (e) => {
-              console.error('[NPC] ❌ Speech error:', e.error, e);
-              this.updateVRText('vr-instruction-text', '⚠️ Audio error: ' + e.error);
-              
-              if (speakingCheckInterval) {
-                clearInterval(speakingCheckInterval);
-              }
-            };
-
-            // Speak
-            console.log('[NPC] Calling synthesis.speak() NOW...');
-            console.log('[NPC] Queue before speak:', this.synthesis.pending, this.synthesis.speaking);
-            
             this.synthesis.speak(utterance);
-            
-            console.log('[NPC] Queue after speak:', this.synthesis.pending, this.synthesis.speaking);
-            
-            // Workaround for Chrome bug: Check if actually speaking
-            let checkCount = 0;
-            speakingCheckInterval = setInterval(() => {
-              checkCount++;
-              console.log(`[NPC] Check ${checkCount}: speaking=${this.synthesis.speaking}, pending=${this.synthesis.pending}`);
-              
-              if (this.synthesis.speaking) {
-                hasStarted = true;
-                console.log('[NPC] ✅ Confirmed audio is playing!');
-                clearInterval(speakingCheckInterval);
-              } else if (checkCount >= 10) {
-                // After 1 second, give up
-                console.error('[NPC] ❌ Audio never started after 1 second');
-                clearInterval(speakingCheckInterval);
-                
-                // Try to trigger it again
-                console.log('[NPC] Attempting to resume synthesis...');
-                this.synthesis.resume();
-              }
-            }, 100);
-          }, 100); // Wait 100ms after cancel
+          }, 100);
         },
 
         showSpeechBubble(text) {
@@ -1650,26 +1527,21 @@
         },
 
         startListening() {
-          // Don't listen if paused
-          if (this.isPaused) {
-            console.log('[Speech] Skipping listen (app is paused)');
-            return;
-          }
+          if (this.isPaused) return;
           
-          if (!this.recognition) {
-            console.error('[Speech] Recognition not initialized');
-            return;
-          }
+          if (this.useVosk) {
+            VoskRecognizer.start();
+            this.isListening = true;
+            this.updateVRText('vr-instruction-text', '🎤 SPEAK NOW!');
+          } else {
+            if (!this.recognition) return;
+            if (this.isListening) return;
 
-          if (this.isListening) {
-            console.log('[Speech] Already listening, skipping');
-            return;
-          }
-
-          try {
-            this.recognition.start();
-          } catch (e) {
-            console.warn('[Speech] Could not start recognition:', e);
+            try {
+              this.recognition.start();
+            } catch (e) {
+              console.warn('[Speech] Could not start:', e);
+            }
           }
         },
 
@@ -1681,81 +1553,66 @@
 
           console.log('[Check] Expected:', expected);
           console.log('[Check] Spoken:', spoken);
-          console.log('[Check] Confidence:', confidence);
 
           const similarity = this.calculateSimilarity(spoken, expected);
           console.log('[Check] Similarity:', similarity);
 
           let feedback, points, className;
 
-          // FIXED: Require GOOD similarity (not just confidence)
-          // Confidence just means API is sure what it heard, not that it's correct
           if (similarity > 0.85) {
-            // Excellent! Very close match
             feedback = '¡Excelente! 🎉<br>Perfect!';
             points = 100;
             className = 'success';
             this.awardPoints(points);
             
-            // Update VR UI
-            this.updateVRText('vr-instruction-text', '✅ Perfect! Next phrase coming...');
+            this.updateVRText('vr-instruction-text', '✅ Perfect! Next phrase...');
             
-            // Move to next phrase after success (if not paused)
             setTimeout(() => {
               if (!this.isPaused) {
                 this.nextPhrase();
               }
             }, 2000);
           } else if (similarity > 0.70) {
-            // Good attempt - give partial credit
-            feedback = '¡Bien! 👍<br>Good, but try to match exactly';
+            feedback = '¡Bien! 👍<br>Good, try again';
             points = 50;
             className = 'warning';
             this.awardPoints(points);
             
-            // Update VR UI
-            this.updateVRText('vr-instruction-text', '⚠️ Good! But try to say the complete phrase...');
+            this.updateVRText('vr-instruction-text', '⚠️ Good! Try the exact phrase...');
             
-            // Let them try again
             setTimeout(() => {
               this.npcSpeak(this.currentPhrase.text);
               setTimeout(() => {
-                this.updateVRText('vr-heard-text', ''); // Clear previous
+                this.updateVRText('vr-heard-text', '');
                 this.startListening();
               }, 2000);
             }, 2000);
           } else if (similarity > 0.50) {
-            // Close but not quite
-            feedback = 'Casi... 🤔<br>Almost! Listen again';
+            feedback = 'Casi... 🤔<br>Almost!';
             points = 25;
             className = 'warning';
             this.awardPoints(points);
             
-            // Update VR UI
-            this.updateVRText('vr-instruction-text', '⚠️ Close! Listen and try again...');
+            this.updateVRText('vr-instruction-text', '⚠️ Close! Listen again...');
             
-            // Repeat the phrase
             setTimeout(() => {
               this.npcSpeak(this.currentPhrase.text);
               setTimeout(() => {
-                this.updateVRText('vr-heard-text', ''); // Clear previous
+                this.updateVRText('vr-heard-text', '');
                 this.startListening();
               }, 2000);
             }, 2000);
           } else {
-            // Wrong answer
             feedback = `❌ No coincide<br>Try: "${this.currentPhrase.text}"`;
             points = 0;
             className = 'error';
             
-            // Update VR UI
-            this.updateVRText('vr-instruction-text', '❌ Wrong phrase. Listen carefully...');
+            this.updateVRText('vr-instruction-text', '❌ Wrong. Listen carefully...');
             
-            // Repeat the phrase
             setTimeout(() => {
               this.npcSpeak(this.currentPhrase.text);
               setTimeout(() => {
-                this.updateVRText('vr-heard-text', ''); // Clear previous
+                this.updateVRText('vr-heard-text', '');
                 this.startListening();
               }, 2000);
             }, 2500);
@@ -1765,14 +1622,11 @@
         },
 
         calculateSimilarity(str1, str2) {
-          // Normalize strings
           str1 = str1.toLowerCase().replace(/[¿?¡!.,]/g, '').trim();
           str2 = str2.toLowerCase().replace(/[¿?¡!.,]/g, '').trim();
 
-          // Exact match
           if (str1 === str2) return 1.0;
 
-          // Levenshtein distance
           const distance = this.levenshteinDistance(str1, str2);
           const maxLength = Math.max(str1.length, str2.length);
           
@@ -1812,8 +1666,6 @@
         awardPoints(points) {
           this.score += points;
           document.getElementById('score').textContent = `Score: ${this.score} 🌟`;
-          
-          // Update VR score
           this.updateVRText('vr-score-text', `Score: ${this.score} 🌟`);
         },
 
@@ -1840,76 +1692,14 @@
       };
 
       // ========================================
-      // A-FRAME COMPONENTS
+      // A-FRAME COMPONENTS (Same as index.html)
       // ========================================
       
-      // Mansion Garden Inspector - Find objects in the GLB
-      AFRAME.registerComponent('mansion-garden-inspector', {
-        init: function() {
-          console.log('[Mansion Inspector] Waiting for model to load...');
-          
-          this.el.addEventListener('model-loaded', () => {
-            console.log('[Mansion Inspector] ✓ Model loaded! Inspecting objects...');
-            
-            const model = this.el.getObject3D('mesh');
-            if (!model) {
-              console.error('[Mansion Inspector] No mesh found');
-              return;
-            }
-            
-            console.log('[Mansion Inspector] === MANSION GARDEN OBJECT LIST ===');
-            let objectCount = 0;
-            
-            model.traverse((node) => {
-              if (node.isMesh || node.isGroup || node.isObject3D) {
-                objectCount++;
-                
-                // Get world position
-                const worldPos = new THREE.Vector3();
-                node.getWorldPosition(worldPos);
-                
-                const name = node.name || 'unnamed';
-                const type = node.type || 'unknown';
-                
-                // Log all objects
-                console.log(`[${objectCount}] ${name} (${type})`);
-                console.log(`   Position: x=${worldPos.x.toFixed(2)}, y=${worldPos.y.toFixed(2)}, z=${worldPos.z.toFixed(2)}`);
-                
-                // Check if name contains "fountain" or "water"
-                const lowerName = name.toLowerCase();
-                if (lowerName.includes('fountain') || lowerName.includes('water') || 
-                    lowerName.includes('basin') || lowerName.includes('pond')) {
-                  console.log(`   🌊 *** POSSIBLE FOUNTAIN/WATER FEATURE ***`);
-                }
-                
-                // Check for geometry size (fountains are usually large)
-                if (node.geometry) {
-                  node.geometry.computeBoundingBox();
-                  const bbox = node.geometry.boundingBox;
-                  if (bbox) {
-                    const size = new THREE.Vector3();
-                    bbox.getSize(size);
-                    if (size.x > 2 || size.y > 2 || size.z > 2) {
-                      console.log(`   📏 Large object: ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)}`);
-                    }
-                  }
-                }
-              }
-            });
-            
-            console.log(`[Mansion Inspector] === Total objects: ${objectCount} ===`);
-            console.log('[Mansion Inspector] Check console above for fountain coordinates!');
-          });
-        }
-      });
-      
-      // UI Toggle Controller - Press A button to toggle UI
       AFRAME.registerComponent('ui-toggle-controller', {
         init: function() {
           this.uiVisible = true;
           
           this.el.addEventListener('abuttondown', (evt) => {
-            console.log('[UI Toggle] A button pressed');
             this.toggleUI();
           });
         },
@@ -1921,25 +1711,12 @@
           const vrLanguagePanel = document.getElementById('vr-language-panel');
           const vrScenarioPanel = document.getElementById('vr-scenario-panel');
           
-          if (vrUIPanel) {
-            vrUIPanel.setAttribute('visible', this.uiVisible);
-          }
-          if (vrLanguagePanel) {
-            vrLanguagePanel.setAttribute('visible', this.uiVisible);
-          }
-          if (vrScenarioPanel) {
-            vrScenarioPanel.setAttribute('visible', this.uiVisible);
-          }
-          
-          console.log('[UI Toggle] UI is now:', this.uiVisible ? 'VISIBLE' : 'HIDDEN');
+          if (vrUIPanel) vrUIPanel.setAttribute('visible', this.uiVisible);
+          if (vrLanguagePanel) vrLanguagePanel.setAttribute('visible', this.uiVisible);
+          if (vrScenarioPanel) vrScenarioPanel.setAttribute('visible', this.uiVisible);
         }
       });
       
-      // ========================================
-      // MIXAMO BODY COMPONENT
-      // ========================================
-
-      // VR Locomotion component - handles NPC rotation
       AFRAME.registerComponent('vr-locomotion', {
         schema: {
           rotationSpeed: { type: 'number', default: 2.0 }
@@ -1984,14 +1761,13 @@
         }
       });
 
-      // Language NPC component
       AFRAME.registerComponent('language-npc', {
         init: function() {
-          console.log('[NPC] Language NPC initialized');
+          console.log('[NPC] Initialized');
         }
       });
 
-      // Mixamo VR Body component (simplified version from body-rigged.html)
+      // Mixamo Body Component (same as index.html - truncated for brevity)
       AFRAME.registerComponent('mixamo-body', {
         schema: {
           isMirror: { type: 'boolean', default: false },
@@ -2000,22 +1776,16 @@
         },
 
         init: function() {
-          console.log('[Mixamo Body] Initializing body component, isMirror:', this.data.isMirror);
-          
           this.camera = document.querySelector('#camera');
           this.leftController = document.querySelector('#left-hand');
           this.rightController = document.querySelector('#right-hand');
           this.rig = document.querySelector('#rig');
-          
-          console.log('[Mixamo Body] Found camera:', !!this.camera);
-          console.log('[Mixamo Body] Found controllers:', !!this.leftController, !!this.rightController);
           
           this.skeleton = null;
           this.bones = {};
           this.model = null;
           this.modelLoaded = false;
           
-          // Mixamo bone names
           this.boneNames = {
             hips: 'mixamorigHips',
             spine: 'mixamorigSpine',
@@ -2033,7 +1803,6 @@
             rightHand: 'mixamorigRightHand'
           };
           
-          // IK config
           this.config = {
             shoulderWidth: 0.34,
             shoulderForward: 0.08,
@@ -2041,37 +1810,26 @@
             lowerArmLength: 0.31
           };
           
-          // Smoothing
           this.torsoRotation = new THREE.Quaternion();
           this.bodyTilt = new THREE.Quaternion();
           this.smoothingFactor = 0.15;
           this.mirrorDistance = 2.5;
           this.manualRotationY = 0;
           
-          // Breathing animation
           this.breathingPhase = 0;
           this.breathingRate = 0.25;
           this.breathingAmount = 0.015;
           
-          // Load model
-          console.log('[Mixamo Body] Loading model from:', this.data.modelPath);
           const loader = new THREE.FBXLoader();
           loader.load(
             this.data.modelPath,
             (fbx) => this.onModelLoaded(fbx),
-            (progress) => {
-              console.log('[Mixamo Body] Loading progress:', (progress.loaded / progress.total * 100).toFixed(2) + '%');
-            },
-            (error) => {
-              console.error('[Mixamo Body] Load error:', error);
-              console.log('[Mixamo Body] Tried to load from:', this.data.modelPath);
-              console.log('[Mixamo Body] Make sure the model exists at this path');
-            }
+            null,
+            (error) => console.error('[Mixamo Body] Load error:', error)
           );
         },
 
         onModelLoaded: function(fbx) {
-          console.log('[Mixamo Body] Model loaded successfully');
           this.modelLoaded = true;
           this.model = fbx;
           
@@ -2104,14 +1862,12 @@
             const name = bone.name;
             this.initialBoneRotations[name] = bone.quaternion.clone();
             
-            // Hide legs
             const lowerName = name.toLowerCase();
             if (lowerName.includes('leg') || lowerName.includes('upleg') || 
                 lowerName.includes('foot') || lowerName.includes('toe')) {
               bone.scale.set(0.001, 0.001, 0.001);
             }
             
-            // Map important bones
             if (name === this.boneNames.hips) this.bones.hips = bone;
             else if (name === this.boneNames.spine) this.bones.spine = bone;
             else if (name === this.boneNames.spine1) this.bones.spine1 = bone;
@@ -2186,20 +1942,14 @@
         },
 
         updateNPCBody: function(dt) {
-          // NPC stays in fixed position with idle animation
-          // Don't follow player - just breathe and face forward
-          
-          // Simple idle pose - face forward
-          const forwardQuat = new THREE.Quaternion(); // Identity = facing forward
+          const forwardQuat = new THREE.Quaternion();
           this.torsoRotation.slerp(forwardQuat, 0.05);
           
-          // Keep NPC at fixed height
           const currentPos = this.el.object3D.position;
           this.el.object3D.position.set(currentPos.x, 0.6, currentPos.z);
           
           this.el.object3D.quaternion.copy(this.torsoRotation);
           
-          // Simple idle pose for NPC
           this.updateNPCBones();
         },
 
@@ -2222,7 +1972,6 @@
           if (this.bones.spine1) this.bones.spine1.quaternion.identity();
           if (this.bones.spine2) this.bones.spine2.quaternion.identity();
           
-          // Head rotation
           if (this.bones.neck) {
             const relativeHeadQuat = headQuat.clone();
             const invBodyQuat = this.torsoRotation.clone().invert();
@@ -2236,20 +1985,17 @@
             this.bones.neck.quaternion.copy(correctedQuat);
           }
           
-          // Simple arm IK
           this.solveSimpleArmIK('left', leftHandPos, leftHandQuat);
           this.solveSimpleArmIK('right', rightHandPos, rightHandQuat);
         },
 
         updateNPCBones: function() {
-          // Reset bones
           if (this.bones.hips) this.bones.hips.quaternion.identity();
           if (this.bones.spine) this.bones.spine.quaternion.identity();
           if (this.bones.spine1) this.bones.spine1.quaternion.identity();
           if (this.bones.spine2) this.bones.spine2.quaternion.identity();
           if (this.bones.neck) this.bones.neck.quaternion.identity();
           
-          // Breathing animation
           const breathingExpansion = Math.sin(this.breathingPhase) * this.breathingAmount;
           
           if (this.bones.spine1) {
@@ -2257,7 +2003,6 @@
             this.bones.spine1.quaternion.setFromEuler(euler);
           }
           
-          // Idle arm pose - relaxed at sides
           if (this.bones.leftUpperArm) {
             const euler = new THREE.Euler(0.2, 0, 0.1, 'YXZ');
             this.bones.leftUpperArm.quaternion.setFromEuler(euler);
@@ -2277,14 +2022,12 @@
         },
 
         solveSimpleArmIK: function(hand, handWorldPos, handWorldQuat) {
-          // Simplified IK for arms
           const upperArmBone = this.bones[`${hand}UpperArm`];
           const forearmBone = this.bones[`${hand}Forearm`];
           const handBone = this.bones[`${hand}HandBone`];
           
           if (!upperArmBone || !forearmBone) return;
           
-          // Simple rotation toward hand
           const shoulderWorldPos = new THREE.Vector3();
           upperArmBone.getWorldPosition(shoulderWorldPos);
           
@@ -2298,7 +2041,7 @@
         }
       });
 
-      // Initialize app when DOM is ready
+      // Initialize app
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => LanguageApp.init());
       } else {
