@@ -1013,6 +1013,10 @@
           this.audioUnlocked = false;
           this.waitingForInteraction = false;
           
+          // Initialize Speech Synthesis (CRITICAL - was missing!)
+          this.synthesis = window.speechSynthesis;
+          console.log('[Language App] Speech Synthesis initialized:', this.synthesis);
+          
           // Detect which recognition system to use
           await this.detectRecognitionSystem();
           
@@ -1862,6 +1866,44 @@ assets/vosk-models/nl.tar.gz</pre>
           }
 
           return matrix[str2.length][str1.length];
+        },
+        
+        async changeLanguage(lang, langName) {
+          console.log('[Language App] Changing language to:', lang, langName);
+          
+          const oldLang = this.currentLanguage;
+          this.currentLanguage = lang;
+          this.currentLanguageName = langName || lang;
+          
+          // Update voices
+          this.loadVoices();
+          
+          // If using Vosk, reload model
+          if (this.useVosk && oldLang !== lang) {
+            this.updateVRText('vr-instruction-text', '⏳ Loading new language model...');
+            try {
+              await VoskRecognizer.switchLanguage(lang, (progress, status) => {
+                console.log('[Vosk] Language switch:', status, progress + '%');
+              });
+              this.updateVRText('vr-instruction-text', '✅ Language changed!');
+            } catch (error) {
+              console.error('[Language App] Language switch error:', error);
+              this.updateVRText('vr-instruction-text', '❌ Language switch failed');
+            }
+          }
+          
+          // Restart with new language
+          this.currentPhraseIndex = 0;
+          this.nextPhrase();
+        },
+        
+        changeScenario(scenario) {
+          console.log('[Language App] Changing scenario to:', scenario);
+          
+          this.currentScenario = scenario;
+          this.currentPhraseIndex = 0;
+          this.switchEnvironment(scenario);
+          this.nextPhrase();
         },
 
         awardPoints(points) {
