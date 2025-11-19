@@ -320,11 +320,11 @@
       </a-entity>
 
       <!-- Player Body -->
-      <a-entity id="local-body" mixamo-body="isMirror: false"></a-entity>
+      <a-entity id="local-body" mixamo-body="isMirror: false; modelPath: ../BoltVR/assets/Y Bot.fbx"></a-entity>
 
       <!-- NPC Tutor Body -->
       <a-entity id="npc-tutor" 
-                mixamo-body="isMirror: true; color: #FF6B6B" 
+                mixamo-body="isMirror: true; color: #FF6B6B; modelPath: ../BoltVR/assets/Y Bot.fbx" 
                 position="0 0 -2.5"
                 language-npc>
         <a-text value="María - Spanish Tutor" 
@@ -642,17 +642,18 @@
       </a-entity>
       
       <a-entity id="env-shopping" visible="false">
-        <a-entity id="trevi-fountain-model" 
-                  gltf-model="url(assets/fontana_di_trevi_photogrammetry_scan.glb)" 
-                  position="0 0 -30" 
-                  scale="1 1 1"
+        <a-entity id="moosstock-mountain-model" 
+                  gltf-model="url(https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/moosstock_mountain_peak_3024_m.glb)" 
+                  position="0 -67 10" 
+                  rotation="0 90 0"
+                  scale="80 80 80"
                   shadow="cast: true; receive: true"></a-entity>
         <a-plane position="0 0 0" 
                  rotation="-90 0 0" 
                  width="50" 
                  height="50" 
                  color="#D2B48C"
-                 opacity="0.8"
+                 opacity="0"
                  shadow="receive: true"></a-plane>
       </a-entity>
       
@@ -1724,6 +1725,7 @@
 
         init: function() {
           this.npcRotationY = 0;
+          this.playerRotationY = 0;
           this.thumbstickRotation = { right: 0 };
           this.npcTutor = null;
           
@@ -1752,6 +1754,11 @@
           const rotationInput = this.thumbstickRotation.right;
           
           if (Math.abs(rotationInput) > 0.1) {
+            // Rotate the player rig
+            this.playerRotationY += rotationInput * this.data.rotationSpeed * dt;
+            this.el.object3D.rotation.y = this.playerRotationY;
+            
+            // Also rotate NPC to match
             this.npcRotationY += rotationInput * this.data.rotationSpeed * dt;
           }
           
@@ -1767,12 +1774,12 @@
         }
       });
 
-      // Mixamo Body Component (same as index.html - truncated for brevity)
+      // Mixamo VR Body Component (from body-rigged.html)
       AFRAME.registerComponent('mixamo-body', {
         schema: {
           isMirror: { type: 'boolean', default: false },
           color: { type: 'color', default: '#4A90E2' },
-          modelPath: { type: 'string', default: '../BoltVR/assets/Y Bot.fbx' }
+          modelPath: { type: 'string', default: 'BoltVR/assets/Y Bot.fbx' }
         },
 
         init: function() {
@@ -1786,6 +1793,7 @@
           this.model = null;
           this.modelLoaded = false;
           
+          // Mixamo bone names
           this.boneNames = {
             hips: 'mixamorigHips',
             spine: 'mixamorigSpine',
@@ -1803,28 +1811,47 @@
             rightHand: 'mixamorigRightHand'
           };
           
+          // IK config (from body.html)
           this.config = {
             shoulderWidth: 0.34,
             shoulderForward: 0.08,
-            upperArmLength: 0.31,
-            lowerArmLength: 0.31
+            upperArmLength: 0.31,  // Increased to 31cm (was 0.25, +6cm total)
+            lowerArmLength: 0.31   // Increased to 31cm (was 0.25, +6cm total)
           };
           
+          // Smoothing
           this.torsoRotation = new THREE.Quaternion();
           this.bodyTilt = new THREE.Quaternion();
           this.smoothingFactor = 0.15;
-          this.mirrorDistance = 2.5;
-          this.manualRotationY = 0;
+          this.mirrorDistance = 2.0;
+          this.manualRotationY = 0; // Set by vr-locomotion
           
-          this.breathingPhase = 0;
-          this.breathingRate = 0.25;
-          this.breathingAmount = 0.015;
+          // Breathing animation
+          this.breathingPhase = 0; // Current phase of breathing cycle (0 to 2*PI)
+          this.breathingRate = 0.25; // Breaths per second (15 breaths/min)
+          this.breathingAmount = 0.015; // Chest expansion amount (1.5cm)
           
+          // Body dynamics for natural movement
+          this.previousHeadPos = new THREE.Vector3();
+          this.previousHeadPosInitialized = false;
+          this.headVelocity = new THREE.Vector3();
+          this.torsoLean = new THREE.Vector3(); // Current torso lean (smoothed)
+          this.torsoLeanVelocity = 0.15; // How fast torso reacts to movement
+          
+          // Enable local clipping in renderer
+          this.el.sceneEl.addEventListener('loaded', () => {
+            const renderer = this.el.sceneEl.renderer;
+            if (renderer) {
+              renderer.localClippingEnabled = true;
+            }
+          });
+          
+          // Load model
           const loader = new THREE.FBXLoader();
           loader.load(
             this.data.modelPath,
             (fbx) => this.onModelLoaded(fbx),
-            null,
+            undefined,
             (error) => console.error('[Mixamo Body] Load error:', error)
           );
         },
@@ -1833,58 +1860,89 @@
           this.modelLoaded = true;
           this.model = fbx;
           
+          // Mixamo models export at 100x scale, need 0.01 to get to meters
           fbx.scale.set(0.01, 0.01, 0.01);
+          
+          // Mixamo models in T-pose face +Z, rotate 180° to face -Z (forward)
           fbx.rotation.y = Math.PI;
           
           this.el.object3D.add(fbx);
           
+          // Find skeleton and set up materials
+          const allMaterials = [];
           fbx.traverse((node) => {
             if (node.isSkinnedMesh && node.skeleton) {
               this.skeleton = node.skeleton;
               this.mapBones();
               this.skinnedMesh = node;
               
+              // Clone material so each body has its own
               node.material = node.material.clone();
-              node.material.color.set(this.data.color);
+              allMaterials.push(node.material);
+              
+              console.log('[Mixamo Body] Found mesh with material:', node.material.type, 'Color:', node.material.color);
             }
             
+            // Also check for regular meshes
             if (node.isMesh && !node.isSkinnedMesh) {
               node.material = node.material.clone();
-              node.material.color.set(this.data.color);
+              allMaterials.push(node.material);
+              console.log('[Mixamo Body] Found regular mesh with material:', node.material.type);
             }
           });
+          
+          console.log('[Mixamo Body]', this.data.isMirror ? 'Mirror' : 'Local', '- Found', allMaterials.length, 'materials');
         },
 
         mapBones: function() {
+          // Store initial T-pose rotations for reference
           this.initialBoneRotations = {};
+          this.loggedHandTPose = false;
+          this.legBones = []; // Store leg bones to hide them
           
           this.skeleton.bones.forEach((bone) => {
             const name = bone.name;
+            
+            // Store initial rotation for all bones
             this.initialBoneRotations[name] = bone.quaternion.clone();
             
+            // Identify and store leg bones to hide them
             const lowerName = name.toLowerCase();
             if (lowerName.includes('leg') || lowerName.includes('upleg') || 
                 lowerName.includes('foot') || lowerName.includes('toe')) {
+              this.legBones.push(bone);
+              // Scale leg bones to zero to hide them
               bone.scale.set(0.001, 0.001, 0.001);
             }
             
-            if (name === this.boneNames.hips) this.bones.hips = bone;
+            if (name === this.boneNames.hips) {
+              this.bones.hips = bone;
+            }
             else if (name === this.boneNames.spine) this.bones.spine = bone;
             else if (name === this.boneNames.spine1) this.bones.spine1 = bone;
             else if (name === this.boneNames.spine2) this.bones.spine2 = bone;
             else if (name === this.boneNames.neck) this.bones.neck = bone;
             else if (name === this.boneNames.head) {
               this.bones.head = bone;
+              // Scale head bone to hide it for local body only
               if (!this.data.isMirror) {
                 bone.scale.set(0.001, 0.001, 0.001);
               }
             }
+            else if (name === this.boneNames.leftShoulder) this.bones.leftShoulder = bone;
             else if (name === this.boneNames.leftArm) this.bones.leftUpperArm = bone;
             else if (name === this.boneNames.leftForeArm) this.bones.leftForearm = bone;
-            else if (name === this.boneNames.leftHand) this.bones.leftHandBone = bone;
+            else if (name === this.boneNames.leftHand) {
+              this.bones.leftHandBone = bone;
+              console.log('[T-Pose] Left Hand initial quat:', bone.quaternion.toArray());
+            }
+            else if (name === this.boneNames.rightShoulder) this.bones.rightShoulder = bone;
             else if (name === this.boneNames.rightArm) this.bones.rightUpperArm = bone;
             else if (name === this.boneNames.rightForeArm) this.bones.rightForearm = bone;
-            else if (name === this.boneNames.rightHand) this.bones.rightHandBone = bone;
+            else if (name === this.boneNames.rightHand) {
+              this.bones.rightHandBone = bone;
+              console.log('[T-Pose] Right Hand initial quat:', bone.quaternion.toArray());
+            }
           });
         },
 
@@ -1894,19 +1952,21 @@
           
           const dt = Math.min(deltaTime / 1000, 0.1);
           
+          // Update breathing animation phase
           this.breathingPhase += dt * this.breathingRate * Math.PI * 2;
           if (this.breathingPhase > Math.PI * 2) {
             this.breathingPhase -= Math.PI * 2;
           }
           
           if (this.data.isMirror) {
-            this.updateNPCBody(dt);
+            this.updateMirrorBody(dt);
           } else {
             this.updateLocalBody(dt);
           }
         },
 
         updateLocalBody: function(dt) {
+          // Get world positions (from body.html lines 1351-1356)
           const headWorldPos = new THREE.Vector3();
           const headWorldQuat = new THREE.Quaternion();
           const leftHandWorldPos = new THREE.Vector3();
@@ -1921,12 +1981,27 @@
           this.rightController.object3D.getWorldPosition(rightHandWorldPos);
           this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
           
+          // Calculate head velocity for dynamic body movement
+          if (this.previousHeadPosInitialized) {
+            this.headVelocity.copy(headWorldPos).sub(this.previousHeadPos).divideScalar(dt);
+          } else {
+            this.previousHeadPosInitialized = true;
+          }
+          this.previousHeadPos.copy(headWorldPos);
+          
+          // Calculate torso orientation
           this.calculateTorsoOrientation(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos, dt);
+          this.calculateBodyTilt(headWorldPos, leftHandWorldPos, rightHandWorldPos, dt);
           
-          const desiredHipsY = headWorldPos.y - 0.65;
-          const modelHipsLocalY = 1.0;
-          const bodyY = desiredHipsY - modelHipsLocalY;
+          // Position body so HIPS are at correct height
+          // Hips should be ~1.0m below head (or headY - 0.65 to keep feet on ground)
+          // Model's hips bone is at Y=1.0m in local space
+          // So entity Y position should be: (desired hips Y) - (model hips local Y)
+          const desiredHipsY = headWorldPos.y - 0.65; // Hips 0.65m below head (lowered by 5cm)
+          const modelHipsLocalY = 1.0; // From FBX: 99.79cm ≈ 1.0m after scaling
+          const bodyY = desiredHipsY - modelHipsLocalY; // Entity position
           
+          // Apply 15cm backward offset in the body's local space (so it rotates with the body)
           const backwardOffset = new THREE.Vector3(0, 0, 0.15);
           backwardOffset.applyQuaternion(this.torsoRotation);
           
@@ -1936,108 +2011,433 @@
             headWorldPos.z + backwardOffset.z
           );
           
-          this.el.object3D.quaternion.copy(this.torsoRotation);
+          // Apply rotation
+          const combinedRotation = new THREE.Quaternion()
+            .copy(this.torsoRotation)
+            .multiply(this.bodyTilt);
+          this.el.object3D.quaternion.copy(combinedRotation);
           
+          // Update bones
           this.updateBones(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos, leftHandWorldQuat, rightHandWorldQuat);
         },
 
-        updateNPCBody: function(dt) {
-          const forwardQuat = new THREE.Quaternion();
-          this.torsoRotation.slerp(forwardQuat, 0.05);
+        updateMirrorBody: function(dt) {
+          // Get player positions (from body.html lines 1836-1849)
+          const headWorldPos = new THREE.Vector3();
+          const headWorldQuat = new THREE.Quaternion();
+          const leftHandWorldPos = new THREE.Vector3();
+          const leftHandWorldQuat = new THREE.Quaternion();
+          const rightHandWorldPos = new THREE.Vector3();
+          const rightHandWorldQuat = new THREE.Quaternion();
           
-          const currentPos = this.el.object3D.position;
-          this.el.object3D.position.set(currentPos.x, 0.6, currentPos.z);
+          this.camera.object3D.getWorldPosition(headWorldPos);
+          this.camera.object3D.getWorldQuaternion(headWorldQuat);
+          this.leftController.object3D.getWorldPosition(leftHandWorldPos);
+          this.leftController.object3D.getWorldQuaternion(leftHandWorldQuat);
+          this.rightController.object3D.getWorldPosition(rightHandWorldPos);
+          this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
           
-          this.el.object3D.quaternion.copy(this.torsoRotation);
+          // Calculate head velocity for dynamic body movement (same as local body)
+          if (this.previousHeadPosInitialized) {
+            this.headVelocity.copy(headWorldPos).sub(this.previousHeadPos).divideScalar(dt);
+          } else {
+            this.previousHeadPosInitialized = true;
+          }
+          this.previousHeadPos.copy(headWorldPos);
           
-          this.updateNPCBones();
+          // Mirror center point (from body.html line 1852)
+          const mirrorCenter = new THREE.Vector3(headWorldPos.x, headWorldPos.y - 0.3, headWorldPos.z - this.mirrorDistance);
+          
+          // Apply offset (from body.html lines 1855-1858)
+          const offset = new THREE.Vector3(0, 0, -this.mirrorDistance);
+          let mirrorHeadPos = headWorldPos.clone().add(offset);
+          let mirrorLeftHandPos = leftHandWorldPos.clone().add(offset);
+          let mirrorRightHandPos = rightHandWorldPos.clone().add(offset);
+          
+          // Apply manual rotation (from body.html lines 1861-1884)
+          if (this.manualRotationY !== 0) {
+            const rotationMatrix = new THREE.Matrix4().makeRotationY(this.manualRotationY);
+            
+            mirrorHeadPos.sub(mirrorCenter);
+            mirrorHeadPos.applyMatrix4(rotationMatrix);
+            mirrorHeadPos.add(mirrorCenter);
+            
+            mirrorLeftHandPos.sub(mirrorCenter);
+            mirrorLeftHandPos.applyMatrix4(rotationMatrix);
+            mirrorLeftHandPos.add(mirrorCenter);
+            
+            mirrorRightHandPos.sub(mirrorCenter);
+            mirrorRightHandPos.applyMatrix4(rotationMatrix);
+            mirrorRightHandPos.add(mirrorCenter);
+            
+            const manualQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.manualRotationY);
+            headWorldQuat.premultiply(manualQuat);
+            leftHandWorldQuat.premultiply(manualQuat);
+            rightHandWorldQuat.premultiply(manualQuat);
+          }
+          
+          // Calculate torso orientation
+          this.calculateTorsoOrientation(mirrorHeadPos, headWorldQuat, mirrorLeftHandPos, mirrorRightHandPos, dt);
+          this.calculateBodyTilt(mirrorHeadPos, mirrorLeftHandPos, mirrorRightHandPos, dt);
+          
+          // Position body so hips are at correct height
+          const desiredHipsY = mirrorHeadPos.y - 0.65; // Lowered by 5cm (was 0.6)
+          const modelHipsLocalY = 1.0;
+          const torsoY = desiredHipsY - modelHipsLocalY;
+          
+          // Apply 15cm backward offset in the body's local space (so it rotates with the body)
+          const backwardOffset = new THREE.Vector3(0, 0, 0.15);
+          backwardOffset.applyQuaternion(this.torsoRotation);
+          
+          this.el.object3D.position.set(
+            mirrorHeadPos.x + backwardOffset.x, 
+            torsoY, 
+            mirrorHeadPos.z + backwardOffset.z
+          );
+          
+          // Apply rotation
+          const combinedRotation = new THREE.Quaternion()
+            .copy(this.torsoRotation)
+            .multiply(this.bodyTilt);
+          this.el.object3D.quaternion.copy(combinedRotation);
+          
+          // Update bones
+          this.updateBones(mirrorHeadPos, headWorldQuat, mirrorLeftHandPos, mirrorRightHandPos, leftHandWorldQuat, rightHandWorldQuat);
         },
 
         calculateTorsoOrientation: function(headPos, headQuat, leftHandPos, rightHandPos, dt) {
+          // Simplified from body.html lines 1407-1486
           const headForwardFlat = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
           headForwardFlat.y = 0;
           headForwardFlat.normalize();
           
+          const shoulderLine = rightHandPos.clone().sub(leftHandPos);
+          shoulderLine.y = 0;
+          const shoulderDist = shoulderLine.length();
+          shoulderLine.normalize();
+          
+          const controllerForward = new THREE.Vector3().crossVectors(shoulderLine, new THREE.Vector3(0, 1, 0));
+          controllerForward.normalize();
+          
+          if (controllerForward.dot(headForwardFlat) < 0) {
+            controllerForward.negate();
+          }
+          
+          // Weight adjustment based on hand distance
+          let controllerWeight = 0.8;
+          if (shoulderDist < 0.25) {
+            controllerWeight = 0.3;
+          } else if (shoulderDist > 0.35) {
+            controllerWeight = 1.0;
+          }
+          
+          const blendedForward = new THREE.Vector3()
+            .addScaledVector(controllerForward, controllerWeight)
+            .addScaledVector(headForwardFlat, 1.0 - controllerWeight)
+            .normalize();
+          
           const targetRotation = new THREE.Quaternion().setFromUnitVectors(
             new THREE.Vector3(0, 0, -1),
-            headForwardFlat
+            blendedForward
           );
           
           this.torsoRotation.slerp(targetRotation, this.smoothingFactor);
         },
 
+        calculateBodyTilt: function(headPos, leftHandPos, rightHandPos, dt) {
+          // Disabled body tilt at entity level to prevent body movement
+          // Spine bending is now handled entirely through individual spine bones
+          this.bodyTilt.identity();
+        },
+
         updateBones: function(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat) {
+          // Reset bones to T-pose
           if (this.bones.hips) this.bones.hips.quaternion.identity();
           if (this.bones.spine) this.bones.spine.quaternion.identity();
           if (this.bones.spine1) this.bones.spine1.quaternion.identity();
           if (this.bones.spine2) this.bones.spine2.quaternion.identity();
           
+          // SPINE BENDING: Combine hand-based lean with dynamic movement lean
+          const bodyCenter = headPos.clone();
+          bodyCenter.y -= 0.5;
+          
+          const leftRelative = leftHandPos.clone().sub(bodyCenter);
+          const rightRelative = rightHandPos.clone().sub(bodyCenter);
+          const avgHandPos = new THREE.Vector3()
+            .addVectors(leftRelative, rightRelative)
+            .multiplyScalar(0.5);
+          
+          // Convert to body-local space
+          const invTorsoRot = this.torsoRotation.clone().invert();
+          avgHandPos.applyQuaternion(invTorsoRot);
+          
+          // Hand-based lean (subtle, only at extreme reaches)
+          const handForwardLean = Math.max(-0.08, Math.min(0.05, -avgHandPos.z * 0.08));
+          const handSideLean = Math.max(-0.08, Math.min(0.08, avgHandPos.x * 0.1));
+          
+          // DYNAMIC MOVEMENT LEAN: Convert head velocity to body-local space
+          const localVelocity = this.headVelocity.clone();
+          localVelocity.applyQuaternion(invTorsoRot);
+          
+          // Calculate target lean based on velocity (opposite direction of movement)
+          // When moving forward, lean back slightly; when moving sideways, lean opposite
+          // Moderate sensitivity for natural movement
+          const targetLean = new THREE.Vector3(
+            localVelocity.z * 0.8,   // Forward/backward movement -> X rotation
+            0,
+            -localVelocity.x * 0.5   // Sideways movement -> Z rotation (reduced for less extreme lean)
+          );
+          
+          // Smooth the torso lean toward target
+          this.torsoLean.lerp(targetLean, this.torsoLeanVelocity);
+          
+          // Combine all lean sources
+          const totalForwardLean = handForwardLean + this.torsoLean.x;
+          const totalSideLean = handSideLean + this.torsoLean.z;
+          
+          // Calculate breathing animation (chest expansion)
+          const breathingExpansion = Math.sin(this.breathingPhase) * this.breathingAmount;
+          
+          // Distribute rotation across spine segments
+          if (this.bones.spine || this.bones.spine1 || this.bones.spine2) {
+            // Each segment gets a portion of the total lean
+            const spineRotations = [
+              { bone: this.bones.spine, amount: 0.25, breathingAmount: 0.3 },
+              { bone: this.bones.spine1, amount: 0.35, breathingAmount: 0.4 },
+              { bone: this.bones.spine2, amount: 0.4, breathingAmount: 0.3 }
+            ];
+            
+            spineRotations.forEach(({ bone, amount, breathingAmount }) => {
+              if (bone) {
+                // Add breathing to forward lean (negative X is backward arch)
+                const breathingLean = -breathingExpansion * breathingAmount;
+                
+                const euler = new THREE.Euler(
+                  -totalForwardLean * amount + breathingLean, // X-axis (flip for model rotation) + breathing
+                  0,
+                  -totalSideLean * amount,    // Z-axis (flip for model rotation)
+                  'YXZ'
+                );
+                bone.quaternion.setFromEuler(euler);
+              }
+            });
+          }
+          
+          // Head rotation (relative to body)
+          // Model is rotated 180° at fbx level, which affects bone rotations
           if (this.bones.neck) {
+            // Get relative head rotation (head relative to torso)
             const relativeHeadQuat = headQuat.clone();
             const invBodyQuat = this.torsoRotation.clone().invert();
             relativeHeadQuat.premultiply(invBodyQuat);
             
+            // Model is rotated 180° around Y, which inverts X and Z rotations
+            // Extract euler, flip X and Z, then rebuild quaternion
             const euler = new THREE.Euler().setFromQuaternion(relativeHeadQuat, 'YXZ');
-            euler.x = -euler.x;
-            euler.z = -euler.z;
+            euler.x = -euler.x; // Flip pitch (nod)
+            euler.z = -euler.z; // Flip roll (tilt)
+            // Y (yaw/turn) stays the same
             
             const correctedQuat = new THREE.Quaternion().setFromEuler(euler);
             this.bones.neck.quaternion.copy(correctedQuat);
           }
           
-          this.solveSimpleArmIK('left', leftHandPos, leftHandQuat);
-          this.solveSimpleArmIK('right', rightHandPos, rightHandQuat);
+          // Arms (with forearm twist)
+          this.solveArmIK('left', leftHandPos, leftHandQuat);
+          this.solveArmIK('right', rightHandPos, rightHandQuat);
         },
 
-        updateNPCBones: function() {
-          if (this.bones.hips) this.bones.hips.quaternion.identity();
-          if (this.bones.spine) this.bones.spine.quaternion.identity();
-          if (this.bones.spine1) this.bones.spine1.quaternion.identity();
-          if (this.bones.spine2) this.bones.spine2.quaternion.identity();
-          if (this.bones.neck) this.bones.neck.quaternion.identity();
-          
-          const breathingExpansion = Math.sin(this.breathingPhase) * this.breathingAmount;
-          
-          if (this.bones.spine1) {
-            const euler = new THREE.Euler(-breathingExpansion * 0.4, 0, 0, 'YXZ');
-            this.bones.spine1.quaternion.setFromEuler(euler);
-          }
-          
-          if (this.bones.leftUpperArm) {
-            const euler = new THREE.Euler(0.2, 0, 0.1, 'YXZ');
-            this.bones.leftUpperArm.quaternion.setFromEuler(euler);
-          }
-          if (this.bones.rightUpperArm) {
-            const euler = new THREE.Euler(0.2, 0, -0.1, 'YXZ');
-            this.bones.rightUpperArm.quaternion.setFromEuler(euler);
-          }
-          if (this.bones.leftForearm) {
-            const euler = new THREE.Euler(0.3, 0, 0, 'YXZ');
-            this.bones.leftForearm.quaternion.setFromEuler(euler);
-          }
-          if (this.bones.rightForearm) {
-            const euler = new THREE.Euler(0.3, 0, 0, 'YXZ');
-            this.bones.rightForearm.quaternion.setFromEuler(euler);
-          }
-        },
-
-        solveSimpleArmIK: function(hand, handWorldPos, handWorldQuat) {
+        solveArmIK: function(hand, handWorldPos, handWorldQuat) {
+          const shoulderBone = this.bones[`${hand}Shoulder`];
           const upperArmBone = this.bones[`${hand}UpperArm`];
           const forearmBone = this.bones[`${hand}Forearm`];
           const handBone = this.bones[`${hand}HandBone`];
           
-          if (!upperArmBone || !forearmBone) return;
+          if (!shoulderBone || !upperArmBone || !forearmBone) {
+            return;
+          }
           
+          // Get actual shoulder bone world position (not calculated, but from the skeleton)
           const shoulderWorldPos = new THREE.Vector3();
-          upperArmBone.getWorldPosition(shoulderWorldPos);
+          shoulderBone.getWorldPosition(shoulderWorldPos);
           
-          const toHand = handWorldPos.clone().sub(shoulderWorldPos).normalize();
-          const targetQuat = new THREE.Quaternion().setFromUnitVectors(
-            new THREE.Vector3(0, -1, 0),
-            toHand
+          // Adjust hand position to account for hand bone offset in the skeleton
+          // The VR controllers are positioned differently than the hand bones
+          const adjustedHandPos = handWorldPos.clone();
+          
+          // Add the left/right offset correction IN BODY LOCAL SPACE
+          // This ensures the offset is correct even when the body is rotated (mirror body)
+          const leftRightOffsetLocal = new THREE.Vector3(hand === 'left' ? 0.1 : -0.1, 0, 0);
+          const leftRightOffsetWorld = leftRightOffsetLocal.applyQuaternion(this.el.object3D.quaternion);
+          adjustedHandPos.add(leftRightOffsetWorld);
+          
+          // Two-bone IK (from body.html lines 1608-1627)
+          const shoulderToHand = adjustedHandPos.clone().sub(shoulderWorldPos);
+          const distance = shoulderToHand.length();
+          const maxReach = (this.config.upperArmLength + this.config.lowerArmLength) * 0.999;
+          const minReach = Math.abs(this.config.upperArmLength - this.config.lowerArmLength) * 1.001;
+          
+          let targetHandPos = adjustedHandPos.clone();
+          if (distance > maxReach) {
+            targetHandPos = shoulderWorldPos.clone().add(shoulderToHand.normalize().multiplyScalar(maxReach));
+          } else if (distance < minReach) {
+            targetHandPos = shoulderWorldPos.clone().add(shoulderToHand.normalize().multiplyScalar(minReach));
+          }
+          
+          // Law of cosines (from body.html lines 1629-1641)
+          const toTarget = targetHandPos.clone().sub(shoulderWorldPos);
+          const targetDist = toTarget.length();
+          const toTargetDir = toTarget.normalize();
+          
+          const upperSq = this.config.upperArmLength * this.config.upperArmLength;
+          const lowerSq = this.config.lowerArmLength * this.config.lowerArmLength;
+          const distSq = targetDist * targetDist;
+          
+          const cosAngle = (upperSq + distSq - lowerSq) / (2 * this.config.upperArmLength * targetDist);
+          const clampedCos = Math.max(-0.999, Math.min(0.999, cosAngle));
+          const angle = Math.acos(clampedCos);
+          
+          // Elbow bend direction - Enhanced with hand orientation influence
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+          const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.torsoRotation);
+          const bodyOutward = bodyRight.clone().multiplyScalar(hand === 'left' ? -1 : 1);
+          
+          // Base bend direction: outward and down
+          let bendDir = new THREE.Vector3()
+            .addScaledVector(bodyOutward, 0.4)
+            .addScaledVector(new THREE.Vector3(0, -1, 0), 0.4)
+            .normalize();
+          
+          // IMPROVED ELBOW ORIENTATION: Adjust bend direction based on hand rotation
+          // Extract the "palm down" vector from hand orientation
+          const handUp = new THREE.Vector3(0, 1, 0).applyQuaternion(handWorldQuat);
+          const handForward = new THREE.Vector3(0, 0, -1).applyQuaternion(handWorldQuat);
+          
+          // Blend hand's up vector into bend direction (palms facing inward = elbows out)
+          // This makes the elbow naturally follow wrist rotation
+          bendDir.addScaledVector(handUp, 0.3);
+          bendDir.normalize();
+          
+          // Make bend perpendicular to shoulder-hand direction
+          bendDir.addScaledVector(toTargetDir, -bendDir.dot(toTargetDir)).normalize();
+          
+          // Calculate elbow (from body.html lines 1667-1673)
+          const elbowDir = new THREE.Vector3()
+            .addScaledVector(toTargetDir, Math.cos(angle))
+            .addScaledVector(bendDir, Math.sin(angle))
+            .normalize();
+          
+          let elbowWorldPos = shoulderWorldPos.clone().add(elbowDir.multiplyScalar(this.config.upperArmLength));
+          
+          // Enforce exact lengths (from body.html lines 1676-1697)
+          const shoulderToElbow = elbowWorldPos.clone().sub(shoulderWorldPos);
+          if (Math.abs(shoulderToElbow.length() - this.config.upperArmLength) > 0.0001) {
+            elbowWorldPos.copy(shoulderWorldPos).add(shoulderToElbow.normalize().multiplyScalar(this.config.upperArmLength));
+          }
+          
+          const elbowToHand = targetHandPos.clone().sub(elbowWorldPos);
+          if (Math.abs(elbowToHand.length() - this.config.lowerArmLength) > 0.0001) {
+            targetHandPos.copy(elbowWorldPos).add(elbowToHand.normalize().multiplyScalar(this.config.lowerArmLength));
+          }
+          
+          // Convert to bone rotations (local space)
+          // The key insight: bones are hierarchical, we need to set rotations relative to PARENT bone
+          this.el.object3D.updateMatrixWorld(true);
+          
+          // Upper Arm: rotate from shoulder to elbow
+          upperArmBone.parent.updateMatrixWorld(true);
+          
+          // Get the direction in world space
+          const upperArmWorldDir = elbowWorldPos.clone().sub(shoulderWorldPos).normalize();
+          
+          // Convert shoulder and elbow to parent bone's local space
+          const shoulderInParent = upperArmBone.parent.worldToLocal(shoulderWorldPos.clone());
+          const elbowInParent = upperArmBone.parent.worldToLocal(elbowWorldPos.clone());
+          
+          // Direction in parent's local space
+          // Bone direction should point FROM parent (shoulder) TO child (elbow)
+          // But we're getting inverted results, so flip the subtraction
+          const upperArmParentDir = shoulderInParent.clone().sub(elbowInParent).normalize();
+          
+          // T-pose direction: Mixamo bones often use Y-down for limbs in T-pose
+          // Try negative Y (pointing down)
+          const tPoseDir = new THREE.Vector3(0, -1, 0);
+          
+          // Calculate rotation from T-pose to target direction
+          const upperArmQuat = new THREE.Quaternion().setFromUnitVectors(tPoseDir, upperArmParentDir);
+          
+          upperArmBone.quaternion.copy(upperArmQuat);
+          upperArmBone.updateMatrixWorld(true);
+          
+          // Forearm: rotate from elbow to hand
+          forearmBone.parent.updateMatrixWorld(true);
+          
+          // Convert to parent (upperArm) local space
+          const elbowInUpperArm = forearmBone.parent.worldToLocal(elbowWorldPos.clone());
+          const handInUpperArm = forearmBone.parent.worldToLocal(targetHandPos.clone());
+          
+          // Direction in parent's local space (flipped like upper arm)
+          const forearmParentDir = elbowInUpperArm.clone().sub(handInUpperArm).normalize();
+          
+          // Forearm also uses same T-pose direction
+          const forearmQuat = new THREE.Quaternion().setFromUnitVectors(tPoseDir, forearmParentDir);
+          
+          // FOREARM TWIST: Add pronation/supination based on wrist rotation
+          // Extract the twist component from hand rotation
+          forearmBone.updateMatrixWorld(true);
+          
+          // Get hand rotation relative to forearm's natural alignment
+          const forearmWorldQuat = new THREE.Quaternion();
+          forearmBone.getWorldQuaternion(forearmWorldQuat);
+          
+          // Hand rotation relative to forearm
+          const handRelativeForearm = handWorldQuat.clone();
+          handRelativeForearm.premultiply(forearmWorldQuat.clone().invert());
+          
+          // Extract twist angle around forearm axis (Y-axis in local space)
+          // This represents pronation (palm down) vs supination (palm up)
+          const handEuler = new THREE.Euler().setFromQuaternion(handRelativeForearm, 'YXZ');
+          const twistAngle = handEuler.y; // Y-axis rotation = twist
+          
+          // Apply 50% of the twist to the forearm (rest stays in hand)
+          // This creates natural forearm rotation
+          const forearmTwist = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0), // Local Y-axis (along forearm)
+            twistAngle * 0.5 // 50% of hand twist
           );
           
-          upperArmBone.quaternion.slerp(targetQuat, 0.3);
+          // Combine direction rotation with twist
+          forearmBone.quaternion.copy(forearmQuat).multiply(forearmTwist);
+          
+          forearmBone.updateMatrixWorld(true);
+          
+          // Hand orientation
+          if (handBone) {
+            forearmBone.updateMatrixWorld(true);
+            
+            // Just use the controller's world quaternion directly, like we do for arms
+            // Convert from world space to forearm's local space
+            const forearmWorldQuat = new THREE.Quaternion();
+            forearmBone.getWorldQuaternion(forearmWorldQuat);
+            
+            let handLocalQuat = handWorldQuat.clone();
+            handLocalQuat.premultiply(forearmWorldQuat.clone().invert());
+            
+            // Apply 180° correction around X axis in LOCAL bone space to flip the hand direction
+            // This accounts for the model's 180° rotation
+            const localXFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+            handLocalQuat.multiply(localXFlip);
+            
+            // Add 90° roll correction (left clockwise = +90°, right counterclockwise = -90°)
+            // Roll is around Y axis in local bone space (forearm direction)
+            const rollCorrection = new THREE.Quaternion().setFromAxisAngle(
+              new THREE.Vector3(0, 1, 0),
+              hand === 'left' ? Math.PI / 2 : -Math.PI / 2
+            );
+            handLocalQuat.multiply(rollCorrection);
+            
+            handBone.quaternion.copy(handLocalQuat);
+          }
         }
       });
 
