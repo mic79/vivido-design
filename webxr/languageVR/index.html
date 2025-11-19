@@ -996,6 +996,10 @@
         async init() {
           console.log('[Language App] Initializing with Vosk support...');
           
+          // Initialize flags
+          this.audioUnlocked = false;
+          this.waitingForInteraction = false;
+          
           // Detect which recognition system to use
           await this.detectRecognitionSystem();
           
@@ -1021,6 +1025,9 @@
         },
 
         async detectRecognitionSystem() {
+          console.log('[Detection] Checking recognition system...');
+          console.log('[Detection] User Agent:', navigator.userAgent);
+          
           const loadingOverlay = document.getElementById('loading-overlay');
           const progressFill = document.getElementById('progress-fill');
           const loadingStatus = document.getElementById('loading-status');
@@ -1029,10 +1036,14 @@
           const urlParams = new URLSearchParams(window.location.search);
           const forceVosk = urlParams.get('vosk') === 'true';
           
+          // Detect Quest browser - Meta Quest browsers identify themselves
+          const isQuestBrowser = /OculusBrowser|Quest/i.test(navigator.userAgent);
+          
           // Check for Web Speech API
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
           
-          if (SpeechRecognition && !forceVosk) {
+          // Force Vosk on Quest browsers since Web Speech API doesn't work reliably there
+          if (SpeechRecognition && !forceVosk && !isQuestBrowser) {
             console.log('[Detection] Web Speech API available');
             document.getElementById('recognition-type').textContent = 'Web Speech API (Online)';
             this.useVosk = false;
@@ -1045,6 +1056,8 @@
           } else {
             if (forceVosk) {
               console.log('[Detection] Vosk mode forced via URL parameter');
+            } else if (isQuestBrowser) {
+              console.log('[Detection] Quest browser detected, using Vosk');
             } else {
               console.log('[Detection] Web Speech API not available, using Vosk');
             }
@@ -1173,19 +1186,33 @@ assets/vosk-models/nl.tar.gz</pre>
           console.log('[Language App] Scene loaded');
           this.updateStatus('VR Scene loaded');
           
-          // Check if we're in VR mode
+          // Check if we're in VR mode or Quest browser
           const scene = document.querySelector('a-scene');
+          const isQuestBrowser = /OculusBrowser|Quest/i.test(navigator.userAgent);
+          
           if (scene.is('vr-mode')) {
             console.log('[Language App] Starting in VR mode');
           } else {
             console.log('[Language App] Starting in desktop mode');
           }
           
-          // Start experience with a delay to allow everything to initialize
-          setTimeout(() => {
-            console.log('[Language App] Starting first phrase...');
-            this.nextPhrase();
-          }, 2000);
+          // On Quest, we need user interaction before audio can play
+          if (isQuestBrowser && !this.audioUnlocked) {
+            console.log('[Language App] Quest browser detected - waiting for user interaction to unlock audio');
+            this.updateStatus('👆 Click "Next" button to start');
+            this.updateVRText('vr-phrase-text', '👆 Click "Next" button to start');
+            
+            // Set a flag that we're waiting for first interaction
+            this.waitingForInteraction = true;
+            
+            // The nextPhrase will be called when user clicks Next button
+          } else {
+            // Start experience with a delay to allow everything to initialize
+            setTimeout(() => {
+              console.log('[Language App] Starting first phrase...');
+              this.nextPhrase();
+            }, 2000);
+          }
         },
 
         loadVoices() {
@@ -1480,6 +1507,12 @@ assets/vosk-models/nl.tar.gz</pre>
         nextPhrase() {
           if (this.isPaused) return;
           
+          // Clear the waitingForInteraction flag on first user interaction
+          if (this.waitingForInteraction) {
+            console.log('[App] First user interaction detected, starting experience');
+            this.waitingForInteraction = false;
+          }
+          
           // Stop current listening session and get final result if using Vosk
           if (this.useVosk && this.isListening) {
             VoskRecognizer.stop();
@@ -1559,6 +1592,17 @@ assets/vosk-models/nl.tar.gz</pre>
           if (this.isPaused) return;
           
           console.log('[NPC Speak] Attempting to speak:', text);
+          
+          // Unlock audio on first user interaction (Quest requirement)
+          if (!this.audioUnlocked) {
+            console.log('[NPC Speak] Unlocking audio context...');
+            this.audioUnlocked = true;
+            // Create a silent audio to unlock the audio context
+            const silentAudio = new Audio();
+            silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhQCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4X/////////////////////////////////////////////////';
+            silentAudio.play().catch(e => console.log('[Audio] Unlock attempt:', e));
+          }
+          
           this.synthesis.cancel();
           this.showSpeechBubble(text);
           this.updateVRText('vr-instruction-text', '🔊 NPC is speaking...');
@@ -1589,6 +1633,7 @@ assets/vosk-models/nl.tar.gz</pre>
               console.log('[NPC Speak] Audio finished. hasStarted:', hasStarted);
               if (!hasStarted) {
                 console.error('[NPC] Audio blocked by browser - try clicking REPEAT button');
+                this.updateVRText('vr-instruction-text', '❌ Audio blocked - click REPEAT');
               }
               setTimeout(() => {
                 this.hideSpeechBubble();
