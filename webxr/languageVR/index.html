@@ -701,10 +701,12 @@
         recognizer: null,
         audioContext: null,
         processor: null,
+        analyser: null,
         isInitialized: false,
         isListening: false,
         currentLanguage: 'es',
         onResult: null,
+        onPartialResult: null,
         
         languageMap: {
           'es-ES': 'es',
@@ -713,10 +715,11 @@
           'nl-NL': 'nl'
         },
         
-        async init(language, onProgress, onResult) {
+        async init(language, onProgress, onResult, onPartialResult) {
           console.log('[Vosk] Initializing for language:', language);
           this.currentLanguage = this.languageMap[language] || 'es';
           this.onResult = onResult;
+          this.onPartialResult = onPartialResult;
           
           try {
             // Show progress
@@ -783,6 +786,11 @@
             
             const source = this.audioContext.createMediaStreamSource(stream);
             
+            // Create analyser for mic level visualization
+            this.analyser = this.audioContext.createAnalyser();
+            this.analyser.fftSize = 256;
+            this.analyser.smoothingTimeConstant = 0.8;
+            
             // Create script processor for audio processing
             const bufferSize = 4096;
             this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
@@ -807,6 +815,10 @@
               const partial = (message.result && message.result.partial) || message.partial;
               if (partial && partial.trim()) {
                 console.log('[Vosk] Partial:', partial);
+                // Call onPartialResult callback if provided
+                if (this.onPartialResult) {
+                  this.onPartialResult(partial);
+                }
               }
             });
             
@@ -826,11 +838,12 @@
               }
             };
             
-            // Connect audio pipeline
-            source.connect(this.processor);
+            // Connect audio pipeline: source -> analyser -> processor -> destination
+            source.connect(this.analyser);
+            this.analyser.connect(this.processor);
             this.processor.connect(this.audioContext.destination);
             
-            console.log('[Vosk] ✓ Audio pipeline ready');
+            console.log('[Vosk] ✓ Audio pipeline ready with analyser');
           } catch (error) {
             console.error('[Vosk] Audio setup error:', error);
             throw error;
@@ -881,7 +894,7 @@
           
           // Reinitialize with new language
           this.isInitialized = false;
-          await this.init(language, onProgress, this.onResult);
+          await this.init(language, onProgress, this.onResult, this.onPartialResult);
         }
       };
       
@@ -1093,8 +1106,19 @@
                 },
                 (text, confidence) => {
                   this.onVoskResult(text, confidence);
+                },
+                (partial) => {
+                  // Callback for partial results
+                  this.onVoskPartialResult(partial);
                 }
               );
+              
+              // Share VoskRecognizer's analyser with LanguageApp for mic level bar
+              if (VoskRecognizer.analyser) {
+                console.log('[Detection] Using Vosk analyser for mic level visualization');
+                this.analyser = VoskRecognizer.analyser;
+                this.audioContext = VoskRecognizer.audioContext;
+              }
               
               // Hide loading after success
               setTimeout(() => {
@@ -1198,6 +1222,16 @@ assets/vosk-models/nl.tar.gz</pre>
           this.updateVRText('vr-heard-text', 'You said: "' + text + '"');
           this.checkAnswer(text, confidence);
         },
+        
+        onVoskPartialResult(partial) {
+          console.log('[Vosk Partial]:', partial);
+          // Display partial result in light gray to show recognition is happening
+          this.updateVRText('vr-heard-text', 'Hearing: "' + partial + '"...');
+          const heardEl = document.getElementById('vr-heard-text');
+          if (heardEl) {
+            heardEl.setAttribute('color', '#CCCCCC');
+          }
+        },
 
         onSceneLoaded() {
           console.log('[Language App] Scene loaded');
@@ -1255,14 +1289,32 @@ assets/vosk-models/nl.tar.gz</pre>
 
         async initMicrophoneVisualizer() {
           try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            this.microphone = this.audioContext.createMediaStreamSource(stream);
-            this.analyser = this.audioContext.createAnalyser();
-            this.analyser.fftSize = 256;
-            this.analyser.smoothingTimeConstant = 0.8;
-            
-            this.microphone.connect(this.analyser);
+            // If using Vosk, the analyser will be shared from VoskRecognizer after init
+            // So we just start the visualization loop and wait for the analyser
+            if (this.useVosk === undefined) {
+              // Not yet determined, create temporary analyser (will be replaced if Vosk is used)
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+              this.microphone = this.audioContext.createMediaStreamSource(stream);
+              this.analyser = this.audioContext.createAnalyser();
+              this.analyser.fftSize = 256;
+              this.analyser.smoothingTimeConstant = 0.8;
+              
+              this.microphone.connect(this.analyser);
+              console.log('[Mic Visualizer] ✓ Temporary analyser created');
+            } else if (!this.useVosk) {
+              // Using Web Speech API, create our own analyser
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+              this.microphone = this.audioContext.createMediaStreamSource(stream);
+              this.analyser = this.audioContext.createAnalyser();
+              this.analyser.fftSize = 256;
+              this.analyser.smoothingTimeConstant = 0.8;
+              
+              this.microphone.connect(this.analyser);
+              console.log('[Mic Visualizer] ✓ Web Speech API analyser created');
+            }
+            // If using Vosk, analyser will be shared after VoskRecognizer.init()
             
             setTimeout(() => {
               this.micLevelBar = document.getElementById('mic-level-bar');
@@ -1771,6 +1823,12 @@ assets/vosk-models/nl.tar.gz</pre>
 
           console.log('[Check] Expected:', expected);
           console.log('[Check] Spoken:', spoken);
+
+          // Reset heard text color to white for final result
+          const heardEl = document.getElementById('vr-heard-text');
+          if (heardEl) {
+            heardEl.setAttribute('color', '#FFFFFF');
+          }
 
           const similarity = this.calculateSimilarity(spoken, expected);
           console.log('[Check] Similarity:', similarity);
