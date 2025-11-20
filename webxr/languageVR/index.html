@@ -1222,27 +1222,23 @@ assets/vosk-models/nl.tar.gz</pre>
             console.log('[Language App] Starting in desktop mode');
           }
           
-          // On Quest, we need user interaction before audio can play
-          if (isQuestBrowser && !this.audioUnlocked) {
-            console.log('[Language App] Quest browser detected - waiting for user interaction to unlock audio');
-            this.updateStatus('👆 Click "Next" button to start');
-            this.updateVRText('vr-phrase-text', '👆 Click "Next" button to start');
-            
-            // Set a flag that we're waiting for first interaction
-            this.waitingForInteraction = true;
-            
-            // The nextPhrase will be called when user clicks Next button
-          } else {
-            // Start experience with a delay to allow everything to initialize
-            setTimeout(() => {
-              console.log('[Language App] Starting first phrase...');
-              this.nextPhrase();
-            }, 2000);
-          }
+          // Start experience with a delay to allow everything to initialize
+          setTimeout(() => {
+            console.log('[Language App] Starting first phrase...');
+            this.nextPhrase();
+          }, 2000);
         },
 
         loadVoices() {
+          // Check if synthesis is available
+          if (!this.synthesis) {
+            console.warn('[Voices] Speech Synthesis not available on this browser');
+            return;
+          }
+          
           const loadVoicesImpl = () => {
+            if (!this.synthesis) return;
+            
             this.voices = this.synthesis.getVoices();
             if (this.voices.length > 0) {
               this.selectedVoice = this.voices.find(v => v.lang.startsWith('es')) || this.voices[0];
@@ -1251,7 +1247,7 @@ assets/vosk-models/nl.tar.gz</pre>
           };
           
           loadVoicesImpl();
-          if (this.synthesis.onvoiceschanged !== undefined) {
+          if (this.synthesis && this.synthesis.onvoiceschanged !== undefined) {
             this.synthesis.onvoiceschanged = loadVoicesImpl;
           }
           setTimeout(loadVoicesImpl, 500);
@@ -1620,6 +1616,23 @@ assets/vosk-models/nl.tar.gz</pre>
           console.log('[NPC Speak] Attempting to speak:', text);
           console.log('[NPC Speak] User Agent:', navigator.userAgent);
           console.log('[NPC Speak] Audio unlocked?:', this.audioUnlocked);
+          console.log('[NPC Speak] Synthesis available?:', !!this.synthesis);
+          
+          // Check if synthesis is available
+          if (!this.synthesis) {
+            console.warn('[NPC Speak] ❌ Speech Synthesis not available - showing text only');
+            this.showSpeechBubble(text);
+            this.updateVRText('vr-instruction-text', '📝 Read the phrase above and speak it!');
+            this.updateVRText('vr-phrase-text', `Say: "${text}"`);
+            
+            // Still start listening after a delay (silent mode)
+            setTimeout(() => {
+              this.hideSpeechBubble();
+            }, 3000);
+            
+            return;
+          }
+          
           console.log('[NPC Speak] Available voices:', this.synthesis.getVoices().length);
           
           // Unlock audio on first user interaction (Quest requirement)
