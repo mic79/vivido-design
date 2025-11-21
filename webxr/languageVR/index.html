@@ -1751,6 +1751,7 @@ assets/vosk-models/nl.tar.gz</pre>
           if (this.useVosk && this.isListening) {
             console.log('[App] Stopping Vosk before next phrase');
             VoskRecognizer.stop();
+            this.isListening = false; // ← Sync the flag!
           } else if (!this.useVosk && this.recognition && this.isListening) {
             console.log('[App] Stopping Web Speech API before next phrase');
             try {
@@ -1804,9 +1805,11 @@ assets/vosk-models/nl.tar.gz</pre>
           if (this.isPaused) {
             if (this.useVosk) {
               VoskRecognizer.stop();
+              this.isListening = false; // ← Sync the flag!
             } else if (this.recognition && this.isListening) {
               try {
                 this.recognition.stop();
+                this.isListening = false;
               } catch (e) {}
             }
             
@@ -2425,22 +2428,37 @@ assets/vosk-models/nl.tar.gz</pre>
         init: function() {
           console.log('[Mic Level Visualizer] Component initialized');
           this.maxWidth = 1.5; // Maximum bar width
-          this.updateBound = this.update.bind(this);
+          this.loggedOnce = false; // Only log analyser status once
+          this.frameCount = 0;
         },
         
         tick: function() {
+          this.frameCount++;
+          
           // Get analyser from LanguageApp or VoskRecognizer
           let analyser = null;
           
           if (window.LanguageApp) {
             if (window.LanguageApp.useVosk && window.VoskRecognizer && window.VoskRecognizer.analyser) {
               analyser = window.VoskRecognizer.analyser;
+              if (!this.loggedOnce) {
+                console.log('[Mic Level Visualizer] Using Vosk analyser');
+                this.loggedOnce = true;
+              }
             } else if (window.LanguageApp.analyser) {
               analyser = window.LanguageApp.analyser;
+              if (!this.loggedOnce) {
+                console.log('[Mic Level Visualizer] Using LanguageApp analyser');
+                this.loggedOnce = true;
+              }
             }
           }
           
           if (!analyser) {
+            // Log every 300 frames (~5 seconds at 60fps) if no analyser found
+            if (this.frameCount % 300 === 0) {
+              console.warn('[Mic Level Visualizer] No analyser available yet (frame', this.frameCount, ')');
+            }
             return; // No analyser available yet
           }
           
@@ -2471,6 +2489,11 @@ assets/vosk-models/nl.tar.gz</pre>
             this.el.setAttribute('color', '#FFC107'); // Yellow - low level
           } else {
             this.el.setAttribute('color', '#666666'); // Gray - very low/silent
+          }
+          
+          // Log mic activity every 60 frames (~1 second)
+          if (this.frameCount % 60 === 0 && normalized > 0.05) {
+            console.log('[Mic Level Visualizer] Level:', (normalized * 100).toFixed(1) + '%');
           }
         }
       });
