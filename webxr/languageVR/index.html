@@ -556,7 +556,8 @@
                    width="0" 
                    height="0.08" 
                    color="#4CAF50" 
-                   position="-0.75 0 0.01"></a-plane>
+                   position="-0.75 0 0.01"
+                   mic-level-visualizer></a-plane>
           <a-text id="mic-level-label"
                   value="Mic Level" 
                   position="0 -0.08 0.01" 
@@ -719,6 +720,8 @@
           this.currentLanguage = this.languageMap[language] || 'es';
           this.onResult = onResult;
           this.onPartialResult = onPartialResult;
+          this.isListening = false;
+          this.shouldProcessResults = false; // Initialize the flag
           
           try {
             // Show progress
@@ -800,36 +803,37 @@
             
             // Listen for results from Vosk recognizer
             this.recognizer.on('result', (message) => {
+              // Only process if we should be listening AND this is the current recognizer
+              if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
+                console.log('[Vosk] Ignoring result - not listening or old recognizer');
+                return;
+              }
+              
               console.log('[Vosk] Result event:', message, 'Recognizer ID:', message.recognizerId);
-              // Only process if this is the current recognizer
-              if (this.recognizer && message.recognizerId === this.recognizer.id) {
-                // Access the nested result.text property (Quest-compatible syntax)
-                const text = (message.result && message.result.text) || message.text;
-                if (text && text.trim()) {
-                  console.log('[Vosk] ✓ Recognized:', text);
-                  if (this.onResult) {
-                    this.onResult(text, 1.0);
-                  }
+              // Access the nested result.text property (Quest-compatible syntax)
+              const text = (message.result && message.result.text) || message.text;
+              if (text && text.trim()) {
+                console.log('[Vosk] ✓ Recognized:', text);
+                if (this.onResult) {
+                  this.onResult(text, 1.0);
                 }
-              } else {
-                console.log('[Vosk] Ignoring result from old recognizer:', message.recognizerId);
               }
             });
             
             this.recognizer.on('partialresult', (message) => {
-              // Only process if this is the current recognizer
-              if (this.recognizer && message.recognizerId === this.recognizer.id) {
-                // Access the nested result.partial property (Quest-compatible syntax)
-                const partial = (message.result && message.result.partial) || message.partial;
-                if (partial && partial.trim()) {
-                  console.log('[Vosk] Partial:', partial);
-                  // Call onPartialResult callback if provided
-                  if (this.onPartialResult) {
-                    this.onPartialResult(partial);
-                  }
+              // Only process if we should be listening AND this is the current recognizer
+              if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
+                return; // Silent ignore for partials
+              }
+              
+              // Access the nested result.partial property (Quest-compatible syntax)
+              const partial = (message.result && message.result.partial) || message.partial;
+              if (partial && partial.trim()) {
+                console.log('[Vosk] Partial:', partial);
+                // Call onPartialResult callback if provided
+                if (this.onPartialResult) {
+                  this.onPartialResult(partial);
                 }
-              } else {
-                console.log('[Vosk] Ignoring partial from old recognizer:', message.recognizerId);
               }
             });
             
@@ -868,11 +872,13 @@
           }
           
           this.isListening = true;
+          this.shouldProcessResults = true; // Enable result processing
           console.log('[Vosk] Started listening');
         },
         
         stop() {
           this.isListening = false;
+          this.shouldProcessResults = false; // Disable result processing
           
           // Get final result before stopping
           if (this.recognizer) {
@@ -1495,13 +1501,7 @@ assets/vosk-models/nl.tar.gz</pre>
               console.log('[Mic Visualizer] ✓ Web Speech API analyser created');
             }
             // If using Vosk, analyser will be shared after VoskRecognizer.init()
-            
-            setTimeout(() => {
-              this.micLevelBar = document.getElementById('mic-level-bar');
-              if (this.micLevelBar) {
-                this.updateMicLevel();
-              }
-            }, 1000);
+            // Mic level visualization is now handled by the 'mic-level-visualizer' A-Frame component
             
             console.log('[Mic Visualizer] ✓ Initialized');
           } catch (error) {
@@ -1509,37 +1509,11 @@ assets/vosk-models/nl.tar.gz</pre>
           }
         },
 
+        // Note: Mic level visualization is now handled by the 'mic-level-visualizer' A-Frame component
+        // This ensures it works properly in VR mode with A-Frame's render loop
         updateMicLevel() {
-          if (!this.analyser || !this.micLevelBar) {
-            requestAnimationFrame(() => this.updateMicLevel());
-            return;
-          }
-
-          const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-          this.analyser.getByteFrequencyData(dataArray);
-          
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
-          }
-          const average = sum / dataArray.length;
-          const normalized = average / 255;
-          
-          const barWidth = normalized * 1.5;
-          this.micLevelBar.setAttribute('width', barWidth);
-          
-          const barX = -0.75 + (barWidth / 2);
-          this.micLevelBar.setAttribute('position', barX + ' 0 0.01');
-          
-          if (normalized > 0.3) {
-            this.micLevelBar.setAttribute('color', '#4CAF50');
-          } else if (normalized > 0.1) {
-            this.micLevelBar.setAttribute('color', '#FFC107');
-          } else {
-            this.micLevelBar.setAttribute('color', '#666666');
-          }
-          
-          requestAnimationFrame(() => this.updateMicLevel());
+          // Deprecated - using A-Frame component instead
+          // The mic-level-visualizer component handles this in VR
         },
 
         setupUIListeners() {
@@ -2443,6 +2417,61 @@ assets/vosk-models/nl.tar.gz</pre>
           this.el.removeEventListener('click', this.onClick);
           this.el.removeEventListener('mouseenter', this.onHover);
           this.el.removeEventListener('mouseleave', this.onLeave);
+        }
+      });
+      
+      // Mic Level Visualizer Component
+      AFRAME.registerComponent('mic-level-visualizer', {
+        init: function() {
+          console.log('[Mic Level Visualizer] Component initialized');
+          this.maxWidth = 1.5; // Maximum bar width
+          this.updateBound = this.update.bind(this);
+        },
+        
+        tick: function() {
+          // Get analyser from LanguageApp or VoskRecognizer
+          let analyser = null;
+          
+          if (window.LanguageApp) {
+            if (window.LanguageApp.useVosk && window.VoskRecognizer && window.VoskRecognizer.analyser) {
+              analyser = window.VoskRecognizer.analyser;
+            } else if (window.LanguageApp.analyser) {
+              analyser = window.LanguageApp.analyser;
+            }
+          }
+          
+          if (!analyser) {
+            return; // No analyser available yet
+          }
+          
+          // Get frequency data
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          analyser.getByteFrequencyData(dataArray);
+          
+          // Calculate average level
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const average = sum / dataArray.length;
+          const normalized = average / 255; // 0.0 to 1.0
+          
+          // Update bar width
+          const barWidth = normalized * this.maxWidth;
+          this.el.setAttribute('width', barWidth);
+          
+          // Update bar position (expand from left)
+          const barX = -0.75 + (barWidth / 2);
+          this.el.object3D.position.x = barX;
+          
+          // Update bar color based on level
+          if (normalized > 0.3) {
+            this.el.setAttribute('color', '#4CAF50'); // Green - good level
+          } else if (normalized > 0.1) {
+            this.el.setAttribute('color', '#FFC107'); // Yellow - low level
+          } else {
+            this.el.setAttribute('color', '#666666'); // Gray - very low/silent
+          }
         }
       });
       
