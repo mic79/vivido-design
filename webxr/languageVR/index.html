@@ -1873,6 +1873,7 @@ assets/vosk-models/nl.tar.gz</pre>
             // Still start listening after a delay (silent mode)
             setTimeout(() => {
               this.hideSpeechBubble();
+              this.startListening(); // ← CRITICAL: Start listening even without TTS
             }, 3000);
             
             return;
