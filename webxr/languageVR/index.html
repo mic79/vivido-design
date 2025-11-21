@@ -340,7 +340,8 @@
                 width="4"
                 shader="msdf"
                 font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
-                id="npc-name"></a-text>
+                id="npc-name">
+          </a-text>
         
         <a-entity id="speech-bubble" position="0 2 0.3" visible="false">
           <a-plane width="1.5" height="0.5" color="#FFFFFF" opacity="0.95"></a-plane>
@@ -350,7 +351,8 @@
                   color="#333" 
                   width="1.3"
                   shader="msdf"
-                  font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
+                  font="assets/fonts/Roboto-Regular-msdf.json"
+                  negate="false"
                   id="bubble-text"></a-text>
         </a-entity>
       </a-entity>
@@ -363,9 +365,7 @@
                 position="0 0.8 0.01" 
                 align="center" 
                 color="#4CAF50" 
-                width="1"
-                shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
+                width="1"></a-text>
         
         <a-box id="vr-lang-spanish" 
                width="1" height="0.2" depth="0.05" 
@@ -436,9 +436,7 @@
                 position="0 0.8 0.01" 
                 align="center" 
                 color="#4CAF50" 
-                width="1"
-                shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
+                width="1"></a-text>
         
         <a-box id="vr-scenario-greetings" 
                width="1" height="0.2" depth="0.05" 
@@ -508,7 +506,8 @@
                 color="#4CAF50" 
                 width="1.8"
                 shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
                 wrap-count="30"></a-text>
         
         <a-text id="vr-translation-text" 
@@ -518,7 +517,8 @@
                 color="#81C784" 
                 width="1.8"
                 shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
                 wrap-count="30"></a-text>
         
         <a-text id="vr-instruction-text" 
@@ -528,7 +528,8 @@
                 color="#FFD700" 
                 width="1.8"
                 shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
                 wrap-count="40"></a-text>
         
         <a-text id="vr-heard-text" 
@@ -538,7 +539,8 @@
                 color="#FFFFFF" 
                 width="1.8"
                 shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
                 wrap-count="40"></a-text>
         
         <a-text id="vr-score-text" 
@@ -546,9 +548,7 @@
                 position="0 -0.25 0.01" 
                 align="center" 
                 color="#FFD700" 
-                width="1.8"
-                shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
+                width="1.8"></a-text>
         
         <a-entity id="mic-visualizer" position="0 -0.45 0.01">
           <a-plane width="1.5" height="0.08" color="#333333"></a-plane>
@@ -557,7 +557,8 @@
                    height="0.08" 
                    color="#4CAF50" 
                    position="-0.75 0 0.01"></a-plane>
-          <a-text value="Mic Level" 
+          <a-text id="mic-level-label"
+                  value="Mic Level" 
                   position="0 -0.08 0.01" 
                   align="center" 
                   color="#888888" 
@@ -624,9 +625,7 @@
                 position="0 3.3 -7.7" 
                 align="center" 
                 color="#2196F3" 
-                width="3"
-                shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
+                width="3"></a-text>
         <a-box position="0 0.4 -2" width="1.5" height="0.8" depth="1" color="#8B4513"></a-box>
         <a-sphere position="-3 1.5 -5" radius="0.3" color="#FF6B6B"></a-sphere>
         <a-sphere position="3 1.5 -5" radius="0.3" color="#4ECDC4"></a-sphere>
@@ -637,9 +636,7 @@
                 rotation="-90 0 0" 
                 align="center" 
                 color="#333" 
-                width="6"
-                shader="msdf"
-                font="https://cdn.aframe.io/fonts/Roboto-msdf.json"></a-text>
+                width="6"></a-text>
       </a-entity>
       
       <a-entity id="env-restaurant" visible="false">
@@ -702,6 +699,8 @@
         audioContext: null,
         processor: null,
         analyser: null,
+        microphoneStream: null,
+        sourceNode: null,
         isInitialized: false,
         isListening: false,
         currentLanguage: 'es',
@@ -745,6 +744,9 @@
             this.recognizer = new this.model.KaldiRecognizer(16000);
             this.recognizer.setWords(true);
             
+            // Add phrase hints for better Vosk accuracy
+            this.updateVoskGrammar();
+            
             console.log('[Vosk] ✓ Recognizer created');
             console.log('[Vosk] Recognizer methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.recognizer)));
             console.log('[Vosk] Recognizer object:', this.recognizer);
@@ -769,7 +771,7 @@
         async setupAudio() {
           try {
             // Get microphone stream
-            const stream = await navigator.mediaDevices.getUserMedia({ 
+            this.microphoneStream = await navigator.mediaDevices.getUserMedia({ 
               audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
@@ -784,7 +786,7 @@
               sampleRate: 16000
             });
             
-            const source = this.audioContext.createMediaStreamSource(stream);
+            this.sourceNode = this.audioContext.createMediaStreamSource(this.microphoneStream);
             
             // Create analyser for mic level visualization
             this.analyser = this.audioContext.createAnalyser();
@@ -799,26 +801,36 @@
             
             // Listen for results from Vosk recognizer
             this.recognizer.on('result', (message) => {
-              console.log('[Vosk] Result event:', message);
-              // Access the nested result.text property (Quest-compatible syntax)
-              const text = (message.result && message.result.text) || message.text;
-              if (text && text.trim()) {
-                console.log('[Vosk] ✓ Recognized:', text);
-                if (this.onResult) {
-                  this.onResult(text, 1.0);
+              console.log('[Vosk] Result event:', message, 'Recognizer ID:', message.recognizerId);
+              // Only process if this is the current recognizer
+              if (this.recognizer && message.recognizerId === this.recognizer.id) {
+                // Access the nested result.text property (Quest-compatible syntax)
+                const text = (message.result && message.result.text) || message.text;
+                if (text && text.trim()) {
+                  console.log('[Vosk] ✓ Recognized:', text);
+                  if (this.onResult) {
+                    this.onResult(text, 1.0);
+                  }
                 }
+              } else {
+                console.log('[Vosk] Ignoring result from old recognizer:', message.recognizerId);
               }
             });
             
             this.recognizer.on('partialresult', (message) => {
-              // Access the nested result.partial property (Quest-compatible syntax)
-              const partial = (message.result && message.result.partial) || message.partial;
-              if (partial && partial.trim()) {
-                console.log('[Vosk] Partial:', partial);
-                // Call onPartialResult callback if provided
-                if (this.onPartialResult) {
-                  this.onPartialResult(partial);
+              // Only process if this is the current recognizer
+              if (this.recognizer && message.recognizerId === this.recognizer.id) {
+                // Access the nested result.partial property (Quest-compatible syntax)
+                const partial = (message.result && message.result.partial) || message.partial;
+                if (partial && partial.trim()) {
+                  console.log('[Vosk] Partial:', partial);
+                  // Call onPartialResult callback if provided
+                  if (this.onPartialResult) {
+                    this.onPartialResult(partial);
+                  }
                 }
+              } else {
+                console.log('[Vosk] Ignoring partial from old recognizer:', message.recognizerId);
               }
             });
             
@@ -839,7 +851,7 @@
             };
             
             // Connect audio pipeline: source -> analyser -> processor -> destination
-            source.connect(this.analyser);
+            this.sourceNode.connect(this.analyser);
             this.analyser.connect(this.processor);
             this.processor.connect(this.audioContext.destination);
             
@@ -878,19 +890,117 @@
           console.log('[Vosk] Stopped listening');
         },
         
-        async switchLanguage(language, onProgress) {
-          console.log('[Vosk] Switching to language:', language);
+        cleanup() {
+          console.log('[Vosk] Cleaning up audio pipeline...');
           
-          // Stop current recognition
-          this.stop();
+          // Stop listening
+          this.isListening = false;
           
-          // Clean up old model
+          // Disconnect audio nodes
+          if (this.sourceNode) {
+            try {
+              this.sourceNode.disconnect();
+            } catch (e) {
+              console.log('[Vosk] Source already disconnected');
+            }
+            this.sourceNode = null;
+          }
+          
+          if (this.analyser) {
+            try {
+              this.analyser.disconnect();
+            } catch (e) {
+              console.log('[Vosk] Analyser already disconnected');
+            }
+            this.analyser = null;
+          }
+          
+          if (this.processor) {
+            try {
+              this.processor.disconnect();
+              this.processor.onaudioprocess = null;
+            } catch (e) {
+              console.log('[Vosk] Processor already disconnected');
+            }
+            this.processor = null;
+          }
+          
+          // Stop microphone stream
+          if (this.microphoneStream) {
+            this.microphoneStream.getTracks().forEach(track => {
+              track.stop();
+              console.log('[Vosk] Stopped microphone track');
+            });
+            this.microphoneStream = null;
+          }
+          
+          // Close audio context
+          if (this.audioContext) {
+            try {
+              this.audioContext.close();
+              console.log('[Vosk] Audio context closed');
+            } catch (e) {
+              console.log('[Vosk] Audio context already closed');
+            }
+            this.audioContext = null;
+          }
+          
+          // Remove recognizer (this will stop it from receiving events)
           if (this.recognizer) {
+            try {
+              this.recognizer.remove();
+              console.log('[Vosk] Recognizer removed');
+            } catch (e) {
+              console.log('[Vosk] Recognizer already removed');
+            }
             this.recognizer = null;
           }
+          
+          // Clean up model
           if (this.model) {
             this.model = null;
           }
+          
+          console.log('[Vosk] ✓ Cleanup complete');
+        },
+        
+        updateVoskGrammar() {
+          if (!this.recognizer) return;
+          
+          // Get all phrases for current language across all scenarios
+          const allPhrases = [];
+          const scenarios = ['restaurant', 'shopping', 'directions'];
+          
+          scenarios.forEach(scenario => {
+            const scenarioPhrases = window.LanguageApp.phrases[scenario][window.LanguageApp.currentLanguage];
+            if (scenarioPhrases) {
+              scenarioPhrases.forEach(p => allPhrases.push(p.text));
+            }
+          });
+          
+          if (allPhrases.length === 0) return;
+          
+          // Vosk expects a JSON array of phrases
+          const grammar = JSON.stringify(allPhrases);
+          
+          try {
+            // Set grammar if the method exists
+            if (typeof this.recognizer.setGrammar === 'function') {
+              this.recognizer.setGrammar(grammar);
+              console.log('[Vosk] Grammar updated with', allPhrases.length, 'phrases');
+            } else {
+              console.log('[Vosk] setGrammar not available, using default model vocabulary');
+            }
+          } catch (error) {
+            console.warn('[Vosk] Could not set grammar:', error);
+          }
+        },
+        
+        async switchLanguage(language, onProgress) {
+          console.log('[Vosk] Switching to language:', language);
+          
+          // Clean up everything from the old language
+          this.cleanup();
           
           // Reinitialize with new language
           this.isInitialized = false;
@@ -1026,6 +1136,9 @@
           this.audioUnlocked = false;
           this.waitingForInteraction = false;
           
+          // Store timeout IDs for cancellation
+          this.pendingTimeouts = [];
+          
           // Initialize Speech Synthesis (CRITICAL - was missing!)
           this.synthesis = window.speechSynthesis;
           console.log('[Language App] Speech Synthesis initialized:', this.synthesis);
@@ -1078,6 +1191,12 @@
             document.getElementById('recognition-type').textContent = 'Web Speech API (Online)';
             this.useVosk = false;
             
+            // Update VR mic level label
+            const micLevelLabel = document.getElementById('mic-level-label');
+            if (micLevelLabel) {
+              micLevelLabel.setAttribute('value', 'Mic Level (Web Speech API)');
+            }
+            
             // Initialize Web Speech API
             this.initWebSpeechAPI();
             
@@ -1093,6 +1212,12 @@
             }
             document.getElementById('recognition-type').textContent = 'Vosk (Offline)';
             this.useVosk = true;
+            
+            // Update VR mic level label
+            const micLevelLabel = document.getElementById('mic-level-label');
+            if (micLevelLabel) {
+              micLevelLabel.setAttribute('value', 'Mic Level (Vosk)');
+            }
             
             // Show loading and initialize Vosk
             loadingOverlay.classList.remove('hidden');
@@ -1160,12 +1285,20 @@ assets/vosk-models/nl.tar.gz</pre>
 
         initWebSpeechAPI() {
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          const SpeechGrammarList = window.SpeechGrammarList || window.webkitSpeechGrammarList;
           
           this.recognition = new SpeechRecognition();
           this.recognition.continuous = false;
           this.recognition.interimResults = false;
           this.recognition.maxAlternatives = 3;
           this.recognition.lang = this.currentLanguage;
+          
+          // Add grammar hints for better accuracy
+          if (SpeechGrammarList) {
+            this.updateSpeechGrammar();
+          } else {
+            console.log('[Web Speech] Grammar hints not supported by this browser');
+          }
 
           console.log('[Web Speech] Initialized for:', this.currentLanguage);
 
@@ -1216,6 +1349,31 @@ assets/vosk-models/nl.tar.gz</pre>
 
           this.updateSpeechStatus('Web Speech API ready', 'active');
         },
+        
+        updateSpeechGrammar() {
+          // Build grammar from all phrases in current language
+          const SpeechGrammarList = window.SpeechGrammarList || window.webkitSpeechGrammarList;
+          if (!SpeechGrammarList || !this.recognition) return;
+          
+          const scenarioPhrases = this.phrases[this.currentScenario][this.currentLanguage];
+          if (!scenarioPhrases || scenarioPhrases.length === 0) return;
+          
+          // Create JSGF grammar (Java Speech Grammar Format)
+          // Remove punctuation from phrases for grammar
+          const cleanPhrases = scenarioPhrases.map(p => p.text.replace(/[¿¡?!.,]/g, '').trim());
+          const phraseList = cleanPhrases.join(' | ');
+          const grammar = `#JSGF V1.0; grammar phrases; public <phrase> = ${phraseList} ;`;
+          
+          try {
+            const grammarList = new SpeechGrammarList();
+            grammarList.addFromString(grammar, 1); // Weight: 1 = highest priority
+            this.recognition.grammars = grammarList;
+            
+            console.log('[Web Speech] ✓ Grammar updated with', scenarioPhrases.length, 'phrases:', cleanPhrases.join(', '));
+          } catch (error) {
+            console.warn('[Web Speech] Grammar hint error (not critical):', error);
+          }
+        },
 
         onVoskResult(text, confidence) {
           console.log('[Vosk Result]:', text);
@@ -1259,6 +1417,12 @@ assets/vosk-models/nl.tar.gz</pre>
           // Start experience with a delay to allow everything to initialize
           setTimeout(() => {
             console.log('[Language App] Starting first phrase...');
+            
+            // Initialize grammar hints before starting
+            if (!this.useVosk && this.recognition) {
+              this.updateSpeechGrammar();
+            }
+            
             this.nextPhrase();
           }, 2000);
         },
@@ -1275,7 +1439,9 @@ assets/vosk-models/nl.tar.gz</pre>
             
             this.voices = this.synthesis.getVoices();
             if (this.voices.length > 0) {
-              this.selectedVoice = this.voices.find(v => v.lang.startsWith('es')) || this.voices[0];
+              // Use the first 2 characters of currentLanguage to match voice (e.g., 'es-ES' -> 'es', 'fr-FR' -> 'fr')
+              const langCode = this.currentLanguage.substring(0, 2);
+              this.selectedVoice = this.voices.find(v => v.lang.startsWith(langCode)) || this.voices[0];
               console.log('[Voices] Selected:', this.selectedVoice.name);
             }
           };
@@ -1581,15 +1747,30 @@ assets/vosk-models/nl.tar.gz</pre>
         nextPhrase() {
           if (this.isPaused) return;
           
+          // Skip if we're changing language/scenario (prevents double calls)
+          if (this.isChangingLanguage || this.isChangingScenario) {
+            console.log('[App] Skipping nextPhrase - changing language/scenario');
+            return;
+          }
+          
           // Clear the waitingForInteraction flag on first user interaction
           if (this.waitingForInteraction) {
             console.log('[App] First user interaction detected, starting experience');
             this.waitingForInteraction = false;
           }
           
-          // Stop current listening session and get final result if using Vosk
+          // CRITICAL: Stop any active recognition sessions first
           if (this.useVosk && this.isListening) {
+            console.log('[App] Stopping Vosk before next phrase');
             VoskRecognizer.stop();
+          } else if (!this.useVosk && this.recognition && this.isListening) {
+            console.log('[App] Stopping Web Speech API before next phrase');
+            try {
+              this.recognition.stop();
+              this.isListening = false;
+            } catch (e) {
+              console.warn('[App] Could not stop recognition:', e);
+            }
           }
           
           const scenarioPhrases = this.phrases[this.currentScenario][this.currentLanguage];
@@ -1603,9 +1784,7 @@ assets/vosk-models/nl.tar.gz</pre>
           this.displayPhrase(this.currentPhrase);
           this.npcSpeak(this.currentPhrase.text);
           
-          setTimeout(() => {
-            this.startListening();
-          }, 3000);
+          // Delay removed - startListening will be called after TTS finishes
         },
 
         displayPhrase(phrase) {
@@ -1655,7 +1834,7 @@ assets/vosk-models/nl.tar.gz</pre>
             if (this.currentPhrase) {
               this.displayPhrase(this.currentPhrase);
               this.npcSpeak(this.currentPhrase.text);
-              setTimeout(() => this.startListening(), 3000);
+              // npcSpeak will handle startListening via onend callback
             } else {
               this.nextPhrase();
             }
@@ -1757,12 +1936,26 @@ assets/vosk-models/nl.tar.gz</pre>
               }
               setTimeout(() => {
                 this.hideSpeechBubble();
-              }, 1000);
+                
+                // CRITICAL: Start listening ONLY after TTS completes
+                // Add delay to ensure audio output fully stops and prevent echo
+                if (!this.isPaused) {
+                  console.log('[NPC Speak] ✓ Starting STT after TTS finished');
+                  this.startListening();
+                }
+              }, 800);
             };
             
             utterance.onerror = (event) => {
               console.error('[NPC Speak] ❌ Error:', event.error, event);
               this.updateVRText('vr-instruction-text', '❌ Speech error: ' + event.error);
+              
+              // Still start listening even if TTS fails
+              setTimeout(() => {
+                if (!this.isPaused) {
+                  this.startListening();
+                }
+              }, 500);
             };
             
             console.log('[NPC Speak] Calling synthesis.speak()');
@@ -1800,15 +1993,26 @@ assets/vosk-models/nl.tar.gz</pre>
           if (this.isPaused) return;
           
           if (this.useVosk) {
+            // Prevent duplicate instances
+            if (this.isListening) {
+              console.warn('[STT] Vosk already listening, skipping start');
+              return;
+            }
             VoskRecognizer.start();
             this.isListening = true;
             this.updateVRText('vr-instruction-text', '🎤 SPEAK NOW!');
           } else {
             if (!this.recognition) return;
-            if (this.isListening) return;
+            
+            // Prevent duplicate instances
+            if (this.isListening) {
+              console.warn('[STT] Web Speech API already listening, skipping start');
+              return;
+            }
 
             try {
               this.recognition.start();
+              console.log('[STT] Web Speech API started');
             } catch (e) {
               console.warn('[Speech] Could not start:', e);
             }
@@ -1830,12 +2034,22 @@ assets/vosk-models/nl.tar.gz</pre>
             heardEl.setAttribute('color', '#FFFFFF');
           }
 
-          const similarity = this.calculateSimilarity(spoken, expected);
+          // IMPROVED: Check if spoken text CONTAINS the expected phrase (handles TTS echo and duplicates)
+          // Remove punctuation for comparison
+          const expectedNoPunct = expected.replace(/[¿¡?!.,]/g, '').trim();
+          const spokenNoPunct = spoken.replace(/[¿¡?!.,]/g, '').trim();
+          
+          // Check if expected phrase is contained in spoken text
+          const isContained = spokenNoPunct.includes(expectedNoPunct);
+          
+          // Also check similarity for partial credit
+          const similarity = this.calculateSimilarity(spokenNoPunct, expectedNoPunct);
+          console.log('[Check] Contains expected?:', isContained);
           console.log('[Check] Similarity:', similarity);
 
           let feedback, points, className;
 
-          if (similarity > 0.85) {
+          if (isContained || similarity > 0.85) {
             feedback = '¡Excelente! 🎉<br>Perfect!';
             points = 100;
             className = 'success';
@@ -1843,11 +2057,12 @@ assets/vosk-models/nl.tar.gz</pre>
             
             this.updateVRText('vr-instruction-text', '✅ Perfect! Next phrase...');
             
-            setTimeout(() => {
+            const timeoutId = setTimeout(() => {
               if (!this.isPaused) {
                 this.nextPhrase();
               }
             }, 2000);
+            this.pendingTimeouts.push(timeoutId);
           } else if (similarity > 0.70) {
             feedback = '¡Bien! 👍<br>Good, try again';
             points = 50;
@@ -1856,13 +2071,11 @@ assets/vosk-models/nl.tar.gz</pre>
             
             this.updateVRText('vr-instruction-text', '⚠️ Good! Try the exact phrase...');
             
-            setTimeout(() => {
+            const timeoutId = setTimeout(() => {
               this.npcSpeak(this.currentPhrase.text);
-              setTimeout(() => {
-                this.updateVRText('vr-heard-text', '');
-                this.startListening();
-              }, 2000);
+              // npcSpeak will handle startListening via onend callback
             }, 2000);
+            this.pendingTimeouts.push(timeoutId);
           } else if (similarity > 0.50) {
             feedback = 'Casi... 🤔<br>Almost!';
             points = 25;
@@ -1871,13 +2084,11 @@ assets/vosk-models/nl.tar.gz</pre>
             
             this.updateVRText('vr-instruction-text', '⚠️ Close! Listen again...');
             
-            setTimeout(() => {
+            const timeoutId = setTimeout(() => {
               this.npcSpeak(this.currentPhrase.text);
-              setTimeout(() => {
-                this.updateVRText('vr-heard-text', '');
-                this.startListening();
-              }, 2000);
+              // npcSpeak will handle startListening via onend callback
             }, 2000);
+            this.pendingTimeouts.push(timeoutId);
           } else {
             feedback = `❌ No coincide<br>Try: "${this.currentPhrase.text}"`;
             points = 0;
@@ -1885,13 +2096,11 @@ assets/vosk-models/nl.tar.gz</pre>
             
             this.updateVRText('vr-instruction-text', '❌ Wrong. Listen carefully...');
             
-            setTimeout(() => {
+            const timeoutId = setTimeout(() => {
               this.npcSpeak(this.currentPhrase.text);
-              setTimeout(() => {
-                this.updateVRText('vr-heard-text', '');
-                this.startListening();
-              }, 2000);
+              // npcSpeak will handle startListening via onend callback
             }, 2500);
+            this.pendingTimeouts.push(timeoutId);
           }
 
           this.showFeedback(feedback, className);
@@ -1939,12 +2148,47 @@ assets/vosk-models/nl.tar.gz</pre>
           return matrix[str2.length][str1.length];
         },
         
+        clearPendingTimeouts() {
+          console.log('[App] Clearing', this.pendingTimeouts.length, 'pending timeouts');
+          this.pendingTimeouts.forEach(id => clearTimeout(id));
+          this.pendingTimeouts = [];
+        },
+        
         async changeLanguage(lang, langName) {
           console.log('[Language App] Changing language to:', lang, langName);
+          
+          // Set flag to prevent race conditions
+          this.isChangingLanguage = true;
+          
+          // Clear ALL pending operations
+          this.clearPendingTimeouts();
           
           const oldLang = this.currentLanguage;
           this.currentLanguage = lang;
           this.currentLanguageName = langName || lang;
+          
+          // Cancel any ongoing speech AND stop recognition
+          if (this.synthesis) {
+            this.synthesis.cancel();
+          }
+          
+          // Stop recognition immediately
+          if (!this.useVosk && this.recognition && this.isListening) {
+            try {
+              this.recognition.stop();
+              this.isListening = false;
+            } catch (e) {}
+          }
+          
+          // Ensure app is not paused when changing language
+          if (this.isPaused) {
+            console.log('[Language App] Unpausing app for language change');
+            this.isPaused = false;
+            const playPauseText = document.getElementById('play-pause-text');
+            if (playPauseText) {
+              playPauseText.setAttribute('value', '⏸️ PAUSE');
+            }
+          }
           
           // Update voices
           this.loadVoices();
@@ -1956,24 +2200,82 @@ assets/vosk-models/nl.tar.gz</pre>
               await VoskRecognizer.switchLanguage(lang, (progress, status) => {
                 console.log('[Vosk] Language switch:', status, progress + '%');
               });
+              
+              // Update analyser reference for mic level bar
+              if (VoskRecognizer.analyser) {
+                console.log('[Language App] Updating analyser reference after language switch');
+                this.analyser = VoskRecognizer.analyser;
+                this.audioContext = VoskRecognizer.audioContext;
+              }
+              
               this.updateVRText('vr-instruction-text', '✅ Language changed!');
             } catch (error) {
               console.error('[Language App] Language switch error:', error);
               this.updateVRText('vr-instruction-text', '❌ Language switch failed');
             }
+          } else if (!this.useVosk && this.recognition) {
+            // Update Web Speech API language
+            this.recognition.lang = lang;
           }
           
           // Restart with new language
           this.currentPhraseIndex = 0;
+          
+          // Update grammar hints for new language
+          if (!this.useVosk && this.recognition) {
+            this.updateSpeechGrammar();
+          }
+          
+          // Clear flag and start next phrase
+          this.isChangingLanguage = false;
           this.nextPhrase();
         },
         
         changeScenario(scenario) {
           console.log('[Language App] Changing scenario to:', scenario);
           
+          // Set flag to prevent race conditions
+          this.isChangingScenario = true;
+          
+          // Clear ALL pending operations
+          this.clearPendingTimeouts();
+          
+          // Cancel any ongoing speech AND stop recognition
+          if (this.synthesis) {
+            this.synthesis.cancel();
+          }
+          
+          // Stop recognition immediately
+          if (!this.useVosk && this.recognition && this.isListening) {
+            try {
+              this.recognition.stop();
+              this.isListening = false;
+            } catch (e) {}
+          }
+          
+          // Ensure app is not paused when changing scenario
+          if (this.isPaused) {
+            console.log('[Language App] Unpausing app for scenario change');
+            this.isPaused = false;
+            const playPauseText = document.getElementById('play-pause-text');
+            if (playPauseText) {
+              playPauseText.setAttribute('value', '⏸️ PAUSE');
+            }
+          }
+          
           this.currentScenario = scenario;
           this.currentPhraseIndex = 0;
           this.switchEnvironment(scenario);
+          
+          // Update grammar hints for new scenario
+          if (!this.useVosk && this.recognition) {
+            this.updateSpeechGrammar();
+          } else if (this.useVosk && VoskRecognizer.recognizer) {
+            VoskRecognizer.updateVoskGrammar();
+          }
+          
+          // Clear flag and start next phrase
+          this.isChangingScenario = false;
           this.nextPhrase();
         },
 
