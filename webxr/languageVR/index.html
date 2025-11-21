@@ -2458,6 +2458,15 @@ assets/vosk-models/nl.tar.gz</pre>
             // Log every 300 frames (~5 seconds at 60fps) if no analyser found
             if (this.frameCount % 300 === 0) {
               console.warn('[Mic Level Visualizer] No analyser available yet (frame', this.frameCount, ')');
+              console.warn('[Mic Level Visualizer] Debug - window.LanguageApp:', !!window.LanguageApp);
+              if (window.LanguageApp) {
+                console.warn('[Mic Level Visualizer] Debug - LanguageApp.useVosk:', window.LanguageApp.useVosk);
+                console.warn('[Mic Level Visualizer] Debug - LanguageApp.analyser:', !!window.LanguageApp.analyser);
+              }
+              console.warn('[Mic Level Visualizer] Debug - window.VoskRecognizer:', !!window.VoskRecognizer);
+              if (window.VoskRecognizer) {
+                console.warn('[Mic Level Visualizer] Debug - VoskRecognizer.analyser:', !!window.VoskRecognizer.analyser);
+              }
             }
             return; // No analyser available yet
           }
