@@ -744,8 +744,7 @@
             this.recognizer = new this.model.KaldiRecognizer(16000);
             this.recognizer.setWords(true);
             
-            // Add phrase hints for better Vosk accuracy
-            this.updateVoskGrammar();
+            // Note: Grammar will be set later after LanguageApp initializes
             
             console.log('[Vosk] ✓ Recognizer created');
             console.log('[Vosk] Recognizer methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.recognizer)));
@@ -965,7 +964,16 @@
         },
         
         updateVoskGrammar() {
-          if (!this.recognizer) return;
+          if (!this.recognizer) {
+            console.log('[Vosk] Recognizer not initialized, skipping grammar update');
+            return;
+          }
+          
+          // Check if LanguageApp is available
+          if (!window.LanguageApp || !window.LanguageApp.phrases || !window.LanguageApp.currentLanguage) {
+            console.log('[Vosk] LanguageApp not yet initialized, skipping grammar update');
+            return;
+          }
           
           // Get all phrases for current language across all scenarios
           const allPhrases = [];
@@ -978,7 +986,10 @@
             }
           });
           
-          if (allPhrases.length === 0) return;
+          if (allPhrases.length === 0) {
+            console.log('[Vosk] No phrases found for grammar');
+            return;
+          }
           
           // Vosk expects a JSON array of phrases
           const grammar = JSON.stringify(allPhrases);
@@ -1421,6 +1432,9 @@ assets/vosk-models/nl.tar.gz</pre>
             // Initialize grammar hints before starting
             if (!this.useVosk && this.recognition) {
               this.updateSpeechGrammar();
+            } else if (this.useVosk && VoskRecognizer.recognizer) {
+              // Now that LanguageApp is initialized, we can set Vosk grammar
+              VoskRecognizer.updateVoskGrammar();
             }
             
             this.nextPhrase();
