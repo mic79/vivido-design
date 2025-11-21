@@ -859,6 +859,15 @@
             this.processor.connect(this.audioContext.destination);
             
             console.log('[Vosk] ✓ Audio pipeline ready with analyser');
+            
+            // Directly set analyser on mic-level-bar entity
+            const micLevelBar = document.querySelector('#mic-level-bar');
+            if (micLevelBar && micLevelBar.components && micLevelBar.components['mic-level-visualizer']) {
+              micLevelBar.components['mic-level-visualizer'].analyser = this.analyser;
+              console.log('[Vosk] ✓ Analyser set on mic-level-bar entity');
+            } else {
+              console.warn('[Vosk] Could not find mic-level-bar entity or component');
+            }
           } catch (error) {
             console.error('[Vosk] Audio setup error:', error);
             throw error;
@@ -2428,52 +2437,24 @@ assets/vosk-models/nl.tar.gz</pre>
         init: function() {
           console.log('[Mic Level Visualizer] Component initialized');
           this.maxWidth = 1.5; // Maximum bar width
-          this.loggedOnce = false; // Only log analyser status once
+          this.analyser = null; // Will be set by VoskRecognizer or LanguageApp
           this.frameCount = 0;
         },
         
         tick: function() {
           this.frameCount++;
           
-          // Get analyser from LanguageApp or VoskRecognizer
-          let analyser = null;
-          
-          if (window.LanguageApp) {
-            if (window.LanguageApp.useVosk && window.VoskRecognizer && window.VoskRecognizer.analyser) {
-              analyser = window.VoskRecognizer.analyser;
-              if (!this.loggedOnce) {
-                console.log('[Mic Level Visualizer] Using Vosk analyser');
-                this.loggedOnce = true;
-              }
-            } else if (window.LanguageApp.analyser) {
-              analyser = window.LanguageApp.analyser;
-              if (!this.loggedOnce) {
-                console.log('[Mic Level Visualizer] Using LanguageApp analyser');
-                this.loggedOnce = true;
-              }
-            }
-          }
-          
-          if (!analyser) {
+          if (!this.analyser) {
             // Log every 300 frames (~5 seconds at 60fps) if no analyser found
             if (this.frameCount % 300 === 0) {
-              console.warn('[Mic Level Visualizer] No analyser available yet (frame', this.frameCount, ')');
-              console.warn('[Mic Level Visualizer] Debug - window.LanguageApp:', !!window.LanguageApp);
-              if (window.LanguageApp) {
-                console.warn('[Mic Level Visualizer] Debug - LanguageApp.useVosk:', window.LanguageApp.useVosk);
-                console.warn('[Mic Level Visualizer] Debug - LanguageApp.analyser:', !!window.LanguageApp.analyser);
-              }
-              console.warn('[Mic Level Visualizer] Debug - window.VoskRecognizer:', !!window.VoskRecognizer);
-              if (window.VoskRecognizer) {
-                console.warn('[Mic Level Visualizer] Debug - VoskRecognizer.analyser:', !!window.VoskRecognizer.analyser);
-              }
+              console.warn('[Mic Level Visualizer] No analyser set yet (frame', this.frameCount, ')');
             }
             return; // No analyser available yet
           }
           
           // Get frequency data
-          const dataArray = new Uint8Array(analyser.frequencyBinCount);
-          analyser.getByteFrequencyData(dataArray);
+          const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+          this.analyser.getByteFrequencyData(dataArray);
           
           // Calculate average level
           let sum = 0;
