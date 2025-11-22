@@ -2316,12 +2316,6 @@ assets/vosk-models/nl.tar.gz</pre>
         init: function() {
           this.uiVisible = true;
           this.aButtonPressed = false; // Track button state to prevent repeated toggles
-          
-          // Listen for A button press event
-          this.el.addEventListener('abuttondown', (evt) => {
-            console.log('[UI Toggle] A button pressed via event');
-            this.toggleUI();
-          });
         },
         
         tick: function() {
