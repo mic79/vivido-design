@@ -295,7 +295,7 @@
     <div id="feedback-banner"></div>
 
     <!-- VR Scene -->
-    <a-scene background="color: #87CEEB" renderer="antialias: true; colorManagement: true">
+    <a-scene background="color: #87CEEB" renderer="antialias: true; colorManagement: true" ui-toggle-controller>
       <!-- Lighting -->
       <a-entity light="type: ambient; intensity: 0.6"></a-entity>
       <a-entity light="type: directional; intensity: 0.8" position="2 4 2"></a-entity>
@@ -313,7 +313,6 @@
                   visible="false"
                   laser-controls="hand: left"
                   raycaster="objects: .clickable; far: 10; lineColor: red; lineOpacity: 0.75"
-                  ui-toggle-controller
                   raycaster-debug></a-entity>
         <a-entity id="right-hand" 
                   hand-controls="hand: right; handModelStyle: lowPoly"
@@ -321,7 +320,6 @@
                   visible="false"
                   laser-controls="hand: right"
                   raycaster="objects: .clickable; far: 10; lineColor: red; lineOpacity: 0.75"
-                  ui-toggle-controller
                   raycaster-debug></a-entity>
       </a-entity>
 
@@ -2315,27 +2313,16 @@ assets/vosk-models/nl.tar.gz</pre>
       AFRAME.registerComponent('ui-toggle-controller', {
         init: function() {
           this.uiVisible = true;
-          this.aButtonPressed = false; // Track button state to prevent repeated toggles
-        },
-        
-        tick: function() {
-          // Quest fallback: Poll gamepad state directly
-          const gamepad = this.el.components['oculus-touch-controls'];
-          if (gamepad && gamepad.controller && gamepad.controller.gamepad) {
-            const buttons = gamepad.controller.gamepad.buttons;
-            // A button is typically button[4] on Oculus Touch controllers
-            if (buttons && buttons[4]) {
-              const aButtonCurrentlyPressed = buttons[4].pressed;
-              
-              // Detect button press (transition from not pressed to pressed)
-              if (aButtonCurrentlyPressed && !this.aButtonPressed) {
-                console.log('[UI Toggle] A button pressed via polling');
-                this.toggleUI();
-              }
-              
-              this.aButtonPressed = aButtonCurrentlyPressed;
-            }
-          }
+          this.lastAButtonPress = 0;
+          
+          // A button to toggle UI with debouncing (same pattern as spaceshooter.html)
+          this.el.sceneEl.addEventListener('abuttondown', () => {
+            const now = Date.now();
+            if (now - this.lastAButtonPress < 500) return; // 500ms debounce
+            this.lastAButtonPress = now;
+            console.log('[UI Toggle] A button pressed');
+            this.toggleUI();
+          });
         },
         
         toggleUI: function() {
