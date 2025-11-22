@@ -2551,26 +2551,42 @@ assets/vosk-models/nl.tar.gz</pre>
             this.npcTutor = document.querySelector('#npc-tutor');
           }, 100);
           
-          // Hide hand controller models
-          setTimeout(() => {
+          // Hide hand controller models (aggressive hiding for Quest)
+          const hideHandModels = () => {
             const leftHand = document.querySelector('#left-hand');
             const rightHand = document.querySelector('#right-hand');
             
             if (leftHand && leftHand.object3D) {
+              leftHand.object3D.visible = false; // Hide entire object3D
               leftHand.object3D.traverse((node) => {
                 if (node.isMesh) {
                   node.visible = false;
+                  // Also hide material to be extra sure
+                  if (node.material) {
+                    node.material.visible = false;
+                  }
                 }
               });
             }
             if (rightHand && rightHand.object3D) {
+              rightHand.object3D.visible = false; // Hide entire object3D
               rightHand.object3D.traverse((node) => {
                 if (node.isMesh) {
                   node.visible = false;
+                  // Also hide material to be extra sure
+                  if (node.material) {
+                    node.material.visible = false;
+                  }
                 }
               });
             }
-          }, 1000);
+          };
+          
+          // Run immediately and then again after delays to catch late-loading models
+          setTimeout(hideHandModels, 100);
+          setTimeout(hideHandModels, 500);
+          setTimeout(hideHandModels, 1000);
+          setTimeout(hideHandModels, 2000);
           
           this.el.sceneEl.addEventListener('thumbstickmoved', (evt) => {
             if (!evt.target || !evt.target.object3D) return;
