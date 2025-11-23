@@ -839,7 +839,8 @@
               if (!this.isListening || !this.recognizer) return;
               
               audioChunkCount++;
-              if (audioChunkCount % 50 === 0) {
+              // Reduced logging frequency: log every 200 chunks (~13 seconds) instead of every 50 (~3 seconds)
+              if (audioChunkCount % 200 === 0) {
                 console.log('[Vosk] Processing audio chunks...', audioChunkCount);
               }
               
@@ -875,6 +876,13 @@
         start() {
           if (!this.isInitialized) {
             console.error('[Vosk] Not initialized');
+            return;
+          }
+          
+          // Check if already listening before starting
+          if (this.isListening) {
+            console.warn('[Vosk] Already listening, ensuring flags are synchronized');
+            this.shouldProcessResults = true; // Re-enable processing just in case
             return;
           }
           
@@ -990,12 +998,33 @@
           
           // Get all phrases for current language across all scenarios
           const allPhrases = [];
-          const scenarios = ['restaurant', 'shopping', 'directions'];
+          const scenarios = ['restaurant', 'shopping', 'directions', 'greetings'];
           
           scenarios.forEach(scenario => {
             const scenarioPhrases = window.LanguageApp.phrases[scenario][window.LanguageApp.currentLanguage];
             if (scenarioPhrases) {
-              scenarioPhrases.forEach(p => allPhrases.push(p.text));
+              scenarioPhrases.forEach(p => {
+                // Add the main phrase
+                allPhrases.push(p.text);
+                
+                // Add variations without punctuation
+                const noPunct = p.text.replace(/[¿¡?!.,]/g, '').trim();
+                if (noPunct !== p.text) {
+                  allPhrases.push(noPunct);
+                }
+                
+                // Add lowercase version
+                allPhrases.push(p.text.toLowerCase());
+                allPhrases.push(noPunct.toLowerCase());
+                
+                // Add individual words for better word-level recognition
+                const words = noPunct.toLowerCase().split(/\s+/);
+                words.forEach(word => {
+                  if (word.length > 2) { // Skip very short words
+                    allPhrases.push(word);
+                  }
+                });
+              });
             }
           });
           
@@ -1004,14 +1033,17 @@
             return;
           }
           
+          // Remove duplicates
+          const uniquePhrases = [...new Set(allPhrases)];
+          
           // Vosk expects a JSON array of phrases
-          const grammar = JSON.stringify(allPhrases);
+          const grammar = JSON.stringify(uniquePhrases);
           
           try {
             // Set grammar if the method exists
             if (typeof this.recognizer.setGrammar === 'function') {
               this.recognizer.setGrammar(grammar);
-              console.log('[Vosk] Grammar updated with', allPhrases.length, 'phrases');
+              console.log('[Vosk] Grammar updated with', uniquePhrases.length, 'phrases/words (from', allPhrases.length, 'total including variations)');
             } else {
               console.log('[Vosk] setGrammar not available, using default model vocabulary');
             }
@@ -1715,7 +1747,63 @@ assets/vosk-models/nl.tar.gz</pre>
           }
         },
 
+        cleanupSceneResources(envEntity) {
+          // Aggressively cleanup 3D models, textures, and geometries
+          if (!envEntity) return;
+          
+          console.log('[Memory] Cleaning up scene resources for:', envEntity.id);
+          
+          // Find all GLTF models in this environment
+          const gltfModels = envEntity.querySelectorAll('[gltf-model]');
+          gltfModels.forEach(model => {
+            try {
+              // Remove the model from memory
+              if (model.object3D) {
+                model.object3D.traverse((node) => {
+                  if (node.geometry) {
+                    node.geometry.dispose();
+                  }
+                  if (node.material) {
+                    if (Array.isArray(node.material)) {
+                      node.material.forEach(mat => {
+                        if (mat.map) mat.map.dispose();
+                        if (mat.lightMap) mat.lightMap.dispose();
+                        if (mat.bumpMap) mat.bumpMap.dispose();
+                        if (mat.normalMap) mat.normalMap.dispose();
+                        if (mat.specularMap) mat.specularMap.dispose();
+                        if (mat.envMap) mat.envMap.dispose();
+                        mat.dispose();
+                      });
+                    } else {
+                      if (node.material.map) node.material.map.dispose();
+                      if (node.material.lightMap) node.material.lightMap.dispose();
+                      if (node.material.bumpMap) node.material.bumpMap.dispose();
+                      if (node.material.normalMap) node.material.normalMap.dispose();
+                      if (node.material.specularMap) node.material.specularMap.dispose();
+                      if (node.material.envMap) node.material.envMap.dispose();
+                      node.material.dispose();
+                    }
+                  }
+                });
+              }
+              
+              // Remove the GLTF model component
+              if (model.components && model.components['gltf-model']) {
+                model.removeAttribute('gltf-model');
+              }
+              
+              console.log('[Memory] ✓ Cleaned up model:', model.id);
+            } catch (err) {
+              console.warn('[Memory] Error cleaning up model:', err);
+            }
+          });
+          
+          console.log('[Memory] ✓ Scene cleanup complete for:', envEntity.id);
+        },
+
         switchEnvironment(scenario) {
+          console.log('[Environment] Switching to scenario:', scenario);
+          
           const envClassroom = document.getElementById('env-classroom');
           const envRestaurant = document.getElementById('env-restaurant');
           const envShopping = document.getElementById('env-shopping');
@@ -1723,20 +1811,47 @@ assets/vosk-models/nl.tar.gz</pre>
           
           if (!envClassroom || !envRestaurant || !envShopping || !envDirections) return;
           
+          // Step 1: Hide all environments FIRST
+          console.log('[Environment] Hiding all environments...');
           envClassroom.setAttribute('visible', 'false');
           envRestaurant.setAttribute('visible', 'false');
           envShopping.setAttribute('visible', 'false');
           envDirections.setAttribute('visible', 'false');
           
-          if (scenario === 'directions') {
-            envDirections.setAttribute('visible', 'true');
-          } else if (scenario === 'shopping') {
-            envShopping.setAttribute('visible', 'true');
-          } else if (scenario === 'restaurant') {
-            envRestaurant.setAttribute('visible', 'true');
-          } else {
-            envClassroom.setAttribute('visible', 'true');
+          // Step 2: Aggressively cleanup memory from currently invisible scenes
+          // This is critical for Quest to prevent crashes
+          console.log('[Environment] Starting memory cleanup...');
+          const environments = [envClassroom, envRestaurant, envShopping, envDirections];
+          environments.forEach(env => {
+            if (env.getAttribute('visible') === 'false' || env.getAttribute('visible') === false) {
+              this.cleanupSceneResources(env);
+            }
+          });
+          
+          // Step 3: Request garbage collection (browser hint)
+          // Force a small delay to allow GC to run
+          console.log('[Environment] Requesting garbage collection...');
+          if (window.gc) {
+            // Only available in development builds or with --expose-gc flag
+            window.gc();
           }
+          
+          // Step 4: Small delay before showing new environment (allows memory to settle)
+          setTimeout(() => {
+            console.log('[Environment] Activating new scenario:', scenario);
+            
+            if (scenario === 'directions') {
+              envDirections.setAttribute('visible', 'true');
+            } else if (scenario === 'shopping') {
+              envShopping.setAttribute('visible', 'true');
+            } else if (scenario === 'restaurant') {
+              envRestaurant.setAttribute('visible', 'true');
+            } else {
+              envClassroom.setAttribute('visible', 'true');
+            }
+            
+            console.log('[Environment] ✓ Scenario switch complete');
+          }, 200); // 200ms delay for memory cleanup and GC
         },
 
         nextPhrase() {
@@ -1854,8 +1969,7 @@ assets/vosk-models/nl.tar.gz</pre>
             
             const audio = new Audio(audioPath);
             
-            // Show speech bubble
-            this.showSpeechBubble(text);
+            // Don't show speech bubble for audio files - only update instruction text
             this.updateVRText('vr-instruction-text', '🔊 NPC is speaking...');
             
             audio.onloadeddata = () => {
@@ -1869,15 +1983,14 @@ assets/vosk-models/nl.tar.gz</pre>
             
             audio.onended = () => {
               console.log('[NPC Speak] ✓ Audio playback finished');
+              // Reduced delay from 800ms to 300ms for faster user experience
               setTimeout(() => {
-                this.hideSpeechBubble();
-                
                 // Start listening after audio completes
                 if (!this.isPaused) {
                   console.log('[NPC Speak] ✓ Starting STT after audio finished');
                   this.startListening();
                 }
-              }, 800);
+              }, 300);
             };
             
             audio.onerror = (e) => {
@@ -1994,6 +2107,7 @@ assets/vosk-models/nl.tar.gz</pre>
                 console.error('[NPC] ❌ Audio blocked by browser - try clicking REPEAT button');
                 this.updateVRText('vr-instruction-text', '❌ Audio blocked - click REPEAT');
               }
+              // Reduced delay from 800ms to 300ms for faster user experience
               setTimeout(() => {
                 this.hideSpeechBubble();
                 
@@ -2003,7 +2117,7 @@ assets/vosk-models/nl.tar.gz</pre>
                   console.log('[NPC Speak TTS] ✓ Starting STT after TTS finished');
                   this.startListening();
                 }
-              }, 800);
+              }, 300);
             };
             
             utterance.onerror = (event) => {
@@ -2053,11 +2167,15 @@ assets/vosk-models/nl.tar.gz</pre>
           if (this.isPaused) return;
           
           if (this.useVosk) {
-            // Prevent duplicate instances
-            if (this.isListening) {
-              console.warn('[STT] Vosk already listening, skipping start');
+            // Double-check Vosk state before starting
+            if (this.isListening || VoskRecognizer.isListening) {
+              console.warn('[STT] Vosk already listening (App:', this.isListening, 'Vosk:', VoskRecognizer.isListening, ') - skipping start');
+              // Synchronize flags to ensure consistency
+              this.isListening = VoskRecognizer.isListening;
               return;
             }
+            
+            console.log('[STT] Starting Vosk...');
             VoskRecognizer.start();
             this.isListening = true;
             this.updateVRText('vr-instruction-text', '🎤 SPEAK NOW!');
@@ -2109,7 +2227,7 @@ assets/vosk-models/nl.tar.gz</pre>
 
           let feedback, points, className;
 
-          if (isContained || similarity > 0.85) {
+          if (isContained || similarity > 0.80) {
             feedback = '¡Excelente! 🎉<br>Perfect!';
             points = 100;
             className = 'success';
@@ -2123,7 +2241,7 @@ assets/vosk-models/nl.tar.gz</pre>
               }
             }, 2000);
             this.pendingTimeouts.push(timeoutId);
-          } else if (similarity > 0.70) {
+          } else if (similarity > 0.60) {
             feedback = '¡Bien! 👍<br>Good, try again';
             points = 50;
             className = 'warning';
@@ -2136,7 +2254,7 @@ assets/vosk-models/nl.tar.gz</pre>
               // npcSpeak will handle startListening via onend callback
             }, 2000);
             this.pendingTimeouts.push(timeoutId);
-          } else if (similarity > 0.50) {
+          } else if (similarity > 0.45) {
             feedback = 'Casi... 🤔<br>Almost!';
             points = 25;
             className = 'warning';
@@ -2181,31 +2299,47 @@ assets/vosk-models/nl.tar.gz</pre>
         },
 
         levenshteinDistance(str1, str2) {
-          const matrix = [];
-
-          for (let i = 0; i <= str2.length; i++) {
-            matrix[i] = [i];
+          // Pre-allocate matrix rows to reduce allocations
+          const len1 = str1.length;
+          const len2 = str2.length;
+          
+          // Early exit for edge cases
+          if (len1 === 0) return len2;
+          if (len2 === 0) return len1;
+          
+          // Use single array with rolling window instead of 2D matrix
+          // This reduces memory from O(n*m) to O(min(n,m))
+          let prevRow = new Array(len1 + 1);
+          let currRow = new Array(len1 + 1);
+          
+          // Initialize first row
+          for (let j = 0; j <= len1; j++) {
+            prevRow[j] = j;
           }
-
-          for (let j = 0; j <= str1.length; j++) {
-            matrix[0][j] = j;
-          }
-
-          for (let i = 1; i <= str2.length; i++) {
-            for (let j = 1; j <= str1.length; j++) {
+          
+          // Calculate distance using rolling arrays
+          for (let i = 1; i <= len2; i++) {
+            currRow[0] = i;
+            
+            for (let j = 1; j <= len1; j++) {
               if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
+                currRow[j] = prevRow[j - 1];
               } else {
-                matrix[i][j] = Math.min(
-                  matrix[i - 1][j - 1] + 1,
-                  matrix[i][j - 1] + 1,
-                  matrix[i - 1][j] + 1
+                currRow[j] = Math.min(
+                  prevRow[j - 1] + 1,  // substitution
+                  currRow[j - 1] + 1,  // insertion
+                  prevRow[j] + 1       // deletion
                 );
               }
             }
+            
+            // Swap rows for next iteration
+            const temp = prevRow;
+            prevRow = currRow;
+            currRow = temp;
           }
-
-          return matrix[str2.length][str1.length];
+          
+          return prevRow[len1];
         },
         
         clearPendingTimeouts() {
@@ -2305,8 +2439,12 @@ assets/vosk-models/nl.tar.gz</pre>
             this.synthesis.cancel();
           }
           
-          // Stop recognition immediately
-          if (!this.useVosk && this.recognition && this.isListening) {
+          // Stop recognition immediately and cleanup audio resources
+          if (this.useVosk && this.isListening) {
+            console.log('[Language App] Stopping Vosk for scenario change');
+            VoskRecognizer.stop();
+            this.isListening = false;
+          } else if (!this.useVosk && this.recognition && this.isListening) {
             try {
               this.recognition.stop();
               this.isListening = false;
@@ -2323,20 +2461,28 @@ assets/vosk-models/nl.tar.gz</pre>
             }
           }
           
+          // Show loading message during cleanup and switch
+          this.updateVRText('vr-instruction-text', '⏳ Changing scenario...');
+          
           this.currentScenario = scenario;
           this.currentPhraseIndex = 0;
+          
+          // switchEnvironment now handles cleanup and has built-in delay
           this.switchEnvironment(scenario);
           
-          // Update grammar hints for new scenario
-          if (!this.useVosk && this.recognition) {
-            this.updateSpeechGrammar();
-          } else if (this.useVosk && VoskRecognizer.recognizer) {
-            VoskRecognizer.updateVoskGrammar();
-          }
-          
-          // Clear flag and start next phrase
-          this.isChangingScenario = false;
-          this.nextPhrase();
+          // Wait for environment switch to complete before updating grammar
+          setTimeout(() => {
+            // Update grammar hints for new scenario
+            if (!this.useVosk && this.recognition) {
+              this.updateSpeechGrammar();
+            } else if (this.useVosk && VoskRecognizer.recognizer) {
+              VoskRecognizer.updateVoskGrammar();
+            }
+            
+            // Clear flag and start next phrase
+            this.isChangingScenario = false;
+            this.nextPhrase();
+          }, 300); // Slightly longer than switchEnvironment delay (200ms)
         },
 
         awardPoints(points) {
@@ -2419,6 +2565,10 @@ assets/vosk-models/nl.tar.gz</pre>
           
           this.originalColor = this.el.getAttribute('color');
           
+          // Cache button queries for performance (avoid repeated DOM queries)
+          this.langButtonsCache = null;
+          this.scenarioButtonsCache = null;
+          
           // Also handle data attributes for backwards compatibility
           if (!this.data.lang && this.el.getAttribute('data-lang')) {
             this.data.lang = this.el.getAttribute('data-lang');
@@ -2453,9 +2603,11 @@ assets/vosk-models/nl.tar.gz</pre>
             const langName = this.el.getAttribute('data-name') || this.data.lang;
             LanguageApp.changeLanguage(this.data.lang, langName);
             
-            // Update button colors
-            const langButtons = document.querySelectorAll('.lang-button');
-            langButtons.forEach(btn => {
+            // Update button colors (use cached query)
+            if (!this.langButtonsCache) {
+              this.langButtonsCache = document.querySelectorAll('.lang-button');
+            }
+            this.langButtonsCache.forEach(btn => {
               btn.setAttribute('color', '#2196F3');
             });
             this.el.setAttribute('color', '#4CAF50');
@@ -2466,9 +2618,11 @@ assets/vosk-models/nl.tar.gz</pre>
             console.log('[VR Button] Scenario selected:', this.data.scenario);
             LanguageApp.changeScenario(this.data.scenario);
             
-            // Update button colors
-            const scenarioButtons = document.querySelectorAll('.scenario-button');
-            scenarioButtons.forEach(btn => {
+            // Update button colors (use cached query)
+            if (!this.scenarioButtonsCache) {
+              this.scenarioButtonsCache = document.querySelectorAll('.scenario-button');
+            }
+            this.scenarioButtonsCache.forEach(btn => {
               btn.setAttribute('color', '#2196F3');
             });
             this.el.setAttribute('color', '#4CAF50');
@@ -2504,6 +2658,10 @@ assets/vosk-models/nl.tar.gz</pre>
           this.maxWidth = 1.5; // Maximum bar width
           this.analyser = null; // Will be set by VoskRecognizer or LanguageApp
           this.frameCount = 0;
+          this.dataArray = null; // Pre-allocated array for performance
+          this.lastColor = null; // Cache last color to avoid redundant setAttribute
+          this.lastWidth = 0; // Cache last width
+          this.lastPosX = 0; // Cache last position
         },
         
         tick: function() {
@@ -2517,37 +2675,54 @@ assets/vosk-models/nl.tar.gz</pre>
             return; // No analyser available yet
           }
           
-          // Get frequency data
-          const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-          this.analyser.getByteFrequencyData(dataArray);
+          // Allocate dataArray once when analyser becomes available
+          if (!this.dataArray) {
+            this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+            console.log('[Mic Level Visualizer] ✓ Pre-allocated dataArray (size:', this.analyser.frequencyBinCount, ') - eliminates per-frame allocations');
+          }
+          
+          // Get frequency data (reuses pre-allocated array)
+          this.analyser.getByteFrequencyData(this.dataArray);
           
           // Calculate average level
           let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
+          for (let i = 0; i < this.dataArray.length; i++) {
+            sum += this.dataArray[i];
           }
-          const average = sum / dataArray.length;
+          const average = sum / this.dataArray.length;
           const normalized = average / 255; // 0.0 to 1.0
           
-          // Update bar width
+          // Update bar width (only if changed significantly)
           const barWidth = normalized * this.maxWidth;
-          this.el.setAttribute('width', barWidth);
-          
-          // Update bar position (expand from left)
-          const barX = -0.75 + (barWidth / 2);
-          this.el.object3D.position.x = barX;
-          
-          // Update bar color based on level
-          if (normalized > 0.3) {
-            this.el.setAttribute('color', '#4CAF50'); // Green - good level
-          } else if (normalized > 0.1) {
-            this.el.setAttribute('color', '#FFC107'); // Yellow - low level
-          } else {
-            this.el.setAttribute('color', '#666666'); // Gray - very low/silent
+          if (Math.abs(barWidth - this.lastWidth) > 0.01) { // 1% threshold
+            this.el.setAttribute('width', barWidth);
+            this.lastWidth = barWidth;
+            
+            // Update bar position (expand from left)
+            const barX = -0.75 + (barWidth / 2);
+            if (Math.abs(barX - this.lastPosX) > 0.005) { // 0.5% threshold
+              this.el.object3D.position.x = barX;
+              this.lastPosX = barX;
+            }
           }
           
-          // Log mic activity every 60 frames (~1 second)
-          if (this.frameCount % 60 === 0 && normalized > 0.05) {
+          // Update bar color based on level (only if changed)
+          let newColor;
+          if (normalized > 0.3) {
+            newColor = '#4CAF50'; // Green - good level
+          } else if (normalized > 0.1) {
+            newColor = '#FFC107'; // Yellow - low level
+          } else {
+            newColor = '#666666'; // Gray - very low/silent
+          }
+          
+          if (newColor !== this.lastColor) {
+            this.el.setAttribute('color', newColor);
+            this.lastColor = newColor;
+          }
+          
+          // Log mic activity every 120 frames (~2 seconds) - reduced logging
+          if (this.frameCount % 120 === 0 && normalized > 0.05) {
             console.log('[Mic Level Visualizer] Level:', (normalized * 100).toFixed(1) + '%');
           }
         }
