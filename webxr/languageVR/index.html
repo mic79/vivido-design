@@ -1606,10 +1606,8 @@ assets/vosk-models/nl.tar.gz</pre>
               document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('active'));
               btn.classList.add('active');
               
-              this.currentScenario = btn.dataset.scenario;
-              this.currentPhraseIndex = 0;
-              this.switchEnvironment(this.currentScenario);
-              this.nextPhrase();
+              // Use changeScenario() for consistency and proper cleanup
+              this.changeScenario(btn.dataset.scenario);
             });
           });
         },
@@ -1681,20 +1679,11 @@ assets/vosk-models/nl.tar.gz</pre>
             });
             
             // Scenario selection in VR
+            // Note: VR scenario buttons now use the vr-button component exclusively
+            // The vr-button component calls changeScenario() which handles all logic
             const scenarioButtons = document.querySelectorAll('.scenario-button');
             scenarioButtons.forEach(btn => {
-              btn.addEventListener('click', () => {
-                const scenario = btn.getAttribute('data-scenario');
-                
-                scenarioButtons.forEach(b => b.setAttribute('color', '#2196F3'));
-                btn.setAttribute('color', '#4CAF50');
-                
-                this.currentScenario = scenario;
-                this.currentPhraseIndex = 0;
-                this.switchEnvironment(scenario);
-                this.nextPhrase();
-              });
-              
+              // Only add hover effects, clicks are handled by vr-button component
               btn.addEventListener('mouseenter', () => {
                 if (btn.getAttribute('color') !== '#4CAF50') {
                   btn.setAttribute('color', '#1976D2');
@@ -2571,6 +2560,10 @@ assets/vosk-models/nl.tar.gz</pre>
           
           this.originalColor = this.el.getAttribute('color');
           
+          // Add debouncing to prevent double-clicks in VR
+          this.lastClickTime = 0;
+          this.clickDebounceMs = 500; // 500ms debounce for VR controller double-clicks
+          
           // Cache button queries for performance (avoid repeated DOM queries)
           this.langButtonsCache = null;
           this.scenarioButtonsCache = null;
@@ -2585,6 +2578,14 @@ assets/vosk-models/nl.tar.gz</pre>
         },
         
         onClick: function() {
+          // Debounce to prevent double-clicks from VR controllers
+          const now = Date.now();
+          if (now - this.lastClickTime < this.clickDebounceMs) {
+            console.log('[VR Button] ⚠️ Ignoring duplicate click (debounced)');
+            return;
+          }
+          this.lastClickTime = now;
+          
           console.log('[VR Button] Clicked:', this.data.action || this.data.lang || this.data.scenario);
           
           // Handle action buttons
