@@ -296,6 +296,19 @@
 
     <!-- VR Scene -->
     <a-scene background="color: #87CEEB" renderer="antialias: true; colorManagement: true" ui-toggle-controller>
+      <!-- Preload all 3D models using A-Frame's asset management system -->
+      <!-- This shows a built-in loading screen and ensures all models are cached before scene starts -->
+      <a-assets timeout="30000">
+        <!-- Restaurant Environment -->
+        <a-asset-item id="temple-model-asset" src="assets/bagan_-_khayiminga_temple_interior.glb"></a-asset-item>
+        
+        <!-- Shopping Environment -->
+        <a-asset-item id="moosstock-model-asset" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/moosstock_mountain_peak_3024_m.glb"></a-asset-item>
+        
+        <!-- Directions Environment -->
+        <a-asset-item id="hintze-hall-model-asset" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/hintze_hall.glb"></a-asset-item>
+      </a-assets>
+      
       <!-- Lighting -->
       <a-entity light="type: ambient; intensity: 0.6"></a-entity>
       <a-entity light="type: directional; intensity: 0.8" position="2 4 2"></a-entity>
@@ -640,7 +653,7 @@
       
       <a-entity id="env-restaurant" visible="false">
         <a-entity id="temple-model" 
-                  gltf-model="url(assets/bagan_-_khayiminga_temple_interior.glb)" 
+                  gltf-model="#temple-model-asset" 
                   position="0 1 -4" 
                   rotation="0 180 0"
                   scale="2 2 2"
@@ -656,7 +669,7 @@
       
       <a-entity id="env-shopping" visible="false">
         <a-entity id="moosstock-mountain-model" 
-                  gltf-model="url(https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/moosstock_mountain_peak_3024_m.glb)" 
+                  gltf-model="#moosstock-model-asset" 
                   position="0 -67 10" 
                   rotation="0 90 0"
                   scale="80 80 80"
@@ -672,7 +685,7 @@
       
       <a-entity id="env-directions" visible="false">
         <a-entity id="hintze-hall-model" 
-                  gltf-model="url(https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/hintze_hall.glb)" 
+                  gltf-model="#hintze-hall-model-asset" 
                   position="2.5 -0.5 -12.5" 
                   rotation="0 180 0"
                   scale="1 1 1"
