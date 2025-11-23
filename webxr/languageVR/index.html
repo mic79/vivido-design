@@ -651,7 +651,7 @@
                 width="6"></a-text>
       </a-entity>
       
-      <a-entity id="env-restaurant" visible="true">
+      <a-entity id="env-restaurant" visible="false">
         <a-entity id="temple-model" 
                   gltf-model="#temple-model-asset" 
                   position="0 1 -4" 
@@ -667,7 +667,7 @@
                  shadow="receive: true"></a-plane>
       </a-entity>
       
-      <a-entity id="env-shopping" visible="true">
+      <a-entity id="env-shopping" visible="false">
         <a-entity id="moosstock-mountain-model" 
                   gltf-model="#moosstock-model-asset" 
                   position="0 -67 10" 
@@ -683,7 +683,7 @@
                  shadow="receive: true"></a-plane>
       </a-entity>
       
-      <a-entity id="env-directions" visible="true">
+      <a-entity id="env-directions" visible="false">
         <a-entity id="hintze-hall-model" 
                   gltf-model="#hintze-hall-model-asset" 
                   position="2.5 -0.5 -12.5" 
@@ -1222,30 +1222,16 @@
         },
 
         async init() {
-          console.log('[Language App] Initializing with Vosk support...');
-          
-          // Show loading overlay
-          const loadingOverlay = document.getElementById('loading-overlay');
-          const progressFill = document.getElementById('progress-fill');
-          const loadingStatus = document.getElementById('loading-status');
-          loadingOverlay.classList.remove('hidden');
-          progressFill.style.width = '0%';
-          loadingStatus.textContent = 'Initializing...';
+          console.log('[Language App] Initializing...');
           
           // Initialize flags
           this.audioUnlocked = false;
           this.waitingForInteraction = false;
-          
-          // Store timeout IDs for cancellation
           this.pendingTimeouts = [];
-          
-          // Add speaking flag to prevent overlapping audio
           this.isSpeaking = false;
-          
-          // Store reference to current audio playback for cancellation
           this.currentAudio = null;
           
-          // Initialize Speech Synthesis (CRITICAL - was missing!)
+          // Initialize Speech Synthesis
           this.synthesis = window.speechSynthesis;
           console.log('[Language App] Speech Synthesis initialized:', this.synthesis);
           
@@ -1262,10 +1248,8 @@
           this.setupUIListeners();
           this.setupVRButtons();
           
-          // STEP 1: Wait for A-Frame scene to be ready FIRST (0-20%)
-          console.log('[Init] Step 1: Waiting for A-Frame scene...');
-          progressFill.style.width = '5%';
-          loadingStatus.textContent = 'Initializing VR scene...';
+          // STEP 1: Wait for A-Frame scene to be ready
+          console.log('[Init] Waiting for A-Frame scene...');
           
           const scene = document.querySelector('a-scene');
           const sceneLoadPromise = new Promise((resolve) => {
@@ -1277,59 +1261,29 @@
           });
           
           await sceneLoadPromise;
-          progressFill.style.width = '20%';
-          loadingStatus.textContent = '✓ VR scene ready!';
-          console.log('[Init] ✓ Step 1 complete: A-Frame scene loaded');
+          console.log('[Init] ✓ A-Frame scene loaded');
           
-          // STEP 2: Load 3D environments sequentially (20-70%)
-          console.log('[Init] Step 2: Loading 3D environments...');
-          await this.preload3DEnvironments();
-          console.log('[Init] ✓ Step 2 complete: All 3D environments loaded');
-          
-          // STEP 3: Load ONLY current language Vosk model (70-100%)
+          // STEP 2: Load ONLY current language Vosk model
           if (this.useVosk) {
-            console.log('[Init] Step 3: Loading current language speech model...');
-            progressFill.style.width = '75%';
-            loadingStatus.textContent = `Loading ${this.currentLanguage.toUpperCase()} speech model...`;
+            console.log('[Init] Loading Vosk for current language...');
             
             try {
               await VoskRecognizer.init(
                 this.currentLanguage,
-                (progress, status) => {
-                  // Map Vosk progress (0-100%) to our progress (75-100%)
-                  const mappedProgress = 75 + Math.floor(progress * 0.25);
-                  progressFill.style.width = `${mappedProgress}%`;
-                  loadingStatus.textContent = `Speech: ${status}`;
-                  console.log(`[Init] Vosk progress: ${mappedProgress}%`);
-                },
+                null,
                 this.onVoskResult.bind(this),
                 this.onVoskPartialResult.bind(this)
               );
               this.analyser = VoskRecognizer.analyser;
-              
-              progressFill.style.width = '100%';
-              loadingStatus.textContent = '✓ Speech model loaded!';
-              console.log('[Init] ✓ Step 3 complete: Vosk model loaded');
+              console.log('[Init] ✓ Vosk initialized');
             } catch (error) {
               console.error('[Init] ❌ Vosk loading failed:', error);
-              loadingStatus.textContent = '❌ Speech model loading failed';
-              progressFill.style.width = '100%';
-              // Continue anyway with Web Speech API fallback
             }
           } else {
             this.initWebSpeechAPI();
-            progressFill.style.width = '100%';
-            loadingStatus.textContent = '✓ Speech recognition ready';
           }
           
-          // Hide loading overlay and show start screen
-          setTimeout(() => {
-            loadingOverlay.classList.add('hidden');
-            document.getElementById('start-screen').classList.remove('hidden');
-            console.log('[Init] ✓ All loading complete, showing start screen');
-          }, 500);
-          
-          // Call onSceneLoaded to set up grammar and start
+          // Call onSceneLoadedSetup to set up grammar
           this.onSceneLoadedSetup();
           
           console.log('[Language App] Initialization complete');
@@ -1557,73 +1511,6 @@ assets/vosk-models/nl.tar.gz</pre>
           if (heardEl) {
             heardEl.setAttribute('color', '#CCCCCC');
           }
-        },
-
-        async preload3DEnvironments() {
-          console.log('[Init] Loading 3D environments sequentially...');
-          
-          const progressFill = document.getElementById('progress-fill');
-          const loadingStatus = document.getElementById('loading-status');
-          
-          const envRestaurant = document.getElementById('env-restaurant');
-          const envShopping = document.getElementById('env-shopping');
-          const envDirections = document.getElementById('env-directions');
-          
-          // Keep all visible to force GPU loading
-          envRestaurant.setAttribute('visible', 'true');
-          envShopping.setAttribute('visible', 'true');
-          envDirections.setAttribute('visible', 'true');
-          
-          const templeModel = document.getElementById('temple-model');
-          const moosstockModel = document.getElementById('moosstock-mountain-model');
-          const hintzeModel = document.getElementById('hintze-hall-model');
-          
-          // Load models sequentially to avoid memory spike
-          const loadModel = (modelEl, name, progressStart, progressEnd) => {
-            return new Promise((resolve) => {
-              progressFill.style.width = `${progressStart}%`;
-              loadingStatus.textContent = `Loading ${name} environment...`;
-              console.log(`[3D Loading] Loading ${name}...`);
-              
-              const onLoaded = () => {
-                progressFill.style.width = `${progressEnd}%`;
-                loadingStatus.textContent = `✓ ${name} loaded!`;
-                console.log(`[3D Loading] ✓ ${name} loaded to GPU`);
-                resolve();
-              };
-              
-              // Check if already loaded
-              if (modelEl.components && modelEl.components['gltf-model'] && modelEl.components['gltf-model'].model) {
-                console.log(`[3D Loading] ${name} already loaded`);
-                onLoaded();
-              } else {
-                modelEl.addEventListener('model-loaded', onLoaded, { once: true });
-                
-                // Timeout fallback
-                setTimeout(() => {
-                  console.warn(`[3D Loading] ${name} loading timeout, continuing anyway`);
-                  resolve();
-                }, 30000); // 30 second timeout per model
-              }
-            });
-          };
-          
-          // Load sequentially: 20% → 37% → 53% → 70%
-          await loadModel(templeModel, 'Restaurant', 20, 37);
-          await loadModel(moosstockModel, 'Shopping', 37, 53);
-          await loadModel(hintzeModel, 'Directions', 53, 70);
-          
-          // All loaded, now hide non-active ones
-          progressFill.style.width = '70%';
-          loadingStatus.textContent = '✓ All environments ready!';
-          console.log('[3D Loading] ✓ All 3D models loaded to GPU');
-          
-          setTimeout(() => {
-            envRestaurant.setAttribute('visible', 'false');
-            envShopping.setAttribute('visible', 'false');
-            envDirections.setAttribute('visible', 'false');
-            console.log('[3D Loading] ✓ Non-active environments hidden (models stay in GPU)');
-          }, 100);
         },
 
         onSceneLoadedSetup() {
