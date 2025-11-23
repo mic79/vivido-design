@@ -1779,56 +1779,28 @@ assets/vosk-models/nl.tar.gz</pre>
           
           if (!envClassroom || !envRestaurant || !envShopping || !envDirections) return;
           
-          // Determine which environment entity corresponds to the target scenario
-          let targetEnv;
-          if (scenario === 'directions') {
-            targetEnv = envDirections;
-          } else if (scenario === 'shopping') {
-            targetEnv = envShopping;
-          } else if (scenario === 'restaurant') {
-            targetEnv = envRestaurant;
-          } else {
-            targetEnv = envClassroom;
-          }
+          // Simply hide all environments and show the target one
+          // DO NOT dispose of geometries/materials - they are needed when we return!
+          console.log('[Environment] Switching environments (hide inactive, show active)...');
           
-          // Step 1: Hide all environments FIRST
-          console.log('[Environment] Hiding all environments...');
+          // Hide all first
           envClassroom.setAttribute('visible', 'false');
           envRestaurant.setAttribute('visible', 'false');
           envShopping.setAttribute('visible', 'false');
           envDirections.setAttribute('visible', 'false');
           
-          // Step 2: Cleanup memory from environments that are NOT the target scenario
-          // This is critical for Quest to prevent crashes
-          console.log('[Environment] Starting memory cleanup (excluding target scenario)...');
-          const environments = [envClassroom, envRestaurant, envShopping, envDirections];
-          environments.forEach(env => {
-            // Only cleanup environments that are NOT the target
-            if (env !== targetEnv) {
-              console.log('[Environment] Cleaning up:', env.id);
-              this.cleanupSceneResources(env);
-            } else {
-              console.log('[Environment] Preserving target environment:', env.id);
-            }
-          });
-          
-          // Step 3: Request garbage collection (browser hint)
-          // Force a small delay to allow GC to run
-          console.log('[Environment] Requesting garbage collection...');
-          if (window.gc) {
-            // Only available in development builds or with --expose-gc flag
-            window.gc();
+          // Show the target environment
+          if (scenario === 'directions') {
+            envDirections.setAttribute('visible', 'true');
+          } else if (scenario === 'shopping') {
+            envShopping.setAttribute('visible', 'true');
+          } else if (scenario === 'restaurant') {
+            envRestaurant.setAttribute('visible', 'true');
+          } else {
+            envClassroom.setAttribute('visible', 'true');
           }
           
-          // Step 4: Small delay before showing new environment (allows memory to settle)
-          setTimeout(() => {
-            console.log('[Environment] Activating new scenario:', scenario);
-            
-            // Show the target environment
-            targetEnv.setAttribute('visible', 'true');
-            
-            console.log('[Environment] ✓ Scenario switch complete');
-          }, 200); // 200ms delay for memory cleanup and GC
+          console.log('[Environment] ✓ Scenario switch complete');
         },
 
         nextPhrase() {
@@ -2492,28 +2464,22 @@ assets/vosk-models/nl.tar.gz</pre>
             }
           }
           
-          // Show loading message during cleanup and switch
-          this.updateVRText('vr-instruction-text', '⏳ Changing scenario...');
-          
           this.currentScenario = scenario;
           this.currentPhraseIndex = 0;
           
-          // switchEnvironment now handles cleanup and has built-in delay
+          // Switch environment (simple hide/show, no disposal)
           this.switchEnvironment(scenario);
           
-          // Wait for environment switch to complete before updating grammar
-          setTimeout(() => {
-            // Update grammar hints for new scenario
-            if (!this.useVosk && this.recognition) {
-              this.updateSpeechGrammar();
-            } else if (this.useVosk && VoskRecognizer.recognizer) {
-              VoskRecognizer.updateVoskGrammar();
-            }
-            
-            // Clear flag and start next phrase
-            this.isChangingScenario = false;
-            this.nextPhrase();
-          }, 300); // Slightly longer than switchEnvironment delay (200ms)
+          // Update grammar hints for new scenario
+          if (!this.useVosk && this.recognition) {
+            this.updateSpeechGrammar();
+          } else if (this.useVosk && VoskRecognizer.recognizer) {
+            VoskRecognizer.updateVoskGrammar();
+          }
+          
+          // Clear flag and start next phrase
+          this.isChangingScenario = false;
+          this.nextPhrase();
         },
 
         awardPoints(points) {
