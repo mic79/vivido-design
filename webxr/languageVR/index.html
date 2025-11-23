@@ -296,6 +296,19 @@
 
     <!-- VR Scene -->
     <a-scene background="color: #87CEEB" renderer="antialias: true; colorManagement: true" ui-toggle-controller>
+      <!-- Preload all 3D models using A-Frame's asset management system -->
+      <!-- This shows a built-in loading screen and ensures all models are cached before scene starts -->
+      <a-assets timeout="30000">
+        <!-- Restaurant Environment -->
+        <a-asset-item id="temple-model-asset" src="assets/bagan_-_khayiminga_temple_interior.glb"></a-asset-item>
+        
+        <!-- Shopping Environment -->
+        <a-asset-item id="moosstock-model-asset" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/moosstock_mountain_peak_3024_m.glb"></a-asset-item>
+        
+        <!-- Directions Environment -->
+        <a-asset-item id="hintze-hall-model-asset" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/hintze_hall.glb"></a-asset-item>
+      </a-assets>
+      
       <!-- Lighting -->
       <a-entity light="type: ambient; intensity: 0.6"></a-entity>
       <a-entity light="type: directional; intensity: 0.8" position="2 4 2"></a-entity>
@@ -640,7 +653,7 @@
       
       <a-entity id="env-restaurant" visible="false">
         <a-entity id="temple-model" 
-                  gltf-model="url(assets/bagan_-_khayiminga_temple_interior.glb)" 
+                  gltf-model="#temple-model-asset" 
                   position="0 1 -4" 
                   rotation="0 180 0"
                   scale="2 2 2"
@@ -656,7 +669,7 @@
       
       <a-entity id="env-shopping" visible="false">
         <a-entity id="moosstock-mountain-model" 
-                  gltf-model="url(https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/moosstock_mountain_peak_3024_m.glb)" 
+                  gltf-model="#moosstock-model-asset" 
                   position="0 -67 10" 
                   rotation="0 90 0"
                   scale="80 80 80"
@@ -672,7 +685,7 @@
       
       <a-entity id="env-directions" visible="false">
         <a-entity id="hintze-hall-model" 
-                  gltf-model="url(https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/hintze_hall.glb)" 
+                  gltf-model="#hintze-hall-model-asset" 
                   position="2.5 -0.5 -12.5" 
                   rotation="0 180 0"
                   scale="1 1 1"
@@ -693,8 +706,10 @@
       // ========================================
       
       const VoskRecognizer = {
-        model: null,
-        recognizer: null,
+        models: {}, // Store all preloaded models
+        recognizers: {}, // Store all recognizers
+        model: null, // Current active model
+        recognizer: null, // Current active recognizer
         audioContext: null,
         processor: null,
         analyser: null,
@@ -705,6 +720,7 @@
         currentLanguage: 'es',
         onResult: null,
         onPartialResult: null,
+        modelsPreloaded: false,
         
         languageMap: {
           'es-ES': 'es',
@@ -713,59 +729,126 @@
           'nl-NL': 'nl'
         },
         
+        async preloadAllModels(onProgress) {
+          console.log('[Vosk] Preloading all language models...');
+          const languages = ['es', 'fr', 'de', 'nl'];
+          const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
+          
+          for (let i = 0; i < languages.length; i++) {
+            const lang = languages[i];
+            const progress = Math.floor((i / languages.length) * 90);
+            
+            if (onProgress) onProgress(progress, `Loading ${lang.toUpperCase()} model (${i+1}/${languages.length})...`);
+            
+            try {
+              const modelPath = `assets/vosk-models/${lang}.tar.gz`;
+              const fullModelPath = `${baseUrl}/${modelPath}`;
+              
+              console.log(`[Vosk] Loading ${lang} model from:`, fullModelPath);
+              this.models[lang] = await Vosk.createModel(fullModelPath);
+              console.log(`[Vosk] ✓ ${lang.toUpperCase()} model loaded`);
+              
+              // Create recognizer for this model
+              this.recognizers[lang] = new this.models[lang].KaldiRecognizer(16000);
+              this.recognizers[lang].setWords(true);
+              console.log(`[Vosk] ✓ ${lang.toUpperCase()} recognizer created`);
+              
+            } catch (error) {
+              console.error(`[Vosk] Failed to load ${lang} model:`, error);
+              throw error;
+            }
+          }
+          
+          if (onProgress) onProgress(100, 'All models loaded!');
+          this.modelsPreloaded = true;
+          console.log('[Vosk] ✓ All 4 language models preloaded successfully');
+          return true;
+        },
+        
         async init(language, onProgress, onResult, onPartialResult) {
           console.log('[Vosk] Initializing for language:', language);
           this.currentLanguage = this.languageMap[language] || 'es';
           this.onResult = onResult;
           this.onPartialResult = onPartialResult;
           this.isListening = false;
-          this.shouldProcessResults = false; // Initialize the flag
+          this.shouldProcessResults = false;
           
           try {
-            // Show progress
-            if (onProgress) onProgress(10, 'Loading Vosk library...');
+            // If models aren't preloaded yet, preload them now
+            if (!this.modelsPreloaded) {
+              if (onProgress) onProgress(10, 'Preloading all language models...');
+              await this.preloadAllModels(onProgress);
+            } else {
+              if (onProgress) onProgress(50, 'Switching to model...');
+            }
             
-            // Load model from local assets - Vosk expects tar.gz archives
-            const modelPath = `assets/vosk-models/${this.currentLanguage}.tar.gz`;
-            console.log('[Vosk] Loading model from:', modelPath);
+            // Switch to the requested language's model and recognizer
+            this.model = this.models[this.currentLanguage];
+            this.recognizer = this.recognizers[this.currentLanguage];
             
-            if (onProgress) onProgress(30, `Loading ${this.currentLanguage} model...`);
-            
-            // Create model - use relative path from current page location
-            const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
-            const fullModelPath = `${baseUrl}/${modelPath}`;
-            console.log('[Vosk] Full model URL:', fullModelPath);
-            
-            this.model = await Vosk.createModel(fullModelPath);
-            console.log('[Vosk] ✓ Model loaded');
-            
-            if (onProgress) onProgress(60, 'Creating recognizer...');
-            
-            // Create recognizer with 16kHz sample rate
-            this.recognizer = new this.model.KaldiRecognizer(16000);
-            this.recognizer.setWords(true);
-            
-            // Note: Grammar will be set later after LanguageApp initializes
-            
-            console.log('[Vosk] ✓ Recognizer created');
+            console.log('[Vosk] ✓ Using', this.currentLanguage.toUpperCase(), 'model and recognizer');
             console.log('[Vosk] Recognizer methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.recognizer)));
             console.log('[Vosk] Recognizer object:', this.recognizer);
             
             if (onProgress) onProgress(80, 'Setting up microphone...');
             
-            // Setup audio processing
-            await this.setupAudio();
+            // Setup audio processing (only once)
+            if (!this.audioContext) {
+              await this.setupAudio();
+            } else {
+              // Audio already set up, just update the recognizer event listeners
+              this.setupRecognizerEvents();
+              console.log('[Vosk] ✓ Audio pipeline already active, events updated');
+            }
             
             if (onProgress) onProgress(100, 'Ready!');
             
             this.isInitialized = true;
-            console.log('[Vosk] ✓ Fully initialized');
+            console.log('[Vosk] ✓ Fully initialized for', this.currentLanguage.toUpperCase());
             
             return true;
           } catch (error) {
             console.error('[Vosk] Initialization error:', error);
             throw error;
           }
+        },
+        
+        setupRecognizerEvents() {
+          // Set up event listeners for the current recognizer
+          this.recognizer.on('result', (message) => {
+            // Only process if we should be listening AND this is the current recognizer
+            if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
+              console.log('[Vosk] Ignoring result - not listening or old recognizer');
+              return;
+            }
+            
+            console.log('[Vosk] Result event:', message, 'Recognizer ID:', message.recognizerId);
+            // Access the nested result.text property (Quest-compatible syntax)
+            const text = (message.result && message.result.text) || message.text;
+            if (text && text.trim()) {
+              console.log('[Vosk] ✓ Recognized:', text);
+              if (this.onResult) {
+                this.onResult(text, 1.0);
+              }
+            }
+          });
+          
+          this.recognizer.on('partialresult', (message) => {
+            // Only process if we should be listening AND this is the current recognizer
+            if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
+              return; // Silent ignore for partials
+            }
+            
+            // Access the nested result.partial property (Quest-compatible syntax)
+            const partial = (message.result && message.result.partial) || message.partial;
+            if (partial && partial.trim()) {
+              console.log('[Vosk] Partial:', partial);
+              // Call onPartialResult callback if provided
+              if (this.onPartialResult) {
+                this.onPartialResult(partial);
+              }
+            }
+          });
         },
         
         async setupAudio() {
@@ -799,41 +882,8 @@
             
             let audioChunkCount = 0;
             
-            // Listen for results from Vosk recognizer
-            this.recognizer.on('result', (message) => {
-              // Only process if we should be listening AND this is the current recognizer
-              if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
-                console.log('[Vosk] Ignoring result - not listening or old recognizer');
-                return;
-              }
-              
-              console.log('[Vosk] Result event:', message, 'Recognizer ID:', message.recognizerId);
-              // Access the nested result.text property (Quest-compatible syntax)
-              const text = (message.result && message.result.text) || message.text;
-              if (text && text.trim()) {
-                console.log('[Vosk] ✓ Recognized:', text);
-                if (this.onResult) {
-                  this.onResult(text, 1.0);
-                }
-              }
-            });
-            
-            this.recognizer.on('partialresult', (message) => {
-              // Only process if we should be listening AND this is the current recognizer
-              if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
-                return; // Silent ignore for partials
-              }
-              
-              // Access the nested result.partial property (Quest-compatible syntax)
-              const partial = (message.result && message.result.partial) || message.partial;
-              if (partial && partial.trim()) {
-                console.log('[Vosk] Partial:', partial);
-                // Call onPartialResult callback if provided
-                if (this.onPartialResult) {
-                  this.onPartialResult(partial);
-                }
-              }
-            });
+            // Set up initial recognizer events
+            this.setupRecognizerEvents();
             
             this.processor.onaudioprocess = (e) => {
               if (!this.isListening || !this.recognizer) return;
@@ -1055,12 +1105,32 @@
         async switchLanguage(language, onProgress) {
           console.log('[Vosk] Switching to language:', language);
           
-          // Clean up everything from the old language
-          this.cleanup();
+          const newLang = this.languageMap[language] || 'es';
           
-          // Reinitialize with new language
-          this.isInitialized = false;
-          await this.init(language, onProgress, this.onResult, this.onPartialResult);
+          if (!this.modelsPreloaded) {
+            console.warn('[Vosk] Models not preloaded, initializing first...');
+            await this.init(language, onProgress, this.onResult, this.onPartialResult);
+            return;
+          }
+          
+          // Stop current recognition
+          if (this.isListening) {
+            this.stop();
+          }
+          
+          // Instantly switch to the new model and recognizer (already preloaded!)
+          this.currentLanguage = newLang;
+          this.model = this.models[newLang];
+          this.recognizer = this.recognizers[newLang];
+          
+          console.log('[Vosk] ✓ Instantly switched to', newLang.toUpperCase(), 'model (preloaded)');
+          
+          // Update event listeners for the new recognizer
+          this.setupRecognizerEvents();
+          
+          if (onProgress) {
+            onProgress(100, `Ready! (${newLang.toUpperCase()})`);
+          }
         }
       };
       
@@ -1194,6 +1264,12 @@
           
           // Store timeout IDs for cancellation
           this.pendingTimeouts = [];
+          
+          // Add speaking flag to prevent overlapping audio
+          this.isSpeaking = false;
+          
+          // Store reference to current audio playback for cancellation
+          this.currentAudio = null;
           
           // Initialize Speech Synthesis (CRITICAL - was missing!)
           this.synthesis = window.speechSynthesis;
@@ -1603,10 +1679,8 @@ assets/vosk-models/nl.tar.gz</pre>
               document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('active'));
               btn.classList.add('active');
               
-              this.currentScenario = btn.dataset.scenario;
-              this.currentPhraseIndex = 0;
-              this.switchEnvironment(this.currentScenario);
-              this.nextPhrase();
+              // Use changeScenario() for consistency and proper cleanup
+              this.changeScenario(btn.dataset.scenario);
             });
           });
         },
@@ -1619,46 +1693,19 @@ assets/vosk-models/nl.tar.gz</pre>
             
             console.log('[VR Buttons] Setting up button listeners...');
             
+            // Note: The vr-button component handles click events
+            // These are just for hover effects
             if (repeatBtn) {
-              // Try multiple event types for Quest compatibility
-              repeatBtn.addEventListener('click', () => {
-                console.log('[VR Button] Repeat clicked!');
-                if (this.currentPhrase && !this.isPaused) {
-                  this.npcSpeak(this.currentPhrase.text);
-                }
-              });
-              repeatBtn.addEventListener('mousedown', () => {
-                console.log('[VR Button] Repeat mousedown!');
-                if (this.currentPhrase && !this.isPaused) {
-                  this.npcSpeak(this.currentPhrase.text);
-                }
-              });
               repeatBtn.addEventListener('mouseenter', () => repeatBtn.setAttribute('color', '#1976D2'));
               repeatBtn.addEventListener('mouseleave', () => repeatBtn.setAttribute('color', '#2196F3'));
             }
             
             if (nextBtn) {
-              nextBtn.addEventListener('click', () => {
-                console.log('[VR Button] Next clicked!');
-                if (!this.isPaused) this.nextPhrase();
-              });
-              nextBtn.addEventListener('mousedown', () => {
-                console.log('[VR Button] Next mousedown!');
-                if (!this.isPaused) this.nextPhrase();
-              });
               nextBtn.addEventListener('mouseenter', () => nextBtn.setAttribute('color', '#45a049'));
               nextBtn.addEventListener('mouseleave', () => nextBtn.setAttribute('color', '#4CAF50'));
             }
             
             if (playPauseBtn) {
-              playPauseBtn.addEventListener('click', () => {
-                console.log('[VR Button] Play/Pause clicked!');
-                this.togglePause();
-              });
-              playPauseBtn.addEventListener('mousedown', () => {
-                console.log('[VR Button] Play/Pause mousedown!');
-                this.togglePause();
-              });
               playPauseBtn.addEventListener('mouseenter', () => playPauseBtn.setAttribute('color', '#388E3C'));
               playPauseBtn.addEventListener('mouseleave', () => playPauseBtn.setAttribute('color', '#4CAF50'));
             }
@@ -1705,20 +1752,11 @@ assets/vosk-models/nl.tar.gz</pre>
             });
             
             // Scenario selection in VR
+            // Note: VR scenario buttons now use the vr-button component exclusively
+            // The vr-button component calls changeScenario() which handles all logic
             const scenarioButtons = document.querySelectorAll('.scenario-button');
             scenarioButtons.forEach(btn => {
-              btn.addEventListener('click', () => {
-                const scenario = btn.getAttribute('data-scenario');
-                
-                scenarioButtons.forEach(b => b.setAttribute('color', '#2196F3'));
-                btn.setAttribute('color', '#4CAF50');
-                
-                this.currentScenario = scenario;
-                this.currentPhraseIndex = 0;
-                this.switchEnvironment(scenario);
-                this.nextPhrase();
-              });
-              
+              // Only add hover effects, clicks are handled by vr-button component
               btn.addEventListener('mouseenter', () => {
                 if (btn.getAttribute('color') !== '#4CAF50') {
                   btn.setAttribute('color', '#1976D2');
@@ -1747,7 +1785,63 @@ assets/vosk-models/nl.tar.gz</pre>
           }
         },
 
+        cleanupSceneResources(envEntity) {
+          // Aggressively cleanup 3D models, textures, and geometries
+          if (!envEntity) return;
+          
+          console.log('[Memory] Cleaning up scene resources for:', envEntity.id);
+          
+          // Find all GLTF models in this environment
+          const gltfModels = envEntity.querySelectorAll('[gltf-model]');
+          gltfModels.forEach(model => {
+            try {
+              // Remove the model from memory
+              if (model.object3D) {
+                model.object3D.traverse((node) => {
+                  if (node.geometry) {
+                    node.geometry.dispose();
+                  }
+                  if (node.material) {
+                    if (Array.isArray(node.material)) {
+                      node.material.forEach(mat => {
+                        if (mat.map) mat.map.dispose();
+                        if (mat.lightMap) mat.lightMap.dispose();
+                        if (mat.bumpMap) mat.bumpMap.dispose();
+                        if (mat.normalMap) mat.normalMap.dispose();
+                        if (mat.specularMap) mat.specularMap.dispose();
+                        if (mat.envMap) mat.envMap.dispose();
+                        mat.dispose();
+                      });
+                    } else {
+                      if (node.material.map) node.material.map.dispose();
+                      if (node.material.lightMap) node.material.lightMap.dispose();
+                      if (node.material.bumpMap) node.material.bumpMap.dispose();
+                      if (node.material.normalMap) node.material.normalMap.dispose();
+                      if (node.material.specularMap) node.material.specularMap.dispose();
+                      if (node.material.envMap) node.material.envMap.dispose();
+                      node.material.dispose();
+                    }
+                  }
+                });
+              }
+              
+              // Remove the GLTF model component
+              if (model.components && model.components['gltf-model']) {
+                model.removeAttribute('gltf-model');
+              }
+              
+              console.log('[Memory] ✓ Cleaned up model:', model.id);
+            } catch (err) {
+              console.warn('[Memory] Error cleaning up model:', err);
+            }
+          });
+          
+          console.log('[Memory] ✓ Scene cleanup complete for:', envEntity.id);
+        },
+
         switchEnvironment(scenario) {
+          console.log('[Environment] Switching to scenario:', scenario);
+          
           const envClassroom = document.getElementById('env-classroom');
           const envRestaurant = document.getElementById('env-restaurant');
           const envShopping = document.getElementById('env-shopping');
@@ -1755,11 +1849,17 @@ assets/vosk-models/nl.tar.gz</pre>
           
           if (!envClassroom || !envRestaurant || !envShopping || !envDirections) return;
           
+          // Simply hide all environments and show the target one
+          // DO NOT dispose of geometries/materials - they are needed when we return!
+          console.log('[Environment] Switching environments (hide inactive, show active)...');
+          
+          // Hide all first
           envClassroom.setAttribute('visible', 'false');
           envRestaurant.setAttribute('visible', 'false');
           envShopping.setAttribute('visible', 'false');
           envDirections.setAttribute('visible', 'false');
           
+          // Show the target environment
           if (scenario === 'directions') {
             envDirections.setAttribute('visible', 'true');
           } else if (scenario === 'shopping') {
@@ -1769,6 +1869,8 @@ assets/vosk-models/nl.tar.gz</pre>
           } else {
             envClassroom.setAttribute('visible', 'true');
           }
+          
+          console.log('[Environment] ✓ Scenario switch complete');
         },
 
         nextPhrase() {
@@ -1874,8 +1976,17 @@ assets/vosk-models/nl.tar.gz</pre>
         npcSpeak(text) {
           if (this.isPaused) return;
           
+          // Prevent overlapping audio (debounce)
+          if (this.isSpeaking) {
+            console.log('[NPC Speak] ⚠️ Already speaking, ignoring duplicate call');
+            return;
+          }
+          
           console.log('[NPC Speak] Attempting to speak:', text);
           console.log('[NPC Speak] Current language:', this.currentLanguage, 'Scenario:', this.currentScenario);
+          
+          // Set speaking flag
+          this.isSpeaking = true;
           
           // Try to use audio file first (Option A: MP3 first, TTS fallback)
           if (this.currentPhrase && this.currentPhrase.audio) {
@@ -1885,6 +1996,7 @@ assets/vosk-models/nl.tar.gz</pre>
             console.log('[NPC Speak] Trying audio file:', audioPath);
             
             const audio = new Audio(audioPath);
+            this.currentAudio = audio; // Store reference for cancellation
             
             // Don't show speech bubble for audio files - only update instruction text
             this.updateVRText('vr-instruction-text', '🔊 NPC is speaking...');
@@ -1900,6 +2012,8 @@ assets/vosk-models/nl.tar.gz</pre>
             
             audio.onended = () => {
               console.log('[NPC Speak] ✓ Audio playback finished');
+              this.isSpeaking = false; // Clear speaking flag
+              this.currentAudio = null; // Clear reference
               // Reduced delay from 800ms to 300ms for faster user experience
               setTimeout(() => {
                 // Start listening after audio completes
@@ -1913,6 +2027,8 @@ assets/vosk-models/nl.tar.gz</pre>
             audio.onerror = (e) => {
               console.warn('[NPC Speak] ⚠️ Audio file failed to load, falling back to TTS:', audioPath);
               console.warn('[NPC Speak] Error details:', e);
+              this.isSpeaking = false; // Clear speaking flag
+              this.currentAudio = null; // Clear reference
               
               // Fallback to TTS
               this.npcSpeakTTS(text);
@@ -1921,6 +2037,8 @@ assets/vosk-models/nl.tar.gz</pre>
             // Attempt to play
             audio.play().catch(err => {
               console.warn('[NPC Speak] ⚠️ Audio playback failed, falling back to TTS:', err);
+              this.isSpeaking = false; // Clear speaking flag
+              this.currentAudio = null; // Clear reference
               this.npcSpeakTTS(text);
             });
             
@@ -1948,6 +2066,7 @@ assets/vosk-models/nl.tar.gz</pre>
             // Still start listening after a delay (silent mode)
             setTimeout(() => {
               this.hideSpeechBubble();
+              this.isSpeaking = false; // Clear speaking flag
               this.startListening(); // ← CRITICAL: Start listening even without TTS
             }, 3000);
             
@@ -2024,6 +2143,7 @@ assets/vosk-models/nl.tar.gz</pre>
                 console.error('[NPC] ❌ Audio blocked by browser - try clicking REPEAT button');
                 this.updateVRText('vr-instruction-text', '❌ Audio blocked - click REPEAT');
               }
+              this.isSpeaking = false; // Clear speaking flag
               // Reduced delay from 800ms to 300ms for faster user experience
               setTimeout(() => {
                 this.hideSpeechBubble();
@@ -2040,6 +2160,7 @@ assets/vosk-models/nl.tar.gz</pre>
             utterance.onerror = (event) => {
               console.error('[NPC Speak TTS] ❌ Error:', event.error, event);
               this.updateVRText('vr-instruction-text', '❌ Speech error: ' + event.error);
+              this.isSpeaking = false; // Clear speaking flag
               
               // Still start listening even if TTS fails
               setTimeout(() => {
@@ -2272,24 +2393,40 @@ assets/vosk-models/nl.tar.gz</pre>
           this.isChangingLanguage = true;
           
           // Clear ALL pending operations
-          this.clearPendingTimeouts();
-          
-          const oldLang = this.currentLanguage;
-          this.currentLanguage = lang;
-          this.currentLanguageName = langName || lang;
-          
-          // Cancel any ongoing speech AND stop recognition
-          if (this.synthesis) {
-            this.synthesis.cancel();
-          }
-          
-          // Stop recognition immediately
-          if (!this.useVosk && this.recognition && this.isListening) {
-            try {
-              this.recognition.stop();
-              this.isListening = false;
-            } catch (e) {}
-          }
+        this.clearPendingTimeouts();
+        
+        // CRITICAL: Stop any ongoing audio playback first!
+        if (this.currentAudio) {
+          console.log('[Language App] Aborting current audio playback for language change');
+          this.currentAudio.pause();
+          this.currentAudio.currentTime = 0;
+          this.currentAudio = null;
+        }
+        if (this.isSpeaking) {
+          console.log('[Language App] Stopping ongoing audio playback for language change');
+          this.isSpeaking = false; // Reset the flag to allow new audio
+        }
+        
+        const oldLang = this.currentLanguage;
+        this.currentLanguage = lang;
+        this.currentLanguageName = langName || lang;
+        
+        // Cancel any ongoing speech AND stop recognition
+        if (this.synthesis) {
+          this.synthesis.cancel();
+        }
+        
+        // Stop recognition immediately - force stop regardless of isListening state
+        if (this.useVosk) {
+          console.log('[Language App] Stopping Vosk for language change (forced)');
+          VoskRecognizer.stop();
+          this.isListening = false;
+        } else if (!this.useVosk && this.recognition) {
+          try {
+            this.recognition.stop();
+            this.isListening = false;
+          } catch (e) {}
+        }
           
           // Ensure app is not paused when changing language
           if (this.isPaused) {
@@ -2343,26 +2480,49 @@ assets/vosk-models/nl.tar.gz</pre>
         },
         
         changeScenario(scenario) {
+          // Prevent multiple simultaneous scenario changes (debounce)
+          if (this.isChangingScenario) {
+            console.log('[Language App] ⚠️ Scenario change already in progress, ignoring duplicate call');
+            return;
+          }
+          
           console.log('[Language App] Changing scenario to:', scenario);
           
           // Set flag to prevent race conditions
           this.isChangingScenario = true;
           
-          // Clear ALL pending operations
-          this.clearPendingTimeouts();
-          
-          // Cancel any ongoing speech AND stop recognition
-          if (this.synthesis) {
-            this.synthesis.cancel();
-          }
-          
-          // Stop recognition immediately
-          if (!this.useVosk && this.recognition && this.isListening) {
-            try {
-              this.recognition.stop();
-              this.isListening = false;
-            } catch (e) {}
-          }
+        // Clear ALL pending operations
+        this.clearPendingTimeouts();
+        
+        // CRITICAL: Stop any ongoing audio playback first!
+        if (this.currentAudio) {
+          console.log('[Language App] Aborting current audio playback for scenario change');
+          this.currentAudio.pause();
+          this.currentAudio.currentTime = 0;
+          this.currentAudio = null;
+        }
+        if (this.isSpeaking) {
+          console.log('[Language App] Stopping ongoing audio playback for scenario change');
+          this.isSpeaking = false; // Reset the flag to allow new audio
+        }
+        
+        // Cancel any ongoing speech AND stop recognition
+        if (this.synthesis) {
+          this.synthesis.cancel();
+        }
+        
+        // Stop recognition immediately and cleanup audio resources
+        // Force stop Vosk regardless of isListening flag state
+        if (this.useVosk) {
+          console.log('[Language App] Stopping Vosk for scenario change (forced)');
+          VoskRecognizer.stop();
+          this.isListening = false;
+        } else if (!this.useVosk && this.recognition) {
+          try {
+            this.recognition.stop();
+            this.isListening = false;
+          } catch (e) {}
+        }
           
           // Ensure app is not paused when changing scenario
           if (this.isPaused) {
@@ -2376,6 +2536,8 @@ assets/vosk-models/nl.tar.gz</pre>
           
           this.currentScenario = scenario;
           this.currentPhraseIndex = 0;
+          
+          // Switch environment (simple hide/show, no disposal)
           this.switchEnvironment(scenario);
           
           // Update grammar hints for new scenario
@@ -2470,6 +2632,10 @@ assets/vosk-models/nl.tar.gz</pre>
           
           this.originalColor = this.el.getAttribute('color');
           
+          // Add debouncing to prevent double-clicks in VR
+          this.lastClickTime = 0;
+          this.clickDebounceMs = 500; // 500ms debounce for VR controller double-clicks
+          
           // Cache button queries for performance (avoid repeated DOM queries)
           this.langButtonsCache = null;
           this.scenarioButtonsCache = null;
@@ -2484,6 +2650,14 @@ assets/vosk-models/nl.tar.gz</pre>
         },
         
         onClick: function() {
+          // Debounce to prevent double-clicks from VR controllers
+          const now = Date.now();
+          if (now - this.lastClickTime < this.clickDebounceMs) {
+            console.log('[VR Button] ⚠️ Ignoring duplicate click (debounced)');
+            return;
+          }
+          this.lastClickTime = now;
+          
           console.log('[VR Button] Clicked:', this.data.action || this.data.lang || this.data.scenario);
           
           // Handle action buttons
