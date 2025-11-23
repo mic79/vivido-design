@@ -298,15 +298,15 @@
     <a-scene background="color: #87CEEB" renderer="antialias: true; colorManagement: true" ui-toggle-controller>
       <!-- Preload all 3D models using A-Frame's asset management system -->
       <!-- This shows a built-in loading screen and ensures all models are cached before scene starts -->
-      <a-assets timeout="30000">
+      <a-assets timeout="60000">
         <!-- Restaurant Environment -->
-        <a-asset-item id="temple-model-asset" src="assets/bagan_-_khayiminga_temple_interior.glb"></a-asset-item>
+        <a-asset-item id="temple-model-asset" src="assets/bagan_-_khayiminga_temple_interior.glb" preload="auto"></a-asset-item>
         
         <!-- Shopping Environment -->
-        <a-asset-item id="moosstock-model-asset" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/moosstock_mountain_peak_3024_m.glb"></a-asset-item>
+        <a-asset-item id="moosstock-model-asset" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/moosstock_mountain_peak_3024_m.glb" preload="auto"></a-asset-item>
         
         <!-- Directions Environment -->
-        <a-asset-item id="hintze-hall-model-asset" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/hintze_hall.glb"></a-asset-item>
+        <a-asset-item id="hintze-hall-model-asset" src="https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/hintze_hall.glb" preload="auto"></a-asset-item>
       </a-assets>
       
       <!-- Lighting -->
