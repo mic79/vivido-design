@@ -706,8 +706,10 @@
       // ========================================
       
       const VoskRecognizer = {
-        model: null,
-        recognizer: null,
+        models: {}, // Store all preloaded models
+        recognizers: {}, // Store all recognizers
+        model: null, // Current active model
+        recognizer: null, // Current active recognizer
         audioContext: null,
         processor: null,
         analyser: null,
@@ -718,6 +720,7 @@
         currentLanguage: 'es',
         onResult: null,
         onPartialResult: null,
+        modelsPreloaded: false,
         
         languageMap: {
           'es-ES': 'es',
@@ -726,59 +729,126 @@
           'nl-NL': 'nl'
         },
         
+        async preloadAllModels(onProgress) {
+          console.log('[Vosk] Preloading all language models...');
+          const languages = ['es', 'fr', 'de', 'nl'];
+          const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
+          
+          for (let i = 0; i < languages.length; i++) {
+            const lang = languages[i];
+            const progress = Math.floor((i / languages.length) * 90);
+            
+            if (onProgress) onProgress(progress, `Loading ${lang.toUpperCase()} model (${i+1}/${languages.length})...`);
+            
+            try {
+              const modelPath = `assets/vosk-models/${lang}.tar.gz`;
+              const fullModelPath = `${baseUrl}/${modelPath}`;
+              
+              console.log(`[Vosk] Loading ${lang} model from:`, fullModelPath);
+              this.models[lang] = await Vosk.createModel(fullModelPath);
+              console.log(`[Vosk] ✓ ${lang.toUpperCase()} model loaded`);
+              
+              // Create recognizer for this model
+              this.recognizers[lang] = new this.models[lang].KaldiRecognizer(16000);
+              this.recognizers[lang].setWords(true);
+              console.log(`[Vosk] ✓ ${lang.toUpperCase()} recognizer created`);
+              
+            } catch (error) {
+              console.error(`[Vosk] Failed to load ${lang} model:`, error);
+              throw error;
+            }
+          }
+          
+          if (onProgress) onProgress(100, 'All models loaded!');
+          this.modelsPreloaded = true;
+          console.log('[Vosk] ✓ All 4 language models preloaded successfully');
+          return true;
+        },
+        
         async init(language, onProgress, onResult, onPartialResult) {
           console.log('[Vosk] Initializing for language:', language);
           this.currentLanguage = this.languageMap[language] || 'es';
           this.onResult = onResult;
           this.onPartialResult = onPartialResult;
           this.isListening = false;
-          this.shouldProcessResults = false; // Initialize the flag
+          this.shouldProcessResults = false;
           
           try {
-            // Show progress
-            if (onProgress) onProgress(10, 'Loading Vosk library...');
+            // If models aren't preloaded yet, preload them now
+            if (!this.modelsPreloaded) {
+              if (onProgress) onProgress(10, 'Preloading all language models...');
+              await this.preloadAllModels(onProgress);
+            } else {
+              if (onProgress) onProgress(50, 'Switching to model...');
+            }
             
-            // Load model from local assets - Vosk expects tar.gz archives
-            const modelPath = `assets/vosk-models/${this.currentLanguage}.tar.gz`;
-            console.log('[Vosk] Loading model from:', modelPath);
+            // Switch to the requested language's model and recognizer
+            this.model = this.models[this.currentLanguage];
+            this.recognizer = this.recognizers[this.currentLanguage];
             
-            if (onProgress) onProgress(30, `Loading ${this.currentLanguage} model...`);
-            
-            // Create model - use relative path from current page location
-            const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
-            const fullModelPath = `${baseUrl}/${modelPath}`;
-            console.log('[Vosk] Full model URL:', fullModelPath);
-            
-            this.model = await Vosk.createModel(fullModelPath);
-            console.log('[Vosk] ✓ Model loaded');
-            
-            if (onProgress) onProgress(60, 'Creating recognizer...');
-            
-            // Create recognizer with 16kHz sample rate
-            this.recognizer = new this.model.KaldiRecognizer(16000);
-            this.recognizer.setWords(true);
-            
-            // Note: Grammar will be set later after LanguageApp initializes
-            
-            console.log('[Vosk] ✓ Recognizer created');
+            console.log('[Vosk] ✓ Using', this.currentLanguage.toUpperCase(), 'model and recognizer');
             console.log('[Vosk] Recognizer methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.recognizer)));
             console.log('[Vosk] Recognizer object:', this.recognizer);
             
             if (onProgress) onProgress(80, 'Setting up microphone...');
             
-            // Setup audio processing
-            await this.setupAudio();
+            // Setup audio processing (only once)
+            if (!this.audioContext) {
+              await this.setupAudio();
+            } else {
+              // Audio already set up, just update the recognizer event listeners
+              this.setupRecognizerEvents();
+              console.log('[Vosk] ✓ Audio pipeline already active, events updated');
+            }
             
             if (onProgress) onProgress(100, 'Ready!');
             
             this.isInitialized = true;
-            console.log('[Vosk] ✓ Fully initialized');
+            console.log('[Vosk] ✓ Fully initialized for', this.currentLanguage.toUpperCase());
             
             return true;
           } catch (error) {
             console.error('[Vosk] Initialization error:', error);
             throw error;
           }
+        },
+        
+        setupRecognizerEvents() {
+          // Set up event listeners for the current recognizer
+          this.recognizer.on('result', (message) => {
+            // Only process if we should be listening AND this is the current recognizer
+            if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
+              console.log('[Vosk] Ignoring result - not listening or old recognizer');
+              return;
+            }
+            
+            console.log('[Vosk] Result event:', message, 'Recognizer ID:', message.recognizerId);
+            // Access the nested result.text property (Quest-compatible syntax)
+            const text = (message.result && message.result.text) || message.text;
+            if (text && text.trim()) {
+              console.log('[Vosk] ✓ Recognized:', text);
+              if (this.onResult) {
+                this.onResult(text, 1.0);
+              }
+            }
+          });
+          
+          this.recognizer.on('partialresult', (message) => {
+            // Only process if we should be listening AND this is the current recognizer
+            if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
+              return; // Silent ignore for partials
+            }
+            
+            // Access the nested result.partial property (Quest-compatible syntax)
+            const partial = (message.result && message.result.partial) || message.partial;
+            if (partial && partial.trim()) {
+              console.log('[Vosk] Partial:', partial);
+              // Call onPartialResult callback if provided
+              if (this.onPartialResult) {
+                this.onPartialResult(partial);
+              }
+            }
+          });
         },
         
         async setupAudio() {
@@ -812,41 +882,8 @@
             
             let audioChunkCount = 0;
             
-            // Listen for results from Vosk recognizer
-            this.recognizer.on('result', (message) => {
-              // Only process if we should be listening AND this is the current recognizer
-              if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
-                console.log('[Vosk] Ignoring result - not listening or old recognizer');
-                return;
-              }
-              
-              console.log('[Vosk] Result event:', message, 'Recognizer ID:', message.recognizerId);
-              // Access the nested result.text property (Quest-compatible syntax)
-              const text = (message.result && message.result.text) || message.text;
-              if (text && text.trim()) {
-                console.log('[Vosk] ✓ Recognized:', text);
-                if (this.onResult) {
-                  this.onResult(text, 1.0);
-                }
-              }
-            });
-            
-            this.recognizer.on('partialresult', (message) => {
-              // Only process if we should be listening AND this is the current recognizer
-              if (!this.shouldProcessResults || !this.recognizer || message.recognizerId !== this.recognizer.id) {
-                return; // Silent ignore for partials
-              }
-              
-              // Access the nested result.partial property (Quest-compatible syntax)
-              const partial = (message.result && message.result.partial) || message.partial;
-              if (partial && partial.trim()) {
-                console.log('[Vosk] Partial:', partial);
-                // Call onPartialResult callback if provided
-                if (this.onPartialResult) {
-                  this.onPartialResult(partial);
-                }
-              }
-            });
+            // Set up initial recognizer events
+            this.setupRecognizerEvents();
             
             this.processor.onaudioprocess = (e) => {
               if (!this.isListening || !this.recognizer) return;
@@ -1068,12 +1105,32 @@
         async switchLanguage(language, onProgress) {
           console.log('[Vosk] Switching to language:', language);
           
-          // Clean up everything from the old language
-          this.cleanup();
+          const newLang = this.languageMap[language] || 'es';
           
-          // Reinitialize with new language
-          this.isInitialized = false;
-          await this.init(language, onProgress, this.onResult, this.onPartialResult);
+          if (!this.modelsPreloaded) {
+            console.warn('[Vosk] Models not preloaded, initializing first...');
+            await this.init(language, onProgress, this.onResult, this.onPartialResult);
+            return;
+          }
+          
+          // Stop current recognition
+          if (this.isListening) {
+            this.stop();
+          }
+          
+          // Instantly switch to the new model and recognizer (already preloaded!)
+          this.currentLanguage = newLang;
+          this.model = this.models[newLang];
+          this.recognizer = this.recognizers[newLang];
+          
+          console.log('[Vosk] ✓ Instantly switched to', newLang.toUpperCase(), 'model (preloaded)');
+          
+          // Update event listeners for the new recognizer
+          this.setupRecognizerEvents();
+          
+          if (onProgress) {
+            onProgress(100, `Ready! (${newLang.toUpperCase()})`);
+          }
         }
       };
       
