@@ -1195,6 +1195,9 @@
           // Store timeout IDs for cancellation
           this.pendingTimeouts = [];
           
+          // Add speaking flag to prevent overlapping audio
+          this.isSpeaking = false;
+          
           // Initialize Speech Synthesis (CRITICAL - was missing!)
           this.synthesis = window.speechSynthesis;
           console.log('[Language App] Speech Synthesis initialized:', this.synthesis);
@@ -1619,46 +1622,19 @@ assets/vosk-models/nl.tar.gz</pre>
             
             console.log('[VR Buttons] Setting up button listeners...');
             
+            // Note: The vr-button component handles click events
+            // These are just for hover effects
             if (repeatBtn) {
-              // Try multiple event types for Quest compatibility
-              repeatBtn.addEventListener('click', () => {
-                console.log('[VR Button] Repeat clicked!');
-                if (this.currentPhrase && !this.isPaused) {
-                  this.npcSpeak(this.currentPhrase.text);
-                }
-              });
-              repeatBtn.addEventListener('mousedown', () => {
-                console.log('[VR Button] Repeat mousedown!');
-                if (this.currentPhrase && !this.isPaused) {
-                  this.npcSpeak(this.currentPhrase.text);
-                }
-              });
               repeatBtn.addEventListener('mouseenter', () => repeatBtn.setAttribute('color', '#1976D2'));
               repeatBtn.addEventListener('mouseleave', () => repeatBtn.setAttribute('color', '#2196F3'));
             }
             
             if (nextBtn) {
-              nextBtn.addEventListener('click', () => {
-                console.log('[VR Button] Next clicked!');
-                if (!this.isPaused) this.nextPhrase();
-              });
-              nextBtn.addEventListener('mousedown', () => {
-                console.log('[VR Button] Next mousedown!');
-                if (!this.isPaused) this.nextPhrase();
-              });
               nextBtn.addEventListener('mouseenter', () => nextBtn.setAttribute('color', '#45a049'));
               nextBtn.addEventListener('mouseleave', () => nextBtn.setAttribute('color', '#4CAF50'));
             }
             
             if (playPauseBtn) {
-              playPauseBtn.addEventListener('click', () => {
-                console.log('[VR Button] Play/Pause clicked!');
-                this.togglePause();
-              });
-              playPauseBtn.addEventListener('mousedown', () => {
-                console.log('[VR Button] Play/Pause mousedown!');
-                this.togglePause();
-              });
               playPauseBtn.addEventListener('mouseenter', () => playPauseBtn.setAttribute('color', '#388E3C'));
               playPauseBtn.addEventListener('mouseleave', () => playPauseBtn.setAttribute('color', '#4CAF50'));
             }
@@ -1966,8 +1942,17 @@ assets/vosk-models/nl.tar.gz</pre>
         npcSpeak(text) {
           if (this.isPaused) return;
           
+          // Prevent overlapping audio (debounce)
+          if (this.isSpeaking) {
+            console.log('[NPC Speak] ⚠️ Already speaking, ignoring duplicate call');
+            return;
+          }
+          
           console.log('[NPC Speak] Attempting to speak:', text);
           console.log('[NPC Speak] Current language:', this.currentLanguage, 'Scenario:', this.currentScenario);
+          
+          // Set speaking flag
+          this.isSpeaking = true;
           
           // Try to use audio file first (Option A: MP3 first, TTS fallback)
           if (this.currentPhrase && this.currentPhrase.audio) {
@@ -1992,6 +1977,7 @@ assets/vosk-models/nl.tar.gz</pre>
             
             audio.onended = () => {
               console.log('[NPC Speak] ✓ Audio playback finished');
+              this.isSpeaking = false; // Clear speaking flag
               // Reduced delay from 800ms to 300ms for faster user experience
               setTimeout(() => {
                 // Start listening after audio completes
@@ -2005,6 +1991,7 @@ assets/vosk-models/nl.tar.gz</pre>
             audio.onerror = (e) => {
               console.warn('[NPC Speak] ⚠️ Audio file failed to load, falling back to TTS:', audioPath);
               console.warn('[NPC Speak] Error details:', e);
+              this.isSpeaking = false; // Clear speaking flag
               
               // Fallback to TTS
               this.npcSpeakTTS(text);
@@ -2013,6 +2000,7 @@ assets/vosk-models/nl.tar.gz</pre>
             // Attempt to play
             audio.play().catch(err => {
               console.warn('[NPC Speak] ⚠️ Audio playback failed, falling back to TTS:', err);
+              this.isSpeaking = false; // Clear speaking flag
               this.npcSpeakTTS(text);
             });
             
@@ -2040,6 +2028,7 @@ assets/vosk-models/nl.tar.gz</pre>
             // Still start listening after a delay (silent mode)
             setTimeout(() => {
               this.hideSpeechBubble();
+              this.isSpeaking = false; // Clear speaking flag
               this.startListening(); // ← CRITICAL: Start listening even without TTS
             }, 3000);
             
@@ -2116,6 +2105,7 @@ assets/vosk-models/nl.tar.gz</pre>
                 console.error('[NPC] ❌ Audio blocked by browser - try clicking REPEAT button');
                 this.updateVRText('vr-instruction-text', '❌ Audio blocked - click REPEAT');
               }
+              this.isSpeaking = false; // Clear speaking flag
               // Reduced delay from 800ms to 300ms for faster user experience
               setTimeout(() => {
                 this.hideSpeechBubble();
@@ -2132,6 +2122,7 @@ assets/vosk-models/nl.tar.gz</pre>
             utterance.onerror = (event) => {
               console.error('[NPC Speak TTS] ❌ Error:', event.error, event);
               this.updateVRText('vr-instruction-text', '❌ Speech error: ' + event.error);
+              this.isSpeaking = false; // Clear speaking flag
               
               // Still start listening even if TTS fails
               setTimeout(() => {
@@ -2435,6 +2426,12 @@ assets/vosk-models/nl.tar.gz</pre>
         },
         
         changeScenario(scenario) {
+          // Prevent multiple simultaneous scenario changes (debounce)
+          if (this.isChangingScenario) {
+            console.log('[Language App] ⚠️ Scenario change already in progress, ignoring duplicate call');
+            return;
+          }
+          
           console.log('[Language App] Changing scenario to:', scenario);
           
           // Set flag to prevent race conditions
