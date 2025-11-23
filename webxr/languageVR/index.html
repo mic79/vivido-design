@@ -1811,6 +1811,18 @@ assets/vosk-models/nl.tar.gz</pre>
           
           if (!envClassroom || !envRestaurant || !envShopping || !envDirections) return;
           
+          // Determine which environment entity corresponds to the target scenario
+          let targetEnv;
+          if (scenario === 'directions') {
+            targetEnv = envDirections;
+          } else if (scenario === 'shopping') {
+            targetEnv = envShopping;
+          } else if (scenario === 'restaurant') {
+            targetEnv = envRestaurant;
+          } else {
+            targetEnv = envClassroom;
+          }
+          
           // Step 1: Hide all environments FIRST
           console.log('[Environment] Hiding all environments...');
           envClassroom.setAttribute('visible', 'false');
@@ -1818,13 +1830,17 @@ assets/vosk-models/nl.tar.gz</pre>
           envShopping.setAttribute('visible', 'false');
           envDirections.setAttribute('visible', 'false');
           
-          // Step 2: Aggressively cleanup memory from currently invisible scenes
+          // Step 2: Cleanup memory from environments that are NOT the target scenario
           // This is critical for Quest to prevent crashes
-          console.log('[Environment] Starting memory cleanup...');
+          console.log('[Environment] Starting memory cleanup (excluding target scenario)...');
           const environments = [envClassroom, envRestaurant, envShopping, envDirections];
           environments.forEach(env => {
-            if (env.getAttribute('visible') === 'false' || env.getAttribute('visible') === false) {
+            // Only cleanup environments that are NOT the target
+            if (env !== targetEnv) {
+              console.log('[Environment] Cleaning up:', env.id);
               this.cleanupSceneResources(env);
+            } else {
+              console.log('[Environment] Preserving target environment:', env.id);
             }
           });
           
@@ -1840,15 +1856,8 @@ assets/vosk-models/nl.tar.gz</pre>
           setTimeout(() => {
             console.log('[Environment] Activating new scenario:', scenario);
             
-            if (scenario === 'directions') {
-              envDirections.setAttribute('visible', 'true');
-            } else if (scenario === 'shopping') {
-              envShopping.setAttribute('visible', 'true');
-            } else if (scenario === 'restaurant') {
-              envRestaurant.setAttribute('visible', 'true');
-            } else {
-              envClassroom.setAttribute('visible', 'true');
-            }
+            // Show the target environment
+            targetEnv.setAttribute('visible', 'true');
             
             console.log('[Environment] ✓ Scenario switch complete');
           }, 200); // 200ms delay for memory cleanup and GC
