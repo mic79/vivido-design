@@ -298,7 +298,8 @@
     <a-scene background="color: #87CEEB" renderer="antialias: true; colorManagement: true" ui-toggle-controller>
       <!-- Preload all 3D models using A-Frame's asset management system -->
       <!-- This shows a built-in loading screen and ensures all models are cached before scene starts -->
-      <a-assets timeout="30000">
+      <a-assets>
+        <!-- Models are NOT preloaded - they load on-demand to save memory -->
         <!-- Restaurant Environment -->
         <a-asset-item id="temple-model-asset" src="assets/bagan_-_khayiminga_temple_interior.glb"></a-asset-item>
         
@@ -706,10 +707,8 @@
       // ========================================
       
       const VoskRecognizer = {
-        models: {}, // Store all preloaded models
-        recognizers: {}, // Store all recognizers
-        model: null, // Current active model
-        recognizer: null, // Current active recognizer
+        model: null, // Only current model in memory
+        recognizer: null, // Only current recognizer in memory
         audioContext: null,
         processor: null,
         analyser: null,
@@ -720,49 +719,13 @@
         currentLanguage: 'es',
         onResult: null,
         onPartialResult: null,
-        modelsPreloaded: false,
+        shouldProcessResults: false,
         
         languageMap: {
           'es-ES': 'es',
           'fr-FR': 'fr',
           'de-DE': 'de',
           'nl-NL': 'nl'
-        },
-        
-        async preloadAllModels(onProgress) {
-          console.log('[Vosk] Preloading all language models...');
-          const languages = ['es', 'fr', 'de', 'nl'];
-          const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
-          
-          for (let i = 0; i < languages.length; i++) {
-            const lang = languages[i];
-            const progress = Math.floor((i / languages.length) * 90);
-            
-            if (onProgress) onProgress(progress, `Loading ${lang.toUpperCase()} model (${i+1}/${languages.length})...`);
-            
-            try {
-              const modelPath = `assets/vosk-models/${lang}.tar.gz`;
-              const fullModelPath = `${baseUrl}/${modelPath}`;
-              
-              console.log(`[Vosk] Loading ${lang} model from:`, fullModelPath);
-              this.models[lang] = await Vosk.createModel(fullModelPath);
-              console.log(`[Vosk] ✓ ${lang.toUpperCase()} model loaded`);
-              
-              // Create recognizer for this model
-              this.recognizers[lang] = new this.models[lang].KaldiRecognizer(16000);
-              this.recognizers[lang].setWords(true);
-              console.log(`[Vosk] ✓ ${lang.toUpperCase()} recognizer created`);
-              
-            } catch (error) {
-              console.error(`[Vosk] Failed to load ${lang} model:`, error);
-              throw error;
-            }
-          }
-          
-          if (onProgress) onProgress(100, 'All models loaded!');
-          this.modelsPreloaded = true;
-          console.log('[Vosk] ✓ All 4 language models preloaded successfully');
-          return true;
         },
         
         async init(language, onProgress, onResult, onPartialResult) {
@@ -774,19 +737,23 @@
           this.shouldProcessResults = false;
           
           try {
-            // If models aren't preloaded yet, preload them now
-            if (!this.modelsPreloaded) {
-              if (onProgress) onProgress(10, 'Preloading all language models...');
-              await this.preloadAllModels(onProgress);
-            } else {
-              if (onProgress) onProgress(50, 'Switching to model...');
-            }
+            // Load ONLY the requested language model (one at a time)
+            if (onProgress) onProgress(20, `Loading ${this.currentLanguage.toUpperCase()} model...`);
             
-            // Switch to the requested language's model and recognizer
-            this.model = this.models[this.currentLanguage];
-            this.recognizer = this.recognizers[this.currentLanguage];
+            const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
+            const modelPath = `assets/vosk-models/${this.currentLanguage}.tar.gz`;
+            const fullModelPath = `${baseUrl}/${modelPath}`;
             
-            console.log('[Vosk] ✓ Using', this.currentLanguage.toUpperCase(), 'model and recognizer');
+            console.log(`[Vosk] Loading ${this.currentLanguage} model from:`, fullModelPath);
+            this.model = await Vosk.createModel(fullModelPath);
+            console.log(`[Vosk] ✓ ${this.currentLanguage.toUpperCase()} model loaded`);
+            
+            if (onProgress) onProgress(60, `Creating recognizer...`);
+            
+            // Create recognizer for this model
+            this.recognizer = new this.model.KaldiRecognizer(16000);
+            this.recognizer.setWords(true);
+            console.log(`[Vosk] ✓ ${this.currentLanguage.toUpperCase()} recognizer created`);
             console.log('[Vosk] Recognizer methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.recognizer)));
             console.log('[Vosk] Recognizer object:', this.recognizer);
             
@@ -1102,36 +1069,66 @@
           }
         },
         
+        async cleanupCurrentModel() {
+          console.log('[Vosk] 🧹 Cleaning up current model to free memory...');
+          
+          // Stop recognition first
+          if (this.isListening) {
+            this.stop();
+          }
+          
+          // Remove recognizer to break event listeners
+          if (this.recognizer) {
+            try {
+              this.recognizer.remove();
+              console.log('[Vosk] ✓ Recognizer removed');
+            } catch (e) {
+              console.warn('[Vosk] Recognizer removal error:', e);
+            }
+            this.recognizer = null;
+          }
+          
+          // Clear model reference (critical for GC)
+          if (this.model) {
+            console.log('[Vosk] ✓ Model reference cleared');
+            this.model = null;
+          }
+          
+          // Force garbage collection if available (Quest-specific)
+          if (typeof window.gc === 'function') {
+            console.log('[Vosk] 🗑️ Requesting garbage collection...');
+            window.gc();
+          }
+          
+          // Brief delay to allow WebAssembly memory to be freed
+          await new Promise(resolve => setTimeout(resolve, 200));
+          
+          console.log('[Vosk] ✓ Cleanup complete, memory freed');
+        },
+        
         async switchLanguage(language, onProgress) {
           console.log('[Vosk] Switching to language:', language);
           
           const newLang = this.languageMap[language] || 'es';
           
-          if (!this.modelsPreloaded) {
-            console.warn('[Vosk] Models not preloaded, initializing first...');
-            await this.init(language, onProgress, this.onResult, this.onPartialResult);
+          // Don't switch if already on this language
+          if (this.currentLanguage === newLang && this.model && this.recognizer) {
+            console.log('[Vosk] Already on', newLang.toUpperCase(), '- skipping switch');
             return;
           }
           
-          // Stop current recognition
-          if (this.isListening) {
-            this.stop();
+          // STEP 1: Clean up old model FIRST (critical for memory)
+          if (this.model || this.recognizer) {
+            if (onProgress) onProgress(10, 'Unloading old model...');
+            await this.cleanupCurrentModel();
           }
           
-          // Instantly switch to the new model and recognizer (already preloaded!)
-          this.currentLanguage = newLang;
-          this.model = this.models[newLang];
-          this.recognizer = this.recognizers[newLang];
+          // STEP 2: Load new model (memory is now free)
+          if (onProgress) onProgress(30, `Loading ${newLang.toUpperCase()}...`);
+          await this.init(language, onProgress, this.onResult, this.onPartialResult);
           
-          console.log('[Vosk] ✓ Instantly switched to', newLang.toUpperCase(), 'model (preloaded)');
-          
-          // Update event listeners for the new recognizer
-          this.setupRecognizerEvents();
-          
-          if (onProgress) {
-            onProgress(100, `Ready! (${newLang.toUpperCase()})`);
-          }
-        }
+          console.log('[Vosk] ✓ Switched to', newLang.toUpperCase());
+        },
       };
       
       // ========================================
