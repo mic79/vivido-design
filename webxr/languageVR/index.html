@@ -404,8 +404,8 @@
   <a-scene background="color: #87CEEB" renderer="antialias: true; colorManagement: true">
     <!-- Assets -->
     <a-assets>
-      <!-- Environment model (language meetup setting) -->
-      <a-asset-item id="cafe-model" src="assets/library_of_celsus_-_crowdsourced_photogrammetry.glb"></a-asset-item>
+      <!-- Restaurant Environment - Bagan Temple Interior -->
+      <a-asset-item id="temple-model" src="assets/bagan_-_khayiminga_temple_interior.glb"></a-asset-item>
     </a-assets>
 
     <!-- Camera Rig with Hands -->
@@ -429,21 +429,21 @@
       </a-entity>
     </a-entity>
 
-    <!-- Environment (smaller scale, behind user so it's a backdrop) -->
-    <a-entity id="environment" position="0 0 10" scale="1 1 1" rotation="0 180 0">
-      <a-entity gltf-model="#cafe-model" position="0 0 0"></a-entity>
+    <!-- Restaurant Environment (Bagan Temple Interior) -->
+    <a-entity id="environment" position="0 0 -4" rotation="0 180 0" scale="2 2 2">
+      <a-entity gltf-model="#temple-model" shadow="cast: true; receive: true"></a-entity>
     </a-entity>
 
     <!-- Lighting -->
-    <a-entity light="type: ambient; color: #BBB; intensity: 0.8"></a-entity>
-    <a-entity light="type: directional; color: #FFF; intensity: 0.6" position="5 10 5"></a-entity>
-    <a-entity light="type: point; color: #FFD700; intensity: 0.5" position="-5 5 -5"></a-entity>
+    <a-entity light="type: ambient; intensity: 0.6"></a-entity>
+    <a-entity light="type: directional; intensity: 0.8; castShadow: true" position="2 4 2"></a-entity>
+    <a-entity light="type: point; intensity: 0.5; color: #FFA500" position="0 2 -2"></a-entity>
 
-    <!-- Ground -->
-    <a-plane position="0 0 0" rotation="-90 0 0" width="100" height="100" color="#7BC8A4" shadow="receive: true"></a-plane>
+    <!-- Floor -->
+    <a-plane position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#8B7355" opacity="0.8" shadow="receive: true"></a-plane>
 
     <!-- NPC Avatar - Maria (in front of user) -->
-    <a-entity id="npc" position="0 1.3 -2.5">
+    <a-entity id="npc" position="0 1.3 -2.5" visible="false">
       <!-- Head -->
       <a-sphere position="0 0.3 0" radius="0.15" color="#FFD4A3"></a-sphere>
       <!-- Body -->
@@ -469,7 +469,7 @@
 
     <!-- Question Panel -->
     <a-entity id="ui-question" position="0 2.2 -2.5" visible="false">
-      <a-plane width="2" height="0.5" color="#1a1a2e" opacity="0.9">
+      <a-plane class="clickable" width="2" height="0.5" color="#1a1a2e" opacity="0.9">
         <a-text id="question-text-nl" value="Hoe gaat het?" align="center" color="#ffffff" width="1.8" position="0 0 0.01"></a-text>
       </a-plane>
       <!-- English translation - hidden by default, shown on hover -->
@@ -784,10 +784,19 @@
           console.log('[Vosk] Result event:', message);
           // Access the nested result.text property (Quest-compatible syntax)
           const text = (message.result && message.result.text) || message.text;
+          
+          // Always call onResult, even for empty results
+          // This ensures the UI gets updated and cleanup happens
           if (text && text.trim()) {
             console.log('[Vosk] ✓ Recognized:', text);
             if (this.onResult) {
               this.onResult(text);
+            }
+          } else {
+            console.log('[Vosk] Empty result (silence or too short)');
+            // Still call onResult with empty string so app can clean up
+            if (this.onResult) {
+              this.onResult('');
             }
           }
         });
@@ -923,6 +932,7 @@
       bars: [],
       isActive: false,
       animationFrame: null,
+      updateInterval: null, // Fallback for Quest browser
 
       init() {
         // Get A-Frame visualizer bars
@@ -947,7 +957,17 @@
         const micEl = document.getElementById('ui-mic-viz');
         if (micEl) micEl.setAttribute('visible', true);
         console.log('[Visualizer] Started');
+        
+        // Try both approaches: requestAnimationFrame AND setInterval
+        // Quest browser might throttle rAF in VR mode
         this.draw();
+        
+        // Fallback: Use setInterval for Quest browser (30 FPS)
+        this.updateInterval = setInterval(() => {
+          if (this.isActive) {
+            this.updateBars();
+          }
+        }, 33); // ~30 FPS
       },
 
       stop() {
@@ -955,9 +975,17 @@
         // Hide A-Frame mic visualizer entity
         const micEl = document.getElementById('ui-mic-viz');
         if (micEl) micEl.setAttribute('visible', false);
+        
         if (this.animationFrame) {
           cancelAnimationFrame(this.animationFrame);
+          this.animationFrame = null;
         }
+        
+        if (this.updateInterval) {
+          clearInterval(this.updateInterval);
+          this.updateInterval = null;
+        }
+        
         console.log('[Visualizer] Stopped');
       },
 
@@ -965,34 +993,46 @@
         if (!this.isActive || !VoskRecognizer.analyser) return;
 
         this.animationFrame = requestAnimationFrame(() => this.draw());
+        this.updateBars();
+      },
+      
+      updateBars() {
+        if (!this.isActive || !VoskRecognizer.analyser || this.bars.length === 0) return;
 
-        const frequencyArray = new Uint8Array(VoskRecognizer.analyser.frequencyBinCount);
-        VoskRecognizer.analyser.getByteFrequencyData(frequencyArray);
+        try {
+          const frequencyArray = new Uint8Array(VoskRecognizer.analyser.frequencyBinCount);
+          VoskRecognizer.analyser.getByteFrequencyData(frequencyArray);
 
-        // Update each bar's height based on frequency data
-        // Sample different frequency ranges for 8 bars
-        const barCount = this.bars.length;
-        const binSize = Math.floor(frequencyArray.length / barCount);
-        
-        for (let i = 0; i < barCount; i++) {
-          // Average frequency for this bar
-          const startBin = i * binSize;
-          const endBin = startBin + binSize;
-          let sum = 0;
-          for (let j = startBin; j < endBin; j++) {
-            sum += frequencyArray[j];
-          }
-          const average = sum / binSize;
+          // Update each bar's height based on frequency data
+          // Sample different frequency ranges for 8 bars
+          const barCount = this.bars.length;
+          const binSize = Math.floor(frequencyArray.length / barCount);
           
-          // Scale to height (0.05 to 0.3)
-          const height = 0.05 + (average / 255) * 0.25;
-          
-          // Update bar height
-          if (this.bars[i]) {
-            this.bars[i].setAttribute('height', height.toFixed(3));
-            // Adjust position to keep bottom aligned
-            this.bars[i].setAttribute('position', `${i * 0.1} ${height / 2} 0`);
+          for (let i = 0; i < barCount; i++) {
+            // Average frequency for this bar
+            const startBin = i * binSize;
+            const endBin = startBin + binSize;
+            let sum = 0;
+            for (let j = startBin; j < endBin; j++) {
+              sum += frequencyArray[j];
+            }
+            const average = sum / binSize;
+            
+            // Scale to height (0.05 to 0.3)
+            const height = 0.05 + (average / 255) * 0.25;
+            
+            // Update bar height (batch setAttribute calls)
+            if (this.bars[i]) {
+              const bar = this.bars[i];
+              const yPos = height / 2;
+              
+              // Use setAttribute sparingly - more efficient
+              bar.setAttribute('height', height.toFixed(3));
+              bar.object3D.position.y = yPos; // Direct Three.js update (faster)
+            }
           }
+        } catch (err) {
+          console.warn('[Visualizer] Update error (Quest compat):', err.message);
         }
       }
     };
@@ -1472,8 +1512,16 @@
       startExperience() {
         console.log('[DutchApp] User clicked Start - beginning conversation');
         
-        // Hide start button
+        // Hide start button and remove clickable class to prevent raycaster intersection
         this.hideUIElement('ui-start');
+        const startButton = document.getElementById('ui-start');
+        if (startButton) {
+          const clickableBox = startButton.querySelector('.clickable');
+          if (clickableBox) {
+            clickableBox.classList.remove('clickable');
+            clickableBox.setAttribute('visible', false);
+          }
+        }
         
         // Start conversation
         this.startConversation('meetup-intro');
@@ -1552,14 +1600,28 @@
           questionEN.setAttribute('visible', false);
         }
         
-        // Add hover listener to question panel to show/hide translation
+        // Setup hover and click for question panel (remove old listeners first)
         const questionPanel = document.getElementById('ui-question');
         if (questionPanel) {
-          questionPanel.addEventListener('raycaster-intersected', () => {
-            if (questionEN) questionEN.setAttribute('visible', true);
+          // Remove old event listeners by cloning the node
+          const newQuestionPanel = questionPanel.cloneNode(true);
+          questionPanel.parentNode.replaceChild(newQuestionPanel, questionPanel);
+          
+          // Re-get the text elements after cloning
+          const newQuestionEN = document.getElementById('question-text-en');
+          
+          // Add hover listener to show/hide translation
+          newQuestionPanel.addEventListener('raycaster-intersected', () => {
+            if (newQuestionEN) newQuestionEN.setAttribute('visible', true);
           });
-          questionPanel.addEventListener('raycaster-intersected-cleared', () => {
-            if (questionEN) questionEN.setAttribute('visible', false);
+          newQuestionPanel.addEventListener('raycaster-intersected-cleared', () => {
+            if (newQuestionEN) newQuestionEN.setAttribute('visible', false);
+          });
+          
+          // Add click listener to replay audio
+          newQuestionPanel.addEventListener('click', () => {
+            console.log('[DutchApp] Question clicked - replaying audio');
+            this.playQuestionAudio(exchange.question.audio);
           });
         }
         
@@ -1579,13 +1641,20 @@
             answerEN.setAttribute('visible', false);
           }
           
-          // Add hover listener to answer panel
+          // Remove old listeners by cloning
           if (answerPanel) {
-            answerPanel.addEventListener('raycaster-intersected', () => {
-              if (answerEN) answerEN.setAttribute('visible', true);
+            const newAnswerPanel = answerPanel.cloneNode(true);
+            answerPanel.parentNode.replaceChild(newAnswerPanel, answerPanel);
+            
+            // Re-get references after cloning
+            const newAnswerEN = newAnswerPanel.querySelector(`#answer${i+1}-en`);
+            
+            // Add hover listener to answer panel
+            newAnswerPanel.addEventListener('raycaster-intersected', () => {
+              if (newAnswerEN) newAnswerEN.setAttribute('visible', true);
             });
-            answerPanel.addEventListener('raycaster-intersected-cleared', () => {
-              if (answerEN) answerEN.setAttribute('visible', false);
+            newAnswerPanel.addEventListener('raycaster-intersected-cleared', () => {
+              if (newAnswerEN) newAnswerEN.setAttribute('visible', false);
             });
           }
           
@@ -1676,15 +1745,15 @@
         const micEl = document.getElementById('ui-mic-viz');
         if (micEl) micEl.setAttribute('visible', false);
         
-        // DON'T disable processing here - user might still be holding trigger!
-        // It will be disabled when they start the next recording
+        // Disable processing immediately - we got a result (even if empty)
+        VoskRecognizer.shouldProcessResults = false;
         
         if (!text || text.trim() === '') {
-          console.warn('[DutchApp] Empty result, ignoring');
+          console.warn('[DutchApp] Empty result (silence or too short), ignoring');
           this.isProcessing = false;
           return;
         }
-
+        
         this.evaluateAnswer(text);
       },
 
