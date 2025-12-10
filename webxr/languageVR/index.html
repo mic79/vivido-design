@@ -8,11 +8,14 @@
   <!-- CSS3DRenderer loaded after A-Frame, will use A-Frame's bundled THREE -->
   <script src="https://unpkg.com/three@0.147.0/examples/js/renderers/CSS3DRenderer.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js"></script>
+  <!-- Slice9 component for rounded corners -->
+  <script src="https://unpkg.com/aframe-slice9-component/dist/aframe-slice9-component.min.js"></script>
   <style>
     body {
       margin: 0;
       overflow: hidden;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      cursor: crosshair; /* Show crosshair cursor for PC users */
     }
 
     /* CSS3D UI Elements (will be rendered in 3D space) */
@@ -404,8 +407,8 @@
   <a-scene background="color: #87CEEB" renderer="antialias: true; colorManagement: true">
     <!-- Assets -->
     <a-assets>
-      <!-- Restaurant Environment - Bagan Temple Interior -->
-      <a-asset-item id="temple-model" src="assets/bagan_-_khayiminga_temple_interior.glb"></a-asset-item>
+      <!-- Restaurant Environment - Modern Dining Room -->
+      <a-asset-item id="dining-room-model" src="assets/modern_dining_room.glb"></a-asset-item>
     </a-assets>
 
     <!-- Camera Rig with Hands -->
@@ -415,7 +418,19 @@
         id="camera" 
         camera 
         look-controls="pointerLockEnabled: false"
-        position="0 1.6 0">
+        position="0 1.6 0"
+        cursor="rayOrigin: mouse; fuse: false"
+        raycaster="objects: .clickable; far: 10">
+        <!-- Visual cursor ring for PC mouse users (hidden - not needed) -->
+        <a-ring 
+          id="mouse-cursor"
+          position="0 0 -0.5" 
+          radius-inner="0.005" 
+          radius-outer="0.008" 
+          color="#ffffff" 
+          opacity="0.8"
+          visible="false">
+        </a-ring>
       </a-entity>
       
       <!-- Hands and Controllers (attached to rig so they follow camera) -->
@@ -429,9 +444,9 @@
       </a-entity>
     </a-entity>
 
-    <!-- Restaurant Environment (Bagan Temple Interior) -->
-    <a-entity id="environment" position="0 0 -4" rotation="0 180 0" scale="2 2 2">
-      <a-entity gltf-model="#temple-model" shadow="cast: true; receive: true"></a-entity>
+    <!-- Restaurant Environment (Modern Dining Room) -->
+    <a-entity id="environment" position="0 1.5 -3" rotation="0 0 0" scale="1 1 1">
+      <a-entity gltf-model="#dining-room-model" shadow="cast: true; receive: true"></a-entity>
     </a-entity>
 
     <!-- Lighting -->
@@ -440,7 +455,7 @@
     <a-entity light="type: point; intensity: 0.5; color: #FFA500" position="0 2 -2"></a-entity>
 
     <!-- Floor -->
-    <a-plane position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#8B7355" opacity="0.8" shadow="receive: true"></a-plane>
+    <a-plane position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#8B7355" opacity="0.8" shadow="receive: true" visible="false"></a-plane>
 
     <!-- NPC Avatar - Maria (in front of user) -->
     <a-entity id="npc" position="0 1.3 -2.5" visible="false">
@@ -453,93 +468,263 @@
       <a-cylinder position="0.2 0.05 0" radius="0.04" height="0.4" rotation="0 0 -20" color="#FFD4A3"></a-cylinder>
       <!-- Name label above head -->
       <a-entity position="0 0.6 0">
-        <a-text value="Maria" align="center" color="#ffffff" width="1.5"></a-text>
+        <a-text value="Maria" 
+                position="0 0 0"
+                align="center" 
+                color="#ffffff" 
+                width="1.5"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"></a-text>
       </a-entity>
     </a-entity>
 
     <!-- UI Panels (A-Frame entities, always visible) -->
     <!-- Start Button -->
-    <a-entity id="ui-start" position="0 1.6 -1.8" visible="true">
-      <a-plane width="1.5" height="0.6" color="#1a1a2e" opacity="0.9">
-        <a-text value="Start Conversation" align="center" color="#ffffff" width="1.3" position="0 0.1 0.01"></a-text>
-        <a-text value="Click to Begin" align="center" color="#88aaff" width="1" position="0 -0.1 0.01"></a-text>
-      </a-plane>
+    <a-entity id="ui-start" position="0 1.6 -1.8" visible="true" button-hover>
+      <a-entity slice9="width: 1.5; height: 0.6; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #4A90E2; opacity: 0.9"></a-entity>
+      <a-text value="Start Conversation" 
+              position="0 0.1 0.01"
+              align="center" 
+              color="#ffffff" 
+              width="1.3"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              wrap-count="20"></a-text>
+      <a-text value="Click to Begin" 
+              position="0 -0.1 0.01"
+              align="center" 
+              color="#88aaff" 
+              width="1"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              wrap-count="20"></a-text>
       <a-box class="clickable" width="1.5" height="0.6" depth="0.01" opacity="0" position="0 0 0"></a-box>
     </a-entity>
 
     <!-- Question Panel -->
     <a-entity id="ui-question" position="0 2.2 -2.5" visible="false">
-      <a-plane class="clickable" width="2" height="0.5" color="#1a1a2e" opacity="0.9">
-        <a-text id="question-text-nl" value="Hoe gaat het?" align="center" color="#ffffff" width="1.8" position="0 0 0.01"></a-text>
-      </a-plane>
-      <!-- English translation - hidden by default, shown on hover -->
-      <a-text id="question-text-en" value="(How are you?)" align="center" color="#88aaff" width="1.6" position="0 -0.3 0.01" visible="false"></a-text>
+      <a-entity slice9="width: 2; height: 0.4; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+      <a-text id="question-text-nl" 
+              value="Hoe gaat het?" 
+              position="0 0 0.01"
+              align="center" 
+              color="#ffffff" 
+              width="1.8"
+              scale="0.8 0.8 0.8"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              wrap-count="35"></a-text>
+      <!-- English translation tooltip - hidden by default, shown on hover -->
+      <a-entity id="question-text-en-container" position="0 -0.35 0.01" visible="false">
+        <a-entity slice9="width: 1.8; height: 0.3; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+        <a-text id="question-text-en" 
+                value="How are you?" 
+                position="0 0 0.01"
+                align="center" 
+                color="#ffffff" 
+                width="1.6"
+                scale="0.7 0.7 0.7"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
+                wrap-count="35"></a-text>
+      </a-entity>
+      <a-box class="clickable" width="2" height="0.4" depth="0.01" opacity="0" position="0 0 0"></a-box>
     </a-entity>
 
     <!-- Answer Panel 1 -->
     <a-entity id="ui-answer1" position="-1 1 -2" visible="false">
-      <a-plane class="clickable answer-card" width="0.8" height="0.4" color="#2a2a4e" opacity="0.9">
-        <a-text id="answer1-text" value="Goed" align="center" color="#ffffff" width="0.7" position="0 0.05 0.01"></a-text>
-        <a-text id="answer1-en" value="(Good)" align="center" color="#88aaff" width="0.6" position="0 -0.1 0.01" visible="false"></a-text>
-      </a-plane>
+      <a-entity slice9="width: 0.8; height: 0.3; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+      <a-text id="answer1-text" 
+              value="Goed" 
+              position="0 0 0.01"
+              align="center" 
+              color="#ffffff" 
+              width="0.7"
+              scale="0.8 0.8 0.8"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              wrap-count="18"></a-text>
+      <!-- English translation tooltip -->
+      <a-entity id="answer1-en-container" position="0 -0.25 0.01" visible="false">
+        <a-entity slice9="width: 0.75; height: 0.25; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+        <a-text id="answer1-en" 
+                value="Good" 
+                position="0 0 0.01"
+                align="center" 
+                color="#ffffff" 
+                width="0.6"
+                scale="0.7 0.7 0.7"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
+                wrap-count="18"></a-text>
+      </a-entity>
+      <a-box class="clickable answer-card" width="0.8" height="0.3" depth="0.01" opacity="0" position="0 0 0"></a-box>
     </a-entity>
 
     <!-- Answer Panel 2 -->
     <a-entity id="ui-answer2" position="0 1 -2" visible="false">
-      <a-plane class="clickable answer-card" width="0.8" height="0.4" color="#2a2a4e" opacity="0.9">
-        <a-text id="answer2-text" value="Prima" align="center" color="#ffffff" width="0.7" position="0 0.05 0.01"></a-text>
-        <a-text id="answer2-en" value="(Fine)" align="center" color="#88aaff" width="0.6" position="0 -0.1 0.01" visible="false"></a-text>
-      </a-plane>
+      <a-entity slice9="width: 0.8; height: 0.3; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+      <a-text id="answer2-text" 
+              value="Prima" 
+              position="0 0 0.01"
+              align="center" 
+              color="#ffffff" 
+              width="0.7"
+              scale="0.8 0.8 0.8"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              wrap-count="18"></a-text>
+      <!-- English translation tooltip -->
+      <a-entity id="answer2-en-container" position="0 -0.25 0.01" visible="false">
+        <a-entity slice9="width: 0.75; height: 0.25; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+        <a-text id="answer2-en" 
+                value="Fine" 
+                position="0 0 0.01"
+                align="center" 
+                color="#ffffff" 
+                width="0.6"
+                scale="0.7 0.7 0.7"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
+                wrap-count="18"></a-text>
+      </a-entity>
+      <a-box class="clickable answer-card" width="0.8" height="0.3" depth="0.01" opacity="0" position="0 0 0"></a-box>
     </a-entity>
 
     <!-- Answer Panel 3 -->
     <a-entity id="ui-answer3" position="1 1 -2" visible="false">
-      <a-plane class="clickable answer-card" width="0.8" height="0.4" color="#2a2a4e" opacity="0.9">
-        <a-text id="answer3-text" value="Heel goed" align="center" color="#ffffff" width="0.7" position="0 0.05 0.01"></a-text>
-        <a-text id="answer3-en" value="(Very good)" align="center" color="#88aaff" width="0.6" position="0 -0.1 0.01" visible="false"></a-text>
-      </a-plane>
+      <a-entity slice9="width: 0.8; height: 0.3; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+      <a-text id="answer3-text" 
+              value="Heel goed" 
+              position="0 0 0.01"
+              align="center" 
+              color="#ffffff" 
+              width="0.7"
+              scale="0.8 0.8 0.8"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              wrap-count="18"></a-text>
+      <!-- English translation tooltip -->
+      <a-entity id="answer3-en-container" position="0 -0.25 0.01" visible="false">
+        <a-entity slice9="width: 0.75; height: 0.25; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+        <a-text id="answer3-en" 
+                value="Very good" 
+                position="0 0 0.01"
+                align="center" 
+                color="#ffffff" 
+                width="0.6"
+                scale="0.7 0.7 0.7"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
+                wrap-count="18"></a-text>
+      </a-entity>
+      <a-box class="clickable answer-card" width="0.8" height="0.3" depth="0.01" opacity="0" position="0 0 0"></a-box>
     </a-entity>
 
     <!--Microphone Visualizer (visible when listening) -->
     <a-entity id="ui-mic-viz" position="0 1.5 -2" visible="false">
-      <a-plane width="2" height="0.6" color="#000000" opacity="0.8">
-        <a-text value="🎤 Listening..." align="center" color="#ff0000" width="1.8" position="0 0.2 0.01"></a-text>
-        <!-- Visual bars for audio levels (will be animated by AudioVisualizer) -->
-        <a-entity id="viz-bars" position="-0.4 -0.1 0.02">
-          <!-- 8 bars for simple visualization -->
-          <a-box id="viz-bar-0" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0 0 0"></a-box>
-          <a-box id="viz-bar-1" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.1 0 0"></a-box>
-          <a-box id="viz-bar-2" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.2 0 0"></a-box>
-          <a-box id="viz-bar-3" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.3 0 0"></a-box>
-          <a-box id="viz-bar-4" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.4 0 0"></a-box>
-          <a-box id="viz-bar-5" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.5 0 0"></a-box>
-          <a-box id="viz-bar-6" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.6 0 0"></a-box>
-          <a-box id="viz-bar-7" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.7 0 0"></a-box>
-        </a-entity>
-      </a-plane>
+      <a-entity slice9="width: 2; height: 0.4; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+      <a-text value="🎤 Listening..." 
+              position="0 0.1 0.01"
+              align="center" 
+              color="#ff0000" 
+              width="1.8"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              wrap-count="30"></a-text>
+      <!-- Visual bars for audio levels (will be animated by AudioVisualizer) -->
+      <a-entity id="viz-bars" position="-0.4 -0.05 0.02">
+        <!-- 8 bars for simple visualization -->
+        <a-box id="viz-bar-0" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0 0 0"></a-box>
+        <a-box id="viz-bar-1" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.1 0 0"></a-box>
+        <a-box id="viz-bar-2" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.2 0 0"></a-box>
+        <a-box id="viz-bar-3" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.3 0 0"></a-box>
+        <a-box id="viz-bar-4" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.4 0 0"></a-box>
+        <a-box id="viz-bar-5" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.5 0 0"></a-box>
+        <a-box id="viz-bar-6" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.6 0 0"></a-box>
+        <a-box id="viz-bar-7" width="0.08" height="0.05" depth="0.01" color="#ff3366" position="0.7 0 0"></a-box>
+      </a-entity>
     </a-entity>
 
     <!-- Recognition Result (shown after speech recognition) -->
-    <a-entity id="ui-recognition-result" position="0 1.8 -2.5" visible="false">
-      <a-plane width="2.5" height="0.8" color="#1a1a2e" opacity="0.9">
-        <a-text id="recognition-text" value="You said: ..." align="center" color="#ffffff" width="2.3" position="0 0.15 0.01"></a-text>
-        <a-text id="accuracy-text" value="Accuracy: 0%" align="center" color="#4CAF50" width="2.3" position="0 -0.15 0.01"></a-text>
-      </a-plane>
+    <a-entity id="ui-recognition-result" position="0 1.6 -2.5" visible="false">
+      <a-entity slice9="width: 2.5; height: 0.5; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+      <a-text id="recognition-text" 
+              value="You said: ..." 
+              position="0 0.08 0.01"
+              align="center" 
+              color="#ffffff" 
+              width="2.3"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              wrap-count="40"></a-text>
+      <a-text id="accuracy-text" 
+              value="Accuracy: 0%" 
+              position="0 -0.08 0.01"
+              align="center" 
+              color="#4CAF50" 
+              width="2.3"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"></a-text>
     </a-entity>
 
     <!-- Final Score (shown at end of conversation) -->
     <a-entity id="ui-final-score" position="0 1.8 -2.5" visible="false">
-      <a-plane width="2.5" height="1.5" color="#1a1a2e" opacity="0.9">
-        <a-text value="🎉 Conversation Complete!" align="center" color="#ffffff" width="2.2" position="0 0.55 0.01"></a-text>
-        <a-text id="final-accuracy-text" value="Overall Accuracy: 0%" align="center" color="#4CAF50" width="2.2" position="0 0.2 0.01"></a-text>
-        <a-text id="best-score-text" value="Personal Best: 0%" align="center" color="#FFD700" width="2.2" position="0 -0.1 0.01"></a-text>
-        <!-- Restart Button -->
-        <a-entity id="restart-button" position="0 -0.5 0.01">
-          <a-plane class="clickable" width="1" height="0.35" color="#4A90E2" opacity="0.9">
-            <a-text value="🔄 Try Again" align="center" color="#ffffff" width="0.9" position="0 0 0.01"></a-text>
-          </a-plane>
-        </a-entity>
-      </a-plane>
+      <a-entity slice9="width: 2.5; height: 1.5; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
+      <a-text value="🎉 Conversation Complete!" 
+              position="0 0.55 0.01"
+              align="center" 
+              color="#ffffff" 
+              width="2.2"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"></a-text>
+      <a-text id="final-accuracy-text" 
+              value="Overall Accuracy: 0%" 
+              position="0 0.2 0.01"
+              align="center" 
+              color="#4CAF50" 
+              width="2.2"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"></a-text>
+      <a-text id="best-score-text" 
+              value="Personal Best: 0%" 
+              position="0 -0.1 0.01"
+              align="center" 
+              color="#FFD700" 
+              width="2.2"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"></a-text>
+      <!-- Restart Button -->
+      <a-entity id="restart-button" position="0 -0.5 0.01">
+        <a-entity id="restart-button-bg" slice9="width: 1; height: 0.35; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #4A90E2; opacity: 0.9"></a-entity>
+        <a-text id="restart-button-text"
+                value="Try Again" 
+                position="0 0 0.02"
+                align="center" 
+                color="#88aaff" 
+                width="1"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"></a-text>
+        <a-box class="clickable" width="1" height="0.35" depth="0.01" opacity="0" position="0 0 0"></a-box>
+      </a-entity>
     </a-entity>
 
     <!-- Instructions -->
@@ -558,6 +743,73 @@
     
     // CSS3DRenderer uses the global THREE from A-Frame
     // A-Frame includes THREE.js, so we don't need to load it separately
+    
+    // ============================================
+    // BUTTON HOVER EFFECT COMPONENT
+    // ============================================
+    AFRAME.registerComponent('button-hover', {
+      init: function () {
+        const el = this.el;
+        const slice9 = el.querySelector('[slice9]');
+        
+        // Store original color
+        this.originalColor = '#4A90E2';
+        this.hoverColor = '#ffffff';
+        
+        // Mouse/VR controller hover
+        el.addEventListener('mouseenter', () => {
+          if (slice9) {
+            slice9.setAttribute('slice9', 'color', this.hoverColor);
+          }
+        });
+        
+        el.addEventListener('mouseleave', () => {
+          if (slice9) {
+            slice9.setAttribute('slice9', 'color', this.originalColor);
+          }
+        });
+        
+        // Also listen to raycaster events for VR controllers
+        el.addEventListener('raycaster-intersected', () => {
+          if (slice9) {
+            slice9.setAttribute('slice9', 'color', this.hoverColor);
+          }
+        });
+        
+        el.addEventListener('raycaster-intersected-cleared', () => {
+          if (slice9) {
+            slice9.setAttribute('slice9', 'color', this.originalColor);
+          }
+        });
+      }
+    });
+    
+    // ============================================
+    // HIDE MOUSE CURSOR IN VR MODE
+    // ============================================
+    AFRAME.registerComponent('hide-in-vr', {
+      init: function () {
+        const el = this.el;
+        const sceneEl = this.el.sceneEl;
+        
+        // Hide cursor when entering VR
+        sceneEl.addEventListener('enter-vr', () => {
+          console.log('[Cursor] Entering VR - hiding mouse cursor');
+          el.setAttribute('visible', false);
+        });
+        
+        // Show cursor when exiting VR
+        sceneEl.addEventListener('exit-vr', () => {
+          console.log('[Cursor] Exiting VR - showing mouse cursor');
+          el.setAttribute('visible', true);
+        });
+        
+        // Initially hide if already in VR
+        if (sceneEl.is('vr-mode')) {
+          el.setAttribute('visible', false);
+        }
+      }
+    });
     
     // ============================================
     // CSS3D RENDERER INTEGRATION WITH A-FRAME
@@ -1065,9 +1317,9 @@
                 audio: "assets/audio/nl/meetup/ex0_hoe_gaat_het.mp3"
               },
               answers: [
-                { dutch: "Goed, dank je! Ik ben een beetje zenuwachtig.", english: "Good, thank you! I'm a bit nervous.", branch: 1 },
-                { dutch: "Heel goed! Ik vind het spannend om Nederlands te oefenen.", english: "Very good! I'm excited to practice Dutch.", branch: 2 },
-                { dutch: "Prima! Ik ben hier voor het eerst.", english: "Great! This is my first time here.", branch: 3 }
+                { dutch: "Goed, dank je! Ik ben een beetje zenuwachtig.", english: "Good, thank you! I'm a bit nervous.", branch: 1, audio: "assets/audio/nl/meetup/answers/ans_ex0_goed.mp3" },
+                { dutch: "Heel goed! Ik vind het spannend om Nederlands te oefenen.", english: "Very good! I'm excited to practice Dutch.", branch: 2, audio: "assets/audio/nl/meetup/answers/ans_ex0_heel_goed.mp3" },
+                { dutch: "Prima! Ik ben hier voor het eerst.", english: "Great! This is my first time here.", branch: 3, audio: "assets/audio/nl/meetup/answers/ans_ex0_prima.mp3" }
               ]
             },
             
@@ -1451,8 +1703,10 @@
       currentExchangeIndex: 0,
       currentAudio: null,
       accuracyScores: [],
+      conversationPath: [], // Track which exchanges were visited
       isProcessing: false,
       awaitingRetry: false,
+      processingTimeout: null, // Store timeout ID for cleanup
 
       async init() {
         console.log('[DutchApp] Initializing...');
@@ -1562,22 +1816,94 @@
 
         // Listen for trigger press (push-to-talk)
         rightHand.addEventListener('triggerdown', () => {
+          // Check if raycaster is intersecting a clickable element
+          const raycaster = rightHand.components.raycaster;
+          if (raycaster && raycaster.intersectedEls && raycaster.intersectedEls.length > 0) {
+            const intersected = raycaster.intersectedEls[0];
+            if (intersected.classList.contains('clickable')) {
+              console.log('[DutchApp] Trigger pressed on clickable - skipping mic');
+              return; // Don't start mic, let the click happen
+            }
+          }
+          
           console.log('[DutchApp] Trigger pressed - starting mic');
           this.startListening();
         });
 
         rightHand.addEventListener('triggerup', () => {
-          console.log('[DutchApp] Trigger released - stopping mic');
-          this.stopListening();
+          // Only stop listening if we were actually listening
+          if (VoskRecognizer.isListening) {
+            console.log('[DutchApp] Trigger released - stopping mic');
+            this.stopListening();
+          }
         });
 
         console.log('[DutchApp] ✓ Controller listeners attached');
+        
+        // Add keyboard listeners for PC testing (50% accuracy answers)
+        this.setupKeyboardTesting();
+      },
+      
+      setupKeyboardTesting() {
+        // Listen for keyboard keys 1, 2, 3 to trigger answers with 50% accuracy
+        document.addEventListener('keydown', (e) => {
+          // Check if we're in a conversation and not processing
+          if (!this.currentConversation || this.isProcessing) return;
+          
+          // Check if key is 1, 2, or 3
+          const answerIndex = parseInt(e.key) - 1;
+          if (answerIndex < 0 || answerIndex > 2) return;
+          
+          const exchange = this.currentConversation.exchanges[this.currentExchangeIndex];
+          if (!exchange || !exchange.answers[answerIndex]) return;
+          
+          // Get the correct answer
+          const correctAnswer = exchange.answers[answerIndex].dutch;
+          
+          // Generate a 50% accurate version by slightly corrupting the text
+          const corrupted50Percent = this.corruptTextTo50Percent(correctAnswer);
+          
+          console.log(`[DutchApp] Keyboard test: Key ${e.key} pressed`);
+          console.log(`[DutchApp] Correct answer: "${correctAnswer}"`);
+          console.log(`[DutchApp] Simulating 50% accuracy: "${corrupted50Percent}"`);
+          
+          // Simulate the speech recognition result
+          this.evaluateAnswer(corrupted50Percent);
+        });
+        
+        console.log('[DutchApp] ✓ Keyboard testing enabled (keys 1, 2, 3 = 50% accuracy answers)');
+      },
+      
+      corruptTextTo50Percent(text) {
+        // Create a version of the text that will score around 50% similarity
+        // Strategy: Keep roughly half the characters correct
+        const words = text.split(' ');
+        const corruptedWords = words.map((word, index) => {
+          // Corrupt every other word more heavily
+          if (index % 2 === 0) {
+            // Keep this word mostly intact (small change)
+            if (word.length > 3) {
+              return word.slice(0, -2) + word.slice(-1);
+            }
+            return word;
+          } else {
+            // Corrupt this word more heavily
+            if (word.length > 2) {
+              // Remove middle characters
+              return word[0] + word.slice(Math.floor(word.length / 2));
+            }
+            return word;
+          }
+        });
+        
+        return corruptedWords.join(' ');
       },
 
       startConversation(conversationId) {
         this.currentConversation = this.conversations.find(c => c.id === conversationId);
         this.currentExchangeIndex = 0;
         this.accuracyScores = [];
+        this.conversationPath = []; // Reset path tracking
         
         console.log('[DutchApp] Starting conversation:', this.currentConversation.name);
         this.showNextExchange();
@@ -1589,15 +1915,21 @@
           return;
         }
 
+        // Track this exchange in the path
+        this.conversationPath.push(this.currentExchangeIndex);
+
         const exchange = this.currentConversation.exchanges[this.currentExchangeIndex];
         
         // Show question using A-Frame text
         const questionNL = document.getElementById('question-text-nl');
+        const questionENContainer = document.getElementById('question-text-en-container');
         const questionEN = document.getElementById('question-text-en');
         if (questionNL) questionNL.setAttribute('value', exchange.question.dutch);
         if (questionEN) {
-          questionEN.setAttribute('value', `(${exchange.question.english})`);
-          questionEN.setAttribute('visible', false);
+          questionEN.setAttribute('value', exchange.question.english);
+        }
+        if (questionENContainer) {
+          questionENContainer.setAttribute('visible', false);
         }
         
         // Setup hover and click for question panel (remove old listeners first)
@@ -1607,15 +1939,23 @@
           const newQuestionPanel = questionPanel.cloneNode(true);
           questionPanel.parentNode.replaceChild(newQuestionPanel, questionPanel);
           
-          // Re-get the text elements after cloning
-          const newQuestionEN = document.getElementById('question-text-en');
+          // Re-get the container after cloning
+          const newQuestionENContainer = document.getElementById('question-text-en-container');
           
-          // Add hover listener to show/hide translation
+          // Ensure clickable box exists and has clickable class
+          const clickableBox = newQuestionPanel.querySelector('a-box');
+          if (clickableBox) {
+            clickableBox.classList.add('clickable');
+            clickableBox.setAttribute('visible', true);
+            clickableBox.setAttribute('opacity', 0);
+          }
+          
+          // Add hover listener to show/hide translation tooltip
           newQuestionPanel.addEventListener('raycaster-intersected', () => {
-            if (newQuestionEN) newQuestionEN.setAttribute('visible', true);
+            if (newQuestionENContainer) newQuestionENContainer.setAttribute('visible', true);
           });
           newQuestionPanel.addEventListener('raycaster-intersected-cleared', () => {
-            if (newQuestionEN) newQuestionEN.setAttribute('visible', false);
+            if (newQuestionENContainer) newQuestionENContainer.setAttribute('visible', false);
           });
           
           // Add click listener to replay audio
@@ -1631,14 +1971,17 @@
         for (let i = 0; i < 3; i++) {
           const answerText = document.getElementById(`answer${i+1}-text`);
           const answerEN = document.getElementById(`answer${i+1}-en`);
+          const answerENContainer = document.getElementById(`answer${i+1}-en-container`);
           const answerPanel = document.getElementById(`ui-answer${i+1}`);
           
           if (answerText && exchange.answers[i]) {
             answerText.setAttribute('value', exchange.answers[i].dutch);
           }
           if (answerEN && exchange.answers[i]) {
-            answerEN.setAttribute('value', `(${exchange.answers[i].english})`);
-            answerEN.setAttribute('visible', false);
+            answerEN.setAttribute('value', exchange.answers[i].english);
+          }
+          if (answerENContainer) {
+            answerENContainer.setAttribute('visible', false);
           }
           
           // Remove old listeners by cloning
@@ -1646,15 +1989,31 @@
             const newAnswerPanel = answerPanel.cloneNode(true);
             answerPanel.parentNode.replaceChild(newAnswerPanel, answerPanel);
             
-            // Re-get references after cloning
-            const newAnswerEN = newAnswerPanel.querySelector(`#answer${i+1}-en`);
+            // Re-get container reference after cloning
+            const newAnswerENContainer = newAnswerPanel.querySelector(`#answer${i+1}-en-container`);
             
-            // Add hover listener to answer panel
+            // Add hover listener to show/hide tooltip
             newAnswerPanel.addEventListener('raycaster-intersected', () => {
-              if (newAnswerEN) newAnswerEN.setAttribute('visible', true);
+              if (newAnswerENContainer) newAnswerENContainer.setAttribute('visible', true);
             });
             newAnswerPanel.addEventListener('raycaster-intersected-cleared', () => {
-              if (newAnswerEN) newAnswerEN.setAttribute('visible', false);
+              if (newAnswerENContainer) newAnswerENContainer.setAttribute('visible', false);
+            });
+            
+            // Add click listener to play answer audio
+            newAnswerPanel.addEventListener('click', () => {
+              const answer = exchange.answers[i];
+              if (answer) {
+                // Generate audio filename if not explicitly set
+                let audioPath = answer.audio;
+                if (!audioPath) {
+                  // Auto-generate filename: answers/ans_ex{exchangeIndex}_opt{optionNumber}.mp3
+                  const filename = `ans_ex${this.currentExchangeIndex}_opt${i+1}`;
+                  audioPath = `assets/audio/nl/meetup/answers/${filename}.mp3`;
+                }
+                console.log('[DutchApp] Answer clicked - playing audio:', audioPath);
+                this.playQuestionAudio(audioPath);
+              }
             });
           }
           
@@ -1715,7 +2074,13 @@
         VoskRecognizer.stopRecording(); // Stop recording but keep processing
         AudioVisualizer.stop();
         
-        // Show "Processing..." indicator
+        // Check if result was already processed (Vosk auto-finalized)
+        if (!VoskRecognizer.shouldProcessResults) {
+          console.log('[DutchApp] Result already processed, skipping processing screen');
+          return; // Don't show processing screen if result already came in
+        }
+        
+        // Show "Processing..." indicator only if we're still waiting for a result
         const micEl = document.getElementById('ui-mic-viz');
         if (micEl) {
           micEl.setAttribute('visible', true);
@@ -1723,23 +2088,55 @@
           if (micText) micText.setAttribute('value', '⏳ Processing...');
         }
         
-        // Disable processing after 2 seconds if no result came through
+        // Clear any existing timeout
+        if (this.processingTimeout) {
+          clearTimeout(this.processingTimeout);
+          this.processingTimeout = null;
+        }
+        
+        // Disable processing after 3 seconds if no result came through
         // (Handles edge case where final result never arrives)
-        setTimeout(() => {
-          if (VoskRecognizer.shouldProcessResults && !VoskRecognizer.isListening) {
+        this.processingTimeout = setTimeout(() => {
+          if (VoskRecognizer.shouldProcessResults) {  // Removed "&& !VoskRecognizer.isListening" check
             VoskRecognizer.shouldProcessResults = false;
             console.log('[DutchApp] Processing timeout - disabled');
             if (micEl) micEl.setAttribute('visible', false);
+            this.isProcessing = false; // Reset processing flag
           }
-        }, 2000);
+          this.processingTimeout = null;
+        }, 3000); // Increased to 3 seconds
       },
 
       onSpeechPartial(text) {
         console.log('[DutchApp] Partial:', text);
+        
+        // Reset the processing timeout since Vosk is actively processing
+        // Clear existing timeout
+        if (this.processingTimeout) {
+          clearTimeout(this.processingTimeout);
+        }
+        
+        // Set a new timeout - if no more activity for 3 seconds, cleanup
+        const micEl = document.getElementById('ui-mic-viz');
+        this.processingTimeout = setTimeout(() => {
+          if (VoskRecognizer.shouldProcessResults) {  // Removed "&& !VoskRecognizer.isListening" check
+            VoskRecognizer.shouldProcessResults = false;
+            console.log('[DutchApp] Processing timeout (from partial) - disabled');
+            if (micEl) micEl.setAttribute('visible', false);
+            this.isProcessing = false; // Reset processing flag
+          }
+          this.processingTimeout = null;
+        }, 3000); // 3 seconds of inactivity
       },
 
       onSpeechResult(text) {
         console.log('[DutchApp] Final result:', text);
+        
+        // Clear the processing timeout since we got a result
+        if (this.processingTimeout) {
+          clearTimeout(this.processingTimeout);
+          this.processingTimeout = null;
+        }
         
         // Hide processing indicator
         const micEl = document.getElementById('ui-mic-viz');
@@ -1852,8 +2249,16 @@
       },
 
       showFinalScore() {
-        // Hide question and answers
-        this.hideUIElement('ui-question');
+        // Hide question and answers completely (remove clickable class to prevent ghost clicks)
+        const questionPanel = document.getElementById('ui-question');
+        if (questionPanel) {
+          questionPanel.setAttribute('visible', false);
+          const clickableBox = questionPanel.querySelector('.clickable');
+          if (clickableBox) {
+            clickableBox.classList.remove('clickable');
+            clickableBox.setAttribute('visible', false);
+          }
+        }
         this.hideUIElement('ui-answer1');
         this.hideUIElement('ui-answer2');
         this.hideUIElement('ui-answer3');
@@ -1863,14 +2268,21 @@
           this.accuracyScores.reduce((sum, score) => sum + score, 0) / this.accuracyScores.length
         );
 
-        // Check and update best score
-        const conversationId = this.currentConversation.id;
-        const bestScore = localStorage.getItem(`best-${conversationId}`);
+        // Generate unique path key from the sequence of exchanges visited
+        const pathKey = this.conversationPath.join('-');
+        const storageKey = `best-${this.currentConversation.id}-path-${pathKey}`;
+        
+        // Check and update best score for this specific path
+        const bestScore = localStorage.getItem(storageKey);
         const isNewBest = !bestScore || totalAccuracy > parseInt(bestScore);
         
         if (isNewBest) {
-          localStorage.setItem(`best-${conversationId}`, totalAccuracy);
+          localStorage.setItem(storageKey, totalAccuracy);
         }
+
+        console.log('[DutchApp] Path taken:', pathKey);
+        console.log('[DutchApp] Total accuracy:', totalAccuracy);
+        console.log('[DutchApp] Best score for this path:', isNewBest ? totalAccuracy : bestScore);
 
         // Show result in VR UI
         const finalAccuracyText = document.getElementById('final-accuracy-text');
@@ -1881,20 +2293,39 @@
         }
         if (bestScoreText) {
           if (isNewBest) {
-            bestScoreText.setAttribute('value', '🎉 New Personal Best!');
+            bestScoreText.setAttribute('value', '🎉 New Personal Best for This Path!');
             bestScoreText.setAttribute('color', '#FFD700');
           } else {
-            bestScoreText.setAttribute('value', `Personal Best: ${bestScore}%`);
+            bestScoreText.setAttribute('value', `Path Best: ${bestScore}%`);
             bestScoreText.setAttribute('color', '#FFD700');
           }
         }
         
         this.showUIElement('ui-final-score');
         
-        // Setup restart button
+        // Setup restart button with hover effect
         const restartButton = document.getElementById('restart-button');
         if (restartButton) {
-          restartButton.addEventListener('click', () => {
+          // Remove old listeners by cloning
+          const newRestartButton = restartButton.cloneNode(true);
+          restartButton.parentNode.replaceChild(newRestartButton, restartButton);
+          
+          // Re-get elements after cloning
+          const restartBg = document.getElementById('restart-button-bg');
+          const restartText = document.getElementById('restart-button-text');
+          
+          // Add hover effect
+          newRestartButton.addEventListener('raycaster-intersected', () => {
+            if (restartBg) restartBg.setAttribute('slice9', 'color', '#ffffff');
+            if (restartText) restartText.setAttribute('color', '#4A90E2');
+          });
+          newRestartButton.addEventListener('raycaster-intersected-cleared', () => {
+            if (restartBg) restartBg.setAttribute('slice9', 'color', '#4A90E2');
+            if (restartText) restartText.setAttribute('color', '#88aaff');
+          });
+          
+          // Add click listener
+          newRestartButton.addEventListener('click', () => {
             console.log('[DutchApp] Restart button clicked');
             this.restart();
           });
@@ -1905,6 +2336,9 @@
 
       restart() {
         this.hideUIElement('ui-final-score');
+        this.accuracyScores = []; // Reset scores
+        this.conversationPath = []; // Reset path tracking
+        this.currentExchangeIndex = 0; // Reset to first exchange
         this.startConversation(this.currentConversation.id);
       }
     };
