@@ -778,51 +778,48 @@
       <a-text value="Hold trigger to speak" align="center" color="#ffffff" width="1.5"></a-text>
     </a-entity>
 
-    <!-- Mode Toggle (Steps / Flow) -->
-    <a-entity id="ui-mode-toggle" position="0 0.2 -2" visible="true">
-      <a-text value="Mode:" 
-              position="-0.5 0 0"
-              align="left" 
-              color="#ffffff" 
-              width="0.8"
-              shader="msdf"
-              font="assets/fonts/Roboto-Regular-msdf.json"
-              negate="false"></a-text>
-      
-      <!-- Steps Button -->
-      <a-entity id="steps-button" position="-0.15 0 0">
-        <a-entity id="steps-button-bg" slice9="width: 0.35; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #666666; opacity: 0.7"></a-entity>
-        <a-text value="Steps" 
-                position="0 0.01 0.01"
-                align="center" 
-                baseline="center"
-                color="#aaaaaa" 
-                width="1.5"
-                scale="1.0 1.0 1.0"
-                shader="msdf"
-                font="assets/fonts/Roboto-Regular-msdf.json"
-                negate="false"
-                transparent="true"
-                opacity="1"></a-text>
-        <a-box class="clickable mode-toggle-btn" width="0.35" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
+    <!-- Controls Row: Mode and Music Toggles -->
+    <a-entity id="ui-controls-row" position="0 0.2 -2" visible="true">
+      <!-- Mode Toggle -->
+      <a-entity id="ui-mode-toggle" position="-0.35 0 0">
+        <a-entity id="mode-toggle-button" button-hover>
+          <a-entity id="mode-toggle-button-bg" slice9="width: 0.65; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #4A90E2; opacity: 0.9"></a-entity>
+          <a-text id="mode-toggle-text"
+                  value="Mode: Flow" 
+                  position="0 0.01 0.01"
+                  align="center" 
+                  baseline="center"
+                  color="#ffffff" 
+                  width="1.5"
+                  scale="1.0 1.0 1.0"
+                  shader="msdf"
+                  font="assets/fonts/Roboto-Regular-msdf.json"
+                  negate="false"
+                  transparent="true"
+                  opacity="1"></a-text>
+          <a-box class="clickable mode-toggle-btn" width="0.65" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
+        </a-entity>
       </a-entity>
       
-      <!-- Flow Button -->
-      <a-entity id="flow-button" position="0.25 0 0">
-        <a-entity id="flow-button-bg" slice9="width: 0.35; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #4A90E2; opacity: 0.9"></a-entity>
-        <a-text value="Flow" 
-                position="0 0.01 0.01"
-                align="center" 
-                baseline="center"
-                color="#ffffff" 
-                width="1.5"
-                scale="1.0 1.0 1.0"
-                shader="msdf"
-                font="assets/fonts/Roboto-Regular-msdf.json"
-                negate="false"
-                transparent="true"
-                opacity="1"></a-text>
-        <a-box class="clickable mode-toggle-btn" width="0.35" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
+      <!-- Music Toggle -->
+      <a-entity id="ui-music-toggle" position="0.35 0 0">
+        <a-entity id="music-toggle-button" button-hover>
+          <a-entity id="music-toggle-button-bg" slice9="width: 0.65; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #666666; opacity: 0.7"></a-entity>
+          <a-text id="music-toggle-text"
+                  value="Music: Off" 
+                  position="0 0.01 0.01"
+                  align="center" 
+                  baseline="center"
+                  color="#aaaaaa" 
+                  width="1.5"
+                  scale="1.0 1.0 1.0"
+                  shader="msdf"
+                  font="assets/fonts/Roboto-Regular-msdf.json"
+                  negate="false"
+                  transparent="true"
+                  opacity="1"></a-text>
+          <a-box class="clickable music-toggle-btn" width="0.65" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
+        </a-entity>
       </a-entity>
     </a-entity>
 
@@ -1867,6 +1864,8 @@
       awaitingContinue: false, // Whether we're waiting for user to click continue
       progressTimeout: null, // Store progress timeout to clear when switching modes
       savedExchangeIndex: null, // Store exchange index before processing answer (for retry)
+      backgroundMusic: null, // Background music audio element
+      musicEnabled: false, // Whether background music is playing
 
       async init() {
         console.log('[DutchApp] Initializing...');
@@ -1910,7 +1909,7 @@
         // Show start button (A-Frame entity, not CSS3D)
         this.showUIElement('ui-start');
         this.showUIElement('ui-instructions');
-        this.showUIElement('ui-mode-toggle');
+        this.showUIElement('ui-controls-row');
 
         // Setup click handler for start button
         const startBox = document.querySelector('#ui-start .clickable');
@@ -1923,25 +1922,25 @@
         
         // Setup mode toggle buttons
         this.setupModeToggle();
+        
+        // Setup music toggle buttons
+        this.setupMusicToggle();
+        
+        // Setup background music (but don't play yet)
+        this.setupBackgroundMusic();
 
         console.log('[DutchApp] ✓ Initialization complete - waiting for user to start');
       },
       
       setupModeToggle() {
-        const stepsButton = document.getElementById('steps-button');
-        const flowButton = document.getElementById('flow-button');
+        const modeToggleButton = document.getElementById('mode-toggle-button');
         
-        if (stepsButton) {
-          stepsButton.addEventListener('click', () => {
-            console.log('[DutchApp] Switching to Steps mode');
-            this.setProgressMode('steps');
-          });
-        }
-        
-        if (flowButton) {
-          flowButton.addEventListener('click', () => {
-            console.log('[DutchApp] Switching to Flow mode');
-            this.setProgressMode('flow');
+        if (modeToggleButton) {
+          modeToggleButton.addEventListener('click', () => {
+            // Toggle between steps and flow
+            const newMode = this.progressMode === 'flow' ? 'steps' : 'flow';
+            console.log(`[DutchApp] Switching to ${newMode} mode`);
+            this.setProgressMode(newMode);
           });
         }
         
@@ -1951,46 +1950,105 @@
       setProgressMode(mode) {
         this.progressMode = mode;
         
-        const stepsBg = document.getElementById('steps-button-bg');
-        const flowBg = document.getElementById('flow-button-bg');
-        const stepsText = document.querySelector('#steps-button a-text');
-        const flowText = document.querySelector('#flow-button a-text');
+        const bg = document.getElementById('mode-toggle-button-bg');
+        const text = document.getElementById('mode-toggle-text');
         
         if (mode === 'steps') {
-          // Steps is active (blue)
-          if (stepsBg) {
-            stepsBg.setAttribute('slice9', 'color', '#4A90E2');
-            stepsBg.setAttribute('slice9', 'opacity', '0.9');
+          // Steps mode - show "Mode: Steps" in blue
+          if (bg) {
+            bg.setAttribute('slice9', 'color', '#4A90E2');
+            bg.setAttribute('slice9', 'opacity', '0.9');
           }
-          if (stepsText) stepsText.setAttribute('color', '#ffffff');
-          
-          // Flow is inactive (gray)
-          if (flowBg) {
-            flowBg.setAttribute('slice9', 'color', '#666666');
-            flowBg.setAttribute('slice9', 'opacity', '0.7');
+          if (text) {
+            text.setAttribute('value', 'Mode: Steps');
+            text.setAttribute('color', '#ffffff');
           }
-          if (flowText) flowText.setAttribute('color', '#aaaaaa');
         } else {
-          // Flow is active (blue)
-          if (flowBg) {
-            flowBg.setAttribute('slice9', 'color', '#4A90E2');
-            flowBg.setAttribute('slice9', 'opacity', '0.9');
+          // Flow mode - show "Mode: Flow" in blue
+          if (bg) {
+            bg.setAttribute('slice9', 'color', '#4A90E2');
+            bg.setAttribute('slice9', 'opacity', '0.9');
           }
-          if (flowText) flowText.setAttribute('color', '#ffffff');
-          
-          // Steps is inactive (gray)
-          if (stepsBg) {
-            stepsBg.setAttribute('slice9', 'color', '#666666');
-            stepsBg.setAttribute('slice9', 'opacity', '0.7');
+          if (text) {
+            text.setAttribute('value', 'Mode: Flow');
+            text.setAttribute('color', '#ffffff');
           }
-          if (stepsText) stepsText.setAttribute('color', '#aaaaaa');
         }
         
         console.log(`[DutchApp] Progress mode set to: ${mode}`);
       },
+      
+      setupBackgroundMusic() {
+        this.backgroundMusic = new Audio('assets/audio/10min-suspense-background-for-voiceover-429711.mp3');
+        this.backgroundMusic.loop = true;
+        this.backgroundMusic.volume = 0.15; // Keep it subtle (15% volume)
+        
+        console.log('[DutchApp] ✓ Background music loaded (off by default)');
+      },
+      
+      setupMusicToggle() {
+        const musicToggleButton = document.getElementById('music-toggle-button');
+        
+        if (musicToggleButton) {
+          musicToggleButton.addEventListener('click', () => {
+            console.log('[DutchApp] Music toggle clicked');
+            this.toggleMusic(!this.musicEnabled);
+          });
+        }
+        
+        console.log('[DutchApp] ✓ Music toggle set up');
+      },
+      
+      toggleMusic(enable) {
+        if (!this.backgroundMusic) {
+          this.setupBackgroundMusic();
+        }
+        
+        this.musicEnabled = enable;
+        
+        if (enable) {
+          this.backgroundMusic.play().catch(e => {
+            console.warn('[DutchApp] Music playback failed:', e);
+          });
+          console.log('[DutchApp] Background music ON');
+        } else {
+          this.backgroundMusic.pause();
+          console.log('[DutchApp] Background music OFF');
+        }
+        
+        // Update button appearance
+        const button = document.getElementById('music-toggle-button');
+        const bg = document.getElementById('music-toggle-button-bg');
+        const text = document.getElementById('music-toggle-text');
+        
+        if (enable) {
+          // Music is ON - button shows "Music: On" in blue
+          if (bg) {
+            bg.setAttribute('slice9', 'color', '#4A90E2');
+            bg.setAttribute('slice9', 'opacity', '0.9');
+          }
+          if (text) {
+            text.setAttribute('value', 'Music: On');
+            text.setAttribute('color', '#ffffff');
+          }
+        } else {
+          // Music is OFF - button shows "Music: Off" in gray
+          if (bg) {
+            bg.setAttribute('slice9', 'color', '#666666');
+            bg.setAttribute('slice9', 'opacity', '0.7');
+          }
+          if (text) {
+            text.setAttribute('value', 'Music: Off');
+            text.setAttribute('color', '#aaaaaa');
+          }
+        }
+      },
 
       startExperience() {
         console.log('[DutchApp] User clicked Start - beginning conversation');
+        
+        // Auto-start background music
+        this.toggleMusic(true);
         
         // Hide start button and remove clickable class to prevent raycaster intersection
         this.hideUIElement('ui-start');
@@ -2675,11 +2733,11 @@
         // Hide recognition result
         this.hideUIElement('ui-recognition-result');
         
-        // Hide mode toggle buttons and remove clickable classes
-        const modeToggle = document.getElementById('ui-mode-toggle');
-        if (modeToggle) {
-          modeToggle.setAttribute('visible', false);
-          const clickableBoxes = modeToggle.querySelectorAll('.clickable');
+        // Hide controls row (mode and music toggles) and remove clickable classes
+        const controlsRow = document.getElementById('ui-controls-row');
+        if (controlsRow) {
+          controlsRow.setAttribute('visible', false);
+          const clickableBoxes = controlsRow.querySelectorAll('.clickable');
           clickableBoxes.forEach(box => {
             box.classList.remove('clickable');
             box.setAttribute('visible', false);
@@ -2778,11 +2836,11 @@
       restart() {
         this.hideUIElement('ui-final-score');
         
-        // Restore mode toggle visibility and clickable classes
-        const modeToggle = document.getElementById('ui-mode-toggle');
-        if (modeToggle) {
-          modeToggle.setAttribute('visible', true);
-          const clickableBoxes = modeToggle.querySelectorAll('.mode-toggle-btn');
+        // Restore controls row visibility and clickable classes
+        const controlsRow = document.getElementById('ui-controls-row');
+        if (controlsRow) {
+          controlsRow.setAttribute('visible', true);
+          const clickableBoxes = controlsRow.querySelectorAll('.mode-toggle-btn, .music-toggle-btn');
           clickableBoxes.forEach(box => {
             box.classList.add('clickable');
           });
