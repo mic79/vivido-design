@@ -712,24 +712,115 @@
               font="assets/fonts/Roboto-Regular-msdf.json"
               negate="false"></a-text>
       <!-- Restart Button -->
-      <a-entity id="restart-button" position="0 -0.5 0.01">
-        <a-entity id="restart-button-bg" slice9="width: 1; height: 0.35; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #4A90E2; opacity: 0.9"></a-entity>
+      <a-entity id="restart-button" position="0 -0.5 0.01" button-hover>
+        <a-entity id="restart-button-bg" slice9="width: 0.4; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #4A90E2; opacity: 0.9"></a-entity>
         <a-text id="restart-button-text"
                 value="Try Again" 
-                position="0 0 0.02"
+                position="0 0.01 0.02"
                 align="center" 
-                color="#88aaff" 
-                width="1"
+                baseline="center"
+                color="#ffffff" 
+                width="1.5"
+                scale="1.0 1.0 1.0"
                 shader="msdf"
                 font="assets/fonts/Roboto-Regular-msdf.json"
-                negate="false"></a-text>
-        <a-box class="clickable" width="1" height="0.35" depth="0.01" opacity="0" position="0 0 0"></a-box>
+                negate="false"
+                transparent="true"
+                opacity="1"></a-text>
+        <a-box class="clickable" width="0.4" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
       </a-entity>
     </a-entity>
 
     <!-- Instructions -->
     <a-entity id="ui-instructions" position="0 0.5 -2" visible="true">
       <a-text value="Hold trigger to speak" align="center" color="#ffffff" width="1.5"></a-text>
+    </a-entity>
+
+    <!-- Mode Toggle (Steps / Flow) -->
+    <a-entity id="ui-mode-toggle" position="0 0.2 -2" visible="true">
+      <a-text value="Mode:" 
+              position="-0.5 0 0"
+              align="left" 
+              color="#ffffff" 
+              width="0.8"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"></a-text>
+      
+      <!-- Steps Button -->
+      <a-entity id="steps-button" position="-0.15 0 0">
+        <a-entity id="steps-button-bg" slice9="width: 0.35; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #666666; opacity: 0.7"></a-entity>
+        <a-text value="Steps" 
+                position="0 0.01 0.01"
+                align="center" 
+                baseline="center"
+                color="#aaaaaa" 
+                width="1.5"
+                scale="1.0 1.0 1.0"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
+                transparent="true"
+                opacity="1"></a-text>
+        <a-box class="clickable mode-toggle-btn" width="0.35" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
+      </a-entity>
+      
+      <!-- Flow Button -->
+      <a-entity id="flow-button" position="0.25 0 0">
+        <a-entity id="flow-button-bg" slice9="width: 0.35; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #4A90E2; opacity: 0.9"></a-entity>
+        <a-text value="Flow" 
+                position="0 0.01 0.01"
+                align="center" 
+                baseline="center"
+                color="#ffffff" 
+                width="1.5"
+                scale="1.0 1.0 1.0"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
+                transparent="true"
+                opacity="1"></a-text>
+        <a-box class="clickable mode-toggle-btn" width="0.35" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
+      </a-entity>
+    </a-entity>
+
+    <!-- Action Buttons Container (shown in Steps mode after answer) -->
+    <a-entity id="ui-action-buttons" position="0 1.3 -2.3" visible="false">
+      <!-- Retry Button -->
+      <a-entity id="retry-answer-button" position="-0.3 0 0" button-hover>
+        <a-entity id="retry-answer-button-bg" slice9="width: 0.4; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #FF6B6B; opacity: 0.9"></a-entity>
+        <a-text value="Retry" 
+                position="0 0.01 0.01"
+                align="center" 
+                baseline="center"
+                color="#ffffff" 
+                width="1.5"
+                scale="1.0 1.0 1.0"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
+                transparent="true"
+                opacity="1"></a-text>
+        <a-box class="clickable action-btn" width="0.4" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
+      </a-entity>
+      
+      <!-- Continue Button -->
+      <a-entity id="continue-button" position="0.3 0 0" button-hover>
+        <a-entity id="continue-button-bg" slice9="width: 0.4; height: 0.15; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png; color: #4A90E2; opacity: 0.9"></a-entity>
+        <a-text value="Continue" 
+                position="0 0.01 0.01"
+                align="center" 
+                baseline="center"
+                color="#ffffff" 
+                width="1.5"
+                scale="1.0 1.0 1.0"
+                shader="msdf"
+                font="assets/fonts/Roboto-Regular-msdf.json"
+                negate="false"
+                transparent="true"
+                opacity="1"></a-text>
+        <a-box class="clickable action-btn" width="0.4" height="0.15" depth="0.01" opacity="0" position="0 0 0"></a-box>
+      </a-entity>
     </a-entity>
 
     <!-- Sky -->
@@ -752,8 +843,13 @@
         const el = this.el;
         const slice9 = el.querySelector('[slice9]');
         
-        // Store original color
-        this.originalColor = '#4A90E2';
+        // Get original color from the slice9 element
+        if (slice9) {
+          const colorAttr = slice9.getAttribute('slice9');
+          this.originalColor = colorAttr.color || '#4A90E2';
+        } else {
+          this.originalColor = '#4A90E2';
+        }
         this.hoverColor = '#ffffff';
         
         // Mouse/VR controller hover
@@ -1296,12 +1392,30 @@
       // Helper functions for A-Frame UI
       showUIElement: function(elementId) {
         const el = document.getElementById(elementId);
-        if (el) el.setAttribute('visible', true);
+        if (el) {
+          el.setAttribute('visible', true);
+          console.log(`[DutchApp] Showing element: ${elementId}`);
+        } else {
+          console.warn(`[DutchApp] Element not found: ${elementId}`);
+        }
       },
       
       hideUIElement: function(elementId) {
         const el = document.getElementById(elementId);
-        if (el) el.setAttribute('visible', false);
+        if (el) {
+          el.setAttribute('visible', false);
+          console.log(`[DutchApp] Hiding element: ${elementId}`);
+          
+          // Special handling for action buttons - remove clickable classes to prevent ghost clicks
+          if (elementId === 'ui-action-buttons') {
+            const clickableBoxes = el.querySelectorAll('.clickable');
+            clickableBoxes.forEach(box => {
+              box.classList.remove('clickable');
+            });
+          }
+        } else {
+          console.warn(`[DutchApp] Element not found to hide: ${elementId}`);
+        }
       },
       
       conversations: [
@@ -1707,6 +1821,10 @@
       isProcessing: false,
       awaitingRetry: false,
       processingTimeout: null, // Store timeout ID for cleanup
+      progressMode: 'flow', // 'flow' or 'steps' - default is flow mode
+      awaitingContinue: false, // Whether we're waiting for user to click continue
+      progressTimeout: null, // Store progress timeout to clear when switching modes
+      savedExchangeIndex: null, // Store exchange index before processing answer (for retry)
 
       async init() {
         console.log('[DutchApp] Initializing...');
@@ -1750,6 +1868,7 @@
         // Show start button (A-Frame entity, not CSS3D)
         this.showUIElement('ui-start');
         this.showUIElement('ui-instructions');
+        this.showUIElement('ui-mode-toggle');
 
         // Setup click handler for start button
         const startBox = document.querySelector('#ui-start .clickable');
@@ -1759,8 +1878,73 @@
             this.startExperience();
           });
         }
+        
+        // Setup mode toggle buttons
+        this.setupModeToggle();
 
         console.log('[DutchApp] ✓ Initialization complete - waiting for user to start');
+      },
+      
+      setupModeToggle() {
+        const stepsButton = document.getElementById('steps-button');
+        const flowButton = document.getElementById('flow-button');
+        
+        if (stepsButton) {
+          stepsButton.addEventListener('click', () => {
+            console.log('[DutchApp] Switching to Steps mode');
+            this.setProgressMode('steps');
+          });
+        }
+        
+        if (flowButton) {
+          flowButton.addEventListener('click', () => {
+            console.log('[DutchApp] Switching to Flow mode');
+            this.setProgressMode('flow');
+          });
+        }
+        
+        console.log('[DutchApp] ✓ Mode toggle set up');
+      },
+      
+      setProgressMode(mode) {
+        this.progressMode = mode;
+        
+        const stepsBg = document.getElementById('steps-button-bg');
+        const flowBg = document.getElementById('flow-button-bg');
+        const stepsText = document.querySelector('#steps-button a-text');
+        const flowText = document.querySelector('#flow-button a-text');
+        
+        if (mode === 'steps') {
+          // Steps is active (blue)
+          if (stepsBg) {
+            stepsBg.setAttribute('slice9', 'color', '#4A90E2');
+            stepsBg.setAttribute('slice9', 'opacity', '0.9');
+          }
+          if (stepsText) stepsText.setAttribute('color', '#ffffff');
+          
+          // Flow is inactive (gray)
+          if (flowBg) {
+            flowBg.setAttribute('slice9', 'color', '#666666');
+            flowBg.setAttribute('slice9', 'opacity', '0.7');
+          }
+          if (flowText) flowText.setAttribute('color', '#aaaaaa');
+        } else {
+          // Flow is active (blue)
+          if (flowBg) {
+            flowBg.setAttribute('slice9', 'color', '#4A90E2');
+            flowBg.setAttribute('slice9', 'opacity', '0.9');
+          }
+          if (flowText) flowText.setAttribute('color', '#ffffff');
+          
+          // Steps is inactive (gray)
+          if (stepsBg) {
+            stepsBg.setAttribute('slice9', 'color', '#666666');
+            stepsBg.setAttribute('slice9', 'opacity', '0.7');
+          }
+          if (stepsText) stepsText.setAttribute('color', '#aaaaaa');
+        }
+        
+        console.log(`[DutchApp] Progress mode set to: ${mode}`);
       },
 
       startExperience() {
@@ -1900,6 +2084,17 @@
       },
 
       startConversation(conversationId) {
+        // Ensure final score screen is completely hidden and disabled
+        const finalScore = document.getElementById('ui-final-score');
+        if (finalScore) {
+          finalScore.setAttribute('visible', false);
+          const clickableBoxes = finalScore.querySelectorAll('.clickable');
+          clickableBoxes.forEach(box => {
+            box.classList.remove('clickable');
+            box.setAttribute('visible', false);
+          });
+        }
+        
         this.currentConversation = this.conversations.find(c => c.id === conversationId);
         this.currentExchangeIndex = 0;
         this.accuracyScores = [];
@@ -1910,6 +2105,16 @@
       },
 
       showNextExchange() {
+        // Clear any pending progress timeout
+        if (this.progressTimeout) {
+          clearTimeout(this.progressTimeout);
+          this.progressTimeout = null;
+        }
+        
+        // Hide action buttons if they're showing
+        this.hideUIElement('ui-action-buttons');
+        this.awaitingContinue = false;
+        
         if (this.currentExchangeIndex >= this.currentConversation.exchanges.length) {
           this.showFinalScore();
           return;
@@ -1988,6 +2193,14 @@
           if (answerPanel) {
             const newAnswerPanel = answerPanel.cloneNode(true);
             answerPanel.parentNode.replaceChild(newAnswerPanel, answerPanel);
+            
+            // Ensure clickable box has clickable class after cloning
+            const clickableBox = newAnswerPanel.querySelector('.answer-card');
+            if (clickableBox) {
+              clickableBox.classList.add('clickable');
+              clickableBox.setAttribute('visible', true);
+              clickableBox.setAttribute('opacity', 0);
+            }
             
             // Re-get container reference after cloning
             const newAnswerENContainer = newAnswerPanel.querySelector(`#answer${i+1}-en-container`);
@@ -2156,6 +2369,10 @@
 
       evaluateAnswer(spokenText) {
         this.isProcessing = true;
+        
+        // Save current exchange index BEFORE evaluating (for retry functionality)
+        this.savedExchangeIndex = this.currentExchangeIndex;
+        
         const exchange = this.currentConversation.exchanges[this.currentExchangeIndex];
         
         // Calculate similarity to each answer (include branch info)
@@ -2188,11 +2405,6 @@
         
         this.showUIElement('ui-recognition-result');
         
-        // Hide result after 3 seconds
-        setTimeout(() => {
-          this.hideUIElement('ui-recognition-result');
-        }, 3000);
-
         // Determine if answer is acceptable
         const threshold = this.awaitingRetry ? 0 : 60; // Lower threshold on retry
         
@@ -2211,9 +2423,25 @@
           }
           
           this.awaitingRetry = false;
-          setTimeout(() => {
-            this.showNextExchange();
-          }, 3000);
+          
+          // Clear any existing progress timeout
+          if (this.progressTimeout) {
+            clearTimeout(this.progressTimeout);
+            this.progressTimeout = null;
+          }
+          
+          // Check progress mode
+          if (this.progressMode === 'steps') {
+            // Steps mode - keep result visible and show action buttons immediately
+            this.showActionButtons();
+          } else {
+            // Flow mode - hide result after 3 seconds and automatically continue
+            this.progressTimeout = setTimeout(() => {
+              this.hideUIElement('ui-recognition-result');
+              this.showNextExchange();
+              this.progressTimeout = null;
+            }, 3000);
+          }
         } else if (!this.awaitingRetry) {
           // First time failing - ask for retry
           this.awaitingRetry = true;
@@ -2242,14 +2470,108 @@
           }
           
           this.awaitingRetry = false;
-          setTimeout(() => {
-            this.showNextExchange();
-          }, 3000);
+          
+          // Clear any existing progress timeout
+          if (this.progressTimeout) {
+            clearTimeout(this.progressTimeout);
+            this.progressTimeout = null;
+          }
+          
+          // Check progress mode
+          if (this.progressMode === 'steps') {
+            // Steps mode - keep result visible and show action buttons immediately
+            this.showActionButtons();
+          } else {
+            // Flow mode - hide result and automatically continue after delay
+            this.progressTimeout = setTimeout(() => {
+              this.hideUIElement('ui-recognition-result');
+              this.showNextExchange();
+              this.progressTimeout = null;
+            }, 3000);
+          }
         }
+      },
+      
+      showActionButtons() {
+        console.log('[DutchApp] Showing action buttons (Steps mode)');
+        this.awaitingContinue = true;
+        this.showUIElement('ui-action-buttons');
+        
+        // Give A-Frame a moment to update visibility before setting up listeners
+        setTimeout(() => {
+          // Setup click handler for retry button
+          const retryButton = document.getElementById('retry-answer-button');
+          if (retryButton) {
+            console.log('[DutchApp] Retry button element found, setting up click handler');
+            
+            // Remove old listeners by cloning
+            const newRetryButton = retryButton.cloneNode(true);
+            newRetryButton.setAttribute('visible', true);
+            
+            // Ensure the clickable box has the clickable class
+            const retryClickableBox = newRetryButton.querySelector('a-box');
+            if (retryClickableBox) {
+              retryClickableBox.classList.add('clickable');
+              retryClickableBox.setAttribute('visible', false); // Invisible but clickable
+            }
+            
+            retryButton.parentNode.replaceChild(newRetryButton, retryButton);
+            
+            // Add click listener
+            newRetryButton.addEventListener('click', () => {
+              console.log('[DutchApp] Retry button clicked');
+              this.hideUIElement('ui-action-buttons');
+              this.hideUIElement('ui-recognition-result');
+              this.awaitingContinue = false;
+              this.isProcessing = false;
+              
+              // Restore the exchange index to what it was BEFORE the answer was evaluated
+              if (this.savedExchangeIndex !== null) {
+                console.log(`[DutchApp] Restoring exchange index from ${this.currentExchangeIndex} to ${this.savedExchangeIndex}`);
+                this.currentExchangeIndex = this.savedExchangeIndex;
+              }
+              // Don't call showNextExchange - just hide the results so user can try again
+            });
+          } else {
+            console.error('[DutchApp] Retry button element not found!');
+          }
+          
+          // Setup click handler for continue button
+          const continueButton = document.getElementById('continue-button');
+          if (continueButton) {
+            console.log('[DutchApp] Continue button element found, setting up click handler');
+            
+            // Remove old listeners by cloning
+            const newContinueButton = continueButton.cloneNode(true);
+            newContinueButton.setAttribute('visible', true);
+            
+            // Ensure the clickable box has the clickable class
+            const continueClickableBox = newContinueButton.querySelector('a-box');
+            if (continueClickableBox) {
+              continueClickableBox.classList.add('clickable');
+              continueClickableBox.setAttribute('visible', false); // Invisible but clickable
+            }
+            
+            continueButton.parentNode.replaceChild(newContinueButton, continueButton);
+            
+            // Add click listener
+            newContinueButton.addEventListener('click', () => {
+              console.log('[DutchApp] Continue button clicked');
+              this.hideUIElement('ui-action-buttons');
+              this.hideUIElement('ui-recognition-result');
+              this.awaitingContinue = false;
+              this.showNextExchange();
+            });
+          } else {
+            console.error('[DutchApp] Continue button element not found!');
+          }
+        }, 100);
       },
 
       showFinalScore() {
-        // Hide question and answers completely (remove clickable class to prevent ghost clicks)
+        // Hide ALL interactive elements and remove clickable classes to prevent ghost clicks
+        
+        // Hide question panel
         const questionPanel = document.getElementById('ui-question');
         if (questionPanel) {
           questionPanel.setAttribute('visible', false);
@@ -2259,9 +2581,44 @@
             clickableBox.setAttribute('visible', false);
           }
         }
-        this.hideUIElement('ui-answer1');
-        this.hideUIElement('ui-answer2');
-        this.hideUIElement('ui-answer3');
+        
+        // Hide all answer panels and remove their clickable classes
+        for (let i = 1; i <= 3; i++) {
+          const answerPanel = document.getElementById(`ui-answer${i}`);
+          if (answerPanel) {
+            answerPanel.setAttribute('visible', false);
+            const clickableBox = answerPanel.querySelector('.clickable');
+            if (clickableBox) {
+              clickableBox.classList.remove('clickable');
+              clickableBox.setAttribute('visible', false);
+            }
+          }
+        }
+        
+        // Hide action buttons (Retry/Continue) and remove clickable classes
+        const actionButtons = document.getElementById('ui-action-buttons');
+        if (actionButtons) {
+          actionButtons.setAttribute('visible', false);
+          const clickableBoxes = actionButtons.querySelectorAll('.clickable');
+          clickableBoxes.forEach(box => {
+            box.classList.remove('clickable');
+            box.setAttribute('visible', false);
+          });
+        }
+        
+        // Hide recognition result
+        this.hideUIElement('ui-recognition-result');
+        
+        // Hide mode toggle buttons and remove clickable classes
+        const modeToggle = document.getElementById('ui-mode-toggle');
+        if (modeToggle) {
+          modeToggle.setAttribute('visible', false);
+          const clickableBoxes = modeToggle.querySelectorAll('.clickable');
+          clickableBoxes.forEach(box => {
+            box.classList.remove('clickable');
+            box.setAttribute('visible', false);
+          });
+        }
 
         // Calculate average accuracy
         const totalAccuracy = Math.round(
@@ -2306,9 +2663,27 @@
         // Setup restart button with hover effect
         const restartButton = document.getElementById('restart-button');
         if (restartButton) {
+          // Ensure the restart button's clickable box has the clickable class
+          const clickableBox = restartButton.querySelector('.clickable');
+          if (!clickableBox) {
+            // If it doesn't have the class, add it back
+            const box = restartButton.querySelector('a-box');
+            if (box) {
+              box.classList.add('clickable');
+              box.setAttribute('visible', false); // Still invisible, just interactable
+            }
+          }
+          
           // Remove old listeners by cloning
           const newRestartButton = restartButton.cloneNode(true);
           restartButton.parentNode.replaceChild(newRestartButton, restartButton);
+          
+          // Ensure clickable class is on the cloned button
+          const newClickableBox = newRestartButton.querySelector('a-box');
+          if (newClickableBox) {
+            newClickableBox.classList.add('clickable');
+            newClickableBox.setAttribute('visible', false);
+          }
           
           // Re-get elements after cloning
           const restartBg = document.getElementById('restart-button-bg');
@@ -2321,7 +2696,7 @@
           });
           newRestartButton.addEventListener('raycaster-intersected-cleared', () => {
             if (restartBg) restartBg.setAttribute('slice9', 'color', '#4A90E2');
-            if (restartText) restartText.setAttribute('color', '#88aaff');
+            if (restartText) restartText.setAttribute('color', '#ffffff');
           });
           
           // Add click listener
@@ -2336,6 +2711,17 @@
 
       restart() {
         this.hideUIElement('ui-final-score');
+        
+        // Restore mode toggle visibility and clickable classes
+        const modeToggle = document.getElementById('ui-mode-toggle');
+        if (modeToggle) {
+          modeToggle.setAttribute('visible', true);
+          const clickableBoxes = modeToggle.querySelectorAll('.mode-toggle-btn');
+          clickableBoxes.forEach(box => {
+            box.classList.add('clickable');
+          });
+        }
+        
         this.accuracyScores = []; // Reset scores
         this.conversationPath = []; // Reset path tracking
         this.currentExchangeIndex = 0; // Reset to first exchange
