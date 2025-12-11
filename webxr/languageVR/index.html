@@ -550,6 +550,20 @@
               font="assets/fonts/Roboto-Regular-msdf.json"
               negate="false"
               wrap-count="18"></a-text>
+      <!-- Best score indicator -->
+      <a-text id="answer1-best-score" 
+              value="" 
+              position="0.35 0.11 0.01"
+              align="right" 
+              color="#4CAF50" 
+              width="1.2"
+              scale="1.0 1.0 1.0"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              transparent="true"
+              opacity="1"
+              visible="false"></a-text>
       <!-- English translation tooltip -->
       <a-entity id="answer1-en-container" position="0 -0.25 0.01" visible="false">
         <a-entity slice9="width: 0.75; height: 0.25; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
@@ -582,6 +596,20 @@
               font="assets/fonts/Roboto-Regular-msdf.json"
               negate="false"
               wrap-count="18"></a-text>
+      <!-- Best score indicator -->
+      <a-text id="answer2-best-score" 
+              value="" 
+              position="0.35 0.11 0.01"
+              align="right" 
+              color="#4CAF50" 
+              width="1.2"
+              scale="1.0 1.0 1.0"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              transparent="true"
+              opacity="1"
+              visible="false"></a-text>
       <!-- English translation tooltip -->
       <a-entity id="answer2-en-container" position="0 -0.25 0.01" visible="false">
         <a-entity slice9="width: 0.75; height: 0.25; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
@@ -614,6 +642,20 @@
               font="assets/fonts/Roboto-Regular-msdf.json"
               negate="false"
               wrap-count="18"></a-text>
+      <!-- Best score indicator -->
+      <a-text id="answer3-best-score" 
+              value="" 
+              position="0.35 0.11 0.01"
+              align="right" 
+              color="#4CAF50" 
+              width="1.2"
+              scale="1.0 1.0 1.0"
+              shader="msdf"
+              font="assets/fonts/Roboto-Regular-msdf.json"
+              negate="false"
+              transparent="true"
+              opacity="1"
+              visible="false"></a-text>
       <!-- English translation tooltip -->
       <a-entity id="answer3-en-container" position="0 -0.25 0.01" visible="false">
         <a-entity slice9="width: 0.75; height: 0.25; left: 20; right: 43; top: 20; bottom: 43; src: assets/tooltip.png"></a-entity>
@@ -2204,6 +2246,21 @@
             
             // Re-get container reference after cloning
             const newAnswerENContainer = newAnswerPanel.querySelector(`#answer${i+1}-en-container`);
+            const newAnswerBestScore = newAnswerPanel.querySelector(`#answer${i+1}-best-score`);
+            
+            // Update best score display AFTER cloning
+            if (newAnswerBestScore && exchange.answers[i]) {
+              const answerKey = `answer-${this.currentConversation.id}-ex${this.currentExchangeIndex}-opt${i+1}`;
+              const storedScore = localStorage.getItem(answerKey);
+              
+              if (storedScore) {
+                newAnswerBestScore.setAttribute('value', storedScore);
+                newAnswerBestScore.setAttribute('visible', true);
+                console.log(`[DutchApp] Showing best score ${storedScore} for answer ${i+1}`);
+              } else {
+                newAnswerBestScore.setAttribute('visible', false);
+              }
+            }
             
             // Add hover listener to show/hide tooltip
             newAnswerPanel.addEventListener('raycaster-intersected', () => {
@@ -2411,6 +2468,15 @@
         if (bestMatch.score >= threshold) {
           // Accept answer and move on
           this.accuracyScores.push(bestMatch.score);
+          
+          // Store best score for this answer
+          const answerKey = `answer-${this.currentConversation.id}-ex${this.currentExchangeIndex}-opt${bestMatch.answerIndex + 1}`;
+          const storedScore = localStorage.getItem(answerKey);
+          
+          if (!storedScore || bestMatch.score > parseInt(storedScore)) {
+            localStorage.setItem(answerKey, bestMatch.score);
+            console.log(`[DutchApp] New best score for answer ${bestMatch.answerIndex + 1}: ${bestMatch.score}%`);
+          }
           
           // Check if this answer leads to a branch
           if (bestMatch.branch !== null) {
