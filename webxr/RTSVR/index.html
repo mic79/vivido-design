@@ -1,0 +1,3938 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>RTS VR - Real-Time Strategy in Virtual Reality</title>
+    <meta name="description" content="Multiplayer RTS game in VR with bot support">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/three-pathfinding@1.3.0/dist/three-pathfinding.umd.js"></script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+      .loading-screen {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: #000;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: Arial, sans-serif;
+        font-size: 24px;
+        z-index: 9999;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="loading-screen">Loading RTS VR...</div>
+    
+    <a-scene 
+      cursor="rayOrigin: mouse"
+      renderer="antialias: false; colorManagement: false; sortObjects: false; physicallyCorrectLights: false; gammaOutput: false; shadowMapEnabled: false"
+      vr-mode-ui="enabled: true"
+      menu-toggle
+      cubemap-background="folder: assets/cubemap-horn-koppe-spring-edit"
+      fog="type: linear; color: #050906; near: 100; far: 800">
+      
+      <!-- Assets -->
+      <a-assets timeout="10000">
+        <a-asset-item id="drone-model" src="../DodgeVR1-1/assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"></a-asset-item>
+        <a-asset-item id="canyon-landscape" src="./assets/canyon-landscape.glb"></a-asset-item>
+      </a-assets>
+
+      <!-- Camera rig with VR controls -->
+      <a-entity id="cameraRig" 
+                position="-30 30 -45"
+                rotation="0 180 0">
+        <a-camera id="camera" 
+                  position="0 0 0"
+                  wasd-controls="enabled: false">
+          
+          <!-- HUD elements -->
+          <a-text id="selectionInfo" 
+                  value="" 
+                  position="-0.3 -0.25 -0.6" 
+                  align="left" 
+                  width="0.5"
+                  color="#ffffff"></a-text>
+          
+          <a-text id="gameStatus" 
+                  value="Press X to open menu" 
+                  position="0 -0.3 -0.6" 
+                  align="center" 
+                  width="0.5"
+                  color="#00ff00"></a-text>
+          
+          <!-- Game Menu in HUD (initially hidden) -->
+          <a-entity id="game-menu" position="0 0 -0.8" visible="false">
+            <!-- Menu background panel -->
+            <a-plane width="1.2" height="0.8" color="#000000" material="opacity: 0.9; transparent: true" position="0 0 -0.01"></a-plane>
+            
+            <!-- Menu title -->
+            <a-text value="RTS VR MENU" position="0 0.3 0" align="center" width="1.2" color="#ffffff"></a-text>
+
+            <!-- Current mode display -->
+            <a-text id="menu-current-mode" value="Mode: Singleplayer" position="0 0.25 0" align="center" width="1.1" color="#ffffff"></a-text>
+            
+            <!-- Start Game Button -->
+            <a-entity id="menu-start" position="0 0.12 0"
+                      geometry="primitive: plane; width: 0.4; height: 0.08"
+                      material="color: #00ff00; transparent: true; opacity: 0.8"
+                      cursor-listener
+                      class="clickable">
+              <a-text value="START GAME" position="0 0 0.01" align="center" width="1.5" color="#000000"></a-text>
+            </a-entity>
+            
+            <!-- Host Button -->
+            <a-entity id="menu-host" position="-0.25 0.02 0"
+                      geometry="primitive: plane; width: 0.22; height: 0.06"
+                      material="color: #0044ff; transparent: true; opacity: 0.8"
+                      cursor-listener
+                      class="clickable">
+              <a-text value="HOST" position="0 0 0.01" align="center" width="1.2" color="#ffffff"></a-text>
+            </a-entity>
+            
+            <!-- Join Button -->
+            <a-entity id="menu-join" position="0 0.02 0"
+                      geometry="primitive: plane; width: 0.22; height: 0.06"
+                      material="color: #ff4400; transparent: true; opacity: 0.8"
+                      cursor-listener
+                      class="clickable">
+              <a-text value="JOIN" position="0 0 0.01" align="center" width="1.2" color="#ffffff"></a-text>
+            </a-entity>
+            
+            <!-- Close Menu Button -->
+            <a-entity id="menu-close" position="0.25 0.02 0"
+                      geometry="primitive: plane; width: 0.22; height: 0.06"
+                      material="color: #ff0000; transparent: true; opacity: 0.8"
+                      cursor-listener
+                      class="clickable">
+              <a-text value="CLOSE" position="0 0 0.01" align="center" width="1.2" color="#ffffff"></a-text>
+            </a-entity>
+            
+            <a-text id="playerSlots" 
+                    value="P1:You P2:Bot P3:Bot P4:Bot" 
+                    position="0 -0.08 0" 
+                    align="center" 
+                    width="1"
+                    color="#ffffff"></a-text>
+          </a-entity>
+        </a-camera>
+        
+        <!-- VR Controllers -->
+        <a-entity id="leftHand" 
+                  hand-controls="hand: left; handModelStyle: lowPoly; color: #15ACCF"
+                  forward-raycaster="hand: left; lineColor: #00ff00; maxLength: 100"
+                  rts-controller="hand: left"></a-entity>
+        
+        <a-entity id="rightHand" 
+                  hand-controls="hand: right; handModelStyle: lowPoly; color: #15ACCF"
+                  forward-raycaster="hand: right; lineColor: #00ff00; maxLength: 100"
+                  rts-controller="hand: right"></a-entity>
+        
+        <!-- Cursor indicator for targeting -->
+        <a-entity id="cursorIndicator" visible="false">
+          <a-ring radius-inner="0.8" radius-outer="1" position="0 0.1 0" rotation="-90 0 0" 
+                  material="color: #00ff00; opacity: 0.6; transparent: true; side: double"></a-ring>
+        </a-entity>
+      </a-entity>
+
+      <!-- Lighting - minimal for performance, terrain has baked lighting -->
+      <a-light type="ambient" intensity="1.0"></a-light>
+
+      <!-- Sound Effects (positioned sounds for spatial audio) -->
+      <a-entity id="fire-sound" 
+                sound="src: url(../audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); 
+                       volume: 0.3; 
+                       autoplay: false; 
+                       poolSize: 5"></a-entity>
+      
+      <a-entity id="impact-sound" 
+                sound="src: url(../audio/impact-cinematic-boom-5-352465.mp3); 
+                       volume: 0.4; 
+                       autoplay: false; 
+                       poolSize: 5"></a-entity>
+      
+      <a-entity id="explosion-sound" 
+                sound="src: url(../audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); 
+                       volume: 0.6; 
+                       autoplay: false; 
+                       poolSize: 3"></a-entity>
+      
+      <a-entity id="victory-sound" 
+                sound="src: url(../audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); 
+                       volume: 0.8; 
+                       autoplay: false"></a-entity>
+
+      <!-- Battlefield -->
+      <a-entity id="battlefield">
+        <!-- Simple ground plane for performance -->
+        <a-plane id="ground"
+                 class="clickable"
+                 position="0 -1 0"
+                 rotation="-90 0 0"
+                 width="2000"
+                 height="2000"
+                 material="src: url(assets/rocky-terrain/rocky_terrain_02_diff_4k.jpg); 
+                          normalMap: url(assets/rocky-terrain/rocky_terrain_02_nor_gl_4k.exr);
+                          roughnessMap: url(assets/rocky-terrain/rocky_terrain_02_rough_4k.exr);
+                          displacementMap: url(assets/rocky-terrain/rocky_terrain_02_disp_4k.png);
+                          displacementScale: 0.3;
+                          repeat: 100 100;
+                          offset: 0.137 0.283;
+                          roughness: 1.0;
+                          metalness: 0.0"
+                 shadow="receive: false"></a-plane>
+        
+        <!-- Grid lines for better spatial awareness -->
+        <a-entity id="gridLines" visible="false"></a-entity>
+        
+        <!-- Obstacles (3 cubes in center - wider spacing for pathfinding) -->
+        <a-box class="obstacle" 
+               position="-20 2.5 0" 
+               width="8" height="5" depth="8" 
+               color="#8B4513"></a-box>
+        <a-box class="obstacle" 
+               position="0 3 0" 
+               width="8" height="6" depth="8" 
+               color="#696969"></a-box>
+        <a-box class="obstacle" 
+               position="20 2.5 0" 
+               width="8" height="5" depth="8" 
+               color="#8B4513"></a-box>
+        
+        <!-- Center dividing line -->
+        <a-plane position="0 0.01 0" 
+                 rotation="-90 0 0" 
+                 width="100" 
+                 height="0.2" 
+                 color="#ffffff"
+                 opacity="0.5"></a-plane>
+        
+        <!-- Player zones markers -->
+        <a-text value="PLAYER TEAM\n(You + Bot)" 
+                position="0 0.5 -40" 
+                rotation="-90 0 0"
+                align="center"
+                color="#ff0000"
+                width="20"></a-text>
+        <a-text value="ENEMY TEAM\n(Bots)" 
+                position="0 0.5 40" 
+                rotation="-90 0 0"
+                align="center"
+                color="#0000ff"
+                width="20"></a-text>
+        
+        <!-- Units container -->
+        <a-entity id="unitsContainer"></a-entity>
+        
+        <!-- Effects container -->
+        <a-entity id="effectsContainer"></a-entity>
+      </a-entity>
+
+      <!-- HUD -->
+      <a-entity id="hud" position="0 0 0">
+        <a-text id="selectionInfo" 
+                value="" 
+                position="-0.3 -0.25 -0.6" 
+                align="left" 
+                width="0.5"
+                color="#ffffff"></a-text>
+        
+        <a-text id="gameStatus" 
+                value="Press X to open menu" 
+                position="0 -0.3 -0.6" 
+                align="center" 
+                width="0.5"
+                color="#00ff00"></a-text>
+        
+        <!-- Victory Message Display -->
+        <a-text id="victoryMessage" 
+                value="" 
+                position="0 0.1 -0.6" 
+                align="center" 
+                width="1.0"
+                color="#ffff00"
+                visible="false"></a-text>
+        
+        <!-- Game Menu in HUD (initially hidden) -->
+        <a-entity id="game-menu" position="0 0 -0.8" visible="false">
+          <!-- Menu background panel -->
+          <a-plane width="1.2" height="0.8" color="#000000" material="opacity: 0.9; transparent: true" position="0 0 -0.01"></a-plane>
+          
+          <!-- Menu title -->
+          <a-text value="RTS VR MENU" position="0 0.3 0" align="center" width="1.2" color="#ffffff"></a-text>
+
+          <!-- Current mode display -->
+          <a-text id="menu-current-mode" value="Mode: Singleplayer" position="0 0.25 0" align="center" width="1.1" color="#ffffff"></a-text>
+          
+          <!-- Start Game Button -->
+          <a-entity id="menu-start" position="0 0.12 0"
+                    geometry="primitive: plane; width: 0.4; height: 0.08"
+                    material="color: #00ff00; transparent: true; opacity: 0.8"
+                    cursor-listener
+                    class="clickable">
+            <a-text value="START GAME" position="0 0 0.01" align="center" width="1.5" color="#000000"></a-text>
+          </a-entity>
+          
+          <!-- Host Button -->
+          <a-entity id="menu-host" position="-0.25 0.02 0"
+                    geometry="primitive: plane; width: 0.22; height: 0.06"
+                    material="color: #0044ff; transparent: true; opacity: 0.8"
+                    cursor-listener
+                    class="clickable">
+            <a-text value="HOST" position="0 0 0.01" align="center" width="1.2" color="#ffffff"></a-text>
+          </a-entity>
+          
+          <!-- Join Button -->
+          <a-entity id="menu-join" position="0 0.02 0"
+                    geometry="primitive: plane; width: 0.22" height="0.06"
+                    material="color: #ff4400; transparent: true; opacity: 0.8"
+                    cursor-listener
+                    class="clickable">
+            <a-text value="JOIN" position="0 0 0.01" align="center" width="1.2" color="#ffffff"></a-text>
+          </a-entity>
+          
+          <!-- Close Menu Button -->
+          <a-entity id="menu-close" position="0.25 0.02 0"
+                    geometry="primitive: plane; width: 0.22; height: 0.06"
+                    material="color: #ff0000; transparent: true; opacity: 0.8"
+                    cursor-listener
+                    class="clickable">
+            <a-text value="CLOSE" position="0 0 0.01" align="center" width="1.2" color="#ffffff"></a-text>
+          </a-entity>
+          
+          <a-text id="playerSlots" 
+                  value="P1:You P2:Bot P3:Bot P4:Bot" 
+                  position="0 -0.08 0" 
+                  align="center" 
+                  width="1"
+                  color="#ffffff"></a-text>
+        </a-entity>
+      </a-entity>
+    </a-scene>
+
+    <script>
+      // Remove loading screen
+      document.querySelector('a-scene').addEventListener('loaded', function() {
+        setTimeout(() => {
+          const loading = document.querySelector('.loading-screen');
+          if (loading) loading.remove();
+        }, 1000);
+      });
+
+      // ===== GLOBAL GAME STATE =====
+      const GAME_STATE = {
+        players: [
+          { id: 'player_0', name: 'Player 1', color: '#ff0000', isHuman: true, isBot: false, team: 0, position: { x: -30, z: -25 }, rotation: 0 },
+          { id: 'player_1', name: 'Player 2', color: '#ff8800', isHuman: false, isBot: true, team: 0, position: { x: 30, z: -25 }, rotation: 0 },
+          { id: 'player_2', name: 'Player 3', color: '#0000ff', isHuman: false, isBot: true, team: 1, position: { x: -30, z: 25 }, rotation: 180 },
+          { id: 'player_3', name: 'Player 4', color: '#00ffff', isHuman: false, isBot: true, team: 1, position: { x: 30, z: 25 }, rotation: 180 }
+        ],
+        myPlayerId: 'player_0',
+        units: new Map(),
+        selectedUnits: new Set(),
+        isMenuOpen: true,
+        gameStarted: false,
+        isMultiplayer: false,
+        isHost: false,
+        fogOfWarEnabled: false, // Disable fog of war initially to force load all units
+        cursorIndicator: null
+      };
+
+      // Multiplayer state
+      let peer = null;
+      let connections = new Map();
+      let activePlayers = new Set(['player_0']);
+      let lobbyNumber = 1;
+
+      // ===== PATHFINDING USING three-pathfinding LIBRARY =====
+      
+      const Pathfinding = window.threePathfinding.Pathfinding;
+      const pathfinding = new Pathfinding();
+      const ZONE = 'battlefield';
+      
+      const obstacles = [
+        { x: -20, z: 0, width: 8, depth: 8 },
+        { x: 0, z: 0, width: 8, depth: 8 },
+        { x: 20, z: 0, width: 8, depth: 8 }
+      ];
+      
+      // Check if position is too close to any obstacle (for destination validation)
+      function isPositionNearObstacle(x, z, safetyMargin = 3) {
+        for (let obs of obstacles) {
+          if (Math.abs(x - obs.x) < (obs.width / 2 + safetyMargin) &&
+              Math.abs(z - obs.z) < (obs.depth / 2 + safetyMargin)) {
+            return true;
+          }
+        }
+        return false;
+      }
+      
+      function initPathfinding() {
+        // Create navigation mesh geometry
+        const navMeshGeometry = new THREE.PlaneGeometry(100, 100, 50, 50);
+        navMeshGeometry.rotateX(-Math.PI / 2);
+        
+        const indices = Array.from(navMeshGeometry.index.array);
+        const positions = navMeshGeometry.attributes.position;
+        const newIndices = [];
+        
+        // Check each triangle - use SMALL buffer for pathfinding (1 unit)
+        for (let i = 0; i < indices.length; i += 3) {
+          const v1 = new THREE.Vector3(
+            positions.getX(indices[i]),
+            positions.getY(indices[i]),
+            positions.getZ(indices[i])
+          );
+          const v2 = new THREE.Vector3(
+            positions.getX(indices[i + 1]),
+            positions.getY(indices[i + 1]),
+            positions.getZ(indices[i + 1])
+          );
+          const v3 = new THREE.Vector3(
+            positions.getX(indices[i + 2]),
+            positions.getY(indices[i + 2]),
+            positions.getZ(indices[i + 2])
+          );
+          
+          // Calculate triangle center
+          const centerX = (v1.x + v2.x + v3.x) / 3;
+          const centerZ = (v1.z + v2.z + v3.z) / 3;
+          
+          // Check center with SMALL buffer (1 unit) - allows pathfinding near obstacles
+          let blocked = false;
+          for (let obs of obstacles) {
+            if (Math.abs(centerX - obs.x) < (obs.width / 2 + 1) &&
+                Math.abs(centerZ - obs.z) < (obs.depth / 2 + 1)) {
+              blocked = true;
+              break;
+            }
+          }
+          
+          if (!blocked) {
+            newIndices.push(indices[i], indices[i + 1], indices[i + 2]);
+          }
+        }
+        
+        console.log(`✅ Nav mesh: ${newIndices.length / 3} walkable triangles`);
+        
+        navMeshGeometry.setIndex(newIndices);
+        pathfinding.setZoneData(ZONE, Pathfinding.createZone(navMeshGeometry));
+        
+        // Visualize (temporarily hidden)
+        // const navMeshMaterial = new THREE.MeshBasicMaterial({ 
+        //   color: 0x00ff00, 
+        //   wireframe: true,
+        //   opacity: 0.3,
+        //   transparent: true
+        // });
+        // const navMesh = new THREE.Mesh(navMeshGeometry, navMeshMaterial);
+        // navMesh.position.y = 0.2;
+        // const scene = document.querySelector('a-scene').object3D;
+        // scene.add(navMesh);
+      }
+      
+      function findPath(startX, startZ, endX, endZ, silent = false) {
+        const startPos = new THREE.Vector3(startX, 0, startZ);
+        const endPos = new THREE.Vector3(endX, 0, endZ);
+        
+        try {
+          const groupID = pathfinding.getGroup(ZONE, startPos);
+          const path = pathfinding.findPath(startPos, endPos, ZONE, groupID);
+          
+          if (path && path.length > 0) {
+            if (!silent) {
+              console.log(`✅ Path found: ${path.length} waypoints`);
+            }
+            return path.map(p => ({ x: p.x, z: p.z }));
+          }
+        } catch (err) {
+          if (!silent) {
+            console.error('Pathfinding error:', err);
+          }
+        }
+        
+        return null;
+      }
+      
+      // Quick snap to nearest nav mesh triangle (for spawning)
+      function snapToNavMeshFast(x, z) {
+        const testPos = new THREE.Vector3(x, 0, z);
+        try {
+          const groupID = pathfinding.getGroup(ZONE, testPos);
+          if (groupID !== undefined) {
+            return { x, z };
+          }
+        } catch (err) {
+          // Not on nav mesh
+        }
+        
+        // Quick spiral search using group ID check
+        for (let radius = 0.5; radius <= 10; radius += 0.5) {
+          for (let i = 0; i < 16; i++) {
+            const angle = (i / 16) * Math.PI * 2;
+            const testX = x + Math.cos(angle) * radius;
+            const testZ = z + Math.sin(angle) * radius;
+            
+            if (Math.abs(testX) > 45 || Math.abs(testZ) > 45) continue;
+            
+            const searchPos = new THREE.Vector3(testX, 0, testZ);
+            try {
+              const groupID = pathfinding.getGroup(ZONE, searchPos);
+              if (groupID !== undefined) {
+                return { x: testX, z: testZ };
+              }
+            } catch (err) {
+              continue;
+            }
+          }
+        }
+        
+        // Fallback
+        return { x: 0, z: 0 };
+      }
+      
+      // Full snap with pathfinding validation (for movement commands)
+      function snapToNavMesh(x, z) {
+        // Test if we can path from map center to this position
+        const testPath = findPath(0, 0, x, z, true);
+        if (testPath && testPath.length > 0) {
+          return { x, z };
+        }
+        
+        // Position not reachable - spiral search for reachable position
+        for (let radius = 0.5; radius <= 35; radius += 0.5) {
+          for (let i = 0; i < 32; i++) {
+            const angle = (i / 32) * Math.PI * 2;
+            const testX = x + Math.cos(angle) * radius;
+            const testZ = z + Math.sin(angle) * radius;
+            
+            if (Math.abs(testX) > 45 || Math.abs(testZ) > 45) continue;
+            
+            const path = findPath(0, 0, testX, testZ, true);
+            if (path && path.length > 0) {
+              if (radius > 2) {
+                console.log(`📍 Snapped ${radius.toFixed(1)}m: (${x.toFixed(1)}, ${z.toFixed(1)}) → (${testX.toFixed(1)}, ${testZ.toFixed(1)})`);
+              }
+              return { x: testX, z: testZ };
+            }
+          }
+        }
+        
+        // Emergency fallback
+        console.error(`❌ Could not snap position (${x.toFixed(1)}, ${z.toFixed(1)}) - using map center`);
+        return { x: 0, z: 0 };
+      }
+      
+      // Find nearest reachable position near target using spiral search
+      function findNearestReachablePosition(startX, startZ, targetX, targetZ, maxRadius = 30) {
+        // First, try the exact target
+        let path = findPath(startX, startZ, targetX, targetZ, true);
+        if (path && path.length > 0) {
+          return { x: targetX, z: targetZ };
+        }
+        
+        // Spiral outward to find closest reachable point with finer granularity
+        const step = 0.4; // Very fine search step
+        for (let radius = step; radius <= maxRadius; radius += step) {
+          // Try 20 directions at this radius for maximum coverage
+          const angleStep = (Math.PI * 2) / 20;
+          for (let i = 0; i < 20; i++) {
+            const angle = i * angleStep;
+            const testX = targetX + Math.cos(angle) * radius;
+            const testZ = targetZ + Math.sin(angle) * radius;
+            
+            // Check if within map bounds
+            if (Math.abs(testX) > 48 || Math.abs(testZ) > 48) continue;
+            
+            path = findPath(startX, startZ, testX, testZ, true);
+            if (path && path.length > 0) {
+              return { x: testX, z: testZ };
+            }
+          }
+        }
+        
+        // This should never happen with proper nav mesh
+        return null;
+      }
+
+      // ===== AFRAME COMPONENTS =====
+
+      // Cubemap background component
+      AFRAME.registerComponent('cubemap-background', {
+        schema: {
+          folder: {type: 'string', default: ''}
+        },
+        
+        init: function() {
+          const scene = this.el.sceneEl;
+          const folder = this.data.folder;
+          
+          if (!folder) {
+            console.warn('No cubemap folder specified');
+            return;
+          }
+          
+          // Load cubemap using THREE.js CubeTextureLoader
+          const loader = new THREE.CubeTextureLoader();
+          const urls = [
+            folder + '/px.png',
+            folder + '/nx.png',
+            folder + '/py.png',
+            folder + '/ny.png',
+            folder + '/pz.png',
+            folder + '/nz.png'
+          ];
+          
+          loader.load(
+            urls,
+            (texture) => {
+              scene.object3D.background = texture;
+              console.log('✅ Cubemap background applied');
+            },
+            undefined,
+            (error) => {
+              console.error('❌ Error loading cubemap:', error);
+            }
+          );
+        }
+      });
+
+      // Performance optimization component for complex models
+      AFRAME.registerComponent('optimize-model', {
+        init: function() {
+          this.el.addEventListener('model-loaded', () => {
+            const obj = this.el.getObject3D('mesh');
+            if (obj) {
+              let meshCount = 0;
+              obj.traverse((node) => {
+                if (node.isMesh) {
+                  meshCount++;
+                  // Disable frustum culling to avoid per-object checks
+                  node.frustumCulled = false;
+                  // Disable shadow casting/receiving for performance
+                  node.castShadow = false;
+                  node.receiveShadow = false;
+                  
+                  // Convert to unlit material to preserve baked lighting/textures
+                  if (node.material) {
+                    const oldMaterial = node.material;
+                    // Use MeshBasicMaterial which is unlit and much faster
+                    node.material = new THREE.MeshBasicMaterial({
+                      map: oldMaterial.map,
+                      color: oldMaterial.color || new THREE.Color(0xffffff),
+                      side: oldMaterial.side || THREE.FrontSide
+                    });
+                    // Dispose old material to free memory
+                    if (oldMaterial.dispose) oldMaterial.dispose();
+                  }
+                  
+                  // Compute bounding sphere for faster raycasting
+                  if (node.geometry && !node.geometry.boundingSphere) {
+                    node.geometry.computeBoundingSphere();
+                  }
+                }
+              });
+              console.log('Model optimized: ' + meshCount + ' meshes with unlit materials');
+            }
+          });
+        }
+      });
+
+      // Custom forward-pointing raycaster for VR controllers
+      AFRAME.registerComponent('forward-raycaster', {
+        schema: {
+          hand: { type: 'string', default: 'right' },
+          lineColor: { type: 'color', default: '#00ff00' },
+          maxLength: { type: 'number', default: 100 }
+        },
+        
+        init: function() {
+          this.raycaster = new THREE.Raycaster();
+          this.intersection = null;
+          this.line = null;
+          this.lastIntersectedEl = null;
+          
+          // Performance: Cache mesh lists and throttle updates
+          this.cachedMeshes = null;
+          this.lastMeshCacheTime = 0;
+          this.meshCacheInterval = 1000; // Re-cache meshes every 1 second
+          this.tickCounter = 0;
+          this.raycastInterval = 2; // Only raycast every N frames (30fps instead of 60fps)
+          
+          this.createLine();
+        },
+        
+        createLine: function() {
+          // Create line - will be rotated to point correctly
+          const geometry = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(0, 0, -1)
+          ]);
+          
+          const material = new THREE.LineBasicMaterial({
+            color: new THREE.Color(this.data.lineColor),
+            opacity: 0.8,
+            transparent: true
+          });
+          
+          this.line = new THREE.Line(geometry, material);
+          this.line.name = 'line';
+          this.line.scale.z = this.data.maxLength;
+          
+          // A-Frame's hand-controls has the controller rotated
+          // Rotate the line to point forward from the controller grip
+          this.line.rotation.x = -Math.PI / 2; // -90 degrees to point forward
+          
+          // Add line to the hand entity
+          this.el.object3D.add(this.line);
+        },
+        
+        tick: function() {
+          if (!this.line) return;
+          
+          // Throttle: Only raycast every N frames for performance
+          this.tickCounter++;
+          if (this.tickCounter % this.raycastInterval !== 0) {
+            return;
+          }
+          
+          // Make sure line is visible
+          this.line.visible = true;
+          
+          // Get world position from the entity (controller position)
+          const origin = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(origin);
+          
+          // Get straight forward direction from controller orientation
+          const direction = new THREE.Vector3(0, 0, -1);
+          direction.applyQuaternion(this.el.object3D.getWorldQuaternion(new THREE.Quaternion()));
+          
+          // Apply line's local rotation
+          const lineQuaternion = new THREE.Quaternion().setFromEuler(this.line.rotation);
+          const worldQuaternion = this.el.object3D.getWorldQuaternion(new THREE.Quaternion());
+          worldQuaternion.multiply(lineQuaternion);
+          direction.set(0, 0, -1).applyQuaternion(worldQuaternion);
+          
+          // Set up raycaster
+          this.raycaster.set(origin, direction.normalize());
+          this.raycaster.far = this.data.maxLength;
+          
+          // Cache meshes for performance - only rebuild every second
+          const now = Date.now();
+          if (!this.cachedMeshes || now - this.lastMeshCacheTime > this.meshCacheInterval) {
+            this.cachedMeshes = this.buildMeshCache();
+            this.lastMeshCacheTime = now;
+          }
+          
+          // Perform raycast with cached meshes
+          const intersections = this.raycaster.intersectObjects(this.cachedMeshes, false);
+          
+          // Update intersection and line, and emit cursor events
+          if (intersections.length > 0) {
+            this.intersection = intersections[0];
+            
+            // Update line length to intersection point (using scale like three.js example)
+            this.line.scale.z = this.intersection.distance;
+            
+            // Emit mouseenter/mouseleave events for hover effects
+            const intersectedEl = this.intersection.object.el || (this.intersection.object.parent && this.intersection.object.parent.el);
+            if (intersectedEl) {
+              if (this.lastIntersectedEl !== intersectedEl) {
+                // Clear previous hover
+                if (this.lastIntersectedEl) {
+                  this.lastIntersectedEl.emit('mouseleave');
+                }
+                // Set new hover
+                intersectedEl.emit('mouseenter');
+                this.lastIntersectedEl = intersectedEl;
+              }
+            }
+          } else {
+            this.intersection = null;
+            
+            // Full length line
+            this.line.scale.z = this.data.maxLength;
+            
+            // Clear hover
+            if (this.lastIntersectedEl) {
+              this.lastIntersectedEl.emit('mouseleave');
+              this.lastIntersectedEl = null;
+            }
+          }
+        },
+        
+        buildMeshCache: function() {
+          // Build and cache mesh list for raycasting
+          const scene = this.el.sceneEl;
+          const selectables = Array.from(scene.querySelectorAll('.selectable:not(.fog-hidden)')).map(el => el.object3D);
+          // Get clickables but EXCLUDE ground (ground is only checked during trigger for movement)
+          const clickables = Array.from(scene.querySelectorAll('.clickable:not(#ground):not(.fog-hidden)')).map(el => el.object3D);
+          const targets = [...selectables, ...clickables];
+          
+          const meshes = [];
+          targets.forEach(obj => {
+            // Simple traversal for units and UI (no ground in this list)
+            obj.traverse(child => {
+              if (child.isMesh) meshes.push(child);
+            });
+          });
+          
+          return meshes;
+        },
+        
+        getIntersection: function() {
+          return this.intersection;
+        },
+        
+        remove: function() {
+          if (this.line) {
+            this.el.object3D.remove(this.line);
+            this.line.geometry.dispose();
+            this.line.material.dispose();
+          }
+        }
+      });
+
+      // Menu toggle component (from BoltVR)
+      AFRAME.registerComponent('menu-toggle', {
+        init: function() {
+          this.menuVisible = false;
+          this.lastBButtonPress = 0;
+          this.lastMenuToggle = 0;
+          
+          // Initialize menu buttons as disabled
+          setTimeout(() => {
+            const menu = document.querySelector('#game-menu');
+            if (menu && !this.menuVisible) {
+              const menuButtons = menu.querySelectorAll('[cursor-listener]');
+              menuButtons.forEach(btn => {
+                btn.classList.remove('clickable');
+                if (btn.object3D) btn.object3D.visible = false;
+              });
+              console.log(`🔒 Initialized ${menuButtons.length} menu buttons as disabled`);
+            }
+          }, 500);
+          
+          // X button to toggle menu with debouncing (ONLY X BUTTON)
+          this.el.sceneEl.addEventListener('xbuttondown', () => {
+            const now = Date.now();
+            if (now - this.lastBButtonPress < 500) return;
+            this.lastBButtonPress = now;
+            this.toggleMenu();
+          });
+          
+          // B button to deselect all units
+          this.el.sceneEl.addEventListener('bbuttondown', () => {
+            if (GAME_STATE.selectedUnits.size > 0) {
+              GAME_STATE.selectedUnits.forEach(unitId => {
+                const selectionRing = document.getElementById(unitId + '_selection');
+                if (selectionRing) selectionRing.setAttribute('visible', 'false');
+              });
+              GAME_STATE.selectedUnits.clear();
+              updateSelectionUI();
+              console.log('✨ Deselected all units via B button');
+            }
+          });
+          
+          // Prevent Y button from toggling menu
+          this.el.sceneEl.addEventListener('ybuttondown', (evt) => {
+            evt.stopPropagation();
+          });
+        },
+        
+        toggleMenu: function() {
+          this.menuVisible = !this.menuVisible;
+          this.lastMenuToggle = Date.now();
+          
+          const menu = document.querySelector('#game-menu');
+          if (!menu) return;
+          
+          menu.setAttribute('visible', this.menuVisible);
+          
+          // Hide victory message when opening menu
+          const victoryMessage = document.getElementById('victoryMessage');
+          if (victoryMessage && this.menuVisible) {
+            victoryMessage.setAttribute('visible', 'false');
+          }
+          
+          const menuButtons = menu.querySelectorAll('[cursor-listener]');
+          menuButtons.forEach(btn => {
+            if (this.menuVisible) {
+              btn.classList.add('clickable');
+              if (btn.object3D) btn.object3D.visible = true;
+            } else {
+              btn.classList.remove('clickable');
+              if (btn.object3D) btn.object3D.visible = false;
+            }
+          });
+          
+          // Update raycasters
+          const leftHand = document.querySelector('#leftHand');
+          const rightHand = document.querySelector('#rightHand');
+          
+          [leftHand, rightHand].forEach(hand => {
+            if (hand && hand.components.raycaster) {
+              if (this.menuVisible) {
+                hand.setAttribute('raycaster', {
+                  objects: '.clickable',
+                  lineColor: '#00ff00',
+                  lineOpacity: 0.8,
+                  far: 10,
+                  enabled: true
+                });
+              } else {
+                hand.setAttribute('raycaster', {
+                  objects: '.clickable, .selectable',
+                  lineColor: '#00ff00',
+                  lineOpacity: 0.5,
+                  far: 100,
+                  enabled: true
+                });
+              }
+              hand.components.raycaster.refreshObjects();
+            }
+          });
+          
+          console.log('Menu toggled:', this.menuVisible ? 'VISIBLE' : 'HIDDEN');
+        }
+      });
+
+      // Cursor listener component (from BoltVR)
+      AFRAME.registerComponent('cursor-listener', {
+        init: function() {
+          this.el.addEventListener('click', this.onClick.bind(this));
+          this.el.addEventListener('mouseenter', this.onHover.bind(this));
+          this.el.addEventListener('mouseleave', this.onLeave.bind(this));
+        },
+
+        onClick: function() {
+          const id = this.el.id;
+          console.log('🖱️ Button clicked:', id);
+          
+          if (!this.el.getAttribute('visible')) {
+            return;
+          }
+          
+          let parent = this.el.parentNode;
+          while (parent && parent.tagName !== 'A-SCENE') {
+            if (parent.hasAttribute && parent.hasAttribute('visible') && !parent.getAttribute('visible')) {
+              return;
+            }
+            parent = parent.parentNode;
+          }
+          
+          if (id === 'menu-start') {
+            if (GAME_STATE.gameStarted) {
+              endGame();
+            } else {
+              startGame();
+            }
+          } else if (id === 'menu-host') {
+            startHosting();
+          } else if (id === 'menu-join') {
+            joinGame();
+          } else if (id === 'menu-close') {
+            toggleMenu();
+          }
+        },
+
+        onHover: function() {
+          const material = this.el.getAttribute('material');
+          this.originalColor = material.color;
+          this.el.setAttribute('material', 'color', '#ffffff');
+          this.el.setAttribute('material', 'opacity', 1.0);
+        },
+
+        onLeave: function() {
+          if (this.originalColor) {
+            this.el.setAttribute('material', 'color', this.originalColor);
+            this.el.setAttribute('material', 'opacity', 0.8);
+          }
+        }
+      });
+
+      // RTS Controller
+      AFRAME.registerComponent('rts-controller', {
+        schema: {
+          hand: { type: 'string', default: 'right' }
+        },
+        
+        init: function() {
+          this.raycaster = this.el.components.raycaster;
+          this.lastCommandTime = 0;
+          this.lastMenuToggle = 0;
+          this.thumbstickX = 0;
+          this.thumbstickY = 0;
+          this.leftGripDown = false;
+          this.rightGripDown = false;
+          this.lastHoveredUnit = null;
+          
+          // Grab state
+          this.isLeft = this.data.hand === 'left';
+          this.grabStartPos = new THREE.Vector3();
+          this.rigStartPos = new THREE.Vector3();
+          this.lastHandPos = new THREE.Vector3();
+          
+          this.el.addEventListener('triggerdown', this.onTriggerDown.bind(this));
+          this.el.addEventListener('gripdown', this.onGripDown.bind(this));
+          this.el.addEventListener('gripup', this.onGripUp.bind(this));
+          this.el.addEventListener('thumbstickmoved', this.onThumbstickMoved.bind(this));
+          
+          // Hover effect listeners
+          setTimeout(() => {
+            this.el.addEventListener('raycaster-intersection', this.onRaycasterIntersection.bind(this));
+            this.el.addEventListener('raycaster-intersection-cleared', this.onRaycasterIntersectionCleared.bind(this));
+            
+            // Get cursor indicator
+            GAME_STATE.cursorIndicator = document.getElementById('cursorIndicator');
+          }, 1000);
+        },
+        
+        tick: function(time, dt) {
+          const rig = document.getElementById('cameraRig');
+          if (!rig) return;
+          
+          // Only right hand controls rotation
+          if (!this.isLeft && Math.abs(this.thumbstickX) > 0.2) {
+            rig.object3D.rotation.y -= this.thumbstickX * 0.02;
+          }
+          
+          // Handle grab-drag ONLY on the hand that's actually gripping
+          const leftHand = document.getElementById('leftHand');
+          const rightHand = document.getElementById('rightHand');
+          const leftController = leftHand ? leftHand.components['rts-controller'] : null;
+          const rightController = rightHand ? rightHand.components['rts-controller'] : null;
+          
+          // Check if both grips are down for pinch zoom
+          const bothGripsDown = leftController && rightController && 
+                                leftController.leftGripDown && rightController.rightGripDown;
+          
+          if (bothGripsDown) {
+            // Only handle pinch zoom from right controller to avoid duplicate processing
+            if (!this.isLeft) {
+              if (!this.isPinching) {
+                this.isPinching = true;
+                const leftPos = new THREE.Vector3();
+                const rightPos = new THREE.Vector3();
+                leftHand.object3D.getWorldPosition(leftPos);
+                rightHand.object3D.getWorldPosition(rightPos);
+                this.lastPinchDistance = leftPos.distanceTo(rightPos);
+              } else {
+                const leftPos = new THREE.Vector3();
+                const rightPos = new THREE.Vector3();
+                leftHand.object3D.getWorldPosition(leftPos);
+                rightHand.object3D.getWorldPosition(rightPos);
+                const distance = leftPos.distanceTo(rightPos);
+                const deltaDistance = distance - this.lastPinchDistance;
+                
+                const currentPos = rig.object3D.position;
+                const newY = Math.max(10, Math.min(100, currentPos.y - deltaDistance * 30));
+                rig.object3D.position.set(currentPos.x, newY, currentPos.z);
+                
+                this.lastPinchDistance = distance;
+              }
+            }
+          } else {
+            this.isPinching = false;
+            
+            // Single hand grab-drag - only process for the hand that's gripping
+            if ((this.isLeft && leftController && leftController.leftGripDown && (!rightController || !rightController.rightGripDown)) ||
+                (!this.isLeft && rightController && rightController.rightGripDown && (!leftController || !leftController.leftGripDown))) {
+              
+              // Use LOCAL position (in rig space)
+              const localPos = this.el.object3D.position.clone();
+              
+              if (!this.lastLocalPos) {
+                this.lastLocalPos = localPos.clone();
+              }
+              
+              const localDelta = new THREE.Vector3().subVectors(this.lastLocalPos, localPos);
+              
+              // Transform local delta to world space using rig rotation
+              // Correct rotation matrix for Y-axis rotation (Y-up, right-handed)
+              const rigRotation = rig.object3D.rotation.y;
+              const worldDelta = new THREE.Vector3(
+                localDelta.x * Math.cos(rigRotation) + localDelta.z * Math.sin(rigRotation),
+                0,
+                -localDelta.x * Math.sin(rigRotation) + localDelta.z * Math.cos(rigRotation)
+              );
+              
+              // Scale based on camera height
+              const currentHeight = rig.object3D.position.y;
+              const heightMultiplier = currentHeight / 40; // Base is 40
+              
+              // 50cm hand movement = ~50 units (5 squares) when zoomed in
+              // 50cm hand movement = ~100 units (10 squares) when zoomed out
+              const scaledDelta = worldDelta.multiplyScalar(100 * heightMultiplier);
+              
+              const currentPos = rig.object3D.position;
+              const newX = Math.max(-60, Math.min(60, currentPos.x + scaledDelta.x));
+              const newZ = Math.max(-60, Math.min(60, currentPos.z + scaledDelta.z));
+              
+              rig.object3D.position.set(newX, currentPos.y, newZ);
+              
+              this.lastLocalPos.copy(localPos);
+            } else {
+              // Reset when not gripping
+              this.lastLocalPos = null;
+            }
+          }
+        },
+        
+        onTriggerDown: function() {
+          const now = Date.now();
+          if (now - this.lastCommandTime < 200) return;
+          this.lastCommandTime = now;
+          
+          // Get intersection from custom raycaster (only checks units and UI)
+          const raycasterComponent = this.el.components['forward-raycaster'];
+          if (!raycasterComponent) return;
+          
+          const intersection = raycasterComponent.getIntersection();
+          
+          // Check if clicking on UI button
+          if (intersection) {
+            const intersectedEl = intersection.object.el || (intersection.object.parent && intersection.object.parent.el);
+            if (intersectedEl) {
+              const isUIButton = intersectedEl.classList.contains('clickable') && 
+                                 !intersectedEl.classList.contains('selectable') &&
+                                 intersectedEl.id !== 'ground';
+              
+              if (isUIButton) {
+                // Emit click event for UI buttons only
+                intersectedEl.emit('click');
+                return;
+              }
+            }
+          }
+          
+          // Don't allow battlefield interactions if game is not started
+          if (!GAME_STATE.gameStarted) return;
+          
+          // Check if clicked on unit
+          if (intersection) {
+            const hitPoint = intersection.point;
+            const hitObject = intersection.object;
+            
+            // Find the A-Frame entity
+            let targetEl = hitObject.el;
+            if (!targetEl && hitObject.parent) {
+              targetEl = hitObject.parent.el;
+            }
+            
+            // Check if clicked on unit
+            if (targetEl && targetEl.classList.contains('selectable')) {
+              // Get unit ID from the element or its parent
+              let unitId = targetEl.getAttribute('data-unit-id');
+              if (!unitId && targetEl.parentNode) {
+                unitId = targetEl.parentNode.getAttribute('data-unit-id');
+              }
+              
+              const unit = GAME_STATE.units.get(unitId);
+              
+              // Safety check: make sure unit exists
+              if (!unit) {
+                return;
+              }
+              
+              if (unit.ownerId === GAME_STATE.myPlayerId) {
+                this.selectUnit(unitId);
+                console.log('Clicked own unit:', unitId);
+              } else {
+                // Clicked on an enemy or friendly unit
+                const myPlayer = GAME_STATE.players.find(p => p.id === GAME_STATE.myPlayerId);
+                const unitPlayer = GAME_STATE.players.find(p => p.id === unit.ownerId);
+                
+                if (GAME_STATE.selectedUnits.size > 0) {
+                  if (unitPlayer && myPlayer && unitPlayer.team !== myPlayer.team) {
+                    // Enemy - attack
+                    this.issueAttackCommand(unit);
+                    console.log('Clicked enemy unit:', unitId);
+                  } else {
+                    // Friendly - guard (not implemented yet, just log)
+                    console.log('Clicked friendly unit (guard not implemented):', unitId);
+                  }
+                }
+              }
+              return; // Exit after handling unit click
+            }
+          }
+          
+          // If no unit hit, do a separate raycast for ground to get movement position
+          // Create a temporary raycaster for ground only
+          const groundRaycaster = new THREE.Raycaster();
+          const origin = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(origin);
+          
+          const direction = new THREE.Vector3(0, 0, -1);
+          const worldQuaternion = new THREE.Quaternion();
+          this.el.object3D.getWorldQuaternion(worldQuaternion);
+          const lineQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+          worldQuaternion.multiply(lineQuaternion);
+          direction.applyQuaternion(worldQuaternion);
+          
+          groundRaycaster.set(origin, direction.normalize());
+          groundRaycaster.far = 100;
+          
+          // Raycast against ground only
+          const groundEl = document.getElementById('ground');
+          if (groundEl) {
+            const groundMeshes = [];
+            groundEl.object3D.traverse(child => {
+              if (child.isMesh) groundMeshes.push(child);
+            });
+            
+            const groundIntersections = groundRaycaster.intersectObjects(groundMeshes, false);
+            
+            if (groundIntersections.length > 0 && GAME_STATE.selectedUnits.size > 0) {
+              const hitPoint = groundIntersections[0].point;
+              
+              // Validate from where selected units actually are
+              const firstUnitId = Array.from(GAME_STATE.selectedUnits)[0];
+              const firstUnit = GAME_STATE.units.get(firstUnitId);
+              
+              if (firstUnit) {
+                const unitPos = firstUnit.el.object3D.position;
+                const testPath = findPath(unitPos.x, unitPos.z, hitPoint.x, hitPoint.z, true);
+                
+                if (testPath && testPath.length > 0) {
+                  this.issueMoveCommand(hitPoint);
+                  console.log('Move command issued to:', hitPoint);
+                } else {
+                  updateGameStatus('Cannot reach that location');
+                }
+              }
+            } else if (groundIntersections.length > 0 && GAME_STATE.selectedUnits.size === 0) {
+              // Deselect all if clicking on empty ground
+              GAME_STATE.selectedUnits.forEach(unitId => {
+                const selectionRing = document.getElementById(unitId + '_selection');
+                if (selectionRing) selectionRing.setAttribute('visible', 'false');
+              });
+              GAME_STATE.selectedUnits.clear();
+              updateSelectionUI();
+            }
+          }
+        },
+        
+        selectUnit: function(unitId) {
+          const unit = GAME_STATE.units.get(unitId);
+          if (!unit) {
+            console.warn('Unit not found:', unitId);
+            return;
+          }
+          
+          const selectionRing = document.getElementById(unitId + '_selection');
+          if (!selectionRing) {
+            console.warn('Selection ring not found for:', unitId);
+            return;
+          }
+          
+          if (GAME_STATE.selectedUnits.has(unitId)) {
+            // Deselect
+            GAME_STATE.selectedUnits.delete(unitId);
+            selectionRing.setAttribute('visible', 'false');
+            console.log('✅ Unit', unitId, 'DESELECTED');
+          } else {
+            // Select
+            GAME_STATE.selectedUnits.add(unitId);
+            selectionRing.setAttribute('visible', 'true');
+            console.log('✅ Unit', unitId, 'SELECTED');
+          }
+          
+          updateSelectionUI();
+        },
+        
+        issueMoveCommand: function(targetPos) {
+          const numUnits = GAME_STATE.selectedUnits.size;
+          const unitsArray = Array.from(GAME_STATE.selectedUnits);
+          
+          const spacing = 2.5;
+          const cols = Math.ceil(Math.sqrt(numUnits));
+          let movedCount = 0;
+          
+          unitsArray.forEach((unitId, index) => {
+            const unit = GAME_STATE.units.get(unitId);
+            if (!unit) return;
+            
+            const unitPos = unit.el.object3D.position;
+            const row = Math.floor(index / cols);
+            const col = index % cols;
+            const offsetX = (col - (cols - 1) / 2) * spacing;
+            const offsetZ = (row - (Math.ceil(numUnits / cols) - 1) / 2) * spacing;
+            
+            const formationX = targetPos.x + offsetX;
+            const formationZ = targetPos.z + offsetZ;
+            
+            let finalX = formationX;
+            let finalZ = formationZ;
+            
+            // Check if formation position is too close to obstacle (LARGE 3-unit margin)
+            if (isPositionNearObstacle(formationX, formationZ, 3)) {
+              // Try center position
+              if (!isPositionNearObstacle(targetPos.x, targetPos.z, 3)) {
+                finalX = targetPos.x;
+                finalZ = targetPos.z;
+              } else {
+                // Both invalid - skip this unit
+                return;
+              }
+            }
+            
+            // Check if position is ON nav mesh and PATHABLE
+            try {
+              const destPoint = new THREE.Vector3(finalX, 0, finalZ);
+              const groupID = pathfinding.getGroup(ZONE, destPoint);
+              if (groupID === undefined) {
+                return; // Not on nav mesh
+              }
+              
+              const testPath = findPath(unitPos.x, unitPos.z, finalX, finalZ, true);
+              if (!testPath || testPath.length === 0) {
+                return; // No path
+              }
+            } catch (err) {
+              return; // Invalid
+            }
+            
+            // Set validated destination AND CLEAR ATTACK STATE
+            unit.state = 'moving';
+            unit.targetPos = { x: finalX, y: 0.75, z: finalZ };
+            unit.targetUnit = null;
+            unit.lastKnownEnemyPos = null;
+            unit.originalMoveOrder = null;  // Clear any saved orders
+            unit.playerCommandedMove = true;  // Flag that this is a player command
+            unit.path = [];
+            unit.pathIndex = 0;
+            unit.isFacingTarget = false;  // Reset facing
+            movedCount++;
+          });
+          
+          updateGameStatus(`Moving ${movedCount} unit(s)`);
+          
+          if (GAME_STATE.isMultiplayer && movedCount > 0) {
+            const commands = unitsArray
+              .filter(unitId => GAME_STATE.units.get(unitId).state === 'moving')
+              .map(unitId => ({
+                unitId,
+                targetPos: GAME_STATE.units.get(unitId).targetPos
+              }));
+            broadcastData({ type: 'move-command', commands });
+          }
+        },
+        
+        issueAttackCommand: function(targetUnit) {
+          const numUnits = GAME_STATE.selectedUnits.size;
+          const unitsArray = Array.from(GAME_STATE.selectedUnits);
+          
+          // Calculate formation positions for multiple units attacking
+          const spacing = 2.5;
+          const cols = Math.ceil(Math.sqrt(numUnits));
+          const targetPos = targetUnit.el.object3D.position;
+          
+          unitsArray.forEach((unitId, index) => {
+            const unit = GAME_STATE.units.get(unitId);
+            if (unit) {
+              unit.state = 'attacking';
+              unit.targetUnit = targetUnit;
+              
+              // Store last known position of target
+              unit.lastKnownEnemyPos = { 
+                x: targetPos.x, 
+                y: 0.75, 
+                z: targetPos.z 
+              };
+              
+              // For multiple units, spread them out in formation near target
+              if (numUnits > 1) {
+                const row = Math.floor(index / cols);
+                const col = index % cols;
+                const offsetX = (col - (cols - 1) / 2) * spacing;
+                const offsetZ = (row - (Math.ceil(numUnits / cols) - 1) / 2) * spacing;
+                
+                unit.targetPos = {
+                  x: targetPos.x + offsetX,
+                  y: 0.75,
+                  z: targetPos.z + offsetZ
+                };
+              } else {
+                unit.targetPos = { ...unit.lastKnownEnemyPos };
+              }
+              
+              unit.path = [];
+              unit.pathIndex = 0;
+              unit.isFacingTarget = false;
+              unit.originalMoveOrder = null; // Clear any previous move order
+            }
+          });
+          
+          if (GAME_STATE.isMultiplayer) {
+            const commands = unitsArray.map(unitId => ({
+              unitId,
+              targetUnitId: targetUnit.id
+            }));
+            broadcastData({ type: 'attack-command', commands });
+          }
+          
+          updateGameStatus('Attacking with ' + numUnits + ' unit(s)');
+        },
+        
+        onGripDown: function() {
+          if (this.isLeft) {
+            this.leftGripDown = true;
+          } else {
+            this.rightGripDown = true;
+          }
+          
+          // Use local position to avoid feedback loop
+          this.lastLocalPos = this.el.object3D.position.clone();
+          this.grabStartPos.copy(this.lastLocalPos);
+          this.rigStartPos.copy(document.getElementById('cameraRig').object3D.position);
+        },
+        
+        onGripUp: function() {
+          if (this.isLeft) {
+            this.leftGripDown = false;
+          } else {
+            this.rightGripDown = false;
+          }
+        },
+        
+        onThumbstickMoved: function(evt) {
+          if (evt.detail.x !== undefined) {
+            this.thumbstickX = evt.detail.x;
+          }
+          if (evt.detail.y !== undefined) {
+            this.thumbstickY = evt.detail.y;
+          }
+        },
+        
+        onRaycasterIntersection: function(evt) {
+          if (!GAME_STATE.gameStarted) return;
+          
+          const intersections = evt.detail.intersections;
+          if (intersections.length === 0) return;
+          
+          const cursorIndicator = GAME_STATE.cursorIndicator;
+          const hasSelection = GAME_STATE.selectedUnits.size > 0;
+          
+          // Find first selectable unit or ground
+          for (let intersection of intersections) {
+            const el = intersection.object.el;
+            const point = intersection.point;
+            
+            // Check if hovering a unit
+            if (el && el.classList.contains('selectable')) {
+              // Get unit ID from the element or its parent
+              let unitId = el.getAttribute('data-unit-id');
+              if (!unitId && el.parentNode) {
+                unitId = el.parentNode.getAttribute('data-unit-id');
+              }
+              
+              if (unitId) {
+                const unit = GAME_STATE.units.get(unitId);
+                
+                // Safety check: make sure unit exists
+                if (!unit) {
+                  continue;
+                }
+                
+                const myPlayer = GAME_STATE.players.find(p => p.id === GAME_STATE.myPlayerId);
+                const unitPlayer = GAME_STATE.players.find(p => p.id === unit.ownerId);
+                
+                // Only show hover ring on own units if no selection, or any unit if have selection
+                const shouldShowHover = (unit.ownerId === GAME_STATE.myPlayerId) || hasSelection;
+                
+                if (shouldShowHover && unitId !== this.lastHoveredUnit) {
+                  if (this.lastHoveredUnit) {
+                    const prevHover = document.getElementById(this.lastHoveredUnit + '_hover');
+                    if (prevHover) prevHover.setAttribute('visible', 'false');
+                  }
+                  const hoverRing = document.getElementById(unitId + '_hover');
+                  if (hoverRing) {
+                    hoverRing.setAttribute('visible', 'true');
+                    this.lastHoveredUnit = unitId;
+                  }
+                }
+                
+                // Show cursor indicator if units selected
+                if (hasSelection && cursorIndicator) {
+                  cursorIndicator.object3D.position.copy(el.parentNode.object3D.position);
+                  cursorIndicator.object3D.position.y = 0.1;
+                  
+                  const ring = cursorIndicator.querySelector('a-ring');
+                  if (unitPlayer.team === myPlayer.team) {
+                    // Friendly - blue (guard)
+                    ring.setAttribute('material', 'color', '#0099ff');
+                  } else {
+                    // Enemy - red (attack)
+                    ring.setAttribute('material', 'color', '#ff0000');
+                  }
+                  cursorIndicator.setAttribute('visible', 'true');
+                }
+              }
+              return;
+            }
+            
+            // Check if hovering ground
+            if (el && el.id === 'ground') {
+              // Show cursor indicator if units selected
+              if (hasSelection && cursorIndicator) {
+                cursorIndicator.object3D.position.set(point.x, 0.1, point.z);
+                // Green for move
+                const ring = cursorIndicator.querySelector('a-ring');
+                ring.setAttribute('material', 'color', '#00ff00');
+                cursorIndicator.setAttribute('visible', 'true');
+              }
+              
+              // Clear unit hover
+              if (this.lastHoveredUnit) {
+                const prevHover = document.getElementById(this.lastHoveredUnit + '_hover');
+                if (prevHover) prevHover.setAttribute('visible', 'false');
+                this.lastHoveredUnit = null;
+              }
+              return;
+            }
+          }
+        },
+        
+        onRaycasterIntersectionCleared: function(evt) {
+          // Clear hover when raycaster no longer intersects
+          if (this.lastHoveredUnit) {
+            const hoverRing = document.getElementById(this.lastHoveredUnit + '_hover');
+            if (hoverRing) hoverRing.setAttribute('visible', 'false');
+            this.lastHoveredUnit = null;
+          }
+          
+          // Hide cursor indicator
+          if (GAME_STATE.cursorIndicator) {
+            GAME_STATE.cursorIndicator.setAttribute('visible', 'false');
+          }
+        },
+        
+        onMenuButton: function() {
+          const menuToggle = document.querySelector('[menu-toggle]');
+          if (menuToggle && menuToggle.components['menu-toggle']) {
+            menuToggle.components['menu-toggle'].toggleMenu();
+          }
+        }
+      });
+
+      // ===== EXACT SPARK AND SMOKE COMPONENTS FROM SPACESHOOTER =====
+      
+      // One-time spark burst for bullet impacts (EXACT from spaceshooter.html)
+      AFRAME.registerComponent('impact-spark-burst', {
+        init: function() {
+          this.sparks = [];
+          this.burstDuration = 0.8; // Sparks last 0.8 seconds
+          this.startTime = Date.now();
+          this.setupSparks();
+        },
+        
+        setupSparks: function() {
+          const scene = this.el.sceneEl.object3D;
+          const worldPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(worldPos);
+          
+          // Create 8-12 sparks for impact
+          const sparkCount = 8 + Math.floor(Math.random() * 5);
+          
+          for (let i = 0; i < sparkCount; i++) {
+            // Random directions in hemisphere above impact point
+            const theta = Math.random() * Math.PI * 2; // 0 to 2π
+            const phi = Math.random() * Math.PI * 0.5; // 0 to π/2 (hemisphere)
+            const speed = 1.5 + Math.random() * 2; // 1.5-3.5 speed
+            
+            const velocity = new THREE.Vector3(
+              Math.sin(phi) * Math.cos(theta) * speed,
+              Math.cos(phi) * speed * 0.5, // Bias upward
+              Math.sin(phi) * Math.sin(theta) * speed
+            );
+            
+            const colors = [0xFFFF00, 0xFF8800, 0xFF4400, 0xFF6600];
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            const size = 0.006 + Math.random() * 0.004; // EXACT from spaceshooter: 0.006-0.010
+            
+            const geometry = new THREE.SphereGeometry(size, 6, 4);
+            const material = new THREE.MeshBasicMaterial({
+              color: new THREE.Color(color),
+              transparent: true,
+              opacity: 0.9
+            });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.copy(worldPos);
+            
+            const spark = {
+              mesh: mesh,
+              velocity: velocity,
+              startPosition: worldPos.clone(),
+              age: 0,
+              maxAge: this.burstDuration,
+              startColor: new THREE.Color(color),
+              endColor: new THREE.Color(0x220000),
+              originalOpacity: 0.9
+            };
+            
+            this.sparks.push(spark);
+            scene.add(mesh);
+          }
+        },
+        
+        tick: function(time, timeDelta) {
+          const deltaSeconds = timeDelta / 1000;
+          const elapsed = (Date.now() - this.startTime) / 1000;
+          
+          if (elapsed > this.burstDuration) {
+            // Effect finished, mark for cleanup
+            this.sparks.forEach(spark => {
+              if (spark.mesh) spark.mesh.visible = false;
+            });
+            
+            // Remove component and entity after effect is done
+            if (this.el && this.el.parentNode) {
+              this.el.parentNode.removeChild(this.el);
+            }
+            return;
+          }
+          
+          // Update each spark
+          this.sparks.forEach(spark => {
+            spark.age += deltaSeconds;
+            
+            if (spark.age > spark.maxAge) {
+              spark.mesh.visible = false;
+              return;
+            }
+            
+            // Move spark with physics
+            spark.mesh.position.x += spark.velocity.x * deltaSeconds;
+            spark.mesh.position.y += spark.velocity.y * deltaSeconds;
+            spark.mesh.position.z += spark.velocity.z * deltaSeconds;
+            
+            // Apply gravity
+            spark.velocity.y -= 2.0 * deltaSeconds;
+            
+            // Fade out and change color
+            const progress = spark.age / spark.maxAge;
+            const currentColor = spark.startColor.clone().lerp(spark.endColor, progress);
+            spark.mesh.material.color.copy(currentColor);
+            spark.mesh.material.opacity = spark.originalOpacity * (1 - progress);
+          });
+        },
+        
+        remove: function() {
+          const scene = this.el.sceneEl.object3D;
+          if (this.sparks) {
+            this.sparks.forEach(spark => {
+              if (spark.mesh) {
+                scene.remove(spark.mesh);
+                if (spark.mesh.geometry) spark.mesh.geometry.dispose();
+                if (spark.mesh.material) spark.mesh.material.dispose();
+              }
+            });
+            this.sparks = [];
+          }
+        }
+      });
+
+      // Smoke puff system with shader material (EXACT from spaceshooter.html)
+      AFRAME.registerComponent('threejs-smoke-puffs', {
+        init: function() {
+          this.setupSmokePuffs();
+        },
+        
+        setupSmokePuffs: function() {
+          // Create up to 100 smoke puff planes with random orientations
+          this.puffMeshes = [];
+          
+          for (let i = 0; i < 100; i++) {
+            const geometry = new THREE.PlaneGeometry(1, 1);
+            
+            const material = new THREE.ShaderMaterial({
+              uniforms: {
+                time: { value: 0 },
+                puffOpacity: { value: 0.0 },
+                puffScale: { value: 0.001 }, // Start at 1mm
+                smokeTexture: { value: new THREE.TextureLoader().load('assets/particles/smoke1.png') },
+                lightPosition: { value: new THREE.Vector3(0, 5.3, 12) }, // Player position for lighting
+                lightColor: { value: new THREE.Color(1, 0, 0) } // Default red light
+              },
+              vertexShader: `
+                uniform float time;
+                uniform float puffScale;
+                
+                varying vec2 vUv;
+                varying vec3 vWorldPosition;
+                
+                void main() {
+                  vUv = uv;
+                  vec3 pos = position;
+                  
+                  // Apply scaling directly to the geometry
+                  pos *= puffScale;
+                  
+                  // Gentle movement
+                  pos.x += sin(time * 0.3) * 0.01;
+                  pos.y += cos(time * 0.2) * 0.01;
+                  
+                  vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
+                  vWorldPosition = worldPosition.xyz;
+                  
+                  vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                  gl_Position = projectionMatrix * mvPosition;
+                }
+              `,
+              fragmentShader: `
+                uniform float time;
+                uniform float puffOpacity;
+                uniform sampler2D smokeTexture;
+                uniform vec3 lightPosition;
+                uniform vec3 lightColor;
+                
+                varying vec2 vUv;
+                varying vec3 vWorldPosition;
+                
+                void main() {
+                  // Use the realistic smoke texture
+                  vec4 smokeColor = texture2D(smokeTexture, vUv);
+                  
+                  // Calculate lighting from player
+                  vec3 lightDir = normalize(lightPosition - vWorldPosition);
+                  float lightDistance = length(lightPosition - vWorldPosition);
+                  float attenuation = 1.0 / (1.0 + 0.1 * lightDistance + 0.01 * lightDistance * lightDistance);
+                  
+                  // Base dark smoke color
+                  vec3 baseColor = vec3(0.3, 0.3, 0.3);
+                  
+                  // Add colored lighting influence
+                  vec3 lightInfluence = lightColor * attenuation * 0.8;
+                  vec3 finalColor = baseColor + lightInfluence;
+                  
+                  // Apply to smoke texture
+                  smokeColor.rgb *= finalColor;
+                  
+                  // Apply dynamic opacity
+                  smokeColor.a *= puffOpacity;
+                  
+                  gl_FragColor = smokeColor;
+                }
+              `,
+              transparent: true,
+              blending: THREE.NormalBlending,
+              depthWrite: false,
+              side: THREE.DoubleSide
+            });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            
+            // Random orientation for each puff
+            mesh.rotation.x = Math.random() * Math.PI * 2;
+            mesh.rotation.y = Math.random() * Math.PI * 2;
+            mesh.rotation.z = Math.random() * Math.PI * 2;
+            
+            // Random position offset within small area
+            mesh.position.set(
+              (Math.random() - 0.5) * 0.02, // Within 2cm
+              (Math.random() - 0.5) * 0.01,
+              (Math.random() - 0.5) * 0.02
+            );
+            
+            mesh.visible = false; // Start invisible
+            this.puffMeshes.push(mesh);
+            this.el.object3D.add(mesh);
+          }
+          
+          this.clock = new THREE.Clock();
+        },
+        
+        tick: function() {
+          if (!this.puffMeshes || !this.el.getAttribute('visible')) return;
+          const time = this.clock.getElapsedTime();
+          
+          // Update time uniform for all puff meshes and handle billboarding
+          this.puffMeshes.forEach(mesh => {
+            mesh.material.uniforms.time.value = time;
+            
+            // Billboard behavior - make mesh face the camera
+            if (mesh.userData.isBillboard && mesh.visible) {
+              const camera = document.querySelector('a-scene').camera;
+              if (camera) {
+                mesh.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+              }
+            }
+          });
+        },
+        
+        remove: function() {
+          if (this.puffMeshes) {
+            this.puffMeshes.forEach(mesh => {
+              this.el.object3D.remove(mesh);
+              if (mesh.geometry) mesh.geometry.dispose();
+              if (mesh.material) mesh.material.dispose();
+            });
+            this.puffMeshes = null;
+          }
+        }
+      });
+
+      // Smoke puff controller for continuous damage smoke (EXACT from spaceshooter.html)
+      AFRAME.registerComponent('spark-smoke-controller', {
+        schema: {
+          damageLevel: { type: 'number', default: 1 } // 1=light (75% health), 2=medium (50% health), 3=heavy (25% health)
+        },
+        
+        init: function() {
+          this.timer = 0;
+          this.nextPuffTime = 0.1; // Start quickly
+          this.smokeComponent = null;
+          this.activePuffs = []; // Track individual puffs
+          this.sparkParticles = []; // Track spark particles
+          
+          // Set max puffs and spawn rate based on damage level
+          const level = this.data.damageLevel;
+          this.maxConcurrentPuffs = level === 1 ? 20 : (level === 2 ? 50 : 80); // Light/Medium/Heavy
+          this.sparkCount = level === 1 ? 5 : (level === 2 ? 10 : 15); // More sparks based on damage
+          this.puffSpawnRate = level === 1 ? 0.3 : (level === 2 ? 0.15 : 0.08); // Faster spawn for higher damage
+          
+          this.setupSparks();
+        },
+        
+        setupSparks: function() {
+          const scene = this.el.sceneEl.object3D;
+          const level = this.data.damageLevel;
+          
+          // Get initial world position
+          const worldPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(worldPos);
+          
+          // Create spark particles that loop
+          for (let i = 0; i < this.sparkCount; i++) {
+            const velocity = new THREE.Vector3(
+              (Math.random() - 0.5) * 2,
+              Math.random() * 1.5 + 0.5,
+              (Math.random() - 0.5) * 2
+            );
+            
+            const colors = [0xFFFF00, 0xFF8800, 0xFF4400];
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            const size = 0.006 + Math.random() * 0.004; // EXACT from spaceshooter: 0.006-0.010
+            
+            const geometry = new THREE.SphereGeometry(size, 6, 4);
+            const material = new THREE.MeshBasicMaterial({
+              color: new THREE.Color(color),
+              transparent: true,
+              opacity: 1.0
+            });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.copy(worldPos); // Start at world position
+            mesh.visible = true; // Make visible immediately
+            
+            const spark = {
+              mesh: mesh,
+              velocity: velocity,
+              age: Math.random() * 0.5, // Stagger start times
+              maxAge: 0.8 + Math.random() * 0.4,
+              startColor: new THREE.Color(color),
+              endColor: new THREE.Color(0x440000),
+              originalOpacity: 1.0,
+              size: size
+            };
+            
+            this.sparkParticles.push(spark);
+            scene.add(mesh);
+          }
+        },
+        
+        tick: function(time, timeDelta) {
+          if (!this.el.getAttribute('visible')) return;
+          
+          if (!this.smokeComponent) {
+            this.smokeComponent = this.el.components['threejs-smoke-puffs'];
+            if (!this.smokeComponent) {
+              return;
+            }
+          }
+          
+          const deltaSeconds = timeDelta / 1000;
+          this.timer += deltaSeconds;
+          
+          // Create new puffs based on damage level (faster for higher damage)
+          if (this.timer >= this.nextPuffTime && this.activePuffs.length < this.maxConcurrentPuffs) {
+            this.timer = 0;
+            this.nextPuffTime = this.puffSpawnRate + Math.random() * 0.1; // Use variable spawn rate
+            
+            // Create new smoke puff
+            this.createPuff();
+          }
+          
+          // Update existing puffs
+          this.updatePuffs(deltaSeconds);
+          
+          // Update spark particles
+          this.updateSparks(deltaSeconds);
+        },
+        
+        updateSparks: function(deltaSeconds) {
+          if (!this.sparkParticles || this.sparkParticles.length === 0) return;
+          
+          // Get world position of parent
+          const worldPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(worldPos);
+          
+          this.sparkParticles.forEach(spark => {
+            spark.age += deltaSeconds;
+            
+            // Reset spark when it expires
+            if (spark.age > spark.maxAge) {
+              spark.age = 0;
+              spark.mesh.position.copy(worldPos);
+              spark.mesh.material.opacity = spark.originalOpacity;
+              spark.mesh.material.color.copy(spark.startColor);
+              spark.mesh.visible = true;
+              
+              // Reset velocity
+              spark.velocity.set(
+                (Math.random() - 0.5) * 2,
+                Math.random() * 1.5 + 0.5,
+                (Math.random() - 0.5) * 2
+              );
+              return;
+            }
+            
+            // Move spark with velocity and gravity
+            spark.mesh.position.x += spark.velocity.x * deltaSeconds;
+            spark.mesh.position.y += spark.velocity.y * deltaSeconds;
+            spark.mesh.position.z += spark.velocity.z * deltaSeconds;
+            
+            // Apply gravity
+            spark.velocity.y -= 3.0 * deltaSeconds;
+            
+            // Fade and color transition
+            const progress = spark.age / spark.maxAge;
+            const currentColor = spark.startColor.clone().lerp(spark.endColor, progress);
+            spark.mesh.material.color.copy(currentColor);
+            spark.mesh.material.opacity = spark.originalOpacity * (1 - progress);
+            spark.mesh.visible = spark.mesh.material.opacity > 0.1;
+          });
+        },
+        
+        createPuff: function() {
+          // Find an available mesh (not currently visible)
+          const availableMesh = this.smokeComponent.puffMeshes.find(mesh => !mesh.visible);
+          
+          if (!availableMesh) {
+            return;
+          }
+          
+          const puff = {
+            age: 0,
+            maxAge: 1.5 + Math.random() * 1, // 1.5-2.5 second lifetime
+            startSize: 0.001, // Start at 1mm
+            endSize: 0.15 + Math.random() * 0.15, // End at 15-30cm
+            opacity: 0.2 + Math.random() * 0.2, // Peak at 0.2-0.4 opacity
+            mesh: availableMesh,
+            startTime: performance.now(),
+            position: {
+              x: (Math.random() - 0.5) * 0.2, // 20cm spawn area
+              y: (Math.random() - 0.5) * 0.2,
+              z: (Math.random() - 0.5) * 0.2
+            },
+            velocity: {
+              x: (Math.random() - 0.5) * 0.24, // More spread
+              y: 0.08 + Math.random() * 0.16,  // Upward movement
+              z: (Math.random() - 0.5) * 0.24
+            },
+            rotationVelocity: {
+              x: (Math.random() - 0.5) * 0.1,
+              y: (Math.random() - 0.5) * 0.1,
+              z: (Math.random() - 0.5) * 0.1
+            }
+          };
+          
+          // Give mesh random initial orientation
+          puff.mesh.rotation.x = Math.random() * Math.PI * 2;
+          puff.mesh.rotation.y = Math.random() * Math.PI * 2;
+          puff.mesh.rotation.z = Math.random() * Math.PI * 2;
+          
+          // Add billboard component
+          puff.mesh.userData.isBillboard = true;
+          
+          // Start from center
+          puff.mesh.position.set(
+            puff.position.x,
+            puff.position.y,
+            puff.position.z
+          );
+          
+          this.activePuffs.push(puff);
+        },
+        
+        updatePuffs: function(deltaSeconds) {
+          if (!this.smokeComponent || !this.smokeComponent.puffMeshes) return;
+          
+          // Remove expired puffs
+          this.activePuffs = this.activePuffs.filter(puff => {
+            puff.age += deltaSeconds;
+            
+            if (puff.age >= puff.maxAge) {
+              puff.mesh.visible = false;
+              return false;
+            }
+            return true;
+          });
+          
+          // Update each active puff
+          this.activePuffs.forEach(puff => {
+            const progress = puff.age / puff.maxAge;
+            
+            // Scale grows continuously
+            const currentScale = puff.startSize + (puff.endSize - puff.startSize) * progress;
+            
+            // Opacity has 3 phases
+            let currentOpacity;
+            if (progress < 0.3) {
+              currentOpacity = puff.opacity * (progress / 0.3);
+            } else if (progress > 0.7) {
+              currentOpacity = puff.opacity * (1 - (progress - 0.7) / 0.3);
+            } else {
+              currentOpacity = puff.opacity;
+            }
+            
+            // Apply scale and opacity
+            puff.mesh.material.uniforms.puffScale.value = currentScale;
+            puff.mesh.material.uniforms.puffOpacity.value = currentOpacity;
+            puff.mesh.visible = currentOpacity > 0.01;
+            
+            // Gentle movement
+            puff.position.x += puff.velocity.x * deltaSeconds;
+            puff.position.y += puff.velocity.y * deltaSeconds;
+            puff.position.z += puff.velocity.z * deltaSeconds;
+            
+            // Air resistance
+            const damping = 0.85;
+            puff.velocity.x *= Math.pow(damping, deltaSeconds);
+            puff.velocity.y *= Math.pow(damping, deltaSeconds);
+            puff.velocity.z *= Math.pow(damping, deltaSeconds);
+            
+            // Gentle rotation
+            puff.mesh.rotation.x += puff.rotationVelocity.x * deltaSeconds;
+            puff.mesh.rotation.y += puff.rotationVelocity.y * deltaSeconds;
+            puff.mesh.rotation.z += puff.rotationVelocity.z * deltaSeconds;
+            
+            // Apply position
+            puff.mesh.position.set(
+              puff.position.x,
+              puff.position.y,
+              puff.position.z
+            );
+          });
+        },
+        
+        remove: function() {
+          this.activePuffs = [];
+          if (this.smokeComponent && this.smokeComponent.puffMeshes) {
+            this.smokeComponent.puffMeshes.forEach(mesh => {
+              mesh.visible = false;
+            });
+          }
+          
+          // Clean up spark particles
+          const scene = this.el.sceneEl.object3D;
+          if (this.sparkParticles) {
+            this.sparkParticles.forEach(spark => {
+              if (spark.mesh) {
+                scene.remove(spark.mesh);
+                if (spark.mesh.geometry) spark.mesh.geometry.dispose();
+                if (spark.mesh.material) spark.mesh.material.dispose();
+              }
+            });
+            this.sparkParticles = [];
+          }
+        }
+      });
+
+      // Impact smoke controller for one-time smoke bursts (EXACT from spaceshooter.html)
+      AFRAME.registerComponent('impact-smoke-controller', {
+        init: function() {
+          this.smokeComponent = null;
+          this.activePuffs = [];
+          this.initialized = false;
+          this.impactMeshes = []; // Separate mesh pool for impact effects
+          
+          // Initialize after short delay
+          setTimeout(() => {
+            this.initializeImpactSmoke();
+          }, 100);
+        },
+        
+        initializeImpactSmoke: function() {
+          // Create dedicated mesh pool for impact effects
+          this.createImpactMeshes();
+          
+          // Create 2-4 puffs immediately
+          const puffCount = 2 + Math.floor(Math.random() * 3);
+          
+          for (let i = 0; i < puffCount; i++) {
+            setTimeout(() => {
+              this.createImpactPuff();
+            }, i * 50);
+          }
+          
+          this.initialized = true;
+        },
+        
+        createImpactMeshes: function() {
+          this.impactMeshes = [];
+          
+          for (let i = 0; i < 20; i++) {
+            const geometry = new THREE.PlaneGeometry(1, 1);
+            
+            const material = new THREE.ShaderMaterial({
+              uniforms: {
+                time: { value: 0 },
+                puffOpacity: { value: 0.0 },
+                puffScale: { value: 0.001 },
+                smokeTexture: { value: new THREE.TextureLoader().load('assets/particles/smoke1.png') },
+                lightPosition: { value: new THREE.Vector3(0, 5.3, 12) },
+                lightColor: { value: new THREE.Color(1, 0, 0) }
+              },
+              vertexShader: `
+                uniform float time;
+                uniform float puffScale;
+                
+                varying vec2 vUv;
+                varying vec3 vWorldPosition;
+                
+                void main() {
+                  vUv = uv;
+                  vec3 pos = position;
+                  pos *= puffScale;
+                  pos.x += sin(time * 0.3) * 0.01;
+                  pos.y += cos(time * 0.2) * 0.01;
+                  
+                  vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
+                  vWorldPosition = worldPosition.xyz;
+                  
+                  vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                  gl_Position = projectionMatrix * mvPosition;
+                }
+              `,
+              fragmentShader: `
+                uniform float time;
+                uniform float puffOpacity;
+                uniform sampler2D smokeTexture;
+                uniform vec3 lightPosition;
+                uniform vec3 lightColor;
+                
+                varying vec2 vUv;
+                varying vec3 vWorldPosition;
+                
+                void main() {
+                  vec4 smokeColor = texture2D(smokeTexture, vUv);
+                  vec3 baseColor = vec3(0.5, 0.5, 0.5);
+                  smokeColor.rgb *= baseColor;
+                  smokeColor.a *= puffOpacity;
+                  gl_FragColor = smokeColor;
+                }
+              `,
+              transparent: true,
+              blending: THREE.NormalBlending,
+              depthWrite: false,
+              side: THREE.DoubleSide
+            });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.userData.isBillboard = true;
+            mesh.visible = false;
+            
+            this.el.sceneEl.object3D.add(mesh);
+            this.impactMeshes.push(mesh);
+          }
+        },
+        
+        createImpactPuff: function() {
+          if (!this.impactMeshes || this.impactMeshes.length === 0) return;
+          
+          const availableMesh = this.impactMeshes.find(mesh => !mesh.visible);
+          if (!availableMesh) return;
+          
+          const worldPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(worldPos);
+          
+          const puff = {
+            age: 0,
+            maxAge: 1.5 + Math.random() * 0.5,
+            startSize: 0.0125,
+            endSize: 0.1 + Math.random() * 0.075,
+            opacity: 0.05625,
+            mesh: availableMesh,
+            startTime: performance.now(),
+            position: {
+              x: (Math.random() - 0.5) * 0.05,
+              y: (Math.random() - 0.5) * 0.05,
+              z: (Math.random() - 0.5) * 0.05
+            }
+          };
+          
+          availableMesh.position.set(
+            worldPos.x + puff.position.x,
+            worldPos.y + puff.position.y,
+            worldPos.z + puff.position.z
+          );
+          
+          availableMesh.visible = true;
+          
+          if (availableMesh.material && availableMesh.material.uniforms) {
+            availableMesh.material.uniforms.puffOpacity.value = 0.05625;
+            availableMesh.material.uniforms.puffScale.value = puff.startSize;
+          }
+          
+          this.activePuffs.push(puff);
+        },
+        
+        tick: function(time, timeDelta) {
+          if (!this.initialized || this.impactMeshes.length === 0) return;
+          
+          const deltaSeconds = timeDelta / 1000;
+          const elapsedTime = time / 1000;
+          
+          // Update time uniform and billboarding
+          this.impactMeshes.forEach(mesh => {
+            mesh.material.uniforms.time.value = elapsedTime;
+            
+            if (mesh.userData.isBillboard && mesh.visible) {
+              const camera = document.querySelector('a-scene').camera;
+              if (camera) {
+                mesh.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+              }
+            }
+          });
+          
+          // Update puffs
+          this.activePuffs = this.activePuffs.filter(puff => {
+            puff.age += deltaSeconds;
+            
+            if (puff.age >= puff.maxAge) {
+              puff.mesh.visible = false;
+              return false;
+            }
+            
+            const progress = puff.age / puff.maxAge;
+            const currentScale = puff.startSize + (puff.endSize - puff.startSize) * progress;
+            
+            let currentOpacity;
+            if (progress < 0.2) {
+              currentOpacity = puff.opacity * (progress / 0.2);
+            } else if (progress > 0.6) {
+              currentOpacity = puff.opacity * (1 - (progress - 0.6) / 0.4);
+            } else {
+              currentOpacity = puff.opacity;
+            }
+            
+            if (puff.mesh.material && puff.mesh.material.uniforms) {
+              puff.mesh.material.uniforms.puffOpacity.value = currentOpacity;
+              puff.mesh.material.uniforms.puffScale.value = currentScale;
+            }
+            
+            return true;
+          });
+        },
+        
+        remove: function() {
+          this.activePuffs.forEach(puff => {
+            if (puff.mesh) {
+              puff.mesh.visible = false;
+            }
+          });
+          this.activePuffs = [];
+          
+          this.impactMeshes.forEach(mesh => {
+            this.el.sceneEl.object3D.remove(mesh);
+            mesh.geometry.dispose();
+            mesh.material.dispose();
+          });
+          this.impactMeshes = [];
+        }
+      });
+
+      // Unit component
+      AFRAME.registerComponent('rts-unit', {
+        schema: {
+          unitId: { type: 'string' },
+          ownerId: { type: 'string' },
+          health: { type: 'number', default: 100 },
+          maxHealth: { type: 'number', default: 100 },
+          damage: { type: 'number', default: 10 },
+          fireRate: { type: 'number', default: 1000 },
+          range: { type: 'number', default: 15 },
+          speed: { type: 'number', default: 3 },
+          visionRange: { type: 'number', default: 20 }
+        },
+        
+        init: function() {
+          const data = this.data;
+          
+          const unitData = {
+            id: data.unitId,
+            ownerId: data.ownerId,
+            el: this.el,
+            health: data.health,
+            maxHealth: data.maxHealth,
+            damage: data.damage,
+            fireRate: data.fireRate,
+            range: data.range,
+            speed: data.speed,
+            visionRange: data.visionRange,
+            state: 'idle',
+            targetPos: null,
+            targetUnit: null,
+            lastFireTime: 0,
+            position: this.el.object3D.position,
+            path: [],
+            pathIndex: 0,
+            isFacingTarget: false,
+            rotationStartTime: 0,
+            lastKnownEnemyPos: null, // For attacking enemies that go out of vision
+            originalMoveOrder: null // For resuming movement after combat
+          };
+          
+          GAME_STATE.units.set(data.unitId, unitData);
+          
+          this.createHealthBar();
+          this.createVisionCircle();
+        },
+        
+        createHealthBar: function() {
+          // Create circular health bar using a torus (ring) - smooth circle, very thin
+          const healthBg = document.createElement('a-torus');
+          healthBg.setAttribute('radius', '0.6');
+          healthBg.setAttribute('radius-tubular', '0.015'); // Very thin
+          healthBg.setAttribute('segments-tubular', '32'); // Smooth circle
+          healthBg.setAttribute('arc', '360');
+          healthBg.setAttribute('position', '0 0 0');
+          healthBg.setAttribute('rotation', '-90 0 0');
+          healthBg.setAttribute('color', '#ff0000');
+          healthBg.setAttribute('material', 'opacity: 0.5; transparent: true');
+          this.el.appendChild(healthBg);
+          
+          const healthFg = document.createElement('a-torus');
+          healthFg.setAttribute('id', this.data.unitId + '_health');
+          healthFg.setAttribute('radius', '0.6');
+          healthFg.setAttribute('radius-tubular', '0.02'); // Very thin
+          healthFg.setAttribute('segments-tubular', '32'); // Smooth circle
+          healthFg.setAttribute('arc', '360');
+          healthFg.setAttribute('position', '0 0.01 0'); // Slightly above background
+          healthFg.setAttribute('rotation', '-90 0 0');
+          healthFg.setAttribute('color', '#00ff00');
+          healthFg.setAttribute('material', 'opacity: 0.8; transparent: true');
+          this.el.appendChild(healthFg);
+          
+          this.healthBar = healthFg;
+        },
+        
+        createVisionCircle: function() {
+          const circle = document.createElement('a-ring');
+          circle.setAttribute('radius-inner', this.data.visionRange - 0.3);
+          circle.setAttribute('radius-outer', this.data.visionRange);
+          circle.setAttribute('position', '0 0.05 0');
+          circle.setAttribute('rotation', '-90 0 0');
+          const playerColor = GAME_STATE.players.find(p => p.id === this.data.ownerId).color;
+          circle.setAttribute('material', `color: ${playerColor}; opacity: 0.3; transparent: true; side: double`);
+          this.el.appendChild(circle);
+        },
+        
+        tick: function(time, deltaTime) {
+          if (!GAME_STATE.gameStarted) return;
+          
+          const unit = GAME_STATE.units.get(this.data.unitId);
+          if (!unit || unit.health <= 0 || unit.destroyed) return;
+          
+          const dt = Math.min(deltaTime / 1000, 0.05); // Cap at 50ms
+          
+          // Check for enemies in vision range while moving
+          if (unit.state === 'moving') {
+            // Only auto-engage if NOT a player-commanded move
+            if (!unit.playerCommandedMove) {
+              const enemyInRange = this.findNearestEnemyInVisionRange(unit);
+              if (enemyInRange) {
+                // Save original move order before engaging
+                unit.originalMoveOrder = { 
+                  x: unit.targetPos.x, 
+                  y: unit.targetPos.y, 
+                  z: unit.targetPos.z 
+                };
+                
+                // Stop moving and engage
+                unit.state = 'attacking';
+                unit.targetUnit = enemyInRange;
+                unit.targetPos = null;
+                unit.path = [];
+                unit.isFacingTarget = false;
+              } else if (unit.targetPos) {
+                this.moveToTarget(unit, dt);
+              }
+            } else {
+              // Player commanded - just move, don't auto-engage
+              if (unit.targetPos) {
+                this.moveToTarget(unit, dt);
+                // Check if reached destination (check again as moveToTarget might null it)
+                if (unit.targetPos) {
+                  const pos = unit.el.object3D.position;
+                  const dx = unit.targetPos.x - pos.x;
+                  const dz = unit.targetPos.z - pos.z;
+                  const distToTarget = Math.sqrt(dx * dx + dz * dz);
+                  if (distToTarget < 0.5) {
+                    // Reached destination - clear player command flag
+                    unit.playerCommandedMove = false;
+                    unit.state = 'idle';
+                    unit.targetPos = null;
+                  }
+                }
+              }
+            }
+          } else if (unit.state === 'attacking' && unit.targetUnit) {
+            this.attackTarget(unit, time, dt);
+          } else if (unit.state === 'idle') {
+          // Check if there's an original move order to resume
+          if (unit.originalMoveOrder) {
+            unit.state = 'moving';
+            unit.targetPos = unit.originalMoveOrder;
+            unit.originalMoveOrder = null;
+            unit.path = [];
+            unit.pathIndex = 0;
+          } else {
+              // Auto-attack enemies in range
+              const enemy = this.findNearestEnemyInRange(unit);
+              if (enemy) {
+                unit.state = 'attacking';
+                unit.targetUnit = enemy;
+                unit.isFacingTarget = false;
+              }
+            }
+          }
+          
+          // Update health bar
+          this.updateHealthBar(unit);
+          
+          // Update fog of war visibility
+          this.updateFogOfWar(unit);
+          
+          if (unit.heading) {
+            this.updateRotation(unit);
+          }
+        },
+        
+        moveToTarget: function(unit, dt) {
+          const pos = this.el.object3D.position;
+          
+          // If no path or reached end of path, calculate new path
+          if (!unit.path || unit.path.length === 0 || unit.pathIndex >= unit.path.length) {
+            if (!unit.targetPos) {
+              unit.state = 'idle';
+              return;
+            }
+            
+            // Calculate path using three-pathfinding
+            let path = findPath(pos.x, pos.z, unit.targetPos.x, unit.targetPos.z, true);
+            
+            // If no path found, try to find nearest reachable position (only once per destination)
+            if ((!path || path.length === 0) && !unit.retriedPathfinding) {
+              unit.retriedPathfinding = true;
+              const reachablePos = findNearestReachablePosition(pos.x, pos.z, unit.targetPos.x, unit.targetPos.z, 20);
+              if (reachablePos) {
+                unit.targetPos.x = reachablePos.x;
+                unit.targetPos.z = reachablePos.z;
+                path = findPath(pos.x, pos.z, reachablePos.x, reachablePos.z, true);
+              }
+            }
+            
+            if (!path || path.length === 0) {
+              unit.state = 'idle';
+              unit.targetPos = null;
+              unit.retriedPathfinding = false;
+              return;
+            }
+            
+            unit.path = path;
+            unit.pathIndex = 0;
+            unit.retriedPathfinding = false;
+          }
+          
+          // Get current waypoint
+          const waypoint = unit.path[unit.pathIndex];
+          const dx = waypoint.x - pos.x;
+          const dz = waypoint.z - pos.z;
+          const distance = Math.sqrt(dx * dx + dz * dz);
+          
+          // Reached waypoint, move to next
+          if (distance < 1) {
+            unit.pathIndex++;
+            
+            // Reached final destination
+            if (unit.pathIndex >= unit.path.length) {
+              unit.state = 'idle';
+              unit.targetPos = null;
+              unit.path = [];
+              unit.pathIndex = 0;
+              return;
+            }
+            return;
+          }
+          
+          // Move towards waypoint
+          const moveX = (dx / distance) * unit.speed * dt;
+          const moveZ = (dz / distance) * unit.speed * dt;
+          
+          pos.x += moveX;
+          pos.z += moveZ;
+          
+          // Update heading for rotation
+          unit.heading = { x: dx, z: dz };
+        },
+        
+        visualizePath: function(path, unitId) {
+          // Remove old path visualization for this unit
+          const oldPath = document.getElementById(`path_${unitId}`);
+          if (oldPath) oldPath.remove();
+          
+          if (!path || path.length === 0) return;
+          
+          // Create path visualization container
+          const pathContainer = document.createElement('a-entity');
+          pathContainer.setAttribute('id', `path_${unitId}`);
+          
+          // Draw line through waypoints
+          const points = path.map(p => `${p.x} 0.5 ${p.z}`).join(', ');
+          const pathLine = document.createElement('a-entity');
+          pathLine.setAttribute('line', `start: ${points.split(', ')[0]}; end: ${points.split(', ')[points.split(', ').length - 1]}; color: yellow`);
+          pathLine.setAttribute('line__path', {
+            path: points,
+            color: '#ffff00',
+            opacity: 0.8,
+            lineWidth: 3
+          });
+          
+          // Add spheres at waypoints
+          path.forEach((waypoint, index) => {
+            const marker = document.createElement('a-sphere');
+            marker.setAttribute('position', `${waypoint.x} 0.5 ${waypoint.z}`);
+            marker.setAttribute('radius', '0.3');
+            marker.setAttribute('color', index === 0 ? '#00ff00' : (index === path.length - 1 ? '#ff0000' : '#ffff00'));
+            marker.setAttribute('opacity', '0.6');
+            pathContainer.appendChild(marker);
+          });
+          
+          const effectsContainer = document.getElementById('effectsContainer');
+          effectsContainer.appendChild(pathContainer);
+          
+          // Remove visualization after 5 seconds
+          setTimeout(() => {
+            const pathViz = document.getElementById(`path_${unitId}`);
+            if (pathViz) pathViz.remove();
+          }, 5000);
+        },
+        
+        attackTarget: function(unit, time, dt) {
+          if (!unit.targetUnit || unit.targetUnit.health <= 0) {
+            // Target destroyed, go back to original move order or idle
+            if (unit.originalMoveOrder) {
+              unit.state = 'idle'; // Will be picked up in next tick to resume movement
+            } else {
+              unit.state = 'idle';
+            }
+            unit.targetUnit = null;
+            unit.lastKnownEnemyPos = null;
+            unit.isFacingTarget = false;
+            return;
+          }
+          
+          const pos = this.el.object3D.position;
+          let targetPos = unit.targetUnit.el.object3D.position;
+          
+          // Update last known position if we can see the target
+          const dx = targetPos.x - pos.x;
+          const dz = targetPos.z - pos.z;
+          const distance = Math.sqrt(dx * dx + dz * dz);
+          
+          if (distance <= unit.visionRange) {
+            // Can see target - update last known position
+            unit.lastKnownEnemyPos = { x: targetPos.x, y: 0.75, z: targetPos.z };
+          } else if (unit.lastKnownEnemyPos) {
+            // Can't see target but have last known position - move there
+            targetPos = unit.lastKnownEnemyPos;
+            
+            // If we reach the last known position and target isn't there, give up
+            const distToLastKnown = Math.sqrt(
+              Math.pow(targetPos.x - pos.x, 2) + 
+              Math.pow(targetPos.z - pos.z, 2)
+            );
+            
+            if (distToLastKnown < 2) {
+              // Reached last known position but target not found
+              if (unit.originalMoveOrder) {
+                unit.state = 'idle'; // Will resume original order
+              } else {
+                unit.state = 'idle';
+              }
+              unit.targetUnit = null;
+              unit.lastKnownEnemyPos = null;
+              unit.isFacingTarget = false;
+              return;
+            }
+          } else {
+            // No vision and no last known position - can't attack
+            if (unit.originalMoveOrder) {
+              unit.state = 'idle';
+            } else {
+              unit.state = 'idle';
+            }
+            unit.targetUnit = null;
+            unit.isFacingTarget = false;
+            return;
+          }
+          
+          // Move closer if out of attack range
+          if (distance > unit.range) {
+            // Update targetPos to follow enemy or move to last known position
+            unit.targetPos = { x: targetPos.x, y: 0.75, z: targetPos.z };
+            unit.path = []; // Clear path to recalculate
+            this.moveToTarget(unit, dt);
+            unit.heading = { x: dx, z: dz };
+            unit.isFacingTarget = false;
+            return;
+          }
+          
+          // In range - check if we can actually see the target to fire
+          if (distance > unit.visionRange) {
+            // In range but can't see - keep moving closer
+            unit.targetPos = { x: targetPos.x, y: 0.75, z: targetPos.z };
+            unit.path = [];
+            this.moveToTarget(unit, dt);
+            unit.heading = { x: dx, z: dz };
+            unit.isFacingTarget = false;
+            return;
+          }
+          
+          // Stop moving, we're in range and can see target
+          unit.targetPos = null;
+          unit.path = [];
+          unit.pathIndex = 0;
+          
+          // Start rotating toward target
+          unit.heading = { x: dx, z: dz };
+          
+          // Check if unit is facing target (within 15 degrees)
+          if (!unit.isFacingTarget) {
+            const targetAngle = Math.atan2(dx, dz);
+            const currentAngle = this.el.object3D.rotation.y;
+            let angleDiff = Math.abs(targetAngle - currentAngle);
+            
+            // Normalize angle difference to 0-PI range
+            if (angleDiff > Math.PI) {
+              angleDiff = 2 * Math.PI - angleDiff;
+            }
+            
+            if (angleDiff < 0.26) { // ~15 degrees in radians
+              unit.isFacingTarget = true;
+              unit.rotationStartTime = time;
+            }
+            return; // Don't fire while rotating
+          }
+          
+          // Wait a bit after rotation completes before firing
+          if (time - unit.rotationStartTime < 200) {
+            return;
+          }
+          
+          // Fire if cooldown is ready
+          if (time - unit.lastFireTime > unit.fireRate) {
+            this.fireAtTarget(unit, unit.targetUnit);
+            unit.lastFireTime = time;
+          }
+        },
+        
+        fireAtTarget: function(unit, target) {
+          target.health -= unit.damage;
+          
+          this.createProjectile(unit, target);
+          
+          // Add or update damage effects based on health percentage
+          if (target.health > 0) {
+            const healthPercent = target.health / target.maxHealth;
+            let damageLevel = 0;
+            
+            // Determine damage level: 1=light (75% health), 2=medium (50% health), 3=heavy (25% health)
+            if (healthPercent <= 0.25) {
+              damageLevel = 3; // Heavy damage
+            } else if (healthPercent <= 0.5) {
+              damageLevel = 2; // Medium damage
+            } else if (healthPercent <= 0.75) {
+              damageLevel = 1; // Light damage
+            }
+            
+            // DISABLED: Damage smoke effects causing loading interruptions
+            // if (damageLevel > 0) {
+            //   if (!target.damageEffect) {
+            //     const damageEffect = document.createElement('a-entity');
+            //     damageEffect.setAttribute('position', '0 1 0');
+            //     damageEffect.setAttribute('spark-smoke-controller', `damageLevel: ${damageLevel}`);
+            //     damageEffect.setAttribute('threejs-smoke-puffs', '');
+            //     target.el.appendChild(damageEffect);
+            //     target.damageEffect = damageEffect;
+            //     target.currentDamageLevel = damageLevel;
+            //   } else if (target.currentDamageLevel !== damageLevel) {
+            //     target.currentDamageLevel = damageLevel;
+            //     const oldEffect = target.damageEffect;
+            //     oldEffect.remove();
+            //     const damageEffect = document.createElement('a-entity');
+            //     damageEffect.setAttribute('position', '0 1 0');
+            //     damageEffect.setAttribute('spark-smoke-controller', `damageLevel: ${damageLevel}`);
+            //     damageEffect.setAttribute('threejs-smoke-puffs', '');
+            //     target.el.appendChild(damageEffect);
+            //     target.damageEffect = damageEffect;
+            //   }
+            // }
+          }
+          
+          if (GAME_STATE.isMultiplayer) {
+            broadcastData({
+              type: 'unit-damage',
+              targetId: target.id,
+              damage: unit.damage,
+              attackerId: unit.id
+            });
+          }
+          
+          if (target.health <= 0) {
+            this.destroyUnit(target);
+          }
+        },
+        
+        createProjectile: function(unit, target) {
+          const start = this.el.object3D.position;
+          const end = target.el.object3D.position;
+          
+          const projectile = document.createElement('a-sphere');
+          projectile.setAttribute('radius', '0.3');
+          projectile.setAttribute('color', GAME_STATE.players.find(p => p.id === unit.ownerId).color);
+          projectile.setAttribute('material', 'emissive: #ffffff; emissiveIntensity: 1');
+          projectile.setAttribute('position', `${start.x} ${start.y} ${start.z}`);
+          
+          const container = document.getElementById('effectsContainer');
+          container.appendChild(projectile);
+          
+          projectile.setAttribute('animation', `property: position; to: ${end.x} ${end.y} ${end.z}; dur: 200; easing: linear`);
+          
+          // Play firing sound
+          const fireSound = document.getElementById('fire-sound');
+          if (fireSound && fireSound.components.sound) {
+            fireSound.object3D.position.copy(start);
+            fireSound.components.sound.stopSound();
+            fireSound.components.sound.playSound();
+          }
+          
+          setTimeout(() => {
+            projectile.remove();
+            
+            // Create spark burst at impact
+            console.log('💥 Creating spark burst at impact');
+            const sparkEntity = document.createElement('a-entity');
+            sparkEntity.setAttribute('position', `${end.x} ${end.y} ${end.z}`);
+            sparkEntity.setAttribute('impact-spark-burst', '');
+            container.appendChild(sparkEntity);
+            
+            // DISABLED: Impact smoke causing loading interruptions
+            // const smokeEntity = document.createElement('a-entity');
+            // smokeEntity.setAttribute('position', `${end.x} ${end.y} ${end.z}`);
+            // smokeEntity.setAttribute('impact-smoke-controller', '');
+            // smokeEntity.setAttribute('threejs-smoke-puffs', '');
+            // container.appendChild(smokeEntity);
+            
+            // Play impact sound
+            const impactSound = document.getElementById('impact-sound');
+            if (impactSound && impactSound.components.sound) {
+              impactSound.object3D.position.set(end.x, end.y, end.z);
+              impactSound.components.sound.stopSound();
+              impactSound.components.sound.playSound();
+            }
+            
+            // Clean up spark effects
+            setTimeout(() => {
+              if (sparkEntity.parentNode) sparkEntity.remove();
+            }, 3000);
+          }, 200);
+        },
+        
+        destroyUnit: function(unit) {
+          if (unit.el && unit.el.parentNode) {
+            // Mark as destroyed FIRST to stop tick immediately
+            unit.destroyed = true;
+            unit.health = 0;
+            
+            // Remove from selection
+            GAME_STATE.selectedUnits.delete(unit.id);
+            
+            // Clear any stale status text
+            if (GAME_STATE.selectedUnits.size === 0) {
+              updateGameStatus('Ready');
+            }
+            
+            // Create explosion effect
+            const pos = unit.el.object3D.position;
+            const explosion = document.createElement('a-entity');
+            explosion.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
+            
+            // Particle explosion
+            for (let i = 0; i < 8; i++) {
+              const particle = document.createElement('a-sphere');
+              particle.setAttribute('radius', '0.2');
+              particle.setAttribute('color', '#ff6600');
+              const angle = (i / 8) * Math.PI * 2;
+              const dx = Math.cos(angle) * 3;
+              const dz = Math.sin(angle) * 3;
+              particle.setAttribute('animation', `property: position; to: ${pos.x + dx} ${pos.y + 2} ${pos.z + dz}; dur: 500; easing: easeOutQuad`);
+              particle.setAttribute('animation__fade', 'property: opacity; to: 0; dur: 500');
+              explosion.appendChild(particle);
+            }
+            
+            // Smoke effect
+            const smoke = document.createElement('a-sphere');
+            smoke.setAttribute('radius', '1');
+            smoke.setAttribute('color', '#333333');
+            smoke.setAttribute('opacity', '0.6');
+            smoke.setAttribute('animation', 'property: scale; to: 3 3 3; dur: 800; easing: easeOutQuad');
+            smoke.setAttribute('animation__fade', 'property: opacity; to: 0; dur: 800');
+            explosion.appendChild(smoke);
+            
+            const container = document.getElementById('effectsContainer');
+            container.appendChild(explosion);
+            setTimeout(() => explosion.remove(), 1000);
+            
+            // Play explosion sound
+            const explosionSound = document.getElementById('explosion-sound');
+            if (explosionSound && explosionSound.components.sound) {
+              explosionSound.object3D.position.copy(unit.el.object3D.position);
+              explosionSound.components.sound.stopSound();
+              explosionSound.components.sound.playSound();
+            }
+            
+            // Use SAME method as fog of war - traverse and hide meshes
+            unit.el.object3D.traverse(obj => {
+              if (obj.isMesh) {
+                obj.visible = false;
+              }
+            });
+            unit.el.classList.add('fog-hidden');
+            
+            // Remove from game state
+            GAME_STATE.units.delete(unit.id);
+            
+            // Update selection UI
+            updateSelectionUI();
+            
+            // Check win condition
+            checkWinCondition();
+          }
+        },
+        
+        findNearestEnemy: function(unit) {
+          let nearest = null;
+          let minDist = Infinity;
+          
+          const myPlayer = GAME_STATE.players.find(p => p.id === unit.ownerId);
+          
+          GAME_STATE.units.forEach(other => {
+            if (other.health <= 0) return;
+            const otherPlayer = GAME_STATE.players.find(p => p.id === other.ownerId);
+            
+            // Check if enemy (different team)
+            if (otherPlayer.team === myPlayer.team) return;
+            
+            const dx = other.el.object3D.position.x - unit.el.object3D.position.x;
+            const dz = other.el.object3D.position.z - unit.el.object3D.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            
+            if (dist < unit.visionRange && dist < minDist) {
+              minDist = dist;
+              nearest = other;
+            }
+          });
+          
+          return nearest;
+        },
+        
+        findNearestEnemyInRange: function(unit) {
+          let nearest = null;
+          let minDist = Infinity;
+          
+          const myPlayer = GAME_STATE.players.find(p => p.id === unit.ownerId);
+          
+          GAME_STATE.units.forEach(other => {
+            if (other.health <= 0) return;
+            const otherPlayer = GAME_STATE.players.find(p => p.id === other.ownerId);
+            
+            // Check if enemy (different team)
+            if (otherPlayer.team === myPlayer.team) return;
+            
+            const dx = other.el.object3D.position.x - unit.el.object3D.position.x;
+            const dz = other.el.object3D.position.z - unit.el.object3D.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            
+            // Only find enemies within attack range
+            if (dist <= unit.range && dist < minDist) {
+              minDist = dist;
+              nearest = other;
+            }
+          });
+          
+          return nearest;
+        },
+        
+        findNearestEnemyInVisionRange: function(unit) {
+          let nearest = null;
+          let minDist = Infinity;
+          
+          const myPlayer = GAME_STATE.players.find(p => p.id === unit.ownerId);
+          
+          GAME_STATE.units.forEach(other => {
+            if (other.health <= 0) return;
+            const otherPlayer = GAME_STATE.players.find(p => p.id === other.ownerId);
+            
+            // Check if enemy (different team)
+            if (otherPlayer.team === myPlayer.team) return;
+            
+            const dx = other.el.object3D.position.x - unit.el.object3D.position.x;
+            const dz = other.el.object3D.position.z - unit.el.object3D.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            
+            // Find enemies within vision range
+            if (dist <= unit.visionRange && dist < minDist) {
+              minDist = dist;
+              nearest = other;
+            }
+          });
+          
+          return nearest;
+        },
+        
+        updateHealthBar: function(unit) {
+          const healthBar = this.healthBar;
+          if (healthBar) {
+            const healthPercent = Math.max(0, unit.health / unit.maxHealth);
+            const arc = healthPercent * 360;
+            healthBar.setAttribute('arc', arc);
+            
+            // Change color based on health
+            if (healthPercent > 0.6) {
+              healthBar.setAttribute('color', '#00ff00');
+            } else if (healthPercent > 0.3) {
+              healthBar.setAttribute('color', '#ffff00');
+            } else {
+              healthBar.setAttribute('color', '#ff0000');
+            }
+          }
+        },
+        
+        updateFogOfWar: function(unit) {
+          // Check if fog of war is enabled
+          if (!GAME_STATE.fogOfWarEnabled) {
+            // Keep all units visible during initial loading
+            this.el.object3D.traverse(obj => {
+              if (obj.isMesh) obj.visible = true;
+            });
+            this.el.classList.remove('fog-hidden');
+            return;
+          }
+          
+          // Only apply fog of war to units not owned by my player or teammates
+          const myPlayer = GAME_STATE.players.find(p => p.id === GAME_STATE.myPlayerId);
+          if (!myPlayer) return;
+          
+          const unitPlayer = GAME_STATE.players.find(p => p.id === unit.ownerId);
+          if (!unitPlayer) return;
+          
+          // Show my own units and teammate units always
+          if (unitPlayer.team === myPlayer.team) {
+            this.el.object3D.traverse(obj => {
+              if (obj.isMesh) obj.visible = true;
+            });
+            this.el.classList.remove('fog-hidden');
+            return;
+          }
+          
+          // For enemy units, check if any of my units can see them
+          let isVisible = false;
+          const pos = this.el.object3D.position;
+          
+          GAME_STATE.units.forEach(myUnit => {
+            const myUnitPlayer = GAME_STATE.players.find(p => p.id === myUnit.ownerId);
+            if (myUnitPlayer && myUnitPlayer.team === myPlayer.team) {
+              const myPos = myUnit.el.object3D.position;
+              const dx = pos.x - myPos.x;
+              const dz = pos.z - myPos.z;
+              const distance = Math.sqrt(dx * dx + dz * dz);
+              
+              if (distance <= myUnit.visionRange) {
+                isVisible = true;
+              }
+            }
+          });
+          
+          // Instead of changing visibility, traverse and set visible on all meshes
+          // This keeps objects in GPU memory but doesn't render them
+          this.el.object3D.traverse(obj => {
+            if (obj.isMesh) {
+              obj.visible = isVisible;
+            }
+          });
+          
+          // Also mark with class for raycasting exclusion
+          if (isVisible) {
+            this.el.classList.remove('fog-hidden');
+          } else {
+            this.el.classList.add('fog-hidden');
+          }
+        },
+        
+        updateRotation: function(unit) {
+          if (unit.heading && (unit.heading.x !== 0 || unit.heading.z !== 0)) {
+            // Calculate angle - heading.x is the X component, heading.z is the Z component
+            // atan2(x, z) gives us the angle in the XZ plane where +Z is forward (0 degrees)
+            const angle = Math.atan2(unit.heading.x, unit.heading.z);
+            this.el.object3D.rotation.y = angle;
+          }
+        }
+      });
+
+      // Billboard component
+      AFRAME.registerComponent('billboard', {
+        tick: function() {
+          const camera = document.getElementById('camera');
+          if (camera) {
+            this.el.object3D.lookAt(camera.object3D.position);
+          }
+        }
+      });
+
+      // ===== GAME FUNCTIONS =====
+
+      function createGridLines() {
+        const container = document.getElementById('gridLines');
+        const gridSize = 100;
+        const gridSpacing = 10;
+        
+        for (let i = -gridSize / 2; i <= gridSize / 2; i += gridSpacing) {
+          const vLine = document.createElement('a-plane');
+          vLine.setAttribute('position', `${i} 0.01 0`);
+          vLine.setAttribute('rotation', '-90 0 0');
+          vLine.setAttribute('width', '0.1');
+          vLine.setAttribute('height', gridSize);
+          vLine.setAttribute('color', '#ffffff');
+          vLine.setAttribute('opacity', '0.2');
+          container.appendChild(vLine);
+          
+          const hLine = document.createElement('a-plane');
+          hLine.setAttribute('position', `0 0.01 ${i}`);
+          hLine.setAttribute('rotation', '-90 0 0');
+          hLine.setAttribute('width', gridSize);
+          hLine.setAttribute('height', '0.1');
+          hLine.setAttribute('color', '#ffffff');
+          hLine.setAttribute('opacity', '0.2');
+          container.appendChild(hLine);
+        }
+      }
+
+      function spawnUnits() {
+        const container = document.getElementById('unitsContainer');
+        let unitIdCounter = 0;
+        
+        console.log('Creating one master model to clone from...');
+        
+        // Create ONE master model entity, load it, then clone for all units
+        const masterModel = document.createElement('a-entity');
+        masterModel.setAttribute('gltf-model', '#drone-model');
+        masterModel.setAttribute('visible', 'false'); // Hidden, just for loading
+        masterModel.setAttribute('position', '0 -1000 0'); // Way below ground
+        document.querySelector('a-scene').appendChild(masterModel);
+        
+        // Wait for it to load
+        masterModel.addEventListener('model-loaded', () => {
+          console.log('✅ Master model loaded! Cloning for all units...');
+          
+          const originalModel = masterModel.getObject3D('mesh');
+          
+          GAME_STATE.players.forEach(player => {
+            const basePos = player.position;
+            const baseRotation = player.rotation;
+            const unitsPerPlayer = 10;
+            
+            for (let i = 0; i < unitsPerPlayer; i++) {
+              const row = Math.floor(i / 5);
+              const col = i % 5;
+              const idealX = basePos.x + (col - 2) * 3;
+              const idealZ = basePos.z + row * 3;
+              
+              const unit = document.createElement('a-entity');
+              const unitId = `unit_${unitIdCounter++}`;
+              unit.setAttribute('id', unitId); // Set ID for querySelector to find it
+              unit.setAttribute('data-unit-id', unitId);
+              unit.setAttribute('class', 'selectable');
+              unit.setAttribute('position', `${idealX} 0.75 ${idealZ}`);
+              unit.setAttribute('rotation', `0 ${baseRotation} 0`);
+              unit.setAttribute('rts-unit', {
+                unitId: unitId,
+                ownerId: player.id
+              });
+              
+              const pyramid = document.createElement('a-sphere');
+              pyramid.setAttribute('radius', '1.6');
+              pyramid.setAttribute('color', player.color);
+              pyramid.setAttribute('material', `shader: standard; emissive: ${player.color}; emissiveIntensity: 0; transparent: true; opacity: 0; visible: false`);
+              pyramid.setAttribute('class', 'selectable');
+              pyramid.setAttribute('data-unit-id', unitId);
+              
+              // Clone the model - INSTANT!
+              const clonedModel = originalModel.clone();
+              clonedModel.scale.set(0.6, 0.6, 0.6);
+              clonedModel.rotation.y = THREE.MathUtils.degToRad(90);
+              
+              // IMPORTANT: Wait for pyramid to be ready before adding model
+              const addModelWhenReady = () => {
+                if (pyramid.object3D) {
+                  pyramid.object3D.add(clonedModel);
+                } else {
+                  // Pyramid not ready yet, try next frame
+                  requestAnimationFrame(addModelWhenReady);
+                }
+              };
+              addModelWhenReady();
+              
+              // Add point light
+              const light = document.createElement('a-entity');
+              light.setAttribute('light', `type: point; color: ${player.color}; intensity: 0.8; distance: 3`);
+              pyramid.appendChild(light);
+              
+              // Add player label
+              const playerNum = player.name.split(' ')[1];
+              const label = document.createElement('a-text');
+              label.setAttribute('value', 'P' + playerNum);
+              label.setAttribute('align', 'center');
+              label.setAttribute('width', '8');
+              label.setAttribute('color', player.color);
+              label.setAttribute('position', '0 2.5 0');
+              label.setAttribute('billboard', '');
+              unit.appendChild(label);
+              
+              // Add selection ring
+              const selectionRing = document.createElement('a-torus');
+              selectionRing.setAttribute('id', unitId + '_selection');
+              selectionRing.setAttribute('radius', '0.8');
+              selectionRing.setAttribute('radius-tubular', '0.02');
+              selectionRing.setAttribute('segments-tubular', '32');
+              selectionRing.setAttribute('position', '0 -0.7 0');
+              selectionRing.setAttribute('rotation', '-90 0 0');
+              selectionRing.setAttribute('color', '#ffff00');
+              selectionRing.setAttribute('material', 'emissive: #ffff00; emissiveIntensity: 0.8; opacity: 0.8; transparent: true');
+              selectionRing.setAttribute('visible', 'false');
+              unit.appendChild(selectionRing);
+              
+              // Add hover ring
+              const hoverRing = document.createElement('a-torus');
+              hoverRing.setAttribute('id', unitId + '_hover');
+              hoverRing.setAttribute('radius', '0.9');
+              hoverRing.setAttribute('radius-tubular', '0.015');
+              hoverRing.setAttribute('segments-tubular', '32');
+              hoverRing.setAttribute('position', '0 -0.68 0');
+              hoverRing.setAttribute('rotation', '-90 0 0');
+              hoverRing.setAttribute('color', '#ffffff');
+              hoverRing.setAttribute('material', 'emissive: #ffffff; emissiveIntensity: 0.5; opacity: 0.5; transparent: true');
+              hoverRing.setAttribute('visible', 'false');
+              unit.appendChild(hoverRing);
+              
+              unit.appendChild(pyramid);
+              container.appendChild(unit);
+            }
+          });
+          
+          // Remove master model after cloning
+          masterModel.parentNode.removeChild(masterModel);
+          
+          console.log('✅ All 40 units created instantly with cloned models!');
+          console.log(`Units distribution: P1=${GAME_STATE.players[0].position.z}, P2=${GAME_STATE.players[1].position.z}, P3=${GAME_STATE.players[2].position.z}, P4=${GAME_STATE.players[3].position.z}`);
+          updateGameStatus('All units spawned - Ready!');
+          forceLoadAllUnits();
+        });
+      }
+      
+      function forceLoadAllUnits() {
+        console.log('🔄 Forcing GPU to render ALL units by warming up scene...');
+        
+        // Disable fog of war so all units stay visible
+        GAME_STATE.fogOfWarEnabled = false;
+        
+        // Make ALL units visible at mesh level
+        GAME_STATE.units.forEach(unit => {
+          if (unit.el) {
+            unit.el.object3D.traverse(obj => {
+              if (obj.isMesh) obj.visible = true;
+            });
+            unit.el.classList.remove('fog-hidden');
+          }
+        });
+        
+        // Force the renderer to compile and render all units
+        const scene = document.querySelector('a-scene');
+        if (scene.renderer) {
+          console.log('🔥 Compiling shaders for all units...');
+          // Force compile all scene objects
+          scene.renderer.compile(scene.object3D, scene.camera);
+        }
+        
+        // Wait 10 seconds for full rendering
+        setTimeout(() => {
+          console.log('✅ All units fully rendered! Enabling fog of war...');
+          
+          // Enable fog of war
+          GAME_STATE.fogOfWarEnabled = true;
+          
+          // Now apply fog of war
+          GAME_STATE.units.forEach(u => {
+            const unitComponent = u.el.components['rts-unit'];
+            if (unitComponent) {
+              unitComponent.updateFogOfWar(u);
+            }
+          });
+        }, 10000);
+      }
+
+      function startGame() {
+        if (GAME_STATE.gameStarted) return;
+        
+        // First, make sure everything is properly reset
+        resetGame();
+        
+        GAME_STATE.gameStarted = true;
+        spawnUnits();
+        startBotAI();
+        toggleMenu();
+        updateGameStatus('Game started!');
+        
+        // Hide victory message
+        const victoryMessage = document.getElementById('victoryMessage');
+        if (victoryMessage) {
+          victoryMessage.setAttribute('visible', 'false');
+        }
+        
+        // Update button text
+        const startButton = document.querySelector('#menu-start a-text');
+        if (startButton) {
+          startButton.setAttribute('value', 'END MATCH');
+        }
+        
+        if (GAME_STATE.isMultiplayer && GAME_STATE.isHost) {
+          broadcastData({ type: 'game-start' });
+        }
+      }
+      
+      function resetGame() {
+        // Stop game
+        GAME_STATE.gameStarted = false;
+        
+        // Reset fog of war flag
+        GAME_STATE.fogOfWarEnabled = false;
+        
+        // Clear selections
+        GAME_STATE.selectedUnits.clear();
+        
+        // Clear cursor indicator reference
+        GAME_STATE.cursorIndicator = null;
+        
+        // Remove ALL unit entities from scene (including destroyed ones)
+        // Don't rely on GAME_STATE.units - destroyed units were already removed from it
+        const allUnitEntities = document.querySelectorAll('[id^="unit_"]');
+        console.log(`🗑️ Removing ${allUnitEntities.length} unit entities from scene`);
+        allUnitEntities.forEach(unitEl => {
+          if (unitEl.parentNode) {
+            unitEl.parentNode.removeChild(unitEl);
+          }
+        });
+        GAME_STATE.units.clear();
+        
+        // Also remove any master models that might be lingering
+        const masterModels = document.querySelectorAll('a-entity[gltf-model="#drone-model"]');
+        console.log(`🗑️ Removing ${masterModels.length} master model entities`);
+        masterModels.forEach(model => {
+          if (model.parentNode) {
+            model.parentNode.removeChild(model);
+          }
+        });
+        
+        // Clear any projectiles that might still exist
+        const projectiles = document.querySelectorAll('[id^="projectile_"]');
+        projectiles.forEach(proj => {
+          if (proj.parentNode) proj.remove();
+        });
+        
+        // Clear any particle effects
+        const effects = document.querySelectorAll('[impact-spark-burst], [explosion-particles]');
+        effects.forEach(effect => {
+          if (effect.parentNode) effect.remove();
+        });
+        
+        // Reset camera/player position BEHIND their units
+        // Player 1's units spawn at x: -30, z: -25, facing towards +Z (north)
+        // So position camera behind them (more negative Z) and at height looking down
+        const cameraRig = document.querySelector('#cameraRig');
+        if (cameraRig) {
+          // Get the human player's info
+          const myPlayer = GAME_STATE.players.find(p => p.id === GAME_STATE.myPlayerId);
+          if (myPlayer) {
+            // Position camera behind the player's spawn position
+            // Units spawn at player.position, so camera goes further back based on rotation
+            const spawnPos = myPlayer.position;
+            const rotation = myPlayer.rotation;
+            
+            // Calculate offset based on rotation (20 units behind, 30 units up for top-down view)
+            const offsetDistance = 20;
+            const offsetX = Math.sin(rotation * Math.PI / 180) * offsetDistance;
+            const offsetZ = -Math.cos(rotation * Math.PI / 180) * offsetDistance;
+            
+            const camX = spawnPos.x + offsetX;
+            const camZ = spawnPos.z + offsetZ;
+            const camY = 30; // Height for top-down view
+            
+            // Face opposite direction (180° from unit facing direction)
+            const camRotation = (rotation + 180) % 360;
+            
+            cameraRig.setAttribute('position', `${camX} ${camY} ${camZ}`);
+            cameraRig.setAttribute('rotation', `0 ${camRotation} 0`);
+          } else {
+            // Fallback to default position
+            cameraRig.setAttribute('position', '-30 30 -45');
+            cameraRig.setAttribute('rotation', '0 180 0');
+          }
+        }
+        
+        // Clear any hover states
+        const controller = document.querySelector('[rts-controller]');
+        if (controller && controller.components['rts-controller']) {
+          const comp = controller.components['rts-controller'];
+          if (comp.lastHoveredUnit) {
+            const prevHover = document.getElementById(comp.lastHoveredUnit + '_hover');
+            if (prevHover) prevHover.setAttribute('visible', 'false');
+            comp.lastHoveredUnit = null;
+          }
+        }
+        
+        // Hide victory message
+        const victoryMessage = document.getElementById('victoryMessage');
+        if (victoryMessage) {
+          victoryMessage.setAttribute('visible', 'false');
+        }
+        
+        // Reset UI
+        updateGameStatus('Press X to open menu');
+        updateSelectionUI();
+        
+        // Update button text
+        const startButton = document.querySelector('#menu-start a-text');
+        if (startButton) {
+          startButton.setAttribute('value', 'START GAME');
+        }
+        
+        console.log('🔄 Game reset complete');
+      }
+      
+      function endGame() {
+        if (!GAME_STATE.gameStarted) return;
+        
+        // Count units per team
+        const teamCounts = {};
+        GAME_STATE.units.forEach(unit => {
+          if (unit.health > 0) {
+            const player = GAME_STATE.players.find(p => p.id === unit.ownerId);
+            if (player) {
+              teamCounts[player.team] = (teamCounts[player.team] || 0) + 1;
+            }
+          }
+        });
+        
+        // Determine winner
+        const teams = Object.keys(teamCounts).map(t => parseInt(t));
+        let winnerTeam = -1;
+        let maxUnits = 0;
+        
+        teams.forEach(team => {
+          if (teamCounts[team] > maxUnits) {
+            maxUnits = teamCounts[team];
+            winnerTeam = team;
+          }
+        });
+        
+        // Check if it's a draw
+        if (teams.length === 0 || maxUnits === 0) {
+          showVictoryMessage("It's a Draw");
+        } else {
+          const teamName = winnerTeam === 0 ? 'Red' : 'Blue';
+          showVictoryMessage(`Team ${teamName} won!`);
+        }
+        
+        // Play victory sound
+        const victorySound = document.getElementById('victory-sound');
+        if (victorySound && victorySound.components.sound) {
+          victorySound.components.sound.playSound();
+        }
+        
+        // Stop the game and clear selections
+        GAME_STATE.gameStarted = false;
+        GAME_STATE.selectedUnits.forEach(unitId => {
+          const selectionRing = document.getElementById(unitId + '_selection');
+          if (selectionRing) selectionRing.setAttribute('visible', 'false');
+        });
+        GAME_STATE.selectedUnits.clear();
+        
+        // Update button text to allow restart
+        const startButton = document.querySelector('#menu-start a-text');
+        if (startButton) {
+          startButton.setAttribute('value', 'START GAME');
+        }
+        
+        // Show menu
+        toggleMenu();
+      }
+      
+      function showVictoryMessage(message) {
+        const victoryMessage = document.getElementById('victoryMessage');
+        if (victoryMessage) {
+          victoryMessage.setAttribute('value', message + '\nPress X to open menu');
+          victoryMessage.setAttribute('visible', 'true');
+        }
+        // Show victory message in the status text too
+        updateGameStatus(message);
+        
+        // HIDE the selection info text
+        const selectionInfo = document.getElementById('selectionInfo');
+        if (selectionInfo) {
+          selectionInfo.setAttribute('value', '');
+        }
+      }
+
+      function startBotAI() {
+        console.log('🤖 Starting bot AI...');
+        setInterval(() => {
+          if (!GAME_STATE.gameStarted) return;
+          
+          GAME_STATE.players.forEach(player => {
+            if (!player.isBot) return;
+            if (!activePlayers.has(player.id)) return;
+            
+            const botUnits = Array.from(GAME_STATE.units.values()).filter(u => u.ownerId === player.id && u.health > 0);
+            if (botUnits.length === 0) return;
+            
+            // Find enemy units (different team)
+            const enemyUnits = Array.from(GAME_STATE.units.values()).filter(u => {
+              if (u.health <= 0) return false;
+              const unitPlayer = GAME_STATE.players.find(p => p.id === u.ownerId);
+              return unitPlayer.team !== player.team;
+            });
+            
+            if (enemyUnits.length === 0) return;
+            
+            botUnits.forEach(unit => {
+              if (unit.state !== 'idle') return;
+              
+              let nearest = null;
+              let minDist = Infinity;
+              
+              enemyUnits.forEach(enemy => {
+                const dx = enemy.el.object3D.position.x - unit.el.object3D.position.x;
+                const dz = enemy.el.object3D.position.z - unit.el.object3D.position.z;
+                const dist = Math.sqrt(dx * dx + dz * dz);
+                
+                if (dist < minDist) {
+                  minDist = dist;
+                  nearest = enemy;
+                }
+              });
+              
+              if (nearest) {
+                unit.state = 'attacking';
+                unit.targetUnit = nearest;
+                // Only log occasionally to reduce spam
+                if (Math.random() < 0.001) {
+                  console.log(`🤖 Bot unit ${unit.id} targeting ${nearest.id}`);
+                }
+              }
+            });
+          });
+        }, 2000);
+      }
+
+      function checkWinCondition() {
+        if (!GAME_STATE.gameStarted) return;
+        
+        // Count units per team
+        const teamCounts = {};
+        GAME_STATE.units.forEach(unit => {
+          if (unit.health > 0) {
+            const player = GAME_STATE.players.find(p => p.id === unit.ownerId);
+            if (player) {
+              if (!teamCounts[player.team]) teamCounts[player.team] = 0;
+              teamCounts[player.team]++;
+            }
+          }
+        });
+        
+        const teamsAlive = Object.keys(teamCounts).length;
+        
+        // Check if only one team remains
+        if (teamsAlive === 1) {
+          const winningTeam = Object.keys(teamCounts)[0];
+          const teamName = winningTeam === '0' ? 'Red' : 'Blue';
+          
+          showVictoryMessage(`Team ${teamName} won!`);
+          
+          // Play victory sound
+          const victorySound = document.getElementById('victory-sound');
+          if (victorySound && victorySound.components.sound) {
+            victorySound.components.sound.playSound();
+          }
+          
+          // Stop the game and clear selections
+          GAME_STATE.gameStarted = false;
+          GAME_STATE.selectedUnits.forEach(unitId => {
+            const selectionRing = document.getElementById(unitId + '_selection');
+            if (selectionRing) selectionRing.setAttribute('visible', 'false');
+          });
+          GAME_STATE.selectedUnits.clear();
+          
+          // Update button text to allow restart
+          const startButton = document.querySelector('#menu-start a-text');
+          if (startButton) {
+            startButton.setAttribute('value', 'START GAME');
+          }
+        } else if (teamsAlive === 0) {
+          showVictoryMessage("It's a Draw");
+          
+          // Stop the game and clear selections
+          GAME_STATE.gameStarted = false;
+          GAME_STATE.selectedUnits.forEach(unitId => {
+            const selectionRing = document.getElementById(unitId + '_selection');
+            if (selectionRing) selectionRing.setAttribute('visible', 'false');
+          });
+          GAME_STATE.selectedUnits.clear();
+          
+          // Update button text to allow restart
+          const startButton = document.querySelector('#menu-start a-text');
+          if (startButton) {
+            startButton.setAttribute('value', 'START GAME');
+          }
+        }
+      }
+
+      function toggleMenu() {
+        const menuToggle = document.querySelector('[menu-toggle]');
+        if (menuToggle && menuToggle.components['menu-toggle']) {
+          menuToggle.components['menu-toggle'].toggleMenu();
+        }
+      }
+
+      function updateGameStatus(message) {
+        const status = document.getElementById('gameStatus');
+        if (status) status.setAttribute('value', message);
+      }
+
+      function updateSelectionUI() {
+        const hud = document.getElementById('selectionInfo');
+        if (hud) {
+          // Clean up selection set - remove any destroyed units
+          const invalidUnits = [];
+          GAME_STATE.selectedUnits.forEach(unitId => {
+            const unit = GAME_STATE.units.get(unitId);
+            if (!unit || unit.health <= 0) {
+              invalidUnits.push(unitId);
+            }
+          });
+          invalidUnits.forEach(unitId => GAME_STATE.selectedUnits.delete(unitId));
+          
+          // Update display with valid count
+          if (GAME_STATE.selectedUnits.size > 0) {
+            hud.setAttribute('value', `Selected: ${GAME_STATE.selectedUnits.size} unit(s) | B:Deselect`);
+          } else {
+            hud.setAttribute('value', '');
+          }
+        }
+      }
+
+      function updatePlayerSlotsDisplay() {
+        const display = document.getElementById('playerSlots');
+        if (display) {
+          const slots = GAME_STATE.players.map((p, i) => {
+            let type = 'Bot';
+            if (activePlayers.has(p.id)) {
+              type = p.id === GAME_STATE.myPlayerId ? 'You' : 'Player';
+            }
+            return `P${i+1}:${type}`;
+          }).join(' ');
+          display.setAttribute('value', slots);
+        }
+      }
+
+      // ===== MULTIPLAYER FUNCTIONS =====
+
+      async function startHosting() {
+        if (GAME_STATE.isMultiplayer) return;
+        updateGameStatus('Starting host...');
+        
+        const sessionID = `rtsvr-host-lobby-${lobbyNumber}`;
+        
+        try {
+          peer = new Peer(sessionID, {
+            host: "0.peerjs.com",
+            port: 443,
+            secure: true
+          });
+          
+          peer.on('open', function() {
+            GAME_STATE.isMultiplayer = true;
+            GAME_STATE.isHost = true;
+            GAME_STATE.myPlayerId = 'player_0';
+            activePlayers.add('player_0');
+            
+            updateGameStatus(`Hosting Lobby ${lobbyNumber}`);
+            document.getElementById('multiplayerStatus').setAttribute('value', `Host - Lobby ${lobbyNumber} (1/4)`);
+            updatePlayerSlotsDisplay();
+          });
+          
+          peer.on('connection', function(conn) {
+            conn.on('open', function() {
+              let assignedPlayerId = null;
+              for (let i = 0; i < 4; i++) {
+                const playerId = `player_${i}`;
+                if (!activePlayers.has(playerId)) {
+                  assignedPlayerId = playerId;
+                  activePlayers.add(playerId);
+                  GAME_STATE.players[i].isBot = false;
+                  break;
+                }
+              }
+              
+              if (assignedPlayerId) {
+                connections.set(assignedPlayerId, conn);
+                
+                conn.send({
+                  type: 'player-assignment',
+                  playerId: assignedPlayerId,
+                  players: GAME_STATE.players,
+                  activePlayers: Array.from(activePlayers)
+                });
+                
+                broadcastData({
+                  type: 'player-list-update',
+                  activePlayers: Array.from(activePlayers)
+                });
+                
+                updatePlayerSlotsDisplay();
+                document.getElementById('multiplayerStatus').setAttribute('value', `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`);
+              }
+              
+              setupConnectionHandlers(conn, assignedPlayerId);
+            });
+          });
+          
+          peer.on('error', function(err) {
+            console.error('Peer error:', err);
+            updateGameStatus('Host error: ' + err.type);
+          });
+          
+        } catch (err) {
+          console.error('Failed to start hosting:', err);
+          updateGameStatus('Failed to host game');
+        }
+      }
+
+      async function joinGame() {
+        if (GAME_STATE.isMultiplayer) return;
+        updateGameStatus('Joining game...');
+        
+        const clientID = `rtsvr-client-${Math.random().toString(36).substr(2, 9)}`;
+        
+        try {
+          peer = new Peer(clientID, {
+            host: "0.peerjs.com",
+            port: 443,
+            secure: true
+          });
+          
+          peer.on('open', function() {
+            const hostID = `rtsvr-host-lobby-${lobbyNumber}`;
+            const conn = peer.connect(hostID);
+            
+            conn.on('open', function() {
+              GAME_STATE.isMultiplayer = true;
+              GAME_STATE.isHost = false;
+              
+              updateGameStatus(`Connected to Lobby ${lobbyNumber}`);
+              document.getElementById('multiplayerStatus').setAttribute('value', `Client - Lobby ${lobbyNumber}`);
+              
+              setupConnectionHandlers(conn, 'host');
+            });
+            
+            conn.on('error', function(err) {
+              console.error('Connection error:', err);
+              updateGameStatus('Failed to join game');
+            });
+          });
+          
+          peer.on('error', function(err) {
+            console.error('Peer error:', err);
+            updateGameStatus('Join error: ' + err.type);
+          });
+          
+        } catch (err) {
+          console.error('Failed to join:', err);
+          updateGameStatus('Failed to join game');
+        }
+      }
+
+      function setupConnectionHandlers(conn, playerId) {
+        conn.on('data', function(data) {
+          handleMultiplayerData(data, conn, playerId);
+        });
+        
+        conn.on('close', function() {
+          console.log('Player disconnected:', playerId);
+          if (playerId && playerId.startsWith('player_')) {
+            activePlayers.delete(playerId);
+            const playerIndex = parseInt(playerId.split('_')[1]);
+            GAME_STATE.players[playerIndex].isBot = true;
+            updatePlayerSlotsDisplay();
+          }
+        });
+      }
+
+      function handleMultiplayerData(data, conn, senderId) {
+        switch(data.type) {
+          case 'player-assignment':
+            GAME_STATE.myPlayerId = data.playerId;
+            GAME_STATE.players = data.players;
+            activePlayers = new Set(data.activePlayers);
+            updatePlayerSlotsDisplay();
+            break;
+            
+          case 'player-list-update':
+            activePlayers = new Set(data.activePlayers);
+            updatePlayerSlotsDisplay();
+            break;
+            
+          case 'game-start':
+            if (!GAME_STATE.gameStarted) {
+              startGame();
+            }
+            break;
+            
+          case 'move-command':
+            data.commands.forEach(cmd => {
+              const unit = GAME_STATE.units.get(cmd.unitId);
+              if (unit) {
+                unit.state = 'moving';
+                unit.targetPos = cmd.targetPos;
+                unit.targetUnit = null;
+              }
+            });
+            break;
+            
+          case 'attack-command':
+            data.commands.forEach(cmd => {
+              const unit = GAME_STATE.units.get(cmd.unitId);
+              const target = GAME_STATE.units.get(cmd.targetUnitId);
+              if (unit && target) {
+                unit.state = 'attacking';
+                unit.targetUnit = target;
+                unit.targetPos = null;
+              }
+            });
+            break;
+            
+          case 'unit-damage':
+            const target = GAME_STATE.units.get(data.targetId);
+            if (target) {
+              target.health -= data.damage;
+              if (target.health <= 0 && target.el) {
+                const unitComponent = target.el.components['rts-unit'];
+                if (unitComponent) {
+                  unitComponent.destroyUnit(target);
+                }
+              }
+            }
+            break;
+        }
+        
+        if (GAME_STATE.isHost && data.type !== 'player-assignment' && data.type !== 'player-list-update') {
+          connections.forEach((conn, playerId) => {
+            if (playerId !== senderId && conn.open) {
+              conn.send(data);
+            }
+          });
+        }
+      }
+
+      function broadcastData(data) {
+        if (!GAME_STATE.isMultiplayer) return;
+        
+        if (GAME_STATE.isHost) {
+          connections.forEach(conn => {
+            if (conn.open) {
+              conn.send(data);
+            }
+          });
+        } else {
+          connections.forEach(conn => {
+            if (conn.open) {
+              conn.send(data);
+            }
+          });
+        }
+      }
+
+      // ===== INITIALIZATION =====
+      
+      document.addEventListener('DOMContentLoaded', function() {
+        console.log('RTS VR initialized');
+        
+        // Wait for assets to load before initializing
+        const scene = document.querySelector('a-scene');
+        if (scene.hasLoaded) {
+          initializeGame();
+        } else {
+          scene.addEventListener('loaded', initializeGame);
+        }
+      });
+      
+      function initializeGame() {
+        console.log('Assets loaded, initializing game...');
+        
+        setTimeout(() => {
+          initPathfinding();
+          // createGridLines(); // Temporarily hidden
+          precompileShaders(); // Pre-compile shaders to prevent stuttering
+          preloadExplosionEffects(); // Pre-load explosion effects
+        }, 500); // Reduced delay since assets are already loaded
+        
+        updateGameStatus('Press X to open menu');
+        updatePlayerSlotsDisplay();
+      }
+      
+      // Preload explosion effects by creating a dummy explosion off-screen
+      function preloadExplosionEffects() {
+        console.log('🎆 Preloading explosion effects...');
+        
+        const container = document.getElementById('effectsContainer');
+        const dummyExplosion = document.createElement('a-entity');
+        dummyExplosion.setAttribute('position', '0 -1000 0'); // Way below ground
+        
+        // Create particles with animations
+        for (let i = 0; i < 8; i++) {
+          const particle = document.createElement('a-sphere');
+          particle.setAttribute('radius', '0.2');
+          particle.setAttribute('color', '#ff6600');
+          const angle = (i / 8) * Math.PI * 2;
+          const dx = Math.cos(angle) * 3;
+          const dz = Math.sin(angle) * 3;
+          particle.setAttribute('animation', `property: position; to: ${dx} 2 ${dz}; dur: 500; easing: easeOutQuad`);
+          particle.setAttribute('animation__fade', 'property: opacity; to: 0; dur: 500');
+          dummyExplosion.appendChild(particle);
+        }
+        
+        // Smoke effect
+        const smoke = document.createElement('a-sphere');
+        smoke.setAttribute('radius', '1');
+        smoke.setAttribute('color', '#333333');
+        smoke.setAttribute('opacity', '0.6');
+        smoke.setAttribute('animation', 'property: scale; to: 3 3 3; dur: 800; easing: easeOutQuad');
+        smoke.setAttribute('animation__fade', 'property: opacity; to: 0; dur: 800');
+        dummyExplosion.appendChild(smoke);
+        
+        container.appendChild(dummyExplosion);
+        
+        // Remove after a short delay
+        setTimeout(() => {
+          dummyExplosion.remove();
+          console.log('✅ Explosion effects preloaded');
+        }, 100);
+      }
+      
+      // Pre-compile shaders by rendering models off-screen
+      function precompileShaders() {
+        console.log('🔧 Pre-compiling shaders...');
+        const scene = document.querySelector('a-scene');
+        const droneAsset = document.getElementById('drone-model');
+        
+        if (!droneAsset || !scene.renderer) {
+          console.warn('⚠️ Cannot precompile - assets not ready');
+          return;
+        }
+        
+        // Create a temporary off-screen container
+        const tempContainer = document.createElement('a-entity');
+        tempContainer.setAttribute('position', '0 -1000 0'); // Way below ground
+        scene.appendChild(tempContainer);
+        
+        // Create multiple instances with different materials to force shader compilation
+        const colors = ['#ff0000', '#0000ff', '#00ff00', '#ffff00'];
+        const tempModels = [];
+        
+        colors.forEach((color, index) => {
+          const tempUnit = document.createElement('a-entity');
+          
+          const tempSphere = document.createElement('a-sphere');
+          tempSphere.setAttribute('radius', '1.6');
+          tempSphere.setAttribute('color', color);
+          tempSphere.setAttribute('material', `shader: standard; emissive: ${color}; emissiveIntensity: 0.8`);
+          
+          const tempModel = document.createElement('a-gltf-model');
+          tempModel.setAttribute('src', '#drone-model');
+          tempModel.setAttribute('scale', '0.6 0.6 0.6');
+          
+          tempSphere.appendChild(tempModel);
+          tempUnit.appendChild(tempSphere);
+          tempContainer.appendChild(tempUnit);
+          tempModels.push(tempModel);
+        });
+        
+        // Wait for models to load, then force a render and clean up
+        let loadedCount = 0;
+        tempModels.forEach(model => {
+          model.addEventListener('model-loaded', () => {
+            loadedCount++;
+            if (loadedCount === tempModels.length) {
+              // Give it one frame to render
+              setTimeout(() => {
+                // Force render
+                if (scene.renderer) {
+                  scene.renderer.compile(scene.object3D, scene.camera);
+                }
+                // Clean up
+                setTimeout(() => {
+                  scene.removeChild(tempContainer);
+                  console.log('✅ Shaders pre-compiled');
+                }, 100);
+              }, 100);
+            }
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
