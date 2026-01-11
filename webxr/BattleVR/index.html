@@ -12,6 +12,7 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/FBXLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/EXRLoader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.0/umd/index.js"></script>
     <script>
       // Suppress the FBXLoader deprecation warnings
@@ -6329,12 +6330,37 @@ function setGameplayHUD(isPlaying) {
           geometry.attributes.position.needsUpdate = true;
 
           // MeshStandardMaterial - WORKS RELIABLY
+          // Load moon texture
+          const textureLoader = new THREE.TextureLoader();
+          const colorTexture = textureLoader.load('assets/textures/moon_01_2k/moon_01_diff_2k.jpg');
+          colorTexture.wrapS = THREE.RepeatWrapping;
+          colorTexture.wrapT = THREE.RepeatWrapping;
+          colorTexture.repeat.set(20, 20);
+          colorTexture.anisotropy = 16; // Sharper texture details
+          colorTexture.encoding = THREE.sRGBEncoding; // Proper color encoding for better visibility
+          
+          // Create material first
           const material = new THREE.MeshStandardMaterial({
-            color: 0xafafaf,
-            roughness: 0.85,
+            map: colorTexture,
+            color: 0xafafaf, // Original gray - maintains shadow appearance
+            roughness: 1, // Increased from 0.85 - more matte, enhances texture visibility
             metalness: 0.0,
             flatShading: false,
             fog: true
+          });
+          
+          // Load EXR normal map asynchronously
+          const exrLoader = new THREE.EXRLoader();
+          exrLoader.load('assets/textures/moon_01_2k/moon_01_nor_gl_2k.exr', function(texture) {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(20, 20);
+            material.normalMap = texture;
+            material.normalScale = new THREE.Vector2(0.5, 0.5); // Reduced from 1.5 - more subtle detail
+            material.needsUpdate = true;
+            console.log('✅ Moon normal map loaded successfully');
+          }, undefined, function(error) {
+            console.warn('⚠️ Could not load normal map:', error);
           });
 
           // Create mesh
