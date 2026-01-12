@@ -33,7 +33,9 @@
       const world = new CANNON.World();
       world.gravity.set(0, -1.62, 0); // Moon gravity (1/6th of Earth's gravity)
       world.broadphase = new CANNON.NaiveBroadphase();
-      world.solver.iterations = 10;
+      world.solver.iterations = 10; // Default iterations - BVH handles terrain collision
+      
+      // Terrain collision handled by BVH, not Cannon.js physics body
 
       // Global error handler to suppress Meta Touch Controls errors
       window.addEventListener('error', (event) => {
@@ -989,31 +991,15 @@
                       const rightHand = document.querySelector('#rightHand');
                       
                       if (leftHand) {
-                        leftHand.setAttribute('raycaster', {
-                          objects: '',
-                          lineColor: '#ffffff',
-                          lineOpacity: 0,
-                          far: 10,
+                        leftHand.setAttribute('forward-raycaster', {
                           enabled: false
                         });
-                        // Force immediate hide of line mesh
-                        if (leftHand.components.raycaster && leftHand.components.raycaster.line) {
-                          leftHand.components.raycaster.line.visible = false;
-                        }
                       }
                       
                       if (rightHand) {
-                        rightHand.setAttribute('raycaster', {
-                          objects: '',
-                          lineColor: '#ffffff',
-                          lineOpacity: 0,
-                          far: 10,
+                        rightHand.setAttribute('forward-raycaster', {
                           enabled: false
                         });
-                        // Force immediate hide of line mesh
-                        if (rightHand.components.raycaster && rightHand.components.raycaster.line) {
-                          rightHand.components.raycaster.line.visible = false;
-                        }
                       }
                       
                       console.log('✅ Raycasters explicitly disabled for client');
@@ -3324,11 +3310,179 @@ function setGameplayHUD(isPlaying) {
   // HUD updated silently
 }
 
+      // Forward-pointing raycaster component (from RTSVR project)
+      AFRAME.registerComponent('forward-raycaster', {
+        schema: {
+          hand: { type: 'string', default: 'right' },
+          lineColor: { type: 'color', default: '#ffffff' },
+          maxLength: { type: 'number', default: 10 },
+          enabled: { type: 'boolean', default: true },
+          objects: { type: 'string', default: '.clickable' }
+        },
+        
+        init: function() {
+          this.raycaster = new THREE.Raycaster();
+          this.intersection = null;
+          this.line = null;
+          this.lastIntersectedEl = null;
+          this.currentTarget = null;
+          
+          // CRITICAL: Compatibility with level-editor and other code expecting raycaster API
+          this.intersectedEls = []; // Array of intersected A-Frame elements
+          this.intersections = []; // Array of THREE.js intersections
+          
+          this.createLine();
+          this.bindEvents();
+        },
+        
+        createLine: function() {
+          const geometry = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(0, 0, -1)
+          ]);
+          
+          const material = new THREE.LineBasicMaterial({
+            color: new THREE.Color(this.data.lineColor),
+            opacity: 0.8,
+            transparent: true
+          });
+          
+          this.line = new THREE.Line(geometry, material);
+          this.line.name = 'forward-raycaster-line';
+          this.line.scale.z = this.data.maxLength;
+          
+          // CRITICAL: Rotate line to point forward from controller grip
+          this.line.rotation.x = -Math.PI / 2; // -90 degrees to point forward
+          
+          this.el.object3D.add(this.line);
+        },
+        
+        bindEvents: function() {
+          // Listen for trigger down to emit click events
+          this.el.addEventListener('triggerdown', () => {
+            if (this.currentTarget) {
+              this.currentTarget.emit('click');
+            }
+          });
+        },
+        
+        update: function(oldData) {
+          // Update line color if changed
+          if (this.line && oldData.lineColor !== this.data.lineColor) {
+            this.line.material.color.set(this.data.lineColor);
+          }
+        },
+        
+        tick: function() {
+          if (!this.line || !this.data.enabled) {
+            if (this.line) this.line.visible = false;
+            if (this.lastIntersectedEl) {
+              this.lastIntersectedEl.emit('mouseleave');
+              this.lastIntersectedEl = null;
+            }
+            this.currentTarget = null;
+            return;
+          }
+          
+          this.line.visible = true;
+          
+          // Get world position and direction for raycasting
+          const origin = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(origin);
+          
+          const direction = new THREE.Vector3(0, 0, -1);
+          const lineQuaternion = new THREE.Quaternion().setFromEuler(this.line.rotation);
+          const worldQuaternion = this.el.object3D.getWorldQuaternion(new THREE.Quaternion());
+          worldQuaternion.multiply(lineQuaternion);
+          direction.applyQuaternion(worldQuaternion);
+          
+          // Set up raycaster
+          this.raycaster.set(origin, direction.normalize());
+          this.raycaster.far = this.data.maxLength;
+          
+          // Find target objects based on objects selector
+          const objectsSelector = this.data.objects || '.clickable';
+          let targetElements = [];
+          
+          if (objectsSelector) {
+            // Split multiple selectors (e.g., "[grab-surface], .gizmo-axis")
+            const selectors = objectsSelector.split(',').map(s => s.trim()).filter(s => s);
+            selectors.forEach(selector => {
+              const elements = Array.from(document.querySelectorAll(selector));
+              targetElements = targetElements.concat(elements);
+            });
+          }
+          
+          const meshes = [];
+          targetElements.forEach(el => {
+            if (el.object3D) {
+              el.object3D.traverse(node => {
+                if (node.isMesh) {
+                  // Store reference to A-Frame element
+                  node.el = el;
+                  meshes.push(node);
+                }
+              });
+            }
+          });
+          
+          // Perform raycast
+          const intersections = this.raycaster.intersectObjects(meshes, false);
+          
+          // CRITICAL: Update intersectedEls and intersections arrays for compatibility
+          this.intersections = intersections;
+          this.intersectedEls = [];
+          
+          if (intersections.length > 0) {
+            this.intersection = intersections[0];
+            this.line.scale.z = this.intersection.distance;
+            
+            // Find the A-Frame element
+            let intersectedEl = this.intersection.object.el;
+            if (!intersectedEl && this.intersection.object.parent) {
+              intersectedEl = this.intersection.object.parent.el;
+            }
+            
+            // CRITICAL: Populate intersectedEls array with all intersected A-Frame elements
+            if (intersectedEl) {
+              this.intersectedEls.push(intersectedEl);
+            }
+            
+            // Emit hover events
+            if (intersectedEl) {
+              if (this.lastIntersectedEl !== intersectedEl) {
+                if (this.lastIntersectedEl) {
+                  this.lastIntersectedEl.emit('mouseleave');
+                }
+                intersectedEl.emit('mouseenter');
+                this.lastIntersectedEl = intersectedEl;
+              }
+              
+              // Store for click events
+              this.currentTarget = intersectedEl;
+            }
+          } else {
+            this.line.scale.z = this.data.maxLength;
+            if (this.lastIntersectedEl) {
+              this.lastIntersectedEl.emit('mouseleave');
+              this.lastIntersectedEl = null;
+            }
+            this.currentTarget = null;
+          }
+        },
+        
+        // Expose methods for compatibility with code expecting raycaster component
+        refreshObjects: function() {
+          // No-op for compatibility - we query every frame
+        }
+      });
+
       // Create materials for zero-g environment
       const defaultMaterial = new CANNON.Material('default');
       const playerMaterial = new CANNON.Material('player');
       const surfaceMaterial = new CANNON.Material('surface');
       const ballMaterial = new CANNON.Material('ball');
+      const terrainMaterial = new CANNON.Material('terrain');
       
       /* 
        * COLLISION FILTERING SYSTEM:
@@ -3359,6 +3513,43 @@ function setGameplayHUD(isPlaying) {
         }
       );
       world.addContactMaterial(ballSurfaceContact);
+      
+      // Terrain contact materials - reduced restitution to prevent bouncing
+      const playerTerrainContact = new CANNON.ContactMaterial(
+        playerMaterial,
+        terrainMaterial,
+        {
+          friction: 0.9,
+          restitution: 0.0, // No bounce on terrain
+          contactEquationStiffness: 1e9,
+          contactEquationRelaxation: 3
+        }
+      );
+      world.addContactMaterial(playerTerrainContact);
+      
+      const defaultTerrainContact = new CANNON.ContactMaterial(
+        defaultMaterial,
+        terrainMaterial,
+        {
+          friction: 0.9,
+          restitution: 0.0, // No bounce on terrain
+          contactEquationStiffness: 1e9,
+          contactEquationRelaxation: 3
+        }
+      );
+      world.addContactMaterial(defaultTerrainContact);
+      
+      const ballTerrainContact = new CANNON.ContactMaterial(
+        ballMaterial,
+        terrainMaterial,
+        {
+          friction: 0.2,
+          restitution: 0.7, // Some bounce for balls
+          contactEquationStiffness: 1e8,
+          contactEquationRelaxation: 3
+        }
+      );
+      world.addContactMaterial(ballTerrainContact);
 
       // Component to sync remote player drone rotation with sphere (physics body)
       // NOTE: This is now handled directly in the network update code
@@ -4241,6 +4432,7 @@ function setGameplayHUD(isPlaying) {
         
         createPlayerPhysicsBody: function() {
           // Create a Cannon.js Sphere body for the player (centered on camera/head)
+          // Extended downward by 1.0m for better ground contact
           const playerRadius = 0.4; // Player collision radius
           const shape = new CANNON.Sphere(playerRadius);
           
@@ -4249,14 +4441,17 @@ function setGameplayHUD(isPlaying) {
           const initialPos = rig ? rig.object3D.position : new THREE.Vector3(0, 0, 0);
           
           this.body = new CANNON.Body({
-            mass: this.data.mass, // 70kg
+            mass: this.data.mass, // 70kg - MUST have mass for ball throwing
             shape: shape,
             linearDamping: this.data.linearDamping,
             angularDamping: this.data.angularDamping,
-            position: new CANNON.Vec3(initialPos.x, initialPos.y, initialPos.z),
+            position: new CANNON.Vec3(initialPos.x, initialPos.y - 1.0, initialPos.z), // Offset down by 1.0m
             collisionFilterGroup: 1, // Player group
-            collisionFilterMask: 4 | 2 // Collides with walls (4) and terrain (implicit in trimesh)
+            collisionFilterMask: 4 // ONLY collide with walls (4), NOT terrain (use BVH instead)
           });
+          
+          // Store the offset so we can apply it during sync
+          this.bodyOffset = -1.0;
           
           // Add to physics world
           if (typeof world !== 'undefined') {
@@ -4264,6 +4459,8 @@ function setGameplayHUD(isPlaying) {
             console.log('✅ Player Cannon.js physics body created');
             console.log('   Mass:', this.data.mass, 'kg');
             console.log('   Radius:', playerRadius, 'm');
+            console.log('   Offset:', this.bodyOffset, 'm (extends downward)');
+            console.log('   Terrain collision: BVH (not physics body)');
             console.log('   Position:', this.body.position.x, this.body.position.y, this.body.position.z);
           } else {
             console.error('❌ Cannon.js world not found - player physics disabled');
@@ -4933,7 +5130,8 @@ function setGameplayHUD(isPlaying) {
           // Sync Cannon.js physics body with rig position
           if (this.body) {
             const rigPos = this.rig.object3D.position;
-            this.body.position.set(rigPos.x, rigPos.y, rigPos.z);
+            const offset = this.bodyOffset || 0;
+            this.body.position.set(rigPos.x, rigPos.y + offset, rigPos.z);
             this.body.velocity.set(this.velocity.x, this.velocity.y, this.velocity.z);
           }
         },
@@ -4955,9 +5153,9 @@ function setGameplayHUD(isPlaying) {
           
           // Check collision points (head, body center, feet)
           const collisionPoints = [
-            { pos: cameraWorldPos.clone(), radius: 0.4, name: 'head' }, // Head level (larger radius for better terrain collision)
-            { pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.4, 0)), radius: 0.4, name: 'body' }, // Body center
-            { pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.8, 0)), radius: 0.4, name: 'feet' } // Feet level (CRITICAL for terrain)
+            { pos: cameraWorldPos.clone(), radius: 0.4, name: 'head' }, // Head level
+            { pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -0.5, 0)), radius: 0.4, name: 'body' }, // Body center
+            { pos: cameraWorldPos.clone().add(new THREE.Vector3(0, -1.0, 0)), radius: 0.4, name: 'feet' } // Feet level - extends 1.0m down
           ];
           
           let totalCollisionResponse = new THREE.Vector3(0, 0, 0);
@@ -4978,6 +5176,38 @@ function setGameplayHUD(isPlaying) {
           
           // Apply collision response by moving rig and dampening velocity
           if (totalCollisionResponse.length() > 0) {
+            // Detect ground collision - if collision is primarily upward, we're on ground
+            const collisionNormal = totalCollisionResponse.clone().normalize();
+            const isGroundCollision = collisionNormal.y > 0.7; // Mostly upward push = ground
+            
+            // Check if player is nearly stationary (standing still)
+            const isStationary = this.velocity.length() < 0.3;
+            
+            // If on ground and stationary, zero out vertical velocity to prevent bouncing
+            if (isGroundCollision && isStationary) {
+              this.velocity.y = 0;
+              // Only apply horizontal collision response, ignore vertical to prevent bounce
+              const horizontalResponse = new THREE.Vector3(
+                totalCollisionResponse.x,
+                0,
+                totalCollisionResponse.z
+              );
+              this.rig.object3D.position.add(horizontalResponse);
+              
+              // Dampen horizontal velocity only
+              if (horizontalResponse.length() > 0) {
+                const horizontalNormal = horizontalResponse.clone().normalize();
+                const velocityInCollisionDirection = this.velocity.clone().projectOnVector(horizontalNormal);
+                this.velocity.sub(velocityInCollisionDirection.multiplyScalar(0.8));
+              }
+              
+              // Skip the rest of collision handling
+              this.checkBallHits(cameraWorldPos);
+              this.checkMeleeHits(cameraWorldPos);
+              return;
+            }
+            
+            // Normal collision handling for moving player
             // NEW: Smart collision response based on grab context
             const leftGrabbing = this.isGrabbing.left && this.grabInfo.left && !this.grabInfo.left.isBall;
             const rightGrabbing = this.isGrabbing.right && this.grabInfo.right && !this.grabInfo.right.isBall;
@@ -5046,7 +5276,7 @@ function setGameplayHUD(isPlaying) {
             this.rig.object3D.position.add(scaledResponse);
             
             // Dampen velocity in collision direction (also scaled)
-            const collisionNormal = totalCollisionResponse.clone().normalize();
+            // collisionNormal already calculated above for ground detection
             const velocityInCollisionDirection = this.velocity.clone().projectOnVector(collisionNormal);
             const dampingStrength = 1.2 * collisionStrength; // Scale damping too
             this.velocity.sub(velocityInCollisionDirection.multiplyScalar(dampingStrength));
@@ -6500,6 +6730,9 @@ function setGameplayHUD(isPlaying) {
           console.log('   Physics vertices:', vertices.length / 3);
           console.log('   Physics triangles:', indices.length / 3);
           
+          // DISABLED: Cannon.js terrain physics - using BVH collision instead
+          // Terrain physics body causes oscillation - BVH is more accurate and stable
+          /*
           // Create Cannon.js Trimesh
           const trimeshShape = new CANNON.Trimesh(vertices, indices);
           
@@ -6507,6 +6740,7 @@ function setGameplayHUD(isPlaying) {
             mass: 0,
             type: CANNON.Body.STATIC,
             shape: trimeshShape,
+            material: terrainMaterial, // Use terrain material for specific contact properties
             collisionFilterGroup: 4, // Same as walls
             collisionFilterMask: -1 // Collides with everything
           });
@@ -6531,6 +6765,11 @@ function setGameplayHUD(isPlaying) {
           } else {
             console.error('❌ Cannon.js world not found!');
           }
+          */
+          
+          console.log('✅ Terrain physics DISABLED - using BVH collision only');
+          console.log('   ✅ Player uses BVH collision (no oscillation)');
+          console.log('   ✅ Bots use BVH collision via applyTerrainCollisionToPhysicsBodies()');
           
           // Clean up physics geometry (not needed after Trimesh is created)
           physicsGeometry.dispose();
@@ -7212,19 +7451,23 @@ function setGameplayHUD(isPlaying) {
           this.lastStealTime = 0; // Track when bot last stole a ball (to prevent rapid stealing)
           
           // Create physics body for the bot
-          const shape = new CANNON.Sphere(0.2);
+          const botRadius = 0.2;
+          const shape = new CANNON.Sphere(botRadius);
           // Position based on team: red bot at negative Z, blue bot at positive Z
           const startZ = this.data.team === 'red' ? -12 : 12;
           this.body = new CANNON.Body({
             mass: 50, // 50kg bot
             shape: shape,
             material: defaultMaterial,
-            position: new CANNON.Vec3(0, 2, startZ), // Team-based starting position
+            position: new CANNON.Vec3(0, 2 - 1.0, startZ), // Offset down by 1.0m for better ground contact
             linearDamping: 0.8,
             angularDamping: 0.8,
             collisionFilterGroup: 1,
-            collisionFilterMask: 6 // Collide with balls (group 2) and surfaces (group 4)
+            collisionFilterMask: 6 // Collide with balls (group 2) and surfaces (group 4) - terrain via BVH
           });
+          
+          // Store the offset so we can apply it during visual sync
+          this.bodyOffset = -1.0;
           
           this.body.gravity = new CANNON.Vec3(0, -1.62, 0); // Moon gravity
           world.addBody(this.body);
@@ -7294,6 +7537,7 @@ function setGameplayHUD(isPlaying) {
           line.setAttribute('position', '0 0 1'); // 1m forward from bot center (positive Z is forward)
           line.setAttribute('rotation', '90 0 0'); // Rotate to point forward (Z-axis)
           line.setAttribute('class', 'bot-direction-indicator');
+          line.setAttribute('visible', 'false'); // HIDDEN - direction indicator not needed
           
           this.el.appendChild(line);
           this.directionIndicator = line;
@@ -7455,20 +7699,28 @@ function setGameplayHUD(isPlaying) {
           // CRITICAL FIX: Use persistent velocity system EXACTLY like humans
           let totalThrust = new THREE.Vector3(0, 0, 0);
           
-          // Simulate left and right thrusters based on navigation needs
-          if (this.thrusterActive.left || this.thrusterActive.right) {
-            // Get forward direction from bot orientation (positive Z is forward)
-            const forwardDir = new THREE.Vector3(0, 0, 1);
-            forwardDir.applyQuaternion(this.el.object3D.quaternion);
-            
-            // CRITICAL FIX: Use same incremental force system as humans
-            // Reduce thrust force when carrying ball (more realistic)
-            const thrustMultiplier = this.isGrabbingBall ? 0.8 : 1.0; // 80% thrust when carrying
-            const incrementalForce = this.data.thrusterForce * thrustMultiplier * dt; // Same as humans: force * dt
-            totalThrust.add(forwardDir.multiplyScalar(incrementalForce));
-            
-            // Debug logging removed to reduce console spam
+          // Get forward direction from bot orientation (positive Z is forward)
+          const forwardDir = new THREE.Vector3(0, 0, 1);
+          forwardDir.applyQuaternion(this.el.object3D.quaternion);
+          
+          // CRITICAL FIX: Use same incremental force system as humans
+          // Reduce thrust force when carrying ball (more realistic)
+          const thrustMultiplier = this.isGrabbingBall ? 0.8 : 1.0; // 80% thrust when carrying
+          const incrementalForce = this.data.thrusterForce * thrustMultiplier * dt; // Same as humans: force * dt
+          
+          // Left thruster - add thrust independently
+          if (this.thrusterActive.left) {
+            const leftThrust = forwardDir.clone().multiplyScalar(incrementalForce);
+            totalThrust.add(leftThrust);
           }
+          
+          // Right thruster - add thrust independently
+          if (this.thrusterActive.right) {
+            const rightThrust = forwardDir.clone().multiplyScalar(incrementalForce);
+            totalThrust.add(rightThrust);
+          }
+          
+          // Now bots get 2x thrust when both thrusters active, just like humans!
           
           // CRITICAL FIX: Add to PERSISTENT velocity (same as humans)
           if (totalThrust.length() > 0) {
@@ -8081,7 +8333,12 @@ function setGameplayHUD(isPlaying) {
           this.applyThrusterForces(deltaTime);
           
           // Update visual position from physics
-          this.el.object3D.position.copy(this.body.position);
+          const offset = this.bodyOffset || 0;
+          this.el.object3D.position.set(
+            this.body.position.x,
+            this.body.position.y - offset, // Remove offset for visual position
+            this.body.position.z
+          );
           this.el.object3D.quaternion.copy(this.body.quaternion);
           
           // Keep bot upright by constraining angular velocity - only allow Y-axis rotation
@@ -10214,11 +10471,11 @@ function setGameplayHUD(isPlaying) {
             // Refresh raycasters
             const leftHand = document.querySelector('#leftHand');
             const rightHand = document.querySelector('#rightHand');
-            if (leftHand && leftHand.components.raycaster) {
-              leftHand.components.raycaster.refreshObjects();
+            if (leftHand && leftHand.components['forward-raycaster']) {
+              leftHand.components['forward-raycaster'].refreshObjects();
             }
-            if (rightHand && rightHand.components.raycaster) {
-              rightHand.components.raycaster.refreshObjects();
+            if (rightHand && rightHand.components['forward-raycaster']) {
+              rightHand.components['forward-raycaster'].refreshObjects();
             }
           }, 100);
           
@@ -10259,11 +10516,11 @@ function setGameplayHUD(isPlaying) {
             // Refresh raycasters
             const leftHand = document.querySelector('#leftHand');
             const rightHand = document.querySelector('#rightHand');
-            if (leftHand && leftHand.components.raycaster) {
-              leftHand.components.raycaster.refreshObjects();
+            if (leftHand && leftHand.components['forward-raycaster']) {
+              leftHand.components['forward-raycaster'].refreshObjects();
             }
-            if (rightHand && rightHand.components.raycaster) {
-              rightHand.components.raycaster.refreshObjects();
+            if (rightHand && rightHand.components['forward-raycaster']) {
+              rightHand.components['forward-raycaster'].refreshObjects();
             }
           }, 100);
         }
@@ -10427,11 +10684,11 @@ function setGameplayHUD(isPlaying) {
             });
             
             // Refresh raycasters after changing button states
-            if (leftHand && leftHand.components.raycaster) {
-              leftHand.components.raycaster.refreshObjects();
+            if (leftHand && leftHand.components['forward-raycaster']) {
+              leftHand.components['forward-raycaster'].refreshObjects();
             }
-            if (rightHand && rightHand.components.raycaster) {
-              rightHand.components.raycaster.refreshObjects();
+            if (rightHand && rightHand.components['forward-raycaster']) {
+              rightHand.components['forward-raycaster'].refreshObjects();
             }
           }
           
@@ -10470,86 +10727,54 @@ function setGameplayHUD(isPlaying) {
           if (this.menuVisible) {
             // Menu is open - ALWAYS show white lasers for menu interaction (takes priority)
             if (leftHand) {
-              leftHand.setAttribute('raycaster', {
-                objects: '.clickable',
+              leftHand.setAttribute('forward-raycaster', {
                 lineColor: '#ffffff',
-                lineOpacity: 1,
-                far: 10,
-                enabled: true
+                maxLength: 10,
+                enabled: true,
+                objects: '.clickable'
               });
             }
             if (rightHand) {
-              rightHand.setAttribute('raycaster', {
-                objects: '.clickable',
+              rightHand.setAttribute('forward-raycaster', {
                 lineColor: '#ffffff',
-                lineOpacity: 1,
-                far: 10,
-                enabled: true
+                maxLength: 10,
+                enabled: true,
+                objects: '.clickable'
               });
             }
           } else if (isEditorActive) {
-            // Menu is closed and editor is active - restore editor raycaster settings
-            // CRITICAL: Don't include .clickable to avoid hitting hidden menu elements
+            // Menu is closed and editor is active - keep lasers visible for editor
             if (leftHand) {
-              leftHand.setAttribute('raycaster', {
-                objects: '[grab-surface], .gizmo-axis',
-                lineColor: '#ffff00',
-                lineOpacity: 0.8,
-                far: 100,
-                enabled: true
+              leftHand.setAttribute('forward-raycaster', {
+                lineColor: '#00ff00',
+                maxLength: 100,
+                enabled: true,
+                objects: '[grab-surface], .gizmo-axis'
               });
-              console.log('🔧 DEBUG: Left hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, far: 100');
             }
             if (rightHand) {
-              rightHand.setAttribute('raycaster', {
-                objects: '[grab-surface], .gizmo-axis',
-                lineColor: '#ffff00',
-                lineOpacity: 0.8,
-                far: 100,
-                enabled: true
+              rightHand.setAttribute('forward-raycaster', {
+                lineColor: '#00ff00',
+                maxLength: 100,
+                enabled: true,
+                objects: '[grab-surface], .gizmo-axis'
               });
-              console.log('🔧 DEBUG: Right hand raycaster set for editor - objects: [grab-surface], .gizmo-axis, far: 100');
             }
           } else {
-            // Normal mode - hide lasers
-            console.log('🔧 DEBUG: Menu closed, hiding lasers (normal mode)');
+            // Menu closed, editor not active - hide lasers
             if (leftHand) {
-              leftHand.setAttribute('raycaster', {
-                objects: '',
-                lineColor: '#ffffff',
-                lineOpacity: 0,
-                far: 10,
+              leftHand.setAttribute('forward-raycaster', {
                 enabled: false
               });
-              // Force immediate update and hide the line mesh
-              if (leftHand.components.raycaster) {
-                leftHand.components.raycaster.data.enabled = false;
-                leftHand.components.raycaster.data.lineOpacity = 0;
-                // CRITICAL: Directly hide the line mesh
-                if (leftHand.components.raycaster.line) {
-                  leftHand.components.raycaster.line.visible = false;
-                }
-              }
             }
             if (rightHand) {
-              rightHand.setAttribute('raycaster', {
-                objects: '',
-                lineColor: '#ffffff',
-                lineOpacity: 0,
-                far: 10,
+              rightHand.setAttribute('forward-raycaster', {
                 enabled: false
               });
-              // Force immediate update and hide the line mesh
-              if (rightHand.components.raycaster) {
-                rightHand.components.raycaster.data.enabled = false;
-                rightHand.components.raycaster.data.lineOpacity = 0;
-                // CRITICAL: Directly hide the line mesh
-                if (rightHand.components.raycaster.line) {
-                  rightHand.components.raycaster.line.visible = false;
-                }
-              }
             }
           }
+          
+          console.log('✅ Raycasters updated for menu state');
           
           // Reset thruster states when menu opens
           if (this.menuVisible) {
@@ -14293,11 +14518,11 @@ function setGameplayHUD(isPlaying) {
             // Refresh raycasters
             const leftHand = document.querySelector('#leftHand');
             const rightHand = document.querySelector('#rightHand');
-            if (leftHand && leftHand.components.raycaster) {
-              leftHand.components.raycaster.refreshObjects();
+            if (leftHand && leftHand.components['forward-raycaster']) {
+              leftHand.components['forward-raycaster'].refreshObjects();
             }
-            if (rightHand && rightHand.components.raycaster) {
-              rightHand.components.raycaster.refreshObjects();
+            if (rightHand && rightHand.components['forward-raycaster']) {
+              rightHand.components['forward-raycaster'].refreshObjects();
             }
           }
           // CRITICAL: Re-show main menu and re-enable ALL its buttons
@@ -14325,11 +14550,11 @@ function setGameplayHUD(isPlaying) {
                 // Fallback: refresh raycasters directly
                 const leftHand = document.querySelector('#leftHand');
                 const rightHand = document.querySelector('#rightHand');
-                if (leftHand && leftHand.components.raycaster) {
-                  leftHand.components.raycaster.refreshObjects();
+                if (leftHand && leftHand.components['forward-raycaster']) {
+                  leftHand.components['forward-raycaster'].refreshObjects();
                 }
-                if (rightHand && rightHand.components.raycaster) {
-                  rightHand.components.raycaster.refreshObjects();
+                if (rightHand && rightHand.components['forward-raycaster']) {
+                  rightHand.components['forward-raycaster'].refreshObjects();
                 }
               }
             }, 100);
@@ -14467,8 +14692,8 @@ function setGameplayHUD(isPlaying) {
           const leftHand = document.querySelector('#leftHand');
           const rightHand = document.querySelector('#rightHand');
           
-          if (leftHand && leftHand.components.raycaster) {
-            const raycaster = leftHand.components.raycaster;
+          if (leftHand && leftHand.components['forward-raycaster']) {
+            const raycaster = leftHand.components['forward-raycaster'];
             raycaster.refreshObjects();
             // Force immediate update
             if (raycaster.raycaster) {
@@ -14476,8 +14701,8 @@ function setGameplayHUD(isPlaying) {
             }
           }
           
-          if (rightHand && rightHand.components.raycaster) {
-            const raycaster = rightHand.components.raycaster;
+          if (rightHand && rightHand.components['forward-raycaster']) {
+            const raycaster = rightHand.components['forward-raycaster'];
             raycaster.refreshObjects();
             // Force immediate update
             if (raycaster.raycaster) {
@@ -15239,7 +15464,7 @@ function setGameplayHUD(isPlaying) {
                 }
                 
                 // NEW: Check if raycaster is actually pointing at the selected object or gizmo
-                const handRaycaster = hand.components['raycaster'];
+                const handRaycaster = hand.components['forward-raycaster'];
                 let isPointingAtTarget = false;
                 
                 if (handRaycaster && handRaycaster.intersectedEls.length > 0) {
@@ -15288,7 +15513,7 @@ function setGameplayHUD(isPlaying) {
                 this.currentDepthOffset = 0; // Reset depth offset
                 
                 // Store initial raycaster intersection point (where laser hits)
-                const raycaster = hand.components.raycaster;
+                const raycaster = hand.components['forward-raycaster'];
                 if (raycaster && raycaster.raycaster) {
                   const intersection = new THREE.Vector3();
                   const ray = raycaster.raycaster;
@@ -15380,47 +15605,9 @@ function setGameplayHUD(isPlaying) {
         },
         
         updateVRRaycasters: function() {
-          // CRITICAL: Check if menu is open - menu has priority over editor settings
-          const menuToggle = document.querySelector('[menu-toggle]');
-          const isMenuOpen = menuToggle && menuToggle.components['menu-toggle'] && menuToggle.components['menu-toggle'].menuVisible;
-          
-          if (isMenuOpen) {
-            console.log('🔧 DEBUG: updateVRRaycasters - Menu is open, skipping update (menu has priority)');
-            return; // Don't change raycaster settings when menu is open
-          }
-          
-          [this.leftHand, this.rightHand].forEach(hand => {
-            if (hand) {
-              const raycasterComponent = hand.components.raycaster;
-              if (raycasterComponent) {
-                if (this.data.enabled) {
-                  // Editor mode: show laser, target grab-surface objects AND gizmo axes
-                  // CRITICAL: Set far to 100 for longer range
-                  hand.setAttribute('raycaster', {
-                    objects: '[grab-surface], .gizmo-axis',
-                    lineColor: '#ffff00',
-                    lineOpacity: 0.8,
-                    far: 100,
-                    enabled: true
-                  });
-                  console.log('🔧 DEBUG: updateVRRaycasters - Editor mode enabled, far: 100');
-                } else {
-                  // Normal mode: hide laser completely
-                  hand.setAttribute('raycaster', {
-                    objects: '',
-                    lineColor: '#ffffff',
-                    lineOpacity: 0,
-                    enabled: false
-                  });
-                  // CRITICAL: Force hide the line mesh immediately
-                  if (raycasterComponent.line) {
-                    raycasterComponent.line.visible = false;
-                  }
-                  console.log('🔧 DEBUG: updateVRRaycasters - Normal mode, lasers hidden');
-                }
-              }
-            }
-          });
+          // NOTE: Raycaster management is now handled by the menu-toggle component
+          // This function is kept for compatibility but does nothing
+          // menu-toggle handles enabling/disabling forward-raycaster based on menu and editor state
         },
         
         setupAButtonListeners: function() {
@@ -15522,7 +15709,7 @@ function setGameplayHUD(isPlaying) {
                 }
                 this.lastSelectionTime = now;
                 
-                const handRaycaster = hand.components['raycaster'];
+                const handRaycaster = hand.components['forward-raycaster'];
                 if (handRaycaster && handRaycaster.intersectedEls.length > 0) {
                   const target = handRaycaster.intersectedEls[0];
                   
@@ -15585,7 +15772,7 @@ function setGameplayHUD(isPlaying) {
             }
             
             // Use raycaster intersection point (where the laser hits)
-            const raycaster = this.activeTransformHand.components.raycaster;
+            const raycaster = this.activeTransformHand.components['forward-raycaster'];
             if (raycaster && raycaster.raycaster) {
               const currentIntersection = new THREE.Vector3();
               const ray = raycaster.raycaster;
@@ -17970,6 +18157,17 @@ function setGameplayHUD(isPlaying) {
             controllerForward.negate();
           }
           
+          // CRITICAL FIX: Constrain torso to not face backwards relative to head
+          // Check if controller direction would make body face backwards
+          const controllerVsHead = controllerForward.dot(headForwardFlat);
+          if (controllerVsHead < -0.3) { // If controller points > 107° away from head
+            // Body can't physically face backwards - clamp controller influence
+            // Project controller forward onto the valid hemisphere around head direction
+            const perpToHead = new THREE.Vector3().crossVectors(headForwardFlat, new THREE.Vector3(0, 1, 0));
+            const projOnPerp = perpToHead.multiplyScalar(controllerForward.dot(perpToHead));
+            controllerForward.copy(headForwardFlat).multiplyScalar(0.3).add(projOnPerp).normalize();
+          }
+          
           let controllerWeight = 0.8;
           if (shoulderDist < 0.25) {
             controllerWeight = 0.2;
@@ -18500,6 +18698,7 @@ function setGameplayHUD(isPlaying) {
              fog="type: exponential; color: #000; density: 0.015">
       
       <a-assets>
+        <!-- REMOVED: Missing texture files not used in this project
         <img id="boxTexture" src="assets/blue-rounded-neon-border.jpg">
         <img id="panelAlbedo" src="assets/TCom_Scifi_Panel_4K_albedo.jpg">
         <img id="panelHeightmap" src="assets/TCom_Scifi_Panel_4K_height.jpg">
@@ -18507,6 +18706,7 @@ function setGameplayHUD(isPlaying) {
         <img id="panelMetallic" src="assets/TCom_Scifi_Panel_4K_metallic.jpg">
         <img id="panelRoughness" src="assets/TCom_Scifi_Panel_4K_roughness.jpg">
         <img id="panelAo" src="assets/TCom_Scifi_Panel_4K_ao.jpg">
+        -->
         
         <!-- Arm Segment 3D Model -->
         <a-asset-item id="arm-segment-model" src="../assets/test-arm.glb"></a-asset-item>
@@ -19067,13 +19267,14 @@ function setGameplayHUD(isPlaying) {
                       impact-effect="color: #888888"
                       class="grabbable-player"
                       data-player-id="player_0">
-              <!-- Drone body visual (HIDDEN - using full body avatar now) -->
+              <!-- Drone body visual - REMOVED (file doesn't exist, using full body avatar)
               <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                            scale="0.4 0.4 0.4"
                            rotation="0 90 0"
                            visible="false"
                            fix-model-exposure>
               </a-gltf-model>
+              -->
               <a-entity light="type: point; color: #888888; intensity: 1; distance: 3"></a-entity>
               <!-- Impact sphere with animation component -->
               <a-sphere id="player-impact" radius="0.1" color="#888888" opacity="0" visible="false" material="side: double; transparent: true"
@@ -19412,8 +19613,7 @@ function setGameplayHUD(isPlaying) {
           
           <a-entity id="leftHand" 
                    hand-controls="hand: left; handModelStyle: lowPoly"
-                   laser-controls="hand: left"
-                   raycaster="objects: .clickable; lineColor: #ffffff; lineOpacity: 0"
+                   forward-raycaster="hand: left; lineColor: #ffffff; maxLength: 10; enabled: false"
                    hand-collider
                    hand-haptics
                    debug-controller
@@ -19449,8 +19649,7 @@ function setGameplayHUD(isPlaying) {
           
           <a-entity id="rightHand" 
                    hand-controls="hand: right; handModelStyle: lowPoly"
-                   laser-controls="hand: right"
-                   raycaster="objects: .clickable; lineColor: #ffffff; lineOpacity: 0"
+                   forward-raycaster="hand: right; lineColor: #ffffff; maxLength: 10; enabled: false"
                    hand-collider
                    hand-haptics
                    debug-controller
@@ -19577,13 +19776,14 @@ function setGameplayHUD(isPlaying) {
                   impact-effect="color: #ff0000"
                   class="grabbable-player"
                   data-player-id="player_0">
-          <!-- Drone body visual (HIDDEN - using full body avatar now) -->
+          <!-- Drone body visual - REMOVED (file doesn't exist, using full body avatar)
           <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        sync-drone-rotation
                        visible="false"
                        fix-model-exposure>
           </a-gltf-model>
+          -->
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-0" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -19716,13 +19916,14 @@ function setGameplayHUD(isPlaying) {
                    impact-effect="color: #ff0000"
                    class="grabbable-player"
                    data-player-id="player_1">
-          <!-- Drone body visual (HIDDEN - using full body avatar now) -->
+          <!-- Drone body visual - REMOVED (file doesn't exist, using full body avatar)
           <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        sync-drone-rotation
                        visible="false"
                        fix-model-exposure>
           </a-gltf-model>
+          -->
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-1" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -19855,13 +20056,14 @@ function setGameplayHUD(isPlaying) {
                    impact-effect="color: #ff00ff"
                    class="grabbable-player"
                    data-player-id="player_2">
-          <!-- Drone body visual (HIDDEN - using full body avatar now) -->
+          <!-- Drone body visual - REMOVED (file doesn't exist, using full body avatar)
           <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        sync-drone-rotation
                        visible="false"
                        fix-model-exposure>
           </a-gltf-model>
+          -->
           <a-entity light="type: point; color: #ff00ff; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-2" radius="0.1" color="#ff00ff" opacity="0" visible="false" material="side: double; transparent: true"
@@ -19994,13 +20196,14 @@ function setGameplayHUD(isPlaying) {
                    impact-effect="color: #ffff00"
                    class="grabbable-player"
                    data-player-id="player_3">
-          <!-- Drone body visual (HIDDEN - using full body avatar now) -->
+          <!-- Drone body visual - REMOVED (file doesn't exist, using full body avatar)
           <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        sync-drone-rotation
                        visible="false"
                        fix-model-exposure>
           </a-gltf-model>
+          -->
           <a-entity light="type: point; color: #ffff00; intensity: 1; distance: 3"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="remote-impact-3" radius="0.1" color="#ffff00" opacity="0" visible="false" material="side: double; transparent: true"
@@ -20120,13 +20323,14 @@ function setGameplayHUD(isPlaying) {
                    impact-effect="color: #ff0000"
                    class="grabbable-player"
                    data-player-id="bot_red">
-          <!-- Drone body visual (HIDDEN - using full body avatar now) -->
+          <!-- Drone body visual - REMOVED (file doesn't exist, using full body avatar)
           <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        rotation="0 90 0"
                        visible="false"
                        fix-model-exposure>
           </a-gltf-model>
+          -->
           <a-entity light="type: point; color: #ff0000; intensity: 1; distance: 4"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="bot-impact" radius="0.1" color="#ff0000" opacity="0" visible="false" material="side: double; transparent: true"
@@ -20146,13 +20350,14 @@ function setGameplayHUD(isPlaying) {
                    impact-effect="color: #0000ff"
                    class="grabbable-player"
                    data-player-id="bot_blue">
-          <!-- Drone body visual (HIDDEN - using full body avatar now) -->
+          <!-- Drone body visual - REMOVED (file doesn't exist, using full body avatar)
           <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        rotation="0 90 0"
                        visible="false"
                        fix-model-exposure>
           </a-gltf-model>
+          -->
           <a-entity light="type: point; color: #0000ff; intensity: 1; distance: 4"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="bot-blue-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"
@@ -20172,13 +20377,14 @@ function setGameplayHUD(isPlaying) {
                    impact-effect="color: #0000ff"
                    class="grabbable-player"
                    data-player-id="bot_green">
-          <!-- Drone body visual (HIDDEN - using full body avatar now) -->
+          <!-- Drone body visual - REMOVED (file doesn't exist, using full body avatar)
           <a-gltf-model src="assets/compressed_1762316343552_Drone Blender_2.90-edit2.glb"
                        scale="0.4 0.4 0.4"
                        rotation="0 90 0"
                        visible="false"
                        fix-model-exposure>
           </a-gltf-model>
+          -->
           <a-entity light="type: point; color: #0000ff; intensity: 1; distance: 4"></a-entity>
           <!-- Impact sphere with animation component -->
           <a-sphere id="bot-green-impact" radius="0.1" color="#0000ff" opacity="0" visible="false" material="side: double; transparent: true"
