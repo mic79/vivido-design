@@ -442,7 +442,7 @@ const ArenaManager = {
   ARENA_BASE_URL: 'https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/arenas/',
   MAX_PERSONAL_SLOTS: 10,
   
-  currentArenaName: 'One',
+  currentArenaName: 'Zero',
   currentArenaSource: 'official', // 'official' or 'personal'
   officialArenas: [
     { id: 'zero', name: 'Zero', description: 'Empty arena for testing', file: 'zero.json' },
@@ -465,6 +465,12 @@ const ArenaManager = {
         this.captureDefaultSnapshot();
       });
     }
+    
+    // Load arena "Zero" by default (empty arena)
+    setTimeout(() => {
+      console.log('🗺️ Loading default arena: Zero');
+      this.loadOfficialArena('zero');
+    }, 100);
     
     // Official arenas are already set above, but try to load from GitHub
     try {
@@ -521,6 +527,28 @@ const ArenaManager = {
         } catch (e) {
           console.warn('Failed to serialize arena object:', entity, e);
         }
+      }
+    });
+    
+    // CRITICAL: Also save spawn points
+    const spawnPoints = document.querySelectorAll('.spawn-point');
+    spawnPoints.forEach(entity => {
+      try {
+        const data = serializeArenaObject(entity);
+        objects.push(data);
+      } catch (e) {
+        console.warn('Failed to serialize spawn point:', entity, e);
+      }
+    });
+    
+    // CRITICAL: Also save geysers
+    const geysers = document.querySelectorAll('.geyser');
+    geysers.forEach(entity => {
+      try {
+        const data = serializeArenaObject(entity);
+        objects.push(data);
+      } catch (e) {
+        console.warn('Failed to serialize geyser:', entity, e);
       }
     });
     
