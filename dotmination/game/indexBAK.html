@@ -2,21 +2,46 @@
 <html lang="en" >
 <head>
   <meta charset="UTF-8">
-  <title>Dotmination</title>
+  <title>Dotmination v1</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, minimal-ui, viewport-fit=cover">
-  <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#ECEFF1">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="#ECEFF1">
   <link rel="apple-touch-icon" href="./images/apple-touch-icon.png">
   <link rel="icon" href="./images/favicon.png">
-  <link rel="manifest" href="./manifest.json">
+
+  <meta name="title" content="Dotmination">
+  <meta name="description" content="Play endlessly for Dotmination!">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://dotmination.vivido-design.com/">
+  <meta property="og:title" content="Dotmination">
+  <meta property="og:description" content="Play endlessly for Dotmination!">
+  <meta property="og:image" content="https://dotmination.vivido-design.com/images/feature2.png">
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://dotmination.vivido-design.com/">
+  <meta property="twitter:title" content="Dotmination">
+  <meta property="twitter:description" content="Play endlessly for Dotmination!">
+  <meta property="twitter:image" content="https://dotmination.vivido-design.com/images/feature2.png">
 
   <link rel="stylesheet" href="./lib/normalize.css">
   <link rel='stylesheet' href='./fonts/roboto.css' type='text/css'>
   <link rel='stylesheet' href='./lib/all.min.css'>
-  <link rel="stylesheet" href="./style.css?v=2024051604">
+  <link rel="stylesheet" href="./style.css">
+
+  <!-- Global site tag (gtag.js) - Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-ELYB3143RL"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-ELYB3143RL');
+  </script>
 
 </head>
 <body>
@@ -44,23 +69,12 @@
     </svg></a></div>
 </div>
 
-<!-- <div class="menu">
-  <ul>
-    <li>Training</li>
-    <li>Solo</li>
-    <li>Local multiplayer</li>
-  </ul>
-  <div class="version">v1.1</div>
-</div> -->
-
 <div class="container">
   <header>
     <div class="players noselect">
-      <span id="player-1-score" class="player-score">0</span>
       <div class="player player--1 selectableX" data-playerId><i class="fas fa-robot"></i></div>
       <p>vs</p>
       <div class="player player--2 selectableX" data-modal=".profile-modal" data-playerId><i class="fas fa-user-secret"></i></div>
-      <span id="player-2-score" class="player-score">0</span>
     </div>
   </header>
   <div class="field-wrapper">
@@ -123,11 +137,8 @@
     <div class="field noselect"></div>
   </div>
   <footer>
-    <div id="main-menu-btn" class="header-icon-btn"><i class="fas fa-bars"></i></div>
     <div class="random" data-modal=".mode-modal"><i class="fas fa-random"></i></div>
-    <div class="rts" data-modal=".mode-modal"><i class="fas fa-bolt"></i></div>
     <div class="level" data-modal=".mode-modal"><i class="fas fa-layer-group"></i><span class="level-value">100</span></div>
-    <div class="multiplayer" data-modal=".mode-modal"><i class="fas fa-users"></i></div>
     <div class="time" data-modal=".time-modal"><div id="time"></div><i class="fas fa-clock"></i></div>
     <!-- <div class="moves"><i class="fas fa-dot-circle"></i></div> -->
   </footer>
@@ -136,7 +147,7 @@
     <div class="backdrop"></div>
     <div class="wrapper">
       <div class="modal-close"><i class="fas fa-times"></i></div>
-      <h2>Stats</h2>
+      <h2>Profile</h2>
       <div class="row">
         <div class="col card btn worst-time" data-level="">
           <p>Worst time</p>
@@ -168,43 +179,14 @@
           <h1><i class="fas fa-random"></i></h1>
           <p>Random</p>
         </div>
-        <div class="col card btn" data-mode="realTimeResource">
-          <h1><i class="fas fa-bolt"></i></h1>
-          <p>Real-Time</p>
-        </div>
-      </div>
-      
-      <div class="bot-difficulty">
-        <h3>Bot Difficulty</h3>
-        <div class="row">
-          <div class="col card btn difficulty-option selected" data-difficulty="random">
-            <h1><i class="fas fa-robot"></i></h1>
-            <p>Normal</p>
-          </div>
-          
-          <div class="col card btn difficulty-option" data-difficulty="smart">
-            <h1><i class="fas fa-brain"></i></h1>
-            <p>Harder</p>
-          </div>
-        </div>
       </div>
       
       <div class="list list--mode-regular">
-        <ul></ul>
-      </div>
-
-      <div class="multiplayer-start-options" style="display: none;">
-        <h3>Start Type</h3>
-        <div class="row">
-          <div class="col card btn btn-start-type start-type-option" data-start-type="blank">
-            <h1><i class="far fa-circle"></i></h1>
-            <p>Blank Start</p>
-          </div>
-          <div class="col card btn btn-start-type start-type-option" data-start-type="half-filled">
-            <h1><i class="fas fa-adjust"></i></h1>
-            <p>Half-Filled Start</p>
-          </div>
-        </div>
+        <ul>
+          <li class="card btn">List item</li>
+          <li class="card btn">List item</li>
+          <li class="card btn">List item</li>
+        </ul>
       </div>
     </div>
   </div>
@@ -229,74 +211,6 @@
   </div>
 </div>
 
-<!-- Main Menu Modal -->
-<div class="modal main-menu-modal">
-  <div class="backdrop"></div>
-  <div class="wrapper">
-    <div class="modal-close"><i class="fas fa-times"></i></div>
-    <h2>Menu</h2>
-    <div class="row">
-      <div class="col card btn btn-main-menu" data-action="mode">
-        <h1>Game Modes</h1>
-      </div>
-    </div>
-    <div class="row">
-      <div class="col card btn btn-main-menu" data-action="how-to-play">
-        <p>How to Play</p>
-      </div>
-    </div>
-    <div class="row">
-      <div class="col card btn btn-main-menu" data-action="profile">
-        <p>View Stats</p>
-      </div>
-    </div>
-    <div class="row">
-      <div class="col card btn btn-main-menu" data-action="colors">
-        <p>Change Colors</p>
-      </div>
-    </div>
-    <div class="row justify-content-center">
-      <div class="col">
-        <p class="text-center">For info and feedback, please visit<br><a href="https://discord.gg/vvuzWnTWKE" target="_blank" onclick="window.open('https://discord.gg/vvuzWnTWKE', '_system'); return false;">Dotmination Discord</a></p>
-        <p class="smaller">Last updated: 2025-05-16</p>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Tutorial Welcome Modal -->
-<div class="modal welcome-tutorial-modal">
-  <div class="backdrop"></div>
-  <div class="wrapper">
-    <div class="modal-close"><i class="fas fa-times"></i></div>
-    <h2>Welcome to Dotmination!</h2>
-    <p>Learn the basics with a quick interactive tutorial.</p>
-    <div class="row">
-      <div class="col card btn btn-start-tutorial">
-        <h1><i class="fas fa-graduation-cap"></i></h1>
-        <p>Start Tutorial</p>
-      </div>
-      <div class="col card btn btn-skip-tutorial">
-        <h1><i class="fas fa-layer-group"></i></h1>
-        <p>Play Level 1</p>
-      </div>
-    </div>
-    <p class="smaller">You can access this tutorial anytime from the Main Menu.</p>
-  </div>
-</div>
-
-<!-- Tutorial Step Instruction Modal -->
-<div class="modal tutorial-step-modal">
-  <div class="backdrop"></div>
-  <div class="wrapper">
-    <h2 id="tutorial-step-title">Step X</h2>
-    <p id="tutorial-step-instruction">Instruction for the step goes here.</p>
-    <p id="tutorial-step-objective">Objective: Do this thing.</p>
-    <button id="btn-quit-tutorial" class="btn-quit-tutorial">Quit Tutorial</button>
-    <div class="row"><div id="btn-start-level-1" class="col card btn btn-start-level-1 text-center">Start Level 1</div></div>
-  </div>
-</div>
-
 <script src='./lib/jquery-3.5.1.min.js'></script>
 <script src='./lib/gsap/gsap.min.js'></script>
 <script src='./lib/gsap/CSSRulePlugin.min.js'></script>
@@ -304,9 +218,7 @@
 <script src='./lib/shake.js'></script>
 <script src='./lib/moment.js'></script>
 <script src='./lib/howler.min.js'></script>
-<script type="module" src="./modules/utils.js?v=2024051604"></script>
-<script type="module" src="./script.js?v=2024051608"></script>
-<script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+<script src="./script.js"></script>
 
 </body>
 </html>
