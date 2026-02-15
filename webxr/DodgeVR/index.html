@@ -1346,6 +1346,250 @@
         }
       });
 
+      // Ball trail component - performant ribbon trails showing speed, direction, spin
+      AFRAME.registerComponent('ball-trail', {
+        schema: {
+          color: { type: 'color', default: '#ffffff' },
+          centerWidth: { type: 'number', default: 0.03 },
+          sideWidth: { type: 'number', default: 0.01 },
+          sideOffset: { type: 'number', default: 0.06 },
+          maxSegments: { type: 'number', default: 40 }
+        },
+
+        init: function() {
+          this.maxSeg = this.data.maxSegments;
+          // Ring buffer for position history
+          this.positions = [];
+          this.headIndex = 0;
+          this.filledCount = 0;
+          // Reusable vectors
+          this._pos = new THREE.Vector3();
+          this._vel = new THREE.Vector3();
+          this._angVel = new THREE.Vector3();
+          this._camPos = new THREE.Vector3();
+          this._dir = new THREE.Vector3();
+          this._side = new THREE.Vector3();
+          this._up = new THREE.Vector3(0, 1, 0);
+          this._spinAxis = new THREE.Vector3();
+          this._offsetL = new THREE.Vector3();
+          this._offsetR = new THREE.Vector3();
+          this._right = new THREE.Vector3(1, 0, 0);
+          this._quat = new THREE.Quaternion();
+
+          // Pre-allocate position ring buffer
+          for (let i = 0; i < this.maxSeg; i++) {
+            this.positions.push(new THREE.Vector3());
+          }
+
+          // Create 3 ribbon trails
+          const color = new THREE.Color(this.data.color);
+          this.trails = [];
+          const configs = [
+            { width: this.data.centerWidth, offsetType: 'center', opacity: 0.9 },
+            { width: this.data.sideWidth, offsetType: 'left', opacity: 0.6 },
+            { width: this.data.sideWidth, offsetType: 'right', opacity: 0.6 }
+          ];
+
+          configs.forEach((cfg) => {
+            const maxVerts = (this.maxSeg + 1) * 2;
+            const maxIndices = this.maxSeg * 6;
+
+            const posAttr = new THREE.BufferAttribute(new Float32Array(maxVerts * 3), 3);
+            posAttr.setUsage(THREE.DynamicDrawUsage);
+            const alphaAttr = new THREE.BufferAttribute(new Float32Array(maxVerts), 1);
+            alphaAttr.setUsage(THREE.DynamicDrawUsage);
+
+            const indices = new Uint16Array(maxIndices);
+            for (let i = 0; i < this.maxSeg; i++) {
+              const base = i * 2;
+              const idx = i * 6;
+              indices[idx]     = base;
+              indices[idx + 1] = base + 1;
+              indices[idx + 2] = base + 2;
+              indices[idx + 3] = base + 1;
+              indices[idx + 4] = base + 3;
+              indices[idx + 5] = base + 2;
+            }
+
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', posAttr);
+            geom.setAttribute('alpha', alphaAttr);
+            geom.setIndex(new THREE.BufferAttribute(indices, 1));
+            geom.setDrawRange(0, 0); // Start with nothing drawn
+
+            const mat = new THREE.ShaderMaterial({
+              uniforms: {
+                uColor: { value: color },
+                uBaseOpacity: { value: cfg.opacity }
+              },
+              vertexShader: `
+                attribute float alpha;
+                varying float vAlpha;
+                void main() {
+                  vAlpha = alpha;
+                  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+              `,
+              fragmentShader: `
+                uniform vec3 uColor;
+                uniform float uBaseOpacity;
+                varying float vAlpha;
+                void main() {
+                  gl_FragColor = vec4(uColor, uBaseOpacity * vAlpha);
+                }
+              `,
+              transparent: true,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+              blending: THREE.AdditiveBlending
+            });
+
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.frustumCulled = false;
+            mesh.renderOrder = 1;
+            this.el.sceneEl.object3D.add(mesh);
+
+            this.trails.push({
+              mesh: mesh,
+              geom: geom,
+              posAttr: posAttr,
+              alphaAttr: alphaAttr,
+              width: cfg.width,
+              offsetType: cfg.offsetType
+            });
+          });
+
+          this.spinAngle = 0; // Accumulated spin for side trail spiral
+        },
+
+        tick: function(time, dt) {
+          const grab = this.el.components['simple-grab'];
+          if (!grab || !grab.body) return;
+
+          const body = grab.body;
+          this._vel.set(body.velocity.x, body.velocity.y, body.velocity.z);
+          const speed = this._vel.length();
+
+          // Get ball world position
+          this.el.object3D.getWorldPosition(this._pos);
+
+          // Push position into ring buffer
+          this.positions[this.headIndex].copy(this._pos);
+          this.headIndex = (this.headIndex + 1) % this.maxSeg;
+          if (this.filledCount < this.maxSeg) this.filledCount++;
+
+          // Speed-based visible length: faster = more segments
+          const visibleCount = Math.min(
+            Math.max(Math.floor(speed * 4), 2),
+            this.filledCount
+          );
+
+          // Hide trails if essentially stationary
+          if (speed < 0.1) {
+            this.trails.forEach(t => t.geom.setDrawRange(0, 0));
+            return;
+          }
+
+          // Get angular velocity for spin
+          this._angVel.set(body.angularVelocity.x, body.angularVelocity.y, body.angularVelocity.z);
+          const spinSpeed = this._angVel.length();
+          const dtSec = (dt || 16) / 1000;
+
+          // Accumulate spin angle for spiral
+          if (spinSpeed > 0.5) {
+            this.spinAngle += spinSpeed * dtSec;
+          }
+
+          // Get camera position for billboard facing
+          const cam = this.el.sceneEl.camera;
+          if (cam) cam.getWorldPosition(this._camPos);
+
+          // Build ribbons
+          for (let t = 0; t < this.trails.length; t++) {
+            const trail = this.trails[t];
+            const posArr = trail.posAttr.array;
+            const alphaArr = trail.alphaAttr.array;
+            const halfW = trail.width * 0.5;
+            let vertIdx = 0;
+
+            for (let i = 0; i < visibleCount; i++) {
+              // Walk backwards from most recent
+              const bufIdx = ((this.headIndex - 1 - i) + this.maxSeg * 2) % this.maxSeg;
+              const p = this.positions[bufIdx];
+
+              // Get direction for this segment
+              if (i < visibleCount - 1) {
+                const nextBufIdx = ((this.headIndex - 2 - i) + this.maxSeg * 2) % this.maxSeg;
+                this._dir.subVectors(p, this.positions[nextBufIdx]).normalize();
+              }
+              // else keep previous dir
+
+              // Apply side offset for left/right trails (with spin spiral)
+              let offsetX = 0, offsetY = 0, offsetZ = 0;
+              if (trail.offsetType !== 'center') {
+                const sideSign = trail.offsetType === 'left' ? -1 : 1;
+                const angle = this.spinAngle + (i * 0.15 * (spinSpeed > 0.5 ? 1 : 0));
+
+                // Create perpendicular offset, rotated by spin
+                if (this._vel.length() > 0.01) {
+                  this._spinAxis.copy(this._vel).normalize();
+                } else {
+                  this._spinAxis.set(0, 0, 1);
+                }
+                // Get a perpendicular vector
+                if (Math.abs(this._spinAxis.y) < 0.99) {
+                  this._offsetL.crossVectors(this._spinAxis, this._up).normalize();
+                } else {
+                  this._offsetL.crossVectors(this._spinAxis, this._right).normalize();
+                }
+                this._offsetR.crossVectors(this._spinAxis, this._offsetL).normalize();
+
+                const sOff = this.data.sideOffset;
+                offsetX = (this._offsetL.x * Math.cos(angle) + this._offsetR.x * Math.sin(angle)) * sOff * sideSign;
+                offsetY = (this._offsetL.y * Math.cos(angle) + this._offsetR.y * Math.sin(angle)) * sOff * sideSign;
+                offsetZ = (this._offsetL.z * Math.cos(angle) + this._offsetR.z * Math.sin(angle)) * sOff * sideSign;
+              }
+
+              const px = p.x + offsetX;
+              const py = p.y + offsetY;
+              const pz = p.z + offsetZ;
+
+              // Billboard: perpendicular to both trail dir and view dir
+              this._side.subVectors(this._camPos, p);
+              this._side.crossVectors(this._dir, this._side).normalize().multiplyScalar(halfW);
+
+              // Two vertices per position (left/right of ribbon center)
+              const vi = vertIdx * 3;
+              posArr[vi]     = px - this._side.x;
+              posArr[vi + 1] = py - this._side.y;
+              posArr[vi + 2] = pz - this._side.z;
+              posArr[vi + 3] = px + this._side.x;
+              posArr[vi + 4] = py + this._side.y;
+              posArr[vi + 5] = pz + this._side.z;
+
+              // Alpha fades from 1 at head to 0 at tail
+              const alpha = 1.0 - (i / visibleCount);
+              alphaArr[vertIdx] = alpha;
+              alphaArr[vertIdx + 1] = alpha;
+
+              vertIdx += 2;
+            }
+
+            trail.posAttr.needsUpdate = true;
+            trail.alphaAttr.needsUpdate = true;
+            trail.geom.setDrawRange(0, Math.max(0, (visibleCount - 1)) * 6);
+          }
+        },
+
+        remove: function() {
+          this.trails.forEach(t => {
+            t.mesh.parent.remove(t.mesh);
+            t.geom.dispose();
+            t.mesh.material.dispose();
+          });
+        }
+      });
+
       // Add glow component
       AFRAME.registerComponent('glow', {
         schema: {
@@ -3773,6 +4017,7 @@
              color="#ff0000" 
              glow="color: #ff0000; intensity: 1.5"
              simple-grab="player: player1"
+             ball-trail="color: #ff0000"
              debug-collider
              obb-collider>
         <a-entity light="type: point;
@@ -3802,6 +4047,7 @@
              color="#0000ff" 
              glow="color: #0000ff; intensity: 1.5"
              simple-grab="player: player2"
+             ball-trail="color: #0000ff"
              debug-collider
              obb-collider>
         <a-entity light="type: point; 
