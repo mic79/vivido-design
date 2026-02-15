@@ -2101,13 +2101,24 @@
             impactSound.components.sound.playSound();
           }
           
-          // Set up initial state and show
+          // Get the THREE.js material directly - avoids setAttribute overhead
+          // which can break on Quest Browser when called every frame
           const sphere = this.impactSphere;
+          const mesh = sphere.getObject3D('mesh');
+          if (!mesh) {
+            console.warn('Impact sphere mesh not ready');
+            return;
+          }
+          const mat = mesh.material;
+          
+          // Set up initial state and show
           sphere.object3D.visible = true;
-          sphere.setAttribute('material', 'opacity', 0.5);
+          mat.opacity = 0.5;
+          mat.transparent = true;
+          mat.needsUpdate = true;
           sphere.object3D.scale.set(1, 1, 1);
           
-          // Animate in JS: grow radius from 0.05 to 1.5, fade opacity from 0.5 to 0
+          // Animate in JS: grow from base size to 1.5m, fade opacity from 0.5 to 0
           const duration = 1000;
           const startTime = performance.now();
           const startRadius = 0.05;
@@ -2125,14 +2136,15 @@
             
             const s = currentRadius / startRadius;
             sphere.object3D.scale.set(s, s, s);
-            sphere.setAttribute('material', 'opacity', currentOpacity);
+            // Direct THREE.js material update - no DOM/A-Frame overhead
+            mat.opacity = currentOpacity;
             
             if (t < 1) {
               this._animFrame = requestAnimationFrame(animate);
             } else {
               // Animation complete - hide sphere and reset
               sphere.object3D.visible = false;
-              sphere.setAttribute('material', 'opacity', 0);
+              mat.opacity = 0;
               sphere.object3D.scale.set(1, 1, 1);
               this._animFrame = null;
             }
