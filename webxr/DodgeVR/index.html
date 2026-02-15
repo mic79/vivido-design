@@ -2049,11 +2049,19 @@
       });
 
       // Impact effect component
+      // Uses A-Frame tick() for animation instead of requestAnimationFrame,
+      // because window-level rAF can be throttled/paused on standalone Quest Browser
+      // once inside an immersive WebXR session.
       AFRAME.registerComponent('impact-effect', {
         schema: {
           color: { type: 'color', default: '#ffffff' }
         },
         init: function() {
+          // Animation state
+          this._animating = false;
+          this._animStart = 0;
+          this._mat = null;
+
           // Find the impact sphere within this entity
           this.impactSphere = this.el.querySelector('a-sphere[id$="-impact"]');
           if (!this.impactSphere) {
@@ -2066,16 +2074,10 @@
             const collider = evt.detail.withEl;
             if (!collider || !collider.hasAttribute('simple-grab')) return;
 
-            // Check if this is the player target
             const isPlayerTarget = this.el.id === 'player-target';
             const isBotTarget = this.el.id === 'bot-target';
-            
-            // Get the ball's player
             const ballPlayer = collider.getAttribute('simple-grab').player;
             
-            // Only play effect if:
-            // - Player target is hit by player1's ball (bot's ball)
-            // - Bot target is hit by player2's ball (player's ball)
             const shouldPlayEffect = (isPlayerTarget && ballPlayer === 'player1') || 
                                    (isBotTarget && ballPlayer === 'player2');
 
@@ -2091,9 +2093,6 @@
             return;
           }
           
-          // Cancel any running animation
-          if (this._animFrame) cancelAnimationFrame(this._animFrame);
-          
           // Play impact sound
           const impactSound = document.querySelector('#impact-sound');
           if (impactSound) {
@@ -2101,56 +2100,56 @@
             impactSound.components.sound.playSound();
           }
           
-          // Get the THREE.js material directly - avoids setAttribute overhead
-          // which can break on Quest Browser when called every frame
-          const sphere = this.impactSphere;
-          const mesh = sphere.getObject3D('mesh');
-          if (!mesh) {
-            console.warn('Impact sphere mesh not ready');
-            return;
+          // Cache the THREE.js material reference
+          if (!this._mat) {
+            const mesh = this.impactSphere.getObject3D('mesh');
+            if (mesh) {
+              this._mat = mesh.material;
+            }
           }
-          const mat = mesh.material;
           
           // Set up initial state and show
-          sphere.object3D.visible = true;
-          mat.opacity = 0.5;
-          mat.transparent = true;
-          mat.needsUpdate = true;
-          sphere.object3D.scale.set(1, 1, 1);
+          this.impactSphere.object3D.visible = true;
+          this.impactSphere.object3D.scale.set(1, 1, 1);
+          if (this._mat) {
+            this._mat.opacity = 0.5;
+            this._mat.transparent = true;
+          }
           
-          // Animate in JS: grow from base size to 1.5m, fade opacity from 0.5 to 0
+          // Start tick-driven animation
+          this._animStart = this.el.sceneEl.time || performance.now();
+          this._animating = true;
+        },
+        
+        tick: function(time) {
+          if (!this._animating) return;
+          
+          const elapsed = time - this._animStart;
           const duration = 1000;
-          const startTime = performance.now();
+          const t = Math.min(elapsed / duration, 1);
+          // easeOutQuad
+          const eased = t * (2 - t);
+          
           const startRadius = 0.05;
           const endRadius = 1.5;
-          const startOpacity = 0.5;
+          const currentRadius = startRadius + (endRadius - startRadius) * eased;
+          const currentOpacity = 0.5 * (1 - eased);
           
-          const animate = (now) => {
-            const elapsed = now - startTime;
-            const t = Math.min(elapsed / duration, 1);
-            // easeOutQuad
-            const eased = t * (2 - t);
-            
-            const currentRadius = startRadius + (endRadius - startRadius) * eased;
-            const currentOpacity = startOpacity * (1 - eased);
-            
-            const s = currentRadius / startRadius;
-            sphere.object3D.scale.set(s, s, s);
-            // Direct THREE.js material update - no DOM/A-Frame overhead
-            mat.opacity = currentOpacity;
-            
-            if (t < 1) {
-              this._animFrame = requestAnimationFrame(animate);
-            } else {
-              // Animation complete - hide sphere and reset
-              sphere.object3D.visible = false;
-              mat.opacity = 0;
-              sphere.object3D.scale.set(1, 1, 1);
-              this._animFrame = null;
+          const s = currentRadius / startRadius;
+          this.impactSphere.object3D.scale.set(s, s, s);
+          if (this._mat) {
+            this._mat.opacity = currentOpacity;
+          }
+          
+          if (t >= 1) {
+            // Animation complete - hide and reset
+            this._animating = false;
+            this.impactSphere.object3D.visible = false;
+            if (this._mat) {
+              this._mat.opacity = 0;
             }
-          };
-          
-          this._animFrame = requestAnimationFrame(animate);
+            this.impactSphere.object3D.scale.set(1, 1, 1);
+          }
         }
       });
 
