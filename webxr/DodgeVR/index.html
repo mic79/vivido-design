@@ -614,6 +614,11 @@
         remoteBallState = null;
         multiplayerScore = { local: 0, remote: 0 };
         multiplayerReady = { local: false, remote: false };
+        // Clear remote body tracking so bot-body reverts to AI idle animation
+        const botBody = document.querySelector('#bot-body');
+        if (botBody && botBody.components['mixamo-body']) {
+          botBody.components['mixamo-body'].remoteHandData = null;
+        }
         
         // Reset the actual game manager scores
         const gameManager = document.querySelector('#game-manager');
@@ -673,30 +678,92 @@
       // In tick, send local player2 (blue) and ball state; apply mirrored remote to player1 (red)
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
-          // In multiplayer, send the local camera's world position/rotation as player state
+          // In multiplayer, send head + hand transforms for full body sync
           if (isMultiplayer && conn && conn.open) {
             const camera = document.querySelector('[camera]');
+            const leftHand = document.querySelector('#leftHand');
+            const rightHand = document.querySelector('#rightHand');
             if (camera) {
               const worldPos = new THREE.Vector3();
               camera.object3D.getWorldPosition(worldPos);
               const worldQuat = new THREE.Quaternion();
               camera.object3D.getWorldQuaternion(worldQuat);
               const worldRot = new THREE.Euler().setFromQuaternion(worldQuat, 'YXZ');
-              sendPlayerState({
+
+              const state = {
                 x: worldPos.x, y: worldPos.y, z: worldPos.z,
-                rx: worldRot.x, ry: worldRot.y, rz: worldRot.z
-              });
+                rx: worldRot.x, ry: worldRot.y, rz: worldRot.z,
+                hqx: worldQuat.x, hqy: worldQuat.y, hqz: worldQuat.z, hqw: worldQuat.w
+              };
+
+              // Include hand positions + quaternions if controllers are available
+              if (leftHand) {
+                const lp = new THREE.Vector3();
+                const lq = new THREE.Quaternion();
+                leftHand.object3D.getWorldPosition(lp);
+                leftHand.object3D.getWorldQuaternion(lq);
+                state.lhx = lp.x; state.lhy = lp.y; state.lhz = lp.z;
+                state.lhqx = lq.x; state.lhqy = lq.y; state.lhqz = lq.z; state.lhqw = lq.w;
+              }
+              if (rightHand) {
+                const rp = new THREE.Vector3();
+                const rq = new THREE.Quaternion();
+                rightHand.object3D.getWorldPosition(rp);
+                rightHand.object3D.getWorldQuaternion(rq);
+                state.rhx = rp.x; state.rhy = rp.y; state.rhz = rp.z;
+                state.rhqx = rq.x; state.rhqy = rq.y; state.rhqz = rq.z; state.rhqw = rq.w;
+              }
+
+              sendPlayerState(state);
             }
           }
-          // In multiplayer, update the red player (bot) with the mirrored remote player state
+          // In multiplayer, update the remote player's body with mirrored transforms
           if (isMultiplayer && remotePlayerState) {
-            const mirroredX = -remotePlayerState.x;
-            const mirroredZ = -remotePlayerState.z;
-            const mirroredRy = -remotePlayerState.ry;
+            const rs = remotePlayerState;
+            const mirroredX = -rs.x;
+            const mirroredZ = -rs.z;
+            const mirroredRy = -rs.ry;
             const player1 = document.querySelector('[advanced-bot]');
             if (player1) {
-              player1.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
-              player1.object3D.rotation.set(remotePlayerState.rx, mirroredRy, 0);
+              player1.object3D.position.set(mirroredX, rs.y, mirroredZ);
+              player1.object3D.rotation.set(rs.rx, mirroredRy, 0);
+            }
+
+            // Feed full head + hand transforms to bot-body's mixamo-body for IK
+            const botBody = document.querySelector('#bot-body');
+            if (botBody && botBody.components['mixamo-body']) {
+              const mb = botBody.components['mixamo-body'];
+              const rd = {
+                head: {
+                  x: mirroredX, y: rs.y, z: mirroredZ,
+                  qx: -rs.hqy, qy: rs.hqx, qz: -rs.hqw, qw: rs.hqz
+                }
+              };
+
+              // Mirror hand positions (negate X and Z) and rotations (negate qy and qz for X-mirror)
+              if (rs.lhx !== undefined) {
+                // Remote left hand becomes visually on the other side
+                rd.leftHand = {
+                  x: -rs.lhx, y: rs.lhy, z: -rs.lhz,
+                  qx: rs.lhqx, qy: -rs.lhqy, qz: -rs.lhqz, qw: rs.lhqw
+                };
+              }
+              if (rs.rhx !== undefined) {
+                rd.rightHand = {
+                  x: -rs.rhx, y: rs.rhy, z: -rs.rhz,
+                  qx: rs.rhqx, qy: -rs.rhqy, qz: -rs.rhqz, qw: rs.rhqw
+                };
+              }
+
+              // Mirror head quaternion for X/Z flip (facing opposite direction)
+              if (rs.hqx !== undefined) {
+                rd.head.qx = rs.hqx;
+                rd.head.qy = -rs.hqy;
+                rd.head.qz = -rs.hqz;
+                rd.head.qw = rs.hqw;
+              }
+
+              mb.remoteHandData = rd;
             }
           }
           const blueBall = document.querySelector('[simple-grab="player: player2"]');
@@ -3456,6 +3523,61 @@
         // ---- Bot body update (AI idle animation) ----
 
         updateBotBody: function(time, dt) {
+          // --- Multiplayer: use real remote player tracking data ---
+          if (this.remoteHandData) {
+            const rd = this.remoteHandData;
+
+            const headPos = new THREE.Vector3(rd.head.x, rd.head.y, rd.head.z);
+            const headQuat = (rd.head.qx !== undefined)
+              ? new THREE.Quaternion(rd.head.qx, rd.head.qy, rd.head.qz, rd.head.qw)
+              : new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+
+            // Default hand positions near body if not yet received
+            const leftHandPos = rd.leftHand
+              ? new THREE.Vector3(rd.leftHand.x, rd.leftHand.y, rd.leftHand.z)
+              : new THREE.Vector3(headPos.x + 0.3, headPos.y - 0.5, headPos.z + 0.25);
+            const rightHandPos = rd.rightHand
+              ? new THREE.Vector3(rd.rightHand.x, rd.rightHand.y, rd.rightHand.z)
+              : new THREE.Vector3(headPos.x - 0.3, headPos.y - 0.5, headPos.z + 0.25);
+
+            const leftHandQuat = rd.leftHand
+              ? new THREE.Quaternion(rd.leftHand.qx, rd.leftHand.qy, rd.leftHand.qz, rd.leftHand.qw)
+              : new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+            const rightHandQuat = rd.rightHand
+              ? new THREE.Quaternion(rd.rightHand.qx, rd.rightHand.qy, rd.rightHand.qz, rd.rightHand.qw)
+              : new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+
+            // Head velocity for dynamic lean
+            if (this.previousHeadPosInitialized) {
+              this.headVelocity.copy(headPos).sub(this.previousHeadPos).divideScalar(dt || 0.016);
+            } else {
+              this.previousHeadPosInitialized = true;
+            }
+            this.previousHeadPos.copy(headPos);
+
+            // Calculate torso from remote head + hand positions (same as player body)
+            this.calculateTorsoOrientation(headPos, headQuat, leftHandPos, rightHandPos, dt);
+
+            // Position body so hips are at correct height (same as updatePlayerBody)
+            const desiredHipsY = headPos.y - 0.65;
+            const modelHipsLocalY = 1.0;
+            const bodyY = desiredHipsY - modelHipsLocalY;
+
+            const backwardOffset = new THREE.Vector3(0, 0, 0.15);
+            backwardOffset.applyQuaternion(this.torsoRotation);
+
+            this.el.object3D.position.set(
+              headPos.x + backwardOffset.x,
+              bodyY,
+              headPos.z + backwardOffset.z
+            );
+            this.el.object3D.quaternion.copy(this.torsoRotation);
+
+            this.updateBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
+            return;
+          }
+
+          // --- Singleplayer: AI idle animation ---
           if (!this.botEntity) {
             this.botEntity = document.querySelector(this.data.botEntitySelector);
             if (!this.botEntity) return;
@@ -3467,7 +3589,6 @@
           this.idleTime += dt;
 
           // Use the bot entity position as the body's anchor point
-          // (independent of where the target sphere is placed)
           const bodyCenter = botWorldPos.clone();
 
           // Head is ~0.3m above the body center
