@@ -696,22 +696,27 @@
                 hqx: worldQuat.x, hqy: worldQuat.y, hqz: worldQuat.z, hqw: worldQuat.w
               };
 
-              // Include hand positions + quaternions if controllers are available
+              // Include hand positions + quaternions if controllers have valid tracking
               if (leftHand) {
                 const lp = new THREE.Vector3();
                 const lq = new THREE.Quaternion();
                 leftHand.object3D.getWorldPosition(lp);
                 leftHand.object3D.getWorldQuaternion(lq);
-                state.lhx = lp.x; state.lhy = lp.y; state.lhz = lp.z;
-                state.lhqx = lq.x; state.lhqy = lq.y; state.lhqz = lq.z; state.lhqw = lq.w;
+                // Only include if hand has a real tracked position (not at origin)
+                if (lp.lengthSq() > 0.001) {
+                  state.lhx = lp.x; state.lhy = lp.y; state.lhz = lp.z;
+                  state.lhqx = lq.x; state.lhqy = lq.y; state.lhqz = lq.z; state.lhqw = lq.w;
+                }
               }
               if (rightHand) {
                 const rp = new THREE.Vector3();
                 const rq = new THREE.Quaternion();
                 rightHand.object3D.getWorldPosition(rp);
                 rightHand.object3D.getWorldQuaternion(rq);
-                state.rhx = rp.x; state.rhy = rp.y; state.rhz = rp.z;
-                state.rhqx = rq.x; state.rhqy = rq.y; state.rhqz = rq.z; state.rhqw = rq.w;
+                if (rp.lengthSq() > 0.001) {
+                  state.rhx = rp.x; state.rhy = rp.y; state.rhz = rp.z;
+                  state.rhqx = rq.x; state.rhqy = rq.y; state.rhqz = rq.z; state.rhqw = rq.w;
+                }
               }
 
               sendPlayerState(state);
@@ -720,9 +725,12 @@
           // In multiplayer, update the remote player's body with mirrored transforms
           if (isMultiplayer && remotePlayerState) {
             const rs = remotePlayerState;
+            // Mirror X and Z since players face each other across the court
             const mirroredX = -rs.x;
             const mirroredZ = -rs.z;
             const mirroredRy = -rs.ry;
+
+            // Move the bot entity (collision targets, etc.)
             const player1 = document.querySelector('[advanced-bot]');
             if (player1) {
               player1.object3D.position.set(mirroredX, rs.y, mirroredZ);
@@ -733,34 +741,37 @@
             const botBody = document.querySelector('#bot-body');
             if (botBody && botBody.components['mixamo-body']) {
               const mb = botBody.components['mixamo-body'];
+
+              // Build remote data with mirrored positions and rotations
+              // Mirror quaternion: negate Y and Z to reflect across YZ plane (X/Z position mirror)
               const rd = {
                 head: {
-                  x: mirroredX, y: rs.y, z: mirroredZ,
-                  qx: -rs.hqy, qy: rs.hqx, qz: -rs.hqw, qw: rs.hqz
+                  x: mirroredX, y: rs.y, z: mirroredZ
                 }
               };
 
-              // Mirror hand positions (negate X and Z) and rotations (negate qy and qz for X-mirror)
-              if (rs.lhx !== undefined) {
-                // Remote left hand becomes visually on the other side
-                rd.leftHand = {
-                  x: -rs.lhx, y: rs.lhy, z: -rs.lhz,
-                  qx: rs.lhqx, qy: -rs.lhqy, qz: -rs.lhqz, qw: rs.lhqw
-                };
-              }
-              if (rs.rhx !== undefined) {
-                rd.rightHand = {
-                  x: -rs.rhx, y: rs.rhy, z: -rs.rhz,
-                  qx: rs.rhqx, qy: -rs.rhqy, qz: -rs.rhqz, qw: rs.rhqw
-                };
-              }
-
-              // Mirror head quaternion for X/Z flip (facing opposite direction)
+              // Head quaternion (mirrored)
               if (rs.hqx !== undefined) {
                 rd.head.qx = rs.hqx;
                 rd.head.qy = -rs.hqy;
                 rd.head.qz = -rs.hqz;
                 rd.head.qw = rs.hqw;
+              }
+
+              // Left hand (mirrored positions + quaternions)
+              if (rs.lhx !== undefined) {
+                rd.leftHand = {
+                  x: -rs.lhx, y: rs.lhy, z: -rs.lhz,
+                  qx: rs.lhqx, qy: -rs.lhqy, qz: -rs.lhqz, qw: rs.lhqw
+                };
+              }
+
+              // Right hand (mirrored positions + quaternions)
+              if (rs.rhx !== undefined) {
+                rd.rightHand = {
+                  x: -rs.rhx, y: rs.rhy, z: -rs.rhz,
+                  qx: rs.rhqx, qy: -rs.rhqy, qz: -rs.rhqz, qw: rs.rhqw
+                };
               }
 
               mb.remoteHandData = rd;
