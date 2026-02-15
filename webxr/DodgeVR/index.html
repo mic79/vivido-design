@@ -2103,14 +2103,14 @@
           
           // Set up initial state and show
           const sphere = this.impactSphere;
-          sphere.setAttribute('visible', true);
+          sphere.object3D.visible = true;
           sphere.setAttribute('material', 'opacity', 0.5);
           sphere.object3D.scale.set(1, 1, 1);
           
-          // Animate in JS: grow radius from 0.1 to 1.5, fade opacity from 0.5 to 0
+          // Animate in JS: grow radius from 0.05 to 1.5, fade opacity from 0.5 to 0
           const duration = 1000;
           const startTime = performance.now();
-          const startRadius = 0.1;
+          const startRadius = 0.05;
           const endRadius = 1.5;
           const startOpacity = 0.5;
           
@@ -2131,7 +2131,7 @@
               this._animFrame = requestAnimationFrame(animate);
             } else {
               // Animation complete - hide sphere and reset
-              sphere.setAttribute('visible', false);
+              sphere.object3D.visible = false;
               sphere.setAttribute('material', 'opacity', 0);
               sphere.object3D.scale.set(1, 1, 1);
               this._animFrame = null;
@@ -3996,7 +3996,7 @@
                   material="color: #ff0000; opacity: 0; transparent: true"
                   obb-collider impact-effect="color: #ff0000">
           <!-- Impact sphere (no declarative animations - handled in JS by impact-effect component) -->
-          <a-sphere id="bot-impact" radius="0.1" visible="false"
+          <a-sphere id="bot-impact" radius="0.05" visible="false"
             material="side: double; transparent: true; opacity: 0; color: #ff0000; emissive: #ff0000; emissiveIntensity: 1.5">
           </a-sphere>
         </a-entity>
@@ -4086,7 +4086,7 @@
               </a-entity>
               <!-- Impact sphere with animation component -->
               <!-- Impact sphere (no declarative animations - handled in JS by impact-effect component) -->
-              <a-sphere id="player-impact" radius="0.1" visible="false"
+              <a-sphere id="player-impact" radius="0.05" visible="false"
                 material="side: double; transparent: true; opacity: 0; color: #0000ff; emissive: #0000ff; emissiveIntensity: 1.5">
               </a-sphere>
             </a-sphere>
