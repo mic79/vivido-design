@@ -1128,6 +1128,11 @@
                     world.removeBody(this.handBody);
                     this.handBody = null;
                   }
+                  // Restore normal mass and release grab state
+                  this.body.mass = 1;
+                  this.body.updateMassProperties();
+                  this.isGrabbed = false;
+                  this.grabbingHand = null;
                   // Mark as returning with 1s grace period (no opponent collision)
                   this.isReturning = true;
                   this.returningGraceUntil = Date.now() + 1000;
@@ -1183,6 +1188,11 @@
           this.body.angularVelocity.set(0, 0, 0);
           this.body.quaternion.set(0, 0, 0, 1);
           this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+          // Restore normal mass in case ball was grabbed
+          this.body.mass = 1;
+          this.body.updateMassProperties();
+          this.isGrabbed = false;
+          this.grabbingHand = null;
         },
         
         tick: function() {
@@ -1305,6 +1315,9 @@
           this.isReturning = false; // Caught the ball - cancel returning state
           // Keep zero gravity
           this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+          // High mass so CANNON treats held ball as a wall during collisions
+          this.body.mass = 1000;
+          this.body.updateMassProperties();
 
           // Robust haptic feedback on grab (Meta Quest compatible)
           if (this.grabbingHand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
@@ -1377,6 +1390,10 @@
           // Clear velocity history for next throw
           this.velocityHistory = [];
           
+          // Restore normal mass for free-flying ball
+          this.body.mass = 1;
+          this.body.updateMassProperties();
+          
           this.isGrabbed = false;
           this.grabbingHand = null;
         }
@@ -1395,7 +1412,6 @@
 
         const currentDist = _ccdRelPos.length();
         // If balls are already close enough for CANNON substeps to catch, let CANNON handle it
-        // At 240Hz substeps, CANNON reliably detects collisions within ~3x combined radius
         if (currentDist < combinedRadius * 3) return;
 
         const a = _ccdRelVel.dot(_ccdRelVel);
@@ -1410,18 +1426,61 @@
 
         const t = (-b - Math.sqrt(discriminant)) / (2 * a);
         if (t >= 0 && t <= dt) {
-          // Collision would be missed by discrete steps - apply elastic response
           const normal = _ccdRelPos.unit();
           const relVelNormal = _ccdRelVel.dot(normal);
           if (relVelNormal >= 0) return; // Moving apart
-          // Elastic collision (equal mass): reflect relative velocity along normal
-          const impulse = normal.scale(-relVelNormal);
-          ballA.velocity.vadd(impulse, ballA.velocity);
-          ballB.velocity.vsub(impulse, ballB.velocity);
+
+          // Check if either ball is grabbed (mass 1000 = held, mass 1 = free)
+          const aGrabbed = ballA.mass > 100;
+          const bGrabbed = ballB.mass > 100;
+
+          if (aGrabbed && bGrabbed) return; // Both held, no physics response
+
+          if (aGrabbed || bGrabbed) {
+            // One ball is held: treat as wall collision for the free ball
+            // Free ball reflects at full speed, held ball is unaffected
+            if (aGrabbed) {
+              // B is free, reflect B's velocity along the collision normal
+              const vbDotN = ballB.velocity.dot(normal);
+              if (vbDotN > 0) { // B moving toward A (normal points A->B, so positive = approaching)
+                const restitution = 0.95;
+                const impulseScalar = -vbDotN * (1 + restitution);
+                ballB.velocity.x += normal.x * impulseScalar;
+                ballB.velocity.y += normal.y * impulseScalar;
+                ballB.velocity.z += normal.z * impulseScalar;
+              }
+            } else {
+              // A is free, reflect A's velocity along the collision normal
+              const vaDotN = ballA.velocity.dot(normal);
+              if (vaDotN < 0) { // A moving toward B (normal points A->B, so negative = approaching)
+                const restitution = 0.95;
+                const impulseScalar = -vaDotN * (1 + restitution);
+                ballA.velocity.x += normal.x * impulseScalar;
+                ballA.velocity.y += normal.y * impulseScalar;
+                ballA.velocity.z += normal.z * impulseScalar;
+              }
+            }
+          } else {
+            // Both free: equal-mass elastic collision
+            const impulse = normal.scale(-relVelNormal);
+            ballA.velocity.vadd(impulse, ballA.velocity);
+            ballB.velocity.vsub(impulse, ballB.velocity);
+          }
+
           // Separate balls so CANNON doesn't also process this collision
-          const separation = normal.scale(combinedRadius * 0.5);
-          ballA.position.vadd(separation, ballA.position);
-          ballB.position.vsub(separation, ballB.position);
+          const sep = _ccdRelPos.unit();
+          sep.scale(combinedRadius * 0.5, sep);
+          if (aGrabbed) {
+            // Only move the free ball (B) away; grabbed ball is hand-controlled
+            ballB.position.vsub(sep, ballB.position);
+            ballB.position.vsub(sep, ballB.position); // Double separation for free ball
+          } else if (bGrabbed) {
+            ballA.position.vadd(sep, ballA.position);
+            ballA.position.vadd(sep, ballA.position);
+          } else {
+            ballA.position.vadd(sep, ballA.position);
+            ballB.position.vsub(sep, ballB.position);
+          }
         }
       }
 
@@ -2525,14 +2584,6 @@
           
           // Apply final velocity
           ballBody.velocity.set(ballVel.x, ballVel.y, ballVel.z);
-          
-          // Push ball outside racket to prevent repeated collision
-          const pushDist = 0.12; // Just past ball radius + half racket depth
-          ballBody.position.set(
-            ballBody.position.x + collisionNormal.x * pushDist,
-            ballBody.position.y + collisionNormal.y * pushDist,
-            ballBody.position.z + collisionNormal.z * pushDist
-          );
           
           // Apply spin based on racket velocity
           ballBody.angularVelocity.x += -racketVelocity.y;
