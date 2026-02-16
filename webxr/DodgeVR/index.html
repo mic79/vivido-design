@@ -115,6 +115,54 @@
             }
           }
           
+          // CANNON-based back wall detection (backup for OBB misses at high speed)
+          // Check if a ball hit a back wall (z=-8 or z=+8)
+          const ballEntity = isBallA ? entityA : (isBallB ? entityB : null);
+          const wallEntity = isBallA ? entityB : (isBallB ? entityA : null);
+          if (ballEntity && wallEntity && (isBallA !== isBallB)) {
+            const wallPos = wallEntity.getAttribute('position');
+            const wallGeom = wallEntity.getAttribute('geometry');
+            if (wallPos && wallGeom && wallGeom.width === 4 && wallGeom.height === 4) {
+              const isBackWallBot = Math.abs(wallPos.z + 8) < 0.01;
+              const isBackWallPlayer = Math.abs(wallPos.z - 8) < 0.01;
+              if (isBackWallBot || isBackWallPlayer) {
+                const grab = ballEntity.components['simple-grab'];
+                if (grab && grab.body) {
+                  const ballPlayer = grab.data.player;
+                  const hitOpponentWall = (ballPlayer === 'player2' && isBackWallBot) ||
+                                          (ballPlayer === 'player1' && isBackWallPlayer);
+                  const hitOwnWall = (ballPlayer === 'player2' && isBackWallPlayer) ||
+                                     (ballPlayer === 'player1' && isBackWallBot);
+                  if (hitOpponentWall) {
+                    // Return ball to spawn at 10m/s (same logic as OBB handler)
+                    if (grab.constraint) { world.removeConstraint(grab.constraint); grab.constraint = null; }
+                    if (grab.handBody) { world.removeBody(grab.handBody); grab.handBody = null; }
+                    grab.body.mass = 1; grab.body.updateMassProperties();
+                    grab.isGrabbed = false; grab.grabbingHand = null;
+                    grab.isReturning = true;
+                    grab.returningGraceUntil = Date.now() + 1000;
+                    grab.body.velocity.set(0, 0, 0);
+                    grab.body.angularVelocity.set(0, 0, 0);
+                    grab.body.quaternion.set(0, 0, 0, 1);
+                    grab.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+                    const cp = grab.body.position;
+                    const sp = grab.initialPosition;
+                    const dx = sp.x - cp.x, dy = sp.y - cp.y, dz = sp.z - cp.z;
+                    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    if (dist > 0.01) {
+                      grab.body.velocity.set((dx/dist)*10, (dy/dist)*10, (dz/dist)*10);
+                    } else {
+                      grab.resetPosition();
+                    }
+                  } else if (hitOwnWall) {
+                    grab.isReturning = false;
+                    grab.resetPosition();
+                  }
+                }
+              }
+            }
+          }
+          
           // Create and dispatch collision events for both entities
           const eventA = new CustomEvent('collision', {
             detail: { body: bodyB, bodyEl: entityB }
@@ -865,10 +913,10 @@
         const origOnBotHit = gm.Component.prototype.onBotHit;
         const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
         gm.Component.prototype.onBotHit = function() {
-          const now = Date.now();
-          if (now - (this._lastBotHitTime || 0) < 200) return;
-          this._lastBotHitTime = now;
           if (isMultiplayer && conn && conn.open) {
+            const now = Date.now();
+            if (now - (this._lastBotHitTime || 0) < 200) return;
+            this._lastBotHitTime = now;
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -877,10 +925,10 @@
           }
         };
         gm.Component.prototype.onPlayerHit = function() {
-          const now = Date.now();
-          if (now - (this._lastPlayerHitTime || 0) < 200) return;
-          this._lastPlayerHitTime = now;
           if (isMultiplayer && conn && conn.open) {
+            const now = Date.now();
+            if (now - (this._lastPlayerHitTime || 0) < 200) return;
+            this._lastPlayerHitTime = now;
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
