@@ -115,34 +115,7 @@
             }
           }
           
-          // CANNON-based back wall detection (backup for OBB misses at high speed)
-          // Flag the ball for deferred processing in simple-grab.tick()
-          // (can't modify velocity here - CANNON solver overwrites it during step)
-          const ballEntity = isBallA ? entityA : (isBallB ? entityB : null);
-          const wallEntity = isBallA ? entityB : (isBallB ? entityA : null);
-          if (ballEntity && wallEntity && (isBallA !== isBallB)) {
-            const wallPos = wallEntity.getAttribute('position');
-            const wallGeom = wallEntity.getAttribute('geometry');
-            if (wallPos && wallGeom && wallGeom.width === 4 && wallGeom.height === 4) {
-              const isBackWallBot = Math.abs(wallPos.z + 8) < 0.01;
-              const isBackWallPlayer = Math.abs(wallPos.z - 8) < 0.01;
-              if (isBackWallBot || isBackWallPlayer) {
-                const grab = ballEntity.components['simple-grab'];
-                if (grab && grab.body) {
-                  const ballPlayer = grab.data.player;
-                  const hitOpponentWall = (ballPlayer === 'player2' && isBackWallBot) ||
-                                          (ballPlayer === 'player1' && isBackWallPlayer);
-                  const hitOwnWall = (ballPlayer === 'player2' && isBackWallPlayer) ||
-                                     (ballPlayer === 'player1' && isBackWallBot);
-                  if (hitOpponentWall) {
-                    grab._pendingWallHit = 'opponent';
-                  } else if (hitOwnWall) {
-                    grab._pendingWallHit = 'own';
-                  }
-                }
-              }
-            }
-          }
+          // Back wall handling is done via position check in simple-grab.tick()
           
           // Create and dispatch collision events for both entities
           const eventA = new CustomEvent('collision', {
@@ -1236,39 +1209,46 @@
         },
         
         tick: function() {
-          // Process deferred wall hits (flagged by CANNON beginContact, after physics step)
-          if (this._pendingWallHit && this.body) {
-            const wallType = this._pendingWallHit;
-            this._pendingWallHit = null;
-            if (wallType === 'opponent') {
-              if (this.constraint) { world.removeConstraint(this.constraint); this.constraint = null; }
-              if (this.handBody) { world.removeBody(this.handBody); this.handBody = null; }
-              this.body.mass = 1; this.body.updateMassProperties();
-              this.isGrabbed = false; this.grabbingHand = null;
-              this.isReturning = true;
-              this.returningGraceUntil = Date.now() + 1000;
-              this.body.velocity.set(0, 0, 0);
-              this.body.angularVelocity.set(0, 0, 0);
-              this.body.quaternion.set(0, 0, 0, 1);
-              this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
-              const cp = this.body.position;
-              const sp = this.initialPosition;
-              const dx = sp.x - cp.x, dy = sp.y - cp.y, dz = sp.z - cp.z;
-              const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-              if (dist > 0.01) {
-                this.body.velocity.set((dx/dist)*10, (dy/dist)*10, (dz/dist)*10);
-              } else {
-                this.resetPosition();
-              }
-              return;
-            } else if (wallType === 'own') {
-              this.isReturning = false;
-              this.resetPosition();
-              return;
-            }
-          }
-
           if (this.body) {
+            // Direct position check for back walls - runs every frame, can't be missed
+            // Skip if grabbed or already returning (returning ball passes through wall zone)
+            if (!this.isGrabbed && !this.isReturning) {
+              const bz = this.body.position.z;
+              if (bz < -7.8 || bz > 7.8) {
+                const nearBotWall = bz < -7.8;   // z=-8 area
+                const nearPlayerWall = bz > 7.8;  // z=+8 area
+                const hitOpponentWall = (this.data.player === 'player2' && nearBotWall) ||
+                                        (this.data.player === 'player1' && nearPlayerWall);
+                const hitOwnWall = (this.data.player === 'player2' && nearPlayerWall) ||
+                                   (this.data.player === 'player1' && nearBotWall);
+                if (hitOpponentWall) {
+                  if (this.constraint) { world.removeConstraint(this.constraint); this.constraint = null; }
+                  if (this.handBody) { world.removeBody(this.handBody); this.handBody = null; }
+                  this.body.mass = 1; this.body.updateMassProperties();
+                  this.isGrabbed = false; this.grabbingHand = null;
+                  this.isReturning = true;
+                  this.returningGraceUntil = Date.now() + 1000;
+                  this.body.velocity.set(0, 0, 0);
+                  this.body.angularVelocity.set(0, 0, 0);
+                  this.body.quaternion.set(0, 0, 0, 1);
+                  this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+                  const cp = this.body.position;
+                  const sp = this.initialPosition;
+                  const dx = sp.x - cp.x, dy = sp.y - cp.y, dz = sp.z - cp.z;
+                  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                  if (dist > 0.01) {
+                    this.body.velocity.set((dx/dist)*10, (dy/dist)*10, (dz/dist)*10);
+                  } else {
+                    this.resetPosition();
+                  }
+                  return;
+                } else if (hitOwnWall) {
+                  this.isReturning = false;
+                  this.resetPosition();
+                  return;
+                }
+              }
+            }
             if (this.isGrabbed && this.grabbingHand) {
               // When grabbed, directly update position and rotation
               const handWorldPos = new THREE.Vector3();
