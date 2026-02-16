@@ -1382,20 +1382,67 @@
         }
       });
 
+      // Swept sphere-sphere CCD for ball-ball collisions
+      // Detects tunneling that CANNON.js discrete steps miss at high relative speeds
+      const _ccdRelPos = new CANNON.Vec3();
+      const _ccdRelVel = new CANNON.Vec3();
+      function checkBallBallCCD(ballA, ballB, dt) {
+        if (!ballA || !ballB) return;
+        ballA.position.vsub(ballB.position, _ccdRelPos);
+        ballA.velocity.vsub(ballB.velocity, _ccdRelVel);
+        const combinedRadius = 0.2; // 0.1 + 0.1
+
+        const a = _ccdRelVel.dot(_ccdRelVel);
+        if (a < 0.0001) return; // Barely moving relative to each other
+        const b = 2 * _ccdRelPos.dot(_ccdRelVel);
+        const c = _ccdRelPos.dot(_ccdRelPos) - combinedRadius * combinedRadius;
+
+        if (c < 0) return; // Already overlapping (CANNON handles this)
+
+        const discriminant = b * b - 4 * a * c;
+        if (discriminant < 0) return; // Paths don't intersect
+
+        const t = (-b - Math.sqrt(discriminant)) / (2 * a);
+        if (t >= 0 && t <= dt) {
+          // Collision will happen during this step but discrete detection may miss it
+          const normal = _ccdRelPos.unit();
+          const relVelNormal = _ccdRelVel.dot(normal);
+          if (relVelNormal >= 0) return; // Already moving apart
+          // Elastic collision response (equal mass): reflect velocity along normal
+          const impulse = normal.scale(-relVelNormal);
+          ballA.velocity.vadd(impulse, ballA.velocity);
+          ballB.velocity.vsub(impulse, ballB.velocity);
+        }
+      }
+
       // Physics update loop - Anti-tunneling optimized
       AFRAME.registerComponent('physics-world', {
         init: function() {
           this.lastTime = 0;
+          this.ballBodies = null;
         },
         tick: function(time) {
-          // Use much smaller, more frequent physics steps to prevent tunneling
           const deltaTime = (time - this.lastTime) / 1000;
           if (deltaTime > 0) {
-            const maxStep = 1/240; // Even smaller timestep (240Hz) for fast racket movements
+            // Cache ball bodies (find them once, then reuse)
+            if (!this.ballBodies) {
+              const b1 = document.querySelector('[simple-grab="player: player1"]');
+              const b2 = document.querySelector('[simple-grab="player: player2"]');
+              if (b1?.components['simple-grab']?.body && b2?.components['simple-grab']?.body) {
+                this.ballBodies = {
+                  a: b1.components['simple-grab'].body,
+                  b: b2.components['simple-grab'].body
+                };
+              }
+            }
+
+            // Pre-step CCD: detect ball-ball tunneling before CANNON substeps
+            if (this.ballBodies) {
+              checkBallBallCCD(this.ballBodies.a, this.ballBodies.b, deltaTime);
+            }
+
+            const maxStep = 1/240;
             const steps = Math.ceil(deltaTime / maxStep);
-            const stepSize = deltaTime / steps;
-            
-            // Clamp to reasonable step count to prevent performance issues
             const clampedSteps = Math.min(steps, 8);
             const clampedStepSize = deltaTime / clampedSteps;
             
@@ -2356,90 +2403,75 @@
           }
         },
         
-        // Plane-based collision detection - only one surface!
+        // Swept collision detection - sweeps BOTH racket and ball paths for CCD
         checkSweptCollision: function(startPos, endPos) {
           // Only check collision if THIS SPECIFIC racket is active
-          // Determine which hand this racket belongs to
           const isLeftRacket = this.el.id === 'leftHandRacket';
           const isRightRacket = this.el.id === 'rightHandRacket';
           
-          // Check if THIS specific racket is active
-          if (isLeftRacket && !racketMode.player2.left) {
-            return; // Left racket not active
-          }
-          if (isRightRacket && !racketMode.player2.right) {
-            return; // Right racket not active
-          }
-          
-          // If we can't determine which racket this is, don't allow collision
-          if (!isLeftRacket && !isRightRacket) {
-            return;
-          }
+          if (isLeftRacket && !racketMode.player2.left) return;
+          if (isRightRacket && !racketMode.player2.right) return;
+          if (!isLeftRacket && !isRightRacket) return;
           
           const blueBall = document.querySelector('[simple-grab="player: player2"]');
-          if (!blueBall || !blueBall.components['simple-grab']?.body) {
-            return;
-          }
+          if (!blueBall || !blueBall.components['simple-grab']?.body) return;
           
-          // Much shorter cooldown to allow rapid hits
+          // Cooldown to prevent multiple rapid hits
           const now = Date.now();
-          if (now - this.lastHitTime < 16) { // ~60fps - allow very rapid hits
-            return;
-          }
+          if (now - this.lastHitTime < 16) return;
           
-          const ballPos = new THREE.Vector3().copy(blueBall.components['simple-grab'].body.position);
+          const ballBody = blueBall.components['simple-grab'].body;
+          const ballPos = new THREE.Vector3(ballBody.position.x, ballBody.position.y, ballBody.position.z);
           const ballRadius = 0.1;
+          const collisionThreshold = ballRadius + 0.05;
           
-          // Get racket position and orientation
-          const racketWorldPos = new THREE.Vector3();
-          const racketWorldQuat = new THREE.Quaternion();
-          this.el.object3D.getWorldPosition(racketWorldPos);
-          this.el.object3D.getWorldQuaternion(racketWorldQuat);
+          // Get previous ball position for swept test (CCD)
+          const lastBallPos = this.lastBallPos || ballPos.clone();
           
-          // Calculate distance from racket to ball
-          const distanceToBall = racketWorldPos.distanceTo(ballPos);
-          
-          // Dynamic proximity check - larger threshold for faster movements to prevent tunneling
+          // Racket movement distance
           const movementVector = new THREE.Vector3().subVectors(endPos, startPos);
-          const movementSpeed = movementVector.length();
+          const racketSpeed = movementVector.length();
           
-          // Increase collision radius based on movement speed to catch fast hits
-          const dynamicRadius = ballRadius + 0.01 + (movementSpeed * 2.0); // Base + speed-based expansion
+          // Ball movement distance
+          const ballMovement = new THREE.Vector3().subVectors(ballPos, lastBallPos);
+          const ballSpeed = ballMovement.length();
           
-          // For fast movements, check multiple points along the path to prevent tunneling
-          if (movementSpeed > 0.05) { // For fast movements
-            let hitDetected = false;
-            const numSteps = Math.min(Math.ceil(movementSpeed * 20), 10); // More steps for faster movement, max 10
+          // Number of interpolation steps based on the faster mover
+          const maxSpeed = Math.max(racketSpeed, ballSpeed);
+          let hitDetected = false;
+          
+          if (maxSpeed > 0.001) {
+            // Sweep both paths simultaneously
+            const numSteps = Math.min(Math.max(Math.ceil(maxSpeed * 30), 4), 20);
             
             for (let i = 0; i <= numSteps; i++) {
               const t = i / numSteps;
-              const interpPos = new THREE.Vector3().lerpVectors(startPos, endPos, t);
-              const distanceAtStep = interpPos.distanceTo(ballPos);
+              const interpRacket = new THREE.Vector3().lerpVectors(startPos, endPos, t);
+              const interpBall = new THREE.Vector3().lerpVectors(lastBallPos, ballPos, t);
               
-              if (distanceAtStep <= ballRadius + 0.05) { // Slightly larger threshold for swept detection
+              if (interpRacket.distanceTo(interpBall) <= collisionThreshold) {
                 hitDetected = true;
                 break;
               }
             }
-            
-            if (!hitDetected) {
-              return; // No collision detected along path
-            }
           } else {
-            // For slow movements, use direct distance check
-            if (distanceToBall > dynamicRadius) {
-              return; // Too far away
+            // Both nearly stationary - direct distance check
+            if (endPos.distanceTo(ballPos) <= collisionThreshold) {
+              hitDetected = true;
             }
           }
           
-          // No minimum speed requirement - allow static contact and pushing
+          // Store ball position for next frame's swept test
+          this.lastBallPos = ballPos.clone();
+          
+          if (!hitDetected) return;
           
           // Record hit time to enforce cooldown
           this.lastHitTime = now;
           
           // Calculate velocity at point of contact using actual time elapsed
           const currentTime = performance.now();
-          const deltaTime = Math.max((currentTime - this.lastRacketTime) / 1000, 0.001); // Convert to seconds, prevent division by zero
+          const deltaTime = Math.max((currentTime - this.lastRacketTime) / 1000, 0.001);
           const contactVelocity = new THREE.Vector3()
             .subVectors(endPos, startPos)
             .divideScalar(deltaTime);
