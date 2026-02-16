@@ -2484,48 +2484,55 @@
           const ballBody = ballEl.components['simple-grab'].body;
           if (!ballBody) return;
           
-          // Primary: Apply linear velocity transfer (ball movement)
-          const velocityMultiplier = 0.8; // How much racket velocity transfers to ball
-          const newVelocity = {
-            x: racketVelocity.x * velocityMultiplier,
-            y: racketVelocity.y * velocityMultiplier,
-            z: racketVelocity.z * velocityMultiplier
-          };
+          // Get the racket's surface normal (local Z axis in world space)
+          const racketNormal = new THREE.Vector3(0, 0, 1);
+          const racketWorldQuat = new THREE.Quaternion();
+          this.el.object3D.getWorldQuaternion(racketWorldQuat);
+          racketNormal.applyQuaternion(racketWorldQuat);
           
-          // Add to existing ball velocity (don't replace completely)
-          ballBody.velocity.x += newVelocity.x;
-          ballBody.velocity.y += newVelocity.y;
-          ballBody.velocity.z += newVelocity.z;
+          // Ball's current velocity
+          const ballVel = new THREE.Vector3(ballBody.velocity.x, ballBody.velocity.y, ballBody.velocity.z);
           
-          // Cap maximum ball speed at 10 m/s for controlled gameplay
-          const currentSpeed = Math.sqrt(
-            ballBody.velocity.x * ballBody.velocity.x +
-            ballBody.velocity.y * ballBody.velocity.y +
-            ballBody.velocity.z * ballBody.velocity.z
-          );
+          // Component of ball velocity along the racket normal (toward the racket)
+          const velAlongNormal = ballVel.dot(racketNormal);
           
-          if (currentSpeed > 10) {
-            const scale = 10 / currentSpeed;
-            ballBody.velocity.x *= scale;
-            ballBody.velocity.y *= scale;
-            ballBody.velocity.z *= scale;
-            console.log('Ball speed capped at 10 m/s (was', currentSpeed.toFixed(1), 'm/s)');
+          // Only reflect if the ball is moving INTO the racket (negative dot = toward surface)
+          if (velAlongNormal < 0) {
+            // Reflect: remove the into-racket component and reverse it (with restitution)
+            const restitution = 0.85;
+            const reflection = racketNormal.clone().multiplyScalar(-velAlongNormal * (1 + restitution));
+            ballVel.add(reflection);
           }
           
-          // Secondary: Apply spin based on racket velocity at contact point
-          const spinMultiplier = 1.0; // Reduced since we now have primary velocity transfer
-          const newSpin = {
-            x: -racketVelocity.y * spinMultiplier, // Up/Down movement creates topspin/backspin
-            y: racketVelocity.x * spinMultiplier,  // Left/Right movement creates sidespin
-            z: racketVelocity.z * spinMultiplier   // Forward/Back movement
-          };
+          // Add racket velocity transfer on top of the reflection
+          const velocityMultiplier = 0.8;
+          ballVel.x += racketVelocity.x * velocityMultiplier;
+          ballVel.y += racketVelocity.y * velocityMultiplier;
+          ballVel.z += racketVelocity.z * velocityMultiplier;
           
-          ballBody.angularVelocity.x += newSpin.x;
-          ballBody.angularVelocity.y += newSpin.y;
-          ballBody.angularVelocity.z += newSpin.z;
+          // Cap maximum ball speed at 10 m/s
+          const currentSpeed = ballVel.length();
+          if (currentSpeed > 10) {
+            ballVel.multiplyScalar(10 / currentSpeed);
+          }
           
-          console.log('Racket impact applied - Velocity:', racketVelocity.length().toFixed(2), 'm/s (frame-rate independent)',
-                     'Ball velocity added:', newVelocity.x.toFixed(2), newVelocity.y.toFixed(2), newVelocity.z.toFixed(2));
+          // Apply final velocity
+          ballBody.velocity.set(ballVel.x, ballVel.y, ballVel.z);
+          
+          // Apply spin based on racket velocity at contact point
+          const spinMultiplier = 1.0;
+          ballBody.angularVelocity.x += -racketVelocity.y * spinMultiplier;
+          ballBody.angularVelocity.y += racketVelocity.x * spinMultiplier;
+          ballBody.angularVelocity.z += racketVelocity.z * spinMultiplier;
+          
+          // Clear returning state since the ball was intercepted
+          const grab = ballEl.components['simple-grab'];
+          if (grab && grab.isReturning) {
+            grab.isReturning = false;
+            grab.returningGraceUntil = 0;
+          }
+          
+          console.log('Racket impact: reflected ball at', currentSpeed.toFixed(1), 'm/s, racket swing:', racketVelocity.length().toFixed(2), 'm/s');
           
           // Play feedback
           const bounceSound = document.querySelector('#bounce-sound');
@@ -2539,7 +2546,7 @@
           const hand = this.el.parentEl;
           if (hand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
             const haptics = hand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
-            haptics.pulse(0.6, 100).catch(() => {}); // Lighter haptic for more precise feel
+            haptics.pulse(0.6, 100).catch(() => {});
           }
         },
 
