@@ -1383,7 +1383,8 @@
       });
 
       // Swept sphere-sphere CCD for ball-ball collisions
-      // Detects tunneling that CANNON.js discrete steps miss at high relative speeds
+      // Only fires when balls are far enough apart that CANNON.js substeps would miss them
+      // (prevents double-response when CANNON can already handle the collision)
       const _ccdRelPos = new CANNON.Vec3();
       const _ccdRelVel = new CANNON.Vec3();
       function checkBallBallCCD(ballA, ballB, dt) {
@@ -1392,26 +1393,35 @@
         ballA.velocity.vsub(ballB.velocity, _ccdRelVel);
         const combinedRadius = 0.2; // 0.1 + 0.1
 
+        const currentDist = _ccdRelPos.length();
+        // If balls are already close enough for CANNON substeps to catch, let CANNON handle it
+        // At 240Hz substeps, CANNON reliably detects collisions within ~3x combined radius
+        if (currentDist < combinedRadius * 3) return;
+
         const a = _ccdRelVel.dot(_ccdRelVel);
         if (a < 0.0001) return; // Barely moving relative to each other
         const b = 2 * _ccdRelPos.dot(_ccdRelVel);
         const c = _ccdRelPos.dot(_ccdRelPos) - combinedRadius * combinedRadius;
 
-        if (c < 0) return; // Already overlapping (CANNON handles this)
+        if (c < 0) return; // Already overlapping
 
         const discriminant = b * b - 4 * a * c;
         if (discriminant < 0) return; // Paths don't intersect
 
         const t = (-b - Math.sqrt(discriminant)) / (2 * a);
         if (t >= 0 && t <= dt) {
-          // Collision will happen during this step but discrete detection may miss it
+          // Collision would be missed by discrete steps - apply elastic response
           const normal = _ccdRelPos.unit();
           const relVelNormal = _ccdRelVel.dot(normal);
-          if (relVelNormal >= 0) return; // Already moving apart
-          // Elastic collision response (equal mass): reflect velocity along normal
+          if (relVelNormal >= 0) return; // Moving apart
+          // Elastic collision (equal mass): reflect relative velocity along normal
           const impulse = normal.scale(-relVelNormal);
           ballA.velocity.vadd(impulse, ballA.velocity);
           ballB.velocity.vsub(impulse, ballB.velocity);
+          // Separate balls so CANNON doesn't also process this collision
+          const separation = normal.scale(combinedRadius * 0.5);
+          ballA.position.vadd(separation, ballA.position);
+          ballB.position.vsub(separation, ballB.position);
         }
       }
 
@@ -2484,23 +2494,26 @@
           const ballBody = ballEl.components['simple-grab'].body;
           if (!ballBody) return;
           
-          // Get the racket's surface normal (local Z axis in world space)
-          const racketNormal = new THREE.Vector3(0, 0, 1);
-          const racketWorldQuat = new THREE.Quaternion();
-          this.el.object3D.getWorldQuaternion(racketWorldQuat);
-          racketNormal.applyQuaternion(racketWorldQuat);
+          // Use racket-to-ball direction as collision normal
+          // This is robust regardless of which face the ball hits
+          const racketWorldPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(racketWorldPos);
+          const ballPos = new THREE.Vector3(ballBody.position.x, ballBody.position.y, ballBody.position.z);
+          const collisionNormal = ballPos.clone().sub(racketWorldPos).normalize();
           
           // Ball's current velocity
           const ballVel = new THREE.Vector3(ballBody.velocity.x, ballBody.velocity.y, ballBody.velocity.z);
+          const incomingSpeed = ballVel.length();
           
-          // Component of ball velocity along the racket normal (toward the racket)
-          const velAlongNormal = ballVel.dot(racketNormal);
+          // Component of ball velocity along the collision normal
+          // Negative = ball moving toward racket, Positive = ball moving away
+          const velAlongNormal = ballVel.dot(collisionNormal);
           
-          // Only reflect if the ball is moving INTO the racket (negative dot = toward surface)
+          // Reflect the ball's velocity component that is moving into the racket
           if (velAlongNormal < 0) {
-            // Reflect: remove the into-racket component and reverse it (with restitution)
+            // Remove the into-racket component and reverse it (with restitution)
             const restitution = 0.85;
-            const reflection = racketNormal.clone().multiplyScalar(-velAlongNormal * (1 + restitution));
+            const reflection = collisionNormal.clone().multiplyScalar(-velAlongNormal * (1 + restitution));
             ballVel.add(reflection);
           }
           
@@ -2510,20 +2523,21 @@
           ballVel.y += racketVelocity.y * velocityMultiplier;
           ballVel.z += racketVelocity.z * velocityMultiplier;
           
-          // Cap maximum ball speed at 10 m/s
-          const currentSpeed = ballVel.length();
-          if (currentSpeed > 10) {
-            ballVel.multiplyScalar(10 / currentSpeed);
-          }
-          
           // Apply final velocity
           ballBody.velocity.set(ballVel.x, ballVel.y, ballVel.z);
           
-          // Apply spin based on racket velocity at contact point
-          const spinMultiplier = 1.0;
-          ballBody.angularVelocity.x += -racketVelocity.y * spinMultiplier;
-          ballBody.angularVelocity.y += racketVelocity.x * spinMultiplier;
-          ballBody.angularVelocity.z += racketVelocity.z * spinMultiplier;
+          // Push ball outside racket to prevent repeated collision
+          const pushDist = 0.12; // Just past ball radius + half racket depth
+          ballBody.position.set(
+            ballBody.position.x + collisionNormal.x * pushDist,
+            ballBody.position.y + collisionNormal.y * pushDist,
+            ballBody.position.z + collisionNormal.z * pushDist
+          );
+          
+          // Apply spin based on racket velocity
+          ballBody.angularVelocity.x += -racketVelocity.y;
+          ballBody.angularVelocity.y += racketVelocity.x;
+          ballBody.angularVelocity.z += racketVelocity.z;
           
           // Clear returning state since the ball was intercepted
           const grab = ballEl.components['simple-grab'];
@@ -2532,7 +2546,7 @@
             grab.returningGraceUntil = 0;
           }
           
-          console.log('Racket impact: reflected ball at', currentSpeed.toFixed(1), 'm/s, racket swing:', racketVelocity.length().toFixed(2), 'm/s');
+          console.log('Racket impact: ball', incomingSpeed.toFixed(1), 'm/s -> ', ballVel.length().toFixed(1), 'm/s, swing:', racketVelocity.length().toFixed(2), 'm/s');
           
           // Play feedback
           const bounceSound = document.querySelector('#bounce-sound');
