@@ -116,7 +116,8 @@
           }
           
           // CANNON-based back wall detection (backup for OBB misses at high speed)
-          // Check if a ball hit a back wall (z=-8 or z=+8)
+          // Flag the ball for deferred processing in simple-grab.tick()
+          // (can't modify velocity here - CANNON solver overwrites it during step)
           const ballEntity = isBallA ? entityA : (isBallB ? entityB : null);
           const wallEntity = isBallA ? entityB : (isBallB ? entityA : null);
           if (ballEntity && wallEntity && (isBallA !== isBallB)) {
@@ -134,29 +135,9 @@
                   const hitOwnWall = (ballPlayer === 'player2' && isBackWallPlayer) ||
                                      (ballPlayer === 'player1' && isBackWallBot);
                   if (hitOpponentWall) {
-                    // Return ball to spawn at 10m/s (same logic as OBB handler)
-                    if (grab.constraint) { world.removeConstraint(grab.constraint); grab.constraint = null; }
-                    if (grab.handBody) { world.removeBody(grab.handBody); grab.handBody = null; }
-                    grab.body.mass = 1; grab.body.updateMassProperties();
-                    grab.isGrabbed = false; grab.grabbingHand = null;
-                    grab.isReturning = true;
-                    grab.returningGraceUntil = Date.now() + 1000;
-                    grab.body.velocity.set(0, 0, 0);
-                    grab.body.angularVelocity.set(0, 0, 0);
-                    grab.body.quaternion.set(0, 0, 0, 1);
-                    grab.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
-                    const cp = grab.body.position;
-                    const sp = grab.initialPosition;
-                    const dx = sp.x - cp.x, dy = sp.y - cp.y, dz = sp.z - cp.z;
-                    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                    if (dist > 0.01) {
-                      grab.body.velocity.set((dx/dist)*10, (dy/dist)*10, (dz/dist)*10);
-                    } else {
-                      grab.resetPosition();
-                    }
+                    grab._pendingWallHit = 'opponent';
                   } else if (hitOwnWall) {
-                    grab.isReturning = false;
-                    grab.resetPosition();
+                    grab._pendingWallHit = 'own';
                   }
                 }
               }
@@ -1255,6 +1236,38 @@
         },
         
         tick: function() {
+          // Process deferred wall hits (flagged by CANNON beginContact, after physics step)
+          if (this._pendingWallHit && this.body) {
+            const wallType = this._pendingWallHit;
+            this._pendingWallHit = null;
+            if (wallType === 'opponent') {
+              if (this.constraint) { world.removeConstraint(this.constraint); this.constraint = null; }
+              if (this.handBody) { world.removeBody(this.handBody); this.handBody = null; }
+              this.body.mass = 1; this.body.updateMassProperties();
+              this.isGrabbed = false; this.grabbingHand = null;
+              this.isReturning = true;
+              this.returningGraceUntil = Date.now() + 1000;
+              this.body.velocity.set(0, 0, 0);
+              this.body.angularVelocity.set(0, 0, 0);
+              this.body.quaternion.set(0, 0, 0, 1);
+              this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+              const cp = this.body.position;
+              const sp = this.initialPosition;
+              const dx = sp.x - cp.x, dy = sp.y - cp.y, dz = sp.z - cp.z;
+              const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+              if (dist > 0.01) {
+                this.body.velocity.set((dx/dist)*10, (dy/dist)*10, (dz/dist)*10);
+              } else {
+                this.resetPosition();
+              }
+              return;
+            } else if (wallType === 'own') {
+              this.isReturning = false;
+              this.resetPosition();
+              return;
+            }
+          }
+
           if (this.body) {
             if (this.isGrabbed && this.grabbingHand) {
               // When grabbed, directly update position and rotation
