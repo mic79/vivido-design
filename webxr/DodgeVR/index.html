@@ -1064,8 +1064,8 @@
             const isPlayerTarget = collider.id === 'player-target' || collider.id === 'player-body-collider';
 
             // --- NORMAL HITS: ball hits the OPPONENT's body ---
-            // Player1's red ball hitting bot = point for player1
-            if (this.data.player === 'player1' && isBotTarget) {
+            // Player2's blue ball (human's) hitting bot = point for human player
+            if (this.data.player === 'player2' && isBotTarget) {
               if (inGracePeriod) return; // Ignore during 1s return grace period
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
@@ -1075,8 +1075,8 @@
               respawn();
               return;
             }
-            // Player2's blue ball hitting player = point for bot
-            if (this.data.player === 'player2' && isPlayerTarget) {
+            // Player1's red ball (bot's) hitting player = point for bot
+            if (this.data.player === 'player1' && isPlayerTarget) {
               if (inGracePeriod) return; // Ignore during 1s return grace period
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
@@ -1088,8 +1088,8 @@
             }
 
             // --- SELF-HITS: ball hits its OWN player (deflection or own-goal) ---
-            // Player2's blue ball hitting bot (deflected back at bot) = point for player1
-            if (this.data.player === 'player2' && isBotTarget) {
+            // Player1's red ball (bot's) deflected back at bot = point for human player
+            if (this.data.player === 'player1' && isBotTarget) {
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -1098,8 +1098,8 @@
               respawn();
               return;
             }
-            // Player1's red ball hitting player (deflected back or own-goal) = point for bot
-            if (this.data.player === 'player1' && isPlayerTarget) {
+            // Player2's blue ball (human's) deflected back at player = point for bot
+            if (this.data.player === 'player2' && isPlayerTarget) {
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -1116,10 +1116,10 @@
                 const isBackWallBehindBot = Math.abs(wallPos.z + 8) < 0.01;   // z = -8
                 const isBackWallBehindPlayer = Math.abs(wallPos.z - 8) < 0.01; // z = +8
                 // Ball hits the wall behind the OPPONENT (went past opponent, hit far wall)
-                // Player1's red ball hits wall behind bot (z=-8) = opponent wall for player1
-                // Player2's blue ball hits wall behind player (z=+8) = opponent wall for player2
-                const hitOpponentWall = (this.data.player === 'player1' && isBackWallBehindBot) ||
-                                        (this.data.player === 'player2' && isBackWallBehindPlayer);
+                // Player2's blue ball hits wall behind bot (z=-8) = opponent wall for player2
+                // Player1's red ball hits wall behind player (z=+8) = opponent wall for player1
+                const hitOpponentWall = (this.data.player === 'player2' && isBackWallBehindBot) ||
+                                        (this.data.player === 'player1' && isBackWallBehindPlayer);
                 if (hitOpponentWall && this.body) {
                   // Release any grab constraint
                   if (this.constraint) {
@@ -1164,10 +1164,10 @@
                   return;
                 }
                 // Ball hits its OWN back wall - just respawn
-                // Player1's red ball hits wall behind player (z=+8) = own back wall
-                // Player2's blue ball hits wall behind bot (z=-8) = own back wall
-                if ((this.data.player === 'player1' && isBackWallBehindPlayer) ||
-                    (this.data.player === 'player2' && isBackWallBehindBot)) {
+                // Player2's blue ball hits wall behind player (z=+8) = own back wall
+                // Player1's red ball hits wall behind bot (z=-8) = own back wall
+                if ((this.data.player === 'player2' && isBackWallBehindPlayer) ||
+                    (this.data.player === 'player1' && isBackWallBehindBot)) {
                   respawn();
                   return;
                 }
