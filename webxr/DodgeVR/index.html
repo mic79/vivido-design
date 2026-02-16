@@ -3398,8 +3398,9 @@
             }
           });
 
-          // For bot body, create racket meshes attached to hand bones for multiplayer
-          if (this.isBot && this.bones.leftHandBone && this.bones.rightHandBone) {
+          // For bot body, create racket meshes for multiplayer (scene-level, not bone-attached)
+          // Positioned directly at remote hand positions each frame for accurate placement
+          if (this.isBot) {
             this.botRackets = { left: null, right: null };
             const racketGeo = new THREE.BoxGeometry(0.2, 0.2, 0.02);
             const racketMat = new THREE.MeshBasicMaterial({
@@ -3410,13 +3411,15 @@
             });
             ['left', 'right'].forEach((side) => {
               const mesh = new THREE.Mesh(racketGeo, racketMat.clone());
-              mesh.position.set(0, 0, -15); // Offset forward from hand (in bone local, scaled 100x)
-              mesh.scale.set(100, 100, 100); // Counter the 0.01 model scale
               mesh.visible = false;
-              const handBone = this.bones[`${side}HandBone`];
-              if (handBone) handBone.add(mesh);
+              this.el.sceneEl.object3D.add(mesh);
               this.botRackets[side] = mesh;
             });
+            // Pre-allocate reusable objects for per-frame racket positioning
+            this._racketOffset = new THREE.Vector3(0, 0, -0.15);
+            this._racketRotOffset = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -Math.PI / 2, 0));
+            this._tmpRacketQuat = new THREE.Quaternion();
+            this._tmpRacketOffsetVec = new THREE.Vector3();
           }
 
           console.log('[Mixamo Body]', this.data.mode, 'body loaded');
@@ -3770,8 +3773,31 @@
 
             this.updateBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
 
-            // Toggle remote player's racket visibility from synced racket mode state
+            // Position remote player's rackets directly at hand positions (bypasses IK)
             if (this.botRackets) {
+              // Left hand racket
+              if (rd.leftHand) {
+                this._tmpRacketQuat.set(rd.leftHand.qx, rd.leftHand.qy, rd.leftHand.qz, rd.leftHand.qw);
+                this._tmpRacketOffsetVec.copy(this._racketOffset).applyQuaternion(this._tmpRacketQuat);
+                this.botRackets.left.position.set(
+                  rd.leftHand.x + this._tmpRacketOffsetVec.x,
+                  rd.leftHand.y + this._tmpRacketOffsetVec.y,
+                  rd.leftHand.z + this._tmpRacketOffsetVec.z
+                );
+                this.botRackets.left.quaternion.copy(this._tmpRacketQuat).multiply(this._racketRotOffset);
+              }
+              // Right hand racket
+              if (rd.rightHand) {
+                this._tmpRacketQuat.set(rd.rightHand.qx, rd.rightHand.qy, rd.rightHand.qz, rd.rightHand.qw);
+                this._tmpRacketOffsetVec.copy(this._racketOffset).applyQuaternion(this._tmpRacketQuat);
+                this.botRackets.right.position.set(
+                  rd.rightHand.x + this._tmpRacketOffsetVec.x,
+                  rd.rightHand.y + this._tmpRacketOffsetVec.y,
+                  rd.rightHand.z + this._tmpRacketOffsetVec.z
+                );
+                this.botRackets.right.quaternion.copy(this._tmpRacketQuat).multiply(this._racketRotOffset);
+              }
+
               this.botRackets.left.visible = racketMode.player1.left;
               this.botRackets.right.visible = racketMode.player1.right;
             }
