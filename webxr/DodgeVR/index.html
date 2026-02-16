@@ -865,24 +865,26 @@
         const origOnBotHit = gm.Component.prototype.onBotHit;
         const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
         gm.Component.prototype.onBotHit = function() {
+          const now = Date.now();
+          if (now - (this._lastBotHitTime || 0) < 200) return;
+          this._lastBotHitTime = now;
           if (isMultiplayer && conn && conn.open) {
-            // Always increment local score when you hit the opponent
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
           } else {
-            // Use singleplayer scoring when not in active multiplayer connection
             origOnBotHit.call(this);
           }
         };
         gm.Component.prototype.onPlayerHit = function() {
+          const now = Date.now();
+          if (now - (this._lastPlayerHitTime || 0) < 200) return;
+          this._lastPlayerHitTime = now;
           if (isMultiplayer && conn && conn.open) {
-            // Always increment remote score when opponent hits you
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
           } else {
-            // Use singleplayer scoring when not in active multiplayer connection
             origOnPlayerHit.call(this);
           }
         };
@@ -2207,6 +2209,10 @@
 
         onBotHit: function() {
           if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          // Prevent double-scoring from multiple handlers firing for the same hit
+          const now = Date.now();
+          if (now - (this._lastBotHitTime || 0) < 200) return;
+          this._lastBotHitTime = now;
           
           if (isMultiplayer && conn && conn.open) {
             multiplayerScore.local += 1;
@@ -2225,6 +2231,9 @@
 
         onPlayerHit: function() {
           if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          const now = Date.now();
+          if (now - (this._lastPlayerHitTime || 0) < 200) return;
+          this._lastPlayerHitTime = now;
           
           if (isMultiplayer && conn && conn.open) {
             multiplayerScore.remote += 1;
@@ -2282,7 +2291,13 @@
             const collider = evt.detail.withEl;
             if (!collider || !collider.hasAttribute('simple-grab')) return;
 
-            // Any ball hitting a target triggers the impact effect
+            // Don't trigger for held balls (player swinging arm near own head)
+            // or balls in grace period (returning through opponent after wall bounce)
+            const grab = collider.components['simple-grab'];
+            if (!grab) return;
+            if (grab.isGrabbed) return;
+            if (grab.isReturning && Date.now() < grab.returningGraceUntil) return;
+
             this.playEffect();
           });
         },
