@@ -2824,23 +2824,10 @@
         }
       });
 
-      // Add debug visualization for controllers
+      // Debug visualization for controllers (disabled - Y Bot hands are used instead)
       AFRAME.registerComponent('debug-controller', {
         init: function() {
-          // Create wireframe for controller collision
-          const wireframe = document.createElement('a-entity');
-          wireframe.setAttribute('geometry', {
-            primitive: 'sphere',
-            radius: 0.05,
-            segmentsWidth: 16,
-            segmentsHeight: 16
-          });
-          wireframe.setAttribute('material', {
-            color: '#ff00ff',
-            wireframe: true,
-            opacity: 0.5
-          });
-          this.el.appendChild(wireframe);
+          // No-op: debug wireframe spheres disabled since rigged body hands are visible
         }
       });
 
@@ -3072,22 +3059,32 @@
             this.rig = document.querySelector('#rig');
 
             // Hide default hand-controls models (Y Bot has its own hands)
+            // Must NOT hide racket child entities -- only the hand-controls mesh
             const hideHandModel = (controller) => {
               if (!controller) return;
               const tryHide = () => {
                 const handControls = controller.components['hand-controls'];
                 if (handControls && handControls.loader) {
-                  // Model loaded - hide it
-                  controller.object3D.traverse((child) => {
-                    if (child.isMesh && child !== controller.object3D) {
-                      child.visible = false;
+                  // Build a set of Object3Ds that belong to child A-Frame entities (rackets, etc.)
+                  const childEntityObj3Ds = new Set();
+                  controller.querySelectorAll('*').forEach((childEl) => {
+                    if (childEl.object3D) {
+                      childEl.object3D.traverse((obj) => childEntityObj3Ds.add(obj));
                     }
                   });
+                  // Only hide meshes from the hand-controls model itself
+                  const handModel = controller.getObject3D('mesh');
+                  if (handModel) {
+                    handModel.traverse((child) => {
+                      if (child.isMesh) {
+                        child.visible = false;
+                      }
+                    });
+                  }
                 }
               };
               controller.addEventListener('model-loaded', tryHide);
               controller.addEventListener('object3dset', tryHide);
-              // Also try immediately in case already loaded
               tryHide();
             };
             hideHandModel(this.leftController);
@@ -3239,6 +3236,27 @@
               node.material = this.createFresnelMaterial(false);
             }
           });
+
+          // For bot body, create racket meshes attached to hand bones for multiplayer
+          if (this.isBot && this.bones.leftHandBone && this.bones.rightHandBone) {
+            this.botRackets = { left: null, right: null };
+            const racketGeo = new THREE.BoxGeometry(0.2, 0.2, 0.02);
+            const racketMat = new THREE.MeshBasicMaterial({
+              color: 0xff4444,
+              wireframe: true,
+              transparent: true,
+              opacity: 0.8
+            });
+            ['left', 'right'].forEach((side) => {
+              const mesh = new THREE.Mesh(racketGeo, racketMat.clone());
+              mesh.position.set(0, 0, -15); // Offset forward from hand (in bone local, scaled 100x)
+              mesh.scale.set(100, 100, 100); // Counter the 0.01 model scale
+              mesh.visible = false;
+              const handBone = this.bones[`${side}HandBone`];
+              if (handBone) handBone.add(mesh);
+              this.botRackets[side] = mesh;
+            });
+          }
 
           console.log('[Mixamo Body]', this.data.mode, 'body loaded');
         },
@@ -3590,6 +3608,12 @@
             this.el.object3D.quaternion.copy(this.torsoRotation);
 
             this.updateBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
+
+            // Toggle remote player's racket visibility from synced racket mode state
+            if (this.botRackets) {
+              this.botRackets.left.visible = racketMode.player1.left;
+              this.botRackets.right.visible = racketMode.player1.right;
+            }
             return;
           }
 
