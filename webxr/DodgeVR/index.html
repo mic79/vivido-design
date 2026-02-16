@@ -1088,8 +1088,13 @@
             }
 
             // --- SELF-HITS: ball hits its OWN player (deflection or own-goal) ---
+            // Only trigger if ball is not held and has meaningful velocity
+            // (prevents false triggers from spawn overlap or holding the ball near your body)
+            const selfHitSpeed = this.body ? this.body.velocity.length() : 0;
+            const canSelfHit = !this.isGrabbed && selfHitSpeed > 1;
+
             // Player1's red ball (bot's) deflected back at bot = point for human player
-            if (this.data.player === 'player1' && isBotTarget) {
+            if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -1099,7 +1104,7 @@
               return;
             }
             // Player2's blue ball (human's) deflected back at player = point for bot
-            if (this.data.player === 'player2' && isPlayerTarget) {
+            if (this.data.player === 'player2' && isPlayerTarget && canSelfHit) {
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
