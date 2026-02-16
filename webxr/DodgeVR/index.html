@@ -742,35 +742,40 @@
             if (botBody && botBody.components['mixamo-body']) {
               const mb = botBody.components['mixamo-body'];
 
-              // Build remote data with mirrored positions and rotations
-              // Mirror quaternion: negate Y and Z to reflect across YZ plane (X/Z position mirror)
+              // Position mirror (-x, y, -z) is equivalent to 180° rotation around Y.
+              // Quaternions must be pre-multiplied by this rotation to face the correct direction.
+              const yFlip = new THREE.Quaternion(0, 1, 0, 0); // 180° around Y
+
               const rd = {
                 head: {
                   x: mirroredX, y: rs.y, z: mirroredZ
                 }
               };
 
-              // Head quaternion (mirrored)
+              // Head quaternion: rotate 180° around Y
               if (rs.hqx !== undefined) {
-                rd.head.qx = rs.hqx;
-                rd.head.qy = -rs.hqy;
-                rd.head.qz = -rs.hqz;
-                rd.head.qw = rs.hqw;
+                const hq = new THREE.Quaternion(rs.hqx, rs.hqy, rs.hqz, rs.hqw);
+                hq.premultiply(yFlip);
+                rd.head.qx = hq.x; rd.head.qy = hq.y; rd.head.qz = hq.z; rd.head.qw = hq.w;
               }
 
-              // Left hand (mirrored positions + quaternions)
+              // Left hand (mirrored position + rotated quaternion)
               if (rs.lhx !== undefined) {
+                const lq = new THREE.Quaternion(rs.lhqx, rs.lhqy, rs.lhqz, rs.lhqw);
+                lq.premultiply(yFlip);
                 rd.leftHand = {
                   x: -rs.lhx, y: rs.lhy, z: -rs.lhz,
-                  qx: rs.lhqx, qy: -rs.lhqy, qz: -rs.lhqz, qw: rs.lhqw
+                  qx: lq.x, qy: lq.y, qz: lq.z, qw: lq.w
                 };
               }
 
-              // Right hand (mirrored positions + quaternions)
+              // Right hand (mirrored position + rotated quaternion)
               if (rs.rhx !== undefined) {
+                const rq = new THREE.Quaternion(rs.rhqx, rs.rhqy, rs.rhqz, rs.rhqw);
+                rq.premultiply(yFlip);
                 rd.rightHand = {
                   x: -rs.rhx, y: rs.rhy, z: -rs.rhz,
-                  qx: rs.rhqx, qy: -rs.rhqy, qz: -rs.rhqz, qw: rs.rhqw
+                  qx: rq.x, qy: rq.y, qz: rq.z, qw: rq.w
                 };
               }
 
