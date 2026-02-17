@@ -1071,6 +1071,32 @@
               this.resetPosition();
             };
             const now = Date.now();
+
+            // Safety: detect ball that just bounced off a back wall before tick() could flag it.
+            // If ball is deep in the opponent's half AND moving backward, it bounced off the wall.
+            if (!this.isReturning && this.body && !this.isGrabbed) {
+              const bz = this.body.position.z;
+              const vz = this.body.velocity.z;
+              const bouncedFromBotWall = (this.data.player === 'player2' && bz < -6.5 && vz > 0.5);
+              const bouncedFromPlayerWall = (this.data.player === 'player1' && bz > 6.5 && vz < -0.5);
+              if (bouncedFromBotWall || bouncedFromPlayerWall) {
+                this.isReturning = true;
+                this.returningGraceUntil = now + 2000;
+                this.body.velocity.set(0, 0, 0);
+                this.body.angularVelocity.set(0, 0, 0);
+                this.body.quaternion.set(0, 0, 0, 1);
+                this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+                const cp = this.body.position;
+                const sp = this.initialPosition;
+                const dx = sp.x - cp.x, dy = sp.y - cp.y, dz = sp.z - cp.z;
+                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                if (dist > 0.01) {
+                  this.body.velocity.set((dx/dist)*10, (dy/dist)*10, (dz/dist)*10);
+                }
+                return; // Don't process this collision - ball is returning
+              }
+            }
+
             const inGracePeriod = this.isReturning && now < this.returningGraceUntil;
 
             const isBotTarget = collider.id === 'bot-target' || collider.id === 'bot-body-collider';
@@ -1079,7 +1105,7 @@
             // --- NORMAL HITS: ball hits the OPPONENT's body ---
             // Player2's blue ball (human's) hitting bot = point for human player
             if (this.data.player === 'player2' && isBotTarget) {
-              if (inGracePeriod) return; // Ignore during 1s return grace period
+              if (inGracePeriod) return; // Ignore during grace period
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -2780,6 +2806,17 @@
               const grab = collider.components?.['simple-grab'];
               if (grab) {
                 if (grab.isGrabbed) return; // Don't trigger for held balls
+                // Detect ball that just bounced off back wall (position + velocity check)
+                if (!grab.isReturning && grab.body) {
+                  const bz = grab.body.position.z;
+                  const vz = grab.body.velocity.z;
+                  if (bz > 6.5 && vz < -0.5) {
+                    // Player1's ball is deep in player's half and moving back = bounced
+                    grab.isReturning = true;
+                    grab.returningGraceUntil = Date.now() + 2000;
+                    return;
+                  }
+                }
                 if (grab.isReturning && Date.now() < grab.returningGraceUntil) return; // Grace period
               }
 
