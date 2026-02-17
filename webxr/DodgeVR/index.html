@@ -1087,6 +1087,7 @@
               if (impactEffect) impactEffect.playEffect();
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
+              pulseHapticBothHands(1.0, 200); // Strong vibration on both controllers
               respawn();
               return;
             }
@@ -1114,6 +1115,7 @@
               if (impactEffect) impactEffect.playEffect();
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
+              pulseHapticBothHands(1.0, 200); // Strong vibration on both controllers
               respawn();
               return;
             }
@@ -1146,7 +1148,7 @@
                   this.grabbingHand = null;
                   // Mark as returning with 1s grace period (no opponent collision)
                   this.isReturning = true;
-                  this.returningGraceUntil = Date.now() + 1000;
+                  this.returningGraceUntil = Date.now() + 2000;
                   // Zero all velocity and spin
                   this.body.velocity.set(0, 0, 0);
                   this.body.angularVelocity.set(0, 0, 0);
@@ -1227,7 +1229,7 @@
                   this.body.mass = 1; this.body.updateMassProperties();
                   this.isGrabbed = false; this.grabbingHand = null;
                   this.isReturning = true;
-                  this.returningGraceUntil = Date.now() + 1000;
+                  this.returningGraceUntil = Date.now() + 2000;
                   this.body.velocity.set(0, 0, 0);
                   this.body.angularVelocity.set(0, 0, 0);
                   this.body.quaternion.set(0, 0, 0, 1);
@@ -1501,6 +1503,9 @@
                 ballB.velocity.y += normal.y * impulseScalar;
                 ballB.velocity.z += normal.z * impulseScalar;
               }
+              // Haptic feedback on the hand holding ball A
+              const grabA = ballA.el?.components?.['simple-grab'];
+              if (grabA?.grabbingHand) pulseHaptic(grabA.grabbingHand, 0.7, 100);
             } else {
               // A is free, reflect A's velocity along the collision normal
               const vaDotN = ballA.velocity.dot(normal);
@@ -1511,6 +1516,9 @@
                 ballA.velocity.y += normal.y * impulseScalar;
                 ballA.velocity.z += normal.z * impulseScalar;
               }
+              // Haptic feedback on the hand holding ball B
+              const grabB = ballB.el?.components?.['simple-grab'];
+              if (grabB?.grabbingHand) pulseHaptic(grabB.grabbingHand, 0.7, 100);
             }
           } else {
             // Both free: equal-mass elastic collision
@@ -2735,11 +2743,16 @@
           // Add collision event listener
           this.el.addEventListener('obbcollisionstarted', (evt) => {
             if (!this.data.enabled) return;
-            console.log('Player collision event received:', evt.detail);
             const collider = evt.detail.withEl;
             if (collider && collider.getAttribute('simple-grab') && 
                 collider.getAttribute('simple-grab').player === 'player1') {
-              console.log('Player hit by bot ball!');
+              // Check grace period - ball returning from back wall shouldn't hit player
+              const grab = collider.components?.['simple-grab'];
+              if (grab) {
+                if (grab.isGrabbed) return; // Don't trigger for held balls
+                if (grab.isReturning && Date.now() < grab.returningGraceUntil) return; // Grace period
+              }
+
               // Visual feedback
               const playerSphere = this.el.querySelector('a-sphere');
               if (playerSphere) {
@@ -2753,10 +2766,7 @@
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
               if (impactEffect) {
-                console.log('Playing player impact effect');
                 impactEffect.playEffect();
-              } else {
-                console.log('No impact effect component found on player-target');
               }
               
               // Update score
@@ -2946,6 +2956,19 @@
           }
         }
       });
+
+      // Helper: pulse haptic on a specific hand entity (or both)
+      function pulseHaptic(handEl, intensity, durationMs) {
+        if (!handEl) return;
+        const tc = handEl.components?.['tracked-controls'];
+        if (tc?.controller?.gamepad?.hapticActuators?.[0]) {
+          tc.controller.gamepad.hapticActuators[0].pulse(intensity, durationMs).catch(() => {});
+        }
+      }
+      function pulseHapticBothHands(intensity, durationMs) {
+        pulseHaptic(document.querySelector('#leftHand'), intensity, durationMs);
+        pulseHaptic(document.querySelector('#rightHand'), intensity, durationMs);
+      }
 
       // Add haptic feedback on hand collision with a ball
       AFRAME.registerComponent('hand-haptics', {
