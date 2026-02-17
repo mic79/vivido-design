@@ -2664,12 +2664,11 @@
           if (isRightRacket && !racketMode.player2.right) return;
           if (!isLeftRacket && !isRightRacket) return;
           
-          // Cache ball element lookups (refresh every 2 seconds)
+          // Cache ball element lookup - racket only interacts with owner's ball (player2)
           const now = Date.now();
           if (!this._cachedBalls || now - this._cachedBallsTime > 2000) {
             this._cachedBalls = [
-              document.querySelector('[simple-grab="player: player2"]'),
-              document.querySelector('[simple-grab="player: player1"]')
+              document.querySelector('[simple-grab="player: player2"]')
             ];
             this._cachedBallsTime = now;
           }
