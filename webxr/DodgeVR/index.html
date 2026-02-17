@@ -2504,7 +2504,14 @@
             this.body = null;
             this.lastHitTime = 0; // Track last hit to prevent multiple rapid hits
             this.lastRacketPos = null; // Initialize as null to detect first frame
+            this.lastRacketQuat = new THREE.Quaternion();
             this.lastRacketTime = 0;
+            this.racketVelocity = new THREE.Vector3();
+            this.racketAngularVelocity = new THREE.Vector3();
+            // Reusable temp objects for angular velocity computation
+            this._deltaQuat = new THREE.Quaternion();
+            this._angAxis = new THREE.Vector3();
+            
             this.tick = function() {
               const worldPos = new THREE.Vector3();
               const worldQuat = new THREE.Quaternion();
@@ -2514,20 +2521,50 @@
               // Initialize position tracking on first frame
               if (!this.lastRacketPos) {
                 this.lastRacketPos = worldPos.clone();
+                this.lastRacketQuat.copy(worldQuat);
                 this.lastRacketTime = performance.now();
                 console.log('Initialized racket tracking for', this.el.id);
                 return;
               }
               
-              // Eleven Table Tennis style: Check for ball collision along movement path
-              const movement = worldPos.distanceTo(this.lastRacketPos);
-              if (movement > 0.00001) { // Extreme sensitivity - detect micro-movements
-                this.checkSweptCollision(this.lastRacketPos, worldPos);
+              const currentTime = performance.now();
+              const dt = Math.max((currentTime - this.lastRacketTime) / 1000, 0.001);
+              
+              // Compute linear velocity
+              this.racketVelocity.subVectors(worldPos, this.lastRacketPos).divideScalar(dt);
+              
+              // Compute angular velocity from quaternion difference
+              // deltaQ = currentQ * inverse(lastQ) → rotation that happened this frame
+              this._deltaQuat.copy(this.lastRacketQuat).invert();
+              this._deltaQuat.premultiply(worldQuat);
+              // Convert quaternion to axis-angle
+              const halfAngle = Math.acos(Math.min(1, Math.abs(this._deltaQuat.w)));
+              const sinHalf = Math.sin(halfAngle);
+              if (sinHalf > 0.0001) {
+                this._angAxis.set(
+                  this._deltaQuat.x / sinHalf,
+                  this._deltaQuat.y / sinHalf,
+                  this._deltaQuat.z / sinHalf
+                );
+                const angle = 2 * halfAngle / dt; // rad/s
+                this.racketAngularVelocity.copy(this._angAxis).multiplyScalar(angle);
+              } else {
+                this.racketAngularVelocity.set(0, 0, 0);
               }
               
-              // Update position tracking
+              // Check for ball collision along movement path
+              const movement = worldPos.distanceTo(this.lastRacketPos);
+              if (movement > 0.00001) {
+                this.checkSweptCollision(this.lastRacketPos, worldPos);
+              } else {
+                // Even without movement, check for stationary overlap
+                this.checkSweptCollision(worldPos, worldPos);
+              }
+              
+              // Update tracking
               this.lastRacketPos.copy(worldPos);
-              this.lastRacketTime = performance.now();
+              this.lastRacketQuat.copy(worldQuat);
+              this.lastRacketTime = currentTime;
             };
           } else {
                       // For non-racket objects, create normal physics bodies
@@ -2640,10 +2677,8 @@
           // Cooldown to prevent multiple rapid hits (100ms = ~7 frames at 72fps)
           if (now - this.lastHitTime < 100) return;
           
-          // Calculate racket velocity once for all ball checks
-          const currentTime = performance.now();
-          const deltaTime = Math.max((currentTime - this.lastRacketTime) / 1000, 0.001);
-          this._sweptContactVel.subVectors(endPos, startPos).divideScalar(deltaTime);
+          // Use the pre-computed racket velocity from the tick function
+          this._sweptContactVel.copy(this.racketVelocity);
           
           // Get racket orientation for proper box collision
           this.el.object3D.getWorldQuaternion(this._sweptRacketQuat);
@@ -2736,11 +2771,14 @@
           }
         },
         
-        applySweptImpact: function(ballEl, racketVelocity, contactPoint) {
+        // Physics-accurate paddle-ball collision based on PingPang's model:
+        // Work in paddle rest frame, decompose into normal/tangential,
+        // apply restitution + friction, transfer spin, transform back.
+        applySweptImpact: function(ballEl, racketLinearVelocity, contactPoint) {
           const ballBody = ballEl.components['simple-grab'].body;
           if (!ballBody) return;
           
-          // Compute proper box collision normal using racket orientation
+          // --- Compute collision normal from box geometry ---
           const racketWorldPos = new THREE.Vector3();
           this.el.object3D.getWorldPosition(racketWorldPos);
           const racketQuat = new THREE.Quaternion();
@@ -2749,61 +2787,95 @@
           
           const ballPos = new THREE.Vector3(ballBody.position.x, ballBody.position.y, ballBody.position.z);
           
-          // Transform ball into racket-local space for proper box normal calculation
+          // Ball in racket-local space for box normal calculation
           const localBall = ballPos.clone().sub(racketWorldPos).applyQuaternion(racketInvQuat);
           const halfW = 0.1, halfH = 0.1, halfD = 0.01;
-          
-          // Closest point on box
           const cx = Math.max(-halfW, Math.min(halfW, localBall.x));
           const cy = Math.max(-halfH, Math.min(halfH, localBall.y));
           const cz = Math.max(-halfD, Math.min(halfD, localBall.z));
           
-          // Normal from closest point to ball center (in local space)
           let localNormal = new THREE.Vector3(localBall.x - cx, localBall.y - cy, localBall.z - cz);
           if (localNormal.lengthSq() < 0.0001) {
-            // Ball center is inside the box - use the face normal (Z axis = flat face)
             localNormal.set(0, 0, localBall.z >= 0 ? 1 : -1);
           } else {
             localNormal.normalize();
           }
+          const normal = localNormal.applyQuaternion(racketQuat);
           
-          // Transform normal back to world space
-          const collisionNormal = localNormal.applyQuaternion(racketQuat);
-          
-          // Ball's current velocity
-          const ballVel = new THREE.Vector3(ballBody.velocity.x, ballBody.velocity.y, ballBody.velocity.z);
-          const incomingSpeed = ballVel.length();
-          
-          // Component of ball velocity along the collision normal
-          const velAlongNormal = ballVel.dot(collisionNormal);
-          
-          // Reflect the ball's velocity component that is moving into the racket
-          if (velAlongNormal < 0) {
-            const restitution = 0.85;
-            const reflection = collisionNormal.clone().multiplyScalar(-velAlongNormal * (1 + restitution));
-            ballVel.add(reflection);
+          // --- Paddle velocity at contact point (linear + rotational) ---
+          const paddleVel = racketLinearVelocity.clone();
+          // Add rotational contribution: v_rot = angularVel × (contactPoint - center)
+          if (this.racketAngularVelocity && this.racketAngularVelocity.lengthSq() > 0.001) {
+            const offset = contactPoint.clone().sub(racketWorldPos);
+            const rotContrib = new THREE.Vector3().crossVectors(this.racketAngularVelocity, offset);
+            paddleVel.add(rotContrib);
           }
           
-          // Add racket velocity transfer on top of the reflection
-          const velocityMultiplier = 0.8;
-          ballVel.x += racketVelocity.x * velocityMultiplier;
-          ballVel.y += racketVelocity.y * velocityMultiplier;
-          ballVel.z += racketVelocity.z * velocityMultiplier;
+          // --- Ball state ---
+          const ballVel = new THREE.Vector3(ballBody.velocity.x, ballBody.velocity.y, ballBody.velocity.z);
+          const ballAngVel = new THREE.Vector3(
+            ballBody.angularVelocity.x, ballBody.angularVelocity.y, ballBody.angularVelocity.z
+          );
+          const incomingSpeed = ballVel.length();
+          const ballRadius = 0.1;
+          const inertiaCoeff = 0.4; // Solid sphere: 2/5 * m * r^2 → coefficient 2/5
           
-          // Apply final velocity
-          ballBody.velocity.set(ballVel.x, ballVel.y, ballVel.z);
+          // --- Transform to paddle rest frame ---
+          const relVel = ballVel.clone().sub(paddleVel);
           
-          // Separate ball from racket to prevent overlap next frame
-          // Push ball along collision normal by enough to clear the racket
-          const separationDist = 0.12; // Ball radius + small margin
-          ballBody.position.x += collisionNormal.x * separationDist;
-          ballBody.position.y += collisionNormal.y * separationDist;
-          ballBody.position.z += collisionNormal.z * separationDist;
+          // Decompose into normal and tangential components
+          const vn = relVel.dot(normal);
           
-          // Apply spin based on racket velocity
-          ballBody.angularVelocity.x += -racketVelocity.y;
-          ballBody.angularVelocity.y += racketVelocity.x;
-          ballBody.angularVelocity.z += racketVelocity.z;
+          // Ball moving away from paddle in paddle frame → no collision
+          if (vn > 0) return;
+          
+          const vperp = normal.clone().multiplyScalar(vn);
+          const vpar = relVel.clone().sub(vperp);
+          
+          // Ball surface velocity at contact point from spin
+          const vrot = new THREE.Vector3().crossVectors(
+            ballAngVel, normal.clone().multiplyScalar(-ballRadius)
+          );
+          
+          // --- Restitution coefficients (rubber paddle surface) ---
+          const perpRestitution = 0.80; // Energy retained in normal bounce
+          const parRestitution  = 0.0;  // Rubber grip: absorbs tangential energy
+          const frictionCoeff   = 0.9;  // High friction for rubber surface
+          
+          // Normal impulse: reverse + attenuate normal component
+          const fperpFactor = 1 + Math.sqrt(perpRestitution);
+          const vperpimp = vperp.clone().multiplyScalar(-fperpFactor);
+          
+          // Tangential impulse: accounts for sliding velocity + ball spin
+          // PingPang formula: vparimp = (vpar + vrot) * (-fpar / (1 + 1/inertia))
+          const fparFactor = 1 + Math.sqrt(parRestitution); // = 1 for rubber
+          const vparimp = vpar.clone().add(vrot).multiplyScalar(
+            -fparFactor / (1.0 + 1.0 / inertiaCoeff)
+          );
+          
+          // Coulomb friction limit: tangential impulse ≤ friction × normal impulse
+          const vperpimpMag = vperpimp.length();
+          const vparimpMag = vparimp.length();
+          const vparmax = frictionCoeff * vperpimpMag;
+          if (vparimpMag > vparmax && vparimpMag > 0.001) {
+            vparimp.multiplyScalar(vparmax / vparimpMag);
+            // Ball skids on the paddle surface
+          }
+          
+          // Apply impulses in paddle rest frame
+          relVel.add(vperpimp).add(vparimp);
+          
+          // Update ball spin from tangential impulse
+          const spinChange = new THREE.Vector3().crossVectors(normal, vparimp)
+            .divideScalar(inertiaCoeff * ballRadius);
+          ballAngVel.sub(spinChange);
+          
+          // --- Transform back to world frame ---
+          const newVel = relVel.add(paddleVel);
+          
+          // Apply final velocity and spin
+          ballBody.velocity.set(newVel.x, newVel.y, newVel.z);
+          ballBody.angularVelocity.set(ballAngVel.x, ballAngVel.y, ballAngVel.z);
           
           // Clear returning state since the ball was intercepted
           const grab = ballEl.components['simple-grab'];
@@ -2812,7 +2884,9 @@
             grab.returningGraceUntil = 0;
           }
           
-          console.log('Racket impact: ball', incomingSpeed.toFixed(1), 'm/s -> ', ballVel.length().toFixed(1), 'm/s, swing:', racketVelocity.length().toFixed(2), 'm/s');
+          console.log('Racket hit:', incomingSpeed.toFixed(1), '→',
+            newVel.length().toFixed(1), 'm/s, paddle:', paddleVel.length().toFixed(2),
+            'm/s, spin:', ballAngVel.length().toFixed(1), 'rad/s');
           
           // Play feedback
           const bounceSound = document.querySelector('#bounce-sound');
@@ -2822,9 +2896,10 @@
             bounceSound.components.sound.playSound();
           }
           
-          // Haptic feedback
+          // Haptic feedback proportional to impact force
           const hand = this.el.parentEl;
-          pulseHaptic(hand, 0.6, 100);
+          const impactStrength = Math.min(1.0, Math.abs(vn) / 10);
+          pulseHaptic(hand, Math.max(0.3, impactStrength), 100);
         },
 
         // Removed handleRacketHit function - using only swept collision detection now
