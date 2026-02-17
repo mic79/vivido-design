@@ -90,6 +90,19 @@ AFRAME.registerComponent('advanced-bot', {
     
     if (collider && collider.getAttribute('simple-grab') && 
         collider.getAttribute('simple-grab').player === 'player2') {
+      // Check grace period - ball returning from back wall shouldn't score
+      const grab = collider.components?.['simple-grab'];
+      if (grab) {
+        if (grab.isGrabbed) return;
+        // Detect ball that is behind the bot (past them, near back wall)
+        if (!grab.isReturning && grab.body && grab.body.position.z < -6.5) {
+          grab.isReturning = true;
+          grab.returningGraceUntil = Date.now() + 2000;
+          return;
+        }
+        if (grab.isReturning && Date.now() < grab.returningGraceUntil) return;
+      }
+
       this.isHit = true;
       this.lastHitTime = now;
       

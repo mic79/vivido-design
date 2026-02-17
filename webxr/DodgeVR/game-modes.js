@@ -26,11 +26,9 @@ AFRAME.registerComponent('game-modes', {
   initBouncingBallMode: function() {
     console.log('Initializing Bouncing Ball game mode');
     
-    // Set opposing wall to bounce mode
-    this.setOpposingWallToBounce();
-    
-    // Override collision detection to prevent opposing wall respawn
-    this.overrideCollisionDetection();
+    // NOTE: Wall duplication and resetPosition override removed.
+    // Back walls always use restitution 0 - balls must never physically bounce off them.
+    // The bouncing-ball mode now only adds visual indicators.
     
     // Add visual indicators
     this.addModeIndicators();
