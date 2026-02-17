@@ -101,7 +101,7 @@
           const isBallA = entityA.hasAttribute('simple-grab');
           const isBallB = entityB.hasAttribute('simple-grab');
           
-          // If both are balls, play bounce sound at collision point
+          // If both are balls, play bounce sound at collision point + haptic on held ball
           if (isBallA && isBallB) {
             const bounceSound = document.querySelector('#bounce-sound');
             if (bounceSound) {
@@ -112,6 +112,15 @@
               // Stop any currently playing sound before starting a new one
               bounceSound.components.sound.stopSound();
               bounceSound.components.sound.playSound();
+            }
+            // Haptic feedback if one ball is held (blocking with held ball)
+            const grabA = entityA.components?.['simple-grab'];
+            const grabB = entityB.components?.['simple-grab'];
+            if (grabA?.isGrabbed && grabA.grabbingHand) {
+              pulseHaptic(grabA.grabbingHand, 0.7, 100);
+            }
+            if (grabB?.isGrabbed && grabB.grabbingHand) {
+              pulseHaptic(grabB.grabbingHand, 0.7, 100);
             }
           }
           
