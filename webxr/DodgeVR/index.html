@@ -1072,14 +1072,17 @@
             };
             const now = Date.now();
 
-            // Safety: detect ball that just bounced off a back wall before tick() could flag it.
-            // If ball is deep in the opponent's half AND moving backward, it bounced off the wall.
+            // Safety: detect ball that is behind the opponent (past them, near back wall).
+            // A ball behind the opponent cannot legitimately score - it either just bounced
+            // off the back wall or is on its way there. No velocity check needed: if the
+            // ball's z is past the opponent's z, it's not a valid frontal hit.
             if (!this.isReturning && this.body && !this.isGrabbed) {
               const bz = this.body.position.z;
-              const vz = this.body.velocity.z;
-              const bouncedFromBotWall = (this.data.player === 'player2' && bz < -6.5 && vz > 0.5);
-              const bouncedFromPlayerWall = (this.data.player === 'player1' && bz > 6.5 && vz < -0.5);
-              if (bouncedFromBotWall || bouncedFromPlayerWall) {
+              // For Player2's ball: bot is at z~-6, so anything past z=-6.5 is behind the bot
+              // For Player1's ball: player is at z~+6, so anything past z=+6.5 is behind player
+              const behindBot = (this.data.player === 'player2' && bz < -6.5);
+              const behindPlayer = (this.data.player === 'player1' && bz > 6.5);
+              if (behindBot || behindPlayer) {
                 this.isReturning = true;
                 this.returningGraceUntil = now + 2000;
                 this.body.velocity.set(0, 0, 0);
@@ -2539,13 +2542,8 @@
           const wallPosition = this.el.getAttribute('position');
           let isBackWall = wallPosition && (Math.abs(wallPosition.z - 8) < 0.01 || Math.abs(wallPosition.z + 8) < 0.01);
           
-          // In bouncing ball mode, only z=8 (behind blue player) should be a back wall
-          // z=-8 (behind red player) should bounce like side walls
-          const scene = this.el.sceneEl;
-          const gameModesComponent = scene && scene.components['game-modes'];
-          if (gameModesComponent && gameModesComponent.data.enabled && gameModesComponent.data.mode === 'bouncing-ball') {
-            isBackWall = wallPosition && Math.abs(wallPosition.z - 8) < 0.01; // Only z=8 is back wall
-          }
+          // Back walls (z=8 and z=-8) ALWAYS use backWallMaterial (restitution 0)
+          // regardless of game mode - balls should never physically bounce off back walls
           
           const body = new CANNON.Body({
             mass: 0,
@@ -2806,16 +2804,11 @@
               const grab = collider.components?.['simple-grab'];
               if (grab) {
                 if (grab.isGrabbed) return; // Don't trigger for held balls
-                // Detect ball that just bounced off back wall (position + velocity check)
-                if (!grab.isReturning && grab.body) {
-                  const bz = grab.body.position.z;
-                  const vz = grab.body.velocity.z;
-                  if (bz > 6.5 && vz < -0.5) {
-                    // Player1's ball is deep in player's half and moving back = bounced
-                    grab.isReturning = true;
-                    grab.returningGraceUntil = Date.now() + 2000;
-                    return;
-                  }
+                // Detect ball that is behind the player (past them, near back wall)
+                if (!grab.isReturning && grab.body && grab.body.position.z > 6.5) {
+                  grab.isReturning = true;
+                  grab.returningGraceUntil = Date.now() + 2000;
+                  return;
                 }
                 if (grab.isReturning && Date.now() < grab.returningGraceUntil) return; // Grace period
               }
