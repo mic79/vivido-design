@@ -1512,6 +1512,12 @@
         }
       });
 
+      // Pre-step ball positions for racket CCD (set before world.step(), used by racket swept collision)
+      const preStepBallPositions = {
+        player1: new THREE.Vector3(),
+        player2: new THREE.Vector3()
+      };
+
       // Swept sphere-sphere CCD for ball-ball collisions
       // Only fires when balls are far enough apart that CANNON.js substeps would miss them
       // (prevents double-response when CANNON can already handle the collision)
@@ -1622,6 +1628,14 @@
                   b: b2.components['simple-grab'].body
                 };
               }
+            }
+
+            // Store pre-step ball positions for racket CCD (before physics moves them)
+            if (this.ballBodies) {
+              const ba = this.ballBodies.a;
+              const bb = this.ballBodies.b;
+              preStepBallPositions.player1.set(ba.position.x, ba.position.y, ba.position.z);
+              preStepBallPositions.player2.set(bb.position.x, bb.position.y, bb.position.z);
             }
 
             // Pre-step CCD: detect ball-ball tunneling before CANNON substeps
@@ -2591,7 +2605,19 @@
           }
         },
         
-        // Swept collision detection - sweeps BOTH racket and ball paths for CCD
+        // Pre-allocated reusable vectors for swept collision (avoid per-frame GC on Quest)
+        _sweptRp: new THREE.Vector3(),
+        _sweptBp: new THREE.Vector3(),
+        _sweptLocal: new THREE.Vector3(),
+        _sweptBallPos: new THREE.Vector3(),
+        _sweptLastBall: new THREE.Vector3(),
+        _sweptContactVel: new THREE.Vector3(),
+        _sweptRacketQuat: new THREE.Quaternion(),
+        _sweptInvQuat: new THREE.Quaternion(),
+        _cachedBalls: null,
+        _cachedBallsTime: 0,
+        
+        // Swept collision detection - checks BOTH balls against the racket box
         checkSweptCollision: function(startPos, endPos) {
           // Only check collision if THIS SPECIFIC racket is active
           const isLeftRacket = this.el.id === 'leftHandRacket';
@@ -2601,95 +2627,158 @@
           if (isRightRacket && !racketMode.player2.right) return;
           if (!isLeftRacket && !isRightRacket) return;
           
-          const blueBall = document.querySelector('[simple-grab="player: player2"]');
-          if (!blueBall || !blueBall.components['simple-grab']?.body) return;
-          
-          // Cooldown to prevent multiple rapid hits
+          // Cache ball element lookups (refresh every 2 seconds)
           const now = Date.now();
-          if (now - this.lastHitTime < 16) return;
-          
-          const ballBody = blueBall.components['simple-grab'].body;
-          const ballPos = new THREE.Vector3(ballBody.position.x, ballBody.position.y, ballBody.position.z);
-          const ballRadius = 0.1;
-          const collisionThreshold = ballRadius + 0.05;
-          
-          // Get previous ball position for swept test (CCD)
-          const lastBallPos = this.lastBallPos || ballPos.clone();
-          
-          // Racket movement distance
-          const movementVector = new THREE.Vector3().subVectors(endPos, startPos);
-          const racketSpeed = movementVector.length();
-          
-          // Ball movement distance
-          const ballMovement = new THREE.Vector3().subVectors(ballPos, lastBallPos);
-          const ballSpeed = ballMovement.length();
-          
-          // Number of interpolation steps based on the faster mover
-          const maxSpeed = Math.max(racketSpeed, ballSpeed);
-          let hitDetected = false;
-          
-          if (maxSpeed > 0.001) {
-            // Sweep both paths simultaneously
-            const numSteps = Math.min(Math.max(Math.ceil(maxSpeed * 30), 4), 20);
-            
-            for (let i = 0; i <= numSteps; i++) {
-              const t = i / numSteps;
-              const interpRacket = new THREE.Vector3().lerpVectors(startPos, endPos, t);
-              const interpBall = new THREE.Vector3().lerpVectors(lastBallPos, ballPos, t);
-              
-              if (interpRacket.distanceTo(interpBall) <= collisionThreshold) {
-                hitDetected = true;
-                break;
-              }
-            }
-          } else {
-            // Both nearly stationary - direct distance check
-            if (endPos.distanceTo(ballPos) <= collisionThreshold) {
-              hitDetected = true;
-            }
+          if (!this._cachedBalls || now - this._cachedBallsTime > 2000) {
+            this._cachedBalls = [
+              document.querySelector('[simple-grab="player: player2"]'),
+              document.querySelector('[simple-grab="player: player1"]')
+            ];
+            this._cachedBallsTime = now;
           }
           
-          // Store ball position for next frame's swept test
-          this.lastBallPos = ballPos.clone();
+          // Cooldown to prevent multiple rapid hits (100ms = ~7 frames at 72fps)
+          if (now - this.lastHitTime < 100) return;
           
-          if (!hitDetected) return;
-          
-          // Record hit time to enforce cooldown
-          this.lastHitTime = now;
-          
-          // Calculate velocity at point of contact using actual time elapsed
+          // Calculate racket velocity once for all ball checks
           const currentTime = performance.now();
           const deltaTime = Math.max((currentTime - this.lastRacketTime) / 1000, 0.001);
-          const contactVelocity = new THREE.Vector3()
-            .subVectors(endPos, startPos)
-            .divideScalar(deltaTime);
+          this._sweptContactVel.subVectors(endPos, startPos).divideScalar(deltaTime);
           
-          // Apply impact with proper contact velocity
-          this.applySweptImpact(blueBall, contactVelocity, ballPos);
+          // Get racket orientation for proper box collision
+          this.el.object3D.getWorldQuaternion(this._sweptRacketQuat);
+          this._sweptInvQuat.copy(this._sweptRacketQuat).invert();
+          
+          // Racket half-extents: 0.2m wide, 0.2m tall, 0.02m thick → halves: 0.1, 0.1, 0.01
+          const halfW = 0.1, halfH = 0.1, halfD = 0.01;
+          const ballRadius = 0.1;
+          const ballRadiusSq = ballRadius * ballRadius;
+          
+          for (const ballEl of this._cachedBalls) {
+            if (!ballEl) continue;
+            const grab = ballEl.components?.['simple-grab'];
+            if (!grab?.body) continue;
+            // Skip held balls - they shouldn't be hit by racket
+            if (grab.isGrabbed) continue;
+            
+            const ballBody = grab.body;
+            // Use post-step position as current
+            this._sweptBallPos.set(ballBody.position.x, ballBody.position.y, ballBody.position.z);
+            
+            // Use pre-step position as the ball's "start of frame" position
+            // This captures where the ball was BEFORE physics moved it, preventing tunneling
+            const playerKey = grab.data?.player || 'player2';
+            const preStepPos = preStepBallPositions[playerKey];
+            
+            // Track previous ball positions per ball entity
+            const trackKey = '_lastBallPos_' + playerKey;
+            if (preStepPos && preStepPos.lengthSq() > 0.01) {
+              // Use pre-step position (stored before world.step())
+              this._sweptLastBall.copy(preStepPos);
+            } else if (this[trackKey]) {
+              this._sweptLastBall.copy(this[trackKey]);
+            } else {
+              this._sweptLastBall.copy(this._sweptBallPos);
+            }
+            
+            // Swept box-sphere test: interpolate both paths, check box-sphere at each step
+            const moveDist = startPos.distanceTo(endPos);
+            const ballDist = this._sweptLastBall.distanceTo(this._sweptBallPos);
+            const maxDist = Math.max(moveDist, ballDist);
+            let hitDetected = false;
+            
+            if (maxDist > 0.001) {
+              const numSteps = Math.min(Math.max(Math.ceil(maxDist * 40), 5), 30);
+              
+              for (let i = 0; i <= numSteps; i++) {
+                const t = i / numSteps;
+                this._sweptRp.lerpVectors(startPos, endPos, t);
+                this._sweptBp.lerpVectors(this._sweptLastBall, this._sweptBallPos, t);
+                
+                // Transform ball position into racket-local space
+                this._sweptLocal.copy(this._sweptBp).sub(this._sweptRp).applyQuaternion(this._sweptInvQuat);
+                
+                // Closest point on the box to the ball center (clamped)
+                const lx = this._sweptLocal.x, ly = this._sweptLocal.y, lz = this._sweptLocal.z;
+                const cx = Math.max(-halfW, Math.min(halfW, lx));
+                const cy = Math.max(-halfH, Math.min(halfH, ly));
+                const cz = Math.max(-halfD, Math.min(halfD, lz));
+                
+                const dx = lx - cx, dy = ly - cy, dz = lz - cz;
+                
+                if (dx*dx + dy*dy + dz*dz <= ballRadiusSq) {
+                  hitDetected = true;
+                  break;
+                }
+              }
+            } else {
+              // Both nearly stationary - direct box-sphere check
+              this._sweptLocal.copy(this._sweptBallPos).sub(endPos).applyQuaternion(this._sweptInvQuat);
+              const lx = this._sweptLocal.x, ly = this._sweptLocal.y, lz = this._sweptLocal.z;
+              const cx = Math.max(-halfW, Math.min(halfW, lx));
+              const cy = Math.max(-halfH, Math.min(halfH, ly));
+              const cz = Math.max(-halfD, Math.min(halfD, lz));
+              const dx = lx - cx, dy = ly - cy, dz = lz - cz;
+              if (dx*dx + dy*dy + dz*dz <= ballRadiusSq) {
+                hitDetected = true;
+              }
+            }
+            
+            // Store ball position for next frame's swept test (fallback)
+            if (!this[trackKey]) this[trackKey] = new THREE.Vector3();
+            this[trackKey].copy(this._sweptBallPos);
+            
+            if (hitDetected) {
+              this.lastHitTime = now;
+              this.applySweptImpact(ballEl, this._sweptContactVel, this._sweptBallPos);
+              return; // Only hit one ball per frame
+            }
+          }
         },
         
         applySweptImpact: function(ballEl, racketVelocity, contactPoint) {
           const ballBody = ballEl.components['simple-grab'].body;
           if (!ballBody) return;
           
-          // Use racket-to-ball direction as collision normal
-          // This is robust regardless of which face the ball hits
+          // Compute proper box collision normal using racket orientation
           const racketWorldPos = new THREE.Vector3();
           this.el.object3D.getWorldPosition(racketWorldPos);
+          const racketQuat = new THREE.Quaternion();
+          this.el.object3D.getWorldQuaternion(racketQuat);
+          const racketInvQuat = racketQuat.clone().invert();
+          
           const ballPos = new THREE.Vector3(ballBody.position.x, ballBody.position.y, ballBody.position.z);
-          const collisionNormal = ballPos.clone().sub(racketWorldPos).normalize();
+          
+          // Transform ball into racket-local space for proper box normal calculation
+          const localBall = ballPos.clone().sub(racketWorldPos).applyQuaternion(racketInvQuat);
+          const halfW = 0.1, halfH = 0.1, halfD = 0.01;
+          
+          // Closest point on box
+          const cx = Math.max(-halfW, Math.min(halfW, localBall.x));
+          const cy = Math.max(-halfH, Math.min(halfH, localBall.y));
+          const cz = Math.max(-halfD, Math.min(halfD, localBall.z));
+          
+          // Normal from closest point to ball center (in local space)
+          let localNormal = new THREE.Vector3(localBall.x - cx, localBall.y - cy, localBall.z - cz);
+          if (localNormal.lengthSq() < 0.0001) {
+            // Ball center is inside the box - use the face normal (Z axis = flat face)
+            localNormal.set(0, 0, localBall.z >= 0 ? 1 : -1);
+          } else {
+            localNormal.normalize();
+          }
+          
+          // Transform normal back to world space
+          const collisionNormal = localNormal.applyQuaternion(racketQuat);
           
           // Ball's current velocity
           const ballVel = new THREE.Vector3(ballBody.velocity.x, ballBody.velocity.y, ballBody.velocity.z);
           const incomingSpeed = ballVel.length();
           
           // Component of ball velocity along the collision normal
-          // Negative = ball moving toward racket, Positive = ball moving away
           const velAlongNormal = ballVel.dot(collisionNormal);
           
           // Reflect the ball's velocity component that is moving into the racket
           if (velAlongNormal < 0) {
-            // Remove the into-racket component and reverse it (with restitution)
             const restitution = 0.85;
             const reflection = collisionNormal.clone().multiplyScalar(-velAlongNormal * (1 + restitution));
             ballVel.add(reflection);
@@ -2703,6 +2792,13 @@
           
           // Apply final velocity
           ballBody.velocity.set(ballVel.x, ballVel.y, ballVel.z);
+          
+          // Separate ball from racket to prevent overlap next frame
+          // Push ball along collision normal by enough to clear the racket
+          const separationDist = 0.12; // Ball radius + small margin
+          ballBody.position.x += collisionNormal.x * separationDist;
+          ballBody.position.y += collisionNormal.y * separationDist;
+          ballBody.position.z += collisionNormal.z * separationDist;
           
           // Apply spin based on racket velocity
           ballBody.angularVelocity.x += -racketVelocity.y;
@@ -2728,10 +2824,7 @@
           
           // Haptic feedback
           const hand = this.el.parentEl;
-          if (hand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
-            const haptics = hand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
-            haptics.pulse(0.6, 100).catch(() => {});
-          }
+          pulseHaptic(hand, 0.6, 100);
         },
 
         // Removed handleRacketHit function - using only swept collision detection now
