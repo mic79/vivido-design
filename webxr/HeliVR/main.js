@@ -154,7 +154,7 @@ class Game {
         this.heliMesh.add(bodyMesh);
 
         this.rotor = new THREE.Mesh(new THREE.BoxGeometry(10, 0.1, 0.4), new THREE.MeshStandardMaterial({color: 0x111111}));
-        this.rotor.position.set(0, 1.2, 0);
+        this.rotor.position.set(0, 2.2, 0);
         this.heliMesh.add(this.rotor);
 
         const tail = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.5, 4), new THREE.MeshStandardMaterial({color: 0x244424}));
@@ -309,7 +309,8 @@ class Game {
                 this.playerGroup.rotateY(Math.PI); 
 
                 // Position camera inside cockpit
-                this.camera.position.set(0, 0.5, 2); 
+                this.camera.position.set(0, -2.0, 2); 
+                this.playerGroup.position.y -= 2.0;
             } else {
                 // Third person follow for desktop
                 const camOffset = new THREE.Vector3(0, 5, -20).applyQuaternion(this.heliMesh.quaternion);

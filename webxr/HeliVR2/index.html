@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canyon Chaos VR Heli</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Menu Screen -->
+    <div id="menu">
+        <h1>Canyon Chaos VR Heli</h1>
+        <p class="menu-sub">Choose your mission</p>
+        <div class="menu-cards">
+            <button data-env="canyon" class="menu-card">
+                <span class="card-icon">&#9968;</span>
+                <span class="card-title">Canyon Run</span>
+                <span class="card-desc">Fly through a winding canyon, dodge pillars and overhangs. Shoot to destroy obstacles.</span>
+            </button>
+            <button data-env="nyc" class="menu-card card-nyc">
+                <span class="card-icon">&#127959;</span>
+                <span class="card-title">NYC Rescue</span>
+                <span class="card-desc">A devastated city needs you. Rescue survivors from rooftops, bridges and rubble. Deliver them to hospitals and shelters.</span>
+            </button>
+        </div>
+        <p class="menu-controls">W/S: Altitude &nbsp; A/D: Yaw &nbsp; Arrows: Pitch &amp; Bank &nbsp; Space: Shoot</p>
+    </div>
+
+    <!-- In-game info bar -->
+    <div id="info" style="display:none;">Canyon Chaos VR Heli<br>W/S: Altitude, A/D: Yaw, Arrows: Pitch &amp; Bank, Space: Shoot</div>
+
+    <!-- HUD (shown only in NYC Rescue) -->
+    <div id="hud" style="display:none;">
+        <div id="hud-top">
+            <span id="hud-compass">N</span>
+            <span id="hud-arrow">&#9650;</span>
+            <span id="hud-distance">0m</span>
+        </div>
+        <div id="hud-bottom">
+            <span id="hud-score">Rescued: 0 / 12</span>
+            <span id="hud-onboard"></span>
+        </div>
+        <div id="hud-status">Rescue survivors across the city</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/gh/kripken/ammo.js@master/builds/ammo.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
