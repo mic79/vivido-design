@@ -17,7 +17,8 @@
     <script>
       // Game settings (adjustable at runtime via console)
       window.gameSettings = {
-        trajectoryPreview: true  // B button toggles; shows bounce path while holding ball
+        trajectoryPreview: true,  // B button toggles; shows bounce path while holding ball
+        trajectoryLocked: false   // Trigger+B freezes trajectory; stays visible after release
       };
 
       // Physics world setup
@@ -303,10 +304,24 @@
         },
 
         toggleTrajectory: function() {
-          window.gameSettings.trajectoryPreview = !window.gameSettings.trajectoryPreview;
-          const label = window.gameSettings.trajectoryPreview ? 'ON' : 'OFF';
-          this.showTrajectoryNotification(label);
-          console.log('Trajectory preview: ' + label);
+          const gs = window.gameSettings;
+          const blueBall = document.querySelector('[simple-grab="player: player2"]');
+          const holding = blueBall && blueBall.components['simple-grab'] && blueBall.components['simple-grab'].isGrabbed;
+
+          if (holding && gs.trajectoryPreview) {
+            // Trigger+B while trajectory is live: toggle lock
+            gs.trajectoryLocked = !gs.trajectoryLocked;
+            const label = gs.trajectoryLocked ? 'LOCKED' : 'LIVE';
+            this.showTrajectoryNotification(label);
+            console.log('Trajectory: ' + label);
+          } else {
+            // B only: toggle trajectory on/off
+            gs.trajectoryPreview = !gs.trajectoryPreview;
+            gs.trajectoryLocked = false;
+            const label = gs.trajectoryPreview ? 'ON' : 'OFF';
+            this.showTrajectoryNotification(label);
+            console.log('Trajectory preview: ' + label);
+          }
         },
 
         showTrajectoryNotification: function(label) {
@@ -1401,9 +1416,10 @@
               }
 
               // --- Trajectory preview laser ---
-              if (window.gameSettings && window.gameSettings.trajectoryPreview) {
+              if (window.gameSettings && window.gameSettings.trajectoryPreview && !window.gameSettings.trajectoryLocked) {
                 this.grabbingHand.object3D.getWorldQuaternion(this._trajQuat);
-                this._trajDir.set(0, 0, -1).applyQuaternion(this._trajQuat);
+                // Compensate for Quest Touch grip angle (~40° tilt from -Z toward -Y)
+                this._trajDir.set(0, -0.643, -0.766).applyQuaternion(this._trajQuat);
 
                 this._trajPos.copy(handWorldPos);
                 const posAttr = this._trajGeom.getAttribute('position');
@@ -1442,12 +1458,12 @@
                 this._trajGeom.setDrawRange(0, ptIdx);
                 posAttr.needsUpdate = true;
                 this._trajLine.visible = true;
-              } else {
+              } else if (!window.gameSettings.trajectoryLocked) {
                 this._trajLine.visible = false;
               }
             } else {
               // When not grabbed, update visual position from physics
-              this._trajLine.visible = false;
+              if (!window.gameSettings.trajectoryLocked) this._trajLine.visible = false;
               this.el.object3D.position.copy(this.body.position);
               this.el.object3D.quaternion.copy(this.body.quaternion);
 
@@ -1605,7 +1621,7 @@
           
           this.isGrabbed = false;
           this.grabbingHand = null;
-          this._trajLine.visible = false;
+          if (!window.gameSettings.trajectoryLocked) this._trajLine.visible = false;
         },
 
       });
