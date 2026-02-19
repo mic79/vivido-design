@@ -1451,6 +1451,63 @@
                   this.body.angularVelocity.y *= damping;
                   this.body.angularVelocity.z *= damping;
                 }
+
+                // --- Aim Assist: in-flight homing ---
+                // Ball leaves the hand exactly as thrown; gentle curving toward
+                // the opponent only starts once the ball crosses into the
+                // opponent's half of the court.  This preserves bounce-throw
+                // strategy (wall hits happen in the player's own half) while
+                // still guiding the ball after a bounce.
+                const aimAssist = (window.gameSettings && window.gameSettings.aimAssist) || 0;
+                if (aimAssist > 0 && linearSpeed > 1.0 && !this.isGrabbed && !this.isReturning) {
+                  const isP2 = (this.data.player === 'player2');
+                  const inOpponentHalf = isP2 ? (this.body.position.z < 0) : (this.body.position.z > 0);
+
+                  if (inOpponentHalf) {
+                    if (!this._aimTarget) {
+                      this._aimTarget = document.querySelector(isP2 ? '#bot-target' : '#player-target');
+                    }
+                    if (this._aimTarget) {
+                      if (!this._homingVec) this._homingVec = new THREE.Vector3();
+                      if (!this._homingDir) this._homingDir = new THREE.Vector3();
+
+                      this._homingVec.set(0, 0, 0);
+                      this._aimTarget.object3D.getWorldPosition(this._homingVec);
+
+                      const bx = this.body.position.x, by = this.body.position.y, bz = this.body.position.z;
+                      this._homingVec.set(
+                        this._homingVec.x - bx,
+                        this._homingVec.y - by,
+                        this._homingVec.z - bz
+                      ).normalize();
+
+                      const curSpd = Math.sqrt(
+                        this.body.velocity.x * this.body.velocity.x +
+                        this.body.velocity.y * this.body.velocity.y +
+                        this.body.velocity.z * this.body.velocity.z
+                      );
+                      if (curSpd > 0.5) {
+                        this._homingDir.set(
+                          this.body.velocity.x / curSpd,
+                          this.body.velocity.y / curSpd,
+                          this.body.velocity.z / curSpd
+                        );
+
+                        const angleToTarget = this._homingDir.angleTo(this._homingVec);
+                        if (angleToTarget > 0.07) { // ~4° dead zone
+                          const homingRate = 1.5 * aimAssist;
+                          const dt = 1 / 72;
+                          const lerpFactor = Math.min(homingRate * dt, 0.06);
+
+                          this._homingDir.lerp(this._homingVec, lerpFactor).normalize();
+                          this.body.velocity.x = this._homingDir.x * curSpd;
+                          this.body.velocity.y = this._homingDir.y * curSpd;
+                          this.body.velocity.z = this._homingDir.z * curSpd;
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -1529,9 +1586,6 @@
             axis.multiplyScalar(angle * 40); // Moderate spin amount
           }
           
-          // Apply aim assist (adjusts direction only, preserves speed and spin)
-          velocity = this.applyAimAssist(velocity);
-
           // Apply velocity to physics body
           this.body.velocity.set(velocity.x, velocity.y, velocity.z);
           this.body.angularVelocity.set(axis.x, axis.y, axis.z);
@@ -1550,118 +1604,7 @@
           this.grabbingHand = null;
         },
 
-        // --- Aim Assist System ---
-        // Adjusts throw direction toward the opponent when throws would miss.
-        // Direct throws: projects landing point at opponent's z-plane, blends toward target.
-        // Bounce throws: uses mirror-image trick to compute ideal wall-bounce angle.
-        // Dead zone ensures already-accurate throws pass through unmodified.
-        applyAimAssist: function(velocity) {
-          const strength = (window.gameSettings && window.gameSettings.aimAssist) || 0;
-          if (strength <= 0) return velocity;
-
-          const speed = velocity.length();
-          if (speed < 1.0) return velocity;
-
-          const isPlayer2 = (this.data.player === 'player2');
-          const targetEl = document.querySelector(isPlayer2 ? '#bot-target' : '#player-target');
-          if (!targetEl) return velocity;
-
-          const targetPos = new THREE.Vector3();
-          targetEl.object3D.getWorldPosition(targetPos);
-
-          const ballPos = new THREE.Vector3(
-            this.body.position.x, this.body.position.y, this.body.position.z
-          );
-
-          const throwDir = velocity.clone().normalize();
-
-          // Player2 throws toward -z, player1 toward +z
-          const forwardSign = isPlayer2 ? -1 : 1;
-          if (throwDir.z * forwardSign < 0.05) return velocity;
-
-          const bounds = { xMin: -2, xMax: 2, yMin: 0, yMax: 4 };
-          const dzToTarget = targetPos.z - ballPos.z;
-          const tToOpponent = Math.abs(throwDir.z) > 0.01 ? dzToTarget / throwDir.z : Infinity;
-
-          // Find which wall/floor/ceiling the ball reaches first
-          let tWall = Infinity, wallAxis = null, wallValue = 0;
-          const candidates = [];
-          if (throwDir.x >  0.01) candidates.push({ t: (bounds.xMax - ballPos.x) / throwDir.x, axis: 'x', val: bounds.xMax });
-          if (throwDir.x < -0.01) candidates.push({ t: (bounds.xMin - ballPos.x) / throwDir.x, axis: 'x', val: bounds.xMin });
-          if (throwDir.y >  0.01) candidates.push({ t: (bounds.yMax - ballPos.y) / throwDir.y, axis: 'y', val: bounds.yMax });
-          if (throwDir.y < -0.01) candidates.push({ t: (bounds.yMin - ballPos.y) / throwDir.y, axis: 'y', val: bounds.yMin });
-          for (let i = 0; i < candidates.length; i++) {
-            if (candidates[i].t > 0 && candidates[i].t < tWall) {
-              tWall = candidates[i].t;
-              wallAxis = candidates[i].axis;
-              wallValue = candidates[i].val;
-            }
-          }
-
-          if (tToOpponent > 0 && tToOpponent < tWall) {
-            return this._assistDirect(velocity, ballPos, targetPos, throwDir, tToOpponent, strength, speed);
-          } else if (wallAxis) {
-            return this._assistBounce(velocity, ballPos, targetPos, throwDir, wallAxis, wallValue, tWall, strength, speed);
-          }
-
-          return velocity;
-        },
-
-        _assistDirect: function(velocity, ballPos, targetPos, throwDir, tToOpponent, strength, speed) {
-          const hitX = ballPos.x + throwDir.x * tToOpponent;
-          const hitY = ballPos.y + throwDir.y * tToOpponent;
-          const missX = hitX - targetPos.x;
-          const missY = hitY - targetPos.y;
-          const missDist = Math.sqrt(missX * missX + missY * missY);
-
-          const deadZone = 0.4; // 40 cm — throws this close are "on target"
-          if (missDist <= deadZone) return velocity;
-
-          const idealDir = new THREE.Vector3().subVectors(targetPos, ballPos).normalize();
-          const correctionFactor = Math.min(1.0, (missDist - deadZone) / 3.0) * strength;
-          const correctedDir = throwDir.clone().lerp(idealDir, correctionFactor).normalize();
-
-          console.log('Aim assist (direct): miss=' + missDist.toFixed(2) + 'm, correction=' + (correctionFactor * 100).toFixed(0) + '%');
-          return correctedDir.multiplyScalar(speed);
-        },
-
-        _assistBounce: function(velocity, ballPos, targetPos, throwDir, wallAxis, wallValue, tWall, strength, speed) {
-          // Mirror target across the wall — direction to mirrored target gives correct bounce angle
-          const mirroredTarget = targetPos.clone();
-          mirroredTarget[wallAxis] = 2 * wallValue - targetPos[wallAxis];
-
-          // Simulate actual post-bounce path to measure miss distance
-          const bouncePoint = ballPos.clone().add(throwDir.clone().multiplyScalar(tWall));
-          const reflectedDir = throwDir.clone();
-          if (wallAxis === 'x') reflectedDir.x *= -1;
-          else if (wallAxis === 'y') reflectedDir.y *= -1;
-          else reflectedDir.z *= -1;
-
-          const dzAfterBounce = targetPos.z - bouncePoint.z;
-          let missDist = 3.0;
-
-          if (Math.abs(reflectedDir.z) > 0.01) {
-            const tAfterBounce = dzAfterBounce / reflectedDir.z;
-            if (tAfterBounce > 0) {
-              const hitX = bouncePoint.x + reflectedDir.x * tAfterBounce;
-              const hitY = bouncePoint.y + reflectedDir.y * tAfterBounce;
-              missDist = Math.sqrt(
-                (hitX - targetPos.x) * (hitX - targetPos.x) +
-                (hitY - targetPos.y) * (hitY - targetPos.y)
-              );
-            }
-          }
-
-          const deadZone = 0.5; // 50 cm — wider tolerance for bounce throws
-          if (missDist <= deadZone) return velocity;
-
-          const idealDir = new THREE.Vector3().subVectors(mirroredTarget, ballPos).normalize();
-          const correctionFactor = Math.min(1.0, (missDist - deadZone) / 3.0) * strength;
-          const correctedDir = throwDir.clone().lerp(idealDir, correctionFactor).normalize();
-
-          console.log('Aim assist (bounce ' + wallAxis + '=' + wallValue + '): miss=' + missDist.toFixed(2) + 'm, correction=' + (correctionFactor * 100).toFixed(0) + '%');
-          return correctedDir.multiplyScalar(speed);
-        }
+        // Aim assist is handled in tick() via in-flight homing (no release-time correction)
       });
 
       // Pre-step ball positions for racket CCD (set before world.step(), used by racket swept collision)
