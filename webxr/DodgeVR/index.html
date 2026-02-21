@@ -758,12 +758,11 @@
         }
         for (var i = 0; i < connections.length; i++) {
           if (connections[i].peerId !== fromPeerId && connections[i].conn.open) {
-            // Match opponent gets player-state for mirrored match rendering
             if (connections[i].peerId === matchOpponentOfSender) {
               connections[i].conn.send({ type: 'player-state', state: state });
+            } else {
+              connections[i].conn.send({ type: 'spectator-player', fromId: fromPeerId, state: state });
             }
-            // ALL peers get spectator-player for general body rendering
-            connections[i].conn.send({ type: 'spectator-player', fromId: fromPeerId, state: state });
           }
         }
       }
@@ -784,8 +783,9 @@
           if (connections[i].peerId !== fromPeerId && connections[i].conn.open) {
             if (connections[i].peerId === matchOpponentOfSender) {
               connections[i].conn.send({ type: 'ball-state', state: state });
+            } else {
+              connections[i].conn.send({ type: 'spectator-ball', fromId: fromPeerId, state: state });
             }
-            connections[i].conn.send({ type: 'spectator-ball', fromId: fromPeerId, state: state });
           }
         }
       }
@@ -965,7 +965,7 @@
         } else if (action === 'leave') {
           lobbyState.queue = lobbyState.queue.filter(function (id) { return id !== playerId; });
           if (lobbyState.matchState !== 'PLAYING') {
-            var wasMatchOpponent = isMatchOpponent(playerId);
+            var leavingMatchSpot = (lobbyState.matchPlayers.blue === playerId || lobbyState.matchPlayers.red === playerId);
             if (lobbyState.matchPlayers.blue === playerId) {
               lobbyState.matchPlayers.blue = null;
               assignSpectatorSlot(playerId);
@@ -973,7 +973,7 @@
               lobbyState.matchPlayers.red = null;
               assignSpectatorSlot(playerId);
             }
-            if (wasMatchOpponent) {
+            if (leavingMatchSpot) {
               remotePlayerState = null;
               remoteBallState = null;
             }
@@ -1119,9 +1119,11 @@
         if (mp.blue === myPlayerId || mp.red === myPlayerId) {
           vrMenu.moveToMatchPosition();
         } else {
+          // Moving to spectator: clear any stale match rendering state
+          remotePlayerState = null;
+          remoteBallState = null;
           var slotIdx = lobbyState.spectatorSlots.indexOf(myPlayerId);
           if (slotIdx < 0) {
-            // Not in any slot yet - assign one (safety fallback)
             assignSpectatorSlot(myPlayerId);
             slotIdx = lobbyState.spectatorSlots.indexOf(myPlayerId);
           }
@@ -1303,8 +1305,9 @@
             if (!c.conn.open) continue;
             if (opponentConn && c.conn === opponentConn) {
               c.conn.send({ type: 'player-state', state: state });
+            } else {
+              c.conn.send({ type: 'spectator-player', fromId: myPlayerId, state: state });
             }
-            c.conn.send({ type: 'spectator-player', fromId: myPlayerId, state: state });
           }
         } else if (conn && conn.open) {
           conn.send({ type: 'player-state', state: state });
@@ -1320,8 +1323,9 @@
             if (!c.conn.open) continue;
             if (opponentConn && c.conn === opponentConn) {
               c.conn.send({ type: 'ball-state', state: state });
+            } else {
+              c.conn.send({ type: 'spectator-ball', fromId: myPlayerId, state: state });
             }
-            c.conn.send({ type: 'spectator-ball', fromId: myPlayerId, state: state });
           }
         } else if (conn && conn.open) {
           conn.send({ type: 'ball-state', state: state });
@@ -1471,8 +1475,8 @@
             var _sbb = document.getElementById('spectator-blue-body');
             if (_sbb) _sbb.object3D.visible = false;
           }
-          // In multiplayer, update the remote player's body with mirrored transforms
-          if (isMultiplayer && remotePlayerState) {
+          // In multiplayer, update the remote player's body with mirrored transforms (match players only)
+          if (isMultiplayer && !window.isSpectator && remotePlayerState) {
             const rs = remotePlayerState;
             // Mirror X and Z since players face each other across the court
             const mirroredX = -rs.x;
@@ -1529,7 +1533,7 @@
               mb.remoteHandData = rd;
             }
           }
-          if (isMultiplayer) {
+          if (isMultiplayer && !window.isSpectator) {
             const blueBall = document.querySelector('[simple-grab="player: player2"]');
             if (blueBall) {
               const pos = blueBall.object3D.position;
@@ -1537,8 +1541,8 @@
               sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: rot.x, vy: rot.y, vz: rot.z });
             }
           }
-          // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) ---
-          if (remotePlayerState) {
+          // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) --- match players only
+          if (!window.isSpectator && remotePlayerState) {
             const mirroredX = -remotePlayerState.x;
             const mirroredZ = -remotePlayerState.z;
             const mirroredVx = -remotePlayerState.vx;
@@ -1554,8 +1558,8 @@
               }
             }
           }
-          // --- REMOTE BALL (ALWAYS RED, MIRRORED X/Z) ---
-          if (remoteBallState) {
+          // --- REMOTE BALL (ALWAYS RED, MIRRORED X/Z) --- match players only
+          if (!window.isSpectator && remoteBallState) {
             const mirroredX = -remoteBallState.x;
             const mirroredZ = -remoteBallState.z;
             const mirroredVx = -remoteBallState.vx;
