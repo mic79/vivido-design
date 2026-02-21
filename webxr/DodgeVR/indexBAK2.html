@@ -12,7 +12,6 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="advanced-bot.js"></script>
     <script src="game-modes.js"></script>
-    <script src="game-menu.js"></script>
   </head>
   <body>
     <script>
@@ -177,14 +176,11 @@
         player2: { left: false, right: false }  // Blue player / local player
       };
 
-      // Multiplayer state (star topology: host + up to 3 peers)
+      // Multiplayer state
       let isMultiplayer = false;
       let isHost = false;
       let peer = null;
-      let conn = null;                    // Peer's connection to host
-      let connections = [];               // Host's array of { conn, peerId, nickname }
-      let lobbyState = null;              // Authoritative on host, synced to peers
-      let myPlayerId = null;
+      let conn = null;
       let multiplayerSlot = null;
       let multiplayerStatus = 'Singleplayer';
       let hasConnected = false;
@@ -197,69 +193,6 @@
       let remoteBallState = null;
       let multiplayerCleanup = null;
       let isSearchingForMatch = false;
-
-      // Spectator rendering state — uses maps keyed by peerId for robustness
-      let spectatorPlayerStates = {};   // { peerId: state }
-      let spectatorBallStates = {};     // { peerId: state }
-      let spectatorMatchBlueId = null;
-      let spectatorMatchRedId = null;
-      let spectatorMatchActive = false;
-      let spectatorMatchStartTime = 0;
-      let _spectatorLogOnce = false;
-
-      // Expose state for game-menu.js
-      window.isMultiplayer = false;
-      window.isHost = false;
-      window.isSpectator = false;
-      window.lobbyState = null;
-      window.myPlayerId = null;
-
-      function syncWindowState() {
-        window.isMultiplayer = isMultiplayer;
-        window.isHost = isHost;
-        window.lobbyState = lobbyState;
-        window.myPlayerId = myPlayerId;
-      }
-
-      function updateOpponentNickname() {
-        var nicknameEl = document.getElementById('opponent-nickname');
-        if (!nicknameEl) return;
-        if (!isMultiplayer || !lobbyState) {
-          nicknameEl.setAttribute('visible', false);
-          return;
-        }
-        var mp = lobbyState.matchPlayers;
-        var opponentId = null;
-        if (mp.blue === myPlayerId) opponentId = mp.red;
-        else if (mp.red === myPlayerId) opponentId = mp.blue;
-        if (!opponentId) {
-          nicknameEl.setAttribute('visible', false);
-          return;
-        }
-        var name = '';
-        for (var i = 0; i < lobbyState.players.length; i++) {
-          if (lobbyState.players[i].id === opponentId) { name = lobbyState.players[i].nickname; break; }
-        }
-        if (name) {
-          nicknameEl.setAttribute('text', 'value', name);
-          nicknameEl.setAttribute('visible', true);
-        } else {
-          nicknameEl.setAttribute('visible', false);
-        }
-      }
-
-      function createLobbyState() {
-        return {
-          players: [],
-          queue: [],
-          matchPlayers: { blue: null, red: null },
-          matchState: 'WAITING',
-          matchStartTime: 0,
-          matchScore: { blue: 0, red: 0 },
-          matchGameState: null,
-          spectatorSlots: [null, null, null, null]
-        };
-      }
 
       // Helper: update version display with status
       function updateMultiplayerStatus(text) {
@@ -281,10 +214,25 @@
         }
       }
 
-      // B button toggles trajectory preview; grip toggles rackets
+      // Listen for Y button to toggle multiplayer and B button to toggle trajectory preview
       AFRAME.registerComponent('multiplayer-toggle', {
         init: function() {
           this.lastModeSwitch = 0;
+          
+          this.el.sceneEl.addEventListener('ybuttondown', () => {
+            const now = Date.now();
+            if (now - lastMultiplayerToggle < 1000) return; // debounce
+            lastMultiplayerToggle = now;
+            if (!isMultiplayer) {
+              updateMultiplayerStatus('Searching for match...');
+              isSearchingForMatch = true;
+              startMultiplayerConnection();
+            } else {
+              updateMultiplayerStatus('Returning to singleplayer...');
+              isSearchingForMatch = false;
+              endMultiplayer();
+            }
+          });
 
           // Listen for B button to toggle trajectory preview
           this._trajNotifyTimeout = null;
@@ -345,8 +293,8 @@
           }
           
           // Send racket state to opponent in multiplayer
-          if (isMultiplayer) {
-            sendToMatchOpponent({ 
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({ 
               type: 'racket-mode', 
               player: 'player2', 
               hand: handSide, 
@@ -424,9 +372,9 @@
           // Apply mode change locally
           this.applyModeChange(newMode, newEnabled);
           
-          // Send mode change to all peers in multiplayer
-          if (isMultiplayer) {
-            sendToMatchOpponent({
+          // Send mode change to peer in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({
               type: 'mode-change',
               mode: newMode,
               enabled: newEnabled
@@ -455,24 +403,32 @@
         }
       });
 
-      // --- Lobby-based multiplayer connection (star topology) ---
-
-      async function connectToLobby(lobbyNum) {
-        if (isMultiplayer) return;
+      // Multiplayer connection logic (slot-based, PeerJS, TURN support)
+      async function startMultiplayerConnection() {
         connectionState = 'connecting';
-        updateMultiplayerStatus('Connecting to lobby ' + lobbyNum + '...');
-        multiplayerSlot = lobbyNum;
-
-        const hostId = 'dodgevr-host-' + lobbyNum;
-        const hostTaken = !(await checkPeerAvailability(hostId));
-
-        if (hostTaken) {
-          await setupPeer(lobbyNum);
-        } else {
-          await setupHost(lobbyNum);
+        multiplayerStatus = 'Searching...';
+        updateMultiplayerStatus('Searching for match...');
+        // Keep bot enabled during connection phase
+        isMultiplayer = false;
+        try {
+          const slot = await findAvailableSlot(multiplayerStartType);
+          if (!slot) {
+            updateMultiplayerStatus('No available slots. Try again.');
+            connectionState = 'disconnected';
+            return;
+          }
+          multiplayerSlot = slot.slotNumber;
+          isHost = slot.role === 'host';
+          if (isHost) {
+            await setupHost(multiplayerSlot);
+          } else {
+            await setupPeer(multiplayerSlot);
+          }
+        } catch (e) {
+          updateMultiplayerStatus('Connection failed.');
+          connectionState = 'disconnected';
         }
       }
-      window.connectToLobby = connectToLobby;
 
       async function checkPeerAvailability(id) {
         return new Promise((resolve) => {
@@ -498,878 +454,253 @@
         });
       }
 
-      async function getIceServers() {
+      async function findAvailableSlot(desiredStartType) {
+        for (let i = 1; i <= MAX_LOBBIES; i++) {
+          const hostId = `dot-host-${desiredStartType}-${i}`;
+          const peerId = `dot-peer-${desiredStartType}-${i}`;
+          const hostAvailable = await checkPeerAvailability(hostId);
+          if (hostAvailable) {
+            return { slotNumber: i, role: 'host' };
+          } else {
+            const peerAvailable = await checkPeerAvailability(peerId);
+            if (peerAvailable) {
+              return { slotNumber: i, role: 'peer' };
+            }
+          }
+        }
+        return null;
+      }
+
+      async function setupPeer(slotNumber) {
+        cleanupMultiplayer();
+        isMultiplayer = true;
+        isHost = false;
+        sessionID = `dot-peer-${multiplayerStartType}-${slotNumber}`;
         let iceServersConfig = [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun.cloudflare.com:3478' }
         ];
         try {
           const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev");
-          if (response.ok) iceServersConfig = await response.json();
+          if (response.ok) {
+            iceServersConfig = await response.json();
+          }
         } catch (e) {}
-        return iceServersConfig;
-      }
-
-      async function setupPeer(lobbyNum) {
-        cleanupMultiplayer();
-        const peerIdNum = Date.now().toString(36) + Math.random().toString(36).substr(2, 4);
-        sessionID = 'dodgevr-peer-' + peerIdNum;
-        myPlayerId = sessionID;
-
-        const iceServersConfig = await getIceServers();
         peer = new Peer(sessionID, {
-          host: "0.peerjs.com", port: 443, secure: true,
-          config: { iceServers: iceServersConfig }
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { 'iceServers': iceServersConfig }
         });
-        peer.on("open", function () {
+        peer.on("open", function() {
           updateMultiplayerStatus('Connecting to host...');
-          const hostID = 'dodgevr-host-' + lobbyNum;
+          const hostID = `dot-host-${multiplayerStartType}-${slotNumber}`;
           conn = peer.connect(hostID);
-          conn.on("open", function () {
-            isMultiplayer = true;
-            isHost = false;
-            syncWindowState();
-            conn.send({ type: 'nickname', nickname: window.playerNickname || 'Player' });
-            setupPeerHandlers(conn);
-            updateMultiplayerStatus('Connected to lobby ' + lobbyNum);
-            connectionState = 'connected';
-            const scene = document.querySelector('a-scene');
-            if (scene) scene.emit('lobby-state-updated');
+          conn.on("open", function() {
+            setupConnectionHandlers(conn);
+            onMultiplayerStart();
           });
-          conn.on('error', function () {
-            updateMultiplayerStatus('Connection failed.');
+        });
+        peer.on("error", function(err) {
+          updateMultiplayerStatus(`Peer error: ${err.type}`);
+          setTimeout(() => {
             endMultiplayer();
-          });
-        });
-        peer.on("error", function (err) {
-          updateMultiplayerStatus('Peer error: ' + err.type);
-          endMultiplayer();
+          }, 100);
         });
       }
 
-      async function setupHost(lobbyNum) {
+      async function setupHost(slotNumber) {
         cleanupMultiplayer();
-        sessionID = 'dodgevr-host-' + lobbyNum;
-        myPlayerId = sessionID;
-
-        lobbyState = createLobbyState();
-        lobbyState.players.push({ id: myPlayerId, nickname: window.playerNickname || 'Host' });
-        assignSpectatorSlot(myPlayerId);
-
-        const iceServersConfig = await getIceServers();
+        isMultiplayer = true;
+        isHost = true;
+        sessionID = `dot-host-${multiplayerStartType}-${slotNumber}`;
+        let iceServersConfig = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ];
+        try {
+          const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev/");
+          if (response.ok) {
+            iceServersConfig = await response.json();
+          }
+        } catch (e) {}
         peer = new Peer(sessionID, {
-          host: "0.peerjs.com", port: 443, secure: true,
-          config: { iceServers: iceServersConfig }
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { 'iceServers': iceServersConfig }
         });
-        peer.on("open", function () {
-          isMultiplayer = true;
-          isHost = true;
-          syncWindowState();
-          updateMultiplayerStatus('Lobby ' + lobbyNum + ' created. Waiting for players...');
-          connectionState = 'connected';
-          applyLobbyPosition();
-
-          peer.on("connection", function (newConn) {
-            if (connections.length >= 3) {
+        peer.on("open", function() {
+          updateMultiplayerStatus('Waiting for opponent...');
+          peer.on("connection", function(newConn) {
+            if (conn) {
               newConn.close();
-              return;
+            } else {
+              conn = newConn;
+              conn.on("open", function() {
+                setupConnectionHandlers(conn);
+                onMultiplayerStart();
+              });
             }
-            // Set up data handler IMMEDIATELY so no messages are lost
-            // (peer may send nickname before host's "open" event fires)
-            var entry = { conn: newConn, peerId: newConn.peer, nickname: 'Player' };
-            setupHostHandlers(newConn, entry);
-            newConn.on("open", function () {
-              connections.push(entry);
-              // Send initial lobby state to the new peer
-              newConn.send({ type: 'lobby-state', state: lobbyState });
-            });
           });
-
-          const scene = document.querySelector('a-scene');
-          if (scene) scene.emit('lobby-state-updated');
         });
-        peer.on("error", function (err) {
-          updateMultiplayerStatus('Host error: ' + err.type);
-          endMultiplayer();
-        });
-      }
-
-      // --- Host-side connection handlers ---
-      function setupHostHandlers(peerConn, entry) {
-        peerConn.on('data', function (data) {
-          if (data.type === 'nickname') {
-            entry.nickname = data.nickname || 'Player';
-            lobbyState.players.push({ id: entry.peerId, nickname: entry.nickname });
-            assignSpectatorSlot(entry.peerId);
-            broadcastLobbyState();
-          } else if (data.type === 'queue-action') {
-            handleQueueAction(entry.peerId, data.action);
-          } else if (data.type === 'match-action') {
-            handleMatchAction(entry.peerId, data.action);
-          } else if (data.type === 'player-state') {
-            handleRelayPlayerState(entry.peerId, data.state);
-          } else if (data.type === 'ball-state') {
-            handleRelayBallState(entry.peerId, data.state);
-          } else if (data.type === 'score-update') {
-            if (isMatchOpponent(entry.peerId)) {
-              multiplayerScore.remote = data.score.local;
-              multiplayerScore.local = data.score.remote;
-              updateScoreDisplayMultiplayer();
-              broadcastSpectatorScore();
-            } else if (window.isSpectator && lobbyState && lobbyState.matchPlayers) {
-              // Host is spectator: relay score between match players and update spectator display
-              var smp = lobbyState.matchPlayers;
-              var otherMatchId = (entry.peerId === smp.blue) ? smp.red : smp.blue;
-              for (var si = 0; si < connections.length; si++) {
-                if (connections[si].peerId === otherMatchId && connections[si].conn.open) {
-                  connections[si].conn.send({ type: 'score-update', score: data.score });
-                  break;
-                }
-              }
-              var isBlue = (entry.peerId === smp.blue);
-              var bScore = isBlue ? data.score.local : data.score.remote;
-              var rScore = isBlue ? data.score.remote : data.score.local;
-              lobbyState.matchScore = { blue: bScore, red: rScore };
-              var bsEl = document.getElementById('blue-score');
-              var rsEl = document.getElementById('red-score');
-              if (bsEl) bsEl.setAttribute('text', 'value', bScore.toString());
-              if (rsEl) rsEl.setAttribute('text', 'value', rScore.toString());
-              // Relay to other spectators
-              var specMsg = { type: 'spectator-score', blueScore: bScore, redScore: rScore };
-              for (var sj = 0; sj < connections.length; sj++) {
-                var sc = connections[sj];
-                if (sc.conn.open && sc.peerId !== smp.blue && sc.peerId !== smp.red) {
-                  sc.conn.send(specMsg);
-                }
-              }
-            }
-          } else if (data.type === 'racket-mode') {
-            if (isMatchOpponent(entry.peerId)) {
-              racketMode.player1[data.hand] = data.active;
-            }
-            relayToMatchPeer(entry.peerId, data);
-          } else if (data.type === 'ready-update') {
-            if (isMatchOpponent(entry.peerId)) {
-              multiplayerReady.remote = data.ready;
-              const gm = document.querySelector('#game-manager');
-              if (gm && gm.components['game-manager']) gm.components['game-manager'].updateReadyState();
-            }
-            relayToMatchPeer(entry.peerId, data);
-          } else if (data.type === 'countdown-start') {
-            if (isMatchOpponent(entry.peerId)) {
-              const gm = document.querySelector('#game-manager');
-              if (gm && gm.components['game-manager']) gm.components['game-manager'].syncedStartCountdown(data.startTime);
-            }
-            relayToMatchPeer(entry.peerId, data);
-          } else if (data.type === 'game-state') {
-            if (lobbyState) lobbyState.matchGameState = data.state;
-            if (isMatchOpponent(entry.peerId)) {
-              const gm = document.querySelector('#game-manager');
-              if (gm && gm.components['game-manager']) {
-                const gmComp = gm.components['game-manager'];
-                gmComp.matchState = data.state;
-                if (data.state === 'OVERTIME') {
-                  gmComp.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
-                } else if (data.state === 'ENDED') {
-                  const flipped = data.winner.includes('You win!') ? 'Opponent wins!' : 'You win!';
-                  gmComp.startMessage.setAttribute('visible', true);
-                  gmComp.startMessage.setAttribute('text', 'value', flipped + '\nPress A to play again');
-                  gmComp.timerDisplay.setAttribute('text', 'value', 'Match ended');
-                  gmComp.gameStarted = false;
-                }
-              }
-            } else if (window.isSpectator) {
-              var hostSpecTd = document.getElementById('timer-display');
-              if (data.state === 'OVERTIME' && hostSpecTd) {
-                hostSpecTd.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
-              } else if (data.state === 'ENDED' && hostSpecTd) {
-                hostSpecTd.setAttribute('text', 'value', 'Match ended');
-              }
-            }
-            relayToMatchPeer(entry.peerId, data);
-            // Broadcast game-state to spectators (non-match peers)
-            for (var gi = 0; gi < connections.length; gi++) {
-              var gc = connections[gi];
-              var gmp = lobbyState ? lobbyState.matchPlayers : {};
-              if (gc.conn.open && gc.peerId !== entry.peerId && gc.peerId !== (gmp.blue) && gc.peerId !== (gmp.red)) {
-                gc.conn.send({ type: 'spectator-game-state', state: data.state });
-              }
-            }
-          } else if (data.type === 'mode-change') {
-            const scene = document.querySelector('a-scene');
-            const mt = scene && scene.components['multiplayer-toggle'];
-            if (mt) mt.applyModeChange(data.mode, data.enabled);
-          }
-        });
-        peerConn.on('close', function () {
-          handlePeerDisconnect(entry.peerId);
-        });
-        peerConn.on('error', function () {
-          handlePeerDisconnect(entry.peerId);
+        peer.on("error", function(err) {
+          updateMultiplayerStatus(`Peer error: ${err.type}`);
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
         });
       }
 
-      function isMatchOpponent(peerId) {
-        if (!lobbyState) return false;
-        var mp = lobbyState.matchPlayers;
-        if (mp.blue === myPlayerId && mp.red === peerId) return true;
-        if (mp.red === myPlayerId && mp.blue === peerId) return true;
-        return false;
-      }
-
-      function getMatchOpponentConn() {
-        if (!lobbyState) return null;
-        var mp = lobbyState.matchPlayers;
-        var opponentId = null;
-        if (mp.blue === myPlayerId) opponentId = mp.red;
-        else if (mp.red === myPlayerId) opponentId = mp.blue;
-        if (!opponentId) return null;
-        for (var i = 0; i < connections.length; i++) {
-          if (connections[i].peerId === opponentId) return connections[i].conn;
-        }
-        return null;
-      }
-
-      // Relay a message to the other match player (when host is spectator)
-      function relayToMatchPeer(fromPeerId, data) {
-        if (!window.isSpectator || !lobbyState || !lobbyState.matchPlayers) return;
-        var smp = lobbyState.matchPlayers;
-        var targetId = (fromPeerId === smp.blue) ? smp.red : smp.blue;
-        for (var i = 0; i < connections.length; i++) {
-          if (connections[i].peerId === targetId && connections[i].conn.open) {
-            connections[i].conn.send(data);
-            break;
-          }
-        }
-      }
-
-      function handleRelayPlayerState(fromPeerId, state) {
-        if (isMatchOpponent(fromPeerId)) {
-          remotePlayerState = state;
-        }
-        if (window.isSpectator) {
-          spectatorPlayerStates[fromPeerId] = state;
-        }
-        var mp = lobbyState ? lobbyState.matchPlayers : null;
-        var matchOpponentOfSender = null;
-        if (mp) {
-          if (fromPeerId === mp.blue) matchOpponentOfSender = mp.red;
-          else if (fromPeerId === mp.red) matchOpponentOfSender = mp.blue;
-        }
-        for (var i = 0; i < connections.length; i++) {
-          if (connections[i].peerId !== fromPeerId && connections[i].conn.open) {
-            if (connections[i].peerId === matchOpponentOfSender) {
-              connections[i].conn.send({ type: 'player-state', state: state });
-            } else {
-              connections[i].conn.send({ type: 'spectator-player', fromId: fromPeerId, state: state });
-            }
-          }
-        }
-      }
-
-      function handleRelayBallState(fromPeerId, state) {
-        if (isMatchOpponent(fromPeerId)) {
-          remoteBallState = state;
-        }
-        if (window.isSpectator) {
-          spectatorBallStates[fromPeerId] = state;
-        }
-        var mp = lobbyState ? lobbyState.matchPlayers : null;
-        var matchOpponentOfSender = null;
-        if (mp) {
-          if (fromPeerId === mp.blue) matchOpponentOfSender = mp.red;
-          else if (fromPeerId === mp.red) matchOpponentOfSender = mp.blue;
-        }
-        for (var i = 0; i < connections.length; i++) {
-          if (connections[i].peerId !== fromPeerId && connections[i].conn.open) {
-            if (connections[i].peerId === matchOpponentOfSender) {
-              connections[i].conn.send({ type: 'ball-state', state: state });
-            } else {
-              connections[i].conn.send({ type: 'spectator-ball', fromId: fromPeerId, state: state });
-            }
-          }
-        }
-      }
-
-      function handlePeerDisconnect(peerId) {
-        connections = connections.filter(function (c) { return c.peerId !== peerId; });
-        if (lobbyState) {
-          var wasMatchPlayer = (lobbyState.matchPlayers.blue === peerId || lobbyState.matchPlayers.red === peerId);
-          // End match first (before removing from players), so endLobbyMatch can still see who was in match
-          if (wasMatchPlayer) {
-            endLobbyMatch();
-          }
-          // Now remove the disconnected player from all state
-          lobbyState.players = lobbyState.players.filter(function (p) { return p.id !== peerId; });
-          lobbyState.queue = lobbyState.queue.filter(function (id) { return id !== peerId; });
-          for (var s = 0; s < lobbyState.spectatorSlots.length; s++) {
-            if (lobbyState.spectatorSlots[s] === peerId) lobbyState.spectatorSlots[s] = null;
-          }
-          // Also remove from matchPlayers in case endLobbyMatch reassigned
-          if (lobbyState.matchPlayers.blue === peerId) lobbyState.matchPlayers.blue = null;
-          if (lobbyState.matchPlayers.red === peerId) lobbyState.matchPlayers.red = null;
-          broadcastLobbyState();
-        }
-        if (connections.length === 0 && isHost) {
-          updateMultiplayerStatus('All players left. Waiting...');
-        }
-      }
-
-      // --- Peer-side connection handlers ---
-      function setupPeerHandlers(hostConn) {
-        hostConn.on('data', function (data) {
-          if (data.type === 'lobby-state') {
-            lobbyState = data.state;
-            syncWindowState();
-            applyLobbyPosition();
-            updateOpponentNickname();
-            // If a match is in progress and we're not a match player, activate spectator view
-            var mp = lobbyState.matchPlayers;
-            console.log('[SPECTATOR] lobby-state received. matchState=' + lobbyState.matchState +
-              ' blue=' + (mp && mp.blue) + ' red=' + (mp && mp.red) +
-              ' myId=' + myPlayerId + ' spectatorMatchBlueId=' + spectatorMatchBlueId);
-            if (mp && lobbyState.matchState === 'PLAYING' &&
-                mp.blue !== myPlayerId && mp.red !== myPlayerId &&
-                !spectatorMatchBlueId) {
-              activateSpectatorView(mp, lobbyState.matchStartTime);
-            }
-            const scene = document.querySelector('a-scene');
-            if (scene) scene.emit('lobby-state-updated');
-          } else if (data.type === 'player-state') {
+      function setupConnectionHandlers(conn) {
+        conn.on('data', (data) => {
+          if (data.type === 'player-state') {
             remotePlayerState = data.state;
           } else if (data.type === 'ball-state') {
             remoteBallState = data.state;
           } else if (data.type === 'score-update') {
+            // Mirror remote/local for display
             multiplayerScore.remote = data.score.local;
             multiplayerScore.local = data.score.remote;
             updateScoreDisplayMultiplayer();
           } else if (data.type === 'racket-mode') {
-            racketMode.player1[data.hand] = data.active;
+            // Sync opponent's per-hand racket mode state
+            racketMode.player1[data.hand] = data.active; // Remote player becomes player1
+            console.log(`Opponent ${data.hand} racket:`, data.active ? 'ON' : 'OFF');
           } else if (data.type === 'ready-update') {
+            // Sync ready state
             multiplayerReady.remote = data.ready;
-            const gm = document.querySelector('#game-manager');
-            if (gm && gm.components['game-manager']) gm.components['game-manager'].updateReadyState();
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].updateReadyState();
+            }
           } else if (data.type === 'countdown-start') {
-            const gm = document.querySelector('#game-manager');
-            if (gm && gm.components['game-manager']) gm.components['game-manager'].syncedStartCountdown(data.startTime);
+            // Sync countdown start
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              gameManager.components['game-manager'].syncedStartCountdown(data.startTime);
+            }
           } else if (data.type === 'game-state') {
-            const gm = document.querySelector('#game-manager');
-            if (gm && gm.components['game-manager']) {
-              const gmComp = gm.components['game-manager'];
-              gmComp.matchState = data.state;
+            // Sync game state changes (overtime/end)
+            const gameManager = document.querySelector('#game-manager');
+            if (gameManager && gameManager.components['game-manager']) {
+              const gm = gameManager.components['game-manager'];
+              gm.matchState = data.state;
+              
               if (data.state === 'OVERTIME') {
-                gmComp.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
+                gm.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
+                console.log('Synced: Match went to overtime');
               } else if (data.state === 'ENDED') {
-                const flipped = data.winner.includes('You win!') ? 'Opponent wins!' : 'You win!';
-                gmComp.startMessage.setAttribute('visible', true);
-                gmComp.startMessage.setAttribute('text', 'value', flipped + '\nPress A to play again');
-                gmComp.timerDisplay.setAttribute('text', 'value', 'Match ended');
-                gmComp.gameStarted = false;
+                // Flip the winner message for the receiving player
+                const flippedWinner = data.winner.includes('You win!') ? 'Opponent wins!' : 'You win!';
+                gm.startMessage.setAttribute('visible', true);
+                gm.startMessage.setAttribute('text', 'value', `${flippedWinner}\nPress A to play again`);
+                gm.timerDisplay.setAttribute('text', 'value', 'Match ended');
+                gm.gameStarted = false;
+                console.log('Synced: Match ended -', flippedWinner);
               }
             }
-          } else if (data.type === 'match-started') {
-            console.log('[SPECTATOR] match-started received. blue=' + (data.matchPlayers && data.matchPlayers.blue) + ' red=' + (data.matchPlayers && data.matchPlayers.red));
-            onMatchStarted(data);
-          } else if (data.type === 'match-ended') {
-            onMatchEnded(data);
           } else if (data.type === 'mode-change') {
+            // Sync game mode changes from host
             const scene = document.querySelector('a-scene');
-            const mt = scene && scene.components['multiplayer-toggle'];
-            if (mt) mt.applyModeChange(data.mode, data.enabled);
-          } else if (data.type === 'spectator-player') {
-            if (!spectatorPlayerStates[data.fromId]) {
-              console.log('[SPECTATOR] First state from: ' + data.fromId + ' matchActive=' + spectatorMatchActive);
-            }
-            spectatorPlayerStates[data.fromId] = data.state;
-            if (!spectatorMatchActive && lobbyState && lobbyState.matchPlayers) {
-              var fmp = lobbyState.matchPlayers;
-              if (fmp.blue && fmp.red &&
-                  fmp.blue !== myPlayerId && fmp.red !== myPlayerId) {
-                console.log('[SPECTATOR] Fallback activation from spectator-player message');
-                activateSpectatorView(fmp, lobbyState.matchStartTime);
-              }
-            }
-          } else if (data.type === 'spectator-ball') {
-            spectatorBallStates[data.fromId] = data.state;
-          } else if (data.type === 'spectator-score') {
-            var bsEl = document.getElementById('blue-score');
-            var rsEl = document.getElementById('red-score');
-            if (bsEl) bsEl.setAttribute('text', 'value', data.blueScore.toString());
-            if (rsEl) rsEl.setAttribute('text', 'value', data.redScore.toString());
-          } else if (data.type === 'spectator-game-state') {
-            if (lobbyState) lobbyState.matchGameState = data.state;
-            var peerTd = document.getElementById('timer-display');
-            if (data.state === 'OVERTIME' && peerTd) {
-              peerTd.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
-            } else if (data.state === 'ENDED' && peerTd) {
-              peerTd.setAttribute('text', 'value', 'Match ended');
+            const multiplayerToggle = scene && scene.components['multiplayer-toggle'];
+            if (multiplayerToggle) {
+              multiplayerToggle.applyModeChange(data.mode, data.enabled);
+              console.log(`Received mode change: ${data.enabled ? data.mode : 'default (disabled)'}`);
             }
           }
         });
-        hostConn.on('close', function () {
-          updateMultiplayerStatus('Disconnected from lobby.');
-          endMultiplayer();
+        conn.on('close', () => {
+          updateMultiplayerStatus('Connection lost. Returning to singleplayer.');
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100); // Small delay to ensure proper cleanup
         });
-        hostConn.on('error', function () {
-          updateMultiplayerStatus('Connection error.');
-          endMultiplayer();
+        conn.on('error', (err) => {
+          updateMultiplayerStatus('Connection error. Returning to singleplayer.');
+          setTimeout(() => {
+            endMultiplayer();
+          }, 100);
         });
       }
 
-      // --- Lobby state broadcast (host only) ---
-      function broadcastLobbyState() {
-        if (!isHost || !lobbyState) return;
-        syncWindowState();
-        for (var i = 0; i < connections.length; i++) {
-          if (connections[i].conn.open) {
-            connections[i].conn.send({ type: 'lobby-state', state: lobbyState });
-          }
-        }
-        updateOpponentNickname();
-        const scene = document.querySelector('a-scene');
-        if (scene) scene.emit('lobby-state-updated');
-      }
-
-      // --- Queue actions ---
-      function sendQueueAction(action) {
-        if (isHost) {
-          handleQueueAction(myPlayerId, action);
-        } else if (conn && conn.open) {
-          conn.send({ type: 'queue-action', action: action });
-        }
-      }
-      window.sendQueueAction = sendQueueAction;
-
-      function handleQueueAction(playerId, action) {
-        if (!lobbyState) return;
-        if (action === 'join') {
-          if (lobbyState.queue.indexOf(playerId) < 0) {
-            lobbyState.queue.push(playerId);
-          }
-          tryAssignMatchPlayers();
-        } else if (action === 'leave') {
-          lobbyState.queue = lobbyState.queue.filter(function (id) { return id !== playerId; });
-          // If the player was assigned a match spot (but match not started), move them back
-          if (lobbyState.matchState !== 'PLAYING') {
-            if (lobbyState.matchPlayers.blue === playerId) {
-              lobbyState.matchPlayers.blue = null;
-              assignSpectatorSlot(playerId);
-            } else if (lobbyState.matchPlayers.red === playerId) {
-              lobbyState.matchPlayers.red = null;
-              assignSpectatorSlot(playerId);
-            }
-            // Try to fill vacant match spot from remaining queue
-            tryAssignMatchPlayers();
-          }
-        }
-        broadcastLobbyState();
-        // Reposition the host if they were the one affected
-        if (playerId === myPlayerId) {
-          applyLobbyPosition();
-        }
-      }
-
-      function tryAssignMatchPlayers() {
-        if (!lobbyState) return;
-        if (lobbyState.matchState === 'PLAYING') return;
-        if (lobbyState.queue.length === 0) return;
-
-        // Fill available match spots one at a time from the queue
-        while (lobbyState.queue.length > 0 && (!lobbyState.matchPlayers.blue || !lobbyState.matchPlayers.red)) {
-          var nextId = lobbyState.queue.shift();
-          if (!lobbyState.matchPlayers.blue) {
-            lobbyState.matchPlayers.blue = nextId;
-          } else {
-            lobbyState.matchPlayers.red = nextId;
-          }
-          // Remove from spectator slot
-          for (var s = 0; s < lobbyState.spectatorSlots.length; s++) {
-            if (lobbyState.spectatorSlots[s] === nextId) {
-              lobbyState.spectatorSlots[s] = null;
-            }
-          }
-        }
-      }
-
-      // --- Match actions ---
-      function sendMatchAction(action) {
-        if (isHost) {
-          handleMatchAction(myPlayerId, action);
-        } else if (conn && conn.open) {
-          conn.send({ type: 'match-action', action: action });
-        }
-      }
-      window.sendMatchAction = sendMatchAction;
-
-      function handleMatchAction(playerId, action) {
-        if (!lobbyState) return;
-        var mp = lobbyState.matchPlayers;
-        if (playerId !== mp.blue && playerId !== mp.red) return;
-
-        if (action === 'start' && lobbyState.matchState !== 'PLAYING') {
-          if (!mp.blue || !mp.red) return; // Both spots must be filled
-          startLobbyMatch();
-        } else if (action === 'end' && lobbyState.matchState === 'PLAYING') {
-          endLobbyMatch();
-        }
-      }
-
-      function startLobbyMatch() {
-        if (!lobbyState) return;
-        lobbyState.matchState = 'PLAYING';
-        lobbyState.matchScore = { blue: 0, red: 0 };
-        lobbyState.matchGameState = 'PLAYING';
-
-        var mp = lobbyState.matchPlayers;
-        var startTime = Date.now();
-        lobbyState.matchStartTime = startTime;
-
-        // If host is a match player, enable match mode and start countdown
-        if (mp.blue === myPlayerId || mp.red === myPlayerId) {
-          activateMatchMode(startTime);
-        } else {
-          activateSpectatorView(mp, startTime);
-        }
-
-        // Notify peers with synced start time
-        for (var i = 0; i < connections.length; i++) {
-          if (connections[i].conn.open) {
-            connections[i].conn.send({
-              type: 'match-started',
-              matchPlayers: mp,
-              startTime: startTime
-            });
-          }
-        }
-
-        broadcastLobbyState();
-      }
-
-      function endLobbyMatch() {
-        if (!lobbyState) return;
-        var oldBlue = lobbyState.matchPlayers.blue;
-        var oldRed = lobbyState.matchPlayers.red;
-
-        lobbyState.matchState = 'WAITING';
-        lobbyState.matchPlayers = { blue: null, red: null };
-        lobbyState.matchStartTime = 0;
-        lobbyState.matchScore = { blue: 0, red: 0 };
-        lobbyState.matchGameState = null;
-
-        // Assign old match players to spectator slots
-        if (oldBlue) assignSpectatorSlot(oldBlue);
-        if (oldRed) assignSpectatorSlot(oldRed);
-
-        // Deactivate match/spectator state for the host
-        if (oldBlue === myPlayerId || oldRed === myPlayerId) {
-          deactivateMatchMode();
-        }
-        deactivateSpectatorView();
-
-        // Try to assign next match from queue BEFORE notifying peers,
-        // so the lobby-state included in match-ended is fully up to date
-        tryAssignMatchPlayers();
-
-        // Notify peers with the updated lobby state so they can position correctly
-        for (var i = 0; i < connections.length; i++) {
-          if (connections[i].conn.open) {
-            connections[i].conn.send({ type: 'match-ended', state: lobbyState });
-          }
-        }
-
-        broadcastLobbyState();
-
-        // Move the host to their new position (spectator or match if reassigned from queue)
-        applyLobbyPosition();
-      }
-
-      function assignSpectatorSlot(playerId) {
-        if (!lobbyState) return;
-        for (var s = 0; s < lobbyState.spectatorSlots.length; s++) {
-          if (lobbyState.spectatorSlots[s] === null) {
-            lobbyState.spectatorSlots[s] = playerId;
-            return;
-          }
-        }
-      }
-
-      // --- Position management based on lobby state ---
-      function applyLobbyPosition() {
-        if (!lobbyState) return;
-        var vrMenu = document.querySelector('a-scene').components['vr-menu'];
-        if (!vrMenu) return;
-
-        var mp = lobbyState.matchPlayers;
-        if (mp.blue === myPlayerId || mp.red === myPlayerId) {
-          vrMenu.moveToMatchPosition();
-        } else {
-          var slotIdx = lobbyState.spectatorSlots.indexOf(myPlayerId);
-          if (slotIdx < 0) {
-            // Not in any slot yet - assign one (safety fallback)
-            assignSpectatorSlot(myPlayerId);
-            slotIdx = lobbyState.spectatorSlots.indexOf(myPlayerId);
-          }
-          if (slotIdx >= 0) {
-            vrMenu.moveToSpectator(slotIdx);
-          }
-        }
-      }
-
-      // Peer callbacks for match start/end
-      function onMatchStarted(data) {
-        var mp = data.matchPlayers;
-        if (!mp) return;
-        if (mp.blue === myPlayerId || mp.red === myPlayerId) {
-          activateMatchMode(data.startTime);
-        } else {
-          activateSpectatorView(mp, data.startTime);
-        }
-
-        // Close menu if open
-        var vrMenu = document.querySelector('a-scene').components['vr-menu'];
-        if (vrMenu && vrMenu.menuVisible) {
-          vrMenu.menuVisible = false;
-          if (vrMenu.menu) vrMenu.menu.setAttribute('visible', false);
-          vrMenu.setRaycasters(false);
-        }
-      }
-
-      function onMatchEnded(data) {
-        // Apply the updated lobby state FIRST so positions are correct
-        if (data && data.state) {
-          lobbyState = data.state;
-          syncWindowState();
-        }
-        deactivateMatchMode();
-        deactivateSpectatorView();
-        // Now move to the correct position (spectator slot or match if reassigned from queue)
-        applyLobbyPosition();
-      }
-
-      function activateSpectatorView(mp, matchStartTime) {
-        console.log('[SPECTATOR] activateSpectatorView called. blue=' + mp.blue + ' red=' + mp.red + ' myId=' + myPlayerId);
-        var bot = document.querySelector('[advanced-bot]');
-        if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
-        spectatorMatchBlueId = mp.blue;
-        spectatorMatchRedId = mp.red;
-        spectatorMatchActive = true;
-        spectatorMatchStartTime = matchStartTime || Date.now();
-        spectatorPlayerStates = {};
-        spectatorBallStates = {};
-        _spectatorLogOnce = false;
-        window.isSpectator = true;
-        var specBlueBody = document.getElementById('spectator-blue-body');
-        if (specBlueBody) specBlueBody.setAttribute('visible', true);
-
-        // Force the EXISTING game-manager score/timer elements visible via object3D
-        var scoreDisplay = document.getElementById('score-display');
-        var timerDisplay = document.getElementById('timer-display');
-        var startMessage = document.getElementById('start-message');
-        if (scoreDisplay) { scoreDisplay.object3D.visible = true; }
-        if (timerDisplay) { timerDisplay.object3D.visible = true; }
-        if (startMessage) { startMessage.object3D.visible = false; }
-        // Use current match score from lobbyState instead of resetting to 0
-        var currentScore = (lobbyState && lobbyState.matchScore) || { blue: 0, red: 0 };
-        var blueScoreEl = document.getElementById('blue-score');
-        var redScoreEl = document.getElementById('red-score');
-        if (blueScoreEl) blueScoreEl.setAttribute('text', 'value', currentScore.blue.toString());
-        if (redScoreEl) redScoreEl.setAttribute('text', 'value', currentScore.red.toString());
-        // Apply current game state (e.g. OVERTIME) for late joiners
-        var currentGameState = lobbyState && lobbyState.matchGameState;
-        if (currentGameState === 'OVERTIME' && timerDisplay) {
-          timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
-        } else if (currentGameState === 'ENDED' && timerDisplay) {
-          timerDisplay.setAttribute('text', 'value', 'Match ended');
-        }
-        console.log('[SPECTATOR] score-display visible=' + (scoreDisplay ? scoreDisplay.object3D.visible : 'null') +
-          ' timer visible=' + (timerDisplay ? timerDisplay.object3D.visible : 'null') +
-          ' score=' + currentScore.blue + '-' + currentScore.red);
-
-        // Show player name labels
-        var blueNick = '', redNick = '';
-        if (lobbyState && lobbyState.players) {
-          for (var i = 0; i < lobbyState.players.length; i++) {
-            if (lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
-            if (lobbyState.players[i].id === mp.red) redNick = lobbyState.players[i].nickname;
-          }
-        }
-        var blueName = document.getElementById('spectator-blue-name');
-        var redName = document.getElementById('spectator-red-name');
-        if (blueName) { blueName.setAttribute('text', 'value', blueNick || 'Blue'); blueName.object3D.visible = true; }
-        if (redName) { redName.setAttribute('text', 'value', redNick || 'Red'); redName.object3D.visible = true; }
-
-        console.log('[SPECTATOR] spectatorMatchActive=' + spectatorMatchActive + ' blueId=' + spectatorMatchBlueId + ' redId=' + spectatorMatchRedId);
-      }
-
-      function deactivateSpectatorView() {
-        spectatorPlayerStates = {};
-        spectatorBallStates = {};
-        spectatorMatchBlueId = null;
-        spectatorMatchRedId = null;
-        spectatorMatchActive = false;
-        spectatorMatchStartTime = 0;
-        var specBlueBody = document.getElementById('spectator-blue-body');
-        if (specBlueBody) {
-          specBlueBody.setAttribute('visible', false);
-          if (specBlueBody.components['mixamo-body']) {
-            specBlueBody.components['mixamo-body'].remoteHandData = null;
-          }
-        }
-        var botBody = document.querySelector('#bot-body');
-        if (botBody && botBody.components['mixamo-body']) {
-          botBody.components['mixamo-body'].remoteHandData = null;
-        }
-        if (!window.isMultiplayer) {
-          var bot = document.querySelector('[advanced-bot]');
-          if (bot) bot.setAttribute('advanced-bot', 'enabled', true);
-        }
-        // Hide score/timer and name labels
-        var scoreDisplay = document.getElementById('score-display');
-        var timerDisplay = document.getElementById('timer-display');
-        if (scoreDisplay) scoreDisplay.object3D.visible = false;
-        if (timerDisplay) timerDisplay.object3D.visible = false;
-        var blueName = document.getElementById('spectator-blue-name');
-        var redName = document.getElementById('spectator-red-name');
-        if (blueName) blueName.object3D.visible = false;
-        if (redName) redName.object3D.visible = false;
-      }
-
-      function activateMatchMode(startTime) {
-        // Clean up any spectator rendering state from before becoming a match player
-        deactivateSpectatorView();
-
-        var bot = document.querySelector('[advanced-bot]');
-        if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
-        multiplayerScore = { local: 0, remote: 0 };
-        multiplayerReady = { local: false, remote: false };
-        updateScoreDisplayMultiplayer();
-        window.isSpectator = false;
-
-        var gameManager = document.querySelector('#game-manager');
-        if (gameManager && gameManager.components['game-manager']) {
-          var gm = gameManager.components['game-manager'];
-          gm.scoreDisplay.setAttribute('visible', false);
-          gm.timerDisplay.setAttribute('visible', false);
-          if (startTime) {
-            gm.syncedStartCountdown(startTime);
-          }
-        }
-      }
-
-      function deactivateMatchMode() {
-        remotePlayerState = null;
-        remoteBallState = null;
-        multiplayerReady = { local: false, remote: false };
-        var botBody = document.querySelector('#bot-body');
-        if (botBody && botBody.components['mixamo-body']) {
-          botBody.components['mixamo-body'].remoteHandData = null;
-        }
-        // Disable bot, player collision, and reset game-manager
-        var bot = document.querySelector('[advanced-bot]');
-        if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
-        var player = document.querySelector('#player');
-        if (player) player.setAttribute('player-collision', 'enabled', false);
-        var gameManager = document.querySelector('#game-manager');
-        if (gameManager && gameManager.components['game-manager']) {
-          var gm = gameManager.components['game-manager'];
-          gm.matchState = 'WAITING';
-          gm.gameStarted = false;
-          gm.startMessage.setAttribute('visible', false);
-          gm.scoreDisplay.setAttribute('visible', false);
-          gm.timerDisplay.setAttribute('visible', false);
-        }
-      }
-
-      // --- Send functions (route based on host/peer) ---
       function sendPlayerState(state) {
-        if (!isMultiplayer) return;
-        if (isHost) {
-          // Host sends to match opponent and spectators
-          var opponentConn = getMatchOpponentConn();
-          if (opponentConn && opponentConn.open) {
-            opponentConn.send({ type: 'player-state', state: state });
-          }
-          // Relay to spectators
-          for (var i = 0; i < connections.length; i++) {
-            var c = connections[i];
-            if (c.conn.open && c.peerId !== (lobbyState && lobbyState.matchPlayers ? (lobbyState.matchPlayers.blue === myPlayerId ? lobbyState.matchPlayers.red : lobbyState.matchPlayers.blue) : null)) {
-              c.conn.send({ type: 'spectator-player', fromId: myPlayerId, state: state });
-            }
-          }
-        } else if (conn && conn.open) {
-          conn.send({ type: 'player-state', state: state });
+        if (conn && conn.open) {
+          conn.send({ type: 'player-state', state });
         }
       }
-
       function sendBallState(state) {
-        if (!isMultiplayer) return;
-        if (isHost) {
-          var opponentConn = getMatchOpponentConn();
-          if (opponentConn && opponentConn.open) {
-            opponentConn.send({ type: 'ball-state', state: state });
-          }
-          // Send ball state to spectators
-          var opponentId = lobbyState && lobbyState.matchPlayers ? (lobbyState.matchPlayers.blue === myPlayerId ? lobbyState.matchPlayers.red : lobbyState.matchPlayers.blue) : null;
-          for (var i = 0; i < connections.length; i++) {
-            var c = connections[i];
-            if (c.conn.open && c.peerId !== opponentId) {
-              c.conn.send({ type: 'spectator-ball', fromId: myPlayerId, state: state });
-            }
-          }
-        } else if (conn && conn.open) {
-          conn.send({ type: 'ball-state', state: state });
+        if (conn && conn.open) {
+          conn.send({ type: 'ball-state', state });
         }
       }
 
+      function onMultiplayerStart() {
+        // Only fully start multiplayer when connection is established
+        if (conn && conn.open) {
+          // Hide bot, disable bot logic
+          const bot = document.querySelector('[advanced-bot]');
+          if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+          isMultiplayer = true;
+          multiplayerStatus = 'Multiplayer Connected';
+          updateMultiplayerStatus('Multiplayer Connected');
+          isSearchingForMatch = false;
+          
+          // Switch to multiplayer score display immediately
+          multiplayerScore = { local: 0, remote: 0 };
+          multiplayerReady = { local: false, remote: false };
+          updateScoreDisplayMultiplayer();
+          
+          // Set game to waiting for ready state
+          const gameManager = document.querySelector('#game-manager');
+          if (gameManager && gameManager.components['game-manager']) {
+            gameManager.components['game-manager'].setMultiplayerWaiting();
+          }
+        }
+      }
       function endMultiplayer() {
         isMultiplayer = false;
-        isHost = false;
-        lobbyState = null;
         multiplayerStatus = 'Singleplayer';
         updateMultiplayerStatus('Singleplayer');
-        deactivateSpectatorView();
         cleanupMultiplayer();
-        var bot = document.querySelector('[advanced-bot]');
+        // Re-enable bot
+        const bot = document.querySelector('[advanced-bot]');
         if (bot) bot.setAttribute('advanced-bot', 'enabled', true);
         remotePlayerState = null;
         remoteBallState = null;
         multiplayerScore = { local: 0, remote: 0 };
         multiplayerReady = { local: false, remote: false };
-        window.isSpectator = false;
-        var botBody = document.querySelector('#bot-body');
+        // Clear remote body tracking so bot-body reverts to AI idle animation
+        const botBody = document.querySelector('#bot-body');
         if (botBody && botBody.components['mixamo-body']) {
           botBody.components['mixamo-body'].remoteHandData = null;
         }
-        var gameManager = document.querySelector('#game-manager');
+        
+        // Reset the actual game manager scores
+        const gameManager = document.querySelector('#game-manager');
         if (gameManager && gameManager.components['game-manager']) {
           gameManager.components['game-manager'].playerScore = 0;
           gameManager.components['game-manager'].botScore = 0;
         }
-        var blueScore = document.getElementById('blue-score');
-        var redScore = document.getElementById('red-score');
+        
+        // Restore singleplayer score display
+        const blueScore = document.getElementById('blue-score');
+        const redScore = document.getElementById('red-score');
         if (blueScore && redScore) {
           blueScore.setAttribute('text', 'value', '0');
           redScore.setAttribute('text', 'value', '0');
         }
         isSearchingForMatch = false;
-        var botEntity = document.querySelector('[advanced-bot]');
+        // Set bot to default singleplayer position (head height)
+        const botEntity = document.querySelector('[advanced-bot]');
         if (botEntity) {
           botEntity.object3D.position.set(0, 1.6, -6);
           botEntity.object3D.rotation.set(0, 0, 0);
         }
-        syncWindowState();
-        var scene = document.querySelector('a-scene');
-        if (scene) scene.emit('lobby-state-updated');
       }
-      window.endMultiplayer = endMultiplayer;
-
       function cleanupMultiplayer() {
-        for (var i = 0; i < connections.length; i++) {
-          try { connections[i].conn.close(); } catch (e) {}
-        }
-        connections = [];
-        if (conn) { try { conn.close(); } catch (e) {} }
-        if (peer) { try { peer.destroy(); } catch (e) {} }
+        if (conn) { try { conn.close(); } catch(e){} }
+        if (peer) { try { peer.destroy(); } catch(e){} }
         conn = null;
         peer = null;
         multiplayerSlot = null;
@@ -1404,7 +735,7 @@
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
           // In multiplayer, send head + hand transforms for full body sync
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && conn && conn.open) {
             const camera = document.querySelector('[camera]');
             const leftHand = document.querySelector('#leftHand');
             const rightHand = document.querySelector('#rightHand');
@@ -1418,8 +749,7 @@
               const state = {
                 x: worldPos.x, y: worldPos.y, z: worldPos.z,
                 rx: worldRot.x, ry: worldRot.y, rz: worldRot.z,
-                hqx: worldQuat.x, hqy: worldQuat.y, hqz: worldQuat.z, hqw: worldQuat.w,
-                nickname: window.playerNickname || 'Player'
+                hqx: worldQuat.x, hqy: worldQuat.y, hqz: worldQuat.z, hqw: worldQuat.w
               };
 
               // Include hand positions + quaternions if controllers have valid tracking
@@ -1463,12 +793,14 @@
               player1.object3D.rotation.set(rs.rx, mirroredRy, 0);
             }
 
+            // Feed full head + hand transforms to bot-body's mixamo-body for IK
             const botBody = document.querySelector('#bot-body');
-            if (botBody) botBody.object3D.visible = true;
             if (botBody && botBody.components['mixamo-body']) {
               const mb = botBody.components['mixamo-body'];
 
-              const yFlip = new THREE.Quaternion(0, 1, 0, 0);
+              // Position mirror (-x, y, -z) is equivalent to 180° rotation around Y.
+              // Quaternions must be pre-multiplied by this rotation to face the correct direction.
+              const yFlip = new THREE.Quaternion(0, 1, 0, 0); // 180° around Y
 
               const rd = {
                 head: {
@@ -1506,13 +838,11 @@
               mb.remoteHandData = rd;
             }
           }
-          if (isMultiplayer && !window.isSpectator) {
-            const blueBall = document.querySelector('[simple-grab="player: player2"]');
-            if (blueBall) {
-              const pos = blueBall.object3D.position;
-              const rot = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
-              sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: rot.x, vy: rot.y, vz: rot.z });
-            }
+          const blueBall = document.querySelector('[simple-grab="player: player2"]');
+          if (blueBall) {
+            const pos = blueBall.object3D.position;
+            const rot = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
+            sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: rot.x, vy: rot.y, vz: rot.z });
           }
           // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) ---
           if (remotePlayerState) {
@@ -1548,210 +878,8 @@
               }
             }
           }
-          // --- SPECTATOR: tick-based fallback activation ---
-          if (isMultiplayer && window.isSpectator && !spectatorMatchActive && lobbyState) {
-            var tmp = lobbyState.matchPlayers;
-            if (tmp && tmp.blue && tmp.red && tmp.blue !== myPlayerId && tmp.red !== myPlayerId) {
-              console.log('[SPECTATOR] Tick fallback activation. matchState=' + lobbyState.matchState);
-              activateSpectatorView(tmp, lobbyState.matchStartTime);
-            }
-          }
-          // --- LOBBY VIEW: render players in match positions even without active match ---
-          if (isMultiplayer && window.isSpectator && !spectatorMatchActive && lobbyState && lobbyState.matchPlayers) {
-            var lmp = lobbyState.matchPlayers;
-            var yFlipLobby = new THREE.Quaternion(0, 1, 0, 0);
-            var hasLobbyBlue = lmp.blue && lmp.blue !== myPlayerId && spectatorPlayerStates[lmp.blue];
-            var hasLobbyRed = lmp.red && lmp.red !== myPlayerId && spectatorPlayerStates[lmp.red];
-            // Blue player in arena
-            if (hasLobbyBlue) {
-              var lbs = spectatorPlayerStates[lmp.blue];
-              var specBlueBody = document.getElementById('spectator-blue-body');
-              if (specBlueBody) {
-                specBlueBody.object3D.visible = true;
-                if (specBlueBody.components['mixamo-body']) {
-                  var lbrd = { head: { x: lbs.x, y: lbs.y, z: lbs.z } };
-                  if (lbs.hqx !== undefined) {
-                    var lbhq = new THREE.Quaternion(lbs.hqx, lbs.hqy, lbs.hqz, lbs.hqw);
-                    lbrd.head.qx = lbhq.x; lbrd.head.qy = lbhq.y; lbrd.head.qz = lbhq.z; lbrd.head.qw = lbhq.w;
-                  }
-                  if (lbs.lhx !== undefined) { lbrd.leftHand = { x: lbs.lhx, y: lbs.lhy, z: lbs.lhz }; if (lbs.lhqx !== undefined) { lbrd.leftHand.qx = lbs.lhqx; lbrd.leftHand.qy = lbs.lhqy; lbrd.leftHand.qz = lbs.lhqz; lbrd.leftHand.qw = lbs.lhqw; } }
-                  if (lbs.rhx !== undefined) { lbrd.rightHand = { x: lbs.rhx, y: lbs.rhy, z: lbs.rhz }; if (lbs.rhqx !== undefined) { lbrd.rightHand.qx = lbs.rhqx; lbrd.rightHand.qy = lbs.rhqy; lbrd.rightHand.qz = lbs.rhqz; lbrd.rightHand.qw = lbs.rhqw; } }
-                  specBlueBody.components['mixamo-body'].remoteHandData = lbrd;
-                }
-              }
-            } else {
-              var specBlueBody2 = document.getElementById('spectator-blue-body');
-              if (specBlueBody2) specBlueBody2.object3D.visible = false;
-            }
-            // Red player in arena (mirrored)
-            if (hasLobbyRed) {
-              var lrs = spectatorPlayerStates[lmp.red];
-              var lmx = -lrs.x, lmz = -lrs.z;
-              var botBody = document.querySelector('#bot-body');
-              if (botBody) botBody.object3D.visible = true;
-              if (botBody && botBody.components['mixamo-body']) {
-                var lrrd = { head: { x: lmx, y: lrs.y, z: lmz } };
-                if (lrs.hqx !== undefined) {
-                  var lrhq = new THREE.Quaternion(lrs.hqx, lrs.hqy, lrs.hqz, lrs.hqw).multiply(yFlipLobby);
-                  lrrd.head.qx = lrhq.x; lrrd.head.qy = lrhq.y; lrrd.head.qz = lrhq.z; lrrd.head.qw = lrhq.w;
-                }
-                if (lrs.lhx !== undefined) { lrrd.leftHand = { x: -lrs.rhx, y: lrs.rhy, z: -lrs.rhz }; if (lrs.rhqx !== undefined) { var lrlq = new THREE.Quaternion(lrs.rhqx, lrs.rhqy, lrs.rhqz, lrs.rhqw).multiply(yFlipLobby); lrrd.leftHand.qx = lrlq.x; lrrd.leftHand.qy = lrlq.y; lrrd.leftHand.qz = lrlq.z; lrrd.leftHand.qw = lrlq.w; } }
-                if (lrs.rhx !== undefined) { lrrd.rightHand = { x: -lrs.lhx, y: lrs.lhy, z: -lrs.lhz }; if (lrs.lhqx !== undefined) { var lrrq = new THREE.Quaternion(lrs.lhqx, lrs.lhqy, lrs.lhqz, lrs.lhqw).multiply(yFlipLobby); lrrd.rightHand.qx = lrrq.x; lrrd.rightHand.qy = lrrq.y; lrrd.rightHand.qz = lrrq.z; lrrd.rightHand.qw = lrrq.w; } }
-                botBody.components['mixamo-body'].remoteHandData = lrrd;
-              }
-            } else if (isMultiplayer) {
-              var botBody2 = document.querySelector('#bot-body');
-              if (botBody2) {
-                botBody2.object3D.visible = false;
-                if (botBody2.components['mixamo-body']) {
-                  botBody2.components['mixamo-body'].remoteHandData = null;
-                }
-              }
-            }
-          }
-          // --- SPECTATOR VIEW: render both match players ---
-          if (spectatorMatchActive && spectatorMatchBlueId) {
-            const redState = spectatorPlayerStates[spectatorMatchRedId];
-            const blueState = spectatorPlayerStates[spectatorMatchBlueId];
-            const redBallSt = spectatorBallStates[spectatorMatchRedId];
-            const blueBallSt = spectatorBallStates[spectatorMatchBlueId];
-
-            if (!_spectatorLogOnce) {
-              var stateKeys = Object.keys(spectatorPlayerStates);
-              if (redState || blueState) {
-                _spectatorLogOnce = true;
-                console.log('[SPECTATOR] Rendering active. blueId=' + spectatorMatchBlueId +
-                  ' redId=' + spectatorMatchRedId +
-                  ' hasBlue=' + !!blueState + ' hasRed=' + !!redState +
-                  ' stateKeys=[' + stateKeys.join(',') + ']');
-              } else if (stateKeys.length > 0) {
-                _spectatorLogOnce = true;
-                console.warn('[SPECTATOR] States received but IDs mismatch! blueId=' + spectatorMatchBlueId +
-                  ' redId=' + spectatorMatchRedId +
-                  ' stateKeys=[' + stateKeys.join(',') + ']');
-              }
-            }
-
-            const yFlipSpec = new THREE.Quaternion(0, 1, 0, 0);
-
-            // Red player: mirrored (both players sit at z=6, red must appear at z=-6)
-            if (redState) {
-              const rs = redState;
-              const mx = -rs.x, mz = -rs.z;
-
-              const botEnt = document.querySelector('[advanced-bot]');
-              if (botEnt) {
-                botEnt.object3D.position.set(mx, rs.y, mz);
-                botEnt.object3D.rotation.set(rs.rx, -rs.ry, 0);
-              }
-              const botBody = document.querySelector('#bot-body');
-              if (botBody) {
-                botBody.object3D.visible = true;
-              }
-              if (botBody && botBody.components['mixamo-body']) {
-                const rd = { head: { x: mx, y: rs.y, z: mz } };
-                if (rs.hqx !== undefined) {
-                  const hq = new THREE.Quaternion(rs.hqx, rs.hqy, rs.hqz, rs.hqw);
-                  hq.premultiply(yFlipSpec);
-                  rd.head.qx = hq.x; rd.head.qy = hq.y; rd.head.qz = hq.z; rd.head.qw = hq.w;
-                }
-                if (rs.lhx !== undefined) {
-                  const lq = new THREE.Quaternion(rs.lhqx, rs.lhqy, rs.lhqz, rs.lhqw);
-                  lq.premultiply(yFlipSpec);
-                  rd.leftHand = { x: -rs.lhx, y: rs.lhy, z: -rs.lhz, qx: lq.x, qy: lq.y, qz: lq.z, qw: lq.w };
-                }
-                if (rs.rhx !== undefined) {
-                  const rq = new THREE.Quaternion(rs.rhqx, rs.rhqy, rs.rhqz, rs.rhqw);
-                  rq.premultiply(yFlipSpec);
-                  rd.rightHand = { x: -rs.rhx, y: rs.rhy, z: -rs.rhz, qx: rq.x, qy: rq.y, qz: rq.z, qw: rq.w };
-                }
-                botBody.components['mixamo-body'].remoteHandData = rd;
-              }
-            }
-
-            // Blue player: no mirroring (already at correct z=6 position)
-            if (blueState) {
-              const bs = blueState;
-              const specBlueBody = document.getElementById('spectator-blue-body');
-              if (specBlueBody && specBlueBody.components['mixamo-body']) {
-                const rd = { head: { x: bs.x, y: bs.y, z: bs.z } };
-                if (bs.hqx !== undefined) {
-                  rd.head.qx = bs.hqx; rd.head.qy = bs.hqy; rd.head.qz = bs.hqz; rd.head.qw = bs.hqw;
-                }
-                if (bs.lhx !== undefined) {
-                  rd.leftHand = { x: bs.lhx, y: bs.lhy, z: bs.lhz, qx: bs.lhqx, qy: bs.lhqy, qz: bs.lhqz, qw: bs.lhqw };
-                }
-                if (bs.rhx !== undefined) {
-                  rd.rightHand = { x: bs.rhx, y: bs.rhy, z: bs.rhz, qx: bs.rhqx, qy: bs.rhqy, qz: bs.rhqz, qw: bs.rhqw };
-                }
-                specBlueBody.components['mixamo-body'].remoteHandData = rd;
-              }
-            }
-
-            // Position balls from spectator data
-            if (redBallSt) {
-              const redBall = document.querySelector('[simple-grab="player: player1"]');
-              if (redBall) {
-                redBall.object3D.position.set(-redBallSt.x, redBallSt.y, -redBallSt.z);
-                if (redBall.components['simple-grab']?.body) {
-                  redBall.components['simple-grab'].body.position.set(-redBallSt.x, redBallSt.y, -redBallSt.z);
-                }
-              }
-            }
-            if (blueBallSt) {
-              const blueBall = document.querySelector('[simple-grab="player: player2"]');
-              if (blueBall) {
-                blueBall.object3D.position.set(blueBallSt.x, blueBallSt.y, blueBallSt.z);
-                if (blueBall.components['simple-grab']?.body) {
-                  blueBall.components['simple-grab'].body.position.set(blueBallSt.x, blueBallSt.y, blueBallSt.z);
-                }
-              }
-            }
-
-            // Force existing game-manager score/timer visible every frame
-            var _sd = document.getElementById('score-display');
-            var _td = document.getElementById('timer-display');
-            var _bs = document.getElementById('blue-score');
-            var _rs = document.getElementById('red-score');
-            var _gm = document.getElementById('game-manager');
-            if (_gm) _gm.object3D.visible = true;
-            if (_sd) _sd.object3D.visible = true;
-            if (_td) _td.object3D.visible = true;
-            if (_bs) _bs.object3D.visible = true;
-            if (_rs) _rs.object3D.visible = true;
-
-            // Update spectator timer (skip if match is in overtime or ended)
-            var _curGameState = lobbyState && lobbyState.matchGameState;
-            if (spectatorMatchStartTime && _td && _curGameState !== 'OVERTIME' && _curGameState !== 'ENDED') {
-              const matchDur = 180;
-              const countdownDur = 3.5;
-              const totalElapsed = (Date.now() - spectatorMatchStartTime) / 1000;
-              const matchElapsed = Math.max(0, totalElapsed - countdownDur);
-              const remaining = Math.max(0, matchDur - matchElapsed);
-              const mins = Math.floor(remaining / 60);
-              const secs = Math.floor(remaining % 60);
-              _td.setAttribute('text', 'value', 'Time: ' + mins + ':' + (secs < 10 ? '0' : '') + secs);
-            }
-
-            // Position name labels above player heads
-            if (blueState) {
-              const bnEl = document.getElementById('spectator-blue-name');
-              if (bnEl) {
-                bnEl.object3D.position.set(blueState.x, (blueState.y || 1.6) + 0.5, blueState.z);
-                bnEl.object3D.visible = true;
-              }
-            }
-            if (redState) {
-              const rnEl = document.getElementById('spectator-red-name');
-              if (rnEl) {
-                rnEl.object3D.position.set(-redState.x, (redState.y || 1.6) + 0.5, -redState.z);
-                rnEl.object3D.visible = true;
-              }
-            }
-          }
-
           // Prevent local input from affecting Player 1 (red) and their ball in multiplayer
-          if (isMultiplayer) {
+          if (isMultiplayer && conn && conn.open) {
             const redBall = document.querySelector('[simple-grab="player: player1"]');
             if (redBall && redBall.components['simple-grab']) {
               redBall.components['simple-grab'].isGrabbed = false;
@@ -1766,47 +894,15 @@
       let multiplayerScore = { local: 0, remote: 0 };
       // Multiplayer ready state
       let multiplayerReady = { local: false, remote: false };
-      function sendToMatchOpponent(data) {
-        if (isHost) {
-          var opp = getMatchOpponentConn();
-          if (opp && opp.open) opp.send(data);
-        } else if (conn && conn.open) {
-          conn.send(data);
-        }
-      }
       function sendScoreUpdate() {
-        sendToMatchOpponent({ type: 'score-update', score: multiplayerScore });
-        broadcastSpectatorScore();
-      }
-      function broadcastSpectatorScore() {
-        if (!isHost || !lobbyState) return;
-        var mp = lobbyState.matchPlayers;
-        if (!mp || !mp.blue) return;
-        var opponentId = mp.blue === myPlayerId ? mp.red : mp.blue;
-        var blueScore = mp.blue === myPlayerId ? multiplayerScore.local : multiplayerScore.remote;
-        var redScore = mp.blue === myPlayerId ? multiplayerScore.remote : multiplayerScore.local;
-        lobbyState.matchScore = { blue: blueScore, red: redScore };
-        var msg = { type: 'spectator-score', blueScore: blueScore, redScore: redScore };
-        for (var i = 0; i < connections.length; i++) {
-          var c = connections[i];
-          if (c.conn.open && c.peerId !== opponentId) {
-            c.conn.send(msg);
-          }
-        }
-      }
-      function broadcastSpectatorGameState(state) {
-        if (!isHost || !lobbyState) return;
-        var mp = lobbyState.matchPlayers;
-        if (!mp) return;
-        for (var i = 0; i < connections.length; i++) {
-          var c = connections[i];
-          if (c.conn.open && c.peerId !== mp.blue && c.peerId !== mp.red) {
-            c.conn.send({ type: 'spectator-game-state', state: state });
-          }
+        if (conn && conn.open) {
+          conn.send({ type: 'score-update', score: multiplayerScore });
         }
       }
       function sendReadyUpdate() {
-        sendToMatchOpponent({ type: 'ready-update', ready: multiplayerReady.local });
+        if (conn && conn.open) {
+          conn.send({ type: 'ready-update', ready: multiplayerReady.local });
+        }
       }
       function updateScoreDisplayMultiplayer() {
         const blueScore = document.getElementById('blue-score');
@@ -1825,7 +921,7 @@
         const origOnBotHit = gm.Component.prototype.onBotHit;
         const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
         gm.Component.prototype.onBotHit = function() {
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && conn && conn.open) {
             const now = Date.now();
             if (now - (this._lastBotHitTime || 0) < 200) return;
             this._lastBotHitTime = now;
@@ -1837,7 +933,7 @@
           }
         };
         gm.Component.prototype.onPlayerHit = function() {
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && conn && conn.open) {
             const now = Date.now();
             if (now - (this._lastPlayerHitTime || 0) < 200) return;
             this._lastPlayerHitTime = now;
@@ -2438,7 +1534,6 @@
         
         onGripDown: function(evt) {
           if (this.isGrabbed) return;
-          if (this.spectatorMode) return;
           
           this.grabbingHand = evt.target;
           this.isGrabbed = true;
@@ -3109,9 +2204,9 @@
           // Listen for A button press on both controllers
           this.el.sceneEl.addEventListener('abuttondown', (evt) => {
             if (this.matchState === 'WAITING') {
-              if (isMultiplayer && !window.isSpectator) {
+              if (isMultiplayer && conn && conn.open) {
                 this.handleMultiplayerReady();
-              } else if (!isMultiplayer) {
+              } else {
                 this.startCountdown();
               }
             } else if (this.matchState === 'ENDED') {
@@ -3148,16 +2243,20 @@
         },
 
         updateReadyState: function() {
-          if (!isMultiplayer) return;
+          if (!isMultiplayer || !conn || !conn.open) return;
           
           if (multiplayerReady.local && !multiplayerReady.remote) {
             this.startMessage.setAttribute('text', 'value', 'Waiting for other player...');
           } else if (!multiplayerReady.local && multiplayerReady.remote) {
             this.startMessage.setAttribute('text', 'value', 'Press A to Start');
           } else if (multiplayerReady.local && multiplayerReady.remote) {
+            // Both ready - start countdown
             const startTime = Date.now();
             this.syncedStartCountdown(startTime);
-            sendToMatchOpponent({ type: 'countdown-start', startTime: startTime });
+            // Send countdown sync to other player
+            if (conn && conn.open) {
+              conn.send({ type: 'countdown-start', startTime: startTime });
+            }
           }
         },
 
@@ -3219,10 +2318,10 @@
           this.botScore = 0;
           this.updateScore();
           
-          // Enable bot (only in singleplayer) and player collision
+          // Enable bot and player collision
           const bot = this.el.sceneEl.querySelector('[advanced-bot]');
           const player = this.el.sceneEl.querySelector('#player');
-          if (bot && !isMultiplayer) bot.setAttribute('advanced-bot', 'enabled', true);
+          if (bot) bot.setAttribute('advanced-bot', 'enabled', true);
           if (player) player.setAttribute('player-collision', 'enabled', true);
           
           // Dispatch game started event
@@ -3246,7 +2345,7 @@
           if (remaining <= 0 && this.matchState === 'PLAYING') {
             // Use correct scores for multiplayer vs singleplayer
             let score1, score2;
-            if (isMultiplayer && !window.isSpectator) {
+            if (isMultiplayer && conn && conn.open) {
               score1 = multiplayerScore.local;
               score2 = multiplayerScore.remote;
             } else {
@@ -3267,10 +2366,9 @@
           this.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
           console.log('Match went to overtime - sudden death');
           
-          if (isMultiplayer) {
-            if (lobbyState) lobbyState.matchGameState = 'OVERTIME';
-            sendToMatchOpponent({ type: 'game-state', state: 'OVERTIME' });
-            broadcastSpectatorGameState('OVERTIME');
+          // Sync overtime state in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({ type: 'game-state', state: 'OVERTIME' });
           }
         },
 
@@ -3278,24 +2376,26 @@
           this.matchState = 'ENDED';
           this.gameStarted = false;
           
+          // Disable bot
           const bot = this.el.sceneEl.querySelector('[advanced-bot]');
           if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
           
+          // Determine winner
           let winner;
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && conn && conn.open) {
             winner = multiplayerScore.local > multiplayerScore.remote ? 'You win!' : 'Opponent wins!';
           } else {
             winner = this.playerScore > this.botScore ? 'Player wins!' : 'Bot wins!';
           }
           
+          // Show end message
           this.startMessage.setAttribute('visible', true);
           this.startMessage.setAttribute('text', 'value', `${winner}\nPress A to play again`);
           this.timerDisplay.setAttribute('text', 'value', 'Match ended');
           
-          if (isMultiplayer) {
-            if (lobbyState) lobbyState.matchGameState = 'ENDED';
-            sendToMatchOpponent({ type: 'game-state', state: 'ENDED', winner: winner });
-            broadcastSpectatorGameState('ENDED');
+          // Sync end state in multiplayer
+          if (isMultiplayer && conn && conn.open) {
+            conn.send({ type: 'game-state', state: 'ENDED', winner: winner });
           }
           
           console.log(`Match ended: ${winner}`);
@@ -3350,7 +2450,7 @@
           if (now - (this._lastBotHitTime || 0) < 200) return;
           this._lastBotHitTime = now;
           
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && conn && conn.open) {
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -3359,6 +2459,7 @@
             this.updateScore();
           }
           
+          // Check for overtime win
           if (this.matchState === 'OVERTIME') {
             this.endMatch();
           }
@@ -3370,7 +2471,7 @@
           if (now - (this._lastPlayerHitTime || 0) < 200) return;
           this._lastPlayerHitTime = now;
           
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && conn && conn.open) {
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -3379,13 +2480,14 @@
             this.updateScore();
           }
           
+          // Check for overtime win
           if (this.matchState === 'OVERTIME') {
             this.endMatch();
           }
         },
 
         updateScore: function() {
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && conn && conn.open) {
             updateScoreDisplayMultiplayer();
           } else {
             // In singleplayer, player is blue, bot is red
@@ -4018,12 +3120,12 @@
         },
         
         tick: function() {
-          if (!this.data.enabled) return;
-          
           // Update player position based on physics, maintaining the height offset
           const physicsPos = this.body.position;
           
           // Keep the player at a constant height
+          //physicsPos.x = this.targetX;
+          physicsPos.z = this.targetZ;
           physicsPos.y = this.targetHeight;
           
           // Update the visual position
@@ -5409,32 +4511,7 @@
 
     </script>
 
-    <!-- Pre-VR nickname overlay -->
-    <div id="pre-vr-overlay" style="position:fixed;inset:0;background:#111;display:flex;align-items:center;justify-content:center;z-index:9999;color:white;font-family:sans-serif;">
-      <div style="text-align:center">
-        <h1 style="font-size:2.5em;margin-bottom:0.2em;letter-spacing:0.1em">DODGE VR</h1>
-        <p style="color:#888;margin-bottom:1.5em">1v1 Dodgeball in Virtual Reality</p>
-        <label for="nickname-input" style="display:block;margin-bottom:0.4em;font-size:1.1em">Nickname</label>
-        <input id="nickname-input" type="text" maxlength="12" placeholder="Player"
-               style="font-size:1.2em;padding:0.4em 0.8em;border:2px solid #4488ff;border-radius:6px;background:#222;color:white;text-align:center;width:200px;outline:none;">
-        <p style="font-size:0.8em;color:#666;margin-top:1.5em">Press <b>Enter VR</b> below to start</p>
-      </div>
-    </div>
-    <script>
-      // Nickname persistence
-      (function() {
-        const input = document.getElementById('nickname-input');
-        const saved = localStorage.getItem('dodgevr-nickname');
-        if (saved) input.value = saved;
-        input.addEventListener('input', function() {
-          localStorage.setItem('dodgevr-nickname', this.value);
-          window.playerNickname = this.value || 'Player';
-        });
-        window.playerNickname = saved || 'Player';
-      })();
-    </script>
-
-    <a-scene physics-world game-manager sound-manager multiplayer-sync fps-counter frame-rate-info ball-speed-tracker vr-menu
+    <a-scene physics-world game-manager sound-manager multiplayer-sync fps-counter frame-rate-info ball-speed-tracker
              game-modes="enabled: false; mode: default"
     vr-mode-ui="enabled: true"
       renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
@@ -5465,25 +4542,25 @@
              class="collidable">
       </a-box>
 
-      <!-- Left wall (glass - transparent so spectators can see in) -->
+      <!-- Left wall -->
       <a-box position="-2 2 0" 
              width="0.1" 
              height="4" 
              depth="16" 
-             color="#aaccff"
-             material="shader: standard; metalness: 0.3; roughness: 0; transparent: true; opacity: 0.15; side: double; depthWrite: false"
+             color="#808080"
+             material="shader: standard; metalness: 0; roughness: 1"
              static-physics
              obb-collider
              class="collidable">
       </a-box>
       
-      <!-- Right wall (glass - transparent so spectators can see in) -->
+      <!-- Right wall -->
       <a-box position="2 2 0" 
              width="0.1" 
              height="4" 
              depth="16" 
-             color="#aaccff"
-             material="shader: standard; metalness: 0.3; roughness: 0; transparent: true; opacity: 0.15; side: double; depthWrite: false"
+             color="#808080"
+             material="shader: standard; metalness: 0; roughness: 1"
              static-physics
              obb-collider
              class="collidable">
@@ -5637,8 +4714,6 @@
 
       <!-- Bot (AI player) -->
       <a-entity position="0 0 -6" advanced-bot="enabled: true; difficulty: medium; debug: true">
-        <!-- Opponent nickname (shown in multiplayer) -->
-        <a-text id="opponent-nickname" value="" position="0 0.7 0" align="center" width="1.5" color="#ffcc00" visible="false"></a-text>
         <a-entity id="bot-target" position="0 0.4 0"
                   geometry="primitive: sphere; radius: 0.15; segmentsWidth: 8; segmentsHeight: 6"
                   material="color: #ff0000; opacity: 0; transparent: true"
@@ -5658,13 +4733,6 @@
 
       <!-- Bot Body (rigged upper body) -->
       <a-entity id="bot-body" mixamo-body="mode: bot; color: #E24A4A"></a-entity>
-
-      <!-- Spectator view: blue player body (hidden until spectating a match) -->
-      <a-entity id="spectator-blue-body" mixamo-body="mode: bot; color: #4A90E2; botEntitySelector: #spectator-blue-anchor" visible="false"></a-entity>
-
-      <!-- Spectator name labels (positioned dynamically above player heads) -->
-      <a-entity id="spectator-blue-name" visible="false" position="0 2.3 6" text="value: ; align: center; width: 3; color: #0099ff; side: double"></a-entity>
-      <a-entity id="spectator-red-name" visible="false" position="0 2.3 -6" text="value: ; align: center; width: 3; color: #ff4444; side: double"></a-entity>
 
       <!-- Player 1 ball spawn (AI player's ball) -->
       <a-sphere position="0 1 -5.5" 
@@ -5751,90 +4819,11 @@
                    material="color: #0000ff; opacity: 0; transparent: true" visible="false"
                    obb-collider>
             </a-box>
-
-            <!-- Game Menu (attached to camera, 0.8m in front) -->
-            <a-entity id="game-menu" position="0 -0.05 -0.8" visible="false">
-              <!-- Background -->
-              <a-plane width="0.72" height="0.54" color="#000000" material="opacity: 0.92; transparent: true; shader: flat" position="0 0 -0.001"></a-plane>
-              <!-- Border -->
-              <a-plane width="0.74" height="0.56" color="#4488ff" material="opacity: 0.4; transparent: true; shader: flat" position="0 0 -0.002"></a-plane>
-
-              <!-- Title -->
-              <a-text value="DODGE VR" position="0 0.22 0" align="center" width="0.8" color="#ffffff" font="dejavu"></a-text>
-
-              <!-- Mode buttons row -->
-              <a-entity position="0 0.14 0">
-                <a-entity id="menu-single" class="clickable" menu-click position="-0.13 0 0"
-                          geometry="primitive: box; width: 0.2; height: 0.06; depth: 0.005"
-                          material="color: #4488ff; opacity: 0.9; shader: flat">
-                  <a-text value="SINGLE" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-                <a-entity id="menu-multi" class="clickable" menu-click position="0.13 0 0"
-                          geometry="primitive: box; width: 0.2; height: 0.06; depth: 0.005"
-                          material="color: #333333; opacity: 0.9; shader: flat">
-                  <a-text value="MULTI" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-              </a-entity>
-
-              <!-- Lobby section (multi only) -->
-              <a-entity id="menu-lobby-section" visible="false" position="0 0.02 0">
-                <!-- Lobby number row -->
-                <a-text value="Lobby:" position="-0.22 0 0" align="left" width="0.35" color="#cccccc"></a-text>
-                <a-entity id="menu-lobby-minus" class="clickable" menu-click position="-0.02 0 0"
-                          geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
-                          material="color: #555555; shader: flat">
-                  <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-                <a-text id="menu-lobby-number" value="1" position="0.06 0 0" align="center" width="0.4" color="#ffffff"></a-text>
-                <a-entity id="menu-lobby-plus" class="clickable" menu-click position="0.14 0 0"
-                          geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
-                          material="color: #555555; shader: flat">
-                  <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-                <a-entity id="menu-join" class="clickable" menu-click position="0.26 0 0"
-                          geometry="primitive: box; width: 0.12; height: 0.05; depth: 0.005"
-                          material="color: #22aa44; shader: flat">
-                  <a-text value="JOIN" align="center" width="0.35" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-
-                <!-- Connected players list -->
-                <a-text id="menu-players-list" value="Players: -" position="-0.3 -0.06 0" align="left" width="0.3" color="#aaaaaa"></a-text>
-
-                <!-- Queue status -->
-                <a-text id="menu-queue-status" value="" position="-0.3 -0.12 0" align="left" width="0.3" color="#ffcc00"></a-text>
-              </a-entity>
-
-              <!-- Queue buttons -->
-              <a-entity id="menu-queue-buttons" visible="false" position="0 -0.1 0">
-                <a-entity id="menu-join-queue" class="clickable" menu-click position="-0.1 0 0"
-                          geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
-                          material="color: #22aa44; shader: flat">
-                  <a-text value="JOIN QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-                <a-entity id="menu-leave-queue" class="clickable" menu-click position="0.1 0 0" visible="false"
-                          geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
-                          material="color: #cc3333; shader: flat">
-                  <a-text value="LEAVE QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-              </a-entity>
-
-              <!-- Start / End match button -->
-              <a-entity id="menu-start-match" class="clickable" menu-click position="0 -0.19 0"
-                        geometry="primitive: box; width: 0.28; height: 0.06; depth: 0.005"
-                        material="color: #ff8800; shader: flat">
-                <a-text id="menu-start-match-text" value="START MATCH" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-              </a-entity>
-
-              <!-- Close hint -->
-              <a-text value="X to close" position="0 -0.25 0" align="center" width="0.25" color="#666666"></a-text>
-            </a-entity>
           </a-entity>
           
           <a-entity id="leftHand" 
                    hand-controls="hand: left"
                    oculus-touch-controls="hand: left"
-                   laser-controls="hand: left"
-                   raycaster="objects: .clickable; far: 10; enabled: false; lineColor: #ffffff; lineOpacity: 0"
                    hand-collider
                    hand-haptics
                    debug-controller
@@ -5882,8 +4871,6 @@
           <a-entity id="rightHand" 
                    hand-controls="hand: right"
                    oculus-touch-controls="hand: right"
-                   laser-controls="hand: right"
-                   raycaster="objects: .clickable; far: 10; enabled: false; lineColor: #ffffff; lineOpacity: 0"
                    hand-collider
                    hand-haptics
                    debug-controller
