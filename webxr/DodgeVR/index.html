@@ -1857,28 +1857,34 @@
         const origOnBotHit = gm.Component.prototype.onBotHit;
         const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
         gm.Component.prototype.onBotHit = function() {
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          const now = Date.now();
+          if (now - (this._lastBotHitTime || 0) < 200) return;
+          this._lastBotHitTime = now;
           if (isMultiplayer && !window.isSpectator) {
-            const now = Date.now();
-            if (now - (this._lastBotHitTime || 0) < 200) return;
-            this._lastBotHitTime = now;
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
           } else {
-            origOnBotHit.call(this);
+            this.playerScore += 1;
+            this.updateScore();
           }
+          if (this.matchState === 'OVERTIME') this.endMatch();
         };
         gm.Component.prototype.onPlayerHit = function() {
+          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          const now = Date.now();
+          if (now - (this._lastPlayerHitTime || 0) < 200) return;
+          this._lastPlayerHitTime = now;
           if (isMultiplayer && !window.isSpectator) {
-            const now = Date.now();
-            if (now - (this._lastPlayerHitTime || 0) < 200) return;
-            this._lastPlayerHitTime = now;
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
           } else {
-            origOnPlayerHit.call(this);
+            this.botScore += 1;
+            this.updateScore();
           }
+          if (this.matchState === 'OVERTIME') this.endMatch();
         };
         gm.Component.prototype._multiplayerPatched = true;
         return true;
@@ -2062,9 +2068,10 @@
 
           // Add collision event listener
           this.el.addEventListener('obbcollisionstarted', (evt) => {
+            // In multiplayer, the red ball (player1) is remote-driven — skip all local collisions
+            if (isMultiplayer && this.data.player === 'player1') return;
             const collider = evt.detail.withEl;
             if (!collider) return;
-            // Helper to respawn this ball
             const respawn = () => {
               this.isReturning = false;
               this.resetPosition();
@@ -2117,14 +2124,16 @@
               return;
             }
             // Player1's red ball (bot's) hitting player = point for bot
+            // In multiplayer, skip: the remote thrower handles scoring via score-update messages
             if (this.data.player === 'player1' && isPlayerTarget) {
-              if (inGracePeriod) return; // Ignore during 1s return grace period
+              if (isMultiplayer) return;
+              if (inGracePeriod) return;
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
-              pulseHapticBothHands(1.0, 200); // Strong vibration on both controllers
+              pulseHapticBothHands(1.0, 200);
               respawn();
               return;
             }
@@ -2136,7 +2145,9 @@
             const canSelfHit = !this.isGrabbed && selfHitSpeed > 1;
 
             // Player1's red ball (bot's) deflected back at bot = point for human player
+            // In multiplayer, skip: red ball is remote-driven, thrower handles scoring
             if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
+              if (isMultiplayer) return;
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -2249,8 +2260,8 @@
         
         tick: function() {
           if (this.body) {
-            // Direct position check for back walls - runs every frame, can't be missed
-            // Skip if grabbed or already returning (returning ball passes through wall zone)
+            // In multiplayer, red ball is remote-driven — skip local wall checks
+            if (isMultiplayer && this.data.player === 'player1') return;
             if (!this.isGrabbed && !this.isReturning) {
               const bz = this.body.position.z;
               if (bz < -7.8 || bz > 7.8) {
@@ -4008,23 +4019,22 @@
           // Add collision event listener
           this.el.addEventListener('obbcollisionstarted', (evt) => {
             if (!this.data.enabled) return;
+            // In multiplayer, red ball is remote-driven; thrower handles scoring
+            if (isMultiplayer) return;
             const collider = evt.detail.withEl;
             if (collider && collider.getAttribute('simple-grab') && 
                 collider.getAttribute('simple-grab').player === 'player1') {
-              // Check grace period - ball returning from back wall shouldn't hit player
               const grab = collider.components?.['simple-grab'];
               if (grab) {
-                if (grab.isGrabbed) return; // Don't trigger for held balls
-                // Detect ball that is behind the player (past them, near back wall)
+                if (grab.isGrabbed) return;
                 if (!grab.isReturning && grab.body && grab.body.position.z > 6.5) {
                   grab.isReturning = true;
                   grab.returningGraceUntil = Date.now() + 2000;
                   return;
                 }
-                if (grab.isReturning && Date.now() < grab.returningGraceUntil) return; // Grace period
+                if (grab.isReturning && Date.now() < grab.returningGraceUntil) return;
               }
 
-              // Visual feedback
               const playerSphere = this.el.querySelector('a-sphere');
               if (playerSphere) {
                 playerSphere.setAttribute('color', '#0000ff');
@@ -4033,14 +4043,12 @@
                 }, 1000);
               }
               
-              // Play impact effect
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
               if (impactEffect) {
                 impactEffect.playEffect();
               }
               
-              // Update score
               const gameManager = this.el.sceneEl.querySelector('#game-manager');
               if (gameManager && gameManager.components['game-manager']) {
                 gameManager.components['game-manager'].onPlayerHit();
