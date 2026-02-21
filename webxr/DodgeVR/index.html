@@ -1337,9 +1337,14 @@
         multiplayerReady = { local: false, remote: false };
         window.isSpectator = false;
         var botBody = document.querySelector('#bot-body');
-        if (botBody && botBody.components['mixamo-body']) {
-          botBody.components['mixamo-body'].remoteHandData = null;
+        if (botBody) {
+          botBody.object3D.visible = true;
+          if (botBody.components['mixamo-body']) {
+            botBody.components['mixamo-body'].remoteHandData = null;
+          }
         }
+        var specBlueBody = document.getElementById('spectator-blue-body');
+        if (specBlueBody) specBlueBody.object3D.visible = false;
         var gameManager = document.querySelector('#game-manager');
         if (gameManager && gameManager.components['game-manager']) {
           gameManager.components['game-manager'].playerScore = 0;
@@ -1447,6 +1452,15 @@
 
               sendPlayerState(state);
             }
+          }
+          // In multiplayer, hide phantom bodies when no valid data is driving them
+          if (isMultiplayer && !window.isSpectator) {
+            if (!remotePlayerState) {
+              var _bb = document.querySelector('#bot-body');
+              if (_bb) _bb.object3D.visible = false;
+            }
+            var _sbb = document.getElementById('spectator-blue-body');
+            if (_sbb) _sbb.object3D.visible = false;
           }
           // In multiplayer, update the remote player's body with mirrored transforms
           if (isMultiplayer && remotePlayerState) {
@@ -3933,16 +3947,16 @@
           // Create spheres for the top and bottom
           const sphereShape = new CANNON.Sphere(radius);
           
-          // Create the physics body
+          // Create the physics body as KINEMATIC so it follows the player
+          // but cannot be pushed by balls or other objects
           this.body = new CANNON.Body({
-            mass: 1,
+            mass: 0,
             material: new CANNON.Material('default'),
-            linearDamping: 0.5,
             fixedRotation: true,
-            type: CANNON.Body.DYNAMIC,
+            type: CANNON.Body.KINEMATIC,
             collisionFilterGroup: 1,
             collisionFilterMask: 1,
-            position: this.el.object3D.position.clone().add(new THREE.Vector3(0, 1.0, 0)) // Offset upward by half height
+            position: this.el.object3D.position.clone().add(new THREE.Vector3(0, 1.0, 0))
           });
           
           // Add the shapes to the body with proper orientation
@@ -4019,20 +4033,16 @@
         
         tick: function() {
           if (!this.data.enabled) return;
-          
-          // Update player position based on physics, maintaining the height offset
-          const physicsPos = this.body.position;
-          
-          // Keep the player at a constant height
-          physicsPos.y = this.targetHeight;
-          
-          // Update the visual position
-          this.el.object3D.position.set(physicsPos.x, physicsPos.y - 1.0, physicsPos.z);
-          
-          // Zero out any vertical velocity to prevent floating/sinking
-          this.body.velocity.x = 0;
-          this.body.velocity.y = 0;
-          this.body.velocity.z = 0;
+
+          // Kinematic body: update physics position FROM the player's VR camera,
+          // so the collision capsule follows the player without being pushable
+          var camera = this.el.sceneEl.querySelector('[camera]');
+          if (camera) {
+            var camPos = new THREE.Vector3();
+            camera.object3D.getWorldPosition(camPos);
+            this.body.position.set(camPos.x, this.targetHeight, camPos.z);
+          }
+          this.body.velocity.set(0, 0, 0);
         }
       });
 

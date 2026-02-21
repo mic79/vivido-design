@@ -217,7 +217,6 @@
           var rig = document.getElementById('rig');
           if (rig) rig.setAttribute('rotation', '0 ' + pos.ry + ' 0');
         }
-        // Sync the physics body so player-collision tick doesn't override
         var pc = player.components['player-collision'];
         if (pc && pc.body) {
           pc.body.position.set(pos.x, (pos.y || 0) + 1.0, pos.z);
