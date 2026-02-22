@@ -613,6 +613,7 @@
           } else if (data.type === 'score-update') {
             if (isMatchOpponent(entry.peerId)) {
               var _prevRemote = multiplayerScore.remote;
+              var _prevLocal = multiplayerScore.local;
               multiplayerScore.remote = data.score.local;
               multiplayerScore.local = data.score.remote;
               updateScoreDisplayMultiplayer();
@@ -621,6 +622,10 @@
                 var _pt = document.querySelector('#player-target');
                 if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
                 pulseHapticBothHands(1.0, 200);
+              }
+              if (multiplayerScore.local > _prevLocal) {
+                var _bt = document.querySelector('#bot-target');
+                if (_bt && _bt.components['impact-effect']) _bt.components['impact-effect'].playEffect();
               }
             } else if (window.isSpectator && lobbyState && lobbyState.matchPlayers) {
               // Host is spectator: relay score between match players and update spectator display
@@ -869,6 +874,7 @@
             remoteBallState = data.state;
           } else if (data.type === 'score-update') {
             var _prevRemote = multiplayerScore.remote;
+            var _prevLocal = multiplayerScore.local;
             multiplayerScore.remote = data.score.local;
             multiplayerScore.local = data.score.remote;
             updateScoreDisplayMultiplayer();
@@ -876,6 +882,10 @@
               var _pt = document.querySelector('#player-target');
               if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
               pulseHapticBothHands(1.0, 200);
+            }
+            if (multiplayerScore.local > _prevLocal) {
+              var _bt = document.querySelector('#bot-target');
+              if (_bt && _bt.components['impact-effect']) _bt.components['impact-effect'].playEffect();
             }
           } else if (data.type === 'racket-mode') {
             racketMode.player1[data.hand] = data.active;
