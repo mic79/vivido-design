@@ -5263,16 +5263,15 @@
             rCtrl.object3D.getWorldPosition(pRightPos);
             rCtrl.object3D.getWorldQuaternion(pRightQuat);
 
-            // Mirror positions: negate X and Z
+            // 180° Y rotation: negate X and Z, same hand mapping (no swap)
             const mHeadPos = new THREE.Vector3(-pHeadPos.x, pHeadPos.y, -pHeadPos.z);
-            // Swap hands for true mirror effect (player right → bot left, etc.)
-            const mLeftPos = new THREE.Vector3(-pRightPos.x, pRightPos.y, -pRightPos.z);
-            const mRightPos = new THREE.Vector3(-pLeftPos.x, pLeftPos.y, -pLeftPos.z);
+            const mLeftPos = new THREE.Vector3(-pLeftPos.x, pLeftPos.y, -pLeftPos.z);
+            const mRightPos = new THREE.Vector3(-pRightPos.x, pRightPos.y, -pRightPos.z);
 
-            // Mirror quaternions: 180° Y rotation, and swap hands
-            const mHeadQuat = this._mirrorYFlip.clone().multiply(pHeadQuat);
-            const mLeftQuat = this._mirrorYFlip.clone().multiply(pRightQuat);
-            const mRightQuat = this._mirrorYFlip.clone().multiply(pLeftQuat);
+            // Rotate quaternions 180° around Y (same pattern as multiplayer mirroring)
+            const mHeadQuat = pHeadQuat.clone().premultiply(this._mirrorYFlip);
+            const mLeftQuat = pLeftQuat.clone().premultiply(this._mirrorYFlip);
+            const mRightQuat = pRightQuat.clone().premultiply(this._mirrorYFlip);
 
             // Head velocity for dynamic lean
             if (this.previousHeadPosInitialized) {
@@ -5308,21 +5307,21 @@
               this.botEntity.object3D.position.set(mHeadPos.x, mHeadPos.y - 0.4, mHeadPos.z);
             }
 
-            // Mirror finger curls: player right → bot left, player left → bot right
+            // Finger curls: same hand mapping (no swap)
             const lGP = lCtrl.components['tracked-controls']?.controller?.gamepad;
             const rGP = rCtrl.components['tracked-controls']?.controller?.gamepad;
-            if (rGP && rGP.buttons) {
-              const t = rGP.buttons[0]?.value || 0;
-              const g = rGP.buttons[1]?.value || 0;
-              let th = 0;
-              for (let i = 2; i <= 6; i++) { if (rGP.buttons[i]?.touched) { th = 1; break; } }
-              this.updateTargetCurls('left', t, g, th);
-            }
             if (lGP && lGP.buttons) {
               const t = lGP.buttons[0]?.value || 0;
               const g = lGP.buttons[1]?.value || 0;
               let th = 0;
               for (let i = 2; i <= 6; i++) { if (lGP.buttons[i]?.touched) { th = 1; break; } }
+              this.updateTargetCurls('left', t, g, th);
+            }
+            if (rGP && rGP.buttons) {
+              const t = rGP.buttons[0]?.value || 0;
+              const g = rGP.buttons[1]?.value || 0;
+              let th = 0;
+              for (let i = 2; i <= 6; i++) { if (rGP.buttons[i]?.touched) { th = 1; break; } }
               this.updateTargetCurls('right', t, g, th);
             }
             ['left', 'right'].forEach(hand => {
