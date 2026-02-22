@@ -2131,66 +2131,59 @@
             const isBotTarget = collider.id === 'bot-target' || collider.id === 'bot-body-collider';
             const isPlayerTarget = collider.id === 'player-target' || collider.id === 'player-body-collider';
 
-            // Only process hits and play impact effects during an active match
-            const _gmEl = document.querySelector('#game-manager');
-            const _gmState = _gmEl && _gmEl.components['game-manager'] && _gmEl.components['game-manager'].matchState;
-            const _matchActive = (_gmState === 'PLAYING' || _gmState === 'OVERTIME');
+            // --- NORMAL HITS: ball hits the OPPONENT's body ---
+            // Player2's blue ball (human's) hitting bot = point for human player
+            if (this.data.player === 'player2' && isBotTarget) {
+              if (inGracePeriod) return;
+              const botTarget = document.querySelector('#bot-target');
+              const impactEffect = botTarget && botTarget.components['impact-effect'];
+              if (impactEffect) impactEffect.playEffect();
+              const gm = document.querySelector('#game-manager');
+              if (gm && gm.components['game-manager']) gm.components['game-manager'].onBotHit();
+              respawn();
+              return;
+            }
+            // Player1's red ball (bot's) hitting player = point for bot
+            // In multiplayer, skip: the remote thrower handles scoring via score-update messages
+            if (this.data.player === 'player1' && isPlayerTarget) {
+              if (isMultiplayer) return;
+              if (inGracePeriod) return;
+              const playerTarget = document.querySelector('#player-target');
+              const impactEffect = playerTarget && playerTarget.components['impact-effect'];
+              if (impactEffect) impactEffect.playEffect();
+              const gm = document.querySelector('#game-manager');
+              if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
+              pulseHapticBothHands(1.0, 200);
+              respawn();
+              return;
+            }
 
-            if (_matchActive) {
-              // --- NORMAL HITS: ball hits the OPPONENT's body ---
-              // Player2's blue ball (human's) hitting bot = point for human player
-              if (this.data.player === 'player2' && isBotTarget) {
-                if (inGracePeriod) return;
-                const botTarget = document.querySelector('#bot-target');
-                const impactEffect = botTarget && botTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                const gm = _gmEl;
-                if (gm && gm.components['game-manager']) gm.components['game-manager'].onBotHit();
-                respawn();
-                return;
-              }
-              // Player1's red ball (bot's) hitting player = point for bot
-              // In multiplayer, skip: the remote thrower handles scoring via score-update messages
-              if (this.data.player === 'player1' && isPlayerTarget) {
-                if (isMultiplayer) return;
-                if (inGracePeriod) return;
-                const playerTarget = document.querySelector('#player-target');
-                const impactEffect = playerTarget && playerTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                const gm = _gmEl;
-                if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
-                pulseHapticBothHands(1.0, 200);
-                respawn();
-                return;
-              }
+            // --- SELF-HITS: ball hits its OWN player (deflection or own-goal) ---
+            const selfHitSpeed = this.body ? this.body.velocity.length() : 0;
+            const canSelfHit = !this.isGrabbed && !this.isReturning && selfHitSpeed > 1;
 
-              // --- SELF-HITS: ball hits its OWN player (deflection or own-goal) ---
-              const selfHitSpeed = this.body ? this.body.velocity.length() : 0;
-              const canSelfHit = !this.isGrabbed && !this.isReturning && selfHitSpeed > 1;
-
-              // Player1's red ball (bot's) deflected back at bot = point for human player
-              // In multiplayer, skip: red ball is remote-driven, thrower handles scoring
-              if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
-                if (isMultiplayer) return;
-                const botTarget = document.querySelector('#bot-target');
-                const impactEffect = botTarget && botTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                const gm = _gmEl;
-                if (gm && gm.components['game-manager']) gm.components['game-manager'].onBotHit();
-                respawn();
-                return;
-              }
-              // Player2's blue ball (human's) deflected back at player = point for bot
-              if (this.data.player === 'player2' && isPlayerTarget && canSelfHit) {
-                const playerTarget = document.querySelector('#player-target');
-                const impactEffect = playerTarget && playerTarget.components['impact-effect'];
-                if (impactEffect) impactEffect.playEffect();
-                const gm = _gmEl;
-                if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
-                pulseHapticBothHands(1.0, 200);
-                respawn();
-                return;
-              }
+            // Player1's red ball (bot's) deflected back at bot = point for human player
+            // In multiplayer, skip: red ball is remote-driven, thrower handles scoring
+            if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
+              if (isMultiplayer) return;
+              const botTarget = document.querySelector('#bot-target');
+              const impactEffect = botTarget && botTarget.components['impact-effect'];
+              if (impactEffect) impactEffect.playEffect();
+              const gm = document.querySelector('#game-manager');
+              if (gm && gm.components['game-manager']) gm.components['game-manager'].onBotHit();
+              respawn();
+              return;
+            }
+            // Player2's blue ball (human's) deflected back at player = point for bot
+            if (this.data.player === 'player2' && isPlayerTarget && canSelfHit) {
+              const playerTarget = document.querySelector('#player-target');
+              const impactEffect = playerTarget && playerTarget.components['impact-effect'];
+              if (impactEffect) impactEffect.playEffect();
+              const gm = document.querySelector('#game-manager');
+              if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
+              pulseHapticBothHands(1.0, 200);
+              respawn();
+              return;
             }
             // Ball hits wall behind opponent - return to spawn at 10 m/s
             if (collider && collider.getAttribute && collider.getAttribute('geometry')) {
@@ -2287,16 +2280,6 @@
           if (this.body) {
             // In multiplayer, red ball is remote-driven — skip local wall checks
             if (isMultiplayer && this.data.player === 'player1') return;
-            // Auto-reset returning balls when they reach near the spawn point
-            if (this.isReturning && !this.isGrabbed) {
-              var sp = this.initialPosition;
-              var cp = this.body.position;
-              var dx = cp.x - sp.x, dy = cp.y - sp.y, dz = cp.z - sp.z;
-              if (dx*dx + dy*dy + dz*dz < 0.09) { // within 30cm
-                this.resetPosition();
-                return;
-              }
-            }
             if (!this.isGrabbed && !this.isReturning) {
               const bz = this.body.position.z;
               if (bz < -7.8 || bz > 7.8) {
