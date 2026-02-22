@@ -612,10 +612,16 @@
             handleRelayBallState(entry.peerId, data.state);
           } else if (data.type === 'score-update') {
             if (isMatchOpponent(entry.peerId)) {
+              var _prevRemote = multiplayerScore.remote;
               multiplayerScore.remote = data.score.local;
               multiplayerScore.local = data.score.remote;
               updateScoreDisplayMultiplayer();
               broadcastSpectatorScore();
+              if (multiplayerScore.remote > _prevRemote) {
+                var _pt = document.querySelector('#player-target');
+                if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+                pulseHapticBothHands(1.0, 200);
+              }
             } else if (window.isSpectator && lobbyState && lobbyState.matchPlayers) {
               // Host is spectator: relay score between match players and update spectator display
               var smp = lobbyState.matchPlayers;
@@ -857,9 +863,15 @@
           } else if (data.type === 'ball-state') {
             remoteBallState = data.state;
           } else if (data.type === 'score-update') {
+            var _prevRemote = multiplayerScore.remote;
             multiplayerScore.remote = data.score.local;
             multiplayerScore.local = data.score.remote;
             updateScoreDisplayMultiplayer();
+            if (multiplayerScore.remote > _prevRemote) {
+              var _pt = document.querySelector('#player-target');
+              if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+              pulseHapticBothHands(1.0, 200);
+            }
           } else if (data.type === 'racket-mode') {
             racketMode.player1[data.hand] = data.active;
           } else if (data.type === 'ready-update') {
@@ -2154,7 +2166,7 @@
 
               // --- SELF-HITS: ball hits its OWN player (deflection or own-goal) ---
               const selfHitSpeed = this.body ? this.body.velocity.length() : 0;
-              const canSelfHit = !this.isGrabbed && selfHitSpeed > 1;
+              const canSelfHit = !this.isGrabbed && !this.isReturning && selfHitSpeed > 1;
 
               // Player1's red ball (bot's) deflected back at bot = point for human player
               // In multiplayer, skip: red ball is remote-driven, thrower handles scoring
@@ -2275,6 +2287,16 @@
           if (this.body) {
             // In multiplayer, red ball is remote-driven — skip local wall checks
             if (isMultiplayer && this.data.player === 'player1') return;
+            // Auto-reset returning balls when they reach near the spawn point
+            if (this.isReturning && !this.isGrabbed) {
+              var sp = this.initialPosition;
+              var cp = this.body.position;
+              var dx = cp.x - sp.x, dy = cp.y - sp.y, dz = cp.z - sp.z;
+              if (dx*dx + dy*dy + dz*dz < 0.09) { // within 30cm
+                this.resetPosition();
+                return;
+              }
+            }
             if (!this.isGrabbed && !this.isReturning) {
               const bz = this.body.position.z;
               if (bz < -7.8 || bz > 7.8) {
@@ -3476,20 +3498,9 @@
             return;
           }
 
-          // Add collision event listener
-          this.el.addEventListener('obbcollisionstarted', (evt) => {
-            const collider = evt.detail.withEl;
-            if (!collider || !collider.hasAttribute('simple-grab')) return;
-
-            // Don't trigger for held balls (player swinging arm near own head)
-            // or balls in grace period (returning through opponent after wall bounce)
-            const grab = collider.components['simple-grab'];
-            if (!grab) return;
-            if (grab.isGrabbed) return;
-            if (grab.isReturning && Date.now() < grab.returningGraceUntil) return;
-
-            this.playEffect();
-          });
+          // OBB collision listener disabled: impact effects are triggered
+          // explicitly by the simple-grab handler (which has match-state guards)
+          // to prevent false triggers outside of active matches.
         },
         
         playEffect: function() {
@@ -3996,8 +4007,8 @@
             material: new CANNON.Material('default'),
             fixedRotation: true,
             type: CANNON.Body.KINEMATIC,
-            collisionFilterGroup: 1,
-            collisionFilterMask: 1,
+            collisionFilterGroup: 2,
+            collisionFilterMask: 0,
             position: this.el.object3D.position.clone().add(new THREE.Vector3(0, 1.0, 0))
           });
           
@@ -5691,7 +5702,7 @@
         <a-entity id="bot-target" position="0 0.4 0"
                   geometry="primitive: sphere; radius: 0.125; segmentsWidth: 8; segmentsHeight: 6"
                   material="color: #ff0000; opacity: 0; transparent: true"
-                  obb-collider impact-effect="color: #ff0000" visible="false">
+                  obb-collider impact-effect="color: #ff0000">
           <!-- Impact sphere (no declarative animations - handled in JS by impact-effect component) -->
           <a-sphere id="bot-impact" radius="0.05" visible="false"
             material="side: double; transparent: true; opacity: 0; color: #ff0000; emissive: #ff0000; emissiveIntensity: 1.5">
@@ -5700,7 +5711,7 @@
         <!-- Bot body collision box (torso area) -->
         <a-box id="bot-body-collider" position="0 -0.05 0"
                width="0.4" height="0.7" depth="0.25"
-               material="color: #ff0000; opacity: 0; transparent: true" visible="false"
+               material="color: #ff0000; opacity: 0; transparent: true"
                obb-collider>
         </a-box>
       </a-entity>
@@ -5797,7 +5808,7 @@
             <!-- Player body collision box (follows head, offset to chest) -->
             <a-box id="player-body-collider" position="0 -0.4 0"
                    width="0.4" height="0.7" depth="0.25"
-                   material="color: #0000ff; opacity: 0; transparent: true" visible="false"
+                   material="color: #0000ff; opacity: 0; transparent: true"
                    obb-collider>
             </a-box>
 
