@@ -635,13 +635,18 @@
               var isBlue = (entry.peerId === smp.blue);
               var bScore = isBlue ? data.score.local : data.score.remote;
               var rScore = isBlue ? data.score.remote : data.score.local;
+              var prevHostScore = lobbyState.matchScore || { blue: 0, red: 0 };
+              var hostHitPlayer = null;
+              if (bScore > prevHostScore.blue) hostHitPlayer = 'red';
+              if (rScore > prevHostScore.red) hostHitPlayer = 'blue';
               lobbyState.matchScore = { blue: bScore, red: rScore };
               var bsEl = document.getElementById('blue-score');
               var rsEl = document.getElementById('red-score');
               if (bsEl) bsEl.setAttribute('text', 'value', bScore.toString());
               if (rsEl) rsEl.setAttribute('text', 'value', rScore.toString());
+              if (hostHitPlayer) triggerSpectatorImpact(hostHitPlayer);
               // Relay to other spectators
-              var specMsg = { type: 'spectator-score', blueScore: bScore, redScore: rScore };
+              var specMsg = { type: 'spectator-score', blueScore: bScore, redScore: rScore, hitPlayer: hostHitPlayer };
               for (var sj = 0; sj < connections.length; sj++) {
                 var sc = connections[sj];
                 if (sc.conn.open && sc.peerId !== smp.blue && sc.peerId !== smp.red) {
@@ -925,6 +930,7 @@
             var rsEl = document.getElementById('red-score');
             if (bsEl) bsEl.setAttribute('text', 'value', data.blueScore.toString());
             if (rsEl) rsEl.setAttribute('text', 'value', data.redScore.toString());
+            if (data.hitPlayer) triggerSpectatorImpact(data.hitPlayer);
           } else if (data.type === 'spectator-game-state') {
             if (lobbyState) lobbyState.matchGameState = data.state;
             var peerTd = document.getElementById('timer-display');
@@ -1867,8 +1873,12 @@
         var opponentId = mp.blue === myPlayerId ? mp.red : mp.blue;
         var blueScore = mp.blue === myPlayerId ? multiplayerScore.local : multiplayerScore.remote;
         var redScore = mp.blue === myPlayerId ? multiplayerScore.remote : multiplayerScore.local;
+        var prevScore = lobbyState.matchScore || { blue: 0, red: 0 };
+        var hitPlayer = null;
+        if (blueScore > prevScore.blue) hitPlayer = 'red';
+        if (redScore > prevScore.red) hitPlayer = 'blue';
         lobbyState.matchScore = { blue: blueScore, red: redScore };
-        var msg = { type: 'spectator-score', blueScore: blueScore, redScore: redScore };
+        var msg = { type: 'spectator-score', blueScore: blueScore, redScore: redScore, hitPlayer: hitPlayer };
         for (var i = 0; i < connections.length; i++) {
           var c = connections[i];
           if (c.conn.open && c.peerId !== opponentId) {
@@ -1884,6 +1894,19 @@
           var c = connections[i];
           if (c.conn.open && c.peerId !== mp.blue && c.peerId !== mp.red) {
             c.conn.send({ type: 'spectator-game-state', state: state });
+          }
+        }
+      }
+      function triggerSpectatorImpact(hitPlayer) {
+        if (hitPlayer === 'red') {
+          var bt = document.querySelector('#bot-target');
+          if (bt && bt.components['impact-effect']) bt.components['impact-effect'].playEffect();
+        } else if (hitPlayer === 'blue') {
+          var sbh = document.getElementById('spectator-blue-hit');
+          if (sbh) {
+            var bs = spectatorPlayerStates[spectatorMatchBlueId];
+            if (bs) sbh.object3D.position.set(bs.x, bs.y || 1.6, bs.z);
+            if (sbh.components['impact-effect']) sbh.components['impact-effect'].playEffect();
           }
         }
       }
@@ -5746,6 +5769,13 @@
 
       <!-- Spectator view: blue player body (hidden until spectating a match) -->
       <a-entity id="spectator-blue-body" mixamo-body="mode: bot; color: #4A90E2; botEntitySelector: #spectator-blue-anchor" visible="false"></a-entity>
+
+      <!-- Spectator impact effect for blue player (positioned dynamically when hit) -->
+      <a-entity id="spectator-blue-hit" impact-effect="color: #0000ff">
+        <a-sphere id="spectator-blue-hit-impact" radius="0.05" visible="false"
+          material="side: double; transparent: true; opacity: 0; color: #0000ff; emissive: #0000ff; emissiveIntensity: 1.5">
+        </a-sphere>
+      </a-entity>
 
       <!-- Spectator name labels (positioned dynamically above player heads) -->
       <a-entity id="spectator-blue-name" visible="false" position="0 2.3 6" text="value: ; align: center; width: 8; color: #0099ff; side: double"></a-entity>
