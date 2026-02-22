@@ -2160,7 +2160,7 @@
 
             // --- SELF-HITS: ball hits its OWN player (deflection or own-goal) ---
             const selfHitSpeed = this.body ? this.body.velocity.length() : 0;
-            const canSelfHit = !this.isGrabbed && !this.isReturning && selfHitSpeed > 1;
+            const canSelfHit = !this.isGrabbed && selfHitSpeed > 1;
 
             // Player1's red ball (bot's) deflected back at bot = point for human player
             // In multiplayer, skip: red ball is remote-driven, thrower handles scoring
