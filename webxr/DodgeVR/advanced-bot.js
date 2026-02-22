@@ -331,7 +331,8 @@ AFRAME.registerComponent('advanced-bot', {
 
   tick: function(time) {
     if (!this.ball || !this.data.enabled || !this.gameStarted || this.isMultiplayer) return;
-    
+    if (window.botMirrorMode) return;
+
     // Check if it's time to throw
     const throwInterval = this.data.throwInterval / this.difficultyMultiplier;
     if (time - this.lastThrowTime > throwInterval && !this.isHit) {

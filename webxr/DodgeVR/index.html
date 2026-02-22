@@ -18,9 +18,11 @@
     <script>
       // Game settings (adjustable at runtime via console)
       window.gameSettings = {
-        trajectoryPreview: true,  // B button toggles; shows bounce path while holding ball
+        trajectoryPreview: false,  // B button toggles; shows bounce path while holding ball
         trajectoryLocked: false   // Trigger+B freezes trajectory; stays visible after release
       };
+
+      window.botMirrorMode = false;
 
       // Physics world setup
       const world = new CANNON.World();
@@ -5229,6 +5231,145 @@
             return;
           }
 
+          // --- Singleplayer: Mirror mode (bot mirrors player body) ---
+          if (window.botMirrorMode) {
+            if (!this._mirrorRefs) {
+              this._mirrorRefs = true;
+              this._mirrorCamera = document.querySelector('[camera]');
+              this._mirrorLeftCtrl = document.querySelector('#leftHand');
+              this._mirrorRightCtrl = document.querySelector('#rightHand');
+              this._mirrorPlayerBall = document.querySelector('[simple-grab="player: player2"]');
+              this._mirrorBotBall = document.querySelector('[simple-grab="player: player1"]');
+              this._mirrorPlayerWasGrabbed = false;
+              this._mirrorYFlip = new THREE.Quaternion(0, 1, 0, 0); // 180° around Y
+            }
+
+            const cam = this._mirrorCamera;
+            const lCtrl = this._mirrorLeftCtrl;
+            const rCtrl = this._mirrorRightCtrl;
+            if (!cam || !lCtrl || !rCtrl) return;
+
+            const pHeadPos = new THREE.Vector3();
+            const pHeadQuat = new THREE.Quaternion();
+            const pLeftPos = new THREE.Vector3();
+            const pLeftQuat = new THREE.Quaternion();
+            const pRightPos = new THREE.Vector3();
+            const pRightQuat = new THREE.Quaternion();
+
+            cam.object3D.getWorldPosition(pHeadPos);
+            cam.object3D.getWorldQuaternion(pHeadQuat);
+            lCtrl.object3D.getWorldPosition(pLeftPos);
+            lCtrl.object3D.getWorldQuaternion(pLeftQuat);
+            rCtrl.object3D.getWorldPosition(pRightPos);
+            rCtrl.object3D.getWorldQuaternion(pRightQuat);
+
+            // Mirror positions: negate X and Z
+            const mHeadPos = new THREE.Vector3(-pHeadPos.x, pHeadPos.y, -pHeadPos.z);
+            // Swap hands for true mirror effect (player right → bot left, etc.)
+            const mLeftPos = new THREE.Vector3(-pRightPos.x, pRightPos.y, -pRightPos.z);
+            const mRightPos = new THREE.Vector3(-pLeftPos.x, pLeftPos.y, -pLeftPos.z);
+
+            // Mirror quaternions: 180° Y rotation, and swap hands
+            const mHeadQuat = this._mirrorYFlip.clone().multiply(pHeadQuat);
+            const mLeftQuat = this._mirrorYFlip.clone().multiply(pRightQuat);
+            const mRightQuat = this._mirrorYFlip.clone().multiply(pLeftQuat);
+
+            // Head velocity for dynamic lean
+            if (this.previousHeadPosInitialized) {
+              this.headVelocity.copy(mHeadPos).sub(this.previousHeadPos).divideScalar(dt || 0.016);
+            } else {
+              this.previousHeadPosInitialized = true;
+            }
+            this.previousHeadPos.copy(mHeadPos);
+
+            this.calculateTorsoOrientation(mHeadPos, mHeadQuat, mLeftPos, mRightPos, dt);
+
+            const desiredHipsY = mHeadPos.y - 0.65;
+            const modelHipsLocalY = 1.0;
+            const bodyY = desiredHipsY - modelHipsLocalY;
+
+            const backOff = new THREE.Vector3(0, 0, 0.15);
+            backOff.applyQuaternion(this.torsoRotation);
+
+            this.el.object3D.position.set(
+              mHeadPos.x + backOff.x,
+              bodyY,
+              mHeadPos.z + backOff.z
+            );
+            this.el.object3D.quaternion.copy(this.torsoRotation);
+
+            this.updateBones(mHeadPos, mHeadQuat, mLeftPos, mRightPos, mLeftQuat, mRightQuat);
+
+            // Move bot entity (hit targets) to follow mirrored head
+            if (!this.botEntity) {
+              this.botEntity = document.querySelector(this.data.botEntitySelector);
+            }
+            if (this.botEntity) {
+              this.botEntity.object3D.position.set(mHeadPos.x, mHeadPos.y - 0.4, mHeadPos.z);
+            }
+
+            // Mirror finger curls: player right → bot left, player left → bot right
+            const lGP = lCtrl.components['tracked-controls']?.controller?.gamepad;
+            const rGP = rCtrl.components['tracked-controls']?.controller?.gamepad;
+            if (rGP && rGP.buttons) {
+              const t = rGP.buttons[0]?.value || 0;
+              const g = rGP.buttons[1]?.value || 0;
+              let th = 0;
+              for (let i = 2; i <= 6; i++) { if (rGP.buttons[i]?.touched) { th = 1; break; } }
+              this.updateTargetCurls('left', t, g, th);
+            }
+            if (lGP && lGP.buttons) {
+              const t = lGP.buttons[0]?.value || 0;
+              const g = lGP.buttons[1]?.value || 0;
+              let th = 0;
+              for (let i = 2; i <= 6; i++) { if (lGP.buttons[i]?.touched) { th = 1; break; } }
+              this.updateTargetCurls('right', t, g, th);
+            }
+            ['left', 'right'].forEach(hand => {
+              ['thumb', 'index', 'middle', 'ring', 'pinky'].forEach(finger => {
+                const cur = this.currentCurls[hand][finger];
+                const tgt = this.targetCurls[hand][finger];
+                this.currentCurls[hand][finger] = cur + (tgt - cur) * this.fingerSmoothingFactor;
+              });
+            });
+            this.applyFingerCurls('left', this.currentCurls.left);
+            this.applyFingerCurls('right', this.currentCurls.right);
+
+            // --- Mirror ball tracking ---
+            const pGrab = this._mirrorPlayerBall?.components?.['simple-grab'];
+            const bGrab = this._mirrorBotBall?.components?.['simple-grab'];
+            if (pGrab && bGrab) {
+              const playerGrabbed = pGrab.isGrabbed;
+
+              if (playerGrabbed && pGrab.grabbingHand) {
+                const hPos = new THREE.Vector3();
+                pGrab.grabbingHand.object3D.getWorldPosition(hPos);
+                const mirBallPos = new THREE.Vector3(-hPos.x, hPos.y, -hPos.z);
+
+                bGrab.body.position.set(mirBallPos.x, mirBallPos.y, mirBallPos.z);
+                bGrab.body.velocity.set(0, 0, 0);
+                bGrab.body.angularVelocity.set(0, 0, 0);
+                bGrab.body.gravity.set(0, 0, 0);
+                bGrab.body.mass = 1000;
+                bGrab.body.updateMassProperties();
+                this._mirrorBotBall.object3D.position.copy(mirBallPos);
+              } else if (this._mirrorPlayerWasGrabbed && !playerGrabbed) {
+                const vel = pGrab.body.velocity;
+                bGrab.body.velocity.set(-vel.x, vel.y, -vel.z);
+                const avel = pGrab.body.angularVelocity;
+                bGrab.body.angularVelocity.set(-avel.x, avel.y, -avel.z);
+                bGrab.body.mass = 1;
+                bGrab.body.updateMassProperties();
+                bGrab.body.gravity.set(0, 0, 0);
+                bGrab.isReturning = false;
+              }
+
+              this._mirrorPlayerWasGrabbed = playerGrabbed;
+            }
+
+            return;
+          }
+
           // --- Singleplayer: AI idle animation ---
           if (!this.botEntity) {
             this.botEntity = document.querySelector(this.data.botEntitySelector);
@@ -5997,6 +6138,16 @@
                           geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
                           material="color: #cc3333; shader: flat">
                   <a-text value="LEAVE QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+              </a-entity>
+
+              <!-- Bot mode toggle (singleplayer only) -->
+              <a-entity id="menu-mirror-section" position="0 0.02 0">
+                <a-text value="Bot Mode:" position="-0.22 0 0" align="left" width="0.35" color="#cccccc"></a-text>
+                <a-entity id="menu-mirror-toggle" class="clickable" menu-click position="0.1 0 0"
+                          geometry="primitive: box; width: 0.24; height: 0.05; depth: 0.005"
+                          material="color: #555555; opacity: 0.9; shader: flat">
+                  <a-text id="menu-mirror-text" value="NORMAL" align="center" width="0.35" color="#ffffff" position="0 0 0.004"></a-text>
                 </a-entity>
               </a-entity>
 

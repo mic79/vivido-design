@@ -123,6 +123,7 @@
         case 'menu-join': this.handleJoin(); break;
         case 'menu-join-queue': this.joinQueue(); break;
         case 'menu-leave-queue': this.leaveQueue(); break;
+        case 'menu-mirror-toggle': this.toggleMirrorMode(); break;
         case 'menu-start-match': this.toggleMatch(); break;
       }
     },
@@ -136,11 +137,43 @@
       if (this.lobbySection) this.lobbySection.setAttribute('visible', mode === 'multi');
       if (this.queueButtons) this.queueButtons.setAttribute('visible', mode === 'multi' && window.isMultiplayer);
 
+      var mirrorSection = document.getElementById('menu-mirror-section');
+      if (mirrorSection) mirrorSection.setAttribute('visible', mode === 'single');
+
+      if (mode === 'multi') {
+        this.setMirrorMode(false);
+      }
+
       if (mode === 'single' && window.isMultiplayer) {
         if (typeof window.endMultiplayer === 'function') window.endMultiplayer();
         this.moveToMatchPosition();
       }
       this.updateMenuDisplay();
+    },
+
+    toggleMirrorMode: function () {
+      this.setMirrorMode(!window.botMirrorMode);
+    },
+
+    setMirrorMode: function (enabled) {
+      window.botMirrorMode = enabled;
+      var mirrorText = document.getElementById('menu-mirror-text');
+      var mirrorBtn = document.getElementById('menu-mirror-toggle');
+      if (mirrorText) mirrorText.setAttribute('text', 'value', enabled ? 'MIRRORED' : 'NORMAL');
+      if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', enabled ? '#4488ff' : '#555555');
+
+      if (!enabled) {
+        var botEntity = document.querySelector('[advanced-bot]');
+        if (botEntity) botEntity.object3D.position.set(0, 1.6, -6);
+        var botBall = document.querySelector('[simple-grab="player: player1"]');
+        if (botBall && botBall.components['simple-grab']) {
+          botBall.components['simple-grab'].resetPosition();
+        }
+        var botBodyEl = document.getElementById('bot-body');
+        if (botBodyEl && botBodyEl.components['mixamo-body']) {
+          botBodyEl.components['mixamo-body']._mirrorRefs = false;
+        }
+      }
     },
 
     updateLobbyNumberDisplay: function () {
@@ -265,6 +298,13 @@
           }
         }
       }
+
+      var mirrorSection = document.getElementById('menu-mirror-section');
+      if (mirrorSection) mirrorSection.setAttribute('visible', this.menuMode === 'single');
+      var mirrorText = document.getElementById('menu-mirror-text');
+      var mirrorBtn = document.getElementById('menu-mirror-toggle');
+      if (mirrorText) mirrorText.setAttribute('text', 'value', window.botMirrorMode ? 'MIRRORED' : 'NORMAL');
+      if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', window.botMirrorMode ? '#4488ff' : '#555555');
 
       if (!ls) {
         if (this.queueButtons) this.queueButtons.setAttribute('visible', false);
