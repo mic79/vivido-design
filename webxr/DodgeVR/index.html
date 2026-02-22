@@ -1391,6 +1391,12 @@
         }
         var specBlueBody = document.getElementById('spectator-blue-body');
         if (specBlueBody) specBlueBody.object3D.visible = false;
+        for (var _ci = 0; _ci < 4; _ci++) {
+          var _csb = document.getElementById('spectator-body-' + _ci);
+          var _csn = document.getElementById('spectator-slot-name-' + _ci);
+          if (_csb) { _csb.object3D.visible = false; if (_csb.components['mixamo-body']) _csb.components['mixamo-body'].remoteHandData = null; }
+          if (_csn) _csn.object3D.visible = false;
+        }
         var gameManager = document.querySelector('#game-manager');
         if (gameManager && gameManager.components['game-manager']) {
           gameManager.components['game-manager'].playerScore = 0;
@@ -1844,6 +1850,45 @@
                 rnEl.object3D.position.set(rx, ry, rz);
                 rnEl.object3D.rotation.y = Math.atan2(_specCamPos.x - rx, _specCamPos.z - rz);
                 rnEl.object3D.visible = true;
+              }
+            }
+          }
+
+          // --- RENDER SPECTATOR SLOT BODIES (visible to all players) ---
+          if (isMultiplayer && lobbyState && lobbyState.spectatorSlots) {
+            var _slotCam = document.querySelector('[camera]');
+            var _slotCamPos = new THREE.Vector3();
+            if (_slotCam) _slotCam.object3D.getWorldPosition(_slotCamPos);
+            for (var _si = 0; _si < 4; _si++) {
+              var _sbEnt = document.getElementById('spectator-body-' + _si);
+              var _snEnt = document.getElementById('spectator-slot-name-' + _si);
+              var _slotPid = lobbyState.spectatorSlots[_si];
+              if (_slotPid && _slotPid !== myPlayerId && spectatorPlayerStates[_slotPid]) {
+                var _ss = spectatorPlayerStates[_slotPid];
+                if (_sbEnt) {
+                  _sbEnt.object3D.visible = true;
+                  if (_sbEnt.components['mixamo-body']) {
+                    var _srd = { head: { x: _ss.x, y: _ss.y, z: _ss.z } };
+                    if (_ss.hqx !== undefined) { _srd.head.qx = _ss.hqx; _srd.head.qy = _ss.hqy; _srd.head.qz = _ss.hqz; _srd.head.qw = _ss.hqw; }
+                    if (_ss.lhx !== undefined) { _srd.leftHand = { x: _ss.lhx, y: _ss.lhy, z: _ss.lhz }; if (_ss.lhqx !== undefined) { _srd.leftHand.qx = _ss.lhqx; _srd.leftHand.qy = _ss.lhqy; _srd.leftHand.qz = _ss.lhqz; _srd.leftHand.qw = _ss.lhqw; } }
+                    if (_ss.rhx !== undefined) { _srd.rightHand = { x: _ss.rhx, y: _ss.rhy, z: _ss.rhz }; if (_ss.rhqx !== undefined) { _srd.rightHand.qx = _ss.rhqx; _srd.rightHand.qy = _ss.rhqy; _srd.rightHand.qz = _ss.rhqz; _srd.rightHand.qw = _ss.rhqw; } }
+                    _sbEnt.components['mixamo-body'].remoteHandData = _srd;
+                  }
+                }
+                if (_snEnt) {
+                  var _sNick = '';
+                  for (var _pi = 0; _pi < lobbyState.players.length; _pi++) {
+                    if (lobbyState.players[_pi].id === _slotPid) { _sNick = lobbyState.players[_pi].nickname; break; }
+                  }
+                  _snEnt.setAttribute('text', 'value', _sNick || 'Spectator');
+                  var _snx = _ss.x, _sny = (_ss.y || 1.6) + 0.5, _snz = _ss.z;
+                  _snEnt.object3D.position.set(_snx, _sny, _snz);
+                  _snEnt.object3D.rotation.y = Math.atan2(_slotCamPos.x - _snx, _slotCamPos.z - _snz);
+                  _snEnt.object3D.visible = true;
+                }
+              } else {
+                if (_sbEnt) { _sbEnt.object3D.visible = false; if (_sbEnt.components['mixamo-body']) _sbEnt.components['mixamo-body'].remoteHandData = null; }
+                if (_snEnt) _snEnt.object3D.visible = false;
               }
             }
           }
@@ -5790,6 +5835,18 @@
       <!-- Spectator name labels (positioned dynamically above player heads) -->
       <a-entity id="spectator-blue-name" visible="false" position="0 2.3 6" text="value: ; align: center; width: 8; color: #0099ff; side: double"></a-entity>
       <a-entity id="spectator-red-name" visible="false" position="0 2.3 -6" text="value: ; align: center; width: 8; color: #ff4444; side: double"></a-entity>
+
+      <!-- Spectator slot bodies (for rendering spectators outside the arena, visible to everyone) -->
+      <a-entity id="spectator-body-0" mixamo-body="mode: bot; color: #66BB6A" visible="false"></a-entity>
+      <a-entity id="spectator-body-1" mixamo-body="mode: bot; color: #66BB6A" visible="false"></a-entity>
+      <a-entity id="spectator-body-2" mixamo-body="mode: bot; color: #66BB6A" visible="false"></a-entity>
+      <a-entity id="spectator-body-3" mixamo-body="mode: bot; color: #66BB6A" visible="false"></a-entity>
+
+      <!-- Spectator slot name labels (positioned dynamically above spectator heads) -->
+      <a-entity id="spectator-slot-name-0" visible="false" text="value: ; align: center; width: 6; color: #66BB6A; side: double"></a-entity>
+      <a-entity id="spectator-slot-name-1" visible="false" text="value: ; align: center; width: 6; color: #66BB6A; side: double"></a-entity>
+      <a-entity id="spectator-slot-name-2" visible="false" text="value: ; align: center; width: 6; color: #66BB6A; side: double"></a-entity>
+      <a-entity id="spectator-slot-name-3" visible="false" text="value: ; align: center; width: 6; color: #66BB6A; side: double"></a-entity>
 
       <!-- Player 1 ball spawn (AI player's ball) -->
       <a-sphere position="0 1 -5.5" 
