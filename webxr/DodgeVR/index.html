@@ -1660,6 +1660,29 @@
                 }
               }
             }
+            // Lobby View: render ball positions from spectatorBallStates
+            if (!localIsMatchPlayer) {
+              if (lobbyBlueId && spectatorBallStates[lobbyBlueId]) {
+                var lbbs = spectatorBallStates[lobbyBlueId];
+                var lobbyBlueBall = document.querySelector('[simple-grab="player: player2"]');
+                if (lobbyBlueBall) {
+                  lobbyBlueBall.object3D.position.set(lbbs.x, lbbs.y, lbbs.z);
+                  if (lobbyBlueBall.components['simple-grab'] && lobbyBlueBall.components['simple-grab'].body) {
+                    lobbyBlueBall.components['simple-grab'].body.position.set(lbbs.x, lbbs.y, lbbs.z);
+                  }
+                }
+              }
+              if (lobbyRedId && spectatorBallStates[lobbyRedId]) {
+                var lrbs = spectatorBallStates[lobbyRedId];
+                var lobbyRedBall = document.querySelector('[simple-grab="player: player1"]');
+                if (lobbyRedBall) {
+                  lobbyRedBall.object3D.position.set(-lrbs.x, lrbs.y, -lrbs.z);
+                  if (lobbyRedBall.components['simple-grab'] && lobbyRedBall.components['simple-grab'].body) {
+                    lobbyRedBall.components['simple-grab'].body.position.set(-lrbs.x, lrbs.y, -lrbs.z);
+                  }
+                }
+              }
+            }
           }
           // --- SPECTATOR VIEW: render both match players ---
           if (spectatorMatchActive && spectatorMatchBlueId) {
@@ -1785,18 +1808,25 @@
               _td.setAttribute('text', 'value', 'Time: ' + mins + ':' + (secs < 10 ? '0' : '') + secs);
             }
 
-            // Position name labels above player heads
+            // Position name labels above player heads, facing the spectator camera
+            var _specCam = document.querySelector('[camera]');
+            var _specCamPos = new THREE.Vector3();
+            if (_specCam) _specCam.object3D.getWorldPosition(_specCamPos);
             if (blueState) {
               const bnEl = document.getElementById('spectator-blue-name');
               if (bnEl) {
-                bnEl.object3D.position.set(blueState.x, (blueState.y || 1.6) + 0.5, blueState.z);
+                var bx = blueState.x, by = (blueState.y || 1.6) + 0.5, bz = blueState.z;
+                bnEl.object3D.position.set(bx, by, bz);
+                bnEl.object3D.rotation.y = Math.atan2(_specCamPos.x - bx, _specCamPos.z - bz);
                 bnEl.object3D.visible = true;
               }
             }
             if (redState) {
               const rnEl = document.getElementById('spectator-red-name');
               if (rnEl) {
-                rnEl.object3D.position.set(-redState.x, (redState.y || 1.6) + 0.5, -redState.z);
+                var rx = -redState.x, ry = (redState.y || 1.6) + 0.5, rz = -redState.z;
+                rnEl.object3D.position.set(rx, ry, rz);
+                rnEl.object3D.rotation.y = Math.atan2(_specCamPos.x - rx, _specCamPos.z - rz);
                 rnEl.object3D.visible = true;
               }
             }
@@ -2280,6 +2310,16 @@
           if (this.body) {
             // In multiplayer, red ball is remote-driven — skip local wall checks
             if (isMultiplayer && this.data.player === 'player1') return;
+            // Returning ball that reached its own wall: respawn
+            if (this.isReturning && !this.isGrabbed) {
+              var bz = this.body.position.z;
+              var atOwnWall = (this.data.player === 'player2' && bz > 7.8) ||
+                              (this.data.player === 'player1' && bz < -7.8);
+              if (atOwnWall) {
+                this.resetPosition();
+                return;
+              }
+            }
             if (!this.isGrabbed && !this.isReturning) {
               const bz = this.body.position.z;
               if (bz < -7.8 || bz > 7.8) {
@@ -3492,10 +3532,12 @@
             return;
           }
           
-          // Play impact sound
+          // Play impact sound at the world position of the hit target
           const impactSound = document.querySelector('#impact-sound');
           if (impactSound) {
-            impactSound.object3D.position.copy(this.el.object3D.position);
+            var _wp = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(_wp);
+            impactSound.object3D.position.copy(_wp);
             impactSound.components.sound.playSound();
           }
           
