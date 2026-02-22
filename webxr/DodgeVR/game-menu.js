@@ -171,7 +171,12 @@
         }
         var botBodyEl = document.getElementById('bot-body');
         if (botBodyEl && botBodyEl.components['mixamo-body']) {
-          botBodyEl.components['mixamo-body']._mirrorRefs = false;
+          var mb = botBodyEl.components['mixamo-body'];
+          mb._mirrorRefs = false;
+          if (mb.botRackets) {
+            mb.botRackets.left.visible = false;
+            mb.botRackets.right.visible = false;
+          }
         }
       }
     },

@@ -5299,6 +5299,33 @@
 
             this.updateBones(mHeadPos, mHeadQuat, mLeftPos, mRightPos, mLeftQuat, mRightQuat);
 
+            // Position mirrored rackets (mirrors player2's racket state)
+            if (this.botRackets) {
+              // Left hand racket
+              this._tmpRacketQuat.copy(mLeftQuat);
+              this._tmpRacketOffsetVec.copy(this._racketOffset).applyQuaternion(this._tmpRacketQuat);
+              this.botRackets.left.position.set(
+                mLeftPos.x + this._tmpRacketOffsetVec.x,
+                mLeftPos.y + this._tmpRacketOffsetVec.y,
+                mLeftPos.z + this._tmpRacketOffsetVec.z
+              );
+              this.botRackets.left.quaternion.copy(this._tmpRacketQuat).multiply(this._racketRotOffset);
+
+              // Right hand racket
+              this._tmpRacketQuat.copy(mRightQuat);
+              this._tmpRacketOffsetVec.copy(this._racketOffset).applyQuaternion(this._tmpRacketQuat);
+              this.botRackets.right.position.set(
+                mRightPos.x + this._tmpRacketOffsetVec.x,
+                mRightPos.y + this._tmpRacketOffsetVec.y,
+                mRightPos.z + this._tmpRacketOffsetVec.z
+              );
+              this.botRackets.right.quaternion.copy(this._tmpRacketQuat).multiply(this._racketRotOffset);
+
+              // Mirror the player's racket visibility (player2 state → bot rackets)
+              this.botRackets.left.visible = racketMode.player2.left;
+              this.botRackets.right.visible = racketMode.player2.right;
+            }
+
             // Move bot entity (hit targets) to follow mirrored head
             if (!this.botEntity) {
               this.botEntity = document.querySelector(this.data.botEntitySelector);
