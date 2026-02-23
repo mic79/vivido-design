@@ -335,14 +335,40 @@ AFRAME.registerComponent('advanced-bot', {
 
     if (window.botRecordedMode) {
       if (window.motionPlayback && window.motionPlayback.isPlaying) return;
-      const throwInterval = this.data.throwInterval / this.difficultyMultiplier;
-      if (time - this.lastThrowTime > throwInterval && !this.isHit) {
-        if (window.motionPlayback && window.motionPlayback.hasClips('serve')) {
-          window.motionPlayback.startClip('serve');
-        } else {
-          this.throwBall();
+
+      const grab = this.ball.components['simple-grab'];
+      if (!grab || !grab.body) return;
+
+      const distToSpawn = grab.body.position.distanceTo(grab.initialPosition);
+      const ballSpeed = grab.body.velocity.length();
+      const ballAtSpawn = distToSpawn < 0.5 && ballSpeed < 1;
+
+      if (ballAtSpawn && !this.isHit) {
+        // Ball is at spawn and at rest — wait a beat, then serve
+        if (!this._recServeReady) {
+          this._recServeReady = true;
+          this._recServeReadyTime = time;
         }
-        this.lastThrowTime = time;
+        if (time - this._recServeReadyTime > 1000) {
+          if (window.motionPlayback && window.motionPlayback.hasClips('serve')) {
+            window.motionPlayback.startClip('serve');
+          } else {
+            this.throwBall();
+          }
+          this._recServeReady = false;
+          this._recBallAwayTime = 0;
+        }
+      } else {
+        this._recServeReady = false;
+        // Track how long the ball has been away from spawn
+        if (!this._recBallAwayTime) {
+          this._recBallAwayTime = time;
+        }
+        // Safety: respawn if ball has been in play for over 15 seconds
+        if (time - this._recBallAwayTime > 15000) {
+          grab.resetPosition();
+          this._recBallAwayTime = 0;
+        }
       }
       return;
     }
