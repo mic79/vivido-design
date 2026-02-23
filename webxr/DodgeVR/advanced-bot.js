@@ -333,7 +333,20 @@ AFRAME.registerComponent('advanced-bot', {
     if (!this.ball || !this.data.enabled || !this.gameStarted || this.isMultiplayer) return;
     if (window.botMirrorMode) return;
 
-    // Check if it's time to throw
+    if (window.botRecordedMode) {
+      if (window.motionPlayback && window.motionPlayback.isPlaying) return;
+      const throwInterval = this.data.throwInterval / this.difficultyMultiplier;
+      if (time - this.lastThrowTime > throwInterval && !this.isHit) {
+        if (window.motionPlayback && window.motionPlayback.hasClips('serve')) {
+          window.motionPlayback.startClip('serve');
+        } else {
+          this.throwBall();
+        }
+        this.lastThrowTime = time;
+      }
+      return;
+    }
+
     const throwInterval = this.data.throwInterval / this.difficultyMultiplier;
     if (time - this.lastThrowTime > throwInterval && !this.isHit) {
       this.throwBall();

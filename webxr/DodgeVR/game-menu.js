@@ -152,17 +152,44 @@
     },
 
     toggleMirrorMode: function () {
-      this.setMirrorMode(!window.botMirrorMode);
+      if (!window.botMirrorMode && !window.botRecordedMode) {
+        this.setBotMode('mirror');
+      } else if (window.botMirrorMode) {
+        this.setBotMode('recorded');
+      } else {
+        this.setBotMode('normal');
+      }
     },
 
     setMirrorMode: function (enabled) {
-      window.botMirrorMode = enabled;
+      this.setBotMode(enabled ? 'mirror' : 'normal');
+    },
+
+    setBotMode: function (mode) {
+      if (window.motionPlayback) window.motionPlayback.isPlaying = false;
+
+      window.botMirrorMode = (mode === 'mirror');
+      window.botRecordedMode = (mode === 'recorded');
+
       var mirrorText = document.getElementById('menu-mirror-text');
       var mirrorBtn = document.getElementById('menu-mirror-toggle');
-      if (mirrorText) mirrorText.setAttribute('text', 'value', enabled ? 'MIRRORED' : 'NORMAL');
-      if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', enabled ? '#4488ff' : '#555555');
+      var labels = { normal: 'NORMAL', mirror: 'MIRRORED', recorded: 'RECORDED' };
+      var colors = { normal: '#555555', mirror: '#4488ff', recorded: '#44aa44' };
+      if (mirrorText) mirrorText.setAttribute('text', 'value', labels[mode] || 'NORMAL');
+      if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', colors[mode] || '#555555');
 
-      if (!enabled) {
+      var clipCountEl = document.getElementById('menu-clip-count');
+      if (clipCountEl) {
+        if (mode === 'recorded' || mode === 'mirror') {
+          var counts = window.motionRecorder ? window.motionRecorder.getClipCounts() : {};
+          clipCountEl.setAttribute('text', 'value', 'Clips: S:' + (counts.serve || 0));
+          clipCountEl.setAttribute('visible', true);
+        } else {
+          clipCountEl.setAttribute('visible', false);
+        }
+      }
+
+      if (mode !== 'mirror') {
         var botEntity = document.querySelector('[advanced-bot]');
         if (botEntity) botEntity.object3D.position.set(0, 1.6, -6);
         var botBall = document.querySelector('[simple-grab="player: player1"]');
@@ -173,6 +200,7 @@
         if (botBodyEl && botBodyEl.components['mixamo-body']) {
           var mb = botBodyEl.components['mixamo-body'];
           mb._mirrorRefs = false;
+          mb._pbRefs = false;
           if (mb.botRackets) {
             mb.botRackets.left.visible = false;
             mb.botRackets.right.visible = false;
@@ -308,8 +336,21 @@
       if (mirrorSection) mirrorSection.setAttribute('visible', this.menuMode === 'single');
       var mirrorText = document.getElementById('menu-mirror-text');
       var mirrorBtn = document.getElementById('menu-mirror-toggle');
-      if (mirrorText) mirrorText.setAttribute('text', 'value', window.botMirrorMode ? 'MIRRORED' : 'NORMAL');
-      if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', window.botMirrorMode ? '#4488ff' : '#555555');
+      var currentMode = window.botMirrorMode ? 'MIRRORED' : (window.botRecordedMode ? 'RECORDED' : 'NORMAL');
+      var currentColor = window.botMirrorMode ? '#4488ff' : (window.botRecordedMode ? '#44aa44' : '#555555');
+      if (mirrorText) mirrorText.setAttribute('text', 'value', currentMode);
+      if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', currentColor);
+
+      var clipCountEl = document.getElementById('menu-clip-count');
+      if (clipCountEl) {
+        if ((window.botRecordedMode || window.botMirrorMode) && this.menuMode === 'single') {
+          var counts = window.motionRecorder ? window.motionRecorder.getClipCounts() : {};
+          clipCountEl.setAttribute('text', 'value', 'Clips: S:' + (counts.serve || 0));
+          clipCountEl.setAttribute('visible', true);
+        } else {
+          clipCountEl.setAttribute('visible', false);
+        }
+      }
 
       if (!ls) {
         if (this.queueButtons) this.queueButtons.setAttribute('visible', false);
