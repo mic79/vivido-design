@@ -5641,8 +5641,10 @@
                   pbBallGrab.body.gravity.set(0, 0, 0);
                   pbBallGrab.body.mass = 1000;
                   pbBallGrab.body.updateMassProperties();
+                  pbBallGrab.isGrabbed = true;
                   this._pbBotBall.object3D.position.set(pbRightPos.x, pbRightPos.y, pbRightPos.z);
                   this._pbBallHeld = true;
+                  this._pbReleaseGraceEnd = 0;
                 } else if (pbFrame.justReleased && pbFrame.rv) {
                   pbBallGrab.body.velocity.set(pbFrame.rv.x, pbFrame.rv.y, pbFrame.rv.z);
                   pbBallGrab.body.angularVelocity.set(0, 0, 0);
@@ -5651,18 +5653,28 @@
                   pbBallGrab.body.gravity.set(0, 0, 0);
                   pbBallGrab.isReturning = false;
                   this._pbBallHeld = false;
+                  this._pbReleaseGraceEnd = performance.now() + 300;
+                } else if (this._pbReleaseGraceEnd && performance.now() > this._pbReleaseGraceEnd) {
+                  pbBallGrab.isGrabbed = false;
+                  pbBallGrab.grabbingHand = null;
+                  this._pbReleaseGraceEnd = 0;
                 }
               }
 
               return;
             }
-            // Clip ended: reset bot position
+            // Clip ended: reset bot position and clear ball state
             if (this.botEntity) this.botEntity.object3D.position.set(0, 1.6, -6);
+            var clipEndGrab = this._pbBotBall ? this._pbBotBall.components['simple-grab'] : null;
+            if (clipEndGrab) {
+              clipEndGrab.isGrabbed = false;
+              clipEndGrab.grabbingHand = null;
+            }
             if (this._pbBallHeld) {
-              var endGrab = this._pbBotBall ? this._pbBotBall.components['simple-grab'] : null;
-              if (endGrab) endGrab.resetPosition();
+              if (clipEndGrab) clipEndGrab.resetPosition();
               this._pbBallHeld = false;
             }
+            this._pbReleaseGraceEnd = 0;
             this._pbRefs = false;
           }
 
