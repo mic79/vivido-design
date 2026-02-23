@@ -1,9 +1,15 @@
-// motion-recorder.js — Records player motion clips during mirror mode and plays them back for bot AI
+// motion-recorder.js — Event-driven motion clip recording and playback for bot AI
+//
+// Recording is driven by ball state transitions, not a fixed time window:
+//   IDLE → ball grabbed → RECORDING → ball released (serve detected) → FOLLOWTHROUGH → 1s → SAVE
+//                                    → ball released (not a serve)   → DISCARD
+//                                    → 10s timeout                   → DISCARD
 (function () {
   'use strict';
 
   var STORAGE_KEY = 'dodgevr-motion-clips';
-  var BUFFER_DURATION_MS = 3000;
+  var FOLLOW_THROUGH_MS = 1000;
+  var MAX_RECORD_MS = 10000;
 
   function r3(v) { return Math.round(v * 1000) / 1000; }
 
@@ -13,13 +19,72 @@
   // ==================== RECORDER ====================
 
   window.motionRecorder = {
-    frameBuffer: [],
-    _prevBallGrabbed: false,
+    _state: 'idle',          // idle | recording | followthrough
+    _frames: [],
+    _recordStartTime: 0,
+    _releaseTime: 0,
+    _releaseVelocity: null,
+    _prevBg: false,
 
-    captureFrame: function (data) {
-      var now = performance.now();
-      this.frameBuffer.push({
-        t: now,
+    // Single entry point — called every mirror-mode frame with all body + ball data
+    recordFrame: function (data) {
+      var bg = !!data.bg;
+      var wasGrabbed = this._prevBg;
+      this._prevBg = bg;
+
+      switch (this._state) {
+
+        case 'idle':
+          if (!wasGrabbed && bg) {
+            this._state = 'recording';
+            this._frames = [];
+            this._recordStartTime = performance.now();
+            this._pushFrame(data);
+          }
+          break;
+
+        case 'recording':
+          this._pushFrame(data);
+
+          if (wasGrabbed && !bg) {
+            // Ball just released — check if it qualifies as a serve
+            var vel = data.bv;
+            if (vel) {
+              var speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+              if (vel.z > 1 && speed > 2) {
+                this._releaseVelocity = { x: r3(vel.x), y: r3(vel.y), z: r3(vel.z) };
+                this._releaseTime = performance.now();
+                this._state = 'followthrough';
+                break;
+              }
+            }
+            // Not a serve — discard
+            this._state = 'idle';
+            this._frames = [];
+          } else if (performance.now() - this._recordStartTime > MAX_RECORD_MS) {
+            this._state = 'idle';
+            this._frames = [];
+          }
+          break;
+
+        case 'followthrough':
+          this._pushFrame(data);
+
+          var ftElapsed = performance.now() - this._releaseTime;
+          // Save when follow-through duration reached, or if the ball is grabbed again
+          if (ftElapsed >= FOLLOW_THROUGH_MS || (!wasGrabbed && bg)) {
+            this._saveClip('serve', this._releaseVelocity);
+            this._state = 'idle';
+            this._frames = [];
+            this._releaseVelocity = null;
+          }
+          break;
+      }
+    },
+
+    _pushFrame: function (data) {
+      this._frames.push({
+        t: performance.now(),
         hp: [r3(data.hp.x), r3(data.hp.y), r3(data.hp.z)],
         hq: [r3(data.hq.x), r3(data.hq.y), r3(data.hq.z), r3(data.hq.w)],
         lp: [r3(data.lp.x), r3(data.lp.y), r3(data.lp.z)],
@@ -32,49 +97,34 @@
         ],
         bg: data.bg ? 1 : 0
       });
-
-      while (this.frameBuffer.length > 1 && now - this.frameBuffer[0].t > BUFFER_DURATION_MS) {
-        this.frameBuffer.shift();
-      }
     },
 
-    checkServe: function (ballVelocity) {
-      if (this.frameBuffer.length === 0) return false;
-      var isGrabbed = !!this.frameBuffer[this.frameBuffer.length - 1].bg;
-      var wasGrabbed = this._prevBallGrabbed;
-      this._prevBallGrabbed = isGrabbed;
-
-      if (wasGrabbed && !isGrabbed && ballVelocity) {
-        var speed = Math.sqrt(ballVelocity.x * ballVelocity.x + ballVelocity.y * ballVelocity.y + ballVelocity.z * ballVelocity.z);
-        if (ballVelocity.z > 1 && speed > 2) {
-          this._saveClip('serve', {
-            x: r3(ballVelocity.x),
-            y: r3(ballVelocity.y),
-            z: r3(ballVelocity.z)
-          });
-          return true;
-        }
-      }
-      return false;
+    reset: function () {
+      this._state = 'idle';
+      this._frames = [];
+      this._releaseVelocity = null;
+      this._prevBg = false;
     },
+
+    // ---- Clip storage ----
 
     _saveClip: function (tag, releaseVelocity) {
-      if (this.frameBuffer.length < 10) return;
+      if (this._frames.length < 10) return;
 
       var frames = [];
-      var startTime = this.frameBuffer[0].t;
-      for (var i = 0; i < this.frameBuffer.length; i++) {
-        var src = this.frameBuffer[i];
-        var f = {
+      var startTime = this._frames[0].t;
+      for (var i = 0; i < this._frames.length; i++) {
+        var src = this._frames[i];
+        frames.push({
           t: Math.round(src.t - startTime),
           hp: src.hp, hq: src.hq,
           lp: src.lp, lq: src.lq,
           rp: src.rp, rq: src.rq,
           fc: src.fc, bg: src.bg
-        };
-        frames.push(f);
+        });
       }
 
+      // Find the release frame (last bg=1 → bg=0 transition)
       var releaseFrame = frames.length - 1;
       for (var j = frames.length - 1; j > 0; j--) {
         if (frames[j].bg === 0 && frames[j - 1].bg === 1) {

@@ -124,6 +124,8 @@
         case 'menu-join-queue': this.joinQueue(); break;
         case 'menu-leave-queue': this.leaveQueue(); break;
         case 'menu-mirror-toggle': this.toggleMirrorMode(); break;
+        case 'menu-delete-last': this.deleteLastClip(); break;
+        case 'menu-clear-clips': this.clearAllClips(); break;
         case 'menu-start-match': this.toggleMatch(); break;
       }
     },
@@ -167,6 +169,7 @@
 
     setBotMode: function (mode) {
       if (window.motionPlayback) window.motionPlayback.isPlaying = false;
+      if (window.motionRecorder && window.motionRecorder.reset) window.motionRecorder.reset();
 
       window.botMirrorMode = (mode === 'mirror');
       window.botRecordedMode = (mode === 'recorded');
@@ -178,16 +181,7 @@
       if (mirrorText) mirrorText.setAttribute('text', 'value', labels[mode] || 'NORMAL');
       if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', colors[mode] || '#555555');
 
-      var clipCountEl = document.getElementById('menu-clip-count');
-      if (clipCountEl) {
-        if (mode === 'recorded' || mode === 'mirror') {
-          var counts = window.motionRecorder ? window.motionRecorder.getClipCounts() : {};
-          clipCountEl.setAttribute('text', 'value', 'Clips: S:' + (counts.serve || 0));
-          clipCountEl.setAttribute('visible', true);
-        } else {
-          clipCountEl.setAttribute('visible', false);
-        }
-      }
+      this.updateClipButtons();
 
       if (mode !== 'mirror') {
         var botEntity = document.querySelector('[advanced-bot]');
@@ -206,6 +200,48 @@
             mb.botRackets.right.visible = false;
           }
         }
+      }
+    },
+
+    deleteLastClip: function () {
+      if (!window.motionClipLibrary) return;
+      var tags = ['serve'];
+      for (var i = 0; i < tags.length; i++) {
+        var arr = window.motionClipLibrary[tags[i]];
+        if (arr && arr.length > 0) {
+          arr.pop();
+          if (window.motionRecorder) {
+            window.motionRecorder._saveToStorage();
+            window.motionRecorder._updateClipCountDisplay();
+          }
+          this.updateClipButtons();
+          return;
+        }
+      }
+    },
+
+    clearAllClips: function () {
+      if (window.motionRecorder) {
+        window.motionRecorder.clearClips();
+      }
+      this.updateClipButtons();
+    },
+
+    updateClipButtons: function () {
+      var counts = window.motionRecorder ? window.motionRecorder.getClipCounts() : {};
+      var total = 0;
+      for (var k in counts) total += counts[k];
+
+      var clipCountEl = document.getElementById('menu-clip-count');
+      var clipBtnsEl = document.getElementById('menu-clip-buttons');
+      var showClips = (window.botMirrorMode || window.botRecordedMode) && this.menuMode === 'single';
+
+      if (clipCountEl) {
+        clipCountEl.setAttribute('text', 'value', 'Clips: S:' + (counts.serve || 0));
+        clipCountEl.setAttribute('visible', showClips);
+      }
+      if (clipBtnsEl) {
+        clipBtnsEl.setAttribute('visible', showClips && total > 0);
       }
     },
 
@@ -341,16 +377,7 @@
       if (mirrorText) mirrorText.setAttribute('text', 'value', currentMode);
       if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', currentColor);
 
-      var clipCountEl = document.getElementById('menu-clip-count');
-      if (clipCountEl) {
-        if ((window.botRecordedMode || window.botMirrorMode) && this.menuMode === 'single') {
-          var counts = window.motionRecorder ? window.motionRecorder.getClipCounts() : {};
-          clipCountEl.setAttribute('text', 'value', 'Clips: S:' + (counts.serve || 0));
-          clipCountEl.setAttribute('visible', true);
-        } else {
-          clipCountEl.setAttribute('visible', false);
-        }
-      }
+      this.updateClipButtons();
 
       if (!ls) {
         if (this.queueButtons) this.queueButtons.setAttribute('visible', false);
