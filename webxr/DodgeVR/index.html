@@ -2203,10 +2203,13 @@
             // Left hand controls player1's ball, right hand controls player2's ball
             if ((isLeftHand && isPlayer1Ball) || (isRightHand && isPlayer2Ball)) {
               this.resetPosition();
-            }
-            // In mirror mode, A (right hand) also respawns the bot's mirrored ball
-            if (window.botMirrorMode && isRightHand && isPlayer1Ball) {
-              this.resetPosition();
+              // In mirror mode, also respawn the mirrored bot's ball
+              if (window.botMirrorMode && isRightHand && isPlayer2Ball) {
+                const mirroredBall = document.querySelector('[simple-grab="player: player1"]');
+                if (mirroredBall && mirroredBall.components['simple-grab']) {
+                  mirroredBall.components['simple-grab'].resetPosition();
+                }
+              }
             }
           });
 
