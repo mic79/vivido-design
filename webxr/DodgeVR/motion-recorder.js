@@ -235,6 +235,8 @@
     clipStartTime: 0,
     _frameIdx: 0,
     _prevBg: false,
+    _cachedFrame: null,
+    _cachedFrameIdx: -1,
 
     hasClips: function (tag) {
       var lib = window.motionClipLibrary;
@@ -249,6 +251,8 @@
       this.clipStartTime = performance.now();
       this._frameIdx = 0;
       this._prevBg = false;
+      this._cachedFrame = null;
+      this._cachedFrameIdx = -1;
       this.isPlaying = true;
 
       var botBall = document.querySelector('[simple-grab="player: player1"]');
@@ -275,8 +279,16 @@
       if (this._frameIdx >= frames.length - 1) {
         this.isPlaying = false;
         this.currentClip = null;
+        this._cachedFrame = null;
         return null;
       }
+
+      // Return cached result if _frameIdx hasn't changed (guards against
+      // multiple callers per frame corrupting _prevBg transition detection)
+      if (this._frameIdx === this._cachedFrameIdx && this._cachedFrame) {
+        return this._cachedFrame;
+      }
+      this._cachedFrameIdx = this._frameIdx;
 
       var f1 = frames[this._frameIdx];
       var f2 = frames[this._frameIdx + 1];
@@ -287,7 +299,7 @@
       var justReleased = this._prevBg && !bg;
       this._prevBg = bg;
 
-      return {
+      this._cachedFrame = {
         hp: lerpArr3(f1.hp, f2.hp, t),
         hq: slerpArr4(f1.hq, f2.hq, t),
         lp: lerpArr3(f1.lp, f2.lp, t),
@@ -299,6 +311,7 @@
         justReleased: justReleased,
         rv: justReleased ? this.currentClip.rv : null
       };
+      return this._cachedFrame;
     }
   };
 

@@ -5251,6 +5251,12 @@
         // ---- Bot body update (AI idle animation) ----
 
         updateBotBody: function(time, dt) {
+          // Singleplayer: only the primary bot body drives mirror/recorded/idle logic.
+          // Spectator bodies (invisible) share the same getFrame() playback object;
+          // if they also call it, they corrupt shared state (_prevBg, _frameIdx)
+          // and cause clips to appear randomly interrupted.
+          if (!this.remoteHandData && this.el.id !== 'bot-body') return;
+
           // --- Multiplayer: use real remote player tracking data ---
           if (this.remoteHandData) {
             const rd = this.remoteHandData;
