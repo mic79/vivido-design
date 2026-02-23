@@ -5582,6 +5582,8 @@
                 lc: this.currentCurls.left,
                 rc: this.currentCurls.right,
                 bg: pGrabRec ? pGrabRec.isGrabbed : false,
+                bh: pGrabRec && pGrabRec.isGrabbed && pGrabRec.grabbingHand
+                    ? (pGrabRec.grabbingHand.id === 'leftHand' ? 1 : 2) : 0,
                 bv: bGrabRec && bGrabRec.body ? bGrabRec.body.velocity : null
               });
             }
@@ -5641,14 +5643,15 @@
               var pbBallGrab = this._pbBotBall ? this._pbBotBall.components['simple-grab'] : null;
               if (pbBallGrab && pbBallGrab.body) {
                 if (pbFrame.bg && !pbFrame.justReleased) {
-                  pbBallGrab.body.position.set(pbRightPos.x, pbRightPos.y, pbRightPos.z);
+                  var ballHandPos = (pbFrame.bh === 1) ? pbLeftPos : pbRightPos;
+                  pbBallGrab.body.position.set(ballHandPos.x, ballHandPos.y, ballHandPos.z);
                   pbBallGrab.body.velocity.set(0, 0, 0);
                   pbBallGrab.body.angularVelocity.set(0, 0, 0);
                   pbBallGrab.body.gravity.set(0, 0, 0);
                   pbBallGrab.body.mass = 1000;
                   pbBallGrab.body.updateMassProperties();
                   pbBallGrab.isGrabbed = true;
-                  this._pbBotBall.object3D.position.set(pbRightPos.x, pbRightPos.y, pbRightPos.z);
+                  this._pbBotBall.object3D.position.set(ballHandPos.x, ballHandPos.y, ballHandPos.z);
                   this._pbBallHeld = true;
                   this._pbReleaseGraceEnd = 0;
                 } else if (pbFrame.justReleased && pbFrame.rv) {

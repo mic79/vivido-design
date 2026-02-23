@@ -95,7 +95,8 @@
           r3(data.lc.thumb), r3(data.lc.index), r3(data.lc.middle), r3(data.lc.ring), r3(data.lc.pinky),
           r3(data.rc.thumb), r3(data.rc.index), r3(data.rc.middle), r3(data.rc.ring), r3(data.rc.pinky)
         ],
-        bg: data.bg ? 1 : 0
+        bg: data.bg ? 1 : 0,
+        bh: data.bh || 0
       });
     },
 
@@ -120,7 +121,7 @@
           hp: src.hp, hq: src.hq,
           lp: src.lp, lq: src.lq,
           rp: src.rp, rq: src.rq,
-          fc: src.fc, bg: src.bg
+          fc: src.fc, bg: src.bg, bh: src.bh
         });
       }
 
@@ -308,6 +309,7 @@
         rq: slerpArr4(f1.rq, f2.rq, t),
         fc: f1.fc,
         bg: bg,
+        bh: f1.bh || 0,
         justReleased: justReleased,
         rv: justReleased ? this.currentClip.rv : null
       };
