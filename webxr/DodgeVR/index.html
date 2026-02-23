@@ -5138,6 +5138,61 @@
           });
         },
 
+        // Mirrored racket impact (same physics as static-physics racket but for bot's ball)
+        _applyMirroredRacketImpact: function(ballGrab, racketPos, racketQuat, racketVel) {
+          const ballBody = ballGrab.body;
+          if (!ballBody) return;
+          const invQ = racketQuat.clone().invert();
+          const ballPos = new THREE.Vector3(ballBody.position.x, ballBody.position.y, ballBody.position.z);
+          const localBall = ballPos.clone().sub(racketPos).applyQuaternion(invQ);
+          const halfW = 0.1, halfH = 0.1, halfD = 0.01;
+          const cx = Math.max(-halfW, Math.min(halfW, localBall.x));
+          const cy = Math.max(-halfH, Math.min(halfH, localBall.y));
+          const cz = Math.max(-halfD, Math.min(halfD, localBall.z));
+          var localN = new THREE.Vector3(localBall.x-cx, localBall.y-cy, localBall.z-cz);
+          if (localN.lengthSq() < 0.0001) localN.set(0, 0, localBall.z >= 0 ? 1 : -1);
+          else localN.normalize();
+          const normal = localN.applyQuaternion(racketQuat);
+
+          const paddleVel = racketVel.clone();
+          const ballVel = new THREE.Vector3(ballBody.velocity.x, ballBody.velocity.y, ballBody.velocity.z);
+          const ballAngVel = new THREE.Vector3(ballBody.angularVelocity.x, ballBody.angularVelocity.y, ballBody.angularVelocity.z);
+          const ballRadius = 0.1;
+          const inertiaCoeff = 0.4;
+          const relVel = ballVel.clone().sub(paddleVel);
+          const vn = relVel.dot(normal);
+          if (vn > 0) return;
+
+          const vperp = normal.clone().multiplyScalar(vn);
+          const vpar = relVel.clone().sub(vperp);
+          const vrot = new THREE.Vector3().crossVectors(ballAngVel, normal.clone().multiplyScalar(-ballRadius));
+          const perpRestitution = 0.80;
+          const parRestitution = 0.0;
+          const frictionCoeff = 0.9;
+          const fperpFactor = 1 + Math.sqrt(perpRestitution);
+          const vperpimp = vperp.clone().multiplyScalar(-fperpFactor);
+          const fparFactor = 1 + Math.sqrt(parRestitution);
+          const vparimp = vpar.clone().add(vrot).multiplyScalar(-fparFactor / (1.0 + 1.0/inertiaCoeff));
+          const vperpimpMag = vperpimp.length();
+          const vparimpMag = vparimp.length();
+          const vparmax = frictionCoeff * vperpimpMag;
+          if (vparimpMag > vparmax && vparimpMag > 0.001) vparimp.multiplyScalar(vparmax / vparimpMag);
+          relVel.add(vperpimp).add(vparimp);
+          const spinChange = new THREE.Vector3().crossVectors(normal, vparimp).divideScalar(inertiaCoeff * ballRadius);
+          ballAngVel.sub(spinChange);
+          const newVel = relVel.add(paddleVel);
+          ballBody.velocity.set(newVel.x, newVel.y, newVel.z);
+          ballBody.angularVelocity.set(ballAngVel.x, ballAngVel.y, ballAngVel.z);
+          if (ballGrab.isReturning) { ballGrab.isReturning = false; ballGrab.returningGraceUntil = 0; }
+
+          const bounceSound = document.querySelector('#bounce-sound');
+          if (bounceSound) {
+            bounceSound.object3D.position.copy(ballPos);
+            bounceSound.components.sound.stopSound();
+            bounceSound.components.sound.playSound();
+          }
+        },
+
         // ---- Player body update (VR-driven) ----
 
         updatePlayerBody: function(dt) {
@@ -5283,6 +5338,17 @@
               this._mirrorBotBall = document.querySelector('[simple-grab="player: player1"]');
               this._mirrorPlayerWasGrabbed = false;
               this._mirrorYFlip = new THREE.Quaternion(0, 1, 0, 0); // 180° around Y
+              // Swept collision tracking for mirrored rackets
+              this._mrLastPos = { left: null, right: null };
+              this._mrLastQuat = { left: new THREE.Quaternion(), right: new THREE.Quaternion() };
+              this._mrLastTime = 0;
+              this._mrVel = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+              this._mrLastHit = 0;
+              this._mrTmpVec = new THREE.Vector3();
+              this._mrTmpLocal = new THREE.Vector3();
+              this._mrTmpInvQ = new THREE.Quaternion();
+              this._mrTmpRp = new THREE.Vector3();
+              this._mrTmpBp = new THREE.Vector3();
             }
 
             const cam = this._mirrorCamera;
@@ -5340,7 +5406,7 @@
 
             this.updateBones(mHeadPos, mHeadQuat, mLeftPos, mRightPos, mLeftQuat, mRightQuat);
 
-            // Position mirrored rackets (mirrors player2's racket state)
+            // Position mirrored rackets and check collisions with bot's ball
             if (this.botRackets) {
               // Left hand racket
               this._tmpRacketQuat.copy(mLeftQuat);
@@ -5365,6 +5431,64 @@
               // Mirror the player's racket visibility (player2 state → bot rackets)
               this.botRackets.left.visible = racketMode.player2.left;
               this.botRackets.right.visible = racketMode.player2.right;
+
+              // Swept collision detection for mirrored rackets vs player1's ball
+              const mrNow = performance.now();
+              const mrDt = Math.max((mrNow - (this._mrLastTime || mrNow)) / 1000, 0.001);
+              this._mrLastTime = mrNow;
+              const botBallGrab = this._mirrorBotBall?.components?.['simple-grab'];
+              const playerHolding = this._mirrorPlayerBall?.components?.['simple-grab']?.isGrabbed;
+              if (botBallGrab?.body && !playerHolding && mrNow - this._mrLastHit > 100) {
+                const sides = ['left', 'right'];
+                for (let si = 0; si < sides.length; si++) {
+                  const side = sides[si];
+                  if (!this.botRackets[side].visible) continue;
+                  const curPos = this.botRackets[side].position;
+                  const curQuat = this.botRackets[side].quaternion;
+                  if (!this._mrLastPos[side]) {
+                    this._mrLastPos[side] = curPos.clone();
+                    this._mrLastQuat[side].copy(curQuat);
+                    continue;
+                  }
+                  // Compute racket velocity
+                  this._mrVel[side].subVectors(curPos, this._mrLastPos[side]).divideScalar(mrDt);
+                  // Swept box-sphere collision (same logic as static-physics rackets)
+                  const halfW = 0.1, halfH = 0.1, halfD = 0.01, ballR = 0.1;
+                  const ballBody = botBallGrab.body;
+                  const ballPos = this._mrTmpVec.set(ballBody.position.x, ballBody.position.y, ballBody.position.z);
+                  this._mrTmpInvQ.copy(curQuat).invert();
+                  const startP = this._mrLastPos[side];
+                  const endP = curPos;
+                  const moveDist = startP.distanceTo(endP);
+                  const numSteps = Math.min(Math.max(Math.ceil(Math.max(moveDist, 0.001) * 40), 5), 30);
+                  let hit = false;
+                  for (let i = 0; i <= numSteps; i++) {
+                    const t = i / numSteps;
+                    this._mrTmpRp.lerpVectors(startP, endP, t);
+                    this._mrTmpLocal.copy(ballPos).sub(this._mrTmpRp).applyQuaternion(this._mrTmpInvQ);
+                    const lx = this._mrTmpLocal.x, ly = this._mrTmpLocal.y, lz = this._mrTmpLocal.z;
+                    const cx = Math.max(-halfW, Math.min(halfW, lx));
+                    const cy = Math.max(-halfH, Math.min(halfH, ly));
+                    const cz = Math.max(-halfD, Math.min(halfD, lz));
+                    const dx = lx-cx, dy = ly-cy, dz = lz-cz;
+                    if (dx*dx + dy*dy + dz*dz <= ballR*ballR) { hit = true; break; }
+                  }
+                  if (hit) {
+                    this._mrLastHit = mrNow;
+                    this._applyMirroredRacketImpact(botBallGrab, curPos, curQuat, this._mrVel[side]);
+                  }
+                  this._mrLastPos[side].copy(curPos);
+                  this._mrLastQuat[side].copy(curQuat);
+                }
+              } else {
+                // Update tracking even when not checking collision
+                if (this._mrLastPos.left) this._mrLastPos.left.copy(this.botRackets.left.position);
+                else this._mrLastPos.left = this.botRackets.left.position.clone();
+                if (this._mrLastPos.right) this._mrLastPos.right.copy(this.botRackets.right.position);
+                else this._mrLastPos.right = this.botRackets.right.position.clone();
+                this._mrLastQuat.left.copy(this.botRackets.left.quaternion);
+                this._mrLastQuat.right.copy(this.botRackets.right.quaternion);
+              }
             }
 
             // Move bot entity (hit targets) to follow mirrored head
