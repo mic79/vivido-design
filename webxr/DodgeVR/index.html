@@ -2193,17 +2193,19 @@
 
           // Listen for A button press on the scene
           this.el.sceneEl.addEventListener('abuttondown', (evt) => {
-            // Get the hand that pressed the button
             const hand = evt.target;
             const isLeftHand = hand.id === 'leftHand';
             const isRightHand = hand.id === 'rightHand';
             
-            // Check if this ball belongs to the player who pressed the button
             const isPlayer1Ball = this.data.player === 'player1';
             const isPlayer2Ball = this.data.player === 'player2';
             
             // Left hand controls player1's ball, right hand controls player2's ball
             if ((isLeftHand && isPlayer1Ball) || (isRightHand && isPlayer2Ball)) {
+              this.resetPosition();
+            }
+            // In mirror mode, A (right hand) also respawns the bot's mirrored ball
+            if (window.botMirrorMode && isRightHand && isPlayer1Ball) {
               this.resetPosition();
             }
           });
