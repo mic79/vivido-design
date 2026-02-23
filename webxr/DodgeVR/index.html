@@ -4830,6 +4830,14 @@
           this.torsoLean = new THREE.Vector3();
           this.torsoLeanVelocity = 0.15;
 
+          // Pose blend state (idle <-> serve transitions)
+          this.blendDuration = 0.25;
+          this._blendState = 'none';
+          this._blendProgress = 0;
+          this._blendFromPose = null;
+          this._lastAppliedPose = null;
+          this._wasInPlayback = false;
+
           // Enable local clipping
           this.el.sceneEl.addEventListener('loaded', () => {
             const renderer = this.el.sceneEl.renderer;
@@ -5600,6 +5608,8 @@
           if (window.botRecordedMode && window.motionPlayback && window.motionPlayback.isPlaying) {
             var pbFrame = window.motionPlayback.getFrame();
             if (pbFrame) {
+              this._ensureBlendPose();
+
               if (!this._pbRefs) {
                 this._pbRefs = true;
                 this._pbBotBall = document.querySelector('[simple-grab="player: player1"]');
@@ -5613,23 +5623,60 @@
               var pbRightPos = new THREE.Vector3(pbFrame.rp[0], pbFrame.rp[1], pbFrame.rp[2]);
               var pbRightQuat = new THREE.Quaternion(pbFrame.rq[0], pbFrame.rq[1], pbFrame.rq[2], pbFrame.rq[3]);
 
+              var targetPose = { headPos: pbHeadPos, headQuat: pbHeadQuat, leftPos: pbLeftPos, rightPos: pbRightPos, leftQuat: pbLeftQuat, rightQuat: pbRightQuat };
+
+              if (!this._wasInPlayback && this._lastAppliedPose) {
+                this._blendState = 'into';
+                this._blendProgress = 0;
+                this._blendFromPose.headPos.copy(this._lastAppliedPose.headPos);
+                this._blendFromPose.headQuat.copy(this._lastAppliedPose.headQuat);
+                this._blendFromPose.leftPos.copy(this._lastAppliedPose.leftPos);
+                this._blendFromPose.rightPos.copy(this._lastAppliedPose.rightPos);
+                this._blendFromPose.leftQuat.copy(this._lastAppliedPose.leftQuat);
+                this._blendFromPose.rightQuat.copy(this._lastAppliedPose.rightQuat);
+              }
+              this._wasInPlayback = true;
+
+              var headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat;
+              if (this._blendState === 'into') {
+                this._blendProgress += (dt || 0.016) / this.blendDuration;
+                var t = Math.min(1, this._blendProgress);
+                var blended = this._blendPose(this._blendFromPose, targetPose, t, this._lastAppliedPose);
+                headPos = blended.headPos;
+                headQuat = blended.headQuat;
+                leftHandPos = blended.leftPos;
+                rightHandPos = blended.rightPos;
+                leftHandQuat = blended.leftQuat;
+                rightHandQuat = blended.rightQuat;
+                if (t >= 1) this._blendState = 'none';
+              } else {
+                headPos = pbHeadPos;
+                headQuat = pbHeadQuat;
+                leftHandPos = pbLeftPos;
+                rightHandPos = pbRightPos;
+                leftHandQuat = pbLeftQuat;
+                rightHandQuat = pbRightQuat;
+              }
+
+              this._storePose(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
+
               if (this.previousHeadPosInitialized) {
-                this.headVelocity.copy(pbHeadPos).sub(this.previousHeadPos).divideScalar(dt || 0.016);
+                this.headVelocity.copy(headPos).sub(this.previousHeadPos).divideScalar(dt || 0.016);
               } else {
                 this.previousHeadPosInitialized = true;
               }
-              this.previousHeadPos.copy(pbHeadPos);
+              this.previousHeadPos.copy(headPos);
 
-              this.calculateTorsoOrientation(pbHeadPos, pbHeadQuat, pbLeftPos, pbRightPos, dt);
+              this.calculateTorsoOrientation(headPos, headQuat, leftHandPos, rightHandPos, dt);
 
-              var pbHipsY = pbHeadPos.y - 0.65;
+              var pbHipsY = headPos.y - 0.65;
               var pbBodyY = pbHipsY - 1.0;
               var pbBackOff = new THREE.Vector3(0, 0, 0.15);
               pbBackOff.applyQuaternion(this.torsoRotation);
-              this.el.object3D.position.set(pbHeadPos.x + pbBackOff.x, pbBodyY, pbHeadPos.z + pbBackOff.z);
+              this.el.object3D.position.set(headPos.x + pbBackOff.x, pbBodyY, headPos.z + pbBackOff.z);
               this.el.object3D.quaternion.copy(this.torsoRotation);
 
-              this.updateBones(pbHeadPos, pbHeadQuat, pbLeftPos, pbRightPos, pbLeftQuat, pbRightQuat);
+              this.updateBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
 
               if (pbFrame.fc && pbFrame.fc.length === 10) {
                 this.applyFingerCurls('left', {
@@ -5643,7 +5690,7 @@
               }
 
               if (!this.botEntity) this.botEntity = document.querySelector(this.data.botEntitySelector);
-              if (this.botEntity) this.botEntity.object3D.position.set(pbHeadPos.x, pbHeadPos.y - 0.4, pbHeadPos.z);
+              if (this.botEntity) this.botEntity.object3D.position.set(headPos.x, headPos.y - 0.4, headPos.z);
 
               var pbBallGrab = this._pbBotBall ? this._pbBotBall.components['simple-grab'] : null;
               if (pbBallGrab && pbBallGrab.body) {
@@ -5682,7 +5729,18 @@
 
               return;
             }
-            // Clip ended: reset bot position and clear ball state
+            // Clip ended: start blend-out from last frame to idle, then reset
+            this._wasInPlayback = false;
+            if (this._lastAppliedPose) {
+              this._blendState = 'outof';
+              this._blendProgress = 0;
+              this._blendFromPose.headPos.copy(this._lastAppliedPose.headPos);
+              this._blendFromPose.headQuat.copy(this._lastAppliedPose.headQuat);
+              this._blendFromPose.leftPos.copy(this._lastAppliedPose.leftPos);
+              this._blendFromPose.rightPos.copy(this._lastAppliedPose.rightPos);
+              this._blendFromPose.leftQuat.copy(this._lastAppliedPose.leftQuat);
+              this._blendFromPose.rightQuat.copy(this._lastAppliedPose.rightQuat);
+            }
             if (this.botEntity) this.botEntity.object3D.position.set(0, 1.6, -6);
             var clipEndGrab = this._pbBotBall ? this._pbBotBall.components['simple-grab'] : null;
             if (clipEndGrab) {
@@ -5695,6 +5753,48 @@
             }
             this._pbReleaseGraceEnd = 0;
             this._pbRefs = false;
+          }
+
+          // --- Singleplayer: Blend-out (serve end -> idle) ---
+          if (window.botRecordedMode && this._blendState === 'outof') {
+            if (!this.botEntity) {
+              this.botEntity = document.querySelector(this.data.botEntitySelector);
+              if (!this.botEntity) return;
+            }
+            const botWorldPos = new THREE.Vector3();
+            this.botEntity.object3D.getWorldPosition(botWorldPos);
+            const bodyCenter = botWorldPos.clone();
+            const idleHeadPos = new THREE.Vector3(bodyCenter.x, bodyCenter.y + 0.3, bodyCenter.z);
+            const idleHeadQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+            const idleLeftPos = new THREE.Vector3(bodyCenter.x + 0.3, bodyCenter.y - 0.2, bodyCenter.z + 0.25);
+            const idleRightPos = new THREE.Vector3(bodyCenter.x - 0.3, bodyCenter.y - 0.2, bodyCenter.z + 0.25);
+            const idleLeftQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+            const idleRightQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+            const idlePose = { headPos: idleHeadPos, headQuat: idleHeadQuat, leftPos: idleLeftPos, rightPos: idleRightPos, leftQuat: idleLeftQuat, rightQuat: idleRightQuat };
+
+            this._blendProgress += (dt || 0.016) / this.blendDuration;
+            var t = Math.min(1, this._blendProgress);
+            var blended = this._blendPose(this._blendFromPose, idlePose, t, this._lastAppliedPose);
+            this._storePose(blended.headPos, blended.headQuat, blended.leftPos, blended.rightPos, blended.leftQuat, blended.rightQuat);
+
+            if (this.previousHeadPosInitialized) {
+              this.headVelocity.copy(blended.headPos).sub(this.previousHeadPos).divideScalar(dt || 0.016);
+            } else {
+              this.previousHeadPosInitialized = true;
+            }
+            this.previousHeadPos.copy(blended.headPos);
+            this.calculateTorsoOrientation(blended.headPos, blended.headQuat, blended.leftPos, blended.rightPos, dt);
+            const modelChestLocalY = 1.25;
+            const backwardOffset = new THREE.Vector3(0, 0, 0.15);
+            backwardOffset.applyQuaternion(this.torsoRotation);
+            this.el.object3D.position.set(bodyCenter.x + backwardOffset.x, bodyCenter.y - modelChestLocalY, bodyCenter.z + backwardOffset.z);
+            this.el.object3D.quaternion.copy(this.torsoRotation);
+            this.updateBones(blended.headPos, blended.headQuat, blended.leftPos, blended.rightPos, blended.leftQuat, blended.rightQuat);
+            const botCurls = { thumb: 0.15, index: 0.2, middle: 0.25, ring: 0.3, pinky: 0.3 };
+            this.applyFingerCurls('left', botCurls);
+            this.applyFingerCurls('right', botCurls);
+            if (t >= 1) this._blendState = 'none';
+            return;
           }
 
           // --- Singleplayer: AI idle animation ---
@@ -5764,10 +5864,58 @@
           // Update bones with IK
           this.updateBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
 
+          this._storePose(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
+
           // Apply relaxed finger curls for bot
           const botCurls = { thumb: 0.15, index: 0.2, middle: 0.25, ring: 0.3, pinky: 0.3 };
           this.applyFingerCurls('left', botCurls);
           this.applyFingerCurls('right', botCurls);
+        },
+
+        // ---- Pose blending (idle <-> serve transitions) ----
+
+        _ensureBlendPose: function() {
+          if (!this._lastAppliedPose) {
+            this._lastAppliedPose = {
+              headPos: new THREE.Vector3(),
+              headQuat: new THREE.Quaternion(),
+              leftPos: new THREE.Vector3(),
+              rightPos: new THREE.Vector3(),
+              leftQuat: new THREE.Quaternion(),
+              rightQuat: new THREE.Quaternion()
+            };
+          }
+          if (!this._blendFromPose) {
+            this._blendFromPose = {
+              headPos: new THREE.Vector3(),
+              headQuat: new THREE.Quaternion(),
+              leftPos: new THREE.Vector3(),
+              rightPos: new THREE.Vector3(),
+              leftQuat: new THREE.Quaternion(),
+              rightQuat: new THREE.Quaternion()
+            };
+          }
+        },
+
+        _storePose: function(headPos, headQuat, leftPos, rightPos, leftQuat, rightQuat) {
+          this._ensureBlendPose();
+          var p = this._lastAppliedPose;
+          p.headPos.copy(headPos);
+          p.headQuat.copy(headQuat);
+          p.leftPos.copy(leftPos);
+          p.rightPos.copy(rightPos);
+          p.leftQuat.copy(leftQuat);
+          p.rightQuat.copy(rightQuat);
+        },
+
+        _blendPose: function(from, to, t, out) {
+          out.headPos.lerpVectors(from.headPos, to.headPos, t);
+          out.headQuat.copy(from.headQuat).slerp(to.headQuat, t);
+          out.leftPos.lerpVectors(from.leftPos, to.leftPos, t);
+          out.rightPos.lerpVectors(from.rightPos, to.rightPos, t);
+          out.leftQuat.copy(from.leftQuat).slerp(to.leftQuat, t);
+          out.rightQuat.copy(from.rightQuat).slerp(to.rightQuat, t);
+          return out;
         },
 
         // ---- Torso orientation (blends head forward + shoulder line) ----
