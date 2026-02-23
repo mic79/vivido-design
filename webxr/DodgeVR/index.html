@@ -1691,8 +1691,10 @@
                 var lobbyBlueBall = document.querySelector('[simple-grab="player: player2"]');
                 if (lobbyBlueBall) {
                   lobbyBlueBall.object3D.position.set(lbbs.x, lbbs.y, lbbs.z);
-                  if (lobbyBlueBall.components['simple-grab'] && lobbyBlueBall.components['simple-grab'].body) {
-                    lobbyBlueBall.components['simple-grab'].body.position.set(lbbs.x, lbbs.y, lbbs.z);
+                  var lbb = lobbyBlueBall.components['simple-grab'] && lobbyBlueBall.components['simple-grab'].body;
+                  if (lbb) {
+                    lbb.position.set(lbbs.x, lbbs.y, lbbs.z);
+                    if (lbbs.vx !== undefined) lbb.velocity.set(lbbs.vx, lbbs.vy, lbbs.vz);
                   }
                 }
               }
@@ -1701,8 +1703,10 @@
                 var lobbyRedBall = document.querySelector('[simple-grab="player: player1"]');
                 if (lobbyRedBall) {
                   lobbyRedBall.object3D.position.set(-lrbs.x, lrbs.y, -lrbs.z);
-                  if (lobbyRedBall.components['simple-grab'] && lobbyRedBall.components['simple-grab'].body) {
-                    lobbyRedBall.components['simple-grab'].body.position.set(-lrbs.x, lrbs.y, -lrbs.z);
+                  var lrb = lobbyRedBall.components['simple-grab'] && lobbyRedBall.components['simple-grab'].body;
+                  if (lrb) {
+                    lrb.position.set(-lrbs.x, lrbs.y, -lrbs.z);
+                    if (lrbs.vx !== undefined) lrb.velocity.set(-lrbs.vx, lrbs.vy, -lrbs.vz);
                   }
                 }
               }
@@ -1787,13 +1791,17 @@
               }
             }
 
-            // Position balls from spectator data
+            // Position balls from spectator data (also set velocity for ball-trail rendering)
             if (redBallSt) {
               const redBall = document.querySelector('[simple-grab="player: player1"]');
               if (redBall) {
                 redBall.object3D.position.set(-redBallSt.x, redBallSt.y, -redBallSt.z);
-                if (redBall.components['simple-grab']?.body) {
-                  redBall.components['simple-grab'].body.position.set(-redBallSt.x, redBallSt.y, -redBallSt.z);
+                const rb = redBall.components['simple-grab']?.body;
+                if (rb) {
+                  rb.position.set(-redBallSt.x, redBallSt.y, -redBallSt.z);
+                  if (redBallSt.vx !== undefined) {
+                    rb.velocity.set(-redBallSt.vx, redBallSt.vy, -redBallSt.vz);
+                  }
                 }
               }
             }
@@ -1801,8 +1809,12 @@
               const blueBall = document.querySelector('[simple-grab="player: player2"]');
               if (blueBall) {
                 blueBall.object3D.position.set(blueBallSt.x, blueBallSt.y, blueBallSt.z);
-                if (blueBall.components['simple-grab']?.body) {
-                  blueBall.components['simple-grab'].body.position.set(blueBallSt.x, blueBallSt.y, blueBallSt.z);
+                const bb = blueBall.components['simple-grab']?.body;
+                if (bb) {
+                  bb.position.set(blueBallSt.x, blueBallSt.y, blueBallSt.z);
+                  if (blueBallSt.vx !== undefined) {
+                    bb.velocity.set(blueBallSt.vx, blueBallSt.vy, blueBallSt.vz);
+                  }
                 }
               }
             }
@@ -2198,6 +2210,8 @@
 
           // Add collision event listener
           this.el.addEventListener('obbcollisionstarted', (evt) => {
+            // Spectators receive impacts via spectator-score messages, not local collisions
+            if (window.isSpectator) return;
             // In multiplayer, the red ball (player1) is remote-driven — skip all local collisions
             if (isMultiplayer && this.data.player === 'player1') return;
             const collider = evt.detail.withEl;
@@ -2388,6 +2402,8 @@
         
         tick: function() {
           if (this.body) {
+            // Spectators don't own any ball — positions come from network data
+            if (window.isSpectator) return;
             // In multiplayer, red ball is remote-driven — skip local wall checks
             if (isMultiplayer && this.data.player === 'player1') return;
             // Returning ball that reached its own wall: respawn
@@ -2884,7 +2900,7 @@
           color: { type: 'color', default: '#ffffff' },
           centerWidth: { type: 'number', default: 0.03 },
           sideWidth: { type: 'number', default: 0.01 },
-          sideOffset: { type: 'number', default: 0.06 },
+          sideOffset: { type: 'number', default: 0.1 },
           maxSegments: { type: 'number', default: 40 }
         },
 
@@ -2999,8 +3015,7 @@
           if (!grab || !grab.body) return;
 
           const body = grab.body;
-          this._vel.set(body.velocity.x, body.velocity.y, body.velocity.z);
-          const speed = this._vel.length();
+          const dtSec = Math.max((dt || 16) / 1000, 0.001);
 
           // Get ball world position
           this.el.object3D.getWorldPosition(this._pos);
@@ -3010,6 +3025,25 @@
           this.headIndex = (this.headIndex + 1) % this.maxSeg;
           if (this.filledCount < this.maxSeg) this.filledCount++;
 
+          // Compute velocity from position deltas — works for grabbed, thrown,
+          // and spectator-driven balls (body.velocity is zeroed while grabbed)
+          if (this.filledCount >= 2) {
+            const curIdx = ((this.headIndex - 1) + this.maxSeg) % this.maxSeg;
+            const prevIdx = ((this.headIndex - 2) + this.maxSeg) % this.maxSeg;
+            this._vel.subVectors(this.positions[curIdx], this.positions[prevIdx]).divideScalar(dtSec);
+          } else {
+            this._vel.set(0, 0, 0);
+          }
+          const speed = this._vel.length();
+
+          // Ignore teleportation spikes (position resets, respawns)
+          if (speed > 50) {
+            this.trails.forEach(t => t.geom.setDrawRange(0, 0));
+            this.filledCount = 0;
+            this.headIndex = 0;
+            return;
+          }
+
           // Speed-based visible length: faster = more segments
           const visibleCount = Math.min(
             Math.max(Math.floor(speed * 4), 2),
@@ -3017,15 +3051,14 @@
           );
 
           // Hide trails if essentially stationary
-          if (speed < 0.1) {
+          if (speed < 0.3) {
             this.trails.forEach(t => t.geom.setDrawRange(0, 0));
             return;
           }
 
-          // Get angular velocity for spin
+          // Get angular velocity for spin (use physics value when available)
           this._angVel.set(body.angularVelocity.x, body.angularVelocity.y, body.angularVelocity.z);
           const spinSpeed = this._angVel.length();
-          const dtSec = (dt || 16) / 1000;
 
           // Accumulate spin angle for spiral
           if (spinSpeed > 0.5) {
@@ -3608,8 +3641,8 @@
         
         playEffect: function() {
           if (!this.impactSphere) {
-            console.warn('Cannot play effect - impact sphere not found');
-            return;
+            this.impactSphere = this.el.querySelector('a-sphere[id$="-impact"]');
+            if (!this.impactSphere) return;
           }
           
           // Play impact sound at the world position of the hit target
@@ -3621,7 +3654,7 @@
             impactSound.components.sound.playSound();
           }
           
-          // Cache the THREE.js material reference
+          // Cache the THREE.js material reference (retry each call until found)
           if (!this._mat) {
             const mesh = this.impactSphere.getObject3D('mesh');
             if (mesh) {
@@ -3635,6 +3668,8 @@
           if (this._mat) {
             this._mat.opacity = 0.5;
             this._mat.transparent = true;
+          } else {
+            this.impactSphere.setAttribute('material', 'opacity', 0.5);
           }
           
           // Start tick-driven animation
@@ -3644,6 +3679,12 @@
         
         tick: function(time) {
           if (!this._animating) return;
+          
+          // Late-bind material if not cached yet
+          if (!this._mat) {
+            const mesh = this.impactSphere.getObject3D('mesh');
+            if (mesh) this._mat = mesh.material;
+          }
           
           const elapsed = time - this._animStart;
           const duration = 1000;
