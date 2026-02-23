@@ -5575,6 +5575,12 @@
             if (window.motionRecorder) {
               var pGrabRec = this._mirrorPlayerBall ? this._mirrorPlayerBall.components['simple-grab'] : null;
               var bGrabRec = this._mirrorBotBall ? this._mirrorBotBall.components['simple-grab'] : null;
+              var recBallPos = null;
+              if (pGrabRec && pGrabRec.isGrabbed && pGrabRec.grabbingHand) {
+                var hpRec = new THREE.Vector3();
+                pGrabRec.grabbingHand.object3D.getWorldPosition(hpRec);
+                recBallPos = { x: -hpRec.x, y: hpRec.y, z: -hpRec.z };
+              }
               window.motionRecorder.recordFrame({
                 hp: mHeadPos, hq: mHeadQuat,
                 lp: mLeftPos, lq: mLeftQuat,
@@ -5582,8 +5588,7 @@
                 lc: this.currentCurls.left,
                 rc: this.currentCurls.right,
                 bg: pGrabRec ? pGrabRec.isGrabbed : false,
-                bh: pGrabRec && pGrabRec.isGrabbed && pGrabRec.grabbingHand
-                    ? (pGrabRec.grabbingHand.id === 'leftHand' ? 1 : 2) : 0,
+                bp: recBallPos,
                 bv: bGrabRec && bGrabRec.body ? bGrabRec.body.velocity : null
               });
             }
@@ -5643,15 +5648,20 @@
               var pbBallGrab = this._pbBotBall ? this._pbBotBall.components['simple-grab'] : null;
               if (pbBallGrab && pbBallGrab.body) {
                 if (pbFrame.bg && !pbFrame.justReleased) {
-                  var ballHandPos = (pbFrame.bh === 1) ? pbLeftPos : pbRightPos;
-                  pbBallGrab.body.position.set(ballHandPos.x, ballHandPos.y, ballHandPos.z);
+                  var bpx, bpy, bpz;
+                  if (pbFrame.bp) {
+                    bpx = pbFrame.bp[0]; bpy = pbFrame.bp[1]; bpz = pbFrame.bp[2];
+                  } else {
+                    bpx = pbRightPos.x; bpy = pbRightPos.y; bpz = pbRightPos.z;
+                  }
+                  pbBallGrab.body.position.set(bpx, bpy, bpz);
                   pbBallGrab.body.velocity.set(0, 0, 0);
                   pbBallGrab.body.angularVelocity.set(0, 0, 0);
                   pbBallGrab.body.gravity.set(0, 0, 0);
                   pbBallGrab.body.mass = 1000;
                   pbBallGrab.body.updateMassProperties();
                   pbBallGrab.isGrabbed = true;
-                  this._pbBotBall.object3D.position.set(ballHandPos.x, ballHandPos.y, ballHandPos.z);
+                  this._pbBotBall.object3D.position.set(bpx, bpy, bpz);
                   this._pbBallHeld = true;
                   this._pbReleaseGraceEnd = 0;
                 } else if (pbFrame.justReleased && pbFrame.rv) {

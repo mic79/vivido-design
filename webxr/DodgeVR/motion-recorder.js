@@ -96,7 +96,8 @@
           r3(data.rc.thumb), r3(data.rc.index), r3(data.rc.middle), r3(data.rc.ring), r3(data.rc.pinky)
         ],
         bg: data.bg ? 1 : 0,
-        bh: data.bh || 0
+        bh: data.bh || 0,
+        bp: data.bp ? [r3(data.bp.x), r3(data.bp.y), r3(data.bp.z)] : null
       });
     },
 
@@ -121,7 +122,7 @@
           hp: src.hp, hq: src.hq,
           lp: src.lp, lq: src.lq,
           rp: src.rp, rq: src.rq,
-          fc: src.fc, bg: src.bg, bh: src.bh
+          fc: src.fc, bg: src.bg, bh: src.bh, bp: src.bp
         });
       }
 
@@ -309,7 +310,7 @@
         rq: slerpArr4(f1.rq, f2.rq, t),
         fc: f1.fc,
         bg: bg,
-        bh: f1.bh || 0,
+        bp: (f1.bp && f2.bp) ? lerpArr3(f1.bp, f2.bp, t) : (f1.bp || null),
         justReleased: justReleased,
         rv: justReleased ? this.currentClip.rv : null
       };
