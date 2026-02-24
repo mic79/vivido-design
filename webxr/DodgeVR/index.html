@@ -5812,10 +5812,10 @@
           const bodyCenter = botWorldPos.clone();
 
           // Head is ~0.3m above the body center
-          const headPos = new THREE.Vector3(bodyCenter.x, bodyCenter.y + 0.3, bodyCenter.z);
+          headPos = new THREE.Vector3(bodyCenter.x, bodyCenter.y + 0.3, bodyCenter.z);
 
           // Head facing +Z (toward player)
-          const headQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+          headQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 
           // Idle hand animation with subtle sway
           const swayX = Math.sin(this.idleTime * 1.5) * 0.03;
@@ -5825,20 +5825,20 @@
           // Hands relative to body center (ready stance)
           // Note: positions are mirrored because the model has double rotation
           // (FBX PI + entity PI), so the IK solver's left/right is flipped
-          const leftHandPos = new THREE.Vector3(
+          leftHandPos = new THREE.Vector3(
             bodyCenter.x + 0.3 - swayX,
             bodyCenter.y - 0.2 + swayY,
             bodyCenter.z + 0.25 + swayZ
           );
-          const rightHandPos = new THREE.Vector3(
+          rightHandPos = new THREE.Vector3(
             bodyCenter.x - 0.3 + swayX,
             bodyCenter.y - 0.2 + swayY,
             bodyCenter.z + 0.25 - swayZ
           );
 
           // Hand orientations (palms facing inward)
-          const leftHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
-          const rightHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+          leftHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+          rightHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
 
           // Bot is stationary - zero velocity
           this.headVelocity.set(0, 0, 0);
