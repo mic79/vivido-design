@@ -1,32 +1,34 @@
 // motion-recorder.js — Event-driven motion clip recording and playback for bot AI
 //
-// Recording is driven by ball state transitions, not a fixed time window:
-//   IDLE → ball grabbed → RECORDING → ball released (serve detected) → FOLLOWTHROUGH → 1s → SAVE
-//                                    → ball released (not a serve)   → DISCARD
-//                                    → 10s timeout                   → DISCARD
+// Recording path:
+//   SERVE: idle → ball grabbed → recording_serve → release as serve → serve_followthrough → SAVE
 (function () {
   'use strict';
 
   var STORAGE_KEY = 'dodgevr-motion-clips';
-  var FOLLOW_THROUGH_MS = 1000;
-  var MAX_RECORD_MS = 10000;
+  var SERVE_FOLLOW_MS = 1000;
+  var MAX_SERVE_MS = 10000;
+  var RING_BUFFER_SIZE = 30;
 
   function r3(v) { return Math.round(v * 1000) / 1000; }
 
   if (!window.motionClipLibrary) window.motionClipLibrary = {};
   window.botRecordedMode = false;
+  window.botRecordedSubMode = 'random';
+  window.clipBrowseIndex = 0;
 
   // ==================== RECORDER ====================
 
   window.motionRecorder = {
-    _state: 'idle',          // idle | recording | followthrough
+    _state: 'idle',
     _frames: [],
+    _ringBuffer: [],
     _recordStartTime: 0,
     _releaseTime: 0,
     _releaseVelocity: null,
+    _releaseAngVelocity: null,
     _prevBg: false,
 
-    // Single entry point — called every mirror-mode frame with all body + ball data
     recordFrame: function (data) {
       var bg = !!data.bg;
       var wasGrabbed = this._prevBg;
@@ -35,56 +37,92 @@
       switch (this._state) {
 
         case 'idle':
+          this._pushToRingBuffer(data);
+
           if (!wasGrabbed && bg) {
-            this._state = 'recording';
-            this._frames = [];
+            this._state = 'recording_serve';
+            this._frames = this._drainRingBuffer();
             this._recordStartTime = performance.now();
             this._pushFrame(data);
           }
           break;
 
-        case 'recording':
+        case 'recording_serve':
           this._pushFrame(data);
 
           if (wasGrabbed && !bg) {
-            // Ball just released — check if it qualifies as a serve
-            var vel = data.bv;
+            var vel = data.obv;
             if (vel) {
               var speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
               if (vel.z > 1 && speed > 2) {
                 this._releaseVelocity = { x: r3(vel.x), y: r3(vel.y), z: r3(vel.z) };
+                var avel = data.oba;
+                this._releaseAngVelocity = avel
+                  ? { x: r3(avel.x), y: r3(avel.y), z: r3(avel.z) } : null;
                 this._releaseTime = performance.now();
-                this._state = 'followthrough';
+                this._state = 'serve_followthrough';
                 break;
               }
             }
-            // Not a serve — discard
             this._state = 'idle';
             this._frames = [];
-          } else if (performance.now() - this._recordStartTime > MAX_RECORD_MS) {
+          } else if (performance.now() - this._recordStartTime > MAX_SERVE_MS) {
             this._state = 'idle';
             this._frames = [];
           }
           break;
 
-        case 'followthrough':
+        case 'serve_followthrough':
           this._pushFrame(data);
-
           var ftElapsed = performance.now() - this._releaseTime;
-          // Save when follow-through duration reached, or if the ball is grabbed again
-          if (ftElapsed >= FOLLOW_THROUGH_MS || (!wasGrabbed && bg)) {
-            this._saveClip('serve', this._releaseVelocity);
+          if (ftElapsed >= SERVE_FOLLOW_MS || (!wasGrabbed && bg)) {
+            this._saveClip('serve', this._releaseVelocity, this._releaseAngVelocity);
             this._state = 'idle';
             this._frames = [];
             this._releaseVelocity = null;
+            this._releaseAngVelocity = null;
           }
           break;
+
       }
     },
 
-    _pushFrame: function (data) {
-      this._frames.push({
+    // ---- Ring buffer for pre-trigger capture ----
+
+    _pushToRingBuffer: function (data) {
+      this._ringBuffer.push({
         t: performance.now(),
+        hp: { x: data.hp.x, y: data.hp.y, z: data.hp.z },
+        hq: { x: data.hq.x, y: data.hq.y, z: data.hq.z, w: data.hq.w },
+        lp: { x: data.lp.x, y: data.lp.y, z: data.lp.z },
+        lq: { x: data.lq.x, y: data.lq.y, z: data.lq.z, w: data.lq.w },
+        rp: { x: data.rp.x, y: data.rp.y, z: data.rp.z },
+        rq: { x: data.rq.x, y: data.rq.y, z: data.rq.z, w: data.rq.w },
+        lc: { thumb: data.lc.thumb, index: data.lc.index, middle: data.lc.middle, ring: data.lc.ring, pinky: data.lc.pinky },
+        rc: { thumb: data.rc.thumb, index: data.rc.index, middle: data.rc.middle, ring: data.rc.ring, pinky: data.rc.pinky },
+        bg: data.bg, bh: data.bh,
+        bp: data.bp ? { x: data.bp.x, y: data.bp.y, z: data.bp.z } : null
+      });
+      while (this._ringBuffer.length > RING_BUFFER_SIZE) {
+        this._ringBuffer.shift();
+      }
+    },
+
+    _drainRingBuffer: function () {
+      var frames = [];
+      for (var i = 0; i < this._ringBuffer.length; i++) {
+        var rb = this._ringBuffer[i];
+        frames.push(this._formatFrame(rb.t, rb));
+      }
+      this._ringBuffer = [];
+      return frames;
+    },
+
+    // ---- Frame formatting ----
+
+    _formatFrame: function (t, data) {
+      return {
+        t: t,
         hp: [r3(data.hp.x), r3(data.hp.y), r3(data.hp.z)],
         hq: [r3(data.hq.x), r3(data.hq.y), r3(data.hq.z), r3(data.hq.w)],
         lp: [r3(data.lp.x), r3(data.lp.y), r3(data.lp.z)],
@@ -98,19 +136,25 @@
         bg: data.bg ? 1 : 0,
         bh: data.bh || 0,
         bp: data.bp ? [r3(data.bp.x), r3(data.bp.y), r3(data.bp.z)] : null
-      });
+      };
+    },
+
+    _pushFrame: function (data) {
+      this._frames.push(this._formatFrame(performance.now(), data));
     },
 
     reset: function () {
       this._state = 'idle';
       this._frames = [];
+      this._ringBuffer = [];
       this._releaseVelocity = null;
+      this._releaseAngVelocity = null;
       this._prevBg = false;
     },
 
     // ---- Clip storage ----
 
-    _saveClip: function (tag, releaseVelocity) {
+    _saveClip: function (tag, releaseVelocity, releaseAngVelocity) {
       if (this._frames.length < 10) return;
 
       var frames = [];
@@ -126,12 +170,14 @@
         });
       }
 
-      // Find the release frame (last bg=1 → bg=0 transition)
-      var releaseFrame = frames.length - 1;
-      for (var j = frames.length - 1; j > 0; j--) {
-        if (frames[j].bg === 0 && frames[j - 1].bg === 1) {
-          releaseFrame = j;
-          break;
+      var releaseFrame = -1;
+      if (tag === 'serve') {
+        releaseFrame = frames.length - 1;
+        for (var j = frames.length - 1; j > 0; j--) {
+          if (frames[j].bg === 0 && frames[j - 1].bg === 1) {
+            releaseFrame = j;
+            break;
+          }
         }
       }
 
@@ -139,6 +185,7 @@
         tag: tag,
         ts: Date.now(),
         rv: releaseVelocity,
+        rav: releaseAngVelocity || null,
         rf: releaseFrame,
         frames: frames
       };
@@ -212,8 +259,9 @@
       var counts = this.getClipCounts();
       var el = document.getElementById('menu-clip-count');
       if (el) {
-        el.setAttribute('text', 'value', 'Clips: S:' + (counts.serve || 0));
-        el.setAttribute('visible', true);
+        var total = counts.serve || 0;
+        el.setAttribute('text', 'value', 'Clips: ' + total);
+        el.setAttribute('visible', total > 0);
       }
     },
 
@@ -233,7 +281,9 @@
 
   window.motionPlayback = {
     isPlaying: false,
+    looping: false,
     currentClip: null,
+    currentTag: null,
     clipStartTime: 0,
     _frameIdx: 0,
     _prevBg: false,
@@ -250,22 +300,44 @@
 
       var clips = window.motionClipLibrary[tag];
       this.currentClip = clips[Math.floor(Math.random() * clips.length)];
+      this.currentTag = tag;
+      this.looping = false;
+      this._startCurrentClip();
+
+      console.log('[MotionPlayback] Playing ' + tag + ' clip (' +
+        this.currentClip.frames.length + ' frames, ' +
+        (this.currentClip.frames[this.currentClip.frames.length - 1].t / 1000).toFixed(1) + 's)');
+      return true;
+    },
+
+    startClipByIndex: function (tag, index) {
+      var lib = window.motionClipLibrary;
+      if (!lib || !lib[tag] || index < 0 || index >= lib[tag].length) return false;
+
+      this.currentClip = lib[tag][index];
+      this.currentTag = tag;
+      this.looping = true;
+      this._startCurrentClip();
+
+      console.log('[MotionPlayback] Previewing ' + tag + ' clip ' + (index + 1) + '/' + lib[tag].length);
+      return true;
+    },
+
+    _resetBotBall: function () {
+      var botBall = document.querySelector('[simple-grab="player: player1"]');
+      if (botBall && botBall.components['simple-grab']) {
+        botBall.components['simple-grab'].resetPosition();
+      }
+    },
+
+    _startCurrentClip: function () {
       this.clipStartTime = performance.now();
       this._frameIdx = 0;
       this._prevBg = false;
       this._cachedFrame = null;
       this._cachedFrameIdx = -1;
       this.isPlaying = true;
-
-      var botBall = document.querySelector('[simple-grab="player: player1"]');
-      if (botBall && botBall.components['simple-grab']) {
-        botBall.components['simple-grab'].resetPosition();
-      }
-
-      console.log('[MotionPlayback] Playing ' + tag + ' clip (' +
-        this.currentClip.frames.length + ' frames, ' +
-        (this.currentClip.frames[this.currentClip.frames.length - 1].t / 1000).toFixed(1) + 's)');
-      return true;
+      this._resetBotBall();
     },
 
     getFrame: function () {
@@ -279,21 +351,30 @@
       }
 
       if (this._frameIdx >= frames.length - 1) {
-        this.isPlaying = false;
-        this.currentClip = null;
-        this._cachedFrame = null;
-        return null;
+        if (this.looping) {
+          this._resetBotBall();
+          this.clipStartTime = performance.now();
+          this._frameIdx = 0;
+          this._prevBg = false;
+          this._cachedFrame = null;
+          this._cachedFrameIdx = -1;
+          elapsed = 0;
+        } else {
+          this.isPlaying = false;
+          this.currentClip = null;
+          this.currentTag = null;
+          this._cachedFrame = null;
+          return null;
+        }
       }
 
-      // Return cached result if _frameIdx hasn't changed (guards against
-      // multiple callers per frame corrupting _prevBg transition detection)
       if (this._frameIdx === this._cachedFrameIdx && this._cachedFrame) {
         return this._cachedFrame;
       }
       this._cachedFrameIdx = this._frameIdx;
 
       var f1 = frames[this._frameIdx];
-      var f2 = frames[this._frameIdx + 1];
+      var f2 = frames[Math.min(this._frameIdx + 1, frames.length - 1)];
       var segDur = f2.t - f1.t;
       var t = segDur > 0 ? Math.max(0, Math.min(1, (elapsed - f1.t) / segDur)) : 0;
 
@@ -312,7 +393,8 @@
         bg: bg,
         bp: (f1.bp && f2.bp) ? lerpArr3(f1.bp, f2.bp, t) : (f1.bp || null),
         justReleased: justReleased,
-        rv: justReleased ? this.currentClip.rv : null
+        rv: justReleased ? this.currentClip.rv : null,
+        rav: justReleased ? this.currentClip.rav : null
       };
       return this._cachedFrame;
     }

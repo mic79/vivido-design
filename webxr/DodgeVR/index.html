@@ -133,6 +133,22 @@
             if (grabB?.isGrabbed && grabB.grabbingHand) {
               pulseHaptic(grabB.grabbingHand, 0.7, 100);
             }
+            // Count ball-on-ball block (debounced via _lastBallBlockTime on held ball)
+            const aHeld = grabA?.isGrabbed;
+            const bHeld = grabB?.isGrabbed;
+            if (aHeld && !bHeld && grabA?.data?.player) {
+              const bnow = performance.now();
+              if (!grabA._lastBallBlockTime || bnow - grabA._lastBallBlockTime > 500) {
+                grabA._lastBallBlockTime = bnow;
+                recordStat(grabA.data.player, 'blocks');
+              }
+            } else if (bHeld && !aHeld && grabB?.data?.player) {
+              const bnow = performance.now();
+              if (!grabB._lastBallBlockTime || bnow - grabB._lastBallBlockTime > 500) {
+                grabB._lastBallBlockTime = bnow;
+                recordStat(grabB.data.player, 'blocks');
+              }
+            }
           }
           
           // Back wall handling is done via position check in simple-grab.tick()
@@ -180,6 +196,79 @@
         player1: { left: false, right: false }, // Red player / opponent in multiplayer
         player2: { left: false, right: false }  // Blue player / local player
       };
+
+      // Stage progression system — per-player
+      // Advances when ball hits opponent's back wall; resets on any player/bot hit.
+      const playerStages = window.playerStages = { player1: 1, player2: 1 };
+      const STAGE_BASE_SPEED = 15;
+      const STAGE_REF_SPEED = 45;
+      const STAGE_REF_STAGE = 25;
+      const STAGE_BASE_SCALE = 1.0;
+      const STAGE_REF_SCALE = 2.0;
+      const BALL_BASE_RADIUS = 0.1;
+
+      const getStageMaxSpeed = window.getStageMaxSpeed = function(stage) {
+        return STAGE_BASE_SPEED + (stage - 1) * (STAGE_REF_SPEED - STAGE_BASE_SPEED) / (STAGE_REF_STAGE - 1);
+      };
+      function getStageBallScale(stage) {
+        return STAGE_BASE_SCALE + (stage - 1) * (STAGE_REF_SCALE - STAGE_BASE_SCALE) / (STAGE_REF_STAGE - 1);
+      }
+      function advanceStage(player) {
+        if (!isMatchActive()) return;
+        playerStages[player] = (playerStages[player] || 1) + 1;
+        applyBallScale(player);
+        console.log('Stage up:', player, '→', playerStages[player],
+          'maxSpd:', getStageMaxSpeed(playerStages[player]).toFixed(1),
+          'scale:', getStageBallScale(playerStages[player]).toFixed(2));
+      }
+      function resetStage(player) {
+        if (!isMatchActive()) return;
+        if (playerStages[player] === 1) return;
+        playerStages[player] = 1;
+        applyBallScale(player);
+        console.log('Stage reset:', player, '→ 1');
+      }
+      function applyBallScale(player) {
+        const scale = getStageBallScale(playerStages[player]);
+        const selector = '[simple-grab="player: ' + player + '"]';
+        const ballEl = document.querySelector(selector);
+        if (!ballEl) return;
+        ballEl.object3D.scale.setScalar(scale);
+        const grab = ballEl.components['simple-grab'];
+        if (grab && grab.body && grab.body.shapes[0]) {
+          grab.body.shapes[0].radius = BALL_BASE_RADIUS * scale;
+          grab.body.updateBoundingRadius();
+        }
+      }
+      function capBallSpeed(player, body) {
+        const maxSpd = getStageMaxSpeed(playerStages[player] || 1);
+        const spd = body.velocity.length();
+        if (spd > maxSpd) {
+          const f = maxSpd / spd;
+          body.velocity.x *= f;
+          body.velocity.y *= f;
+          body.velocity.z *= f;
+        }
+      }
+
+      // Live match stats — per player
+      const matchStats = window.matchStats = {
+        player1: { throws: 0, hits: 0, blocks: 0, racketHits: 0, dodges: 0 },
+        player2: { throws: 0, hits: 0, blocks: 0, racketHits: 0, dodges: 0 }
+      };
+      function resetMatchStats() {
+        matchStats.player1 = { throws: 0, hits: 0, blocks: 0, racketHits: 0, dodges: 0 };
+        matchStats.player2 = { throws: 0, hits: 0, blocks: 0, racketHits: 0, dodges: 0 };
+      }
+      function isMatchActive() {
+        var gm = document.querySelector('#game-manager');
+        var c = gm && gm.components['game-manager'];
+        return c && (c.matchState === 'PLAYING' || c.matchState === 'OVERTIME');
+      }
+      function recordStat(player, stat) {
+        if (!isMatchActive()) return;
+        matchStats[player][stat]++;
+      }
 
       // Multiplayer state (star topology: host + up to 3 peers)
       let isMultiplayer = false;
@@ -693,7 +782,7 @@
                 } else if (data.state === 'ENDED') {
                   const flipped = data.winner.includes('You win!') ? 'Opponent wins!' : 'You win!';
                   gmComp.startMessage.setAttribute('visible', true);
-                  gmComp.startMessage.setAttribute('text', 'value', flipped + '\nPress A to play again');
+                  gmComp.startMessage.setAttribute('text', 'value', flipped);
                   gmComp.timerDisplay.setAttribute('text', 'value', 'Match ended');
                   gmComp.gameStarted = false;
                 }
@@ -910,7 +999,7 @@
               } else if (data.state === 'ENDED') {
                 const flipped = data.winner.includes('You win!') ? 'Opponent wins!' : 'You win!';
                 gmComp.startMessage.setAttribute('visible', true);
-                gmComp.startMessage.setAttribute('text', 'value', flipped + '\nPress A to play again');
+                gmComp.startMessage.setAttribute('text', 'value', flipped);
                 gmComp.timerDisplay.setAttribute('text', 'value', 'Match ended');
                 gmComp.gameStarted = false;
               }
@@ -2193,6 +2282,16 @@
           this._trajPos = new THREE.Vector3();
           this._trajQuat = new THREE.Quaternion();
 
+          // Dodge detection: track whether a throw was aimed at the opponent
+          this._throwOpponentPos = null;
+          this._prevBallZ = null;
+          this._prevBallX = null;
+          this._prevBallY = null;
+          this._dodgeAimed = null;
+
+          // Deferred stat counting: only count when ball crosses midpoint (Z=0)
+          this._pendingAction = null; // 'throw' or 'racket'
+
           // Listen for A button press on the scene
           this.el.sceneEl.addEventListener('abuttondown', (evt) => {
             const hand = evt.target;
@@ -2204,9 +2303,11 @@
             
             // Left hand controls player1's ball, right hand controls player2's ball
             if ((isLeftHand && isPlayer1Ball) || (isRightHand && isPlayer2Ball)) {
+              resetStage(this.data.player);
               this.resetPosition();
               // In mirror mode, also respawn the mirrored bot's ball
               if (window.botMirrorMode && isRightHand && isPlayer2Ball) {
+                resetStage('player1');
                 const mirroredBall = document.querySelector('[simple-grab="player: player1"]');
                 if (mirroredBall && mirroredBall.components['simple-grab']) {
                   mirroredBall.components['simple-grab'].resetPosition();
@@ -2240,6 +2341,9 @@
               const behindBot = (this.data.player === 'player2' && bz < -6.5);
               const behindPlayer = (this.data.player === 'player1' && bz > 6.5);
               if (behindBot || behindPlayer) {
+                advanceStage(this.data.player);
+                const opponent = this.data.player === 'player1' ? 'player2' : 'player1';
+                if (this._dodgeAimed) recordStat(opponent, 'dodges');
                 this.isReturning = true;
                 this.returningGraceUntil = now + 2000;
                 this.body.velocity.set(0, 0, 0);
@@ -2262,10 +2366,18 @@
             const isBotTarget = collider.id === 'bot-target' || collider.id === 'bot-body-collider';
             const isPlayerTarget = collider.id === 'player-target' || collider.id === 'player-body-collider';
 
+            // Prevent double-counting when ball hits both target and body collider
+            if (isBotTarget || isPlayerTarget) {
+              if (this._lastHitTime && now - this._lastHitTime < 200) return;
+              this._lastHitTime = now;
+            }
+
             // --- NORMAL HITS: ball hits the OPPONENT's body ---
             // Player2's blue ball (human's) hitting bot = point for human player
             if (this.data.player === 'player2' && isBotTarget) {
               if (inGracePeriod) return;
+              resetStage(this.data.player);
+              recordStat('player2', 'hits');
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -2279,6 +2391,8 @@
             if (this.data.player === 'player1' && isPlayerTarget) {
               if (isMultiplayer) return;
               if (inGracePeriod) return;
+              resetStage(this.data.player);
+              recordStat('player1', 'hits');
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -2297,6 +2411,8 @@
             // In multiplayer, skip: red ball is remote-driven, thrower handles scoring
             if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
               if (isMultiplayer) return;
+              resetStage(this.data.player);
+              recordStat('player2', 'hits');
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -2307,6 +2423,8 @@
             }
             // Player2's blue ball (human's) deflected back at player = point for bot
             if (this.data.player === 'player2' && isPlayerTarget && canSelfHit) {
+              resetStage(this.data.player);
+              recordStat('player1', 'hits');
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
@@ -2329,6 +2447,7 @@
                 const hitOpponentWall = (this.data.player === 'player2' && isBackWallBehindBot) ||
                                         (this.data.player === 'player1' && isBackWallBehindPlayer);
                 if (hitOpponentWall && this.body) {
+                  advanceStage(this.data.player);
                   // Release any grab constraint
                   if (this.constraint) {
                     world.removeConstraint(this.constraint);
@@ -2371,11 +2490,12 @@
                   }
                   return;
                 }
-                // Ball hits its OWN back wall - just respawn
+                // Ball hits its OWN back wall - respawn and reset stage
                 // Player2's blue ball hits wall behind player (z=+8) = own back wall
                 // Player1's red ball hits wall behind bot (z=-8) = own back wall
                 if ((this.data.player === 'player2' && isBackWallBehindPlayer) ||
                     (this.data.player === 'player1' && isBackWallBehindBot)) {
+                  resetStage(this.data.player);
                   respawn();
                   return;
                 }
@@ -2384,9 +2504,22 @@
           });
         },
         
+        snapshotOpponentPos: function() {
+          const targetId = this.data.player === 'player2' ? '#bot-target' : '#player-target';
+          const target = document.querySelector(targetId);
+          if (target) {
+            if (!this._throwOpponentPos) this._throwOpponentPos = new THREE.Vector3();
+            target.object3D.getWorldPosition(this._throwOpponentPos);
+          }
+          this._dodgeAimed = null;
+        },
+
         resetPosition: function() {
           this.isReturning = false;
           this.returningGraceUntil = 0;
+          this._throwOpponentPos = null;
+          this._dodgeAimed = null;
+          this._pendingAction = null;
           if (this.constraint) {
             world.removeConstraint(this.constraint);
             this.constraint = null;
@@ -2425,6 +2558,46 @@
             }
             if (!this.isGrabbed && !this.isReturning) {
               const bz = this.body.position.z;
+
+              // Z-plane crossing: check if ball passed through opponent's plane this frame
+              if (this._throwOpponentPos && this._dodgeAimed === null && this._prevBallZ !== null) {
+                const opZ = this._throwOpponentPos.z;
+                const movingTowardBot = this.data.player === 'player2';
+                const crossed = movingTowardBot
+                  ? (this._prevBallZ > opZ && bz <= opZ)
+                  : (this._prevBallZ < opZ && bz >= opZ);
+                if (crossed) {
+                  const denom = bz - this._prevBallZ;
+                  if (Math.abs(denom) > 0.001) {
+                    const t = (opZ - this._prevBallZ) / denom;
+                    const bx = this.body.position.x;
+                    const by = this.body.position.y;
+                    const prevBx = this._prevBallX || bx;
+                    const prevBy = this._prevBallY || by;
+                    const crossX = prevBx + t * (bx - prevBx);
+                    const crossY = prevBy + t * (by - prevBy);
+                    const dx = crossX - this._throwOpponentPos.x;
+                    const dy = crossY - this._throwOpponentPos.y;
+                    this._dodgeAimed = Math.abs(dx) < 0.5 && Math.abs(dy) < 1.0;
+                  }
+                }
+              }
+              // Count throw/racket only when ball crosses midpoint (Z=0) toward opponent
+              if (this._pendingAction && this._prevBallZ !== null) {
+                const towardOpponent = this.data.player === 'player2'
+                  ? (this._prevBallZ > 0 && bz <= 0)
+                  : (this._prevBallZ < 0 && bz >= 0);
+                if (towardOpponent) {
+                  if (this._pendingAction === 'throw') recordStat(this.data.player, 'throws');
+                  else if (this._pendingAction === 'racket') recordStat(this.data.player, 'racketHits');
+                  this._pendingAction = null;
+                }
+              }
+
+              this._prevBallZ = bz;
+              this._prevBallX = this.body.position.x;
+              this._prevBallY = this.body.position.y;
+
               if (bz < -7.8 || bz > 7.8) {
                 const nearBotWall = bz < -7.8;   // z=-8 area
                 const nearPlayerWall = bz > 7.8;  // z=+8 area
@@ -2433,6 +2606,9 @@
                 const hitOwnWall = (this.data.player === 'player2' && nearPlayerWall) ||
                                    (this.data.player === 'player1' && nearBotWall);
                 if (hitOpponentWall) {
+                  advanceStage(this.data.player);
+                  const tickOpponent = this.data.player === 'player1' ? 'player2' : 'player1';
+                  if (this._dodgeAimed) recordStat(tickOpponent, 'dodges');
                   if (this.constraint) { world.removeConstraint(this.constraint); this.constraint = null; }
                   if (this.handBody) { world.removeBody(this.handBody); this.handBody = null; }
                   this.body.mass = 1; this.body.updateMassProperties();
@@ -2454,6 +2630,7 @@
                   }
                   return;
                 } else if (hitOwnWall) {
+                  resetStage(this.data.player);
                   this.isReturning = false;
                   this.resetPosition();
                   return;
@@ -2502,23 +2679,31 @@
               // Keep zero gravity
               this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
               
-              // Haptic when held ball touches opponent's ball (direct distance check)
+              // Haptic + block detection when held ball touches opponent's ball
               if (!this._lastBallBallHapticTime) this._lastBallBallHapticTime = 0;
+              if (!this._lastBallBlockTime) this._lastBallBlockTime = 0;
               const hapticNow = performance.now();
-              if (hapticNow - this._lastBallBallHapticTime > 200) {
-                const otherPlayer = this.data.player === 'player1' ? 'player2' : 'player1';
-                if (!this._otherBallEl) {
-                  this._otherBallEl = document.querySelector('[simple-grab="player: ' + otherPlayer + '"]');
-                }
-                const otherGrab = this._otherBallEl?.components?.['simple-grab'];
-                if (otherGrab?.body) {
-                  const dx = this.body.position.x - otherGrab.body.position.x;
-                  const dy = this.body.position.y - otherGrab.body.position.y;
-                  const dz = this.body.position.z - otherGrab.body.position.z;
-                  const distSq = dx*dx + dy*dy + dz*dz;
-                  if (distSq < 0.05) { // ~0.22m, slightly more than combined radius 0.2
+              const otherPlayer = this.data.player === 'player1' ? 'player2' : 'player1';
+              if (!this._otherBallEl) {
+                this._otherBallEl = document.querySelector('[simple-grab="player: ' + otherPlayer + '"]');
+              }
+              const otherGrab = this._otherBallEl?.components?.['simple-grab'];
+              if (otherGrab?.body) {
+                const dx = this.body.position.x - otherGrab.body.position.x;
+                const dy = this.body.position.y - otherGrab.body.position.y;
+                const dz = this.body.position.z - otherGrab.body.position.z;
+                const distSq = dx*dx + dy*dy + dz*dz;
+                const rA = this.body.shapes[0]?.radius || 0.1;
+                const rB = otherGrab.body.shapes[0]?.radius || 0.1;
+                const touchDist = (rA + rB) * 1.15;
+                if (distSq < touchDist * touchDist) {
+                  if (hapticNow - this._lastBallBallHapticTime > 200) {
                     this._lastBallBallHapticTime = hapticNow;
                     pulseHaptic(this.grabbingHand, 0.7, 100);
+                  }
+                  if (!otherGrab.isGrabbed && hapticNow - this._lastBallBlockTime > 500) {
+                    this._lastBallBlockTime = hapticNow;
+                    recordStat(this.data.player, 'blocks');
                   }
                 }
               }
@@ -2680,8 +2865,8 @@
             const throwMultiplier = 1.5; // Slight boost for satisfying throws
             velocity.multiplyScalar(throwMultiplier);
             
-            // Cap maximum throw speed for gameplay balance
-            const maxThrowSpeed = 25; // m/s
+            // Cap throw speed based on the ball owner's stage
+            const maxThrowSpeed = getStageMaxSpeed(playerStages[this.data.player] || 1);
             if (velocity.length() > maxThrowSpeed) {
               velocity.normalize().multiplyScalar(maxThrowSpeed);
             }
@@ -2719,6 +2904,8 @@
           this.body.angularVelocity.set(axis.x, axis.y, axis.z);
           this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
           
+          this._pendingAction = 'throw';
+          this.snapshotOpponentPos();
           console.log('Throw velocity:', velocity.length().toFixed(2), 'm/s (smoothed)');
           
           // Clear velocity history for next throw
@@ -2750,7 +2937,9 @@
         if (!ballA || !ballB) return;
         ballA.position.vsub(ballB.position, _ccdRelPos);
         ballA.velocity.vsub(ballB.velocity, _ccdRelVel);
-        const combinedRadius = 0.2; // 0.1 + 0.1
+        const rA = ballA.shapes[0]?.radius || 0.1;
+        const rB = ballB.shapes[0]?.radius || 0.1;
+        const combinedRadius = rA + rB;
 
         const currentDist = _ccdRelPos.length();
         // If balls are already close enough for CANNON substeps to catch, let CANNON handle it
@@ -2784,29 +2973,41 @@
             if (aGrabbed) {
               // B is free, reflect B's velocity along the collision normal
               const vbDotN = ballB.velocity.dot(normal);
-              if (vbDotN > 0) { // B moving toward A (normal points A->B, so positive = approaching)
+              if (vbDotN > 0) {
                 const restitution = 0.95;
                 const impulseScalar = -vbDotN * (1 + restitution);
                 ballB.velocity.x += normal.x * impulseScalar;
                 ballB.velocity.y += normal.y * impulseScalar;
                 ballB.velocity.z += normal.z * impulseScalar;
               }
-              // Haptic feedback on the hand holding ball A
               const grabA = ballA.el?.components?.['simple-grab'];
               if (grabA?.grabbingHand) pulseHaptic(grabA.grabbingHand, 0.7, 100);
+              if (grabA?.data?.player) {
+                const cn = performance.now();
+                if (!grabA._lastBallBlockTime || cn - grabA._lastBallBlockTime > 500) {
+                  grabA._lastBallBlockTime = cn;
+                  recordStat(grabA.data.player, 'blocks');
+                }
+              }
             } else {
               // A is free, reflect A's velocity along the collision normal
               const vaDotN = ballA.velocity.dot(normal);
-              if (vaDotN < 0) { // A moving toward B (normal points A->B, so negative = approaching)
+              if (vaDotN < 0) {
                 const restitution = 0.95;
                 const impulseScalar = -vaDotN * (1 + restitution);
                 ballA.velocity.x += normal.x * impulseScalar;
                 ballA.velocity.y += normal.y * impulseScalar;
                 ballA.velocity.z += normal.z * impulseScalar;
               }
-              // Haptic feedback on the hand holding ball B
               const grabB = ballB.el?.components?.['simple-grab'];
               if (grabB?.grabbingHand) pulseHaptic(grabB.grabbingHand, 0.7, 100);
+              if (grabB?.data?.player) {
+                const cn = performance.now();
+                if (!grabB._lastBallBlockTime || cn - grabB._lastBallBlockTime > 500) {
+                  grabB._lastBallBlockTime = cn;
+                  recordStat(grabB.data.player, 'blocks');
+                }
+              }
             }
           } else {
             // Both free: equal-mass elastic collision
@@ -3327,18 +3528,6 @@
           this.scoreDisplay.setAttribute('visible', false);
           this.timerDisplay.setAttribute('visible', false);
           
-          // Listen for A button press on both controllers
-          this.el.sceneEl.addEventListener('abuttondown', (evt) => {
-            if (this.matchState === 'WAITING') {
-              if (isMultiplayer && !window.isSpectator) {
-                this.handleMultiplayerReady();
-              } else if (!isMultiplayer) {
-                this.startCountdown();
-              }
-            } else if (this.matchState === 'ENDED') {
-              this.resetMatch();
-            }
-          });
         },
 
         tick: function() {
@@ -3372,9 +3561,11 @@
           if (!isMultiplayer) return;
           
           if (multiplayerReady.local && !multiplayerReady.remote) {
+            this.startMessage.setAttribute('visible', true);
             this.startMessage.setAttribute('text', 'value', 'Waiting for other player...');
           } else if (!multiplayerReady.local && multiplayerReady.remote) {
-            this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+            this.startMessage.setAttribute('visible', true);
+            this.startMessage.setAttribute('text', 'value', 'Other player is ready');
           } else if (multiplayerReady.local && multiplayerReady.remote) {
             const startTime = Date.now();
             this.syncedStartCountdown(startTime);
@@ -3388,9 +3579,7 @@
           multiplayerReady.local = false;
           multiplayerReady.remote = false;
           
-          // Show start message
-          this.startMessage.setAttribute('visible', true);
-          this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+          this.startMessage.setAttribute('visible', false);
           this.scoreDisplay.setAttribute('visible', false);
           this.timerDisplay.setAttribute('visible', false);
           
@@ -3435,10 +3624,13 @@
           this.scoreDisplay.setAttribute('visible', true);
           this.timerDisplay.setAttribute('visible', true);
           
-          // Reset scores
+          // Reset scores, stages, and stats
           this.playerScore = 0;
           this.botScore = 0;
           this.updateScore();
+          resetStage('player1');
+          resetStage('player2');
+          resetMatchStats();
           
           // Enable bot (only in singleplayer) and player collision
           const bot = this.el.sceneEl.querySelector('[advanced-bot]');
@@ -3510,7 +3702,7 @@
           }
           
           this.startMessage.setAttribute('visible', true);
-          this.startMessage.setAttribute('text', 'value', `${winner}\nPress A to play again`);
+          this.startMessage.setAttribute('text', 'value', winner);
           this.timerDisplay.setAttribute('text', 'value', 'Match ended');
           
           if (isMultiplayer) {
@@ -3527,6 +3719,9 @@
           this.playerScore = 0;
           this.botScore = 0;
           this.gameStarted = false;
+          resetStage('player1');
+          resetStage('player2');
+          resetMatchStats();
           
           // Reset multiplayer scores and ready states
           if (isMultiplayer) {
@@ -3536,11 +3731,9 @@
             multiplayerReady.remote = false;
           }
           
-          // Hide game UI, show start message
           this.scoreDisplay.setAttribute('visible', false);
           this.timerDisplay.setAttribute('visible', false);
-          this.startMessage.setAttribute('visible', true);
-          this.startMessage.setAttribute('text', 'value', 'Press A to Start');
+          this.startMessage.setAttribute('visible', false);
           
           // Disable bot
           const bot = this.el.sceneEl.querySelector('[advanced-bot]');
@@ -3784,6 +3977,9 @@
                 this.racketAngularVelocity.set(0, 0, 0);
               }
               
+              // Store current quat for orientation interpolation in checkSweptCollision
+              this._currentWorldQuat = worldQuat;
+              
               // Check for ball collision along movement path
               const movement = worldPos.distanceTo(this.lastRacketPos);
               if (movement > 0.00001) {
@@ -3883,6 +4079,8 @@
         _sweptContactVel: new THREE.Vector3(),
         _sweptRacketQuat: new THREE.Quaternion(),
         _sweptInvQuat: new THREE.Quaternion(),
+        _sweptStepQuat: new THREE.Quaternion(),
+        _sweptStepInvQuat: new THREE.Quaternion(),
         _cachedBalls: null,
         _cachedBallsTime: 0,
         
@@ -3911,14 +4109,10 @@
           // Use the pre-computed racket velocity from the tick function
           this._sweptContactVel.copy(this.racketVelocity);
           
-          // Get racket orientation for proper box collision
-          this.el.object3D.getWorldQuaternion(this._sweptRacketQuat);
-          this._sweptInvQuat.copy(this._sweptRacketQuat).invert();
+          // Get racket start/end orientations for interpolation during swept test
+          this._sweptRacketQuat.copy(this._currentWorldQuat || this.lastRacketQuat);
           
-          // Racket half-extents: 0.2m wide, 0.2m tall, 0.02m thick → halves: 0.1, 0.1, 0.01
-          const halfW = 0.1, halfH = 0.1, halfD = 0.01;
-          const ballRadius = 0.1;
-          const ballRadiusSq = ballRadius * ballRadius;
+          const halfW = 0.1, halfH = 0.1, halfD = 0.025;
           
           for (const ballEl of this._cachedBalls) {
             if (!ballEl) continue;
@@ -3928,6 +4122,8 @@
             if (grab.isGrabbed) continue;
             
             const ballBody = grab.body;
+            const ballRadius = ballBody.shapes[0] ? ballBody.shapes[0].radius : 0.1;
+            const ballRadiusSq = ballRadius * ballRadius;
             // Use post-step position as current
             this._sweptBallPos.set(ballBody.position.x, ballBody.position.y, ballBody.position.z);
             
@@ -3936,10 +4132,8 @@
             const playerKey = grab.data?.player || 'player2';
             const preStepPos = preStepBallPositions[playerKey];
             
-            // Track previous ball positions per ball entity
             const trackKey = '_lastBallPos_' + playerKey;
-            if (preStepPos && preStepPos.lengthSq() > 0.01) {
-              // Use pre-step position (stored before world.step())
+            if (preStepPos) {
               this._sweptLastBall.copy(preStepPos);
             } else if (this[trackKey]) {
               this._sweptLastBall.copy(this[trackKey]);
@@ -3950,19 +4144,23 @@
             // Swept box-sphere test: interpolate both paths, check box-sphere at each step
             const moveDist = startPos.distanceTo(endPos);
             const ballDist = this._sweptLastBall.distanceTo(this._sweptBallPos);
-            const maxDist = Math.max(moveDist, ballDist);
+            const totalDist = moveDist + ballDist;
             let hitDetected = false;
             
-            if (maxDist > 0.001) {
-              const numSteps = Math.min(Math.max(Math.ceil(maxDist * 40), 5), 30);
+            if (totalDist > 0.001) {
+              const numSteps = Math.min(Math.max(Math.ceil(totalDist / 0.04), 5), 120);
               
               for (let i = 0; i <= numSteps; i++) {
                 const t = i / numSteps;
                 this._sweptRp.lerpVectors(startPos, endPos, t);
                 this._sweptBp.lerpVectors(this._sweptLastBall, this._sweptBallPos, t);
                 
+                // Interpolate racket orientation for this step
+                this._sweptStepQuat.slerpQuaternions(this.lastRacketQuat, this._sweptRacketQuat, t);
+                this._sweptStepInvQuat.copy(this._sweptStepQuat).invert();
+                
                 // Transform ball position into racket-local space
-                this._sweptLocal.copy(this._sweptBp).sub(this._sweptRp).applyQuaternion(this._sweptInvQuat);
+                this._sweptLocal.copy(this._sweptBp).sub(this._sweptRp).applyQuaternion(this._sweptStepInvQuat);
                 
                 // Closest point on the box to the ball center (clamped)
                 const lx = this._sweptLocal.x, ly = this._sweptLocal.y, lz = this._sweptLocal.z;
@@ -3978,7 +4176,8 @@
                 }
               }
             } else {
-              // Both nearly stationary - direct box-sphere check
+              // Both nearly stationary - direct box-sphere check using end orientation
+              this._sweptInvQuat.copy(this._sweptRacketQuat).invert();
               this._sweptLocal.copy(this._sweptBallPos).sub(endPos).applyQuaternion(this._sweptInvQuat);
               const lx = this._sweptLocal.x, ly = this._sweptLocal.y, lz = this._sweptLocal.z;
               const cx = Math.max(-halfW, Math.min(halfW, lx));
@@ -4020,7 +4219,7 @@
           
           // Ball in racket-local space for box normal calculation
           const localBall = ballPos.clone().sub(racketWorldPos).applyQuaternion(racketInvQuat);
-          const halfW = 0.1, halfH = 0.1, halfD = 0.01;
+          const halfW = 0.1, halfH = 0.1, halfD = 0.025;
           const cx = Math.max(-halfW, Math.min(halfW, localBall.x));
           const cy = Math.max(-halfH, Math.min(halfH, localBall.y));
           const cz = Math.max(-halfD, Math.min(halfD, localBall.z));
@@ -4048,17 +4247,23 @@
             ballBody.angularVelocity.x, ballBody.angularVelocity.y, ballBody.angularVelocity.z
           );
           const incomingSpeed = ballVel.length();
-          const ballRadius = 0.1;
-          const inertiaCoeff = 0.4; // Solid sphere: 2/5 * m * r^2 → coefficient 2/5
+          const ballRadius = ballBody.shapes[0] ? ballBody.shapes[0].radius : 0.1;
+          const inertiaCoeff = 0.4;
           
           // --- Transform to paddle rest frame ---
           const relVel = ballVel.clone().sub(paddleVel);
           
           // Decompose into normal and tangential components
-          const vn = relVel.dot(normal);
+          let vn = relVel.dot(normal);
           
-          // Ball moving away from paddle in paddle frame → no collision
-          if (vn > 0) return;
+          // If vn > 0 the ball appears to be moving away from the paddle face.
+          // This happens when a fast ball has already passed through the racket
+          // by the time we process the swept hit — the normal is computed from the
+          // wrong side. Flip the normal so the impulse pushes the ball back correctly.
+          if (vn > 0) {
+            normal.negate();
+            vn = -vn;
+          }
           
           const vperp = normal.clone().multiplyScalar(vn);
           const vpar = relVel.clone().sub(vperp);
@@ -4104,8 +4309,12 @@
           // --- Transform back to world frame ---
           const newVel = relVel.add(paddleVel);
           
-          // Apply final velocity and spin
+          // Apply final velocity and spin, capped by the ball owner's stage
+          const ballOwner = ballEl.components['simple-grab']?.data?.player || 'player2';
+          const ballGrabComp = ballEl.components['simple-grab'];
+          if (ballGrabComp) ballGrabComp._pendingAction = 'racket';
           ballBody.velocity.set(newVel.x, newVel.y, newVel.z);
+          capBallSpeed(ballOwner, ballBody);
           ballBody.angularVelocity.set(ballAngVel.x, ballAngVel.y, ballAngVel.z);
           
           // Clear returning state since the ball was intercepted
@@ -4116,7 +4325,7 @@
           }
           
           console.log('Racket hit:', incomingSpeed.toFixed(1), '→',
-            newVel.length().toFixed(1), 'm/s, paddle:', paddleVel.length().toFixed(2),
+            ballBody.velocity.length().toFixed(1), 'm/s, paddle:', paddleVel.length().toFixed(2),
             'm/s, spin:', ballAngVel.length().toFixed(1), 'rad/s');
           
           // Play feedback
@@ -4212,6 +4421,7 @@
                 if (grab.isReturning && Date.now() < grab.returningGraceUntil) return;
               }
 
+              resetStage('player1');
               const playerSphere = this.el.querySelector('a-sphere');
               if (playerSphere) {
                 playerSphere.setAttribute('color', '#0000ff');
@@ -4285,6 +4495,7 @@
           
           if (collider && collider.getAttribute('simple-grab') && 
               collider.getAttribute('simple-grab').player === 'player2') {
+            resetStage('player2');
             this.isHit = true;
             this.lastHitTime = now;
             
@@ -4341,14 +4552,18 @@
           
           // Reset ball position
           this.ball.components['simple-grab'].resetPosition();
+          this.ball.components['simple-grab']._pendingAction = 'throw';
+          this.ball.components['simple-grab'].snapshotOpponentPos();
           
-          // Apply velocity
+          // Apply velocity, capped by stage-based max speed
           const ballBody = this.ball.components['simple-grab'].body;
           if (ballBody) {
+            const maxSpd = getStageMaxSpeed(playerStages['player1'] || 1);
+            const cappedForce = Math.min(throwForce, maxSpd);
             ballBody.velocity.set(
-              throwAngle.x * throwForce,
-              throwAngle.y * throwForce,
-              throwAngle.z * throwForce
+              throwAngle.x * cappedForce,
+              throwAngle.y * cappedForce,
+              throwAngle.z * cappedForce
             );
           }
         },
@@ -4651,10 +4866,18 @@
           if (this.statsDisplay) {
             const blue = this.ballStats.player2;
             const red = this.ballStats.player1;
+            const bs = matchStats.player2;
+            const rs = matchStats.player1;
+            const blueAttempts = bs.throws + bs.racketHits;
+            const redAttempts = rs.throws + rs.racketHits;
+            const blueAcc = blueAttempts > 0 ? Math.round((bs.hits + rs.dodges + rs.blocks) / blueAttempts * 100) : 0;
+            const redAcc = redAttempts > 0 ? Math.round((rs.hits + bs.dodges + bs.blocks) / redAttempts * 100) : 0;
             
             const displayText = 
-              `${blue.color} ball: ${blue.current.toFixed(1)} m/s (Max: ${blue.fastest.toFixed(1)})` + 
-              `\n${red.color} ball: ${red.current.toFixed(1)} m/s (Max: ${red.fastest.toFixed(1)})`;
+              `Blue: ${blue.current.toFixed(1)} m/s (Max: ${blue.fastest.toFixed(1)})` +
+              `\nStage ${playerStages.player2 || 1}  |  T:${bs.throws} R:${bs.racketHits} B:${bs.blocks} D:${bs.dodges} Acc:${blueAcc}%` +
+              `\nRed: ${red.current.toFixed(1)} m/s (Max: ${red.fastest.toFixed(1)})` +
+              `\nStage ${playerStages.player1 || 1}  |  T:${rs.throws} R:${rs.racketHits} B:${rs.blocks} D:${rs.dodges} Acc:${redAcc}%`;
             
             this.statsDisplay.setAttribute('value', displayText);
           }
@@ -4831,7 +5054,7 @@
           this.torsoLeanVelocity = 0.15;
 
           // Pose blend state (idle <-> serve transitions)
-          this.blendDuration = 0.25;
+          this.blendDuration = 0.5;
           this._blendState = 'none';
           this._blendProgress = 0;
           this._blendFromPose = null;
@@ -5172,7 +5395,7 @@
           const paddleVel = racketVel.clone();
           const ballVel = new THREE.Vector3(ballBody.velocity.x, ballBody.velocity.y, ballBody.velocity.z);
           const ballAngVel = new THREE.Vector3(ballBody.angularVelocity.x, ballBody.angularVelocity.y, ballBody.angularVelocity.z);
-          const ballRadius = 0.1;
+          const ballRadius = ballBody.shapes[0] ? ballBody.shapes[0].radius : 0.1;
           const inertiaCoeff = 0.4;
           const relVel = ballVel.clone().sub(paddleVel);
           const vn = relVel.dot(normal);
@@ -5197,6 +5420,9 @@
           ballAngVel.sub(spinChange);
           const newVel = relVel.add(paddleVel);
           ballBody.velocity.set(newVel.x, newVel.y, newVel.z);
+          const mirrorBallPlayer = ballGrab.data?.player || 'player1';
+          if (ballGrab) ballGrab._pendingAction = 'racket';
+          capBallSpeed(mirrorBallPlayer, ballBody);
           ballBody.angularVelocity.set(ballAngVel.x, ballAngVel.y, ballAngVel.z);
           if (ballGrab.isReturning) { ballGrab.isReturning = false; ballGrab.returningGraceUntil = 0; }
 
@@ -5474,8 +5700,9 @@
                   // Compute racket velocity
                   this._mrVel[side].subVectors(curPos, this._mrLastPos[side]).divideScalar(mrDt);
                   // Swept box-sphere collision (same logic as static-physics rackets)
-                  const halfW = 0.1, halfH = 0.1, halfD = 0.01, ballR = 0.1;
+                  const halfW = 0.1, halfH = 0.1, halfD = 0.01;
                   const ballBody = botBallGrab.body;
+                  const ballR = ballBody.shapes[0] ? ballBody.shapes[0].radius : 0.1;
                   const ballPos = this._mrTmpVec.set(ballBody.position.x, ballBody.position.y, ballBody.position.z);
                   this._mrTmpInvQ.copy(curQuat).invert();
                   const startP = this._mrLastPos[side];
@@ -5597,7 +5824,8 @@
                 rc: this.currentCurls.right,
                 bg: pGrabRec ? pGrabRec.isGrabbed : false,
                 bp: recBallPos,
-                bv: bGrabRec && bGrabRec.body ? bGrabRec.body.velocity : null
+                obv: bGrabRec && bGrabRec.body ? bGrabRec.body.velocity : null,
+                oba: bGrabRec && bGrabRec.body ? bGrabRec.body.angularVelocity : null
               });
             }
 
@@ -5634,13 +5862,17 @@
                 this._blendFromPose.rightPos.copy(this._lastAppliedPose.rightPos);
                 this._blendFromPose.leftQuat.copy(this._lastAppliedPose.leftQuat);
                 this._blendFromPose.rightQuat.copy(this._lastAppliedPose.rightQuat);
+                this._blendFromBodyPos.copy(this.el.object3D.position);
+                this._blendFromBodyQuat.copy(this.el.object3D.quaternion);
               }
               this._wasInPlayback = true;
 
               var headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat;
               if (this._blendState === 'into') {
                 this._blendProgress += (dt || 0.016) / this.blendDuration;
-                var t = Math.min(1, this._blendProgress);
+                var rawT = Math.min(1, this._blendProgress);
+                var t = rawT * rawT * (3 - 2 * rawT);
+                this._bodyBlendT = rawT < 1 ? t : undefined;
                 var blended = this._blendPose(this._blendFromPose, targetPose, t, this._lastAppliedPose);
                 headPos = blended.headPos;
                 headQuat = blended.headQuat;
@@ -5648,7 +5880,7 @@
                 rightHandPos = blended.rightPos;
                 leftHandQuat = blended.leftQuat;
                 rightHandQuat = blended.rightQuat;
-                if (t >= 1) this._blendState = 'none';
+                if (rawT >= 1) this._blendState = 'none';
               } else {
                 headPos = pbHeadPos;
                 headQuat = pbHeadQuat;
@@ -5673,8 +5905,15 @@
               var pbBodyY = pbHipsY - 1.0;
               var pbBackOff = new THREE.Vector3(0, 0, 0.15);
               pbBackOff.applyQuaternion(this.torsoRotation);
-              this.el.object3D.position.set(headPos.x + pbBackOff.x, pbBodyY, headPos.z + pbBackOff.z);
-              this.el.object3D.quaternion.copy(this.torsoRotation);
+              if (this._bodyBlendT !== undefined) {
+                var _tbp = new THREE.Vector3(headPos.x + pbBackOff.x, pbBodyY, headPos.z + pbBackOff.z);
+                this.el.object3D.position.lerpVectors(this._blendFromBodyPos, _tbp, this._bodyBlendT);
+                this.el.object3D.quaternion.copy(this._blendFromBodyQuat).slerp(this.torsoRotation, this._bodyBlendT);
+                this._bodyBlendT = undefined;
+              } else {
+                this.el.object3D.position.set(headPos.x + pbBackOff.x, pbBodyY, headPos.z + pbBackOff.z);
+                this.el.object3D.quaternion.copy(this.torsoRotation);
+              }
 
               this.updateBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
 
@@ -5712,8 +5951,13 @@
                   this._pbBallHeld = true;
                   this._pbReleaseGraceEnd = 0;
                 } else if (pbFrame.justReleased && pbFrame.rv) {
+                  pbBallGrab._pendingAction = 'throw';
+                  pbBallGrab.snapshotOpponentPos();
                   pbBallGrab.body.velocity.set(pbFrame.rv.x, pbFrame.rv.y, pbFrame.rv.z);
-                  pbBallGrab.body.angularVelocity.set(0, 0, 0);
+                  capBallSpeed('player1', pbBallGrab.body);
+                  var rav = pbFrame.rav;
+                  pbBallGrab.body.angularVelocity.set(
+                    rav ? rav.x : 0, rav ? rav.y : 0, rav ? rav.z : 0);
                   pbBallGrab.body.mass = 1;
                   pbBallGrab.body.updateMassProperties();
                   pbBallGrab.body.gravity.set(0, 0, 0);
@@ -5740,6 +5984,8 @@
               this._blendFromPose.rightPos.copy(this._lastAppliedPose.rightPos);
               this._blendFromPose.leftQuat.copy(this._lastAppliedPose.leftQuat);
               this._blendFromPose.rightQuat.copy(this._lastAppliedPose.rightQuat);
+              this._blendFromBodyPos.copy(this.el.object3D.position);
+              this._blendFromBodyQuat.copy(this.el.object3D.quaternion);
             }
             if (this.botEntity) this.botEntity.object3D.position.set(0, 1.6, -6);
             var clipEndGrab = this._pbBotBall ? this._pbBotBall.components['simple-grab'] : null;
@@ -5773,7 +6019,8 @@
             const idlePose = { headPos: idleHeadPos, headQuat: idleHeadQuat, leftPos: idleLeftPos, rightPos: idleRightPos, leftQuat: idleLeftQuat, rightQuat: idleRightQuat };
 
             this._blendProgress += (dt || 0.016) / this.blendDuration;
-            var t = Math.min(1, this._blendProgress);
+            var rawT = Math.min(1, this._blendProgress);
+            var t = rawT * rawT * (3 - 2 * rawT);
             var blended = this._blendPose(this._blendFromPose, idlePose, t, this._lastAppliedPose);
             this._storePose(blended.headPos, blended.headQuat, blended.leftPos, blended.rightPos, blended.leftQuat, blended.rightQuat);
 
@@ -5787,13 +6034,19 @@
             const modelChestLocalY = 1.25;
             const backwardOffset = new THREE.Vector3(0, 0, 0.15);
             backwardOffset.applyQuaternion(this.torsoRotation);
-            this.el.object3D.position.set(bodyCenter.x + backwardOffset.x, bodyCenter.y - modelChestLocalY, bodyCenter.z + backwardOffset.z);
-            this.el.object3D.quaternion.copy(this.torsoRotation);
+            var targetBodyPos = new THREE.Vector3(bodyCenter.x + backwardOffset.x, bodyCenter.y - modelChestLocalY, bodyCenter.z + backwardOffset.z);
+            if (rawT < 1) {
+              this.el.object3D.position.lerpVectors(this._blendFromBodyPos, targetBodyPos, t);
+              this.el.object3D.quaternion.copy(this._blendFromBodyQuat).slerp(this.torsoRotation, t);
+            } else {
+              this.el.object3D.position.copy(targetBodyPos);
+              this.el.object3D.quaternion.copy(this.torsoRotation);
+            }
             this.updateBones(blended.headPos, blended.headQuat, blended.leftPos, blended.rightPos, blended.leftQuat, blended.rightQuat);
             const botCurls = { thumb: 0.15, index: 0.2, middle: 0.25, ring: 0.3, pinky: 0.3 };
             this.applyFingerCurls('left', botCurls);
             this.applyFingerCurls('right', botCurls);
-            if (t >= 1) this._blendState = 'none';
+            if (rawT >= 1) this._blendState = 'none';
             return;
           }
 
@@ -5840,8 +6093,24 @@
           leftHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
           rightHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
 
-          // Bot is stationary - zero velocity
-          this.headVelocity.set(0, 0, 0);
+          var rt = window.botReactionTarget;
+          if (rt && rt.handTarget && rt.progress > 0) {
+            var ht = rt.handTarget;
+            var p = rt.progress;
+            if (ht.x >= bodyCenter.x) {
+              leftHandPos.lerp(new THREE.Vector3(ht.x, ht.y, ht.z), p);
+            } else {
+              rightHandPos.lerp(new THREE.Vector3(ht.x, ht.y, ht.z), p);
+            }
+          }
+
+          if (rt && rt.progress > 0) {
+            if (this.previousHeadPosInitialized) {
+              this.headVelocity.subVectors(headPos, this.previousHeadPos).multiplyScalar(1 / dt);
+            }
+          } else {
+            this.headVelocity.set(0, 0, 0);
+          }
           if (!this.previousHeadPosInitialized) this.previousHeadPosInitialized = true;
           this.previousHeadPos.copy(headPos);
 
@@ -5895,6 +6164,8 @@
               rightQuat: new THREE.Quaternion()
             };
           }
+          if (!this._blendFromBodyPos) this._blendFromBodyPos = new THREE.Vector3();
+          if (!this._blendFromBodyQuat) this._blendFromBodyQuat = new THREE.Quaternion();
         },
 
         _storePose: function(headPos, headQuat, leftPos, rightPos, leftQuat, rightQuat) {
@@ -6385,7 +6656,7 @@
         </a-entity>
         
         <a-entity id="timer-display" position="0 3.0 0" text="value: Time: 3:00; align: center; width: 2; color: #ffff00"></a-entity>
-        <a-entity id="start-message" position="0 2.7 0" text="value: Press A to Start; align: center; width: 2; color: #ffffff"></a-entity>
+        <a-entity id="start-message" position="0 2.7 0" visible="false" text="value: ; align: center; width: 2; color: #ffffff"></a-entity>
 
       </a-entity>
 
@@ -6420,7 +6691,7 @@
         <a-text id="opponent-nickname" value="" position="0 0.7 0" align="center" width="6" color="#ffcc00" visible="false"></a-text>
         <a-entity id="bot-target" position="0 0.4 0"
                   geometry="primitive: sphere; radius: 0.125; segmentsWidth: 8; segmentsHeight: 6"
-                  material="color: #ff0000; opacity: 0; transparent: true"
+                  material="color: #ff0000; opacity: 0; transparent: true; depthWrite: false"
                   obb-collider impact-effect="color: #ff0000">
           <!-- Impact sphere (no declarative animations - handled in JS by impact-effect component) -->
           <a-sphere id="bot-impact" radius="0.05" visible="false"
@@ -6430,7 +6701,7 @@
         <!-- Bot body collision box (torso area) -->
         <a-box id="bot-body-collider" position="0 -0.05 0"
                width="0.4" height="0.7" depth="0.25"
-               material="color: #ff0000; opacity: 0; transparent: true"
+               material="color: #ff0000; opacity: 0; transparent: true; depthWrite: false"
                obb-collider>
         </a-box>
       </a-entity>
@@ -6529,14 +6800,7 @@
         <a-entity id="rig" position="0 0 0">
           <a-entity camera look-controls="pointerLockEnabled: false">
             <!-- This is the target sphere that needs to be hit -->
-            <a-sphere id="player-target" radius="0.2" color="#0000ff" position="0 0 0" glow="color: #0000ff; intensity: 1.5" obb-collider material="transparent: true; opacity: 0" impact-effect="color: #0000ff">
-              <a-entity light="type: point;
-                             color: #0000ff;
-                             intensity: 0.8;     
-                             distance: 3;       
-                             decay: 2"  
-                        position="0 0 0">
-              </a-entity>
+            <a-sphere id="player-target" radius="0.2" color="#0000ff" position="0 0 0" glow="color: #0000ff; intensity: 1.5" obb-collider material="transparent: true; opacity: 0; depthWrite: false" impact-effect="color: #0000ff">
               <!-- Impact sphere with animation component -->
               <!-- Impact sphere (no declarative animations - handled in JS by impact-effect component) -->
               <a-sphere id="player-impact" radius="0.05" visible="false"
@@ -6546,7 +6810,7 @@
             <!-- Player body collision box (follows head, offset to chest) -->
             <a-box id="player-body-collider" position="0 -0.4 0"
                    width="0.4" height="0.7" depth="0.25"
-                   material="color: #0000ff; opacity: 0; transparent: true"
+                   material="color: #0000ff; opacity: 0; transparent: true; depthWrite: false"
                    obb-collider>
             </a-box>
 
@@ -6637,6 +6901,45 @@
                     <a-text value="CLEAR ALL" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
                   </a-entity>
                 </a-entity>
+
+                <!-- Recorded sub-mode section (visible in RECORDED mode with clips) -->
+                <a-entity id="menu-rec-sub-section" position="0 -0.07 0" visible="false">
+                  <a-text value="Mode:" position="-0.12 0 0" align="left" width="0.3" color="#cccccc"></a-text>
+                  <a-entity id="menu-rec-mode-toggle" class="clickable" menu-click position="0.12 0 0"
+                            geometry="primitive: box; width: 0.2; height: 0.04; depth: 0.005"
+                            material="color: #555555; opacity: 0.9; shader: flat">
+                    <a-text id="menu-rec-mode-text" value="ALL RANDOM" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+
+                  <a-entity id="menu-difficulty-row" position="0 -0.045 0">
+                    <a-text value="Difficulty:" position="-0.12 0 0" align="left" width="0.28" color="#cccccc"></a-text>
+                    <a-entity id="menu-difficulty-toggle" class="clickable" menu-click position="0.12 0 0"
+                              geometry="primitive: box; width: 0.2; height: 0.04; depth: 0.005"
+                              material="color: #555555; opacity: 0.9; shader: flat">
+                      <a-text id="menu-difficulty-text" value="MEDIUM" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                    </a-entity>
+                  </a-entity>
+
+                  <!-- Browse controls (visible in SINGLE sub-mode) -->
+                  <a-entity id="menu-single-browse" position="0 -0.045 0" visible="false">
+                    <a-entity id="menu-clip-prev" class="clickable" menu-click position="-0.12 0 0"
+                              geometry="primitive: box; width: 0.06; height: 0.035; depth: 0.005"
+                              material="color: #555555; opacity: 0.9; shader: flat">
+                      <a-text value="<" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                    </a-entity>
+                    <a-text id="menu-clip-counter" value="0 / 0" position="-0.04 0 0" align="center" width="0.28" color="#ffffff"></a-text>
+                    <a-entity id="menu-clip-next" class="clickable" menu-click position="0.04 0 0"
+                              geometry="primitive: box; width: 0.06; height: 0.035; depth: 0.005"
+                              material="color: #555555; opacity: 0.9; shader: flat">
+                      <a-text value=">" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                    </a-entity>
+                    <a-entity id="menu-clip-delete" class="clickable" menu-click position="0.16 0 0"
+                              geometry="primitive: box; width: 0.1; height: 0.035; depth: 0.005"
+                              material="color: #cc3333; opacity: 0.9; shader: flat">
+                      <a-text value="DEL" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                    </a-entity>
+                  </a-entity>
+                </a-entity>
               </a-entity>
 
               <!-- Start / End match button -->
@@ -6668,8 +6971,7 @@
                    depth="0.02"
                    position="0 0 -0.15"
                    rotation="0 -90 0"
-                   color="#0099ff"
-                   material="wireframe: true; opacity: 0.8; transparent: true"
+                   material="color: #0099ff; emissive: #0099ff; emissiveIntensity: 1.5; wireframe: true; opacity: 0.8; transparent: true"
                    static-physics="isRacket: true"
                    visible="false">
             </a-box>
@@ -6679,8 +6981,8 @@
                       position="0 0.1 0.05" 
                       rotation="-45 0 0">
               <!-- Background panel -->
-              <a-plane width="0.25" 
-                       height="0.15" 
+              <a-plane width="0.32" 
+                       height="0.22" 
                        color="#000000" 
                        material="opacity: 0.8; transparent: true"
                        position="0 0 -0.001">
@@ -6688,7 +6990,7 @@
               
               <!-- Stats text -->
               <a-text id="ball-stats-text"
-                      value="Blue ball: -- m/s&#10;Red ball: -- m/s"
+                      value="Blue: -- m/s (Max: --)&#10;Stage 1  |  T:0 R:0 B:0 D:0 Acc:0%&#10;Red: -- m/s (Max: --)&#10;Stage 1  |  T:0 R:0 B:0 D:0 Acc:0%"
                       position="0 0 0"
                       align="center"
                       width="0.25"
@@ -6717,8 +7019,7 @@
                    depth="0.02"
                    position="0 0 -0.15"
                    rotation="0 -90 0"
-                   color="#0099ff"
-                   material="wireframe: true; opacity: 0.8; transparent: true"
+                   material="color: #0099ff; emissive: #0099ff; emissiveIntensity: 1.5; wireframe: true; opacity: 0.8; transparent: true"
                    static-physics="isRacket: true"
                    visible="false">
             </a-box>

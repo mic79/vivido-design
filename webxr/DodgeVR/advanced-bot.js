@@ -15,18 +15,33 @@ AFRAME.registerComponent('advanced-bot', {
 
   init: function() {
     this.ball = null;
+    this.playerBall = null;
     this.lastThrowTime = 0;
     this.isHit = false;
     this.hitCooldown = 2000;
     this.lastHitTime = 0;
-    this.playerHistory = []; // Store recent player positions for prediction
+    this.playerHistory = [];
     this.maxHistoryLength = 10;
     this.currentStrategy = this.data.strategy;
     this.difficultyMultiplier = this.getDifficultyMultiplier();
     this.gameStarted = false;
     this.isMultiplayer = false;
+
+    this._homePos = new THREE.Vector3(0, 1.6, -6);
+    this._reactState = 'idle';
+    this._reactStartTime = 0;
+    this._reactAction = null;
+    this._reactArrival = null;
+    this._reactDodgeTarget = new THREE.Vector3();
+    this._reactExecuteStart = 0;
+    this._reactRecoverStart = 0;
+    this._reactReactionDelay = 0;
+    this._lastBallVelZ = 0;
+    this._reactRecoverFrom = new THREE.Vector3();
+    window.botReactionTarget = null;
+
+    this._initReactionParams();
     
-    // Create debug visualization
     if (this.data.debug) {
       this.debugSphere = document.createElement('a-sphere');
       this.debugSphere.setAttribute('radius', 0.05);
@@ -36,9 +51,9 @@ AFRAME.registerComponent('advanced-bot', {
       this.el.sceneEl.appendChild(this.debugSphere);
     }
     
-    // Find the bot's ball
     this.el.sceneEl.addEventListener('loaded', () => {
       this.ball = this.el.sceneEl.querySelector('[simple-grab="player: player1"]');
+      this.playerBall = this.el.sceneEl.querySelector('[simple-grab="player: player2"]');
     });
 
     // Listen for collisions
@@ -105,7 +120,13 @@ AFRAME.registerComponent('advanced-bot', {
 
       this.isHit = true;
       this.lastHitTime = now;
-      
+
+      if (this._reactState !== 'idle') {
+        this._reactState = 'recovering';
+        this._reactRecoverStart = performance.now();
+        this._reactRecoverFrom = this.el.object3D.position.clone();
+      }
+
       // Visual feedback
       const botSphere = this.el.querySelector('a-sphere');
       if (botSphere) {
@@ -276,6 +297,182 @@ AFRAME.registerComponent('advanced-bot', {
       .normalize();
   },
 
+  _initReactionParams: function() {
+    var d = this.data.difficulty;
+    if (d === 'easy') {
+      this._rp = {
+        reactionMin: 400, reactionMax: 600,
+        predictionError: 0.4,
+        wrongChoiceChance: 0.30,
+        moveSpeed: 1.8,
+        executeDuration: 400,
+        recoverDuration: 800,
+        dodgeDist: 0.45
+      };
+    } else if (d === 'hard') {
+      this._rp = {
+        reactionMin: 150, reactionMax: 250,
+        predictionError: 0.05,
+        wrongChoiceChance: 0.05,
+        moveSpeed: 3.5,
+        executeDuration: 250,
+        recoverDuration: 300,
+        dodgeDist: 0.55
+      };
+    } else {
+      this._rp = {
+        reactionMin: 250, reactionMax: 400,
+        predictionError: 0.2,
+        wrongChoiceChance: 0.15,
+        moveSpeed: 2.5,
+        executeDuration: 300,
+        recoverDuration: 500,
+        dodgeDist: 0.5
+      };
+    }
+  },
+
+  _predictArrival: function(ballPos, ballVel) {
+    var botZ = this._homePos.z;
+    if (ballVel.z >= -1) return null;
+    var t = (botZ - ballPos.z) / ballVel.z;
+    if (t < 0 || t > 3) return null;
+    return {
+      x: ballPos.x + ballVel.x * t,
+      y: ballPos.y + ballVel.y * t,
+      t: t
+    };
+  },
+
+  _smoothstep: function(t) {
+    t = Math.max(0, Math.min(1, t));
+    return t * t * (3 - 2 * t);
+  },
+
+  _updateReaction: function(time) {
+    if (!this.playerBall) return;
+    var grab = this.playerBall.components['simple-grab'];
+    if (!grab || !grab.body) return;
+
+    var ballPos = grab.body.position;
+    var ballVel = grab.body.velocity;
+    var rp = this._rp;
+    var now = performance.now();
+
+    switch (this._reactState) {
+
+      case 'idle':
+        if (grab.isGrabbed) break;
+        var speed = Math.sqrt(ballVel.x * ballVel.x + ballVel.y * ballVel.y + ballVel.z * ballVel.z);
+        if (ballVel.z < -2 && speed > 3 && ballPos.z > this._homePos.z + 2) {
+          this._reactState = 'perceiving';
+          this._reactStartTime = now;
+          this._reactReactionDelay = rp.reactionMin +
+            Math.random() * (rp.reactionMax - rp.reactionMin);
+        }
+        break;
+
+      case 'perceiving':
+        if (now - this._reactStartTime < this._reactReactionDelay) break;
+
+        var arrival = this._predictArrival(ballPos, ballVel);
+        if (!arrival) {
+          this._reactState = 'idle';
+          break;
+        }
+
+        var errorX = (Math.random() - 0.5) * 2 * rp.predictionError;
+        var errorY = (Math.random() - 0.5) * 2 * rp.predictionError * 0.5;
+        arrival.x += errorX;
+        arrival.y += errorY;
+        this._reactArrival = arrival;
+
+        var offsetX = arrival.x - this._homePos.x;
+        var offsetY = arrival.y - this._homePos.y;
+        var dodgeX, dodgeY;
+
+        if (Math.random() < rp.wrongChoiceChance) {
+          dodgeX = offsetX > 0 ? rp.dodgeDist : -rp.dodgeDist;
+        } else {
+          dodgeX = offsetX > 0 ? -rp.dodgeDist : rp.dodgeDist;
+        }
+
+        dodgeY = 0;
+        if (offsetY > 0.3) {
+          dodgeY = -0.25;
+        } else if (offsetY < -0.3) {
+          dodgeY = 0.15;
+        }
+
+        this._reactDodgeTarget.set(
+          this._homePos.x + dodgeX,
+          this._homePos.y + dodgeY,
+          this._homePos.z
+        );
+
+        var handTarget = null;
+        if (Math.abs(offsetX) < 0.4 && Math.abs(offsetY) < 0.4) {
+          handTarget = {
+            x: arrival.x,
+            y: Math.max(this._homePos.y - 0.5, arrival.y),
+            z: this._homePos.z + 0.4
+          };
+        }
+        window.botReactionTarget = { handTarget: handTarget, progress: 0 };
+
+        this._reactState = 'executing';
+        this._reactExecuteStart = now;
+        this._reactAction = 'dodge';
+        break;
+
+      case 'executing':
+        var execElapsed = now - this._reactExecuteStart;
+        var execT = Math.min(1, execElapsed / rp.executeDuration);
+        var easedT = this._smoothstep(execT);
+
+        this.el.object3D.position.lerpVectors(
+          this._homePos, this._reactDodgeTarget, easedT
+        );
+
+        if (window.botReactionTarget) {
+          window.botReactionTarget.progress = easedT;
+        }
+
+        var ballPassed = ballPos.z < this._homePos.z - 1.5;
+        var ballStopped = Math.sqrt(ballVel.x * ballVel.x + ballVel.y * ballVel.y + ballVel.z * ballVel.z) < 0.5;
+        var ballReversed = ballVel.z > 0.5;
+        var timeout = execElapsed > 2000;
+
+        if (ballPassed || ballStopped || ballReversed || timeout) {
+          this._reactState = 'recovering';
+          this._reactRecoverStart = now;
+          this._reactRecoverFrom = this.el.object3D.position.clone();
+        }
+        break;
+
+      case 'recovering':
+        var recElapsed = now - this._reactRecoverStart;
+        var recT = Math.min(1, recElapsed / rp.recoverDuration);
+        var easedRecT = this._smoothstep(recT);
+
+        this.el.object3D.position.lerpVectors(
+          this._reactRecoverFrom, this._homePos, easedRecT
+        );
+
+        if (window.botReactionTarget) {
+          window.botReactionTarget.progress = 1 - easedRecT;
+        }
+
+        if (recT >= 1) {
+          this.el.object3D.position.copy(this._homePos);
+          this._reactState = 'idle';
+          this._reactAction = null;
+          window.botReactionTarget = null;
+        }
+        break;
+    }
+  },
+
   throwBall: function() {
     if (!this.ball || !this.ball.components['simple-grab']) return;
     
@@ -310,13 +507,19 @@ AFRAME.registerComponent('advanced-bot', {
     // Calculate throw angle
     const throwAngle = this.calculateThrowAngle(predictedPos);
     
-    // Calculate throw force based on difficulty and strategy
+    // Calculate throw force based on difficulty and strategy, capped by stage
     const baseForce = this.data.minThrowForce + 
       Math.random() * (this.data.maxThrowForce - this.data.minThrowForce);
-    const throwForce = baseForce * this.difficultyMultiplier;
+    const rawForce = baseForce * this.difficultyMultiplier;
+    const maxSpd = window.getStageMaxSpeed
+      ? window.getStageMaxSpeed((window.playerStages || {})['player1'] || 1)
+      : rawForce;
+    const throwForce = Math.min(rawForce, maxSpd);
     
     // Reset ball position
     this.ball.components['simple-grab'].resetPosition();
+    this.ball.components['simple-grab']._pendingAction = 'throw';
+    this.ball.components['simple-grab'].snapshotOpponentPos();
     
     // Apply velocity
     const ballBody = this.ball.components['simple-grab'].body;
@@ -333,8 +536,24 @@ AFRAME.registerComponent('advanced-bot', {
     if (!this.ball || !this.data.enabled || !this.gameStarted || this.isMultiplayer) return;
     if (window.botMirrorMode) return;
 
+    var isPlayingClip = window.motionPlayback && window.motionPlayback.isPlaying;
+
+    if (isPlayingClip && this._reactState !== 'idle') {
+      this._reactState = 'idle';
+      this.el.object3D.position.copy(this._homePos);
+      window.botReactionTarget = null;
+    }
+
+    if (!isPlayingClip) {
+      this._updateReaction(time);
+    }
+
     if (window.botRecordedMode) {
-      if (window.motionPlayback && window.motionPlayback.isPlaying) return;
+      if (window.botRecordedSubMode === 'single') {
+        return;
+      }
+
+      if (isPlayingClip) return;
 
       const grab = this.ball.components['simple-grab'];
       if (!grab || !grab.body) return;
@@ -344,7 +563,6 @@ AFRAME.registerComponent('advanced-bot', {
       const ballAtSpawn = distToSpawn < 0.5 && ballSpeed < 1;
 
       if (ballAtSpawn && !this.isHit) {
-        // Ball is at spawn and at rest — wait a beat, then serve
         if (!this._recServeReady) {
           this._recServeReady = true;
           this._recServeReadyTime = time;
@@ -360,11 +578,9 @@ AFRAME.registerComponent('advanced-bot', {
         }
       } else {
         this._recServeReady = false;
-        // Track how long the ball has been away from spawn
         if (!this._recBallAwayTime) {
           this._recBallAwayTime = time;
         }
-        // Safety: respawn if ball has been in play for over 15 seconds
         if (time - this._recBallAwayTime > 15000) {
           grab.resetPosition();
           this._recBallAwayTime = 0;
