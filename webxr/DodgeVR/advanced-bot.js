@@ -476,23 +476,24 @@ AFRAME.registerComponent('advanced-bot', {
   throwBall: function() {
     if (!this.ball || !this.ball.components['simple-grab']) return;
     
-    // Get player position and predict future position
-    const player = document.querySelector('#player');
-    if (!player) return;
-    
-    // Get the camera position (head height)
-    const camera = document.querySelector('[camera]');
-    if (!camera) return;
-    
-    const playerPos = new THREE.Vector3();
-    camera.object3D.getWorldPosition(playerPos);
-    
-    // Add height offset (50cm higher)
-    playerPos.y += 0.5;
-    
+    var arenaTarget = window._arenaRedBotTargetOverride;
+    var playerPos;
+
+    if (arenaTarget) {
+      playerPos = new THREE.Vector3(arenaTarget.x, arenaTarget.y, arenaTarget.z);
+    } else {
+      var player = document.querySelector('#player');
+      if (!player) return;
+      var camera = document.querySelector('[camera]');
+      if (!camera) return;
+      playerPos = new THREE.Vector3();
+      camera.object3D.getWorldPosition(playerPos);
+      playerPos.y += 0.5;
+    }
+
     this.updatePlayerHistory(playerPos);
     
-    const predictedPos = this.predictPlayerPosition() || playerPos;
+    const predictedPos = arenaTarget ? playerPos : (this.predictPlayerPosition() || playerPos);
     
     // Update debug visualization
     if (this.data.debug && this.debugSphere) {
@@ -505,7 +506,36 @@ AFRAME.registerComponent('advanced-bot', {
     }
     
     // Calculate throw angle
-    const throwAngle = this.calculateThrowAngle(predictedPos);
+    var throwAngle;
+    if (arenaTarget) {
+      var throwType = Math.random();
+      var vx, vy, vz;
+      if (throwType < 0.4) {
+        vx = (Math.random() - 0.5) * 0.35;
+        vy = (Math.random() - 0.5) * 0.25;
+        vz = 1;
+      } else if (throwType < 0.7) {
+        var bounceChoice = Math.random();
+        if (bounceChoice < 0.25) {
+          vx = 0.6 + Math.random() * 0.3; vy = (Math.random() - 0.5) * 0.3; vz = 1;
+        } else if (bounceChoice < 0.5) {
+          vx = -(0.6 + Math.random() * 0.3); vy = (Math.random() - 0.5) * 0.3; vz = 1;
+        } else if (bounceChoice < 0.75) {
+          vx = (Math.random() - 0.5) * 0.3; vy = 0.5 + Math.random() * 0.3; vz = 1;
+        } else {
+          vx = (Math.random() - 0.5) * 0.3; vy = -(0.3 + Math.random() * 0.2); vz = 1;
+        }
+      } else {
+        var curveSide = Math.random() < 0.5 ? 1 : -1;
+        vx = curveSide * (0.3 + Math.random() * 0.3);
+        vy = (Math.random() - 0.5) * 0.2;
+        vz = 1;
+      }
+      var mag = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      throwAngle = new THREE.Vector3(vx / mag, vy / mag, vz / mag);
+    } else {
+      throwAngle = this.calculateThrowAngle(predictedPos);
+    }
     
     // Calculate throw force based on difficulty and strategy, capped by stage
     const baseForce = this.data.minThrowForce + 

@@ -626,6 +626,7 @@
             setupPeerHandlers(conn);
             updateMultiplayerStatus('Connected to lobby ' + lobbyNum);
             connectionState = 'connected';
+            arenaBots.enable();
             const scene = document.querySelector('a-scene');
             if (scene) scene.emit('lobby-state-updated');
           });
@@ -661,6 +662,7 @@
           updateMultiplayerStatus('Lobby ' + lobbyNum + ' created. Waiting for players...');
           connectionState = 'connected';
           applyLobbyPosition();
+          arenaBots.enable();
 
           peer.on("connection", function (newConn) {
             if (connections.length >= 3) {
@@ -951,6 +953,11 @@
             }
             applyLobbyPosition();
             updateOpponentNickname();
+            // Sync arena bots based on match slot occupancy
+            if (arenaBots.enabled && mp) {
+              arenaBots.setSlotHuman('blue', !!mp.blue);
+              arenaBots.setSlotHuman('red', !!mp.red);
+            }
             console.log('[LOBBY] lobby-state received. matchState=' + lobbyState.matchState +
               ' blue=' + (mp && mp.blue) + ' red=' + (mp && mp.red) +
               ' myId=' + myPlayerId);
@@ -1092,9 +1099,11 @@
             if (lobbyState.matchPlayers.blue === playerId) {
               lobbyState.matchPlayers.blue = null;
               assignSpectatorSlot(playerId);
+              if (arenaBots.enabled) arenaBots.setSlotHuman('blue', false);
             } else if (lobbyState.matchPlayers.red === playerId) {
               lobbyState.matchPlayers.red = null;
               assignSpectatorSlot(playerId);
+              if (arenaBots.enabled) arenaBots.setSlotHuman('red', false);
             }
             if (leavingMatchSpot) {
               remotePlayerState = null;
@@ -1120,8 +1129,10 @@
           var nextId = lobbyState.queue.shift();
           if (!lobbyState.matchPlayers.blue) {
             lobbyState.matchPlayers.blue = nextId;
+            arenaBots.setSlotHuman('blue', true);
           } else {
             lobbyState.matchPlayers.red = nextId;
+            arenaBots.setSlotHuman('red', true);
           }
           // Remove from spectator slot
           for (var s = 0; s < lobbyState.spectatorSlots.length; s++) {
@@ -1200,6 +1211,12 @@
         // Assign old match players to spectator slots
         if (oldBlue) assignSpectatorSlot(oldBlue);
         if (oldRed) assignSpectatorSlot(oldRed);
+
+        // Re-enable arena bots for vacated slots
+        if (arenaBots.enabled) {
+          if (oldBlue) arenaBots.setSlotHuman('blue', false);
+          if (oldRed) arenaBots.setSlotHuman('red', false);
+        }
 
         // Deactivate match/spectator state for the host
         if (oldBlue === myPlayerId || oldRed === myPlayerId) {
@@ -1349,14 +1366,14 @@
         spectatorMatchActive = false;
         spectatorMatchStartTime = 0;
         var specBlueBody = document.getElementById('spectator-blue-body');
-        if (specBlueBody) {
+        if (specBlueBody && !arenaBots.blueBotActive) {
           specBlueBody.setAttribute('visible', false);
           if (specBlueBody.components['mixamo-body']) {
             specBlueBody.components['mixamo-body'].remoteHandData = null;
           }
         }
         var botBody = document.querySelector('#bot-body');
-        if (botBody && botBody.components['mixamo-body']) {
+        if (botBody && botBody.components['mixamo-body'] && !arenaBots.redBotActive) {
           botBody.components['mixamo-body'].remoteHandData = null;
         }
         if (!window.isMultiplayer) {
@@ -1464,6 +1481,7 @@
         lobbyState = null;
         multiplayerStatus = 'Singleplayer';
         updateMultiplayerStatus('Singleplayer');
+        arenaBots.disable();
         deactivateSpectatorView();
         spectatorPlayerStates = {};
         spectatorBallStates = {};
@@ -1526,6 +1544,320 @@
         multiplayerSlot = null;
         hasConnected = false;
       }
+
+      // ---- Arena Bots: decorative bots that play in the multiplayer arena ----
+      var arenaBots = {
+        enabled: false,
+        redBotActive: false,
+        blueBotActive: false,
+        _blueBall: null,
+        _redBall: null,
+        _blueBotState: null,
+
+        _createBlueBotState: function() {
+          return {
+            lastThrowTime: 0,
+            throwInterval: 3500 + Math.random() * 2000,
+            homePos: new THREE.Vector3(0, 1.6, 6),
+            currentPos: new THREE.Vector3(0, 1.6, 6),
+            reactState: 'idle',
+            reactStartTime: 0,
+            reactReactionDelay: 0,
+            reactDodgeTarget: new THREE.Vector3(),
+            reactExecuteStart: 0,
+            reactRecoverStart: 0,
+            reactRecoverFrom: new THREE.Vector3(),
+            isHit: false,
+            lastHitTime: 0
+          };
+        },
+
+        enable: function() {
+          this.enabled = true;
+          this.redBotActive = true;
+          this.blueBotActive = true;
+          this._blueBotState = this._createBlueBotState();
+          this._blueBall = document.querySelector('[simple-grab="player: player2"]');
+          this._redBall = document.querySelector('[simple-grab="player: player1"]');
+          this._enableRedBot(true);
+          this._updateBodyVisibility();
+          console.log('[ArenaBots] Enabled - 2 bots playing');
+        },
+
+        disable: function() {
+          this.enabled = false;
+          this.redBotActive = false;
+          this.blueBotActive = false;
+          this._enableRedBot(false);
+          window._arenaRedBotTargetOverride = null;
+          this._updateBodyVisibility();
+          console.log('[ArenaBots] Disabled');
+        },
+
+        setSlotHuman: function(slot, isHuman) {
+          if (slot === 'blue') {
+            var wasActive = this.blueBotActive;
+            this.blueBotActive = !isHuman;
+            if (isHuman) {
+              this._updateBodyVisibility();
+            } else if (!wasActive) {
+              this._blueBotState = this._createBlueBotState();
+              this._updateBodyVisibility();
+            }
+          } else if (slot === 'red') {
+            var wasRedActive = this.redBotActive;
+            this.redBotActive = !isHuman;
+            if (isHuman) {
+              if (wasRedActive) this._enableRedBot(false);
+              window._arenaRedBotTargetOverride = null;
+            } else if (!wasRedActive) {
+              this._enableRedBot(true);
+            }
+            this._updateBodyVisibility();
+          }
+          console.log('[ArenaBots] Slot ' + slot + ' human=' + isHuman +
+            ' redActive=' + this.redBotActive + ' blueActive=' + this.blueBotActive);
+        },
+
+        _enableRedBot: function(enable) {
+          var botEl = document.querySelector('[advanced-bot]');
+          if (!botEl) return;
+          var bot = botEl.components['advanced-bot'];
+          if (!bot) return;
+          if (enable) {
+            bot.isMultiplayer = false;
+            bot.gameStarted = true;
+            botEl.setAttribute('advanced-bot', 'enabled', true);
+            botEl.object3D.position.set(0, 1.6, -6);
+          } else {
+            botEl.setAttribute('advanced-bot', 'enabled', false);
+          }
+        },
+
+        _updateBodyVisibility: function() {
+          var botBody = document.querySelector('#bot-body');
+          var blueBody = document.getElementById('spectator-blue-body');
+          if (botBody) botBody.object3D.visible = this.redBotActive;
+          if (blueBody) blueBody.object3D.visible = this.blueBotActive;
+        },
+
+        tick: function(time) {
+          if (!this.enabled) return;
+
+          if (this.blueBotActive && this._blueBotState) {
+            this._tickBlueBot(time);
+            this._updateBlueBotBody();
+          }
+
+          if (this.redBotActive && this.blueBotActive) {
+            var bst = this._blueBotState;
+            window._arenaRedBotTargetOverride = {
+              x: bst.currentPos.x,
+              y: bst.currentPos.y,
+              z: bst.currentPos.z
+            };
+          } else {
+            window._arenaRedBotTargetOverride = null;
+          }
+        },
+
+        _tickBlueBot: function(time) {
+          var s = this._blueBotState;
+          if (!this._blueBall) {
+            this._blueBall = document.querySelector('[simple-grab="player: player2"]');
+          }
+          if (!this._blueBall || !this._blueBall.components['simple-grab']) return;
+
+          // Clear hit state after 1 second
+          if (s.isHit && time - s.lastHitTime > 1000) {
+            s.isHit = false;
+          }
+
+          this._blueBotDodge();
+          this._checkBlueBotHit(time);
+
+          if (!s.isHit && time - s.lastThrowTime > s.throwInterval) {
+            this._blueBotThrow(time);
+            s.lastThrowTime = time;
+            s.throwInterval = 3000 + Math.random() * 2000;
+          }
+        },
+
+        _blueBotThrow: function(time) {
+          var ball = this._blueBall;
+          var grab = ball.components['simple-grab'];
+          if (!grab || !grab.body) return;
+          if (grab.isGrabbed) return;
+
+          var distToSpawn = grab.body.position.distanceTo(grab.initialPosition);
+          var ballSpeed = grab.body.velocity.length();
+          if (distToSpawn > 1.5 && ballSpeed > 1) return;
+
+          grab.resetPosition();
+          grab._pendingAction = 'throw';
+          if (grab.snapshotOpponentPos) grab.snapshotOpponentPos();
+
+          var force = 8 + Math.random() * 7;
+
+          var throwType = Math.random();
+          var vx, vy, vz;
+          if (throwType < 0.4) {
+            // Direct throw with angular variation
+            vx = (Math.random() - 0.5) * 0.35;
+            vy = (Math.random() - 0.5) * 0.25;
+            vz = -1;
+          } else if (throwType < 0.7) {
+            // Bounce throw — aim at wall/floor/ceiling
+            var bounceChoice = Math.random();
+            if (bounceChoice < 0.25) {
+              vx = 0.6 + Math.random() * 0.3; vy = (Math.random() - 0.5) * 0.3; vz = -1;
+            } else if (bounceChoice < 0.5) {
+              vx = -(0.6 + Math.random() * 0.3); vy = (Math.random() - 0.5) * 0.3; vz = -1;
+            } else if (bounceChoice < 0.75) {
+              vx = (Math.random() - 0.5) * 0.3; vy = 0.5 + Math.random() * 0.3; vz = -1;
+            } else {
+              vx = (Math.random() - 0.5) * 0.3; vy = -(0.3 + Math.random() * 0.2); vz = -1;
+            }
+          } else {
+            // Curve throw — offset lateral with spin
+            var curveSide = Math.random() < 0.5 ? 1 : -1;
+            vx = curveSide * (0.3 + Math.random() * 0.3);
+            vy = (Math.random() - 0.5) * 0.2;
+            vz = -1;
+          }
+          var mag = Math.sqrt(vx * vx + vy * vy + vz * vz);
+          grab.body.velocity.set(
+            (vx / mag) * force,
+            (vy / mag) * force,
+            (vz / mag) * force
+          );
+        },
+
+        _checkBlueBotHit: function(time) {
+          var s = this._blueBotState;
+          if (s.isHit) return;
+          if (!this._redBall) return;
+          var grab = this._redBall.components['simple-grab'];
+          if (!grab || !grab.body) return;
+          if (grab.isReturning) return;
+
+          var bp = grab.body.position;
+          var bodyY = s.currentPos.y - 0.3;
+          var dx = bp.x - s.currentPos.x;
+          var dy = bp.y - bodyY;
+          var dz = bp.z - s.currentPos.z;
+          var horizDistSq = dx * dx + dz * dz;
+          var speed = grab.body.velocity.length();
+
+          if (horizDistSq < 0.6 * 0.6 && Math.abs(dy) < 0.9 && speed > 2) {
+            s.isHit = true;
+            s.lastHitTime = time;
+            resetStage('player1');
+            grab.isReturning = true;
+            grab.returningGraceUntil = Date.now() + 2000;
+            grab.body.velocity.set(0, 0, 0);
+            grab.body.angularVelocity.set(0, 0, 0);
+            var sp = grab.initialPosition;
+            var ddx = sp.x - bp.x, ddy = sp.y - bp.y, ddz = sp.z - bp.z;
+            var dist = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+            if (dist > 0.01) {
+              grab.body.velocity.set((ddx / dist) * 10, (ddy / dist) * 10, (ddz / dist) * 10);
+            } else {
+              grab.resetPosition();
+            }
+          }
+        },
+
+        _blueBotDodge: function() {
+          var s = this._blueBotState;
+          if (!this._redBall) {
+            this._redBall = document.querySelector('[simple-grab="player: player1"]');
+          }
+          if (!this._redBall || !this._redBall.components['simple-grab']) return;
+          var grab = this._redBall.components['simple-grab'];
+          if (!grab || !grab.body) return;
+
+          var ballPos = grab.body.position;
+          var ballVel = grab.body.velocity;
+          var now = performance.now();
+
+          switch (s.reactState) {
+            case 'idle':
+              if (grab.isGrabbed) break;
+              var speed = Math.sqrt(ballVel.x * ballVel.x + ballVel.y * ballVel.y + ballVel.z * ballVel.z);
+              if (ballVel.z > 2 && speed > 3 && ballPos.z < s.homePos.z - 2) {
+                s.reactState = 'perceiving';
+                s.reactStartTime = now;
+                s.reactReactionDelay = 250 + Math.random() * 150;
+              }
+              break;
+
+            case 'perceiving':
+              if (now - s.reactStartTime < s.reactReactionDelay) break;
+              var botZ = s.homePos.z;
+              if (ballVel.z <= 1) { s.reactState = 'idle'; break; }
+              var t = (botZ - ballPos.z) / ballVel.z;
+              if (t < 0 || t > 3) { s.reactState = 'idle'; break; }
+              var arrivalX = ballPos.x + ballVel.x * t + (Math.random() - 0.5) * 0.4;
+              var arrivalY = ballPos.y + ballVel.y * t + (Math.random() - 0.5) * 0.2;
+
+              var offsetX = arrivalX - s.homePos.x;
+              var dodgeX = offsetX > 0 ? -0.5 : 0.5;
+              if (Math.random() < 0.15) dodgeX = -dodgeX;
+
+              var dodgeY = 0;
+              if (arrivalY - s.homePos.y > 0.3) dodgeY = -0.25;
+              else if (arrivalY - s.homePos.y < -0.3) dodgeY = 0.15;
+
+              s.reactDodgeTarget.set(s.homePos.x + dodgeX, s.homePos.y + dodgeY, s.homePos.z);
+              s.reactState = 'executing';
+              s.reactExecuteStart = now;
+              break;
+
+            case 'executing':
+              var execElapsed = now - s.reactExecuteStart;
+              var execT = Math.min(1, execElapsed / 300);
+              var easedT = execT * execT * (3 - 2 * execT);
+              s.currentPos.lerpVectors(s.homePos, s.reactDodgeTarget, easedT);
+
+              var ballPassed = ballPos.z > s.homePos.z + 1.5;
+              var ballStopped = Math.sqrt(ballVel.x * ballVel.x + ballVel.y * ballVel.y + ballVel.z * ballVel.z) < 0.5;
+              var ballReversed = ballVel.z < -0.5;
+              if (ballPassed || ballStopped || ballReversed || execElapsed > 2000) {
+                s.reactState = 'recovering';
+                s.reactRecoverStart = now;
+                s.reactRecoverFrom.copy(s.currentPos);
+              }
+              break;
+
+            case 'recovering':
+              var recElapsed = now - s.reactRecoverStart;
+              var recT = Math.min(1, recElapsed / 500);
+              var easedRecT = recT * recT * (3 - 2 * recT);
+              s.currentPos.lerpVectors(s.reactRecoverFrom, s.homePos, easedRecT);
+              if (recT >= 1) {
+                s.currentPos.copy(s.homePos);
+                s.reactState = 'idle';
+              }
+              break;
+          }
+        },
+
+        _updateBlueBotBody: function() {
+          var body = document.getElementById('spectator-blue-body');
+          if (!body || !body.components['mixamo-body']) return;
+          var s = this._blueBotState;
+          body.components['mixamo-body'].remoteHandData = {
+            head: { x: s.currentPos.x, y: s.currentPos.y, z: s.currentPos.z,
+                    qx: 0, qy: 0, qz: 0, qw: 1 },
+            leftHand: { x: s.currentPos.x - 0.3, y: s.currentPos.y - 0.5, z: s.currentPos.z - 0.25,
+                        qx: 0, qy: 0, qz: 0, qw: 1 },
+            rightHand: { x: s.currentPos.x + 0.3, y: s.currentPos.y - 0.5, z: s.currentPos.z - 0.25,
+                         qx: 0, qy: 0, qz: 0, qw: 1 }
+          };
+        }
+      };
+      window.arenaBots = arenaBots;
 
       // Attach multiplayer-toggle to scene
       document.addEventListener('DOMContentLoaded', () => {
@@ -1599,14 +1931,21 @@
               sendPlayerState(state);
             }
           }
+          // Tick arena bots (decorative bots playing in multiplayer lobby)
+          if (isMultiplayer && arenaBots.enabled) {
+            arenaBots.tick(performance.now());
+          }
           // In multiplayer, hide phantom bodies when no valid data is driving them
+          // (but keep arena bot bodies visible when arena bots are active)
           if (isMultiplayer && !window.isSpectator) {
-            if (!remotePlayerState) {
+            if (!remotePlayerState && !arenaBots.redBotActive) {
               var _bb = document.querySelector('#bot-body');
               if (_bb) _bb.object3D.visible = false;
             }
-            var _sbb = document.getElementById('spectator-blue-body');
-            if (_sbb) _sbb.object3D.visible = false;
+            if (!arenaBots.blueBotActive) {
+              var _sbb = document.getElementById('spectator-blue-body');
+              if (_sbb) _sbb.object3D.visible = false;
+            }
           }
           // In multiplayer, update the remote player's body with mirrored transforms (match players only)
           if (isMultiplayer && !window.isSpectator && remotePlayerState) {
@@ -1743,7 +2082,7 @@
                   specBlueBody.components['mixamo-body'].remoteHandData = lbrd;
                 }
               }
-            } else if (!localIsMatchPlayer) {
+            } else if (!localIsMatchPlayer && !arenaBots.blueBotActive) {
               var specBlueBody2 = document.getElementById('spectator-blue-body');
               if (specBlueBody2) specBlueBody2.object3D.visible = false;
             }
@@ -1766,7 +2105,7 @@
                 if (lrs.rhx !== undefined) { lrrd.rightHand = { x: -lrs.lhx, y: lrs.lhy, z: -lrs.lhz }; if (lrs.lhqx !== undefined) { var lrrq = new THREE.Quaternion(lrs.lhqx, lrs.lhqy, lrs.lhqz, lrs.lhqw).multiply(yFlipLobby); lrrd.rightHand.qx = lrrq.x; lrrd.rightHand.qy = lrrq.y; lrrd.rightHand.qz = lrrq.z; lrrd.rightHand.qw = lrrq.w; } }
                 botBody.components['mixamo-body'].remoteHandData = lrrd;
               }
-            } else if (!localIsMatchPlayer && !remotePlayerState) {
+            } else if (!localIsMatchPlayer && !remotePlayerState && !arenaBots.redBotActive) {
               var botBody2 = document.querySelector('#bot-body');
               if (botBody2) {
                 botBody2.object3D.visible = false;
@@ -2319,9 +2658,12 @@
           // Add collision event listener
           this.el.addEventListener('obbcollisionstarted', (evt) => {
             // Spectators receive impacts via spectator-score messages, not local collisions
-            if (window.isSpectator) return;
+            // But allow when arena bots are playing (balls are locally simulated)
+            var arenaBotsPlaying = window.arenaBots && window.arenaBots.enabled;
+            if (window.isSpectator && !arenaBotsPlaying) return;
             // In multiplayer, the red ball (player1) is remote-driven — skip all local collisions
-            if (isMultiplayer && this.data.player === 'player1') return;
+            // But allow when arena red bot is active (ball is locally simulated by bot)
+            if (isMultiplayer && this.data.player === 'player1' && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
             const collider = evt.detail.withEl;
             if (!collider) return;
             const respawn = () => {
@@ -2381,6 +2723,13 @@
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
+              var botEl = document.querySelector('[advanced-bot]');
+              var advBot = botEl && botEl.components['advanced-bot'];
+              if (advBot) {
+                advBot.isHit = true;
+                advBot.lastHitTime = Date.now();
+                setTimeout(function() { advBot.isHit = false; }, 1000);
+              }
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onBotHit();
               respawn();
@@ -2543,9 +2892,12 @@
         tick: function() {
           if (this.body) {
             // Spectators don't own any ball — positions come from network data
-            if (window.isSpectator) return;
+            // But allow full tick when arena bots are playing (balls are locally simulated)
+            var arenaBotsPlaying = window.arenaBots && window.arenaBots.enabled;
+            if (window.isSpectator && !arenaBotsPlaying) return;
             // In multiplayer, red ball is remote-driven — skip local wall checks
-            if (isMultiplayer && this.data.player === 'player1') return;
+            // But allow when arena red bot is active (ball is locally simulated by bot)
+            if (isMultiplayer && this.data.player === 'player1' && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
             // Returning ball that reached its own wall: respawn
             if (this.isReturning && !this.isGrabbed) {
               var bz = this.body.position.z;
