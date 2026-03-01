@@ -746,7 +746,9 @@
       window.connectToLobby = connectToLobby;
 
       // --- Mobile Spectator Connection ---
+      var _mobileSpectatorLobbyNum = 0;
       async function connectAsMobileSpectator(lobbyNum) {
+        _mobileSpectatorLobbyNum = lobbyNum;
         if (isMultiplayer) return;
         var statusEl = document.getElementById('mobile-status-msg');
         var watchBtn = document.getElementById('mobile-watch-btn');
@@ -754,10 +756,12 @@
         if (watchBtn) watchBtn.disabled = true;
 
         var hostId = 'dodgevr-host-' + lobbyNum;
+        var hudStatusEl = document.getElementById('mobile-hud-status');
         var hostTaken = !(await checkPeerAvailability(hostId));
 
         if (!hostTaken) {
           if (statusEl) statusEl.textContent = 'No lobby found. Host must create it in VR first.';
+          if (hudStatusEl) hudStatusEl.textContent = 'Host disconnected.';
           if (watchBtn) watchBtn.disabled = false;
           return;
         }
@@ -784,6 +788,26 @@
             conn.send({ type: 'mobile-spectator', nickname: 'Spectator' });
             setupMobileSpectatorHandlers(conn);
             connectionState = 'connected';
+            window._spectatorHostId = hostId;
+            var _hudSt = document.getElementById('mobile-hud-status');
+            if (_hudSt) _hudSt.textContent = 'Watching lobby ' + _mobileSpectatorLobbyNum;
+
+            // Prevent screen from sleeping while spectating
+            if ('wakeLock' in navigator && !window._wakeLockSetup) {
+              window._wakeLockSetup = true;
+              navigator.wakeLock.request('screen').then(function(lock) {
+                window._wakeLock = lock;
+                lock.addEventListener('release', function() { window._wakeLock = null; });
+              }).catch(function() {});
+              document.addEventListener('visibilitychange', function() {
+                if (document.visibilityState === 'visible' && !window._wakeLock) {
+                  navigator.wakeLock.request('screen').then(function(lock) {
+                    window._wakeLock = lock;
+                    lock.addEventListener('release', function() { window._wakeLock = null; });
+                  }).catch(function() {});
+                }
+              });
+            }
 
             // Switch from lobby screen to match HUD
             var lobbyScreen = document.getElementById('mobile-lobby-screen');
@@ -914,11 +938,27 @@
         });
         hostConn.on('close', function () {
           var statusEl = document.getElementById('mobile-hud-status');
-          if (statusEl) statusEl.textContent = 'Disconnected from lobby.';
+          if (statusEl) statusEl.textContent = 'Reconnecting...';
+          window._lastArenaBotState = null;
+          isMultiplayer = false;
+          connectionState = 'disconnected';
+          if (_mobileSpectatorLobbyNum > 0) {
+            setTimeout(function() {
+              connectAsMobileSpectator(_mobileSpectatorLobbyNum);
+            }, 2000);
+          }
         });
         hostConn.on('error', function () {
           var statusEl = document.getElementById('mobile-hud-status');
-          if (statusEl) statusEl.textContent = 'Connection error.';
+          if (statusEl) statusEl.textContent = 'Reconnecting...';
+          window._lastArenaBotState = null;
+          isMultiplayer = false;
+          connectionState = 'disconnected';
+          if (_mobileSpectatorLobbyNum > 0) {
+            setTimeout(function() {
+              connectAsMobileSpectator(_mobileSpectatorLobbyNum);
+            }, 3000);
+          }
         });
       }
 
@@ -2875,6 +2915,9 @@
               var _lbId = lobbyState.matchPlayers.blue;
               if (_lbId) bs = spectatorPlayerStates[_lbId];
             }
+            if (!bs && window._spectatorHostId) {
+              bs = spectatorPlayerStates[window._spectatorHostId];
+            }
             if (!bs && window._lastArenaBotState && window._lastArenaBotState.bbd) {
               bs = window._lastArenaBotState.bbd;
             }
@@ -2903,7 +2946,8 @@
         const origOnBotHit = gm.Component.prototype.onBotHit;
         const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
         gm.Component.prototype.onBotHit = function() {
-          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          var _abActive = window.arenaBots && window.arenaBots.enabled;
+          if (!_abActive && this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
           const now = Date.now();
           if (now - (this._lastBotHitTime || 0) < 200) return;
           this._lastBotHitTime = now;
@@ -2911,17 +2955,21 @@
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
+            if (_abActive && isHost) {
+              broadcastArenaBotScore(multiplayerScore.local, multiplayerScore.remote, 'red');
+            }
           } else {
             this.playerScore += 1;
             this.updateScore();
-            if (isHost && isMultiplayer && arenaBots.enabled) {
+            if (isHost && isMultiplayer && _abActive) {
               broadcastArenaBotScore(this.playerScore, this.botScore, 'red');
             }
           }
           if (this.matchState === 'OVERTIME') this.endMatch();
         };
         gm.Component.prototype.onPlayerHit = function() {
-          if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
+          var _abActive = window.arenaBots && window.arenaBots.enabled;
+          if (!_abActive && this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
           const now = Date.now();
           if (now - (this._lastPlayerHitTime || 0) < 200) return;
           this._lastPlayerHitTime = now;
@@ -2929,10 +2977,13 @@
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
+            if (_abActive && isHost) {
+              broadcastArenaBotScore(multiplayerScore.local, multiplayerScore.remote, 'blue');
+            }
           } else {
             this.botScore += 1;
             this.updateScore();
-            if (isHost && isMultiplayer && arenaBots.enabled) {
+            if (isHost && isMultiplayer && _abActive) {
               broadcastArenaBotScore(this.playerScore, this.botScore, 'blue');
             }
           }
@@ -4681,10 +4732,12 @@
           // Play impact sound at the world position of the hit target
           const impactSound = document.querySelector('#impact-sound');
           if (impactSound) {
-            var _wp = new THREE.Vector3();
-            this.el.object3D.getWorldPosition(_wp);
-            impactSound.object3D.position.copy(_wp);
-            impactSound.components.sound.playSound();
+            try {
+              var _wp = new THREE.Vector3();
+              this.el.object3D.getWorldPosition(_wp);
+              impactSound.object3D.position.copy(_wp);
+              if (impactSound.components.sound) impactSound.components.sound.playSound();
+            } catch(e) {}
           }
           
           // Cache the THREE.js material reference (retry each call until found)
