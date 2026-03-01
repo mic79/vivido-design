@@ -2378,6 +2378,8 @@
 
       // --- GAME STATE SYNC ---
       // In tick, send local player2 (blue) and ball state; apply mirrored remote to player1 (red)
+      var _yFlip180 = new THREE.Quaternion(0, 1, 0, 0);
+      var _remoteBallQuat = new THREE.Quaternion();
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
           // In multiplayer, ALL players send head + hand transforms for full body sync
@@ -2538,42 +2540,44 @@
             const blueBall = document.querySelector('[simple-grab="player: player2"]');
             if (blueBall) {
               const pos = blueBall.object3D.position;
-              const rot = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
-              sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: rot.x, vy: rot.y, vz: rot.z });
+              const bBody = blueBall.components['simple-grab']?.body;
+              const vel = bBody?.velocity || {x:0,y:0,z:0};
+              const angVel = bBody?.angularVelocity || {x:0,y:0,z:0};
+              const bQuat = bBody?.quaternion || {x:0,y:0,z:0,w:1};
+              sendBallState({
+                x: pos.x, y: pos.y, z: pos.z,
+                vx: vel.x, vy: vel.y, vz: vel.z,
+                ax: angVel.x, ay: angVel.y, az: angVel.z,
+                qx: bQuat.x, qy: bQuat.y, qz: bQuat.z, qw: bQuat.w
+              });
             }
             sendStatsSync();
           }
-          // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) --- match players only
-          if (!window.isSpectator && remotePlayerState) {
-            const mirroredX = -remotePlayerState.x;
-            const mirroredZ = -remotePlayerState.z;
-            const mirroredVx = -remotePlayerState.vx;
-            const mirroredVz = -remotePlayerState.vz;
-            const mirroredRy = -remotePlayerState.ry;
-            const redBall = document.querySelector('[simple-grab="player: player1"]');
-            if (redBall) {
-              redBall.object3D.position.set(mirroredX, remotePlayerState.y, mirroredZ);
-              redBall.object3D.rotation.set(remotePlayerState.rx, mirroredRy, remotePlayerState.rz);
-              if (redBall.components['simple-grab']?.body) {
-                redBall.components['simple-grab'].body.position.set(mirroredX, remotePlayerState.y, mirroredZ);
-                redBall.components['simple-grab'].body.velocity.set(mirroredVx, remotePlayerState.vy, mirroredVz);
-              }
-            }
-          }
           // --- REMOTE BALL (ALWAYS RED, MIRRORED X/Z) --- match players only
           if (!window.isSpectator && remoteBallState) {
-            const mirroredX = -remoteBallState.x;
-            const mirroredZ = -remoteBallState.z;
-            const mirroredVx = -remoteBallState.vx;
-            const mirroredVz = -remoteBallState.vz;
-            const mirroredRy = -remoteBallState.ry;
+            const rbs = remoteBallState;
+            const mirX = -rbs.x;
+            const mirZ = -rbs.z;
             const redBall = document.querySelector('[simple-grab="player: player1"]');
             if (redBall) {
-              redBall.object3D.position.set(mirroredX, remoteBallState.y, mirroredZ);
-              redBall.object3D.rotation.set(remoteBallState.rx, mirroredRy, remoteBallState.rz);
-              if (redBall.components['simple-grab']?.body) {
-                redBall.components['simple-grab'].body.position.set(mirroredX, remoteBallState.y, mirroredZ);
-                redBall.components['simple-grab'].body.velocity.set(mirroredVx, remoteBallState.vy, mirroredVz);
+              redBall.object3D.position.set(mirX, rbs.y, mirZ);
+              // Apply mirrored quaternion (180° rotation about Y)
+              if (rbs.qx !== undefined) {
+                var _bq = _remoteBallQuat;
+                _bq.set(rbs.qx, rbs.qy, rbs.qz, rbs.qw);
+                _bq.premultiply(_yFlip180);
+                redBall.object3D.quaternion.copy(_bq);
+              }
+              var rbody = redBall.components['simple-grab']?.body;
+              if (rbody) {
+                rbody.position.set(mirX, rbs.y, mirZ);
+                rbody.velocity.set(-rbs.vx, rbs.vy, -rbs.vz);
+                if (rbs.ax !== undefined) {
+                  rbody.angularVelocity.set(-rbs.ax, rbs.ay, -rbs.az);
+                }
+                if (rbs.qx !== undefined) {
+                  rbody.quaternion.set(_remoteBallQuat.x, _remoteBallQuat.y, _remoteBallQuat.z, _remoteBallQuat.w);
+                }
               }
             }
           }
@@ -2643,7 +2647,6 @@
               }
             }
             // Lobby View: render ball positions from spectatorBallStates
-            // Only apply network positions for slots with human players (bots simulate locally)
             if (!localIsMatchPlayer) {
               var _abEnabled = window.arenaBots && window.arenaBots.enabled;
               if (lobbyBlueId && spectatorBallStates[lobbyBlueId] && !(_abEnabled && window.arenaBots.blueBotActive)) {
@@ -2651,11 +2654,13 @@
                 var lobbyBlueBall = document.querySelector('[simple-grab="player: player2"]');
                 if (lobbyBlueBall) {
                   lobbyBlueBall.object3D.position.set(lbbs.x, lbbs.y, lbbs.z);
+                  if (lbbs.qx !== undefined) lobbyBlueBall.object3D.quaternion.set(lbbs.qx, lbbs.qy, lbbs.qz, lbbs.qw);
                   var lbb = lobbyBlueBall.components['simple-grab'] && lobbyBlueBall.components['simple-grab'].body;
                   if (lbb) {
                     lbb.position.set(lbbs.x, lbbs.y, lbbs.z);
-                    lbb.velocity.set(0, 0, 0);
-                    lbb.angularVelocity.set(0, 0, 0);
+                    lbb.velocity.set(lbbs.vx || 0, lbbs.vy || 0, lbbs.vz || 0);
+                    lbb.angularVelocity.set(lbbs.ax || 0, lbbs.ay || 0, lbbs.az || 0);
+                    if (lbbs.qx !== undefined) lbb.quaternion.set(lbbs.qx, lbbs.qy, lbbs.qz, lbbs.qw);
                   }
                 }
               }
@@ -2664,11 +2669,17 @@
                 var lobbyRedBall = document.querySelector('[simple-grab="player: player1"]');
                 if (lobbyRedBall) {
                   lobbyRedBall.object3D.position.set(-lrbs.x, lrbs.y, -lrbs.z);
+                  if (lrbs.qx !== undefined) {
+                    _remoteBallQuat.set(lrbs.qx, lrbs.qy, lrbs.qz, lrbs.qw);
+                    _remoteBallQuat.premultiply(_yFlip180);
+                    lobbyRedBall.object3D.quaternion.copy(_remoteBallQuat);
+                  }
                   var lrb = lobbyRedBall.components['simple-grab'] && lobbyRedBall.components['simple-grab'].body;
                   if (lrb) {
                     lrb.position.set(-lrbs.x, lrbs.y, -lrbs.z);
-                    lrb.velocity.set(0, 0, 0);
-                    lrb.angularVelocity.set(0, 0, 0);
+                    lrb.velocity.set(lrbs.vx ? -lrbs.vx : 0, lrbs.vy || 0, lrbs.vz ? -lrbs.vz : 0);
+                    lrb.angularVelocity.set(lrbs.ax ? -lrbs.ax : 0, lrbs.ay || 0, lrbs.az ? -lrbs.az : 0);
+                    if (lrbs.qx !== undefined) lrb.quaternion.set(_remoteBallQuat.x, _remoteBallQuat.y, _remoteBallQuat.z, _remoteBallQuat.w);
                   }
                 }
               }
@@ -2754,17 +2765,23 @@
             }
 
             // Position balls from spectator data
-            // Zero velocity on the physics body to prevent world.step() drift;
-            // position is authoritative from network data each frame
+            // Zero linear velocity to prevent world.step() drift;
+            // angular velocity preserved for trail spin effect
             if (redBallSt) {
               const redBall = document.querySelector('[simple-grab="player: player1"]');
               if (redBall) {
                 redBall.object3D.position.set(-redBallSt.x, redBallSt.y, -redBallSt.z);
+                if (redBallSt.qx !== undefined) {
+                  _remoteBallQuat.set(redBallSt.qx, redBallSt.qy, redBallSt.qz, redBallSt.qw);
+                  _remoteBallQuat.premultiply(_yFlip180);
+                  redBall.object3D.quaternion.copy(_remoteBallQuat);
+                }
                 const rb = redBall.components['simple-grab']?.body;
                 if (rb) {
                   rb.position.set(-redBallSt.x, redBallSt.y, -redBallSt.z);
-                  rb.velocity.set(0, 0, 0);
-                  rb.angularVelocity.set(0, 0, 0);
+                  rb.velocity.set(redBallSt.vx ? -redBallSt.vx : 0, redBallSt.vy || 0, redBallSt.vz ? -redBallSt.vz : 0);
+                  rb.angularVelocity.set(redBallSt.ax ? -redBallSt.ax : 0, redBallSt.ay || 0, redBallSt.az ? -redBallSt.az : 0);
+                  if (redBallSt.qx !== undefined) rb.quaternion.set(_remoteBallQuat.x, _remoteBallQuat.y, _remoteBallQuat.z, _remoteBallQuat.w);
                 }
               }
             }
@@ -2772,11 +2789,15 @@
               const blueBall = document.querySelector('[simple-grab="player: player2"]');
               if (blueBall) {
                 blueBall.object3D.position.set(blueBallSt.x, blueBallSt.y, blueBallSt.z);
+                if (blueBallSt.qx !== undefined) {
+                  blueBall.object3D.quaternion.set(blueBallSt.qx, blueBallSt.qy, blueBallSt.qz, blueBallSt.qw);
+                }
                 const bb = blueBall.components['simple-grab']?.body;
                 if (bb) {
                   bb.position.set(blueBallSt.x, blueBallSt.y, blueBallSt.z);
-                  bb.velocity.set(0, 0, 0);
-                  bb.angularVelocity.set(0, 0, 0);
+                  bb.velocity.set(blueBallSt.vx || 0, blueBallSt.vy || 0, blueBallSt.vz || 0);
+                  bb.angularVelocity.set(blueBallSt.ax || 0, blueBallSt.ay || 0, blueBallSt.az || 0);
+                  if (blueBallSt.qx !== undefined) bb.quaternion.set(blueBallSt.qx, blueBallSt.qy, blueBallSt.qz, blueBallSt.qw);
                 }
               }
             }
