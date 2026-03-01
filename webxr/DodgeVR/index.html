@@ -1251,6 +1251,14 @@
                 gc.conn.send({ type: 'spectator-game-state', state: data.state });
               }
             }
+          } else if (data.type === 'stats-sync') {
+            if (isMatchOpponent(entry.peerId)) {
+              matchStats.player1 = data.stats;
+              if (playerStages.player1 !== data.stage) {
+                playerStages.player1 = data.stage;
+                applyBallScale('player1');
+              }
+            }
           } else if (data.type === 'mode-change') {
             const scene = document.querySelector('a-scene');
             const mt = scene && scene.components['multiplayer-toggle'];
@@ -1458,6 +1466,12 @@
                 gmComp.timerDisplay.setAttribute('text', 'value', 'Match ended');
                 gmComp.gameStarted = false;
               }
+            }
+          } else if (data.type === 'stats-sync') {
+            matchStats.player1 = data.stats;
+            if (playerStages.player1 !== data.stage) {
+              playerStages.player1 = data.stage;
+              applyBallScale('player1');
             }
           } else if (data.type === 'match-started') {
             console.log('[SPECTATOR] match-started received. blue=' + (data.matchPlayers && data.matchPlayers.blue) + ' red=' + (data.matchPlayers && data.matchPlayers.red));
@@ -1931,6 +1945,27 @@
           }
         } else if (conn && conn.open) {
           conn.send({ type: 'ball-state', state: state });
+        }
+      }
+
+      var _lastStatsSyncTime = 0;
+      function sendStatsSync() {
+        if (!isMultiplayer || window.isSpectator) return;
+        var now = performance.now();
+        if (now - _lastStatsSyncTime < 500) return;
+        _lastStatsSyncTime = now;
+        var msg = {
+          type: 'stats-sync',
+          stats: matchStats.player2,
+          stage: playerStages.player2
+        };
+        if (isHost) {
+          var opponentConn = getMatchOpponentConn();
+          if (opponentConn && opponentConn.open) {
+            opponentConn.send(msg);
+          }
+        } else if (conn && conn.open) {
+          conn.send(msg);
         }
       }
 
@@ -2506,6 +2541,7 @@
               const rot = blueBall.components['simple-grab']?.body?.velocity || {x:0,y:0,z:0};
               sendBallState({ x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, vx: rot.x, vy: rot.y, vz: rot.z });
             }
+            sendStatsSync();
           }
           // --- REMOTE PLAYER (ALWAYS RED, MIRRORED X/Z) --- match players only
           if (!window.isSpectator && remotePlayerState) {
