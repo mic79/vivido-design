@@ -14,6 +14,177 @@
     <script src="game-modes.js"></script>
     <script src="game-menu.js"></script>
     <script src="motion-recorder.js"></script>
+    <style>
+      /* Mobile Spectator UI */
+      #mobile-spectator-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 9999;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        pointer-events: none;
+      }
+      #mobile-spectator-overlay.active { display: block; }
+      #mobile-spectator-overlay * { pointer-events: auto; }
+
+      /* Lobby join screen (shown before connecting) */
+      #mobile-lobby-screen {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+      }
+      #mobile-lobby-screen h1 {
+        font-size: 2em;
+        margin: 0 0 0.1em;
+        letter-spacing: 0.05em;
+        color: #4488ff;
+      }
+      #mobile-lobby-screen .subtitle {
+        font-size: 0.9em;
+        color: #999;
+        margin-bottom: 1.5em;
+      }
+      #mobile-lobby-screen .lobby-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 1em;
+      }
+      #mobile-lobby-screen .lobby-row label {
+        font-size: 1.1em;
+        color: #ccc;
+      }
+      #mobile-lobby-screen .lobby-num-btn {
+        width: 44px; height: 44px;
+        border: none;
+        border-radius: 8px;
+        background: #333;
+        color: #fff;
+        font-size: 1.4em;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      #mobile-lobby-screen .lobby-num-btn:active { background: #555; }
+      #mobile-lobby-screen .lobby-num {
+        font-size: 1.6em;
+        min-width: 2em;
+        text-align: center;
+        color: #fff;
+      }
+      #mobile-lobby-screen .watch-btn {
+        padding: 14px 48px;
+        border: none;
+        border-radius: 10px;
+        background: #22aa44;
+        color: #fff;
+        font-size: 1.2em;
+        font-weight: bold;
+        cursor: pointer;
+        touch-action: manipulation;
+        margin-top: 0.5em;
+      }
+      #mobile-lobby-screen .watch-btn:active { background: #1a8836; }
+      #mobile-lobby-screen .watch-btn:disabled { background: #555; color: #999; }
+      #mobile-lobby-screen .status-msg {
+        margin-top: 1em;
+        font-size: 0.95em;
+        color: #ffcc00;
+        min-height: 1.5em;
+      }
+
+      /* Match HUD (shown during spectating) */
+      #mobile-match-hud {
+        display: none;
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        pointer-events: none;
+      }
+      #mobile-match-hud.active { display: block; }
+
+      #mobile-hud-top {
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 8px 16px;
+        background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+      }
+      #mobile-hud-scores {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 1.8em;
+        font-weight: bold;
+      }
+      #mobile-hud-scores .blue-name,
+      #mobile-hud-scores .red-name {
+        font-size: 0.5em;
+        font-weight: normal;
+        max-width: 100px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #mobile-hud-scores .blue-side { color: #4499ff; text-align: right; }
+      #mobile-hud-scores .red-side { color: #ff4444; text-align: left; }
+      #mobile-hud-scores .score-sep { color: #888; font-size: 0.8em; }
+
+      #mobile-hud-timer {
+        position: absolute;
+        top: 52px; left: 0; right: 0;
+        text-align: center;
+        font-size: 1em;
+        color: #ffdd00;
+        text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+      }
+
+      #mobile-hud-status {
+        position: absolute;
+        bottom: 12px; left: 0; right: 0;
+        text-align: center;
+        font-size: 0.9em;
+        color: #aaa;
+        text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+      }
+
+      /* Landscape prompt for portrait mode */
+      #mobile-rotate-prompt {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 99999;
+        background: rgba(0,0,0,0.95);
+        color: #fff;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2em;
+        text-align: center;
+        padding: 20px;
+      }
+      #mobile-rotate-prompt .rotate-icon {
+        font-size: 3em;
+        margin-bottom: 16px;
+        animation: rotateHint 2s ease-in-out infinite;
+      }
+      @keyframes rotateHint {
+        0%, 100% { transform: rotate(0deg); }
+        50% { transform: rotate(90deg); }
+      }
+
+      @media (orientation: portrait) {
+        body.mobile-spectator #mobile-rotate-prompt { display: flex; }
+      }
+      @media (orientation: landscape) {
+        body.mobile-spectator #mobile-rotate-prompt { display: none; }
+      }
+    </style>
   </head>
   <body>
     <script>
@@ -25,6 +196,13 @@
 
       window.botMirrorMode = false;
       window.botRecordedMode = false;
+
+      // Mobile spectator detection
+      window.isMobileSpectator = false;
+      function isMobileDevice() {
+        return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) &&
+               ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+      }
 
       // Physics world setup
       const world = new CANNON.World();
@@ -567,6 +745,183 @@
       }
       window.connectToLobby = connectToLobby;
 
+      // --- Mobile Spectator Connection ---
+      async function connectAsMobileSpectator(lobbyNum) {
+        if (isMultiplayer) return;
+        var statusEl = document.getElementById('mobile-status-msg');
+        var watchBtn = document.getElementById('mobile-watch-btn');
+        if (statusEl) statusEl.textContent = 'Connecting to lobby ' + lobbyNum + '...';
+        if (watchBtn) watchBtn.disabled = true;
+
+        var hostId = 'dodgevr-host-' + lobbyNum;
+        var hostTaken = !(await checkPeerAvailability(hostId));
+
+        if (!hostTaken) {
+          if (statusEl) statusEl.textContent = 'No lobby found. Host must create it in VR first.';
+          if (watchBtn) watchBtn.disabled = false;
+          return;
+        }
+
+        cleanupMultiplayer();
+        var peerIdNum = Date.now().toString(36) + Math.random().toString(36).substr(2, 4);
+        sessionID = 'dodgevr-mspec-' + peerIdNum;
+        myPlayerId = sessionID;
+
+        var iceServersConfig = await getIceServers();
+        peer = new Peer(sessionID, {
+          host: '0.peerjs.com', port: 443, secure: true,
+          config: { iceServers: iceServersConfig }
+        });
+        peer.on('open', function () {
+          if (statusEl) statusEl.textContent = 'Connecting to host...';
+          conn = peer.connect(hostId);
+          conn.on('open', function () {
+            isMultiplayer = true;
+            isHost = false;
+            window.isMobileSpectator = true;
+            window.isSpectator = true;
+            syncWindowState();
+            conn.send({ type: 'mobile-spectator', nickname: 'Spectator' });
+            setupMobileSpectatorHandlers(conn);
+            connectionState = 'connected';
+            arenaBots.enable();
+
+            // Switch from lobby screen to match HUD
+            var lobbyScreen = document.getElementById('mobile-lobby-screen');
+            var matchHud = document.getElementById('mobile-match-hud');
+            if (lobbyScreen) lobbyScreen.style.display = 'none';
+            if (matchHud) matchHud.classList.add('active');
+          });
+          conn.on('error', function () {
+            if (statusEl) statusEl.textContent = 'Connection failed.';
+            if (watchBtn) watchBtn.disabled = false;
+          });
+        });
+        peer.on('error', function (err) {
+          if (statusEl) statusEl.textContent = 'Error: ' + err.type;
+          if (watchBtn) watchBtn.disabled = false;
+        });
+      }
+      window.connectAsMobileSpectator = connectAsMobileSpectator;
+
+      function setupMobileSpectatorHandlers(hostConn) {
+        hostConn.on('data', function (data) {
+          if (data.type === 'lobby-state') {
+            lobbyState = data.state;
+            syncWindowState();
+            var mp = lobbyState.matchPlayers;
+            // Sync arena bot slots based on which match positions have humans
+            if (arenaBots.enabled && mp) {
+              arenaBots.setSlotHuman('blue', !!mp.blue);
+              arenaBots.setSlotHuman('red', !!mp.red);
+            }
+            if (mp && lobbyState.matchState === 'PLAYING' && mp.blue && mp.red) {
+              if (!spectatorMatchActive) {
+                activateSpectatorView(mp, lobbyState.matchStartTime);
+              }
+              updateMobileHudNames();
+            }
+            updateMobileHudStatus();
+          } else if (data.type === 'match-started') {
+            // Both slots now have humans — disable bots for both
+            if (arenaBots.enabled && data.matchPlayers) {
+              arenaBots.setSlotHuman('blue', !!data.matchPlayers.blue);
+              arenaBots.setSlotHuman('red', !!data.matchPlayers.red);
+            }
+            onMatchStarted(data);
+            updateMobileHudNames();
+            updateMobileHudStatus();
+          } else if (data.type === 'match-ended') {
+            if (data && data.state) {
+              lobbyState = data.state;
+              syncWindowState();
+            }
+            deactivateSpectatorView();
+            // Re-enable bots for vacated slots
+            if (arenaBots.enabled) {
+              var emp = lobbyState ? lobbyState.matchPlayers : null;
+              arenaBots.setSlotHuman('blue', !!(emp && emp.blue));
+              arenaBots.setSlotHuman('red', !!(emp && emp.red));
+            }
+            updateMobileHudStatus();
+            var bsEl = document.getElementById('mobile-blue-score');
+            var rsEl = document.getElementById('mobile-red-score');
+            if (bsEl) bsEl.textContent = '0';
+            if (rsEl) rsEl.textContent = '0';
+          } else if (data.type === 'spectator-player') {
+            spectatorPlayerStates[data.fromId] = data.state;
+            if (!spectatorMatchActive && lobbyState && lobbyState.matchPlayers) {
+              var fmp = lobbyState.matchPlayers;
+              if (fmp.blue && fmp.red) {
+                activateSpectatorView(fmp, lobbyState.matchStartTime);
+                updateMobileHudNames();
+              }
+            }
+          } else if (data.type === 'spectator-ball') {
+            spectatorBallStates[data.fromId] = data.state;
+          } else if (data.type === 'spectator-score') {
+            var bsEl = document.getElementById('mobile-blue-score');
+            var rsEl = document.getElementById('mobile-red-score');
+            if (bsEl) bsEl.textContent = data.blueScore.toString();
+            if (rsEl) rsEl.textContent = data.redScore.toString();
+            // Also update the in-scene score elements
+            var bs3d = document.getElementById('blue-score');
+            var rs3d = document.getElementById('red-score');
+            if (bs3d) bs3d.setAttribute('text', 'value', data.blueScore.toString());
+            if (rs3d) rs3d.setAttribute('text', 'value', data.redScore.toString());
+            if (data.hitPlayer) triggerSpectatorImpact(data.hitPlayer);
+          } else if (data.type === 'spectator-game-state') {
+            if (lobbyState) lobbyState.matchGameState = data.state;
+            var timerEl = document.getElementById('mobile-hud-timer');
+            if (data.state === 'OVERTIME' && timerEl) {
+              timerEl.textContent = 'OVERTIME - Next goal wins!';
+            } else if (data.state === 'ENDED' && timerEl) {
+              timerEl.textContent = 'Match ended';
+            }
+          }
+        });
+        hostConn.on('close', function () {
+          var statusEl = document.getElementById('mobile-hud-status');
+          if (statusEl) statusEl.textContent = 'Disconnected from lobby.';
+        });
+        hostConn.on('error', function () {
+          var statusEl = document.getElementById('mobile-hud-status');
+          if (statusEl) statusEl.textContent = 'Connection error.';
+        });
+      }
+
+      function updateMobileHudNames() {
+        if (!lobbyState || !lobbyState.matchPlayers) return;
+        var mp = lobbyState.matchPlayers;
+        var blueNick = 'Blue', redNick = 'Red';
+        if (lobbyState.players) {
+          for (var i = 0; i < lobbyState.players.length; i++) {
+            if (lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
+            if (lobbyState.players[i].id === mp.red) redNick = lobbyState.players[i].nickname;
+          }
+        }
+        var bnEl = document.getElementById('mobile-blue-name');
+        var rnEl = document.getElementById('mobile-red-name');
+        if (bnEl) bnEl.textContent = blueNick;
+        if (rnEl) rnEl.textContent = redNick;
+      }
+
+      function updateMobileHudStatus() {
+        var statusEl = document.getElementById('mobile-hud-status');
+        if (!statusEl) return;
+        if (!lobbyState) {
+          statusEl.textContent = 'Connecting...';
+          return;
+        }
+        var mp = lobbyState.matchPlayers;
+        if (lobbyState.matchState === 'PLAYING' && mp && mp.blue && mp.red) {
+          statusEl.textContent = '';
+        } else {
+          var pc = lobbyState.players ? lobbyState.players.length : 0;
+          statusEl.textContent = 'Waiting for match... (' + pc + ' player' + (pc !== 1 ? 's' : '') + ' in lobby)';
+        }
+      }
+
       async function checkPeerAvailability(id) {
         return new Promise((resolve) => {
           const tempPeer = new Peer(id, { host: "0.peerjs.com", port: 443, secure: true });
@@ -665,13 +1020,12 @@
           arenaBots.enable();
 
           peer.on("connection", function (newConn) {
-            if (connections.length >= 3) {
+            // Allow up to 3 VR players + 10 mobile spectators
+            if (connections.length >= 13) {
               newConn.close();
               return;
             }
-            // Set up data handler IMMEDIATELY so no messages are lost
-            // (peer may send nickname before host's "open" event fires)
-            var entry = { conn: newConn, peerId: newConn.peer, nickname: 'Player' };
+            var entry = { conn: newConn, peerId: newConn.peer, nickname: 'Player', isMobileSpectator: false };
             setupHostHandlers(newConn, entry);
             newConn.on("open", function () {
               connections.push(entry);
@@ -693,10 +1047,29 @@
       function setupHostHandlers(peerConn, entry) {
         peerConn.on('data', function (data) {
           if (data.type === 'nickname') {
+            var playerConns = connections.filter(function(c) { return !c.isMobileSpectator; }).length;
+            if (playerConns > 3) {
+              peerConn.close();
+              return;
+            }
             entry.nickname = data.nickname || 'Player';
             lobbyState.players.push({ id: entry.peerId, nickname: entry.nickname });
             assignSpectatorSlot(entry.peerId);
             broadcastLobbyState();
+          } else if (data.type === 'mobile-spectator') {
+            entry.isMobileSpectator = true;
+            entry.nickname = data.nickname || 'Spectator';
+            // Don't add to lobbyState.players — mobile spectators are passive observers
+            // Send current lobby state so they know match status
+            peerConn.send({ type: 'lobby-state', state: lobbyState });
+            // If a match is in progress, send match-started so they activate spectator view
+            if (lobbyState.matchState === 'PLAYING' && lobbyState.matchPlayers.blue && lobbyState.matchPlayers.red) {
+              peerConn.send({
+                type: 'match-started',
+                matchPlayers: lobbyState.matchPlayers,
+                startTime: lobbyState.matchStartTime
+              });
+            }
           } else if (data.type === 'queue-action') {
             handleQueueAction(entry.peerId, data.action);
           } else if (data.type === 'match-action') {
@@ -902,7 +1275,10 @@
       }
 
       function handlePeerDisconnect(peerId) {
+        // Check if disconnecting peer was a mobile spectator (no lobby state cleanup needed)
+        var wasMobile = connections.some(function(c) { return c.peerId === peerId && c.isMobileSpectator; });
         connections = connections.filter(function (c) { return c.peerId !== peerId; });
+        if (wasMobile) return;
         if (lobbyState) {
           var wasMatchPlayer = (lobbyState.matchPlayers.blue === peerId || lobbyState.matchPlayers.red === peerId);
           // End match first (before removing from players), so endLobbyMatch can still see who was in match
@@ -1253,6 +1629,7 @@
 
       // --- Position management based on lobby state ---
       function applyLobbyPosition() {
+        if (window.isMobileSpectator) return;
         if (!lobbyState) return;
         var vrMenu = document.querySelector('a-scene').components['vr-menu'];
         if (!vrMenu) return;
@@ -1357,6 +1734,16 @@
         if (redName) { redName.setAttribute('text', 'value', redNick || 'Red'); redName.object3D.visible = true; }
 
         console.log('[SPECTATOR] spectatorMatchActive=' + spectatorMatchActive + ' blueId=' + spectatorMatchBlueId + ' redId=' + spectatorMatchRedId);
+
+        // Sync mobile HUD if applicable
+        if (window.isMobileSpectator) {
+          var mbsEl = document.getElementById('mobile-blue-score');
+          var mrsEl = document.getElementById('mobile-red-score');
+          if (mbsEl) mbsEl.textContent = currentScore.blue.toString();
+          if (mrsEl) mrsEl.textContent = currentScore.red.toString();
+          updateMobileHudNames();
+          updateMobileHudStatus();
+        }
       }
 
       function deactivateSpectatorView() {
@@ -1887,7 +2274,8 @@
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
           // In multiplayer, ALL players send head + hand transforms for full body sync
-          if (isMultiplayer) {
+          // (mobile spectators don't send — they only receive)
+          if (isMultiplayer && !window.isMobileSpectator) {
             const camera = document.querySelector('[camera]');
             const leftHand = document.querySelector('#leftHand');
             const rightHand = document.querySelector('#rightHand');
@@ -2271,7 +2659,11 @@
               const remaining = Math.max(0, matchDur - matchElapsed);
               const mins = Math.floor(remaining / 60);
               const secs = Math.floor(remaining % 60);
-              _td.setAttribute('text', 'value', 'Time: ' + mins + ':' + (secs < 10 ? '0' : '') + secs);
+              var _timeStr = 'Time: ' + mins + ':' + (secs < 10 ? '0' : '') + secs;
+              _td.setAttribute('text', 'value', _timeStr);
+              // Also update mobile HUD timer
+              var _mht = document.getElementById('mobile-hud-timer');
+              if (_mht) _mht.textContent = _timeStr;
             }
 
             // Position name labels above player heads, facing the spectator camera
@@ -6836,7 +7228,165 @@
       })();
     </script>
 
-    <a-scene physics-world game-manager sound-manager multiplayer-sync fps-counter frame-rate-info ball-speed-tracker vr-menu
+    <!-- Mobile Spectator Overlay -->
+    <div id="mobile-spectator-overlay">
+      <div id="mobile-lobby-screen">
+        <h1>DODGE VR</h1>
+        <div class="subtitle">Mobile Spectator</div>
+        <div class="lobby-row">
+          <label>Lobby:</label>
+          <button class="lobby-num-btn" id="mobile-lobby-minus">&minus;</button>
+          <span class="lobby-num" id="mobile-lobby-num">1</span>
+          <button class="lobby-num-btn" id="mobile-lobby-plus">+</button>
+        </div>
+        <button class="watch-btn" id="mobile-watch-btn">WATCH</button>
+        <div class="status-msg" id="mobile-status-msg"></div>
+      </div>
+      <div id="mobile-match-hud">
+        <div id="mobile-hud-top">
+          <div id="mobile-hud-scores">
+            <span class="red-side">
+              <span class="red-name" id="mobile-red-name">Red</span>
+              <span id="mobile-red-score">0</span>
+            </span>
+            <span class="score-sep">&ndash;</span>
+            <span class="blue-side">
+              <span id="mobile-blue-score">0</span>
+              <span class="blue-name" id="mobile-blue-name">Blue</span>
+            </span>
+          </div>
+        </div>
+        <div id="mobile-hud-timer"></div>
+        <div id="mobile-hud-status">Waiting for match...</div>
+      </div>
+    </div>
+
+    <!-- Rotate prompt for portrait mode -->
+    <div id="mobile-rotate-prompt">
+      <div class="rotate-icon">&#x1F4F1;</div>
+      <div>Rotate your phone to landscape mode</div>
+    </div>
+
+    <script>
+      // Mobile Spectator Initialization
+      (function() {
+        if (!isMobileDevice()) return;
+
+        window.isMobileSpectator = true;
+        document.body.classList.add('mobile-spectator');
+
+        // Show mobile spectator overlay, hide VR overlay
+        var overlay = document.getElementById('mobile-spectator-overlay');
+        if (overlay) overlay.classList.add('active');
+        var preVr = document.getElementById('pre-vr-overlay');
+        if (preVr) preVr.style.display = 'none';
+
+        // Try to lock landscape
+        if (screen.orientation && screen.orientation.lock) {
+          screen.orientation.lock('landscape').catch(function() {});
+        }
+
+        // Lobby number controls
+        var lobbyNum = 1;
+        var numEl = document.getElementById('mobile-lobby-num');
+        document.getElementById('mobile-lobby-minus').addEventListener('click', function() {
+          lobbyNum = Math.max(1, lobbyNum - 1);
+          numEl.textContent = lobbyNum;
+        });
+        document.getElementById('mobile-lobby-plus').addEventListener('click', function() {
+          lobbyNum = Math.min(10, lobbyNum + 1);
+          numEl.textContent = lobbyNum;
+        });
+        document.getElementById('mobile-watch-btn').addEventListener('click', function() {
+          if (typeof window.connectAsMobileSpectator === 'function') {
+            window.connectAsMobileSpectator(lobbyNum);
+          }
+        });
+
+        // Register mobile spectator camera component
+        AFRAME.registerComponent('mobile-spectator-cam', {
+          init: function() {
+            if (!window.isMobileSpectator) return;
+            var self = this;
+
+            // Hide the VR button immediately via DOM
+            var vrBtn = document.querySelector('.a-enter-vr');
+            if (vrBtn) vrBtn.style.display = 'none';
+
+            // Set up camera once scene is fully loaded
+            if (this.el.hasLoaded) {
+              self.setupMobileCamera();
+            }
+            this.el.addEventListener('loaded', function() {
+              self.setupMobileCamera();
+            });
+          },
+
+          setupMobileCamera: function() {
+            // Hide VR button (retry in case it was created after init)
+            var vrBtn = document.querySelector('.a-enter-vr');
+            if (vrBtn) vrBtn.style.display = 'none';
+
+            // Remove look-controls FIRST so it stops overriding camera orientation
+            var cam = document.querySelector('[camera]');
+            if (cam) {
+              cam.removeAttribute('look-controls');
+              cam.setAttribute('camera', 'fov', 50);
+            }
+
+            // Position camera at side of arena using object3D for reliability
+            var player = document.getElementById('player');
+            if (player) {
+              player.object3D.position.set(10, 2.5, 0);
+            }
+            var rig = document.getElementById('rig');
+            if (rig) {
+              // 90° around Y = face toward -X (toward the arena center)
+              rig.object3D.rotation.set(0, Math.PI / 2, 0);
+            }
+
+            // Hide VR controllers
+            var leftHand = document.getElementById('leftHand');
+            var rightHand = document.getElementById('rightHand');
+            if (leftHand) leftHand.object3D.visible = false;
+            if (rightHand) rightHand.object3D.visible = false;
+
+            // Hide game menu
+            var gameMenu = document.getElementById('game-menu');
+            if (gameMenu) gameMenu.object3D.visible = false;
+
+            // Hide player target and body collider (we're just watching)
+            var playerTarget = document.getElementById('player-target');
+            if (playerTarget) playerTarget.object3D.visible = false;
+            var playerCollider = document.getElementById('player-body-collider');
+            if (playerCollider) playerCollider.object3D.visible = false;
+
+            // Hide arm stats
+            var armStats = document.getElementById('arm-stats');
+            if (armStats) armStats.object3D.visible = false;
+
+            // Hide player body (local player shouldn't be visible)
+            var playerBody = document.getElementById('player-body');
+            if (playerBody) playerBody.object3D.visible = false;
+
+            // Add a very dim ambient light so the arena structure is faintly visible
+            // but preserve the game's dark, neon-lit atmosphere from ball point lights
+            var ambientLight = document.createElement('a-entity');
+            ambientLight.setAttribute('light', 'type: ambient; color: #223344; intensity: 0.4');
+            this.el.appendChild(ambientLight);
+
+            // Enable arena bots so the spectator sees action while waiting
+            if (window.arenaBots) {
+              window.arenaBots.enable();
+            }
+
+            console.log('[MOBILE SPECTATOR] Camera set to side view at (10, 2.5, 0) facing -X');
+          }
+        });
+      })();
+    </script>
+
+    <a-scene physics-world game-manager sound-manager multiplayer-sync fps-counter frame-rate-info ball-speed-tracker vr-menu mobile-spectator-cam
              game-modes="enabled: false; mode: default"
     vr-mode-ui="enabled: true"
       renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
