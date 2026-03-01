@@ -784,7 +784,6 @@
             conn.send({ type: 'mobile-spectator', nickname: 'Spectator' });
             setupMobileSpectatorHandlers(conn);
             connectionState = 'connected';
-            arenaBots.enable();
 
             // Switch from lobby screen to match HUD
             var lobbyScreen = document.getElementById('mobile-lobby-screen');
@@ -810,11 +809,6 @@
             lobbyState = data.state;
             syncWindowState();
             var mp = lobbyState.matchPlayers;
-            // Sync arena bot slots based on which match positions have humans
-            if (arenaBots.enabled && mp) {
-              arenaBots.setSlotHuman('blue', !!mp.blue);
-              arenaBots.setSlotHuman('red', !!mp.red);
-            }
             if (mp && lobbyState.matchState === 'PLAYING' && mp.blue && mp.red) {
               if (!spectatorMatchActive) {
                 activateSpectatorView(mp, lobbyState.matchStartTime);
@@ -823,26 +817,17 @@
             }
             updateMobileHudStatus();
           } else if (data.type === 'match-started') {
-            // Both slots now have humans — disable bots for both
-            if (arenaBots.enabled && data.matchPlayers) {
-              arenaBots.setSlotHuman('blue', !!data.matchPlayers.blue);
-              arenaBots.setSlotHuman('red', !!data.matchPlayers.red);
-            }
+            window._lastArenaBotState = null;
             onMatchStarted(data);
             updateMobileHudNames();
             updateMobileHudStatus();
           } else if (data.type === 'match-ended') {
+            window._lastArenaBotState = null;
             if (data && data.state) {
               lobbyState = data.state;
               syncWindowState();
             }
             deactivateSpectatorView();
-            // Re-enable bots for vacated slots
-            if (arenaBots.enabled) {
-              var emp = lobbyState ? lobbyState.matchPlayers : null;
-              arenaBots.setSlotHuman('blue', !!(emp && emp.blue));
-              arenaBots.setSlotHuman('red', !!(emp && emp.red));
-            }
             updateMobileHudStatus();
             var bsEl = document.getElementById('mobile-blue-score');
             var rsEl = document.getElementById('mobile-red-score');
@@ -878,6 +863,53 @@
             } else if (data.state === 'ENDED' && timerEl) {
               timerEl.textContent = 'Match ended';
             }
+          } else if (data.type === 'arena-bot-state') {
+            var abs = data.s;
+            if (abs.rb) {
+              var _redBall = document.querySelector('[simple-grab="player: player1"]');
+              if (_redBall) {
+                _redBall.object3D.position.set(abs.rb.x, abs.rb.y, abs.rb.z);
+                var _rbody = _redBall.components['simple-grab'] && _redBall.components['simple-grab'].body;
+                if (_rbody) {
+                  _rbody.position.set(abs.rb.x, abs.rb.y, abs.rb.z);
+                  _rbody.velocity.set(0, 0, 0);
+                  _rbody.angularVelocity.set(0, 0, 0);
+                }
+              }
+            }
+            if (abs.rbd) {
+              var _botEnt = document.querySelector('[advanced-bot]');
+              if (_botEnt) _botEnt.object3D.position.set(abs.rbd.x, abs.rbd.y, abs.rbd.z);
+              var _botBody = document.querySelector('#bot-body');
+              if (_botBody) _botBody.object3D.visible = true;
+            }
+            if (abs.bb) {
+              var _blueBall = document.querySelector('[simple-grab="player: player2"]');
+              if (_blueBall) {
+                _blueBall.object3D.position.set(abs.bb.x, abs.bb.y, abs.bb.z);
+                var _bbody = _blueBall.components['simple-grab'] && _blueBall.components['simple-grab'].body;
+                if (_bbody) {
+                  _bbody.position.set(abs.bb.x, abs.bb.y, abs.bb.z);
+                  _bbody.velocity.set(0, 0, 0);
+                  _bbody.angularVelocity.set(0, 0, 0);
+                }
+              }
+            }
+            if (abs.bbd) {
+              var _blueBody = document.getElementById('spectator-blue-body');
+              if (_blueBody) {
+                _blueBody.object3D.visible = true;
+                if (_blueBody.components['mixamo-body']) {
+                  var _bx = abs.bbd.x, _by = abs.bbd.y, _bz = abs.bbd.z;
+                  _blueBody.components['mixamo-body'].remoteHandData = {
+                    head: { x: _bx, y: _by, z: _bz, qx: 0, qy: 0, qz: 0, qw: 1 },
+                    leftHand: { x: _bx - 0.3, y: _by - 0.5, z: _bz - 0.25, qx: 0, qy: 0, qz: 0, qw: 1 },
+                    rightHand: { x: _bx + 0.3, y: _by - 0.5, z: _bz - 0.25, qx: 0, qy: 0, qz: 0, qw: 1 }
+                  };
+                }
+              }
+            }
+            window._lastArenaBotState = abs;
           }
         });
         hostConn.on('close', function () {
@@ -2323,6 +2355,38 @@
           if (isMultiplayer && arenaBots.enabled) {
             arenaBots.tick(performance.now());
           }
+          // Host: broadcast bot-controlled ball + body positions to all spectators
+          if (isHost && isMultiplayer && arenaBots.enabled) {
+            var _abState = {};
+            if (arenaBots.redBotActive) {
+              var _rbEl = document.querySelector('[simple-grab="player: player1"]');
+              if (_rbEl) {
+                var _rbp = _rbEl.object3D.position;
+                _abState.rb = { x: _rbp.x, y: _rbp.y, z: _rbp.z };
+              }
+              var _botEnt = document.querySelector('[advanced-bot]');
+              if (_botEnt) {
+                var _bep = _botEnt.object3D.position;
+                _abState.rbd = { x: _bep.x, y: _bep.y, z: _bep.z };
+              }
+            }
+            if (arenaBots.blueBotActive) {
+              var _bbEl = document.querySelector('[simple-grab="player: player2"]');
+              if (_bbEl) {
+                var _bbp = _bbEl.object3D.position;
+                _abState.bb = { x: _bbp.x, y: _bbp.y, z: _bbp.z };
+              }
+              if (arenaBots._blueBotState) {
+                var _bbs = arenaBots._blueBotState.currentPos;
+                _abState.bbd = { x: _bbs.x, y: _bbs.y, z: _bbs.z };
+              }
+            }
+            for (var _abi = 0; _abi < connections.length; _abi++) {
+              if (connections[_abi].conn.open) {
+                connections[_abi].conn.send({ type: 'arena-bot-state', s: _abState });
+              }
+            }
+          }
           // In multiplayer, hide phantom bodies when no valid data is driving them
           // (but keep arena bot bodies visible when arena bots are active)
           if (isMultiplayer && !window.isSpectator) {
@@ -2470,7 +2534,7 @@
                   specBlueBody.components['mixamo-body'].remoteHandData = lbrd;
                 }
               }
-            } else if (!localIsMatchPlayer && !arenaBots.blueBotActive) {
+            } else if (!localIsMatchPlayer && !arenaBots.blueBotActive && !(window._lastArenaBotState && window._lastArenaBotState.bbd)) {
               var specBlueBody2 = document.getElementById('spectator-blue-body');
               if (specBlueBody2) specBlueBody2.object3D.visible = false;
             }
@@ -2493,7 +2557,7 @@
                 if (lrs.rhx !== undefined) { lrrd.rightHand = { x: -lrs.lhx, y: lrs.lhy, z: -lrs.lhz }; if (lrs.lhqx !== undefined) { var lrrq = new THREE.Quaternion(lrs.lhqx, lrs.lhqy, lrs.lhqz, lrs.lhqw).multiply(yFlipLobby); lrrd.rightHand.qx = lrrq.x; lrrd.rightHand.qy = lrrq.y; lrrd.rightHand.qz = lrrq.z; lrrd.rightHand.qw = lrrq.w; } }
                 botBody.components['mixamo-body'].remoteHandData = lrrd;
               }
-            } else if (!localIsMatchPlayer && !remotePlayerState && !arenaBots.redBotActive) {
+            } else if (!localIsMatchPlayer && !remotePlayerState && !arenaBots.redBotActive && !(window._lastArenaBotState && window._lastArenaBotState.rbd)) {
               var botBody2 = document.querySelector('#bot-body');
               if (botBody2) {
                 botBody2.object3D.visible = false;
@@ -2792,6 +2856,13 @@
           }
         }
       }
+      function broadcastArenaBotScore(blueScore, redScore, hitPlayer) {
+        if (!isHost) return;
+        var msg = { type: 'spectator-score', blueScore: blueScore, redScore: redScore, hitPlayer: hitPlayer };
+        for (var i = 0; i < connections.length; i++) {
+          if (connections[i].conn.open) connections[i].conn.send(msg);
+        }
+      }
       function triggerSpectatorImpact(hitPlayer) {
         if (hitPlayer === 'red') {
           var bt = document.querySelector('#bot-target');
@@ -2800,6 +2871,13 @@
           var sbh = document.getElementById('spectator-blue-hit');
           if (sbh) {
             var bs = spectatorPlayerStates[spectatorMatchBlueId];
+            if (!bs && lobbyState && lobbyState.matchPlayers) {
+              var _lbId = lobbyState.matchPlayers.blue;
+              if (_lbId) bs = spectatorPlayerStates[_lbId];
+            }
+            if (!bs && window._lastArenaBotState && window._lastArenaBotState.bbd) {
+              bs = window._lastArenaBotState.bbd;
+            }
             if (bs) sbh.object3D.position.set(bs.x, bs.y || 1.6, bs.z);
             if (sbh.components['impact-effect']) sbh.components['impact-effect'].playEffect();
           }
@@ -2836,6 +2914,9 @@
           } else {
             this.playerScore += 1;
             this.updateScore();
+            if (isHost && isMultiplayer && arenaBots.enabled) {
+              broadcastArenaBotScore(this.playerScore, this.botScore, 'red');
+            }
           }
           if (this.matchState === 'OVERTIME') this.endMatch();
         };
@@ -2851,6 +2932,9 @@
           } else {
             this.botScore += 1;
             this.updateScore();
+            if (isHost && isMultiplayer && arenaBots.enabled) {
+              broadcastArenaBotScore(this.playerScore, this.botScore, 'blue');
+            }
           }
           if (this.matchState === 'OVERTIME') this.endMatch();
         };
@@ -3132,9 +3216,10 @@
               return;
             }
             // Player1's red ball (bot's) hitting player = point for bot
-            // In multiplayer, skip: the remote thrower handles scoring via score-update messages
+            // In multiplayer with a human remote thrower, skip (they handle scoring via score-update)
+            // But allow when the red arena bot is active (locally simulated)
             if (this.data.player === 'player1' && isPlayerTarget) {
-              if (isMultiplayer) return;
+              if (isMultiplayer && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
               if (inGracePeriod) return;
               resetStage(this.data.player);
               recordStat('player1', 'hits');
@@ -3153,9 +3238,9 @@
             const canSelfHit = !this.isGrabbed && selfHitSpeed > 1;
 
             // Player1's red ball (bot's) deflected back at bot = point for human player
-            // In multiplayer, skip: red ball is remote-driven, thrower handles scoring
+            // In multiplayer with human remote, skip — but allow when red arena bot is active
             if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
-              if (isMultiplayer) return;
+              if (isMultiplayer && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
               resetStage(this.data.player);
               recordStat('player2', 'hits');
               const botTarget = document.querySelector('#bot-target');
@@ -7379,10 +7464,9 @@
             ambientLight.setAttribute('light', 'type: ambient; color: #223344; intensity: 0.4');
             this.el.appendChild(ambientLight);
 
-            // Enable arena bots so the spectator sees action while waiting
-            if (window.arenaBots) {
-              window.arenaBots.enable();
-            }
+            // Disable advanced-bot AI on mobile — bot positions come from the host
+            var botEl = document.querySelector('[advanced-bot]');
+            if (botEl) botEl.setAttribute('advanced-bot', 'enabled', false);
 
             console.log('[MOBILE SPECTATOR] Camera set to side view at (10, 2.5, 0) facing -X');
           }
