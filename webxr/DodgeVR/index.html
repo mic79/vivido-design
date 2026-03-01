@@ -1771,8 +1771,9 @@
 
       function activateSpectatorView(mp, matchStartTime) {
         console.log('[SPECTATOR] activateSpectatorView called. blue=' + mp.blue + ' red=' + mp.red + ' myId=' + myPlayerId);
+        var _abRedActive = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
         var bot = document.querySelector('[advanced-bot]');
-        if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+        if (bot && !_abRedActive) bot.setAttribute('advanced-bot', 'enabled', false);
         spectatorMatchBlueId = mp.blue;
         spectatorMatchRedId = mp.red;
         spectatorMatchActive = true;
@@ -1868,8 +1869,9 @@
         // Clean up any spectator rendering state from before becoming a match player
         deactivateSpectatorView();
 
+        var _abRedActive = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
         var bot = document.querySelector('[advanced-bot]');
-        if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+        if (bot && !_abRedActive) bot.setAttribute('advanced-bot', 'enabled', false);
         multiplayerScore = { local: 0, remote: 0 };
         multiplayerReady = { local: false, remote: false };
         updateScoreDisplayMultiplayer();
@@ -1894,9 +1896,9 @@
         if (botBody && botBody.components['mixamo-body']) {
           botBody.components['mixamo-body'].remoteHandData = null;
         }
-        // Disable bot, player collision, and reset game-manager
+        var _abRedActive = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
         var bot = document.querySelector('[advanced-bot]');
-        if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+        if (bot && !_abRedActive) bot.setAttribute('advanced-bot', 'enabled', false);
         var player = document.querySelector('#player');
         if (player) player.setAttribute('player-collision', 'enabled', false);
         var gameManager = document.querySelector('#game-manager');
@@ -2075,6 +2077,13 @@
           this._redBall = document.querySelector('[simple-grab="player: player1"]');
           this._enableRedBot(true);
           this._updateBodyVisibility();
+          // Stop any running singleplayer timer from disabling the bot
+          var _gmEl = document.querySelector('#game-manager');
+          if (_gmEl && _gmEl.components['game-manager']) {
+            var _gm = _gmEl.components['game-manager'];
+            _gm.matchState = 'WAITING';
+            _gm.gameStarted = false;
+          }
           console.log('[ArenaBots] Enabled - 2 bots playing');
         },
 
@@ -4633,7 +4642,8 @@
           this.gameStarted = false;
           
           const bot = this.el.sceneEl.querySelector('[advanced-bot]');
-          if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+          var _abRunning = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
+          if (bot && !_abRunning) bot.setAttribute('advanced-bot', 'enabled', false);
           
           let winner;
           if (isMultiplayer && !window.isSpectator) {
@@ -4676,9 +4686,9 @@
           this.timerDisplay.setAttribute('visible', false);
           this.startMessage.setAttribute('visible', false);
           
-          // Disable bot
+          var _abRunning = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
           const bot = this.el.sceneEl.querySelector('[advanced-bot]');
-          if (bot) bot.setAttribute('advanced-bot', 'enabled', false);
+          if (bot && !_abRunning) bot.setAttribute('advanced-bot', 'enabled', false);
           
           console.log('Match reset to waiting state');
         },
