@@ -2503,8 +2503,10 @@
               }
             }
             // Lobby View: render ball positions from spectatorBallStates
+            // Only apply network positions for slots with human players (bots simulate locally)
             if (!localIsMatchPlayer) {
-              if (lobbyBlueId && spectatorBallStates[lobbyBlueId]) {
+              var _abEnabled = window.arenaBots && window.arenaBots.enabled;
+              if (lobbyBlueId && spectatorBallStates[lobbyBlueId] && !(_abEnabled && window.arenaBots.blueBotActive)) {
                 var lbbs = spectatorBallStates[lobbyBlueId];
                 var lobbyBlueBall = document.querySelector('[simple-grab="player: player2"]');
                 if (lobbyBlueBall) {
@@ -2512,11 +2514,12 @@
                   var lbb = lobbyBlueBall.components['simple-grab'] && lobbyBlueBall.components['simple-grab'].body;
                   if (lbb) {
                     lbb.position.set(lbbs.x, lbbs.y, lbbs.z);
-                    if (lbbs.vx !== undefined) lbb.velocity.set(lbbs.vx, lbbs.vy, lbbs.vz);
+                    lbb.velocity.set(0, 0, 0);
+                    lbb.angularVelocity.set(0, 0, 0);
                   }
                 }
               }
-              if (lobbyRedId && spectatorBallStates[lobbyRedId]) {
+              if (lobbyRedId && spectatorBallStates[lobbyRedId] && !(_abEnabled && window.arenaBots.redBotActive)) {
                 var lrbs = spectatorBallStates[lobbyRedId];
                 var lobbyRedBall = document.querySelector('[simple-grab="player: player1"]');
                 if (lobbyRedBall) {
@@ -2524,7 +2527,8 @@
                   var lrb = lobbyRedBall.components['simple-grab'] && lobbyRedBall.components['simple-grab'].body;
                   if (lrb) {
                     lrb.position.set(-lrbs.x, lrbs.y, -lrbs.z);
-                    if (lrbs.vx !== undefined) lrb.velocity.set(-lrbs.vx, lrbs.vy, -lrbs.vz);
+                    lrb.velocity.set(0, 0, 0);
+                    lrb.angularVelocity.set(0, 0, 0);
                   }
                 }
               }
@@ -2609,7 +2613,9 @@
               }
             }
 
-            // Position balls from spectator data (also set velocity for ball-trail rendering)
+            // Position balls from spectator data
+            // Zero velocity on the physics body to prevent world.step() drift;
+            // position is authoritative from network data each frame
             if (redBallSt) {
               const redBall = document.querySelector('[simple-grab="player: player1"]');
               if (redBall) {
@@ -2617,9 +2623,8 @@
                 const rb = redBall.components['simple-grab']?.body;
                 if (rb) {
                   rb.position.set(-redBallSt.x, redBallSt.y, -redBallSt.z);
-                  if (redBallSt.vx !== undefined) {
-                    rb.velocity.set(-redBallSt.vx, redBallSt.vy, -redBallSt.vz);
-                  }
+                  rb.velocity.set(0, 0, 0);
+                  rb.angularVelocity.set(0, 0, 0);
                 }
               }
             }
@@ -2630,9 +2635,8 @@
                 const bb = blueBall.components['simple-grab']?.body;
                 if (bb) {
                   bb.position.set(blueBallSt.x, blueBallSt.y, blueBallSt.z);
-                  if (blueBallSt.vx !== undefined) {
-                    bb.velocity.set(blueBallSt.vx, blueBallSt.vy, blueBallSt.vz);
-                  }
+                  bb.velocity.set(0, 0, 0);
+                  bb.angularVelocity.set(0, 0, 0);
                 }
               }
             }
@@ -3053,9 +3057,9 @@
             // But allow when arena bots are playing (balls are locally simulated)
             var arenaBotsPlaying = window.arenaBots && window.arenaBots.enabled;
             if (window.isSpectator && !arenaBotsPlaying) return;
-            // In multiplayer, the red ball (player1) is remote-driven — skip all local collisions
-            // But allow when arena red bot is active (ball is locally simulated by bot)
+            // Skip collisions for balls whose slot has a human (network-driven)
             if (isMultiplayer && this.data.player === 'player1' && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
+            if (window.isSpectator && this.data.player === 'player2' && !(arenaBotsPlaying && window.arenaBots.blueBotActive)) return;
             const collider = evt.detail.withEl;
             if (!collider) return;
             const respawn = () => {
@@ -3287,9 +3291,9 @@
             // But allow full tick when arena bots are playing (balls are locally simulated)
             var arenaBotsPlaying = window.arenaBots && window.arenaBots.enabled;
             if (window.isSpectator && !arenaBotsPlaying) return;
-            // In multiplayer, red ball is remote-driven — skip local wall checks
-            // But allow when arena red bot is active (ball is locally simulated by bot)
+            // Skip tick for balls whose slot has a human player (network-driven, not local)
             if (isMultiplayer && this.data.player === 'player1' && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
+            if (window.isSpectator && this.data.player === 'player2' && !(arenaBotsPlaying && window.arenaBots.blueBotActive)) return;
             // Returning ball that reached its own wall: respawn
             if (this.isReturning && !this.isGrabbed) {
               var bz = this.body.position.z;
