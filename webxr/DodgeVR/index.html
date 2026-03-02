@@ -528,7 +528,8 @@
           matchStartTime: 0,
           matchScore: { blue: 0, red: 0 },
           matchGameState: null,
-          spectatorSlots: [null, null, null, null]
+          spectatorSlots: [null, null, null, null],
+          mobileSpectatorCount: 0
         };
       }
 
@@ -1131,8 +1132,8 @@
           } else if (data.type === 'mobile-spectator') {
             entry.isMobileSpectator = true;
             entry.nickname = data.nickname || 'Spectator';
-            // Don't add to lobbyState.players — mobile spectators are passive observers
-            // Send current lobby state so they know match status
+            lobbyState.mobileSpectatorCount = connections.filter(function(c) { return c.isMobileSpectator; }).length;
+            broadcastLobbyState();
             peerConn.send({ type: 'lobby-state', state: lobbyState });
             // If a match is in progress, send match-started so they activate spectator view
             if (lobbyState.matchState === 'PLAYING' && lobbyState.matchPlayers.blue && lobbyState.matchPlayers.red) {
@@ -1355,10 +1356,15 @@
       }
 
       function handlePeerDisconnect(peerId) {
-        // Check if disconnecting peer was a mobile spectator (no lobby state cleanup needed)
         var wasMobile = connections.some(function(c) { return c.peerId === peerId && c.isMobileSpectator; });
         connections = connections.filter(function (c) { return c.peerId !== peerId; });
-        if (wasMobile) return;
+        if (wasMobile) {
+          if (lobbyState) {
+            lobbyState.mobileSpectatorCount = connections.filter(function(c) { return c.isMobileSpectator; }).length;
+            broadcastLobbyState();
+          }
+          return;
+        }
         if (lobbyState) {
           var wasMatchPlayer = (lobbyState.matchPlayers.blue === peerId || lobbyState.matchPlayers.red === peerId);
           // End match first (before removing from players), so endLobbyMatch can still see who was in match
@@ -3727,11 +3733,6 @@
                 const angularSpeed = angularVelocity.length();
                 const linearSpeed = velocity.length();
                 
-                // Debug: Always log spin and speed when ball is moving to see what we're working with
-                if (linearSpeed > 0.5) {
-                  console.log('Ball moving - Speed:', linearSpeed.toFixed(2), 'm/s, Spin:', angularSpeed.toFixed(2), 'rad/s');
-                }
-                
                 // Apply Magnus effect - subtle curve to existing motion
                 if (angularSpeed > 0.1 && linearSpeed > 0.5) { // Much lower thresholds
                   // Calculate Magnus force as acceleration (not velocity change)
@@ -5826,12 +5827,14 @@
             const blueAcc = blueAttempts > 0 ? Math.round((bs.hits + rs.dodges + rs.blocks) / blueAttempts * 100) : 0;
             const redAcc = redAttempts > 0 ? Math.round((rs.hits + bs.dodges + bs.blocks) / redAttempts * 100) : 0;
             
-            const displayText = 
+            var displayText = 
               `Blue: ${blue.current.toFixed(1)} m/s (Max: ${blue.fastest.toFixed(1)})` +
               `\nStage ${playerStages.player2 || 1}  |  T:${bs.throws} R:${bs.racketHits} B:${bs.blocks} D:${bs.dodges} Acc:${blueAcc}%` +
               `\nRed: ${red.current.toFixed(1)} m/s (Max: ${red.fastest.toFixed(1)})` +
               `\nStage ${playerStages.player1 || 1}  |  T:${rs.throws} R:${rs.racketHits} B:${rs.blocks} D:${rs.dodges} Acc:${redAcc}%`;
-            
+            if (lobbyState && typeof lobbyState.mobileSpectatorCount === 'number' && lobbyState.mobileSpectatorCount > 0) {
+              displayText += `\nMobile Spectators: ${lobbyState.mobileSpectatorCount}`;
+            }
             this.statsDisplay.setAttribute('value', displayText);
           }
         },
@@ -8092,7 +8095,7 @@
                       rotation="-45 0 0">
               <!-- Background panel -->
               <a-plane width="0.32" 
-                       height="0.22" 
+                       height="0.25" 
                        color="#000000" 
                        material="opacity: 0.8; transparent: true"
                        position="0 0 -0.001">
