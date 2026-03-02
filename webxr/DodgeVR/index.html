@@ -448,6 +448,101 @@
         matchStats[player][stat]++;
       }
 
+      // ---- Match History (localStorage) ----
+      const MATCH_HISTORY_KEY = 'dodgevr-match-history';
+      const MATCH_HISTORY_MAX = 10;
+
+      function loadMatchHistory() {
+        try {
+          var raw = localStorage.getItem(MATCH_HISTORY_KEY);
+          if (raw) {
+            var data = JSON.parse(raw);
+            return {
+              single: Array.isArray(data.single) ? data.single : [],
+              multi: Array.isArray(data.multi) ? data.multi : []
+            };
+          }
+        } catch (e) { console.warn('Failed to load match history', e); }
+        return { single: [], multi: [] };
+      }
+
+      function saveMatchToHistory(record) {
+        var history = loadMatchHistory();
+        var list = record.mode === 'multi' ? history.multi : history.single;
+        list.unshift(record);
+        if (list.length > MATCH_HISTORY_MAX) list.length = MATCH_HISTORY_MAX;
+        try {
+          localStorage.setItem(MATCH_HISTORY_KEY, JSON.stringify(history));
+        } catch (e) { console.warn('Failed to save match history', e); }
+      }
+
+      function clearMatchHistory(mode) {
+        var history = loadMatchHistory();
+        if (mode === 'multi') history.multi = [];
+        else history.single = [];
+        try {
+          localStorage.setItem(MATCH_HISTORY_KEY, JSON.stringify(history));
+        } catch (e) { console.warn('Failed to clear match history', e); }
+      }
+      window.loadMatchHistory = loadMatchHistory;
+      window.clearMatchHistory = clearMatchHistory;
+
+      function _saveMatchHistoryFromState(gmComp, wasOvertime) {
+        if (window.isSpectator) return;
+        gmComp._historySaved = true;
+        var sceneEl = gmComp.el.sceneEl;
+        var bst = sceneEl.components['ball-speed-tracker'];
+        var blueMax = bst ? bst.ballStats.player2.fastest : 0;
+        var redMax = bst ? bst.ballStats.player1.fastest : 0;
+        var ps = matchStats.player2;
+        var os = matchStats.player1;
+        var pAttempts = ps.throws + ps.racketHits;
+        var oAttempts = os.throws + os.racketHits;
+        var pAcc = pAttempts > 0 ? Math.round((ps.hits + os.dodges + os.blocks) / pAttempts * 100) : 0;
+        var oAcc = oAttempts > 0 ? Math.round((os.hits + ps.dodges + ps.blocks) / oAttempts * 100) : 0;
+        var durationSec = gmComp.matchStartTime ? Math.round((Date.now() - gmComp.matchStartTime) / 1000) : 0;
+        var pScore, oScore;
+        if (isMultiplayer) {
+          pScore = multiplayerScore.local;
+          oScore = multiplayerScore.remote;
+        } else {
+          pScore = gmComp.playerScore;
+          oScore = gmComp.botScore;
+        }
+        var isWin = pScore > oScore;
+        var opponentName = null;
+        if (isMultiplayer && lobbyState) {
+          var mp = lobbyState.matchPlayers;
+          var oppId = mp.blue === myPlayerId ? mp.red : mp.blue;
+          for (var pi = 0; pi < lobbyState.players.length; pi++) {
+            if (lobbyState.players[pi].id === oppId) { opponentName = lobbyState.players[pi].nickname; break; }
+          }
+        }
+        saveMatchToHistory({
+          timestamp: Date.now(),
+          mode: isMultiplayer ? 'multi' : 'single',
+          result: isWin ? 'WIN' : 'LOSS',
+          playerScore: pScore,
+          opponentScore: oScore,
+          durationSeconds: durationSec,
+          overtime: !!wasOvertime,
+          player: {
+            throws: ps.throws, racketHits: ps.racketHits, blocks: ps.blocks,
+            dodges: ps.dodges, hits: ps.hits, accuracy: pAcc,
+            maxSpeed: Math.round(blueMax * 10) / 10,
+            finalStage: playerStages.player2 || 1
+          },
+          opponent: {
+            throws: os.throws, racketHits: os.racketHits, blocks: os.blocks,
+            dodges: os.dodges, hits: os.hits, accuracy: oAcc,
+            maxSpeed: Math.round(redMax * 10) / 10,
+            finalStage: playerStages.player1 || 1
+          },
+          botMode: !isMultiplayer ? (window.botMirrorMode ? 'MIRRORED' : (window.botRecordedMode ? 'RECORDED' : 'NORMAL')) : null,
+          opponentName: opponentName
+        });
+      }
+
       // Multiplayer state (star topology: host + up to 3 peers)
       let isMultiplayer = false;
       let isHost = false;
@@ -1224,6 +1319,7 @@
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) {
                 const gmComp = gm.components['game-manager'];
+                var prevState = gmComp.matchState;
                 gmComp.matchState = data.state;
                 if (data.state === 'OVERTIME') {
                   gmComp.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
@@ -1233,6 +1329,9 @@
                   gmComp.startMessage.setAttribute('text', 'value', flipped);
                   gmComp.timerDisplay.setAttribute('text', 'value', 'Match ended');
                   gmComp.gameStarted = false;
+                  if (!gmComp._historySaved) {
+                    _saveMatchHistoryFromState(gmComp, prevState === 'OVERTIME');
+                  }
                 }
               }
             } else if (window.isSpectator) {
@@ -1462,6 +1561,7 @@
             const gm = document.querySelector('#game-manager');
             if (gm && gm.components['game-manager']) {
               const gmComp = gm.components['game-manager'];
+              var prevState2 = gmComp.matchState;
               gmComp.matchState = data.state;
               if (data.state === 'OVERTIME') {
                 gmComp.timerDisplay.setAttribute('text', 'value', 'OVERTIME - Next goal wins!');
@@ -1471,6 +1571,9 @@
                 gmComp.startMessage.setAttribute('text', 'value', flipped);
                 gmComp.timerDisplay.setAttribute('text', 'value', 'Match ended');
                 gmComp.gameStarted = false;
+                if (!gmComp._historySaved) {
+                  _saveMatchHistoryFromState(gmComp, prevState2 === 'OVERTIME');
+                }
               }
             }
           } else if (data.type === 'stats-sync') {
@@ -4578,6 +4681,7 @@
           // Reset scores, stages, and stats
           this.playerScore = 0;
           this.botScore = 0;
+          this._historySaved = false;
           this.updateScore();
           resetStage('player1');
           resetStage('player2');
@@ -4639,6 +4743,7 @@
         },
 
         endMatch: function() {
+          var wasOvertime = this.matchState === 'OVERTIME';
           this.matchState = 'ENDED';
           this.gameStarted = false;
           
@@ -4661,6 +4766,10 @@
             if (lobbyState) lobbyState.matchGameState = 'ENDED';
             sendToMatchOpponent({ type: 'game-state', state: 'ENDED', winner: winner });
             broadcastSpectatorGameState('ENDED');
+          }
+          
+          if (!this._historySaved) {
+            _saveMatchHistoryFromState(this, wasOvertime);
           }
           
           console.log(`Match ended: ${winner}`);
@@ -7939,15 +8048,20 @@
 
               <!-- Mode buttons row -->
               <a-entity position="0 0.14 0">
-                <a-entity id="menu-single" class="clickable" menu-click position="-0.13 0 0"
-                          geometry="primitive: box; width: 0.2; height: 0.06; depth: 0.005"
+                <a-entity id="menu-single" class="clickable" menu-click position="-0.2 0 0"
+                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
                           material="color: #4488ff; opacity: 0.9; shader: flat">
-                  <a-text value="SINGLE" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+                  <a-text value="SINGLE" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
                 </a-entity>
-                <a-entity id="menu-multi" class="clickable" menu-click position="0.13 0 0"
-                          geometry="primitive: box; width: 0.2; height: 0.06; depth: 0.005"
+                <a-entity id="menu-multi" class="clickable" menu-click position="0 0 0"
+                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
                           material="color: #333333; opacity: 0.9; shader: flat">
-                  <a-text value="MULTI" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+                  <a-text value="MULTI" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity id="menu-stats" class="clickable" menu-click position="0.2 0 0"
+                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                          material="color: #333333; opacity: 0.9; shader: flat">
+                  <a-text value="STATS" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
                 </a-entity>
               </a-entity>
 
@@ -8052,6 +8166,48 @@
                       <a-text value="DEL" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
                     </a-entity>
                   </a-entity>
+                </a-entity>
+              </a-entity>
+
+              <!-- Stats section (stats tab only) -->
+              <a-entity id="menu-stats-section" visible="false" position="0 -0.02 0">
+                <!-- Sub-tab row -->
+                <a-entity position="0 0.06 0">
+                  <a-entity id="menu-stats-sp" class="clickable" menu-click position="-0.12 0 0"
+                            geometry="primitive: box; width: 0.2; height: 0.045; depth: 0.005"
+                            material="color: #4488ff; opacity: 0.9; shader: flat">
+                    <a-text value="SP HISTORY" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+                  <a-entity id="menu-stats-mp" class="clickable" menu-click position="0.12 0 0"
+                            geometry="primitive: box; width: 0.2; height: 0.045; depth: 0.005"
+                            material="color: #333333; opacity: 0.9; shader: flat">
+                    <a-text value="MP HISTORY" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+                </a-entity>
+                <!-- Summary line -->
+                <a-text id="menu-stats-summary" value="No matches yet" position="-0.3 0.025 0" align="left" width="0.32" color="#ffcc00"></a-text>
+                <!-- Match history text block -->
+                <a-text id="menu-stats-text" value="" position="-0.3 -0.01 0" align="left" width="0.28" color="#cccccc"
+                        baseline="top" anchor="left"></a-text>
+                <!-- Navigation + clear row -->
+                <a-entity position="0 -0.2 0">
+                  <a-entity id="menu-stats-prev" class="clickable" menu-click position="-0.2 0 0"
+                            geometry="primitive: box; width: 0.12; height: 0.04; depth: 0.005"
+                            material="color: #555555; opacity: 0.9; shader: flat">
+                    <a-text value="< PREV" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+                  <a-text id="menu-stats-page" value="" position="0 0 0" align="center" width="0.25" color="#888888"></a-text>
+                  <a-entity id="menu-stats-next" class="clickable" menu-click position="0.2 0 0"
+                            geometry="primitive: box; width: 0.12; height: 0.04; depth: 0.005"
+                            material="color: #555555; opacity: 0.9; shader: flat">
+                    <a-text value="NEXT >" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+                </a-entity>
+                <!-- Clear button -->
+                <a-entity id="menu-stats-clear" class="clickable" menu-click position="0 -0.24 0"
+                          geometry="primitive: box; width: 0.18; height: 0.04; depth: 0.005"
+                          material="color: #cc3333; opacity: 0.9; shader: flat">
+                  <a-text value="CLEAR HISTORY" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
                 </a-entity>
               </a-entity>
 

@@ -25,6 +25,10 @@
       this.lobbySection = null;
       this.queueButtons = null;
 
+      this.statsSubTab = 'single';
+      this.statsPage = 0;
+      this.STATS_PER_PAGE = 3;
+
       var self = this;
 
       if (this.el.hasLoaded) {
@@ -117,6 +121,7 @@
       switch (buttonId) {
         case 'menu-single': this.setMode('single'); break;
         case 'menu-multi': this.setMode('multi'); break;
+        case 'menu-stats': this.setMode('stats'); break;
         case 'menu-lobby-minus':
           this.lobbyNumber = Math.max(1, this.lobbyNumber - 1);
           this.updateLobbyNumberDisplay();
@@ -137,6 +142,11 @@
         case 'menu-delete-last': this.deleteLastClip(); break;
         case 'menu-clear-clips': this.clearAllClips(); break;
         case 'menu-start-match': this.toggleMatch(); break;
+        case 'menu-stats-sp': this.setStatsSubTab('single'); break;
+        case 'menu-stats-mp': this.setStatsSubTab('multi'); break;
+        case 'menu-stats-prev': this.statsPagePrev(); break;
+        case 'menu-stats-next': this.statsPageNext(); break;
+        case 'menu-stats-clear': this.clearStats(); break;
       }
     },
 
@@ -144,13 +154,21 @@
       this.menuMode = mode;
       var singleBtn = document.getElementById('menu-single');
       var multiBtn = document.getElementById('menu-multi');
+      var statsBtn = document.getElementById('menu-stats');
       if (singleBtn) singleBtn.setAttribute('material', 'color', mode === 'single' ? '#4488ff' : '#333333');
       if (multiBtn) multiBtn.setAttribute('material', 'color', mode === 'multi' ? '#4488ff' : '#333333');
+      if (statsBtn) statsBtn.setAttribute('material', 'color', mode === 'stats' ? '#4488ff' : '#333333');
       if (this.lobbySection) this.lobbySection.setAttribute('visible', mode === 'multi');
       if (this.queueButtons) this.queueButtons.setAttribute('visible', mode === 'multi' && window.isMultiplayer);
 
       var mirrorSection = document.getElementById('menu-mirror-section');
       if (mirrorSection) mirrorSection.setAttribute('visible', mode === 'single');
+
+      var statsSection = document.getElementById('menu-stats-section');
+      if (statsSection) statsSection.setAttribute('visible', mode === 'stats');
+
+      var startMatchBtn = document.getElementById('menu-start-match');
+      if (startMatchBtn) startMatchBtn.setAttribute('visible', mode !== 'stats');
 
       if (mode === 'multi') {
         this.setMirrorMode(false);
@@ -160,6 +178,12 @@
         if (typeof window.endMultiplayer === 'function') window.endMultiplayer();
         this.moveToMatchPosition();
       }
+
+      if (mode === 'stats') {
+        this.statsPage = 0;
+        this.updateStatsDisplay();
+      }
+
       this.updateMenuDisplay();
     },
 
@@ -326,6 +350,116 @@
         window.motionRecorder.clearClips();
       }
       this.updateClipButtons();
+    },
+
+    // ---- Match History (Stats tab) ----
+
+    setStatsSubTab: function (tab) {
+      this.statsSubTab = tab;
+      this.statsPage = 0;
+      var spBtn = document.getElementById('menu-stats-sp');
+      var mpBtn = document.getElementById('menu-stats-mp');
+      if (spBtn) spBtn.setAttribute('material', 'color', tab === 'single' ? '#4488ff' : '#333333');
+      if (mpBtn) mpBtn.setAttribute('material', 'color', tab === 'multi' ? '#4488ff' : '#333333');
+      this.updateStatsDisplay();
+    },
+
+    statsPagePrev: function () {
+      if (this.statsPage > 0) {
+        this.statsPage--;
+        this.updateStatsDisplay();
+      }
+    },
+
+    statsPageNext: function () {
+      var history = window.loadMatchHistory ? window.loadMatchHistory() : { single: [], multi: [] };
+      var list = this.statsSubTab === 'multi' ? history.multi : history.single;
+      var maxPage = Math.max(0, Math.ceil(list.length / this.STATS_PER_PAGE) - 1);
+      if (this.statsPage < maxPage) {
+        this.statsPage++;
+        this.updateStatsDisplay();
+      }
+    },
+
+    clearStats: function () {
+      if (window.clearMatchHistory) {
+        window.clearMatchHistory(this.statsSubTab);
+      }
+      this.statsPage = 0;
+      this.updateStatsDisplay();
+    },
+
+    updateStatsDisplay: function () {
+      var history = window.loadMatchHistory ? window.loadMatchHistory() : { single: [], multi: [] };
+      var list = this.statsSubTab === 'multi' ? history.multi : history.single;
+      var summaryEl = document.getElementById('menu-stats-summary');
+      var textEl = document.getElementById('menu-stats-text');
+      var pageEl = document.getElementById('menu-stats-page');
+
+      if (list.length === 0) {
+        if (summaryEl) summaryEl.setAttribute('text', 'value', 'No matches yet');
+        if (textEl) textEl.setAttribute('text', 'value', '');
+        if (pageEl) pageEl.setAttribute('text', 'value', '');
+        return;
+      }
+
+      var wins = 0, totalAcc = 0;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].result === 'WIN') wins++;
+        totalAcc += (list[i].player && list[i].player.accuracy) || 0;
+      }
+      var losses = list.length - wins;
+      var avgAcc = Math.round(totalAcc / list.length);
+      if (summaryEl) {
+        summaryEl.setAttribute('text', 'value',
+          'Record: ' + wins + 'W - ' + losses + 'L  |  Avg Acc: ' + avgAcc + '%');
+      }
+
+      var totalPages = Math.ceil(list.length / this.STATS_PER_PAGE);
+      var startIdx = this.statsPage * this.STATS_PER_PAGE;
+      var endIdx = Math.min(startIdx + this.STATS_PER_PAGE, list.length);
+      var lines = [];
+
+      for (var j = startIdx; j < endIdx; j++) {
+        var m = list[j];
+        var num = j + 1;
+        var mins = Math.floor((m.durationSeconds || 0) / 60);
+        var secs = (m.durationSeconds || 0) % 60;
+        var timeStr = mins + ':' + (secs < 10 ? '0' : '') + secs;
+        var header = '#' + num + '  ' + m.result + '  |  ' +
+          m.playerScore + ' - ' + m.opponentScore + '  |  ' + timeStr;
+        if (m.overtime) header += '  |  OT';
+        lines.push(header);
+
+        var p = m.player || {};
+        lines.push('  You: T:' + (p.throws || 0) + ' R:' + (p.racketHits || 0) +
+          ' B:' + (p.blocks || 0) + ' D:' + (p.dodges || 0) +
+          ' Acc:' + (p.accuracy || 0) + '% Spd:' + (p.maxSpeed || 0) +
+          ' Stg:' + (p.finalStage || 1));
+
+        var o = m.opponent || {};
+        var oppLabel = m.opponentName || 'Bot';
+        lines.push('  ' + oppLabel + ': T:' + (o.throws || 0) + ' R:' + (o.racketHits || 0) +
+          ' B:' + (o.blocks || 0) + ' D:' + (o.dodges || 0) +
+          ' Acc:' + (o.accuracy || 0) + '% Spd:' + (o.maxSpeed || 0) +
+          ' Stg:' + (o.finalStage || 1));
+
+        var dateLine = '';
+        if (m.botMode) dateLine += m.botMode + '  |  ';
+        if (m.timestamp) {
+          var d = new Date(m.timestamp);
+          var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+          dateLine += months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + ' ' +
+            d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+        }
+        if (dateLine) lines.push('  ' + dateLine);
+        lines.push('');
+      }
+
+      if (textEl) textEl.setAttribute('text', 'value', lines.join('\n'));
+      if (pageEl) {
+        pageEl.setAttribute('text', 'value', totalPages > 1 ? (this.statsPage + 1) + ' / ' + totalPages : '');
+      }
     },
 
     updateClipButtons: function () {
@@ -523,17 +657,23 @@
 
       this.updateClipButtons();
 
+      var statsSection = document.getElementById('menu-stats-section');
+      if (statsSection) statsSection.setAttribute('visible', this.menuMode === 'stats');
+
       if (!ls) {
         if (this.queueButtons) this.queueButtons.setAttribute('visible', false);
         var startMatchBtn = document.getElementById('menu-start-match');
         if (startMatchBtn) {
-          startMatchBtn.setAttribute('visible', true);
-          var stxt = document.getElementById('menu-start-match-text');
-          var gmEl = document.querySelector('#game-manager');
-          var gm = gmEl && gmEl.components['game-manager'];
-          var isPlaying = gm && (gm.matchState === 'PLAYING' || gm.matchState === 'OVERTIME' || gm.matchState === 'COUNTDOWN');
-          if (stxt) stxt.setAttribute('text', 'value', isPlaying ? 'END MATCH' : 'START MATCH');
-          startMatchBtn.setAttribute('material', 'color', isPlaying ? '#cc3333' : '#ff8800');
+          var showStart = this.menuMode !== 'stats';
+          startMatchBtn.setAttribute('visible', showStart);
+          if (showStart) {
+            var stxt = document.getElementById('menu-start-match-text');
+            var gmEl = document.querySelector('#game-manager');
+            var gm = gmEl && gmEl.components['game-manager'];
+            var isPlaying = gm && (gm.matchState === 'PLAYING' || gm.matchState === 'OVERTIME' || gm.matchState === 'COUNTDOWN');
+            if (stxt) stxt.setAttribute('text', 'value', isPlaying ? 'END MATCH' : 'START MATCH');
+            startMatchBtn.setAttribute('material', 'color', isPlaying ? '#cc3333' : '#ff8800');
+          }
         }
         return;
       }
@@ -591,17 +731,21 @@
       var startMatchBtn2 = document.getElementById('menu-start-match');
       var startMatchText = document.getElementById('menu-start-match-text');
       if (startMatchBtn2 && startMatchText) {
-        var bothSlotsFilled = ls.matchPlayers.blue && ls.matchPlayers.red;
-        if (isMatchPlayer && ls.matchState === 'PLAYING') {
-          startMatchBtn2.setAttribute('visible', true);
-          startMatchText.setAttribute('text', 'value', 'END MATCH');
-          startMatchBtn2.setAttribute('material', 'color', '#cc3333');
-        } else if (isMatchPlayer && bothSlotsFilled) {
-          startMatchBtn2.setAttribute('visible', true);
-          startMatchText.setAttribute('text', 'value', 'START MATCH');
-          startMatchBtn2.setAttribute('material', 'color', '#ff8800');
-        } else {
+        if (this.menuMode === 'stats') {
           startMatchBtn2.setAttribute('visible', false);
+        } else {
+          var bothSlotsFilled = ls.matchPlayers.blue && ls.matchPlayers.red;
+          if (isMatchPlayer && ls.matchState === 'PLAYING') {
+            startMatchBtn2.setAttribute('visible', true);
+            startMatchText.setAttribute('text', 'value', 'END MATCH');
+            startMatchBtn2.setAttribute('material', 'color', '#cc3333');
+          } else if (isMatchPlayer && bothSlotsFilled) {
+            startMatchBtn2.setAttribute('visible', true);
+            startMatchText.setAttribute('text', 'value', 'START MATCH');
+            startMatchBtn2.setAttribute('material', 'color', '#ff8800');
+          } else {
+            startMatchBtn2.setAttribute('visible', false);
+          }
         }
       }
 
