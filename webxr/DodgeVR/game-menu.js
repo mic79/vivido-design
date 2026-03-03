@@ -787,6 +787,7 @@
           startMatchBtn2.setAttribute('visible', false);
         } else {
           var bothSlotsFilled = ls.matchPlayers.blue && ls.matchPlayers.red;
+          var canStartBotMatch = isMatchPlayer && ls.matchPlayers.blue && !ls.matchPlayers.red;
           if (isMatchPlayer && ls.matchState === 'PLAYING') {
             startMatchBtn2.setAttribute('visible', true);
             startMatchText.setAttribute('text', 'value', 'END MATCH');
@@ -794,6 +795,10 @@
           } else if (isMatchPlayer && bothSlotsFilled) {
             startMatchBtn2.setAttribute('visible', true);
             startMatchText.setAttribute('text', 'value', 'START MATCH');
+            startMatchBtn2.setAttribute('material', 'color', '#ff8800');
+          } else if (canStartBotMatch) {
+            startMatchBtn2.setAttribute('visible', true);
+            startMatchText.setAttribute('text', 'value', 'START vs BOT');
             startMatchBtn2.setAttribute('material', 'color', '#ff8800');
           } else {
             startMatchBtn2.setAttribute('visible', false);

@@ -519,8 +519,9 @@
         var pAcc = pAttempts > 0 ? Math.round((ps.hits + os.dodges + os.blocks) / pAttempts * 100) : 0;
         var oAcc = oAttempts > 0 ? Math.round((os.hits + ps.dodges + ps.blocks) / oAttempts * 100) : 0;
         var durationSec = gmComp.matchStartTime ? Math.round((Date.now() - gmComp.matchStartTime) / 1000) : 0;
+        var effectivelySingle = !isMultiplayer || window.isLobbyBotMatch;
         var pScore, oScore;
-        if (isMultiplayer) {
+        if (!effectivelySingle) {
           pScore = multiplayerScore.local;
           oScore = multiplayerScore.remote;
         } else {
@@ -529,7 +530,7 @@
         }
         var isWin = pScore > oScore;
         var opponentName = null;
-        if (isMultiplayer && lobbyState) {
+        if (!effectivelySingle && lobbyState) {
           var mp = lobbyState.matchPlayers;
           var oppId = mp.blue === myPlayerId ? mp.red : mp.blue;
           for (var pi = 0; pi < lobbyState.players.length; pi++) {
@@ -538,7 +539,7 @@
         }
         saveMatchToHistory({
           timestamp: Date.now(),
-          mode: isMultiplayer ? 'multi' : 'single',
+          mode: effectivelySingle ? 'single' : 'multi',
           result: isWin ? 'WIN' : 'LOSS',
           playerScore: pScore,
           opponentScore: oScore,
@@ -556,14 +557,15 @@
             maxSpeed: Math.round(redMax * 10) / 10,
             finalStage: playerStages.player1 || 1
           },
-          botMode: !isMultiplayer ? (window.botMirrorMode ? 'MIRRORED' : (window.botRecordedMode ? 'RECORDED' : 'NORMAL')) : null,
-          opponentName: opponentName
+          botMode: effectivelySingle ? (window.botMirrorMode ? 'MIRRORED' : (window.botRecordedMode ? 'RECORDED' : 'NORMAL')) : null,
+          opponentName: effectivelySingle ? null : opponentName
         });
       }
 
       // Multiplayer state (star topology: host + up to 3 peers)
       let isMultiplayer = false;
       let isHost = false;
+      window.isLobbyBotMatch = false;
       let peer = null;
       let conn = null;                    // Peer's connection to host
       let connections = [];               // Host's array of { conn, peerId, nickname }
@@ -618,6 +620,11 @@
         else if (mp.red === myPlayerId) opponentId = mp.blue;
         if (!opponentId) {
           nicknameEl.setAttribute('visible', false);
+          return;
+        }
+        if (opponentId === '__BOT__') {
+          nicknameEl.setAttribute('text', 'value', 'Bot');
+          nicknameEl.setAttribute('visible', true);
           return;
         }
         var name = '';
@@ -1333,6 +1340,7 @@
             relayToMatchPeer(entry.peerId, data);
           } else if (data.type === 'game-state') {
             if (lobbyState) lobbyState.matchGameState = data.state;
+            if (data.state === 'ENDED') scheduleAutoEndLobbyMatch(window.isLobbyBotMatch);
             if (isMatchOpponent(entry.peerId)) {
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) {
@@ -1642,6 +1650,49 @@
             } else if (data.state === 'ENDED' && peerTd) {
               peerTd.setAttribute('text', 'value', 'Match ended');
             }
+          } else if (data.type === 'arena-bot-state') {
+            window._lastArenaBotState = data.s;
+            var abs = data.s;
+            if (abs.rb) {
+              var _redBall = document.querySelector('[simple-grab="player: player1"]');
+              if (_redBall) {
+                _redBall.object3D.position.set(abs.rb.x, abs.rb.y, abs.rb.z);
+                var _rbody = _redBall.components['simple-grab'] && _redBall.components['simple-grab'].body;
+                if (_rbody) {
+                  _rbody.position.set(abs.rb.x, abs.rb.y, abs.rb.z);
+                  _rbody.velocity.set(0, 0, 0);
+                  _rbody.angularVelocity.set(0, 0, 0);
+                }
+              }
+            }
+            if (abs.rbd) {
+              var _botEnt = document.querySelector('[advanced-bot]');
+              if (_botEnt) _botEnt.object3D.position.set(abs.rbd.x, abs.rbd.y, abs.rbd.z);
+              var _botBody = document.querySelector('#bot-body');
+              if (_botBody) {
+                _botBody.object3D.visible = true;
+                _botBody.object3D.position.set(abs.rbd.x, abs.rbd.y, abs.rbd.z);
+              }
+            }
+            if (abs.bb) {
+              var _blueBall = document.querySelector('[simple-grab="player: player2"]');
+              if (_blueBall) {
+                _blueBall.object3D.position.set(abs.bb.x, abs.bb.y, abs.bb.z);
+                var _bbody = _blueBall.components['simple-grab'] && _blueBall.components['simple-grab'].body;
+                if (_bbody) {
+                  _bbody.position.set(abs.bb.x, abs.bb.y, abs.bb.z);
+                  _bbody.velocity.set(0, 0, 0);
+                  _bbody.angularVelocity.set(0, 0, 0);
+                }
+              }
+            }
+            if (abs.bbd) {
+              var _specBlue = document.getElementById('spectator-blue-body');
+              if (_specBlue) {
+                _specBlue.object3D.visible = true;
+                _specBlue.object3D.position.set(abs.bbd.x, abs.bbd.y, abs.bbd.z);
+              }
+            }
           }
         });
         hostConn.on('close', function () {
@@ -1752,7 +1803,7 @@
         if (playerId !== mp.blue && playerId !== mp.red) return;
 
         if (action === 'start' && lobbyState.matchState !== 'PLAYING') {
-          if (!mp.blue || !mp.red) return; // Both spots must be filled
+          if (!mp.blue) return;
           startLobbyMatch();
         } else if (action === 'end' && lobbyState.matchState === 'PLAYING') {
           endLobbyMatch();
@@ -1761,11 +1812,20 @@
 
       function startLobbyMatch() {
         if (!lobbyState) return;
+        var mp = lobbyState.matchPlayers;
+
+        var isBotMatch = mp.blue && !mp.red;
+        window.isLobbyBotMatch = isBotMatch;
+        if (isBotMatch) {
+          mp.red = '__BOT__';
+          if (arenaBots.enabled) arenaBots.setSlotHuman('red', true);
+        }
+
+        if (_autoEndTimer) { clearTimeout(_autoEndTimer); _autoEndTimer = null; }
         lobbyState.matchState = 'PLAYING';
         lobbyState.matchScore = { blue: 0, red: 0 };
         lobbyState.matchGameState = 'PLAYING';
 
-        var mp = lobbyState.matchPlayers;
         var startTime = Date.now();
         lobbyState.matchStartTime = startTime;
 
@@ -1782,7 +1842,8 @@
             connections[i].conn.send({
               type: 'match-started',
               matchPlayers: mp,
-              startTime: startTime
+              startTime: startTime,
+              isBotMatch: isBotMatch
             });
           }
         }
@@ -1790,8 +1851,23 @@
         broadcastLobbyState();
       }
 
+      var _autoEndTimer = null;
+      function scheduleAutoEndLobbyMatch(isBotMatch) {
+        if (_autoEndTimer) return;
+        var delay = isBotMatch ? 4000 : 5000;
+        _autoEndTimer = setTimeout(function() {
+          _autoEndTimer = null;
+          if (lobbyState && lobbyState.matchState === 'PLAYING') {
+            endLobbyMatch();
+          }
+        }, delay);
+      }
+
       function endLobbyMatch() {
         if (!lobbyState) return;
+        if (_autoEndTimer) { clearTimeout(_autoEndTimer); _autoEndTimer = null; }
+        var wasBotMatch = window.isLobbyBotMatch;
+        window.isLobbyBotMatch = false;
         var oldBlue = lobbyState.matchPlayers.blue;
         var oldRed = lobbyState.matchPlayers.red;
 
@@ -1801,14 +1877,14 @@
         lobbyState.matchScore = { blue: 0, red: 0 };
         lobbyState.matchGameState = null;
 
-        // Assign old match players to spectator slots
+        // Assign old match players to spectator slots (skip bot sentinel)
         if (oldBlue) assignSpectatorSlot(oldBlue);
-        if (oldRed) assignSpectatorSlot(oldRed);
+        if (oldRed && oldRed !== '__BOT__') assignSpectatorSlot(oldRed);
 
-        // Re-enable arena bots for vacated slots
+        // Re-enable arena bots for all vacated slots
         if (arenaBots.enabled) {
-          if (oldBlue) arenaBots.setSlotHuman('blue', false);
-          if (oldRed) arenaBots.setSlotHuman('red', false);
+          arenaBots.setSlotHuman('blue', false);
+          arenaBots.setSlotHuman('red', false);
         }
 
         // Deactivate match/spectator state for the host
@@ -1820,6 +1896,20 @@
         // Try to assign next match from queue BEFORE notifying peers,
         // so the lobby-state included in match-ended is fully up to date
         tryAssignMatchPlayers();
+
+        // For bot matches, auto-re-queue the host so they can quickly rematch
+        if (wasBotMatch) {
+          for (var s = 0; s < lobbyState.spectatorSlots.length; s++) {
+            if (lobbyState.spectatorSlots[s] === myPlayerId) lobbyState.spectatorSlots[s] = null;
+          }
+          if (!lobbyState.matchPlayers.blue) {
+            lobbyState.matchPlayers.blue = myPlayerId;
+            if (arenaBots.enabled) arenaBots.setSlotHuman('blue', true);
+          } else if (!lobbyState.matchPlayers.red) {
+            lobbyState.matchPlayers.red = myPlayerId;
+            if (arenaBots.enabled) arenaBots.setSlotHuman('red', true);
+          }
+        }
 
         // Notify peers with the updated lobby state so they can position correctly
         for (var i = 0; i < connections.length; i++) {
@@ -1940,10 +2030,13 @@
 
         // Show player name labels
         var blueNick = '', redNick = '';
+        if (mp.red === '__BOT__') {
+          redNick = 'Bot';
+        }
         if (lobbyState && lobbyState.players) {
           for (var i = 0; i < lobbyState.players.length; i++) {
             if (lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
-            if (lobbyState.players[i].id === mp.red) redNick = lobbyState.players[i].nickname;
+            if (lobbyState.players[i].id === mp.red && mp.red !== '__BOT__') redNick = lobbyState.players[i].nickname;
           }
         }
         var blueName = document.getElementById('spectator-blue-name');
@@ -2000,9 +2093,19 @@
         // Clean up any spectator rendering state from before becoming a match player
         deactivateSpectatorView();
 
-        var _abRedActive = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
         var bot = document.querySelector('[advanced-bot]');
-        if (bot && !_abRedActive) bot.setAttribute('advanced-bot', 'enabled', false);
+        if (window.isLobbyBotMatch) {
+          if (bot) {
+            bot.components['advanced-bot'].isMultiplayer = false;
+            bot.components['advanced-bot'].gameStarted = true;
+            bot.setAttribute('advanced-bot', 'enabled', true);
+          }
+          var botBody = document.querySelector('#bot-body');
+          if (botBody) botBody.object3D.visible = true;
+        } else {
+          var _abRedActive = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
+          if (bot && !_abRedActive) bot.setAttribute('advanced-bot', 'enabled', false);
+        }
         multiplayerScore = { local: 0, remote: 0 };
         multiplayerReady = { local: false, remote: false };
         updateScoreDisplayMultiplayer();
@@ -2043,7 +2146,7 @@
           gm.timerDisplay.setAttribute('visible', false);
           gm.respawnBalls();
           if (wasActive) {
-            sceneEl.emit('matchEnded');
+            gm.el.sceneEl.emit('matchEnded');
           }
         }
       }
@@ -2153,6 +2256,7 @@
       function endMultiplayer() {
         isMultiplayer = false;
         isHost = false;
+        window.isLobbyBotMatch = false;
         lobbyState = null;
         multiplayerStatus = 'Singleplayer';
         updateMultiplayerStatus('Singleplayer');
@@ -2624,9 +2728,9 @@
             arenaBots.tick(performance.now());
           }
           // Host: broadcast bot-controlled ball + body positions to all spectators
-          if (isHost && isMultiplayer && arenaBots.enabled) {
+          if (isHost && isMultiplayer && (arenaBots.enabled || window.isLobbyBotMatch)) {
             var _abState = {};
-            if (arenaBots.redBotActive) {
+            if (arenaBots.redBotActive || window.isLobbyBotMatch) {
               var _rbEl = document.querySelector('[simple-grab="player: player1"]');
               if (_rbEl) {
                 var _rbp = _rbEl.object3D.position;
@@ -2656,9 +2760,9 @@
             }
           }
           // In multiplayer, hide phantom bodies when no valid data is driving them
-          // (but keep arena bot bodies visible when arena bots are active)
+          // (but keep arena bot bodies visible when arena bots are active or during lobby bot match)
           if (isMultiplayer && !window.isSpectator) {
-            if (!remotePlayerState && !arenaBots.redBotActive) {
+            if (!remotePlayerState && !arenaBots.redBotActive && !window.isLobbyBotMatch) {
               var _bb = document.querySelector('#bot-body');
               if (_bb) _bb.object3D.visible = false;
             }
@@ -3210,7 +3314,7 @@
           const now = Date.now();
           if (now - (this._lastBotHitTime || 0) < 200) return;
           this._lastBotHitTime = now;
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -3220,7 +3324,8 @@
           } else {
             this.playerScore += 1;
             this.updateScore();
-            if (isHost && isMultiplayer && _abActive) {
+            if (isHost && isMultiplayer && (_abActive || window.isLobbyBotMatch)) {
+              if (window.isLobbyBotMatch && lobbyState) lobbyState.matchScore = { blue: this.playerScore, red: this.botScore };
               broadcastArenaBotScore(this.playerScore, this.botScore, 'red');
             }
           }
@@ -3232,7 +3337,7 @@
           const now = Date.now();
           if (now - (this._lastPlayerHitTime || 0) < 200) return;
           this._lastPlayerHitTime = now;
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -3242,7 +3347,8 @@
           } else {
             this.botScore += 1;
             this.updateScore();
-            if (isHost && isMultiplayer && _abActive) {
+            if (isHost && isMultiplayer && (_abActive || window.isLobbyBotMatch)) {
+              if (window.isLobbyBotMatch && lobbyState) lobbyState.matchScore = { blue: this.playerScore, red: this.botScore };
               broadcastArenaBotScore(this.playerScore, this.botScore, 'blue');
             }
           }
@@ -3467,7 +3573,7 @@
             var arenaBotsPlaying = window.arenaBots && window.arenaBots.enabled;
             if (window.isSpectator && !arenaBotsPlaying) return;
             // Skip collisions for balls whose slot has a human (network-driven)
-            if (isMultiplayer && this.data.player === 'player1' && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
+            if (isMultiplayer && this.data.player === 'player1' && !window.isLobbyBotMatch && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
             if (window.isSpectator && this.data.player === 'player2' && !(arenaBotsPlaying && window.arenaBots.blueBotActive)) return;
             const collider = evt.detail.withEl;
             if (!collider) return;
@@ -3541,9 +3647,9 @@
             }
             // Player1's red ball (bot's) hitting player = point for bot
             // In multiplayer with a human remote thrower, skip (they handle scoring via score-update)
-            // But allow when the red arena bot is active (locally simulated)
+            // But allow when the red arena bot is active or during lobby bot match (locally simulated)
             if (this.data.player === 'player1' && isPlayerTarget) {
-              if (isMultiplayer && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
+              if (isMultiplayer && !window.isLobbyBotMatch && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
               if (inGracePeriod) return;
               recordStat('player1', 'hits');
               const playerTarget = document.querySelector('#player-target');
@@ -3562,9 +3668,9 @@
             const canSelfHit = !this.isGrabbed && selfHitSpeed > 1 && timeSinceRelease > 1500;
 
             // Player1's red ball (bot's) deflected back at bot = point for human player
-            // In multiplayer with human remote, skip — but allow when red arena bot is active
+            // In multiplayer with human remote, skip — but allow when red arena bot is active or lobby bot match
             if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
-              if (isMultiplayer && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
+              if (isMultiplayer && !window.isLobbyBotMatch && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
               recordStat('player2', 'hits');
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
@@ -3880,7 +3986,7 @@
             var arenaBotsPlaying = window.arenaBots && window.arenaBots.enabled;
             if (window.isSpectator && !arenaBotsPlaying) return;
             // Skip tick for balls whose slot has a human player (network-driven, not local)
-            if (isMultiplayer && this.data.player === 'player1' && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
+            if (isMultiplayer && this.data.player === 'player1' && !window.isLobbyBotMatch && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
             if (window.isSpectator && this.data.player === 'player2' && !(arenaBotsPlaying && window.arenaBots.blueBotActive)) return;
             // Returning ball that reached its own wall: respawn with animation
             if (this.isReturning && !this.isGrabbed) {
@@ -5175,10 +5281,10 @@
           resetStage('player2');
           resetMatchStats();
           
-          // Enable bot (only in singleplayer) and player collision
+          // Enable bot in singleplayer or lobby bot match
           const bot = this.el.sceneEl.querySelector('[advanced-bot]');
           const player = this.el.sceneEl.querySelector('#player');
-          if (bot && !isMultiplayer) bot.setAttribute('advanced-bot', 'enabled', true);
+          if (bot && (!isMultiplayer || window.isLobbyBotMatch)) bot.setAttribute('advanced-bot', 'enabled', true);
           if (player) player.setAttribute('player-collision', 'enabled', true);
           
           // Dispatch game started event
@@ -5200,9 +5306,8 @@
           
           // Check if time is up
           if (remaining <= 0 && this.matchState === 'PLAYING') {
-            // Use correct scores for multiplayer vs singleplayer
             let score1, score2;
-            if (isMultiplayer && !window.isSpectator) {
+            if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
               score1 = multiplayerScore.local;
               score2 = multiplayerScore.remote;
             } else {
@@ -5225,7 +5330,7 @@
           
           if (isMultiplayer) {
             if (lobbyState) lobbyState.matchGameState = 'OVERTIME';
-            sendToMatchOpponent({ type: 'game-state', state: 'OVERTIME' });
+            if (!window.isLobbyBotMatch) sendToMatchOpponent({ type: 'game-state', state: 'OVERTIME' });
             broadcastSpectatorGameState('OVERTIME');
           }
         },
@@ -5242,7 +5347,7 @@
           let winner;
           if (cancelled) {
             winner = 'Match cancelled';
-          } else if (isMultiplayer && !window.isSpectator) {
+          } else if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             winner = multiplayerScore.local > multiplayerScore.remote ? 'You win!' : 'Opponent wins!';
           } else {
             winner = this.playerScore > this.botScore ? 'Player wins!' : 'Bot wins!';
@@ -5254,7 +5359,7 @@
           
           if (isMultiplayer) {
             if (lobbyState) lobbyState.matchGameState = 'ENDED';
-            sendToMatchOpponent({ type: 'game-state', state: 'ENDED', winner: winner });
+            if (!window.isLobbyBotMatch) sendToMatchOpponent({ type: 'game-state', state: 'ENDED', winner: winner });
             broadcastSpectatorGameState('ENDED');
           }
           
@@ -5265,6 +5370,10 @@
           
           this.el.sceneEl.emit('matchEnded');
           console.log(`Match ended: ${winner}${cancelled ? ' (cancelled)' : ''}`);
+
+          if (isMultiplayer && !cancelled && isHost) {
+            scheduleAutoEndLobbyMatch(window.isLobbyBotMatch);
+          }
         },
 
         resetMatch: function() {
@@ -5312,12 +5421,11 @@
 
         onBotHit: function() {
           if (this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
-          // Prevent double-scoring from multiple handlers firing for the same hit
           const now = Date.now();
           if (now - (this._lastBotHitTime || 0) < 200) return;
           this._lastBotHitTime = now;
           
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -5337,7 +5445,7 @@
           if (now - (this._lastPlayerHitTime || 0) < 200) return;
           this._lastPlayerHitTime = now;
           
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
             sendScoreUpdate();
@@ -5352,10 +5460,9 @@
         },
 
         updateScore: function() {
-          if (isMultiplayer && !window.isSpectator) {
+          if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             updateScoreDisplayMultiplayer();
           } else {
-            // In singleplayer, player is blue, bot is red
             const blueScore = document.getElementById('blue-score');
             const redScore = document.getElementById('red-score');
             if (blueScore && redScore) {
