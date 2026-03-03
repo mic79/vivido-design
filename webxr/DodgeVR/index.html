@@ -5220,21 +5220,7 @@
               }
 
               void main() {
-                vec2 warpedUv = vUv;
-                for (int i = 0; i < ` + MAX + `; i++) {
-                  if (float(i) >= uImpactCount) break;
-                  vec2 ip = uImpactPos[i];
-                  float spd = uImpactSpeeds[i];
-                  float elapsed = uTime - uImpactTimes[i];
-                  if (elapsed < 0.0 || elapsed > 0.6) continue;
-                  vec2 dir = warpedUv - ip;
-                  float d2 = dot(dir, dir);
-                  float warpR = uCellSize * (4.0 + spd * 2.0);
-                  float warp = exp(-d2 / (warpR * warpR)) * (1.0 - elapsed / 0.6) * uCellSize * (0.5 + spd * 0.3);
-                  warpedUv += normalize(dir + 0.0001) * warp;
-                }
-
-                vec4 hc = hexCoords(warpedUv, uCellSize);
+                vec4 hc = hexCoords(vUv, uCellSize);
                 vec2 cellCenter = hc.xy;
                 float edgeDist = hc.z;
 
