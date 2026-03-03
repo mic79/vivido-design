@@ -3742,6 +3742,17 @@
                 if (this.velocityHistory.length > this.maxHistorySize) {
                   this.velocityHistory.shift();
                 }
+
+                // Continuous haptic feedback proportional to hand movement speed
+                const handSpeed = instantVelocity.length();
+                if (handSpeed > 0.05) {
+                  const hapticIntensity = THREE.MathUtils.clamp(
+                    (handSpeed - 0.3) / (8.0 - 0.3),
+                    0.02,
+                    1.0
+                  );
+                  pulseHaptic(this.grabbingHand, hapticIntensity, 20);
+                }
               }
               
               this.lastPosition.copy(currentPos);
