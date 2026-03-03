@@ -2085,6 +2085,50 @@
         }
       }
 
+      function applyRemoteBallVisuals(ballEl, state) {
+        if (!ballEl) return;
+        var grab = ballEl.components['simple-grab'];
+        var player = grab ? grab.data.player : 'player1';
+        if (state.ro) {
+          var s = state.rs || 0.5;
+          ballEl.object3D.scale.setScalar(s);
+          if (grab && grab.body && grab.body.shapes[0]) {
+            grab.body.shapes[0].radius = BALL_BASE_RADIUS * s;
+            grab.body.updateBoundingRadius();
+          }
+          var opacity = Math.max(0, (s - 0.5) / 0.5);
+          ballEl.object3D.traverse(function(node) {
+            if (node.isMesh && node.material) {
+              node.material.transparent = true;
+              node.material.opacity = opacity;
+            }
+          });
+          var lightChild = ballEl.querySelector('[light]');
+          if (lightChild) {
+            var lc = lightChild.components.light;
+            if (lc && lc.light) lc.light.intensity = 1.5 * opacity;
+          }
+        } else {
+          var fullScale = getStageBallScale(playerStages[player] || 1);
+          ballEl.object3D.scale.setScalar(fullScale);
+          if (grab && grab.body && grab.body.shapes[0]) {
+            grab.body.shapes[0].radius = BALL_BASE_RADIUS * fullScale;
+            grab.body.updateBoundingRadius();
+          }
+          ballEl.object3D.traverse(function(node) {
+            if (node.isMesh && node.material) {
+              node.material.transparent = true;
+              node.material.opacity = 1.0;
+            }
+          });
+          var lightChild2 = ballEl.querySelector('[light]');
+          if (lightChild2) {
+            var lc2 = lightChild2.components.light;
+            if (lc2 && lc2.light) lc2.light.intensity = 1.5;
+          }
+        }
+      }
+
       var _lastStatsSyncTime = 0;
       function sendStatsSync() {
         if (!isMultiplayer || window.isSpectator) return;
@@ -2327,6 +2371,7 @@
           var grab = ball.components['simple-grab'];
           if (!grab || !grab.body) return;
           if (grab.isGrabbed) return;
+          if (grab._respawnPhase) return;
 
           var distToSpawn = grab.body.position.distanceTo(grab.initialPosition);
           var ballSpeed = grab.body.velocity.length();
@@ -2379,6 +2424,7 @@
           var grab = this._redBall.components['simple-grab'];
           if (!grab || !grab.body) return;
           if (grab.isReturning) return;
+          if (grab._respawnPhase) return;
 
           var bp = grab.body.position;
           var bodyY = s.currentPos.y - 0.3;
@@ -2689,12 +2735,18 @@
               const vel = bBody?.velocity || {x:0,y:0,z:0};
               const angVel = bBody?.angularVelocity || {x:0,y:0,z:0};
               const bQuat = bBody?.quaternion || {x:0,y:0,z:0,w:1};
-              sendBallState({
+              const bGrab = blueBall.components['simple-grab'];
+              const bState = {
                 x: pos.x, y: pos.y, z: pos.z,
                 vx: vel.x, vy: vel.y, vz: vel.z,
                 ax: angVel.x, ay: angVel.y, az: angVel.z,
                 qx: bQuat.x, qy: bQuat.y, qz: bQuat.z, qw: bQuat.w
-              });
+              };
+              if (bGrab && bGrab._respawnPhase) {
+                bState.rs = blueBall.object3D.scale.x;
+                bState.ro = 1; // flag: respawning
+              }
+              sendBallState(bState);
             }
             sendStatsSync();
           }
@@ -2724,6 +2776,7 @@
                   rbody.quaternion.set(_remoteBallQuat.x, _remoteBallQuat.y, _remoteBallQuat.z, _remoteBallQuat.w);
                 }
               }
+              applyRemoteBallVisuals(redBall, rbs);
             }
           }
           // --- SPECTATOR: tick-based fallback activation ---
@@ -2807,6 +2860,7 @@
                     lbb.angularVelocity.set(lbbs.ax || 0, lbbs.ay || 0, lbbs.az || 0);
                     if (lbbs.qx !== undefined) lbb.quaternion.set(lbbs.qx, lbbs.qy, lbbs.qz, lbbs.qw);
                   }
+                  applyRemoteBallVisuals(lobbyBlueBall, lbbs);
                 }
               }
               if (lobbyRedId && spectatorBallStates[lobbyRedId] && !(_abEnabled && window.arenaBots.redBotActive)) {
@@ -2826,6 +2880,7 @@
                     lrb.angularVelocity.set(lrbs.ax ? -lrbs.ax : 0, lrbs.ay || 0, lrbs.az ? -lrbs.az : 0);
                     if (lrbs.qx !== undefined) lrb.quaternion.set(_remoteBallQuat.x, _remoteBallQuat.y, _remoteBallQuat.z, _remoteBallQuat.w);
                   }
+                  applyRemoteBallVisuals(lobbyRedBall, lrbs);
                 }
               }
             }
@@ -2928,6 +2983,7 @@
                   rb.angularVelocity.set(redBallSt.ax ? -redBallSt.ax : 0, redBallSt.ay || 0, redBallSt.az ? -redBallSt.az : 0);
                   if (redBallSt.qx !== undefined) rb.quaternion.set(_remoteBallQuat.x, _remoteBallQuat.y, _remoteBallQuat.z, _remoteBallQuat.w);
                 }
+                applyRemoteBallVisuals(redBall, redBallSt);
               }
             }
             if (blueBallSt) {
@@ -2944,6 +3000,7 @@
                   bb.angularVelocity.set(blueBallSt.ax || 0, blueBallSt.ay || 0, blueBallSt.az || 0);
                   if (blueBallSt.qx !== undefined) bb.quaternion.set(blueBallSt.qx, blueBallSt.qy, blueBallSt.qz, blueBallSt.qw);
                 }
+                applyRemoteBallVisuals(blueBall, blueBallSt);
               }
             }
 
@@ -3337,6 +3394,14 @@
           this.velocityHistory = [];
           this.maxHistorySize = 5;
 
+          // Respawn animation state
+          this._respawnPhase = null; // null, 'fade-out', 'fade-in'
+          this._respawnStart = 0;
+          this._respawnFadeOutDur = 500;  // ms
+          this._respawnFadeInDur = 500;   // ms
+          this._respawnBaseScale = 1.0;
+          this._respawnResetStagePending = false;
+
           // Cache hum sound element for dynamic pitch/volume control
           const humId = this.data.player === 'player1' ? 'red-ball-hum' : 'blue-ball-hum';
           this._humEl = this.el.querySelector('#' + humId);
@@ -3379,15 +3444,15 @@
             const isPlayer2Ball = this.data.player === 'player2';
             
             // Left hand controls player1's ball, right hand controls player2's ball
+            // Don't allow manual respawn while ball is returning from opponent wall
             if ((isLeftHand && isPlayer1Ball) || (isRightHand && isPlayer2Ball)) {
-              resetStage(this.data.player);
-              this.resetPosition();
+              if (this.isReturning) return;
+              this.animatedRespawn(this.data.player);
               // In mirror mode, also respawn the mirrored bot's ball
               if (window.botMirrorMode && isRightHand && isPlayer2Ball) {
-                resetStage('player1');
                 const mirroredBall = document.querySelector('[simple-grab="player: player1"]');
                 if (mirroredBall && mirroredBall.components['simple-grab']) {
-                  mirroredBall.components['simple-grab'].resetPosition();
+                  mirroredBall.components['simple-grab'].animatedRespawn('player1');
                 }
               }
             }
@@ -3395,6 +3460,8 @@
 
           // Add collision event listener
           this.el.addEventListener('obbcollisionstarted', (evt) => {
+            // Ignore all collisions during respawn animation
+            if (this._respawnPhase) return;
             // Spectators receive impacts via spectator-score messages, not local collisions
             // But allow when arena bots are playing (balls are locally simulated)
             var arenaBotsPlaying = window.arenaBots && window.arenaBots.enabled;
@@ -3404,9 +3471,9 @@
             if (window.isSpectator && this.data.player === 'player2' && !(arenaBotsPlaying && window.arenaBots.blueBotActive)) return;
             const collider = evt.detail.withEl;
             if (!collider) return;
-            const respawn = () => {
+            const respawn = (resetPlayer) => {
               this.isReturning = false;
-              this.resetPosition();
+              this.animatedRespawn(resetPlayer || null);
             };
             const now = Date.now();
 
@@ -3456,7 +3523,6 @@
             // Player2's blue ball (human's) hitting bot = point for human player
             if (this.data.player === 'player2' && isBotTarget) {
               if (inGracePeriod) return;
-              resetStage(this.data.player);
               recordStat('player2', 'hits');
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
@@ -3470,7 +3536,7 @@
               }
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onBotHit();
-              respawn();
+              respawn(this.data.player);
               return;
             }
             // Player1's red ball (bot's) hitting player = point for bot
@@ -3479,7 +3545,6 @@
             if (this.data.player === 'player1' && isPlayerTarget) {
               if (isMultiplayer && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
               if (inGracePeriod) return;
-              resetStage(this.data.player);
               recordStat('player1', 'hits');
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
@@ -3487,7 +3552,7 @@
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
               pulseHapticBothHands(1.0, 200);
-              respawn();
+              respawn(this.data.player);
               return;
             }
 
@@ -3500,19 +3565,17 @@
             // In multiplayer with human remote, skip — but allow when red arena bot is active
             if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
               if (isMultiplayer && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
-              resetStage(this.data.player);
               recordStat('player2', 'hits');
               const botTarget = document.querySelector('#bot-target');
               const impactEffect = botTarget && botTarget.components['impact-effect'];
               if (impactEffect) impactEffect.playEffect();
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onBotHit();
-              respawn();
+              respawn(this.data.player);
               return;
             }
             // Player2's blue ball (human's) deflected back at player = point for bot
             if (this.data.player === 'player2' && isPlayerTarget && canSelfHit) {
-              resetStage(this.data.player);
               recordStat('player1', 'hits');
               const playerTarget = document.querySelector('#player-target');
               const impactEffect = playerTarget && playerTarget.components['impact-effect'];
@@ -3520,7 +3583,7 @@
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
               pulseHapticBothHands(1.0, 200);
-              respawn();
+              respawn(this.data.player);
               return;
             }
             // Ball hits wall behind opponent - return to spawn at 10 m/s
@@ -3585,8 +3648,7 @@
                 // Player1's red ball hits wall behind bot (z=-8) = own back wall
                 if ((this.data.player === 'player2' && isBackWallBehindPlayer) ||
                     (this.data.player === 'player1' && isBackWallBehindBot)) {
-                  resetStage(this.data.player);
-                  respawn();
+                  respawn(this.data.player);
                   return;
                 }
               }
@@ -3604,7 +3666,163 @@
           this._dodgeAimed = null;
         },
 
+        _setBallOpacity: function(opacity) {
+          this.el.object3D.traverse(function(node) {
+            if (node.isMesh && node.material) {
+              node.material.transparent = true;
+              node.material.opacity = opacity;
+            }
+          });
+          // Also fade the point light
+          var lightEl = this.el.querySelector('[light]');
+          if (lightEl) {
+            var lightComp = lightEl.components.light;
+            if (lightComp && lightComp.light) {
+              lightComp.light.intensity = 1.5 * opacity;
+            }
+          }
+        },
+
+        animatedRespawn: function(resetStageForPlayer) {
+          if (this._respawnPhase) return; // already animating
+          this._respawnPhase = 'fade-out';
+          this._respawnStart = performance.now();
+          this._respawnBaseScale = getStageBallScale(playerStages[this.data.player] || 1);
+          this._respawnResetStagePending = resetStageForPlayer || null;
+
+          // Release any grab constraints
+          if (this.constraint) {
+            world.removeConstraint(this.constraint);
+            this.constraint = null;
+          }
+          if (this.handBody) {
+            world.removeBody(this.handBody);
+            this.handBody = null;
+          }
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this.body.mass = 1;
+          this.body.updateMassProperties();
+
+          // Bezier curve: P0 = current pos, P1 = control point, P2 = spawn
+          var p0 = this._respawnP0 = new CANNON.Vec3().copy(this.body.position);
+          var vel = this.body.velocity;
+          var speed = vel.length();
+          var sp = this.initialPosition;
+          if (speed > 0.5) {
+            var lookahead = Math.min(speed * 0.15, 2.0);
+            this._respawnP1 = new CANNON.Vec3(
+              p0.x + vel.x / speed * lookahead,
+              p0.y + vel.y / speed * lookahead,
+              p0.z + vel.z / speed * lookahead
+            );
+          } else {
+            this._respawnP1 = new CANNON.Vec3(
+              (p0.x + sp.x) * 0.5,
+              Math.max(p0.y, sp.y) + 0.5,
+              (p0.z + sp.z) * 0.5
+            );
+          }
+          this._respawnP2 = new CANNON.Vec3().copy(sp);
+
+          // Kill physics — we drive position manually via bezier
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          this.body.gravity.set(0, 0, 0);
+
+          // Disable collisions during respawn
+          this.body.collisionFilterGroup = 0;
+          this.body.collisionFilterMask = 0;
+        },
+
+        _tickRespawnAnimation: function() {
+          var now = performance.now();
+          var elapsed = now - this._respawnStart;
+
+          if (this._respawnPhase === 'fade-out') {
+            var t = Math.min(elapsed / this._respawnFadeOutDur, 1.0);
+
+            // Quadratic bezier: B(t) = (1-t)^2 * P0 + 2(1-t)t * P1 + t^2 * P2
+            var u = 1 - t;
+            var uu = u * u, tt = t * t, ut2 = 2 * u * t;
+            var bx = uu * this._respawnP0.x + ut2 * this._respawnP1.x + tt * this._respawnP2.x;
+            var by = uu * this._respawnP0.y + ut2 * this._respawnP1.y + tt * this._respawnP2.y;
+            var bz = uu * this._respawnP0.z + ut2 * this._respawnP1.z + tt * this._respawnP2.z;
+            this.body.position.set(bx, by, bz);
+            this.el.object3D.position.set(bx, by, bz);
+
+            // Shrink and fade (min 0.5 scale = 5cm radius to prevent wall clipping)
+            var ease = t * t;
+            var scale = this._respawnBaseScale * (1.0 - ease);
+            if (scale < 0.5) scale = 0.5;
+            this.el.object3D.scale.setScalar(scale);
+            if (this.body.shapes[0]) {
+              this.body.shapes[0].radius = BALL_BASE_RADIUS * scale;
+              this.body.updateBoundingRadius();
+            }
+            this._setBallOpacity(1.0 - ease);
+
+            if (t >= 1.0) {
+              // Fade-out complete: ball has arrived at spawn and is invisible
+              if (this._respawnResetStagePending) {
+                resetStage(this._respawnResetStagePending);
+              }
+              this._respawnBaseScale = getStageBallScale(playerStages[this.data.player] || 1);
+              this.isReturning = false;
+              this.returningGraceUntil = 0;
+              this._throwOpponentPos = null;
+              this._dodgeAimed = null;
+              this._pendingAction = null;
+              this.body.position.copy(this.initialPosition);
+              this.body.velocity.set(0, 0, 0);
+              this.body.angularVelocity.set(0, 0, 0);
+              this.body.quaternion.set(0, 0, 0, 1);
+              this.body.gravity.copy(new CANNON.Vec3(0, 0, 0));
+              this._releaseTime = Date.now();
+
+              // Sync visual to spawn
+              this.el.object3D.position.copy(this.initialPosition);
+
+              // Start fade-in
+              this._respawnPhase = 'fade-in';
+              this._respawnStart = now;
+              this.el.object3D.scale.setScalar(0.5);
+              this._setBallOpacity(0);
+            }
+          } else if (this._respawnPhase === 'fade-in') {
+            // Keep visual at spawn
+            this.el.object3D.position.copy(this.initialPosition);
+
+            var t2 = Math.min(elapsed / this._respawnFadeInDur, 1.0);
+            var ease2 = 1.0 - (1.0 - t2) * (1.0 - t2); // ease-out
+            var scale2 = 0.5 + (this._respawnBaseScale - 0.5) * ease2;
+            this.el.object3D.scale.setScalar(scale2);
+            if (this.body.shapes[0]) {
+              this.body.shapes[0].radius = BALL_BASE_RADIUS * scale2;
+              this.body.updateBoundingRadius();
+            }
+            this._setBallOpacity(ease2);
+
+            if (t2 >= 1.0) {
+              // Animation complete - restore full state
+              this._respawnPhase = null;
+              this.el.object3D.scale.setScalar(this._respawnBaseScale);
+              if (this.body.shapes[0]) {
+                this.body.shapes[0].radius = BALL_BASE_RADIUS * this._respawnBaseScale;
+                this.body.updateBoundingRadius();
+              }
+              this._setBallOpacity(1.0);
+              this.body.collisionFilterGroup = 1;
+              this.body.collisionFilterMask = 1;
+            }
+          }
+        },
+
         resetPosition: function() {
+          // Cancel any in-progress respawn animation
+          if (this._respawnPhase) {
+            this._respawnPhase = null;
+          }
           this.isReturning = false;
           this.returningGraceUntil = 0;
           this._throwOpponentPos = null;
@@ -3629,6 +3847,16 @@
           this.isGrabbed = false;
           this.grabbingHand = null;
           this._releaseTime = Date.now();
+          // Restore visuals (opacity, scale, collision) in case animation was interrupted
+          this._setBallOpacity(1.0);
+          var fullScale = getStageBallScale(playerStages[this.data.player] || 1);
+          this.el.object3D.scale.setScalar(fullScale);
+          if (this.body.shapes[0]) {
+            this.body.shapes[0].radius = BALL_BASE_RADIUS * fullScale;
+            this.body.updateBoundingRadius();
+          }
+          this.body.collisionFilterGroup = 1;
+          this.body.collisionFilterMask = 1;
         },
         
         _updateHumPitch: function(speed) {
@@ -3649,6 +3877,11 @@
 
         tick: function() {
           if (this.body) {
+            // Drive respawn animation (fade-out homing + fade-in at spawn)
+            if (this._respawnPhase) {
+              this._tickRespawnAnimation();
+              return;
+            }
             // Spectators don't own any ball — positions come from network data
             // But allow full tick when arena bots are playing (balls are locally simulated)
             var arenaBotsPlaying = window.arenaBots && window.arenaBots.enabled;
@@ -3656,13 +3889,13 @@
             // Skip tick for balls whose slot has a human player (network-driven, not local)
             if (isMultiplayer && this.data.player === 'player1' && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
             if (window.isSpectator && this.data.player === 'player2' && !(arenaBotsPlaying && window.arenaBots.blueBotActive)) return;
-            // Returning ball that reached its own wall: respawn
+            // Returning ball that reached its own wall: respawn with animation
             if (this.isReturning && !this.isGrabbed) {
               var bz = this.body.position.z;
               var atOwnWall = (this.data.player === 'player2' && bz > 7.8) ||
                               (this.data.player === 'player1' && bz < -7.8);
               if (atOwnWall) {
-                this.resetPosition();
+                this.animatedRespawn();
                 return;
               }
             }
@@ -3741,9 +3974,8 @@
                   }
                   return;
                 } else if (hitOwnWall) {
-                  resetStage(this.data.player);
                   this.isReturning = false;
-                  this.resetPosition();
+                  this.animatedRespawn(this.data.player);
                   return;
                 }
               }
@@ -3950,6 +4182,7 @@
         onGripDown: function(evt) {
           if (this.isGrabbed) return;
           if (this.spectatorMode) return;
+          if (this._respawnPhase) return;
           
           this.grabbingHand = evt.target;
           this.isGrabbed = true;
@@ -3960,11 +4193,8 @@
           this.body.mass = 1000;
           this.body.updateMassProperties();
 
-          // Robust haptic feedback on grab (Meta Quest compatible)
-          if (this.grabbingHand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
-            const haptics = this.grabbingHand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
-            haptics.pulse(0.7, 100).catch(() => {}); // Silently fail if haptics not supported
-          }
+          // Strong "thud" haptic on grab
+          pulseHaptic(this.grabbingHand, 1.0, 80);
 
           // Start hum sound on first grab (user gesture resumes AudioContext)
           if (!this._humStarted && this._humEl) {
@@ -5924,7 +6154,7 @@
             if (!ballEl) continue;
             const grab = ballEl.components?.['simple-grab'];
             if (!grab?.body) continue;
-            // Skip held balls - they shouldn't be hit by racket
+            if (grab._respawnPhase) continue;
             if (grab.isGrabbed) continue;
             
             const ballBody = grab.body;
@@ -6212,6 +6442,7 @@
                 collider.getAttribute('simple-grab').player === 'player1') {
               const grab = collider.components?.['simple-grab'];
               if (grab) {
+                if (grab._respawnPhase) return;
                 if (grab.isGrabbed) return;
                 if (!grab.isReturning && grab.body && grab.body.position.z > 6.5) {
                   grab.isReturning = true;
@@ -6335,6 +6566,7 @@
         
         throwBall: function() {
           if (!this.ball || !this.ball.components['simple-grab']) return;
+          if (this.ball.components['simple-grab']._respawnPhase) return;
           
           // Get player position
           const player = document.querySelector('#player');
@@ -6443,7 +6675,7 @@
           this.el.addEventListener('obbcollisionstarted', (evt) => {
             const collider = evt.detail.withEl;
             // Check if the collider is a ball (has simple-grab component)
-            if (collider && collider.components && collider.components['simple-grab']) {
+            if (collider && collider.components && collider.components['simple-grab'] && !collider.components['simple-grab']._respawnPhase) {
               // Try to get the gamepad from the controller
               const trackedControls = this.el.components['tracked-controls'];
               if (trackedControls?.controller?.gamepad?.hapticActuators?.[0]) {
