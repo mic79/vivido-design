@@ -5115,7 +5115,9 @@
           this._planeH = planeH;
 
           const MAX = this.data.maxImpacts;
-          this._impactPositions = new Float32Array(MAX * 2);
+          const impactPosArr = [];
+          for (let i = 0; i < MAX; i++) impactPosArr.push(new THREE.Vector2());
+          this._impactPosArr    = impactPosArr;
           this._impactTimes     = new Float32Array(MAX);
           this._impactSpeeds    = new Float32Array(MAX);
           this._impactHues      = new Float32Array(MAX);
@@ -5132,8 +5134,8 @@
             uRippleWidth:    { value: this.data.rippleWidth },
             uBaseOpacity:    { value: this.data.baseOpacity },
             uColor:          { value: col },
-            uImpactCount:    { value: 0 },
-            uImpactPos:      { value: this._impactPositions },
+            uImpactCount:    { value: 0.0 },
+            uImpactPos:      { value: impactPosArr },
             uImpactTimes:    { value: this._impactTimes },
             uImpactSpeeds:   { value: this._impactSpeeds },
             uImpactHues:     { value: this._impactHues },
@@ -5152,7 +5154,7 @@
               }
             `,
             fragmentShader: `
-              precision mediump float;
+              precision highp float;
               uniform float uTime;
               uniform float uCellSize;
               uniform float uRippleSpeed;
@@ -5160,9 +5162,9 @@
               uniform float uRippleWidth;
               uniform float uBaseOpacity;
               uniform vec3  uColor;
-              uniform int   uImpactCount;
+              uniform float uImpactCount;
               uniform vec2  uPlaneSize;
-              uniform float uImpactPos[` + (MAX * 2) + `];
+              uniform vec2  uImpactPos[` + MAX + `];
               uniform float uImpactTimes[` + MAX + `];
               uniform float uImpactSpeeds[` + MAX + `];
               uniform float uImpactHues[` + MAX + `];
@@ -5220,11 +5222,10 @@
               void main() {
                 vec2 warpedUv = vUv;
                 for (int i = 0; i < ` + MAX + `; i++) {
-                  if (i >= uImpactCount) break;
-                  vec2 ip = vec2(uImpactPos[i * 2], uImpactPos[i * 2 + 1]);
-                  float it = uImpactTimes[i];
+                  if (float(i) >= uImpactCount) break;
+                  vec2 ip = uImpactPos[i];
                   float spd = uImpactSpeeds[i];
-                  float elapsed = uTime - it;
+                  float elapsed = uTime - uImpactTimes[i];
                   if (elapsed < 0.0 || elapsed > 0.6) continue;
                   vec2 dir = warpedUv - ip;
                   float d2 = dot(dir, dir);
@@ -5248,12 +5249,11 @@
                 vec3 totalColor = vec3(0.0);
 
                 for (int i = 0; i < ` + MAX + `; i++) {
-                  if (i >= uImpactCount) break;
-                  vec2 ip = vec2(uImpactPos[i * 2], uImpactPos[i * 2 + 1]);
-                  float it = uImpactTimes[i];
+                  if (float(i) >= uImpactCount) break;
+                  vec2 ip = uImpactPos[i];
                   float spd = uImpactSpeeds[i];
                   float hue = uImpactHues[i];
-                  float elapsed = uTime - it;
+                  float elapsed = uTime - uImpactTimes[i];
                   if (elapsed < 0.0 || elapsed > uRippleDuration) continue;
 
                   float power = 0.4 + spd * 0.6;
@@ -5319,6 +5319,7 @@
             `,
             transparent: true,
             depthWrite: false,
+            depthTest: false,
             side: THREE.DoubleSide,
             blending: THREE.AdditiveBlending
           });
@@ -5438,8 +5439,7 @@
 
           const MAX = this.data.maxImpacts;
           const idx = this._impactCount % MAX;
-          this._impactPositions[idx * 2]     = u;
-          this._impactPositions[idx * 2 + 1] = v;
+          this._impactPosArr[idx].set(u, v);
           const nowSec = now / 1000.0;
           this._impactTimes[idx] = nowSec;
           this._impactSpeeds[idx] = normSpeed;
