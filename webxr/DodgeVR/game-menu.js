@@ -141,6 +141,7 @@
         case 'menu-clip-delete': this.deleteCurrentClip(); break;
         case 'menu-delete-last': this.deleteLastClip(); break;
         case 'menu-clear-clips': this.clearAllClips(); break;
+        case 'menu-music-toggle': this.toggleMusic(); break;
         case 'menu-start-match': this.toggleMatch(); break;
         case 'menu-stats-sp': this.setStatsSubTab('single'); break;
         case 'menu-stats-mp': this.setStatsSubTab('multi'); break;
@@ -172,6 +173,12 @@
 
       if (mode === 'multi') {
         this.setMirrorMode(false);
+        // End any active singleplayer match when switching to multiplayer
+        var gmEl = document.querySelector('#game-manager');
+        var gm = gmEl && gmEl.components['game-manager'];
+        if (gm && (gm.matchState === 'PLAYING' || gm.matchState === 'OVERTIME' || gm.matchState === 'COUNTDOWN')) {
+          gm.endMatch(true);
+        }
       }
 
       if (mode === 'single' && window.isMultiplayer) {
@@ -552,6 +559,51 @@
       }
     },
 
+    toggleMusic: function () {
+      window._musicEnabled = window._musicEnabled !== false;
+      window._musicEnabled = !window._musicEnabled;
+
+      var btn = document.getElementById('menu-music-toggle');
+      if (btn) {
+        btn.setAttribute('material', 'color', window._musicEnabled ? '#44aa44' : '#555555');
+      }
+
+      var sm = this.el.sceneEl.components['sound-manager'];
+      var bgm = document.querySelector('#bg-music');
+      var mm = document.querySelector('#match-music');
+
+      if (window._musicEnabled) {
+        var gmEl = document.querySelector('#game-manager');
+        var gm = gmEl && gmEl.components['game-manager'];
+        var inMatch = gm && (gm.matchState === 'PLAYING' || gm.matchState === 'OVERTIME' || gm.matchState === 'COUNTDOWN');
+        if (inMatch) {
+          if (mm && mm.components.sound) {
+            mm.components.sound.playSound();
+            if (sm) {
+              sm._setVolume(mm, 0);
+              sm._fadeSound(mm, 0, sm.matchMusicVolume, 500);
+            }
+          }
+        } else {
+          if (bgm && bgm.components.sound) {
+            bgm.components.sound.playSound();
+            if (sm) {
+              sm._setVolume(bgm, 0);
+              sm._fadeSound(bgm, 0, sm.bgMusicVolume, 500);
+            }
+          }
+        }
+        window._bgMusicStarted = true;
+      } else {
+        if (bgm && bgm.components.sound) bgm.components.sound.stopSound();
+        if (mm && mm.components.sound) mm.components.sound.stopSound();
+        if (sm) {
+          if (sm._fadeTickers['bg-music']) { clearInterval(sm._fadeTickers['bg-music']); delete sm._fadeTickers['bg-music']; }
+          if (sm._fadeTickers['match-music']) { clearInterval(sm._fadeTickers['match-music']); delete sm._fadeTickers['match-music']; }
+        }
+      }
+    },
+
     toggleMatch: function () {
       var ls = window.lobbyState;
       if (!window.isMultiplayer) {
@@ -575,7 +627,7 @@
       if (gmEl && gmEl.components['game-manager']) {
         var gm = gmEl.components['game-manager'];
         if (gm.matchState === 'PLAYING' || gm.matchState === 'OVERTIME' || gm.matchState === 'COUNTDOWN') {
-          gm.endMatch();
+          gm.endMatch(true);
           this.updateMenuDisplay();
           return;
         }
