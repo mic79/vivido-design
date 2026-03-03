@@ -3704,28 +3704,22 @@
           this.body.mass = 1;
           this.body.updateMassProperties();
 
-          // Bezier curve: P0 = current pos, P1 = control point, P2 = spawn
-          var p0 = this._respawnP0 = new CANNON.Vec3().copy(this.body.position);
+          // Fade out in place: keep a short drift from current velocity then decelerate
+          this._respawnP0 = new CANNON.Vec3().copy(this.body.position);
           var vel = this.body.velocity;
           var speed = vel.length();
-          var sp = this.initialPosition;
+          var driftDist = Math.min(speed * 0.15, 1.0);
           if (speed > 0.5) {
-            var lookahead = Math.min(speed * 0.15, 2.0);
-            this._respawnP1 = new CANNON.Vec3(
-              p0.x + vel.x / speed * lookahead,
-              p0.y + vel.y / speed * lookahead,
-              p0.z + vel.z / speed * lookahead
+            this._respawnDrift = new CANNON.Vec3(
+              vel.x / speed * driftDist,
+              vel.y / speed * driftDist,
+              vel.z / speed * driftDist
             );
           } else {
-            this._respawnP1 = new CANNON.Vec3(
-              (p0.x + sp.x) * 0.5,
-              Math.max(p0.y, sp.y) + 0.5,
-              (p0.z + sp.z) * 0.5
-            );
+            this._respawnDrift = new CANNON.Vec3(0, 0, 0);
           }
-          this._respawnP2 = new CANNON.Vec3().copy(sp);
 
-          // Kill physics — we drive position manually via bezier
+          // Kill physics — we drive position manually
           this.body.velocity.set(0, 0, 0);
           this.body.angularVelocity.set(0, 0, 0);
           this.body.gravity.set(0, 0, 0);
@@ -3742,14 +3736,13 @@
           if (this._respawnPhase === 'fade-out') {
             var t = Math.min(elapsed / this._respawnFadeOutDur, 1.0);
 
-            // Quadratic bezier: B(t) = (1-t)^2 * P0 + 2(1-t)t * P1 + t^2 * P2
-            var u = 1 - t;
-            var uu = u * u, tt = t * t, ut2 = 2 * u * t;
-            var bx = uu * this._respawnP0.x + ut2 * this._respawnP1.x + tt * this._respawnP2.x;
-            var by = uu * this._respawnP0.y + ut2 * this._respawnP1.y + tt * this._respawnP2.y;
-            var bz = uu * this._respawnP0.z + ut2 * this._respawnP1.z + tt * this._respawnP2.z;
-            this.body.position.set(bx, by, bz);
-            this.el.object3D.position.set(bx, by, bz);
+            // Drift: ball coasts forward slightly then decelerates (ease-out drift)
+            var driftT = 1.0 - (1.0 - t) * (1.0 - t); // ease-out
+            var px = this._respawnP0.x + this._respawnDrift.x * driftT;
+            var py = this._respawnP0.y + this._respawnDrift.y * driftT;
+            var pz = this._respawnP0.z + this._respawnDrift.z * driftT;
+            this.body.position.set(px, py, pz);
+            this.el.object3D.position.set(px, py, pz);
 
             // Shrink and fade (min 0.5 scale = 5cm radius to prevent wall clipping)
             var ease = t * t;
