@@ -218,22 +218,23 @@
       const backWallMaterial = new CANNON.Material('backWall');
 
       // Create contact materials
+      // Friction couples ball spin ↔ velocity on bounces (topspin kicks forward, etc.)
       const ballFloorContact = new CANNON.ContactMaterial(
         ballMaterial,
         floorMaterial,
         {
-          friction: 0.0,
+          friction: 0.5,
           restitution: 1.0
         }
       );
       world.addContactMaterial(ballFloorContact);
 
-      // Add contact material for ball vs. default (walls/ceiling)
+      // Ball vs. default (walls/ceiling) — same spin-friction coupling
       const ballDefaultContact = new CANNON.ContactMaterial(
         ballMaterial,
         defaultMaterial,
         {
-          friction: 0.0,
+          friction: 0.5,
           restitution: 1.0
         }
       );
@@ -274,6 +275,28 @@
       );
       world.addContactMaterial(ballBackWallContact);
 
+      window.playBounceSound = function(position, speed) {
+        var el = document.querySelector('#bounce-sound');
+        if (!el) return;
+        var sc = el.components.sound;
+        if (!sc) return;
+        el.object3D.position.copy(position);
+        var normSpeed = Math.min((speed || 5) / 15, 1.0);
+        var rate = 1.3 + normSpeed * 0.4 + (Math.random() - 0.5) * 0.3;
+        var vol = 0.5 + normSpeed * 0.4;
+        if (sc.pool && sc.pool.children) {
+          for (var i = 0; i < sc.pool.children.length; i++) {
+            var a = sc.pool.children[i];
+            if (!a.isPlaying) {
+              a.setPlaybackRate(rate);
+              a.setVolume(vol);
+            }
+          }
+        }
+        sc.stopSound();
+        sc.playSound();
+      };
+
       // Add collision event handling to the physics world
       world.addEventListener('beginContact', function(event) {
         const bodyA = event.bodyA;
@@ -292,16 +315,11 @@
           
           // If both are balls, play bounce sound at collision point + haptic on held ball
           if (isBallA && isBallB) {
-            const bounceSound = document.querySelector('#bounce-sound');
-            if (bounceSound) {
-              // Calculate collision point as midpoint between balls
-              const collisionPoint = new THREE.Vector3();
-              collisionPoint.addVectors(bodyA.position, bodyB.position).multiplyScalar(0.5);
-              bounceSound.object3D.position.copy(collisionPoint);
-              // Stop any currently playing sound before starting a new one
-              bounceSound.components.sound.stopSound();
-              bounceSound.components.sound.playSound();
-            }
+            const collisionPoint = new THREE.Vector3();
+            collisionPoint.addVectors(bodyA.position, bodyB.position).multiplyScalar(0.5);
+            const relSpeed = new CANNON.Vec3();
+            bodyA.velocity.vsub(bodyB.velocity, relSpeed);
+            window.playBounceSound(collisionPoint, relSpeed.length());
             // Haptic feedback if one ball is held (blocking with held ball)
             const grabA = entityA.components?.['simple-grab'];
             const grabB = entityB.components?.['simple-grab'];
@@ -3278,6 +3296,7 @@
           this.body = null;
           this.isReturning = false;       // Ball is returning from opponent wall
           this.returningGraceUntil = 0;   // Timestamp: opponent collision ignored until this time
+          this._releaseTime = 0;          // Timestamp: when ball was last released/thrown
           
           // Set initial position based on player
           const spawnZ = this.data.player === 'player1' ? -5.5 : 5.5;
@@ -3461,7 +3480,8 @@
 
             // --- SELF-HITS: ball hits its OWN player (deflection or own-goal) ---
             const selfHitSpeed = this.body ? this.body.velocity.length() : 0;
-            const canSelfHit = !this.isGrabbed && selfHitSpeed > 1;
+            const timeSinceRelease = now - this._releaseTime;
+            const canSelfHit = !this.isGrabbed && selfHitSpeed > 1 && timeSinceRelease > 1500;
 
             // Player1's red ball (bot's) deflected back at bot = point for human player
             // In multiplayer with human remote, skip — but allow when red arena bot is active
@@ -3518,6 +3538,7 @@
                   this.body.updateMassProperties();
                   this.isGrabbed = false;
                   this.grabbingHand = null;
+                  this._releaseTime = Date.now();
                   // Mark as returning with 1s grace period (no opponent collision)
                   this.isReturning = true;
                   this.returningGraceUntil = Date.now() + 2000;
@@ -3594,6 +3615,7 @@
           this.body.updateMassProperties();
           this.isGrabbed = false;
           this.grabbingHand = null;
+          this._releaseTime = Date.now();
         },
         
         tick: function() {
@@ -3672,6 +3694,7 @@
                   if (this.handBody) { world.removeBody(this.handBody); this.handBody = null; }
                   this.body.mass = 1; this.body.updateMassProperties();
                   this.isGrabbed = false; this.grabbingHand = null;
+                  this._releaseTime = Date.now();
                   this.isReturning = true;
                   this.returningGraceUntil = Date.now() + 2000;
                   this.body.velocity.set(0, 0, 0);
@@ -3971,6 +3994,7 @@
           
           this.isGrabbed = false;
           this.grabbingHand = null;
+          this._releaseTime = Date.now();
           if (!window.gameSettings.trajectoryLocked) this._trajLine.visible = false;
         },
 
@@ -4092,6 +4116,8 @@
         init: function() {
           this.lastTime = 0;
           this.ballBodies = null;
+          this._preVelA = new CANNON.Vec3();
+          this._preVelB = new CANNON.Vec3();
         },
         tick: function(time) {
           const deltaTime = (time - this.lastTime) / 1000;
@@ -4121,6 +4147,13 @@
               checkBallBallCCD(this.ballBodies.a, this.ballBodies.b, deltaTime);
             }
 
+            // Snapshot velocities AFTER CCD but BEFORE solver — so only Cannon.js
+            // solver changes (wall bounces) are detected, not ball-ball CCD
+            if (this.ballBodies) {
+              this._preVelA.copy(this.ballBodies.a.velocity);
+              this._preVelB.copy(this.ballBodies.b.velocity);
+            }
+
             const maxStep = 1/240;
             const steps = Math.ceil(deltaTime / maxStep);
             const clampedSteps = Math.min(steps, 8);
@@ -4129,8 +4162,83 @@
             for (let i = 0; i < clampedSteps; i++) {
               world.step(clampedStepSize);
             }
+
+            // After solver: transfer ball spin into velocity on wall bounces
+            if (this.ballBodies) {
+              this._checkSpinBounce(this.ballBodies.a, this._preVelA);
+              this._checkSpinBounce(this.ballBodies.b, this._preVelB);
+            }
           }
           this.lastTime = time;
+        },
+
+        // Detect wall bounces via velocity-component sign flips, then convert
+        // the ball's spin into a tangential kick (topspin → forward, etc.).
+        _checkSpinBounce: function(body, preVel) {
+          const grab = body.el?.components?.['simple-grab'];
+          if (grab?.isGrabbed) return;
+
+          const av = body.angularVelocity;
+          const angSq = av.x * av.x + av.y * av.y + av.z * av.z;
+          if (angSq < 0.25) return;  // < 0.5 rad/s — negligible spin
+
+          const R  = body.shapes[0] ? body.shapes[0].radius : 0.1;
+          const v  = body.velocity;
+          const p  = body.position;
+          const threshold = 0.3;  // min speed to count as a bounce flip
+          const margin = 0.6;     // position margin from wall surface
+
+          // Floor: vy flipped negative→positive, ball near y=0
+          if (preVel.y < -threshold && v.y > threshold && p.y < R + margin)
+            this._applySpinKick(body, 0, 1, 0, R, 'floor');
+          // Ceiling: vy flipped positive→negative, ball near y=4
+          else if (preVel.y > threshold && v.y < -threshold && p.y > 4 - R - margin)
+            this._applySpinKick(body, 0, -1, 0, R, 'ceiling');
+
+          // Left wall: vx flipped negative→positive, ball near x=-2
+          if (preVel.x < -threshold && v.x > threshold && p.x < -2 + R + margin)
+            this._applySpinKick(body, 1, 0, 0, R, 'left wall');
+          // Right wall: vx flipped positive→negative, ball near x=2
+          else if (preVel.x > threshold && v.x < -threshold && p.x > 2 - R - margin)
+            this._applySpinKick(body, -1, 0, 0, R, 'right wall');
+        },
+
+        // Apply friction-based spin→velocity transfer for one wall normal axis.
+        _applySpinKick: function(body, nx, ny, nz, R, wallName) {
+          const av = body.angularVelocity;
+
+          // Contact-point offset: r = -n * R (point on ball nearest the wall)
+          const rx = -nx * R, ry = -ny * R, rz = -nz * R;
+
+          // Surface velocity from spin at contact: v_spin = ω × r
+          const vsx = av.y * rz - av.z * ry;
+          const vsy = av.z * rx - av.x * rz;
+          const vsz = av.x * ry - av.y * rx;
+
+          // Keep only tangential component (parallel to wall)
+          const dot = vsx * nx + vsy * ny + vsz * nz;
+          const vtx = vsx - dot * nx;
+          const vty = vsy - dot * ny;
+          const vtz = vsz - dot * nz;
+
+          const kickMag = Math.sqrt(vtx * vtx + vty * vty + vtz * vtz);
+          if (kickMag < 0.01) return;
+
+          // Friction opposes the spin surface velocity → subtract
+          const transfer = 1.2;
+          body.velocity.x -= vtx * transfer;
+          body.velocity.y -= vty * transfer;
+          body.velocity.z -= vtz * transfer;
+
+          // Spin is partially consumed by friction on each wall bounce
+          av.x *= 0.7;
+          av.y *= 0.7;
+          av.z *= 0.7;
+
+          console.log('Spin bounce off', wallName,
+            '| spin:', Math.sqrt(av.x*av.x + av.y*av.y + av.z*av.z).toFixed(1), 'rad/s',
+            '| kick:', kickMag.toFixed(2), 'm/s',
+            '| vel:', body.velocity.length().toFixed(1), 'm/s');
         }
       });
 
@@ -4978,6 +5086,497 @@
         }
       });
 
+      AFRAME.registerComponent('honeycomb-shield', {
+        schema: {
+          cellSize:        { type: 'number', default: 0.05 },
+          rippleSpeed:     { type: 'number', default: 0.3 },
+          rippleDuration:  { type: 'number', default: 2.0 },
+          rippleWidth:     { type: 'number', default: 0.06 },
+          baseOpacity:     { type: 'number', default: 0.03 },
+          color:           { type: 'color',  default: '#00ccff' },
+          maxImpacts:      { type: 'int',    default: 8 }
+        },
+
+        init: function() {
+          const geom = this.el.getAttribute('geometry');
+          if (!geom) return;
+          const w = geom.width  || 1;
+          const h = geom.height || 1;
+          const d = geom.depth  || 1;
+
+          const thinAxis = (h <= w && h <= d) ? 'y' : (w <= h && w <= d) ? 'x' : 'z';
+          let planeW, planeH;
+          if (thinAxis === 'y') { planeW = w; planeH = d; }
+          else if (thinAxis === 'x') { planeW = d; planeH = h; }
+          else { planeW = w; planeH = h; }
+
+          this._thinAxis = thinAxis;
+          this._planeW = planeW;
+          this._planeH = planeH;
+
+          const MAX = this.data.maxImpacts;
+          this._impactPositions = new Float32Array(MAX * 2);
+          this._impactTimes     = new Float32Array(MAX);
+          this._impactSpeeds    = new Float32Array(MAX);
+          this._impactHues      = new Float32Array(MAX);
+          this._impactCount     = 0;
+          this._tmpVec          = new THREE.Vector3();
+
+          const col = new THREE.Color(this.data.color);
+
+          const uniforms = {
+            uTime:           { value: 0.0 },
+            uCellSize:       { value: this.data.cellSize },
+            uRippleSpeed:    { value: this.data.rippleSpeed },
+            uRippleDuration: { value: this.data.rippleDuration },
+            uRippleWidth:    { value: this.data.rippleWidth },
+            uBaseOpacity:    { value: this.data.baseOpacity },
+            uColor:          { value: col },
+            uImpactCount:    { value: 0 },
+            uImpactPos:      { value: this._impactPositions },
+            uImpactTimes:    { value: this._impactTimes },
+            uImpactSpeeds:   { value: this._impactSpeeds },
+            uImpactHues:     { value: this._impactHues },
+            uPlaneSize:      { value: new THREE.Vector2(planeW, planeH) }
+          };
+          this._uniforms = uniforms;
+
+          const mat = new THREE.ShaderMaterial({
+            uniforms: uniforms,
+            vertexShader: `
+              varying vec2 vUv;
+              uniform vec2 uPlaneSize;
+              void main() {
+                vUv = uv * uPlaneSize;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+              }
+            `,
+            fragmentShader: `
+              precision mediump float;
+              uniform float uTime;
+              uniform float uCellSize;
+              uniform float uRippleSpeed;
+              uniform float uRippleDuration;
+              uniform float uRippleWidth;
+              uniform float uBaseOpacity;
+              uniform vec3  uColor;
+              uniform int   uImpactCount;
+              uniform vec2  uPlaneSize;
+              uniform float uImpactPos[` + (MAX * 2) + `];
+              uniform float uImpactTimes[` + MAX + `];
+              uniform float uImpactSpeeds[` + MAX + `];
+              uniform float uImpactHues[` + MAX + `];
+              varying vec2  vUv;
+
+              float hash(vec2 p) {
+                vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+                p3 += dot(p3, p3.yzx + 33.33);
+                return fract((p3.x + p3.y) * p3.z);
+              }
+
+              float hash2(vec2 p) {
+                return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+              }
+
+              float hexDist(vec2 p) {
+                p = abs(p);
+                return max(dot(p, normalize(vec2(1.0, 1.732))), p.x);
+              }
+
+              vec4 hexCoords(vec2 p, float size) {
+                vec2 r = vec2(1.0, 1.732) * size;
+                vec2 h = r * 0.5;
+                vec2 a = mod(p + h, r) - h;
+                vec2 b = mod(p, r) - h;
+                vec2 gv = (dot(a, a) < dot(b, b)) ? a : b;
+                vec2 id = p - gv;
+                float edgeDist = size * 0.5 - hexDist(gv);
+                return vec4(id, edgeDist, length(gv));
+              }
+
+              vec3 energyColor(float progress, float intensity, float hue) {
+                vec3 white = vec3(1.0);
+                vec3 warm1 = vec3(1.0, 0.55, 0.0);
+                vec3 warm2 = vec3(1.0, 0.12, 0.05);
+                vec3 warm3 = vec3(0.55, 0.0, 0.15);
+                vec3 cool1 = vec3(0.0, 0.9, 1.0);
+                vec3 cool2 = vec3(0.1, 0.3, 1.0);
+                vec3 cool3 = vec3(0.4, 0.1, 0.8);
+                vec3 s1 = mix(warm1, cool1, hue);
+                vec3 s2 = mix(warm2, cool2, hue);
+                vec3 s3 = mix(warm3, cool3, hue);
+                vec3 col;
+                if (progress < 0.15) {
+                  col = mix(white, s1, progress / 0.15);
+                } else if (progress < 0.45) {
+                  col = mix(s1, s2, (progress - 0.15) / 0.3);
+                } else {
+                  col = mix(s2, s3, clamp((progress - 0.45) / 0.55, 0.0, 1.0));
+                }
+                col = mix(col, white, intensity * 0.3);
+                return col;
+              }
+
+              void main() {
+                vec2 warpedUv = vUv;
+                for (int i = 0; i < ` + MAX + `; i++) {
+                  if (i >= uImpactCount) break;
+                  vec2 ip = vec2(uImpactPos[i * 2], uImpactPos[i * 2 + 1]);
+                  float it = uImpactTimes[i];
+                  float spd = uImpactSpeeds[i];
+                  float elapsed = uTime - it;
+                  if (elapsed < 0.0 || elapsed > 0.6) continue;
+                  vec2 dir = warpedUv - ip;
+                  float d2 = dot(dir, dir);
+                  float warpR = uCellSize * (4.0 + spd * 2.0);
+                  float warp = exp(-d2 / (warpR * warpR)) * (1.0 - elapsed / 0.6) * uCellSize * (0.5 + spd * 0.3);
+                  warpedUv += normalize(dir + 0.0001) * warp;
+                }
+
+                vec4 hc = hexCoords(warpedUv, uCellSize);
+                vec2 cellCenter = hc.xy;
+                float edgeDist = hc.z;
+
+                float edgeThickness = uCellSize * 0.08;
+                float edge = 1.0 - smoothstep(0.0, edgeThickness, edgeDist);
+
+                float cellH = hash(cellCenter * 100.0);
+                float cellH2 = hash2(cellCenter * 73.0);
+                float cellH3 = hash(cellCenter * 37.0 + 7.0);
+
+                float totalGlow = 0.0;
+                vec3 totalColor = vec3(0.0);
+
+                for (int i = 0; i < ` + MAX + `; i++) {
+                  if (i >= uImpactCount) break;
+                  vec2 ip = vec2(uImpactPos[i * 2], uImpactPos[i * 2 + 1]);
+                  float it = uImpactTimes[i];
+                  float spd = uImpactSpeeds[i];
+                  float hue = uImpactHues[i];
+                  float elapsed = uTime - it;
+                  if (elapsed < 0.0 || elapsed > uRippleDuration) continue;
+
+                  float power = 0.4 + spd * 0.6;
+                  float dist = distance(cellCenter, ip);
+
+                  float flashPhase = 1.0 - smoothstep(0.0, 0.12, elapsed);
+                  float flashR = uCellSize * (6.0 + spd * 4.0);
+                  float flash = exp(-dist * dist / (flashR * flashR)) * flashPhase * power * 3.0;
+
+                  float jitter = (cellH - 0.5) * 0.25;
+                  float effElapsed = elapsed + jitter;
+                  float rippleRadius = uRippleSpeed * (1.0 + spd * 0.5) * effElapsed;
+                  float noisyDist = dist + (cellH2 - 0.5) * uCellSize * 3.0;
+                  float bandDist = abs(noisyDist - rippleRadius);
+
+                  float w = uRippleWidth * (0.7 + cellH * 0.6) * (0.8 + spd * 0.4);
+                  float band = exp(-bandDist * bandDist / (w * w * 0.5));
+
+                  float coreRadius = uCellSize * (2.0 + spd * 2.0);
+                  float core = exp(-dist * dist / (coreRadius * coreRadius * 0.3));
+                  float coreFade = 1.0 - smoothstep(0.0, uRippleDuration * 0.7, elapsed);
+                  core *= coreFade * power * 1.5;
+
+                  float afterPhase = smoothstep(0.15, 0.4, elapsed) *
+                    (1.0 - smoothstep(0.5, 1.0, elapsed / uRippleDuration));
+                  float flickSeed = hash(cellCenter * 50.0 + floor(uTime * 18.0) * 0.1);
+                  float nearImpact = exp(-dist * dist * 35.0);
+                  float crackle = step(0.78, flickSeed) * nearImpact * afterPhase * power;
+                  float crackle2 = step(0.92, hash(cellCenter * 23.0 + floor(uTime * 7.0) * 0.3))
+                    * exp(-dist * dist * 12.0) * afterPhase * power * 0.5;
+
+                  float distFalloff = exp(-dist * dist * 8.0);
+                  float fade = 1.0 - smoothstep(uRippleDuration * 0.3, uRippleDuration, elapsed);
+                  float intensityVar = 0.6 + cellH2 * 0.8;
+                  float impact = max(band * intensityVar, core) * fade * (0.3 + distFalloff * 0.7);
+                  impact = max(impact, max(flash, max(crackle, crackle2)));
+
+                  float progress = clamp(elapsed / uRippleDuration, 0.0, 1.0);
+                  float distProgress = clamp(dist * 2.0, 0.0, 1.0);
+                  float colorProg = progress * 0.6 + distProgress * 0.4;
+                  colorProg -= flash * 0.3;
+                  colorProg += crackle * 0.15 * cellH3;
+                  vec3 impactColor = energyColor(clamp(colorProg, 0.0, 1.0), max(core, flash), hue);
+
+                  totalGlow += impact;
+                  totalColor += impactColor * impact;
+                }
+
+                totalGlow = min(totalGlow, 2.5);
+                vec3 baseCol = uColor;
+                vec3 finalColor = totalGlow > 0.001
+                  ? totalColor / max(totalGlow, 0.001)
+                  : baseCol;
+
+                float edgeGlow = edge * totalGlow;
+                float fillGlow = totalGlow * 0.15;
+                float combined = max(edgeGlow, fillGlow);
+                float alpha = edge * uBaseOpacity + combined;
+                vec3 col = finalColor * (edge * uBaseOpacity + combined);
+                col += finalColor * edge * combined * 0.5;
+                gl_FragColor = vec4(col, alpha);
+              }
+            `,
+            transparent: true,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending
+          });
+          this._material = mat;
+
+          const plane = new THREE.PlaneGeometry(planeW, planeH);
+          const mesh = new THREE.Mesh(plane, mat);
+
+          const pos = this.el.getAttribute('position');
+          const panelOffset = 0.06;
+          if (thinAxis === 'y') {
+            mesh.rotation.x = -Math.PI / 2;
+            mesh.position.set(0, (pos.y > 2 ? -panelOffset : panelOffset), 0);
+          } else if (thinAxis === 'x') {
+            mesh.rotation.y = Math.PI / 2;
+            mesh.position.set((pos.x > 0 ? -panelOffset : panelOffset), 0, 0);
+          } else {
+            mesh.position.set(0, 0, (pos.z > 0 ? -panelOffset : panelOffset));
+          }
+
+          this.el.object3D.add(mesh);
+          this._mesh = mesh;
+
+          this._onCollision = this._onCollision.bind(this);
+          this.el.addEventListener('obbcollisionstarted', this._onCollision);
+
+          this._sparks = [];
+          this._sparkGeom = new THREE.SphereGeometry(0.008, 6, 4);
+
+          this._ballPrevDist = new Map();
+          this._ballCooldowns = new Map();
+          this._balls = null;
+          this._wallPos = this.el.getAttribute('position');
+
+          try { this._audioCtx = THREE.AudioContext.getContext(); }
+          catch(e) { this._audioCtx = null; }
+        },
+
+        _playZap: function(intensity, worldPos) {
+          try {
+            const ctx = this._audioCtx;
+            if (!ctx || ctx.state === 'suspended') return;
+            const now = ctx.currentTime;
+            const pitchRand = 0.85 + Math.random() * 0.3;
+            const dur = (0.03 + intensity * 0.05) * pitchRand;
+            const bufSize = Math.floor(ctx.sampleRate * dur);
+            const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+            const d = buf.getChannelData(0);
+            const toneFreq = (800 + intensity * 2000 + Math.random() * 600) * pitchRand;
+            const toneMix = 0.15 + intensity * 0.2;
+            const decayRate = (20 + Math.random() * 15 + (1 - intensity) * 25) / pitchRand;
+            for (let i = 0; i < bufSize; i++) {
+              const t = i / ctx.sampleRate;
+              const env = Math.exp(-t * decayRate);
+              const noise = (Math.random() * 2 - 1) * (1 - toneMix);
+              const tone = Math.sin(t * toneFreq * 6.2832) * toneMix;
+              d[i] = (noise + tone) * env * 0.12 * (0.3 + intensity * 0.7);
+              if (Math.random() < 0.015) d[i] *= 1.8;
+            }
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            src.playbackRate.value = pitchRand;
+            const bp = ctx.createBiquadFilter();
+            bp.type = intensity > 0.6 ? 'bandpass' : 'highpass';
+            bp.frequency.value = 2000 + Math.random() * 1500 + intensity * 4000;
+            bp.Q.value = 0.5 + Math.random() * 1.5;
+            const panner = ctx.createPanner();
+            panner.panningModel = 'HRTF';
+            panner.distanceModel = 'inverse';
+            panner.refDistance = 1;
+            panner.maxDistance = 15;
+            panner.rolloffFactor = 3;
+            if (worldPos) {
+              panner.positionX.setValueAtTime(worldPos.x, now);
+              panner.positionY.setValueAtTime(worldPos.y, now);
+              panner.positionZ.setValueAtTime(worldPos.z, now);
+            }
+            const gain = ctx.createGain();
+            gain.gain.value = 0.03 + intensity * 0.05;
+            src.connect(bp);
+            bp.connect(panner);
+            panner.connect(gain);
+            gain.connect(ctx.destination);
+            src.start(now);
+          } catch(e) {}
+        },
+
+        _triggerImpact: function(ballEl) {
+          const now = performance.now();
+          const cd = this._ballCooldowns.get(ballEl) || 0;
+          if (now - cd < 300) return;
+          this._ballCooldowns.set(ballEl, now);
+
+          ballEl.object3D.getWorldPosition(this._tmpVec);
+          const bp = this._tmpVec;
+          const pos = this._wallPos;
+
+          const grab = ballEl.components['simple-grab'];
+          const vel = grab && grab.body ? grab.body.velocity : null;
+          const speed = vel ? Math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z) : 5;
+          const normSpeed = Math.min(speed / 12.0, 1.0);
+
+          const player = grab && grab.data ? grab.data.player : '';
+          const hue = (player === 'player1') ? 0.0 : 1.0;
+
+          let u, v;
+          if (this._thinAxis === 'y') {
+            u = bp.x - pos.x + this._planeW * 0.5;
+            v = pos.z - bp.z + this._planeH * 0.5;
+          } else if (this._thinAxis === 'x') {
+            u = pos.z - bp.z + this._planeW * 0.5;
+            v = bp.y - pos.y + this._planeH * 0.5;
+          } else {
+            u = bp.x - pos.x + this._planeW * 0.5;
+            v = bp.y - pos.y + this._planeH * 0.5;
+          }
+
+          const MAX = this.data.maxImpacts;
+          const idx = this._impactCount % MAX;
+          this._impactPositions[idx * 2]     = u;
+          this._impactPositions[idx * 2 + 1] = v;
+          const nowSec = now / 1000.0;
+          this._impactTimes[idx] = nowSec;
+          this._impactSpeeds[idx] = normSpeed;
+          this._impactHues[idx] = hue;
+          this._impactCount++;
+          this._uniforms.uImpactCount.value = Math.min(this._impactCount, MAX);
+
+          this._spawnSparks(bp, normSpeed, hue);
+
+          this._playZap(normSpeed, bp);
+        },
+
+        _spawnSparks: function(worldPos, normSpeed, hue) {
+          const scene = this.el.sceneEl.object3D;
+          const count = 4 + Math.floor(Math.random() * 4);
+          const warmColors = [0xFFFF44, 0xFF8800, 0xFF4400, 0xFF6600];
+          const coolColors = [0x44DDFF, 0x2288FF, 0x4466FF, 0x66BBFF];
+          const colors = hue < 0.5 ? warmColors : coolColors;
+
+          for (let i = 0; i < count; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.random() * Math.PI * 0.4;
+            const speed = (0.8 + Math.random() * 1.2) * (0.5 + normSpeed);
+
+            const wallNorm = new THREE.Vector3();
+            if (this._thinAxis === 'y') wallNorm.set(0, worldPos.y > 1 ? -1 : 1, 0);
+            else if (this._thinAxis === 'x') wallNorm.set(worldPos.x > 0 ? -1 : 1, 0, 0);
+            else wallNorm.set(0, 0, worldPos.z > 0 ? -1 : 1);
+
+            const tangent1 = new THREE.Vector3();
+            const tangent2 = new THREE.Vector3();
+            if (Math.abs(wallNorm.y) > 0.9) {
+              tangent1.set(1, 0, 0);
+              tangent2.set(0, 0, 1);
+            } else if (Math.abs(wallNorm.x) > 0.9) {
+              tangent1.set(0, 1, 0);
+              tangent2.set(0, 0, 1);
+            } else {
+              tangent1.set(1, 0, 0);
+              tangent2.set(0, 1, 0);
+            }
+
+            const velocity = new THREE.Vector3()
+              .addScaledVector(wallNorm, Math.cos(phi) * speed)
+              .addScaledVector(tangent1, Math.sin(phi) * Math.cos(theta) * speed)
+              .addScaledVector(tangent2, Math.sin(phi) * Math.sin(theta) * speed);
+
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            const size = 0.006 + Math.random() * 0.005;
+            const material = new THREE.MeshBasicMaterial({
+              color: new THREE.Color(color),
+              transparent: true,
+              opacity: 0.9
+            });
+            const mesh = new THREE.Mesh(this._sparkGeom, material);
+            mesh.position.copy(worldPos);
+            mesh.scale.setScalar(size / 0.008);
+            scene.add(mesh);
+
+            this._sparks.push({
+              mesh: mesh,
+              velocity: velocity,
+              age: 0,
+              maxAge: 0.3 + Math.random() * 0.2,
+              startColor: new THREE.Color(color),
+              endColor: new THREE.Color(hue < 0.5 ? 0x220000 : 0x000022),
+              originalOpacity: 0.9
+            });
+          }
+        },
+
+        _onCollision: function(evt) {
+          const collider = evt.detail.withEl;
+          if (!collider || !collider.hasAttribute('simple-grab')) return;
+          this._triggerImpact(collider);
+        },
+
+        tick: function(time, timeDelta) {
+          this._uniforms.uTime.value = performance.now() / 1000.0;
+
+          const dt = Math.min((timeDelta || 16) / 1000, 0.05);
+          for (let i = this._sparks.length - 1; i >= 0; i--) {
+            const s = this._sparks[i];
+            s.age += dt;
+            if (s.age >= s.maxAge) {
+              s.mesh.parent.remove(s.mesh);
+              s.mesh.material.dispose();
+              this._sparks.splice(i, 1);
+              continue;
+            }
+            s.mesh.position.x += s.velocity.x * dt;
+            s.mesh.position.y += s.velocity.y * dt;
+            s.mesh.position.z += s.velocity.z * dt;
+            s.velocity.y -= 2.0 * dt;
+            const progress = s.age / s.maxAge;
+            s.mesh.material.color.copy(s.startColor).lerp(s.endColor, progress);
+            s.mesh.material.opacity = s.originalOpacity * (1 - progress * progress);
+          }
+
+          if (!this._balls) {
+            const b1 = document.querySelector('[simple-grab="player: player1"]');
+            const b2 = document.querySelector('[simple-grab="player: player2"]');
+            this._balls = [b1, b2].filter(Boolean);
+          }
+
+          const pos = this._wallPos;
+          const threshold = 0.25;
+
+          for (let bi = 0; bi < this._balls.length; bi++) {
+            const ball = this._balls[bi];
+            if (!ball || !ball.object3D) continue;
+            const bp = ball.object3D.position;
+
+            let dist;
+            if (this._thinAxis === 'y') dist = Math.abs(bp.y - pos.y);
+            else if (this._thinAxis === 'x') dist = Math.abs(bp.x - pos.x);
+            else dist = Math.abs(bp.z - pos.z);
+
+            const prevDist = this._ballPrevDist.get(ball);
+            if (prevDist !== undefined && dist > prevDist && prevDist < threshold) {
+              this._triggerImpact(ball);
+            }
+            this._ballPrevDist.set(ball, dist);
+          }
+        },
+
+        remove: function() {
+          if (this._mesh) this.el.object3D.remove(this._mesh);
+          this._sparks.forEach(s => {
+            if (s.mesh.parent) s.mesh.parent.remove(s.mesh);
+            s.mesh.material.dispose();
+          });
+          this._sparks = [];
+          this.el.removeEventListener('obbcollisionstarted', this._onCollision);
+        }
+      });
+
       // Static physics component for non-grabbable objects
       AFRAME.registerComponent('static-physics', {
         init: function() {
@@ -5117,14 +5716,11 @@
             this.el.addEventListener('obbcollisionstarted', (evt) => {
               const collider = evt.detail.withEl;
               if (collider && collider.hasAttribute('simple-grab')) {
-                // Regular wall/obstacle collision
-                const bounceSound = document.querySelector('#bounce-sound');
-                if (bounceSound) {
-                  const ballPos = collider.object3D.position;
-                  bounceSound.object3D.position.copy(ballPos);
-                  bounceSound.components.sound.stopSound();
-                  bounceSound.components.sound.playSound();
-                }
+                const ballPos = collider.object3D.position;
+                const grab = collider.components['simple-grab'];
+                const bv = grab && grab.body ? grab.body.velocity : null;
+                const spd = bv ? Math.sqrt(bv.x*bv.x + bv.y*bv.y + bv.z*bv.z) : 5;
+                window.playBounceSound(ballPos, spd);
               }
             });
             
@@ -5391,13 +5987,7 @@
             ballBody.velocity.length().toFixed(1), 'm/s, paddle:', paddleVel.length().toFixed(2),
             'm/s, spin:', ballAngVel.length().toFixed(1), 'rad/s');
           
-          // Play feedback
-          const bounceSound = document.querySelector('#bounce-sound');
-          if (bounceSound) {
-            bounceSound.object3D.position.copy(contactPoint);
-            bounceSound.components.sound.stopSound();
-            bounceSound.components.sound.playSound();
-          }
+          window.playBounceSound(contactPoint, Math.abs(vn) + paddleVel.length());
           
           // Haptic feedback proportional to impact force
           const hand = this.el.parentEl;
@@ -6491,12 +7081,8 @@
           ballBody.angularVelocity.set(ballAngVel.x, ballAngVel.y, ballAngVel.z);
           if (ballGrab.isReturning) { ballGrab.isReturning = false; ballGrab.returningGraceUntil = 0; }
 
-          const bounceSound = document.querySelector('#bounce-sound');
-          if (bounceSound) {
-            bounceSound.object3D.position.copy(ballPos);
-            bounceSound.components.sound.stopSound();
-            bounceSound.components.sound.playSound();
-          }
+          const bv = ballBody.velocity;
+          window.playBounceSound(ballPos, Math.sqrt(bv.x*bv.x + bv.y*bv.y + bv.z*bv.z));
         },
 
         // ---- Player body update (VR-driven) ----
@@ -7722,6 +8308,7 @@
              material="shader: standard; metalness: 0; roughness: 1"
              static-physics
              obb-collider
+             honeycomb-shield
              class="collidable">
       </a-box>
 
@@ -7734,6 +8321,7 @@
              material="shader: standard; metalness: 0; roughness: 1"
              static-physics
              obb-collider
+             honeycomb-shield
              class="collidable">
       </a-box>
 
@@ -7746,6 +8334,7 @@
              material="shader: standard; metalness: 0.3; roughness: 0; transparent: true; opacity: 0.15; side: double; depthWrite: false"
              static-physics
              obb-collider
+             honeycomb-shield
              class="collidable">
       </a-box>
       
@@ -7758,6 +8347,7 @@
              material="shader: standard; metalness: 0.3; roughness: 0; transparent: true; opacity: 0.15; side: double; depthWrite: false"
              static-physics
              obb-collider
+             honeycomb-shield
              class="collidable">
       </a-box>
       
@@ -7770,6 +8360,7 @@
              material="shader: standard; metalness: 0; roughness: 1"
              static-physics
              obb-collider
+             honeycomb-shield
              class="collidable">
       </a-box>
       
@@ -7782,6 +8373,7 @@
              material="shader: standard; metalness: 0; roughness: 1"
              static-physics
              obb-collider
+             honeycomb-shield
              class="collidable">
       </a-box>
 
