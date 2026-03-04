@@ -578,6 +578,7 @@
       let multiplayerStartType = 'dodgeball';
       let sessionID = null;
       let connectionState = 'disconnected';
+      window.connectionState = 'disconnected';
       let lastMultiplayerToggle = 0;
       let remotePlayerState = null;
       let remoteBallState = null;
@@ -851,7 +852,9 @@
 
       async function connectToLobby(lobbyNum) {
         if (isMultiplayer) return;
+        if (connectionState === 'connecting') return;
         connectionState = 'connecting';
+        window.connectionState = 'connecting';
         updateMultiplayerStatus('Connecting to lobby ' + lobbyNum + '...');
         multiplayerSlot = lobbyNum;
 
@@ -909,6 +912,7 @@
             conn.send({ type: 'mobile-spectator', nickname: 'Spectator' });
             setupMobileSpectatorHandlers(conn);
             connectionState = 'connected';
+            window.connectionState = 'connected';
             window._spectatorHostId = hostId;
             var _hudSt = document.getElementById('mobile-hud-status');
             if (_hudSt) _hudSt.textContent = 'Watching lobby ' + _mobileSpectatorLobbyNum;
@@ -1063,6 +1067,7 @@
           window._lastArenaBotState = null;
           isMultiplayer = false;
           connectionState = 'disconnected';
+          window.connectionState = 'disconnected';
           if (_mobileSpectatorLobbyNum > 0) {
             setTimeout(function() {
               connectAsMobileSpectator(_mobileSpectatorLobbyNum);
@@ -1075,6 +1080,7 @@
           window._lastArenaBotState = null;
           isMultiplayer = false;
           connectionState = 'disconnected';
+          window.connectionState = 'disconnected';
           if (_mobileSpectatorLobbyNum > 0) {
             setTimeout(function() {
               connectAsMobileSpectator(_mobileSpectatorLobbyNum);
@@ -1174,6 +1180,7 @@
             setupPeerHandlers(conn);
             updateMultiplayerStatus('Connected to lobby ' + lobbyNum);
             connectionState = 'connected';
+            window.connectionState = 'connected';
             arenaBots.enable();
             const scene = document.querySelector('a-scene');
             if (scene) scene.emit('lobby-state-updated');
@@ -1209,6 +1216,7 @@
           syncWindowState();
           updateMultiplayerStatus('Lobby ' + lobbyNum + ' created. Waiting for players...');
           connectionState = 'connected';
+          window.connectionState = 'connected';
           applyLobbyPosition();
           arenaBots.enable();
 
@@ -2256,6 +2264,8 @@
       function endMultiplayer() {
         isMultiplayer = false;
         isHost = false;
+        connectionState = 'disconnected';
+        window.connectionState = 'disconnected';
         window.isLobbyBotMatch = false;
         lobbyState = null;
         multiplayerStatus = 'Singleplayer';
@@ -2543,6 +2553,7 @@
             s.lastHitTime = time;
             resetStage('player1');
             grab.isReturning = true;
+            grab.returningStartTime = Date.now();
             grab.returningGraceUntil = Date.now() + 2000;
             grab.body.velocity.set(0, 0, 0);
             grab.body.angularVelocity.set(0, 0, 0);
@@ -3468,6 +3479,7 @@
           this.body = null;
           this.isReturning = false;       // Ball is returning from opponent wall
           this.returningGraceUntil = 0;   // Timestamp: opponent collision ignored until this time
+          this.returningStartTime = 0;    // Timestamp: when returning state began (for 4s summon cooldown)
           this._releaseTime = 0;          // Timestamp: when ball was last released/thrown
           
           // Set initial position based on player
@@ -3550,9 +3562,9 @@
             const isPlayer2Ball = this.data.player === 'player2';
             
             // Left hand controls player1's ball, right hand controls player2's ball
-            // Don't allow manual respawn while ball is returning from opponent wall
+            // Don't allow manual respawn while ball is returning (4s cooldown)
             if ((isLeftHand && isPlayer1Ball) || (isRightHand && isPlayer2Ball)) {
-              if (this.isReturning) return;
+              if (this.isReturning && (Date.now() - this.returningStartTime) < 4000) return;
               this.animatedRespawn(this.data.player);
               // In mirror mode, also respawn the mirrored bot's ball
               if (window.botMirrorMode && isRightHand && isPlayer2Ball) {
@@ -3598,6 +3610,7 @@
                 const opponent = this.data.player === 'player1' ? 'player2' : 'player1';
                 if (this._dodgeAimed) recordStat(opponent, 'dodges');
                 this.isReturning = true;
+                this.returningStartTime = now;
                 this.returningGraceUntil = now + 2000;
                 this.body.velocity.set(0, 0, 0);
                 this.body.angularVelocity.set(0, 0, 0);
@@ -3721,8 +3734,8 @@
                   this.isGrabbed = false;
                   this.grabbingHand = null;
                   this._releaseTime = Date.now();
-                  // Mark as returning with 1s grace period (no opponent collision)
                   this.isReturning = true;
+                  this.returningStartTime = Date.now();
                   this.returningGraceUntil = Date.now() + 2000;
                   // Zero all velocity and spin
                   this.body.velocity.set(0, 0, 0);
@@ -4057,6 +4070,7 @@
                   this.isGrabbed = false; this.grabbingHand = null;
                   this._releaseTime = Date.now();
                   this.isReturning = true;
+                  this.returningStartTime = Date.now();
                   this.returningGraceUntil = Date.now() + 2000;
                   this.body.velocity.set(0, 0, 0);
                   this.body.angularVelocity.set(0, 0, 0);
@@ -6546,6 +6560,7 @@
                 if (grab.isGrabbed) return;
                 if (!grab.isReturning && grab.body && grab.body.position.z > 6.5) {
                   grab.isReturning = true;
+                  grab.returningStartTime = Date.now();
                   grab.returningGraceUntil = Date.now() + 2000;
                   return;
                 }

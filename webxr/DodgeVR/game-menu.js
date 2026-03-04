@@ -3,6 +3,34 @@
 (function () {
   'use strict';
 
+  // Patch A-Frame raycaster to skip invisible objects (THREE.js r169 does not
+  // check object3D.visible during raycasting, so hidden menu sections with
+  // .clickable children intercept the ray and block visible buttons behind them)
+  var _rcDef = AFRAME.components.raycaster;
+  if (_rcDef && _rcDef.Component && _rcDef.Component.prototype.refreshObjects) {
+    var _origRefresh = _rcDef.Component.prototype.refreshObjects;
+    _rcDef.Component.prototype.refreshObjects = function () {
+      _origRefresh.call(this);
+      this.objects = this.objects.filter(function (obj3d) {
+        var node = obj3d;
+        while (node) {
+          if (node.visible === false) return false;
+          node = node.parent;
+        }
+        return true;
+      });
+    };
+  }
+
+  function refreshRaycasters() {
+    var hands = [document.getElementById('leftHand'), document.getElementById('rightHand')];
+    for (var i = 0; i < hands.length; i++) {
+      if (hands[i] && hands[i].components && hands[i].components.raycaster) {
+        hands[i].components.raycaster.refreshObjects();
+      }
+    }
+  }
+
   var SPECTATOR_POSITIONS = [
     { x: -4, y: 0, z: 3, ry: -53 },
     { x: 4, y: 0, z: 3, ry: 53 },
@@ -156,9 +184,9 @@
       var singleBtn = document.getElementById('menu-single');
       var multiBtn = document.getElementById('menu-multi');
       var statsBtn = document.getElementById('menu-stats');
-      if (singleBtn) singleBtn.setAttribute('material', 'color', mode === 'single' ? '#4488ff' : '#333333');
-      if (multiBtn) multiBtn.setAttribute('material', 'color', mode === 'multi' ? '#4488ff' : '#333333');
-      if (statsBtn) statsBtn.setAttribute('material', 'color', mode === 'stats' ? '#4488ff' : '#333333');
+      if (singleBtn) setButtonColor(singleBtn, mode === 'single' ? '#4488ff' : '#333333');
+      if (multiBtn) setButtonColor(multiBtn, mode === 'multi' ? '#4488ff' : '#333333');
+      if (statsBtn) setButtonColor(statsBtn, mode === 'stats' ? '#4488ff' : '#333333');
       if (this.lobbySection) this.lobbySection.setAttribute('visible', mode === 'multi');
       if (this.queueButtons) this.queueButtons.setAttribute('visible', mode === 'multi' && window.isMultiplayer);
 
@@ -192,6 +220,7 @@
       }
 
       this.updateMenuDisplay();
+      refreshRaycasters();
     },
 
     toggleMirrorMode: function () {
@@ -224,7 +253,7 @@
       var labels = { normal: 'NORMAL', mirror: 'MIRRORED', recorded: 'RECORDED' };
       var colors = { normal: '#555555', mirror: '#4488ff', recorded: '#44aa44' };
       if (mirrorText) mirrorText.setAttribute('text', 'value', labels[mode] || 'NORMAL');
-      if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', colors[mode] || '#555555');
+      if (mirrorBtn) setButtonColor(mirrorBtn, colors[mode] || '#555555');
 
       this.updateClipButtons();
 
@@ -366,8 +395,8 @@
       this.statsPage = 0;
       var spBtn = document.getElementById('menu-stats-sp');
       var mpBtn = document.getElementById('menu-stats-mp');
-      if (spBtn) spBtn.setAttribute('material', 'color', tab === 'single' ? '#4488ff' : '#333333');
-      if (mpBtn) mpBtn.setAttribute('material', 'color', tab === 'multi' ? '#4488ff' : '#333333');
+      if (spBtn) setButtonColor(spBtn, tab === 'single' ? '#4488ff' : '#333333');
+      if (mpBtn) setButtonColor(mpBtn, tab === 'multi' ? '#4488ff' : '#333333');
       this.updateStatsDisplay();
     },
 
@@ -497,7 +526,7 @@
       }
       var recModeBtn = document.getElementById('menu-rec-mode-toggle');
       if (recModeBtn) {
-        recModeBtn.setAttribute('material', 'color', window.botRecordedSubMode === 'random' ? '#555555' : '#4488ff');
+        setButtonColor(recModeBtn, window.botRecordedSubMode === 'random' ? '#555555' : '#4488ff');
       }
 
       var showBrowse = showRecSub && window.botRecordedSubMode === 'single';
@@ -515,7 +544,7 @@
           var diffLabels = { easy: 'EASY', medium: 'MEDIUM', hard: 'HARD' };
           var diffColors = { easy: '#44aa44', medium: '#cc8800', hard: '#cc3333' };
           diffText.setAttribute('text', 'value', diffLabels[diff] || 'MEDIUM');
-          diffBtn.setAttribute('material', 'color', diffColors[diff] || '#555555');
+          setButtonColor(diffBtn, diffColors[diff] || '#555555');
         }
       }
 
@@ -528,6 +557,7 @@
           counterText.setAttribute('text', 'value', arr.length > 0 ? (window.clipBrowseIndex + 1) + ' / ' + arr.length : '0 / 0');
         }
       }
+      refreshRaycasters();
     },
 
     updateLobbyNumberDisplay: function () {
@@ -536,11 +566,18 @@
     },
 
     handleJoin: function () {
+      if (window.connectionState === 'connecting') return;
       if (window.isMultiplayer) {
         if (typeof window.endMultiplayer === 'function') window.endMultiplayer();
         this.moveToMatchPosition();
         this.updateMenuDisplay();
       } else {
+        var joinBtn = document.getElementById('menu-join');
+        if (joinBtn) {
+          var joinText = joinBtn.querySelector('a-text');
+          if (joinText) joinText.setAttribute('text', 'value', 'JOINING...');
+          setButtonColor(joinBtn, '#cc8800');
+        }
         if (typeof window.connectToLobby === 'function') {
           window.connectToLobby(this.lobbyNumber);
         }
@@ -565,7 +602,7 @@
 
       var btn = document.getElementById('menu-music-toggle');
       if (btn) {
-        btn.setAttribute('material', 'color', window._musicEnabled ? '#44aa44' : '#555555');
+        setButtonColor(btn, window._musicEnabled ? '#44aa44' : '#555555');
       }
 
       var sm = this.el.sceneEl.components['sound-manager'];
@@ -688,12 +725,15 @@
       if (joinBtn) {
         var joinText = joinBtn.querySelector('a-text');
         if (joinText) {
-          if (window.isMultiplayer) {
+          if (window.connectionState === 'connecting') {
+            joinText.setAttribute('text', 'value', 'JOINING...');
+            setButtonColor(joinBtn, '#cc8800');
+          } else if (window.isMultiplayer) {
             joinText.setAttribute('text', 'value', 'LEAVE');
-            joinBtn.setAttribute('material', 'color', '#cc3333');
+            setButtonColor(joinBtn, '#cc3333');
           } else {
             joinText.setAttribute('text', 'value', 'JOIN');
-            joinBtn.setAttribute('material', 'color', '#22aa44');
+            setButtonColor(joinBtn, '#22aa44');
           }
         }
       }
@@ -705,7 +745,7 @@
       var currentMode = window.botMirrorMode ? 'MIRRORED' : (window.botRecordedMode ? 'RECORDED' : 'NORMAL');
       var currentColor = window.botMirrorMode ? '#4488ff' : (window.botRecordedMode ? '#44aa44' : '#555555');
       if (mirrorText) mirrorText.setAttribute('text', 'value', currentMode);
-      if (mirrorBtn) mirrorBtn.setAttribute('material', 'color', currentColor);
+      if (mirrorBtn) setButtonColor(mirrorBtn, currentColor);
 
       this.updateClipButtons();
 
@@ -724,7 +764,7 @@
             var gm = gmEl && gmEl.components['game-manager'];
             var isPlaying = gm && (gm.matchState === 'PLAYING' || gm.matchState === 'OVERTIME' || gm.matchState === 'COUNTDOWN');
             if (stxt) stxt.setAttribute('text', 'value', isPlaying ? 'END MATCH' : 'START MATCH');
-            startMatchBtn.setAttribute('material', 'color', isPlaying ? '#cc3333' : '#ff8800');
+            setButtonColor(startMatchBtn, isPlaying ? '#cc3333' : '#ff8800');
           }
         }
         return;
@@ -791,21 +831,22 @@
           if (isMatchPlayer && ls.matchState === 'PLAYING') {
             startMatchBtn2.setAttribute('visible', true);
             startMatchText.setAttribute('text', 'value', 'END MATCH');
-            startMatchBtn2.setAttribute('material', 'color', '#cc3333');
+            setButtonColor(startMatchBtn2, '#cc3333');
           } else if (isMatchPlayer && bothSlotsFilled) {
             startMatchBtn2.setAttribute('visible', true);
             startMatchText.setAttribute('text', 'value', 'START MATCH');
-            startMatchBtn2.setAttribute('material', 'color', '#ff8800');
+            setButtonColor(startMatchBtn2, '#ff8800');
           } else if (canStartBotMatch) {
             startMatchBtn2.setAttribute('visible', true);
             startMatchText.setAttribute('text', 'value', 'START vs BOT');
-            startMatchBtn2.setAttribute('material', 'color', '#ff8800');
+            setButtonColor(startMatchBtn2, '#ff8800');
           } else {
             startMatchBtn2.setAttribute('visible', false);
           }
         }
       }
 
+      refreshRaycasters();
     }
   });
 
@@ -830,11 +871,21 @@
     return true;
   }
 
+  function setButtonColor(el, color) {
+    if (!el) return;
+    var mc = el.components && el.components['menu-click'];
+    if (mc) {
+      mc.setColor(color);
+    } else {
+      el.setAttribute('material', 'color', color);
+    }
+  }
+
   AFRAME.registerComponent('menu-click', {
     init: function () {
       var self = this;
-      this.originalColor = null;
-      this.originalOpacity = null;
+      this._hoverCount = 0;
+      this._baseColor = null;
 
       this.el.addEventListener('click', function () {
         if (!isEffectivelyVisible(self.el)) return;
@@ -846,23 +897,30 @@
 
       this.el.addEventListener('mouseenter', function () {
         if (!isEffectivelyVisible(self.el)) return;
-        var mat = self.el.getAttribute('material');
-        if (mat) {
-          self.originalColor = mat.color;
-          self.originalOpacity = mat.opacity;
+        self._hoverCount++;
+        if (self._hoverCount === 1) {
+          var mat = self.el.getAttribute('material');
+          self._baseColor = mat ? mat.color : '#333333';
+          self.el.setAttribute('material', 'color', lightenColor(self._baseColor, 0.2));
         }
-        var baseColor = self.originalColor || '#333333';
-        self.el.setAttribute('material', 'color', lightenColor(baseColor, 0.2));
       });
 
       this.el.addEventListener('mouseleave', function () {
-        if (self.originalColor) {
-          self.el.setAttribute('material', 'color', self.originalColor);
-        }
-        if (self.originalOpacity !== null) {
-          self.el.setAttribute('material', 'opacity', self.originalOpacity);
+        self._hoverCount = Math.max(0, self._hoverCount - 1);
+        if (self._hoverCount === 0 && self._baseColor) {
+          self.el.setAttribute('material', 'color', self._baseColor);
+          self._baseColor = null;
         }
       });
+    },
+
+    setColor: function (color) {
+      if (this._hoverCount > 0) {
+        this._baseColor = color;
+        this.el.setAttribute('material', 'color', lightenColor(color, 0.2));
+      } else {
+        this.el.setAttribute('material', 'color', color);
+      }
     }
   });
 })();
