@@ -6923,6 +6923,41 @@
         }
       });
 
+      // Request the highest available refresh rate (e.g. 120 Hz on Quest 3)
+      AFRAME.registerComponent('high-refresh-rate', {
+        init: function() {
+          this.onEnterVR = this.onEnterVR.bind(this);
+          this.el.sceneEl.addEventListener('enter-vr', this.onEnterVR);
+        },
+
+        onEnterVR: function() {
+          const session = this.el.sceneEl.xrSession;
+          if (!session) return;
+
+          const supported = session.supportedFrameRates;
+          if (!supported || !supported.length) {
+            console.log('[high-refresh-rate] supportedFrameRates not available');
+            return;
+          }
+
+          const sortedRates = Array.from(supported).sort((a, b) => b - a);
+          const target = sortedRates[0]; // pick the highest available
+          console.log('[high-refresh-rate] supported:', sortedRates, '| requesting:', target);
+
+          if (session.updateTargetFrameRate) {
+            session.updateTargetFrameRate(target).then(function() {
+              console.log('[high-refresh-rate] now running at', target, 'Hz');
+            }).catch(function(err) {
+              console.warn('[high-refresh-rate] failed to set frame rate:', err);
+            });
+          }
+        },
+
+        remove: function() {
+          this.el.sceneEl.removeEventListener('enter-vr', this.onEnterVR);
+        }
+      });
+
       // Frame rate info component (for debugging only - do not use to limit FPS in VR!)
       AFRAME.registerComponent('frame-rate-info', {
         init: function() {
@@ -8786,7 +8821,7 @@
       })();
     </script>
 
-    <a-scene physics-world game-manager sound-manager multiplayer-sync fps-counter frame-rate-info ball-speed-tracker vr-menu mobile-spectator-cam
+    <a-scene physics-world game-manager sound-manager multiplayer-sync fps-counter frame-rate-info high-refresh-rate ball-speed-tracker vr-menu mobile-spectator-cam
              game-modes="enabled: false; mode: default"
     vr-mode-ui="enabled: true"
       renderer="antialias: true; colorManagement: true; shadowMapEnabled: false; maxDeltaTime: 0.2"
