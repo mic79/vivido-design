@@ -671,12 +671,24 @@
       _replayBroadcastScore.red = 0;
       _lastReplayBroadcastTime = 0;
 
+      // Reset playerStages so any code reading it (resetPosition, applyRemoteBallVisuals,
+      // animatedRespawn, capBallSpeed) uses stage 1 at replay start
+      if (window.playerStages) {
+        window.playerStages.player1 = 1;
+        window.playerStages.player2 = 1;
+      }
+
       // Reset ball scales and opacity to default
       var allBalls = [blueBall, document.querySelector('[simple-grab="player: player1"]')];
       for (var bi = 0; bi < allBalls.length; bi++) {
         if (allBalls[bi]) {
           allBalls[bi].object3D.scale.setScalar(1);
           setReplayBallOpacity(allBalls[bi], 1);
+          var _bg = allBalls[bi].components['simple-grab'];
+          if (_bg && _bg.body && _bg.body.shapes[0]) {
+            _bg.body.shapes[0].radius = 0.1;
+            _bg.body.updateBoundingRadius();
+          }
         }
       }
 
@@ -740,6 +752,11 @@
 
     // Reset ball positions, scales, and opacity
     var bb = blueBall && blueBall.components['simple-grab'];
+    // Reset playerStages before resetPosition so it computes scale from stage 1
+    if (window.playerStages) {
+      window.playerStages.player1 = 1;
+      window.playerStages.player2 = 1;
+    }
     if (bb) bb.resetPosition();
     if (blueBall) {
       blueBall.object3D.scale.setScalar(1);
@@ -918,10 +935,24 @@
           _replayRespawns[ev.data.player] = { startTime: elapsed };
         } else if (ev.type === 'stage') {
           _replayStages[ev.data.player] = ev.data.stage;
+          if (window.playerStages) window.playerStages[ev.data.player] = ev.data.stage;
           var stBallEl = ev.data.player === 'player2' ? blueBallEl : redBallEl;
           if (stBallEl) {
             var stScale = window.getStageBallScale ? window.getStageBallScale(ev.data.stage) : 1;
             stBallEl.object3D.scale.setScalar(stScale);
+            var stGrab = stBallEl.components['simple-grab'];
+            if (stGrab && stGrab.body && stGrab.body.shapes[0]) {
+              stGrab.body.shapes[0].radius = 0.1 * stScale;
+              stGrab.body.updateBoundingRadius();
+            }
+          }
+          // Broadcast stage change to spectators
+          if (window.isMultiplayer && window.isHost && window.connections) {
+            var stageMsg = { type: 'replay-stage', player: ev.data.player, stage: ev.data.stage };
+            var conns = window.connections;
+            for (var sti = 0; sti < conns.length; sti++) {
+              if (conns[sti].conn.open) conns[sti].conn.send(stageMsg);
+            }
           }
         } else if (ev.type === 'racket') {
           _replayRackets[ev.data.player][ev.data.hand] = ev.data.active;

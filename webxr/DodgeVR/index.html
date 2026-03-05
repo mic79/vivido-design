@@ -1065,6 +1065,9 @@
             if (td3d) td3d.setAttribute('text', 'value', data.text);
             var mhtEl = document.getElementById('mobile-hud-timer');
             if (mhtEl) mhtEl.textContent = data.text;
+          } else if (data.type === 'replay-stage') {
+            playerStages[data.player] = data.stage;
+            applyBallScale(data.player);
           } else if (data.type === 'spectator-game-state') {
             if (lobbyState) lobbyState.matchGameState = data.state;
             var timerEl = document.getElementById('mobile-hud-timer');
@@ -1310,6 +1313,11 @@
                   blueNick: _rn.blue || '',
                   redNick: _rn.red || ''
                 });
+                // Send current replay stages so late joiner has correct ball sizes
+                if (window.playerStages) {
+                  if (window.playerStages.player1 > 1) newConn.send({ type: 'replay-stage', player: 'player1', stage: window.playerStages.player1 });
+                  if (window.playerStages.player2 > 1) newConn.send({ type: 'replay-stage', player: 'player2', stage: window.playerStages.player2 });
+                }
                 // Send current replay score so late joiner doesn't start at 0-0
                 var bsEl = document.getElementById('blue-score');
                 var rsEl = document.getElementById('red-score');
@@ -1757,6 +1765,9 @@
             if (rtTd) rtTd.setAttribute('text', 'value', data.text);
             var rtMht = document.getElementById('mobile-hud-timer');
             if (rtMht) rtMht.textContent = data.text;
+          } else if (data.type === 'replay-stage') {
+            playerStages[data.player] = data.stage;
+            applyBallScale(data.player);
           } else if (data.type === 'spectator-game-state') {
             if (lobbyState) lobbyState.matchGameState = data.state;
             var peerTd = document.getElementById('timer-display');
@@ -2082,6 +2093,13 @@
           window._replayNames = { blue: data.blueNick || '', red: data.redNick || '' };
         } else {
           window._replayNames = null;
+        }
+        // Reset ball stages for replay so applyRemoteBallVisuals uses correct scale
+        if (mp.blue === '__replay_blue__' || mp.red === '__replay_red__') {
+          playerStages.player1 = 1;
+          playerStages.player2 = 1;
+          applyBallScale('player1');
+          applyBallScale('player2');
         }
         if (mp.blue === myPlayerId || mp.red === myPlayerId) {
           activateMatchMode(data.startTime);
