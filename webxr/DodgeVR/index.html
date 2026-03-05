@@ -1379,22 +1379,18 @@
           } else if (data.type === 'score-update') {
             if (isMatchOpponent(entry.peerId)) {
               var _prevRemote = multiplayerScore.remote;
-              var _prevLocal = multiplayerScore.local;
               multiplayerScore.remote = data.score.local;
-              multiplayerScore.local = data.score.remote;
               updateScoreDisplayMultiplayer();
               broadcastSpectatorScore();
               if (multiplayerScore.remote > _prevRemote) {
-                var _pt = document.querySelector('#player-target');
-                if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
-                pulseHapticBothHands(1.0, 200);
-              }
-              if (multiplayerScore.local > _prevLocal) {
-                var _bt = document.querySelector('#bot-target');
-                if (_bt && _bt.components['impact-effect']) _bt.components['impact-effect'].playEffect();
+                var _hitDedup = window._lastLocalPlayerHitTime || 0;
+                if (Date.now() - _hitDedup > 300) {
+                  var _pt = document.querySelector('#player-target');
+                  if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+                  pulseHapticBothHands(1.0, 200);
+                }
               }
             } else if (window.isSpectator && lobbyState && lobbyState.matchPlayers) {
-              // Host is spectator: relay score between match players and update spectator display
               var smp = lobbyState.matchPlayers;
               var otherMatchId = (entry.peerId === smp.blue) ? smp.red : smp.blue;
               for (var si = 0; si < connections.length; si++) {
@@ -1404,9 +1400,11 @@
                 }
               }
               var isBlue = (entry.peerId === smp.blue);
-              var bScore = isBlue ? data.score.local : data.score.remote;
-              var rScore = isBlue ? data.score.remote : data.score.local;
               var prevHostScore = lobbyState.matchScore || { blue: 0, red: 0 };
+              var incomingBlue = isBlue ? data.score.local : data.score.remote;
+              var incomingRed = isBlue ? data.score.remote : data.score.local;
+              var bScore = Math.max(prevHostScore.blue, incomingBlue);
+              var rScore = Math.max(prevHostScore.red, incomingRed);
               var hostHitPlayer = null;
               if (bScore > prevHostScore.blue) hostHitPlayer = 'red';
               if (rScore > prevHostScore.red) hostHitPlayer = 'blue';
@@ -1416,7 +1414,6 @@
               if (bsEl) bsEl.setAttribute('text', 'value', bScore.toString());
               if (rsEl) rsEl.setAttribute('text', 'value', rScore.toString());
               if (hostHitPlayer) triggerSpectatorImpact(hostHitPlayer);
-              // Relay to other spectators
               var specMsg = { type: 'spectator-score', blueScore: bScore, redScore: rScore, hitPlayer: hostHitPlayer };
               for (var sj = 0; sj < connections.length; sj++) {
                 var sc = connections[sj];
@@ -1441,6 +1438,9 @@
             if (isMatchOpponent(entry.peerId)) {
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].syncedStartCountdown(data.startTime);
+            }
+            if (window.isSpectator && data.startTime) {
+              spectatorMatchStartTime = data.startTime;
             }
             relayToMatchPeer(entry.peerId, data);
           } else if (data.type === 'game-state') {
@@ -1541,10 +1541,10 @@
       }
 
       function handleRelayPlayerState(fromPeerId, state) {
+        state._ts = Date.now();
         if (isMatchOpponent(fromPeerId)) {
           remotePlayerState = state;
         }
-        // Always store for rendering (lobby view, spectator view, etc.)
         spectatorPlayerStates[fromPeerId] = state;
 
         var mp = lobbyState ? lobbyState.matchPlayers : null;
@@ -1663,23 +1663,21 @@
             const scene = document.querySelector('a-scene');
             if (scene) scene.emit('lobby-state-updated');
           } else if (data.type === 'player-state') {
+            data.state._ts = Date.now();
             remotePlayerState = data.state;
           } else if (data.type === 'ball-state') {
             remoteBallState = data.state;
           } else if (data.type === 'score-update') {
             var _prevRemote = multiplayerScore.remote;
-            var _prevLocal = multiplayerScore.local;
             multiplayerScore.remote = data.score.local;
-            multiplayerScore.local = data.score.remote;
             updateScoreDisplayMultiplayer();
             if (multiplayerScore.remote > _prevRemote) {
-              var _pt = document.querySelector('#player-target');
-              if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
-              pulseHapticBothHands(1.0, 200);
-            }
-            if (multiplayerScore.local > _prevLocal) {
-              var _bt = document.querySelector('#bot-target');
-              if (_bt && _bt.components['impact-effect']) _bt.components['impact-effect'].playEffect();
+              var _hitDedup = window._lastLocalPlayerHitTime || 0;
+              if (Date.now() - _hitDedup > 300) {
+                var _pt = document.querySelector('#player-target');
+                if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+                pulseHapticBothHands(1.0, 200);
+              }
             }
           } else if (data.type === 'racket-mode') {
             racketMode.player1[data.hand] = data.active;
@@ -1730,6 +1728,7 @@
             if (!spectatorPlayerStates[data.fromId]) {
               console.log('[SPECTATOR] First state from: ' + data.fromId + ' matchActive=' + spectatorMatchActive);
             }
+            data.state._ts = Date.now();
             spectatorPlayerStates[data.fromId] = data.state;
             if (!spectatorMatchActive && lobbyState && lobbyState.matchPlayers) {
               var fmp = lobbyState.matchPlayers;
@@ -2143,6 +2142,8 @@
         window.isSpectator = true;
         var specBlueBody = document.getElementById('spectator-blue-body');
         if (specBlueBody) specBlueBody.setAttribute('visible', true);
+        var specRedBody = document.querySelector('#bot-body');
+        if (specRedBody) specRedBody.object3D.visible = true;
 
         // Force the EXISTING game-manager score/timer elements visible via object3D
         var scoreDisplay = document.getElementById('score-display');
@@ -2928,8 +2929,11 @@
           }
           // In multiplayer, update the remote player's body with mirrored transforms (match players only)
           if (isMultiplayer && !window.isSpectator && remotePlayerState) {
+            if (remotePlayerState._ts && Date.now() - remotePlayerState._ts > 2000) {
+              var _staleBot = document.querySelector('#bot-body');
+              if (_staleBot) _staleBot.object3D.visible = false;
+            } else {
             const rs = remotePlayerState;
-            // Mirror X and Z since players face each other across the court
             const mirroredX = -rs.x;
             const mirroredZ = -rs.z;
             const mirroredRy = -rs.ry;
@@ -2985,6 +2989,7 @@
 
               mb.remoteHandData = rd;
             }
+          } // end stale else
           }
           if (isMultiplayer && !window.isSpectator) {
             const blueBall = document.querySelector('[simple-grab="player: player2"]');
@@ -3146,8 +3151,12 @@
           }
           // --- SPECTATOR VIEW: render both match players ---
           if (spectatorMatchActive && spectatorMatchBlueId) {
-            const redState = spectatorPlayerStates[spectatorMatchRedId];
-            const blueState = spectatorPlayerStates[spectatorMatchBlueId];
+            var _staleThresh = 2000;
+            var _nowTs = Date.now();
+            var _rawRed = spectatorPlayerStates[spectatorMatchRedId];
+            var _rawBlue = spectatorPlayerStates[spectatorMatchBlueId];
+            const redState = (_rawRed && _rawRed._ts && (_nowTs - _rawRed._ts > _staleThresh)) ? null : _rawRed;
+            const blueState = (_rawBlue && _rawBlue._ts && (_nowTs - _rawBlue._ts > _staleThresh)) ? null : _rawBlue;
             const redBallSt = spectatorBallStates[spectatorMatchRedId];
             const blueBallSt = spectatorBallStates[spectatorMatchBlueId];
 
@@ -3517,12 +3526,8 @@
             window.matchRecorder.recordEvent('hit', { player: 'blue' });
           }
           if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
-            multiplayerScore.remote += 1;
-            updateScoreDisplayMultiplayer();
-            sendScoreUpdate();
-            if (_abActive && isHost) {
-              broadcastArenaBotScore(multiplayerScore.local, multiplayerScore.remote, 'blue');
-            }
+            window._lastLocalPlayerHitTime = now;
+            pulseHapticBothHands(1.0, 200);
           } else {
             this.botScore += 1;
             this.updateScore();
@@ -5649,9 +5654,8 @@
           this._lastPlayerHitTime = now;
           
           if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
-            multiplayerScore.remote += 1;
-            updateScoreDisplayMultiplayer();
-            sendScoreUpdate();
+            window._lastLocalPlayerHitTime = now;
+            pulseHapticBothHands(1.0, 200);
           } else {
             this.botScore += 1;
             this.updateScore();
@@ -6650,12 +6654,19 @@
           // --- Transform back to world frame ---
           const newVel = relVel.add(paddleVel);
           
-          // Apply final velocity and spin, capped by the ball owner's stage
           const ballOwner = ballEl.components['simple-grab']?.data?.player || 'player2';
           const ballGrabComp = ballEl.components['simple-grab'];
           if (ballGrabComp) ballGrabComp._pendingAction = 'racket';
           ballBody.velocity.set(newVel.x, newVel.y, newVel.z);
           capBallSpeed(ballOwner, ballBody);
+          var _racketMaxSpd = getStageMaxSpeed(playerStages[ballOwner] || 1) * 0.5;
+          var _racketSpd = ballBody.velocity.length();
+          if (_racketSpd > _racketMaxSpd) {
+            var _rf = _racketMaxSpd / _racketSpd;
+            ballBody.velocity.x *= _rf;
+            ballBody.velocity.y *= _rf;
+            ballBody.velocity.z *= _rf;
+          }
           ballBody.angularVelocity.set(ballAngVel.x, ballAngVel.y, ballAngVel.z);
           
           // Clear returning state since the ball was intercepted
@@ -7787,6 +7798,14 @@
           const mirrorBallPlayer = ballGrab.data?.player || 'player1';
           if (ballGrab) ballGrab._pendingAction = 'racket';
           capBallSpeed(mirrorBallPlayer, ballBody);
+          var _mrRacketMax = getStageMaxSpeed(playerStages[mirrorBallPlayer] || 1) * 0.5;
+          var _mrRacketSpd = ballBody.velocity.length();
+          if (_mrRacketSpd > _mrRacketMax) {
+            var _mrf = _mrRacketMax / _mrRacketSpd;
+            ballBody.velocity.x *= _mrf;
+            ballBody.velocity.y *= _mrf;
+            ballBody.velocity.z *= _mrf;
+          }
           ballBody.angularVelocity.set(ballAngVel.x, ballAngVel.y, ballAngVel.z);
           if (ballGrab.isReturning) { ballGrab.isReturning = false; ballGrab.returningGraceUntil = 0; }
 
