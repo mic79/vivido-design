@@ -2730,13 +2730,9 @@
           if (window.matchRecorder && window.matchRecorder.isRecording) {
             window.matchRecorder.tick();
           }
-          // Match replay playback rendering
-          if (window.replayActive && window.tickReplay) {
-            window.tickReplay();
-            return;
-          }
           // In multiplayer, ALL players send head + hand transforms for full body sync
           // (mobile spectators don't send — they only receive)
+          // This runs before the replay return so spectators still see the host moving in real-time
           if (isMultiplayer && !window.isMobileSpectator) {
             const camera = document.querySelector('[camera]');
             const leftHand = document.querySelector('#leftHand');
@@ -2780,6 +2776,11 @@
 
               sendPlayerState(state);
             }
+          }
+          // Match replay playback rendering
+          if (window.replayActive && window.tickReplay) {
+            window.tickReplay();
+            return;
           }
           // Tick arena bots (decorative bots playing in multiplayer lobby)
           if (isMultiplayer && arenaBots.enabled) {
