@@ -961,17 +961,13 @@
       timerEl.setAttribute('text', 'value', replayTimerText);
     }
 
-    // In multiplayer, broadcast replay state to spectators (throttled to 20Hz to avoid data channel overflow)
+    // In multiplayer, broadcast replay state to spectators every frame as a single bundled message
     if (window.isMultiplayer && window.isHost && window.connections) {
-      var now = performance.now();
-      if (now - _lastReplayBroadcastTime >= SAMPLE_INTERVAL) {
-        _lastReplayBroadcastTime = now;
-        broadcastReplayToSpectators(frame, replayTimerText);
-      }
+      broadcastReplayToSpectators(frame, replayTimerText);
     }
   };
 
-  // Broadcast replay frame data to multiplayer spectators using the spectator message format
+  // Broadcast all replay frame data as a single bundled message for smooth spectator rendering
   function broadcastReplayToSpectators(frame, timerText) {
     var conns = window.connections;
     if (!conns || conns.length === 0) return;
@@ -980,58 +976,52 @@
     var rh = frame.red.head;
     var rlh = frame.red.leftHand;
     var rrh = frame.red.rightHand;
-    // Un-mirror quaternion: premultiply with yFlip(0,1,0,0) → (qz, qw, -qx, -qy)
-    var redState = {
-      x: -rh.x, y: rh.y, z: -rh.z,
-      hqx: rh.qz, hqy: rh.qw, hqz: -rh.qx, hqw: -rh.qy,
-      lhx: -rlh.x, lhy: rlh.y, lhz: -rlh.z,
-      lhqx: rlh.qz, lhqy: rlh.qw, lhqz: -rlh.qx, lhqw: -rlh.qy,
-      rhx: -rrh.x, rhy: rrh.y, rhz: -rrh.z,
-      rhqx: rrh.qz, rhqy: rrh.qw, rhqz: -rrh.qx, rhqw: -rrh.qy
-    };
 
-    // Blue player: no conversion needed
+    // Un-mirror quaternion: premultiply with yFlip(0,1,0,0) → (qz, qw, -qx, -qy)
+    var rb = frame.redBall;
+    var bb = frame.blueBall;
     var bh = frame.blue.head;
     var blh = frame.blue.leftHand;
     var brh = frame.blue.rightHand;
-    var blueState = {
-      x: bh.x, y: bh.y, z: bh.z,
-      hqx: bh.qx, hqy: bh.qy, hqz: bh.qz, hqw: bh.qw,
-      lhx: blh.x, lhy: blh.y, lhz: blh.z,
-      lhqx: blh.qx, lhqy: blh.qy, lhqz: blh.qz, lhqw: blh.qw,
-      rhx: brh.x, rhy: brh.y, rhz: brh.z,
-      rhqx: brh.qx, rhqy: brh.qy, rhqz: brh.qz, rhqw: brh.qw
-    };
 
-    // Un-mirror red ball
-    var rb = frame.redBall;
-    var rbqFlip = { x: rb.qz, y: rb.qw, z: -rb.qx, w: -rb.qy };
-    var redBallState = {
-      x: -rb.x, y: rb.y, z: -rb.z,
-      vx: -rb.vx, vy: rb.vy, vz: -rb.vz,
-      ax: -rb.ax, ay: rb.ay, az: -rb.az,
-      qx: rbqFlip.x, qy: rbqFlip.y, qz: rbqFlip.z, qw: rbqFlip.w
-    };
-
-    // Blue ball: no conversion
-    var bb = frame.blueBall;
-    var blueBallState = {
-      x: bb.x, y: bb.y, z: bb.z,
-      vx: bb.vx, vy: bb.vy, vz: bb.vz,
-      ax: bb.ax, ay: bb.ay, az: bb.az,
-      qx: bb.qx, qy: bb.qy, qz: bb.qz, qw: bb.qw
+    var msg = {
+      type: 'replay-state',
+      bp: { // blue player
+        x: bh.x, y: bh.y, z: bh.z,
+        hqx: bh.qx, hqy: bh.qy, hqz: bh.qz, hqw: bh.qw,
+        lhx: blh.x, lhy: blh.y, lhz: blh.z,
+        lhqx: blh.qx, lhqy: blh.qy, lhqz: blh.qz, lhqw: blh.qw,
+        rhx: brh.x, rhy: brh.y, rhz: brh.z,
+        rhqx: brh.qx, rhqy: brh.qy, rhqz: brh.qz, rhqw: brh.qw
+      },
+      rp: { // red player (un-mirrored)
+        x: -rh.x, y: rh.y, z: -rh.z,
+        hqx: rh.qz, hqy: rh.qw, hqz: -rh.qx, hqw: -rh.qy,
+        lhx: -rlh.x, lhy: rlh.y, lhz: -rlh.z,
+        lhqx: rlh.qz, lhqy: rlh.qw, lhqz: -rlh.qx, lhqw: -rlh.qy,
+        rhx: -rrh.x, rhy: rrh.y, rhz: -rrh.z,
+        rhqx: rrh.qz, rhqy: rrh.qw, rhqz: -rrh.qx, rhqw: -rrh.qy
+      },
+      bb: { // blue ball
+        x: bb.x, y: bb.y, z: bb.z,
+        vx: bb.vx, vy: bb.vy, vz: bb.vz,
+        ax: bb.ax, ay: bb.ay, az: bb.az,
+        qx: bb.qx, qy: bb.qy, qz: bb.qz, qw: bb.qw
+      },
+      rb: { // red ball (un-mirrored)
+        x: -rb.x, y: rb.y, z: -rb.z,
+        vx: -rb.vx, vy: rb.vy, vz: -rb.vz,
+        ax: -rb.ax, ay: rb.ay, az: -rb.az,
+        qx: rb.qz, qy: rb.qw, qz: -rb.qx, qw: -rb.qy
+      },
+      t: timerText || ''
     };
 
     for (var i = 0; i < conns.length; i++) {
       if (!conns[i].conn.open) continue;
-      // Skip if data channel buffer is backed up to prevent overflow/freeze
       var dc = conns[i].conn._dc || conns[i].conn.dataChannel;
       if (dc && dc.bufferedAmount > 65536) continue;
-      conns[i].conn.send({ type: 'spectator-player', fromId: '__replay_blue__', state: blueState });
-      conns[i].conn.send({ type: 'spectator-player', fromId: '__replay_red__', state: redState });
-      conns[i].conn.send({ type: 'spectator-ball', fromId: '__replay_blue__', state: blueBallState });
-      conns[i].conn.send({ type: 'spectator-ball', fromId: '__replay_red__', state: redBallState });
-      if (timerText) conns[i].conn.send({ type: 'replay-timer', text: timerText });
+      conns[i].conn.send(msg);
     }
   }
 

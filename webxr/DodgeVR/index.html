@@ -1011,6 +1011,8 @@
           } else if (data.type === 'match-ended') {
             window._lastArenaBotState = null;
             window._replayTimerText = null;
+            var _mhtEnd = document.getElementById('mobile-hud-timer');
+            if (_mhtEnd) _mhtEnd.textContent = '';
             if (data && data.state) {
               lobbyState = data.state;
               syncWindowState();
@@ -1043,6 +1045,18 @@
             if (bs3d) bs3d.setAttribute('text', 'value', data.blueScore.toString());
             if (rs3d) rs3d.setAttribute('text', 'value', data.redScore.toString());
             if (data.hitPlayer) triggerSpectatorImpact(data.hitPlayer);
+          } else if (data.type === 'replay-state') {
+            spectatorPlayerStates['__replay_blue__'] = data.bp;
+            spectatorPlayerStates['__replay_red__'] = data.rp;
+            spectatorBallStates['__replay_blue__'] = data.bb;
+            spectatorBallStates['__replay_red__'] = data.rb;
+            if (data.t) {
+              window._replayTimerText = data.t;
+              var td3d = document.getElementById('timer-display');
+              if (td3d) td3d.setAttribute('text', 'value', data.t);
+              var mhtEl = document.getElementById('mobile-hud-timer');
+              if (mhtEl) mhtEl.textContent = data.t;
+            }
           } else if (data.type === 'replay-timer') {
             window._replayTimerText = data.text;
             var td3d = document.getElementById('timer-display');
@@ -1713,6 +1727,18 @@
             if (bsEl) bsEl.setAttribute('text', 'value', data.blueScore.toString());
             if (rsEl) rsEl.setAttribute('text', 'value', data.redScore.toString());
             if (data.hitPlayer) triggerSpectatorImpact(data.hitPlayer);
+          } else if (data.type === 'replay-state') {
+            spectatorPlayerStates['__replay_blue__'] = data.bp;
+            spectatorPlayerStates['__replay_red__'] = data.rp;
+            spectatorBallStates['__replay_blue__'] = data.bb;
+            spectatorBallStates['__replay_red__'] = data.rb;
+            if (data.t) {
+              window._replayTimerText = data.t;
+              var rtTd = document.getElementById('timer-display');
+              if (rtTd) rtTd.setAttribute('text', 'value', data.t);
+              var rtMht = document.getElementById('mobile-hud-timer');
+              if (rtMht) rtMht.textContent = data.t;
+            }
           } else if (data.type === 'replay-timer') {
             window._replayTimerText = data.text;
             var rtTd = document.getElementById('timer-display');
@@ -3360,8 +3386,19 @@
       }
       function triggerSpectatorImpact(hitPlayer) {
         if (hitPlayer === 'red') {
-          var bt = document.querySelector('#bot-target');
-          if (bt && bt.components['impact-effect']) bt.components['impact-effect'].playEffect();
+          var srh = document.getElementById('spectator-red-hit');
+          if (srh) {
+            var rs = spectatorPlayerStates[spectatorMatchRedId];
+            if (!rs && lobbyState && lobbyState.matchPlayers) {
+              var _lrId = lobbyState.matchPlayers.red;
+              if (_lrId) rs = spectatorPlayerStates[_lrId];
+            }
+            if (rs) {
+              var mx = -rs.x, mz = -rs.z;
+              srh.object3D.position.set(mx, rs.y || 1.6, mz);
+            }
+            if (srh.components['impact-effect']) srh.components['impact-effect'].playEffect();
+          }
         } else if (hitPlayer === 'blue') {
           var sbh = document.getElementById('spectator-blue-hit');
           if (sbh) {
@@ -9167,6 +9204,13 @@
       <a-entity id="spectator-blue-hit" impact-effect="color: #0000ff">
         <a-sphere id="spectator-blue-hit-impact" radius="0.05" visible="false"
           material="side: double; transparent: true; opacity: 0; color: #0000ff; emissive: #0000ff; emissiveIntensity: 1.5">
+        </a-sphere>
+      </a-entity>
+
+      <!-- Spectator impact effect for red player (positioned dynamically when hit) -->
+      <a-entity id="spectator-red-hit" impact-effect="color: #ff0000">
+        <a-sphere id="spectator-red-hit-impact" radius="0.05" visible="false"
+          material="side: double; transparent: true; opacity: 0; color: #ff0000; emissive: #ff0000; emissiveIntensity: 1.5">
         </a-sphere>
       </a-entity>
 
