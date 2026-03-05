@@ -1010,6 +1010,7 @@
             updateMobileHudStatus();
           } else if (data.type === 'match-ended') {
             window._lastArenaBotState = null;
+            window._replayTimerText = null;
             if (data && data.state) {
               lobbyState = data.state;
               syncWindowState();
@@ -1042,6 +1043,12 @@
             if (bs3d) bs3d.setAttribute('text', 'value', data.blueScore.toString());
             if (rs3d) rs3d.setAttribute('text', 'value', data.redScore.toString());
             if (data.hitPlayer) triggerSpectatorImpact(data.hitPlayer);
+          } else if (data.type === 'replay-timer') {
+            window._replayTimerText = data.text;
+            var td3d = document.getElementById('timer-display');
+            if (td3d) td3d.setAttribute('text', 'value', data.text);
+            var mhtEl = document.getElementById('mobile-hud-timer');
+            if (mhtEl) mhtEl.textContent = data.text;
           } else if (data.type === 'spectator-game-state') {
             if (lobbyState) lobbyState.matchGameState = data.state;
             var timerEl = document.getElementById('mobile-hud-timer');
@@ -1706,6 +1713,12 @@
             if (bsEl) bsEl.setAttribute('text', 'value', data.blueScore.toString());
             if (rsEl) rsEl.setAttribute('text', 'value', data.redScore.toString());
             if (data.hitPlayer) triggerSpectatorImpact(data.hitPlayer);
+          } else if (data.type === 'replay-timer') {
+            window._replayTimerText = data.text;
+            var rtTd = document.getElementById('timer-display');
+            if (rtTd) rtTd.setAttribute('text', 'value', data.text);
+            var rtMht = document.getElementById('mobile-hud-timer');
+            if (rtMht) rtMht.textContent = data.text;
           } else if (data.type === 'spectator-game-state') {
             if (lobbyState) lobbyState.matchGameState = data.state;
             var peerTd = document.getElementById('timer-display');
@@ -2043,6 +2056,7 @@
       }
 
       function onMatchEnded(data) {
+        window._replayTimerText = null;
         // Apply the updated lobby state FIRST so positions are correct
         if (data && data.state) {
           lobbyState = data.state;
@@ -3198,8 +3212,9 @@
             if (_rs) _rs.object3D.visible = true;
 
             // Update spectator timer (skip if match is in overtime or ended)
+            // During replay, the host broadcasts the authoritative timer via replay-timer messages
             var _curGameState = lobbyState && lobbyState.matchGameState;
-            if (spectatorMatchStartTime && _td && _curGameState !== 'OVERTIME' && _curGameState !== 'ENDED') {
+            if (!window._replayTimerText && spectatorMatchStartTime && _td && _curGameState !== 'OVERTIME' && _curGameState !== 'ENDED') {
               const matchDur = 180;
               const countdownDur = 3.5;
               const totalElapsed = (Date.now() - spectatorMatchStartTime) / 1000;

@@ -955,9 +955,10 @@
     var remaining = Math.max(0, window.replayEngine._duration - elapsed);
     var mins = Math.floor(remaining / 60000);
     var secs = Math.floor((remaining % 60000) / 1000);
+    var replayTimerText = 'REPLAY  ' + mins + ':' + (secs < 10 ? '0' : '') + secs;
     var timerEl = document.getElementById('timer-display');
     if (timerEl) {
-      timerEl.setAttribute('text', 'value', 'REPLAY  ' + mins + ':' + (secs < 10 ? '0' : '') + secs);
+      timerEl.setAttribute('text', 'value', replayTimerText);
     }
 
     // In multiplayer, broadcast replay state to spectators (throttled to 20Hz to avoid data channel overflow)
@@ -965,13 +966,13 @@
       var now = performance.now();
       if (now - _lastReplayBroadcastTime >= SAMPLE_INTERVAL) {
         _lastReplayBroadcastTime = now;
-        broadcastReplayToSpectators(frame);
+        broadcastReplayToSpectators(frame, replayTimerText);
       }
     }
   };
 
   // Broadcast replay frame data to multiplayer spectators using the spectator message format
-  function broadcastReplayToSpectators(frame) {
+  function broadcastReplayToSpectators(frame, timerText) {
     var conns = window.connections;
     if (!conns || conns.length === 0) return;
 
@@ -1030,6 +1031,7 @@
       conns[i].conn.send({ type: 'spectator-player', fromId: '__replay_red__', state: redState });
       conns[i].conn.send({ type: 'spectator-ball', fromId: '__replay_blue__', state: blueBallState });
       conns[i].conn.send({ type: 'spectator-ball', fromId: '__replay_red__', state: redBallState });
+      if (timerText) conns[i].conn.send({ type: 'replay-timer', text: timerText });
     }
   }
 
