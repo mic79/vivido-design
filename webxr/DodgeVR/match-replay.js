@@ -507,6 +507,8 @@
   };
   // Last broadcast score during replay (for computing hitPlayer delta)
   var _replayBroadcastScore = { blue: 0, red: 0 };
+  // Throttle replay broadcast to match recording sample rate (20Hz)
+  var _lastReplayBroadcastTime = 0;
   var RESPAWN_FADE_OUT = 500;
   var RESPAWN_FADE_IN = 500;
   var RESPAWN_TOTAL = RESPAWN_FADE_OUT + RESPAWN_FADE_IN;
@@ -661,6 +663,7 @@
       _replayRackets.player2.left = false; _replayRackets.player2.right = false;
       _replayBroadcastScore.blue = 0;
       _replayBroadcastScore.red = 0;
+      _lastReplayBroadcastTime = 0;
 
       // Reset ball scales and opacity to default
       var allBalls = [blueBall, document.querySelector('[simple-grab="player: player1"]')];
@@ -957,9 +960,13 @@
       timerEl.setAttribute('text', 'value', 'REPLAY  ' + mins + ':' + (secs < 10 ? '0' : '') + secs);
     }
 
-    // In multiplayer, broadcast replay state to spectators
+    // In multiplayer, broadcast replay state to spectators (throttled to 20Hz to avoid data channel overflow)
     if (window.isMultiplayer && window.isHost && window.connections) {
-      broadcastReplayToSpectators(frame);
+      var now = performance.now();
+      if (now - _lastReplayBroadcastTime >= SAMPLE_INTERVAL) {
+        _lastReplayBroadcastTime = now;
+        broadcastReplayToSpectators(frame);
+      }
     }
   };
 
