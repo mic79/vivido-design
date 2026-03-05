@@ -505,6 +505,8 @@
     player1: { left: false, right: false },
     player2: { left: false, right: false }
   };
+  // Last broadcast score during replay (for computing hitPlayer delta)
+  var _replayBroadcastScore = { blue: 0, red: 0 };
   var RESPAWN_FADE_OUT = 500;
   var RESPAWN_FADE_IN = 500;
   var RESPAWN_TOTAL = RESPAWN_FADE_OUT + RESPAWN_FADE_IN;
@@ -657,6 +659,8 @@
       _replayStages.player2 = 1;
       _replayRackets.player1.left = false; _replayRackets.player1.right = false;
       _replayRackets.player2.left = false; _replayRackets.player2.right = false;
+      _replayBroadcastScore.blue = 0;
+      _replayBroadcastScore.red = 0;
 
       // Reset ball scales and opacity to default
       var allBalls = [blueBall, document.querySelector('[simple-grab="player: player1"]')];
@@ -869,6 +873,19 @@
           var rsEl = document.getElementById('red-score');
           if (bsEl) bsEl.setAttribute('text', 'value', ev.data.blue.toString());
           if (rsEl) rsEl.setAttribute('text', 'value', ev.data.red.toString());
+          // Broadcast to spectators so mobile/VR spectators see score updates + hit effects
+          if (window.isMultiplayer && window.isHost && window.connections) {
+            var hitPlayer = null;
+            if (ev.data.blue > _replayBroadcastScore.blue) hitPlayer = 'red';
+            else if (ev.data.red > _replayBroadcastScore.red) hitPlayer = 'blue';
+            _replayBroadcastScore.blue = ev.data.blue;
+            _replayBroadcastScore.red = ev.data.red;
+            var scoreMsg = { type: 'spectator-score', blueScore: ev.data.blue, redScore: ev.data.red, hitPlayer: hitPlayer };
+            var conns = window.connections;
+            for (var si = 0; si < conns.length; si++) {
+              if (conns[si].conn.open) conns[si].conn.send(scoreMsg);
+            }
+          }
         } else if (ev.type === 'hit') {
           if (ev.data.player === 'red') {
             var bt = document.querySelector('#bot-target');
