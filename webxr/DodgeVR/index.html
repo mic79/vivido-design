@@ -14,6 +14,7 @@
     <script src="game-modes.js"></script>
     <script src="game-menu.js"></script>
     <script src="motion-recorder.js"></script>
+    <script src="match-replay.js"></script>
     <style>
       /* Mobile Spectator UI */
       #mobile-spectator-overlay {
@@ -406,13 +407,16 @@
       const getStageMaxSpeed = window.getStageMaxSpeed = function(stage) {
         return STAGE_BASE_SPEED + (stage - 1) * (STAGE_REF_SPEED - STAGE_BASE_SPEED) / (STAGE_REF_STAGE - 1);
       };
-      function getStageBallScale(stage) {
+      var getStageBallScale = window.getStageBallScale = function(stage) {
         return STAGE_BASE_SCALE + (stage - 1) * (STAGE_REF_SCALE - STAGE_BASE_SCALE) / (STAGE_REF_STAGE - 1);
-      }
+      };
       function advanceStage(player) {
         if (!isMatchActive()) return;
         playerStages[player] = (playerStages[player] || 1) + 1;
         applyBallScale(player);
+        if (window.matchRecorder && window.matchRecorder.isRecording) {
+          window.matchRecorder.recordEvent('stage', { player: player, stage: playerStages[player] });
+        }
         console.log('Stage up:', player, '→', playerStages[player],
           'maxSpd:', getStageMaxSpeed(playerStages[player]).toFixed(1),
           'scale:', getStageBallScale(playerStages[player]).toFixed(2));
@@ -422,6 +426,9 @@
         if (playerStages[player] === 1) return;
         playerStages[player] = 1;
         applyBallScale(player);
+        if (window.matchRecorder && window.matchRecorder.isRecording) {
+          window.matchRecorder.recordEvent('stage', { player: player, stage: 1 });
+        }
         console.log('Stage reset:', player, '→ 1');
       }
       function applyBallScale(player) {
@@ -501,6 +508,13 @@
         try {
           localStorage.setItem(MATCH_HISTORY_KEY, JSON.stringify(history));
         } catch (e) { console.warn('Failed to clear match history', e); }
+        // Prune associated replays from IndexedDB
+        if (window.matchReplayStorage) {
+          var keepTs = [];
+          var remaining = history.single.concat(history.multi);
+          for (var i = 0; i < remaining.length; i++) keepTs.push(remaining[i].timestamp);
+          window.matchReplayStorage.pruneOld(keepTs);
+        }
       }
       window.loadMatchHistory = loadMatchHistory;
       window.clearMatchHistory = clearMatchHistory;
@@ -537,8 +551,9 @@
             if (lobbyState.players[pi].id === oppId) { opponentName = lobbyState.players[pi].nickname; break; }
           }
         }
+        var matchTs = Date.now();
         saveMatchToHistory({
-          timestamp: Date.now(),
+          timestamp: matchTs,
           mode: effectivelySingle ? 'single' : 'multi',
           result: isWin ? 'WIN' : 'LOSS',
           playerScore: pScore,
@@ -560,6 +575,25 @@
           botMode: effectivelySingle ? (window.botMirrorMode ? 'MIRRORED' : (window.botRecordedMode ? 'RECORDED' : 'NORMAL')) : null,
           opponentName: effectivelySingle ? null : opponentName
         });
+
+        // Save match replay recording linked to the same timestamp
+        if (window.matchRecorder && window.matchRecorder.isRecording) {
+          var replay = window.matchRecorder.stopRecording();
+          if (replay && window.matchReplayStorage) {
+            replay.matchTimestamp = matchTs;
+            window.matchReplayStorage.save(replay).then(function () {
+              console.log('[MatchReplay] Replay saved for match', matchTs);
+              // Prune replays not in current match history
+              var hist = loadMatchHistory();
+              var keepTs = [];
+              var all = hist.single.concat(hist.multi);
+              for (var ri = 0; ri < all.length; ri++) keepTs.push(all[ri].timestamp);
+              window.matchReplayStorage.pruneOld(keepTs);
+            }).catch(function (e) {
+              console.warn('[MatchReplay] Failed to save replay:', e);
+            });
+          }
+        }
       }
 
       // Multiplayer state (star topology: host + up to 3 peers)
@@ -606,6 +640,7 @@
         window.isHost = isHost;
         window.lobbyState = lobbyState;
         window.myPlayerId = myPlayerId;
+        window.connections = connections;
       }
 
       function updateOpponentNickname() {
@@ -727,6 +762,9 @@
         setRacketVisible: function(handSide, visible) {
           // Local player is always player2
           racketMode.player2[handSide] = visible;
+          if (window.matchRecorder && window.matchRecorder.isRecording) {
+            window.matchRecorder.recordEvent('racket', { player: 'player2', hand: handSide, active: visible });
+          }
           
           // Get the appropriate racket element
           const racketId = handSide === 'left' ? '#leftHandRacket' : '#rightHandRacket';
@@ -2688,6 +2726,15 @@
       var _remoteBallQuat = new THREE.Quaternion();
       AFRAME.registerComponent('multiplayer-sync', {
         tick: function() {
+          // Match replay recording (captures at 20 Hz internally)
+          if (window.matchRecorder && window.matchRecorder.isRecording) {
+            window.matchRecorder.tick();
+          }
+          // Match replay playback rendering
+          if (window.replayActive && window.tickReplay) {
+            window.tickReplay();
+            return;
+          }
           // In multiplayer, ALL players send head + hand transforms for full body sync
           // (mobile spectators don't send — they only receive)
           if (isMultiplayer && !window.isMobileSpectator) {
@@ -3325,6 +3372,11 @@
           const now = Date.now();
           if (now - (this._lastBotHitTime || 0) < 200) return;
           this._lastBotHitTime = now;
+          var _bt = document.querySelector('#bot-target');
+          if (_bt && _bt.components['impact-effect']) _bt.components['impact-effect'].playEffect();
+          if (window.matchRecorder && window.matchRecorder.isRecording) {
+            window.matchRecorder.recordEvent('hit', { player: 'red' });
+          }
           if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             multiplayerScore.local += 1;
             updateScoreDisplayMultiplayer();
@@ -3348,6 +3400,11 @@
           const now = Date.now();
           if (now - (this._lastPlayerHitTime || 0) < 200) return;
           this._lastPlayerHitTime = now;
+          var _pt = document.querySelector('#player-target');
+          if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+          if (window.matchRecorder && window.matchRecorder.isRecording) {
+            window.matchRecorder.recordEvent('hit', { player: 'blue' });
+          }
           if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             multiplayerScore.remote += 1;
             updateScoreDisplayMultiplayer();
@@ -3643,9 +3700,6 @@
             if (this.data.player === 'player2' && isBotTarget) {
               if (inGracePeriod) return;
               recordStat('player2', 'hits');
-              const botTarget = document.querySelector('#bot-target');
-              const impactEffect = botTarget && botTarget.components['impact-effect'];
-              if (impactEffect) impactEffect.playEffect();
               var botEl = document.querySelector('[advanced-bot]');
               var advBot = botEl && botEl.components['advanced-bot'];
               if (advBot) {
@@ -3665,9 +3719,6 @@
               if (isMultiplayer && !window.isLobbyBotMatch && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
               if (inGracePeriod) return;
               recordStat('player1', 'hits');
-              const playerTarget = document.querySelector('#player-target');
-              const impactEffect = playerTarget && playerTarget.components['impact-effect'];
-              if (impactEffect) impactEffect.playEffect();
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
               pulseHapticBothHands(1.0, 200);
@@ -3685,9 +3736,6 @@
             if (this.data.player === 'player1' && isBotTarget && canSelfHit) {
               if (isMultiplayer && !window.isLobbyBotMatch && !(arenaBotsPlaying && window.arenaBots.redBotActive)) return;
               recordStat('player2', 'hits');
-              const botTarget = document.querySelector('#bot-target');
-              const impactEffect = botTarget && botTarget.components['impact-effect'];
-              if (impactEffect) impactEffect.playEffect();
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onBotHit();
               respawn(this.data.player);
@@ -3696,9 +3744,6 @@
             // Player2's blue ball (human's) deflected back at player = point for bot
             if (this.data.player === 'player2' && isPlayerTarget && canSelfHit) {
               recordStat('player1', 'hits');
-              const playerTarget = document.querySelector('#player-target');
-              const impactEffect = playerTarget && playerTarget.components['impact-effect'];
-              if (impactEffect) impactEffect.playEffect();
               const gm = document.querySelector('#game-manager');
               if (gm && gm.components['game-manager']) gm.components['game-manager'].onPlayerHit();
               pulseHapticBothHands(1.0, 200);
@@ -3804,6 +3849,12 @@
 
         animatedRespawn: function(resetStageForPlayer) {
           if (this._respawnPhase) return; // already animating
+          if (window.matchRecorder && window.matchRecorder.isRecording) {
+            window.matchRecorder.recordEvent('respawn', {
+              player: this.data.player,
+              resetStage: resetStageForPlayer || null
+            });
+          }
           this._respawnPhase = 'fade-out';
           this._respawnStart = performance.now();
           this._respawnBaseScale = getStageBallScale(playerStages[this.data.player] || 1);
@@ -5176,7 +5227,7 @@
           
           // Match states: WAITING, COUNTDOWN, PLAYING, OVERTIME, ENDED
           this.matchState = 'WAITING';
-          this.matchDuration = 180; // 3 minutes in seconds
+          this.matchDuration = 30; // TEMP: 30 seconds for testing (was 180)
           this.matchStartTime = 0;
           this.countdownTime = 3;
           this.countdownStartTime = 0;
@@ -5303,6 +5354,11 @@
           
           // Dispatch game started event
           this.el.sceneEl.emit('gameStarted');
+
+          // Start match replay recording
+          if (window.matchRecorder && !window.isSpectator) {
+            window.matchRecorder.startRecording(this.matchStartTime);
+          }
           
           console.log('Match started - 3 minutes');
         },
@@ -5380,6 +5436,12 @@
           // Only save history for completed matches (timer expired or overtime goal)
           if (!cancelled && !this._historySaved) {
             _saveMatchHistoryFromState(this, wasOvertime);
+          }
+          // Discard recording for cancelled matches
+          if (cancelled && window.matchRecorder && window.matchRecorder.isRecording) {
+            window.matchRecorder.isRecording = false;
+            window.matchRecorder._rawFrames = [];
+            window.matchRecorder._events = [];
           }
           
           this.el.sceneEl.emit('matchEnded');
@@ -6576,12 +6638,6 @@
                 }, 1000);
               }
               
-              const playerTarget = document.querySelector('#player-target');
-              const impactEffect = playerTarget && playerTarget.components['impact-effect'];
-              if (impactEffect) {
-                impactEffect.playEffect();
-              }
-              
               const gameManager = this.el.sceneEl.querySelector('#game-manager');
               if (gameManager && gameManager.components['game-manager']) {
                 gameManager.components['game-manager'].onPlayerHit();
@@ -6655,13 +6711,7 @@
               }, 1000);
             }
             
-            // Play impact effect
-            const impactEffect = this.el.components['impact-effect'];
-            if (impactEffect) {
-              impactEffect.playEffect();
-            }
-            
-            // Update score
+            // Update score (onBotHit triggers impact effect internally)
             const gameManager = this.el.sceneEl.querySelector('#game-manager');
             if (gameManager && gameManager.components['game-manager']) {
               gameManager.components['game-manager'].onBotHit();
@@ -7293,8 +7343,9 @@
           if (this.isBot) {
             this.botRackets = { left: null, right: null };
             const racketGeo = new THREE.BoxGeometry(0.2, 0.2, 0.02);
+            const racketColor = new THREE.Color(this.data.color || '#ff4444');
             const racketMat = new THREE.MeshBasicMaterial({
-              color: 0xff4444,
+              color: racketColor,
               wireframe: true,
               transparent: true,
               opacity: 0.8
@@ -7748,8 +7799,10 @@
                 this.botRackets.right.quaternion.copy(this._tmpRacketQuat).multiply(this._racketRotOffset);
               }
 
-              this.botRackets.left.visible = racketMode.player1.left;
-              this.botRackets.right.visible = racketMode.player1.right;
+              if (!window.replayActive) {
+                this.botRackets.left.visible = racketMode.player1.left;
+                this.botRackets.right.visible = racketMode.player1.right;
+              }
             }
             return;
           }
@@ -7832,6 +7885,7 @@
             this.el.object3D.quaternion.copy(this.torsoRotation);
 
             this.updateBones(mHeadPos, mHeadQuat, mLeftPos, mRightPos, mLeftQuat, mRightQuat);
+            this._storePose(mHeadPos, mHeadQuat, mLeftPos, mRightPos, mLeftQuat, mRightQuat);
 
             // Position mirrored rackets and check collisions with bot's ball
             if (this.botRackets) {
@@ -9346,6 +9400,22 @@
                             material="color: #555555; opacity: 0.9; shader: flat">
                     <a-text value="NEXT >" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
                   </a-entity>
+                </a-entity>
+                <!-- Per-match replay buttons (3 slots, dynamically shown/hidden) -->
+                <a-entity id="menu-stats-replay-0" class="clickable" menu-click position="0.24 -0.028 0" visible="false"
+                          geometry="primitive: box; width: 0.14; height: 0.025; depth: 0.005"
+                          material="color: #4488ff; opacity: 0.9; shader: flat">
+                  <a-text id="menu-stats-replay-0-text" value="Watch replay" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity id="menu-stats-replay-1" class="clickable" menu-click position="0.24 -0.076 0" visible="false"
+                          geometry="primitive: box; width: 0.14; height: 0.025; depth: 0.005"
+                          material="color: #4488ff; opacity: 0.9; shader: flat">
+                  <a-text id="menu-stats-replay-1-text" value="Watch replay" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity id="menu-stats-replay-2" class="clickable" menu-click position="0.24 -0.124 0" visible="false"
+                          geometry="primitive: box; width: 0.14; height: 0.025; depth: 0.005"
+                          material="color: #4488ff; opacity: 0.9; shader: flat">
+                  <a-text id="menu-stats-replay-2-text" value="Watch replay" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
                 </a-entity>
                 <!-- Clear button -->
                 <a-entity id="menu-stats-clear" class="clickable" menu-click position="0 -0.24 0"

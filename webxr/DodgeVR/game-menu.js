@@ -57,6 +57,12 @@
       this.statsPage = 0;
       this.STATS_PER_PAGE = 3;
 
+      this._clearConfirmPending = false;
+      this._clearConfirmTimer = null;
+
+      // Single-laser: which hand currently owns the laser ('left' or 'right')
+      this._activeHand = 'right';
+
       var self = this;
 
       if (this.el.hasLoaded) {
@@ -82,6 +88,29 @@
         }
       }
       setTimeout(attachXButton, 100);
+
+      // Single-laser-pointer: switch active hand on trigger press
+      function attachLaserSwitch() {
+        var lh = document.getElementById('leftHand');
+        var rh = document.getElementById('rightHand');
+        if (lh && rh) {
+          lh.addEventListener('triggerdown', function () {
+            if (self.menuVisible && self._activeHand !== 'left') {
+              self._activeHand = 'left';
+              self._applySingleLaser(true);
+            }
+          });
+          rh.addEventListener('triggerdown', function () {
+            if (self.menuVisible && self._activeHand !== 'right') {
+              self._activeHand = 'right';
+              self._applySingleLaser(true);
+            }
+          });
+        } else {
+          setTimeout(attachLaserSwitch, 500);
+        }
+      }
+      setTimeout(attachLaserSwitch, 100);
 
       this.el.sceneEl.addEventListener('enter-vr', function () {
         var overlay = document.getElementById('pre-vr-overlay');
@@ -116,32 +145,44 @@
       console.log('VR Menu toggled:', this.menuVisible, 'menu ref:', !!this.menu);
       if (this.menu) this.menu.setAttribute('visible', this.menuVisible);
       this.setRaycasters(this.menuVisible);
-      if (this.menuVisible) this.updateMenuDisplay();
+      if (this.menuVisible) {
+        this.updateMenuDisplay();
+      } else {
+        this._resetClearConfirm();
+      }
     },
 
     setRaycasters: function (enabled) {
       this.ensureRefs();
-      var hands = [this.leftHand, this.rightHand];
-      for (var i = 0; i < hands.length; i++) {
-        var hand = hands[i];
-        if (!hand) continue;
-        hand.setAttribute('raycaster', {
-          objects: enabled ? '.clickable' : '',
-          showLine: enabled,
-          lineColor: '#ffffff',
-          lineOpacity: enabled ? 1 : 0,
-          far: 10,
-          enabled: enabled
-        });
+      if (enabled) {
+        this._applySingleLaser(true);
+      } else {
+        this._setHandRaycaster(this.leftHand, false);
+        this._setHandRaycaster(this.rightHand, false);
       }
-      // Defer line hide to run after raycaster processes the setAttribute update
+    },
+
+    _applySingleLaser: function (enabled) {
+      this.ensureRefs();
+      var activeEl = this._activeHand === 'left' ? this.leftHand : this.rightHand;
+      var inactiveEl = this._activeHand === 'left' ? this.rightHand : this.leftHand;
+      this._setHandRaycaster(activeEl, enabled);
+      this._setHandRaycaster(inactiveEl, false);
+    },
+
+    _setHandRaycaster: function (hand, enabled) {
+      if (!hand) return;
+      hand.setAttribute('raycaster', {
+        objects: enabled ? '.clickable' : '',
+        showLine: enabled,
+        lineColor: '#ffffff',
+        lineOpacity: enabled ? 1 : 0,
+        far: 10,
+        enabled: enabled
+      });
       setTimeout(function () {
-        for (var i = 0; i < hands.length; i++) {
-          var hand = hands[i];
-          if (!hand) continue;
-          var rc = hand.components.raycaster;
-          if (rc && rc.line) rc.line.visible = enabled;
-        }
+        var rc = hand.components && hand.components.raycaster;
+        if (rc && rc.line) rc.line.visible = enabled;
       }, 0);
     },
 
@@ -176,10 +217,17 @@
         case 'menu-stats-prev': this.statsPagePrev(); break;
         case 'menu-stats-next': this.statsPageNext(); break;
         case 'menu-stats-clear': this.clearStats(); break;
+        case 'menu-stats-replay-0': this.toggleReplaySlot(0); break;
+        case 'menu-stats-replay-1': this.toggleReplaySlot(1); break;
+        case 'menu-stats-replay-2': this.toggleReplaySlot(2); break;
       }
     },
 
     setMode: function (mode) {
+      // Stop any active replay when switching modes
+      if (window.replayActive && window.stopMatchReplay) window.stopMatchReplay();
+      this._resetClearConfirm();
+
       this.menuMode = mode;
       var singleBtn = document.getElementById('menu-single');
       var multiBtn = document.getElementById('menu-multi');
@@ -393,6 +441,7 @@
     setStatsSubTab: function (tab) {
       this.statsSubTab = tab;
       this.statsPage = 0;
+      this._resetClearConfirm();
       var spBtn = document.getElementById('menu-stats-sp');
       var mpBtn = document.getElementById('menu-stats-mp');
       if (spBtn) setButtonColor(spBtn, tab === 'single' ? '#4488ff' : '#333333');
@@ -418,11 +467,64 @@
     },
 
     clearStats: function () {
+      var clearBtn = document.getElementById('menu-stats-clear');
+      var clearText = clearBtn && clearBtn.querySelector('[text]');
+
+      if (!this._clearConfirmPending) {
+        // First click: show confirmation
+        this._clearConfirmPending = true;
+        if (clearBtn) setButtonColor(clearBtn, '#ff6600');
+        if (clearText) clearText.setAttribute('text', 'value', 'CONFIRM?');
+        var self = this;
+        this._clearConfirmTimer = setTimeout(function () {
+          self._resetClearConfirm();
+        }, 3000);
+        return;
+      }
+
+      // Second click within timeout: actually clear
+      clearTimeout(this._clearConfirmTimer);
+      this._clearConfirmPending = false;
       if (window.clearMatchHistory) {
         window.clearMatchHistory(this.statsSubTab);
       }
       this.statsPage = 0;
+      this._resetClearConfirm();
       this.updateStatsDisplay();
+    },
+
+    _resetClearConfirm: function () {
+      this._clearConfirmPending = false;
+      var clearBtn = document.getElementById('menu-stats-clear');
+      var clearText = clearBtn && clearBtn.querySelector('[text]');
+      if (clearBtn) setButtonColor(clearBtn, '#cc3333');
+      if (clearText) clearText.setAttribute('text', 'value', 'CLEAR HISTORY');
+    },
+
+    toggleReplaySlot: function (slot) {
+      var history = window.loadMatchHistory ? window.loadMatchHistory() : { single: [], multi: [] };
+      var list = this.statsSubTab === 'multi' ? history.multi : history.single;
+      var idx = this.statsPage * this.STATS_PER_PAGE + slot;
+      if (idx >= list.length) return;
+      var match = list[idx];
+      if (!match || !match.timestamp) return;
+
+      // If this match's replay is currently playing, stop it
+      if (window.replayActive && window.replayEngine &&
+          window.replayEngine._matchTimestamp === match.timestamp) {
+        if (window.stopMatchReplay) window.stopMatchReplay();
+        this.updateStatsDisplay();
+        return;
+      }
+
+      // Otherwise start watching this replay
+      var self = this;
+      if (window.startMatchReplay) {
+        window.startMatchReplay(match.timestamp);
+        self.menuVisible = false;
+        if (self.menu) self.menu.setAttribute('visible', false);
+        self.setRaycasters(false);
+      }
     },
 
     updateStatsDisplay: function () {
@@ -432,10 +534,24 @@
       var textEl = document.getElementById('menu-stats-text');
       var pageEl = document.getElementById('menu-stats-page');
 
+      // Gather per-slot replay button elements
+      var replayBtns = [];
+      var replayTexts = [];
+      for (var ri = 0; ri < this.STATS_PER_PAGE; ri++) {
+        replayBtns.push(document.getElementById('menu-stats-replay-' + ri));
+        replayTexts.push(document.getElementById('menu-stats-replay-' + ri + '-text'));
+      }
+
+      // Hide all replay buttons initially
+      for (var rh = 0; rh < replayBtns.length; rh++) {
+        if (replayBtns[rh]) replayBtns[rh].setAttribute('visible', false);
+      }
+
       if (list.length === 0) {
         if (summaryEl) summaryEl.setAttribute('text', 'value', 'No matches yet');
         if (textEl) textEl.setAttribute('text', 'value', '');
         if (pageEl) pageEl.setAttribute('text', 'value', '');
+        refreshRaycasters();
         return;
       }
 
@@ -496,6 +612,54 @@
       if (pageEl) {
         pageEl.setAttribute('text', 'value', totalPages > 1 ? (this.statsPage + 1) + ' / ' + totalPages : '');
       }
+
+      // Check replay availability for each visible match slot
+      var activeReplayTs = (window.replayActive && window.replayEngine) ?
+        window.replayEngine._matchTimestamp : null;
+
+      if (window.matchReplayStorage) {
+        var matchesOnPage = [];
+        for (var mi = startIdx; mi < endIdx; mi++) matchesOnPage.push(list[mi]);
+        var checksRemaining = matchesOnPage.length;
+        for (var si = 0; si < matchesOnPage.length; si++) {
+          (function (slotIdx, match) {
+            if (!match || !match.timestamp) {
+              checksRemaining--;
+              if (checksRemaining <= 0) refreshRaycasters();
+              return;
+            }
+            // If this match is currently being replayed, show as "Stop replay"
+            if (activeReplayTs && match.timestamp === activeReplayTs) {
+              if (replayBtns[slotIdx]) {
+                replayBtns[slotIdx].setAttribute('visible', true);
+                setButtonColor(replayBtns[slotIdx], '#cc3333');
+              }
+              if (replayTexts[slotIdx]) {
+                replayTexts[slotIdx].setAttribute('text', 'value', 'Stop replay');
+              }
+              checksRemaining--;
+              if (checksRemaining <= 0) refreshRaycasters();
+              return;
+            }
+            window.matchReplayStorage.load(match.timestamp).then(function (replay) {
+              if (replay && replayBtns[slotIdx]) {
+                replayBtns[slotIdx].setAttribute('visible', true);
+                setButtonColor(replayBtns[slotIdx], '#4488ff');
+                if (replayTexts[slotIdx]) {
+                  replayTexts[slotIdx].setAttribute('text', 'value', 'Watch replay');
+                }
+              }
+              checksRemaining--;
+              if (checksRemaining <= 0) refreshRaycasters();
+            }).catch(function () {
+              checksRemaining--;
+              if (checksRemaining <= 0) refreshRaycasters();
+            });
+          })(si, matchesOnPage[si]);
+        }
+      }
+
+      refreshRaycasters();
     },
 
     updateClipButtons: function () {
@@ -660,6 +824,7 @@
     },
 
     startSingleplayerMatch: function () {
+      if (window.replayActive && window.stopMatchReplay) window.stopMatchReplay();
       var gmEl = document.querySelector('#game-manager');
       if (gmEl && gmEl.components['game-manager']) {
         var gm = gmEl.components['game-manager'];
@@ -751,6 +916,7 @@
 
       var statsSection = document.getElementById('menu-stats-section');
       if (statsSection) statsSection.setAttribute('visible', this.menuMode === 'stats');
+      if (this.menuMode === 'stats') this.updateStatsDisplay();
 
       if (!ls) {
         if (this.queueButtons) this.queueButtons.setAttribute('visible', false);
