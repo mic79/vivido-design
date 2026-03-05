@@ -617,11 +617,15 @@
       for (var i = 0; i < allMatches.length; i++) {
         if (allMatches[i].timestamp === matchTimestamp) { matchRecord = allMatches[i]; break; }
       }
+      var hostNick = window.playerNickname || 'Player';
+      var opponentNick = matchRecord ? (matchRecord.opponentName || 'Bot') : 'Bot';
+      window._replayNames = { blue: hostNick, red: opponentNick };
+
       var blueName = document.getElementById('spectator-blue-name');
       var redName = document.getElementById('spectator-red-name');
       if (blueName) { blueName.setAttribute('text', 'value', 'You'); blueName.object3D.visible = true; }
       if (redName) {
-        redName.setAttribute('text', 'value', matchRecord ? (matchRecord.opponentName || 'Bot') : 'Bot');
+        redName.setAttribute('text', 'value', opponentNick);
         redName.object3D.visible = true;
       }
 
@@ -647,7 +651,9 @@
               conns[ci].conn.send({
                 type: 'match-started',
                 matchPlayers: replayMP,
-                startTime: Date.now()
+                startTime: Date.now(),
+                blueNick: hostNick,
+                redNick: opponentNick
               });
             }
           }
@@ -780,7 +786,8 @@
       botBody.components['mixamo-body'].remoteHandData = null;
     }
 
-    // Hide name labels
+    // Hide name labels and clear replay names
+    window._replayNames = null;
     var blueName = document.getElementById('spectator-blue-name');
     var redName = document.getElementById('spectator-red-name');
     if (blueName) blueName.object3D.visible = false;
@@ -802,15 +809,20 @@
       window.arenaBots.setSlotHuman('blue', false);
       window.arenaBots.setSlotHuman('red', false);
       window._replayPrevArenaState = null;
-      // Notify spectators that the replay/match ended
+      // Notify spectators that the replay/match ended (include lobby state so
+      // spectators update their player slot mappings and render correct colors)
       var conns = window.connections;
       if (conns) {
+        var endMsg = { type: 'match-ended', winner: 'Replay ended' };
+        if (window.lobbyState) endMsg.state = window.lobbyState;
         for (var ci = 0; ci < conns.length; ci++) {
           if (conns[ci].conn.open) {
-            conns[ci].conn.send({ type: 'match-ended', winner: 'Replay ended' });
+            conns[ci].conn.send(endMsg);
           }
         }
       }
+      // Broadcast updated lobby state so spectators have current slot assignments
+      if (window.broadcastLobbyState) window.broadcastLobbyState();
     }
 
     console.log('[MatchReplay] Replay stopped');

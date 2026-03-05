@@ -641,6 +641,7 @@
         window.lobbyState = lobbyState;
         window.myPlayerId = myPlayerId;
         window.connections = connections;
+        window.broadcastLobbyState = broadcastLobbyState;
       }
 
       function updateOpponentNickname() {
@@ -1011,6 +1012,7 @@
           } else if (data.type === 'match-ended') {
             window._lastArenaBotState = null;
             window._replayTimerText = null;
+            window._replayNames = null;
             var _mhtEnd = document.getElementById('mobile-hud-timer');
             if (_mhtEnd) _mhtEnd.textContent = '';
             if (data && data.state) {
@@ -1106,7 +1108,7 @@
             if (abs.bbd) {
               var _blueBody = document.getElementById('spectator-blue-body');
               if (_blueBody) {
-                _blueBody.object3D.visible = true;
+                _blueBody.setAttribute('visible', 'true');
                 if (_blueBody.components['mixamo-body']) {
                   var _bx = abs.bbd.x, _by = abs.bbd.y, _bz = abs.bbd.z;
                   _blueBody.components['mixamo-body'].remoteHandData = {
@@ -1152,10 +1154,17 @@
         if (!lobbyState || !lobbyState.matchPlayers) return;
         var mp = lobbyState.matchPlayers;
         var blueNick = 'Blue', redNick = 'Red';
-        if (lobbyState.players) {
-          for (var i = 0; i < lobbyState.players.length; i++) {
-            if (lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
-            if (lobbyState.players[i].id === mp.red) redNick = lobbyState.players[i].nickname;
+        // Use replay names if available (replay uses synthetic IDs that won't match lobby players)
+        if (window._replayNames) {
+          blueNick = window._replayNames.blue || 'Blue';
+          redNick = window._replayNames.red || 'Red';
+        } else {
+          if (mp.red === '__BOT__') redNick = 'Bot';
+          if (lobbyState.players) {
+            for (var i = 0; i < lobbyState.players.length; i++) {
+              if (lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
+              if (lobbyState.players[i].id === mp.red && mp.red !== '__BOT__') redNick = lobbyState.players[i].nickname;
+            }
           }
         }
         var bnEl = document.getElementById('mobile-blue-name');
@@ -1293,10 +1302,13 @@
               newConn.send({ type: 'lobby-state', state: lobbyState });
               // If a replay is currently active, notify the new peer so it activates spectator view
               if (window.replayActive) {
+                var _rn = window._replayNames || {};
                 newConn.send({
                   type: 'match-started',
                   matchPlayers: { blue: '__replay_blue__', red: '__replay_red__' },
-                  startTime: Date.now()
+                  startTime: Date.now(),
+                  blueNick: _rn.blue || '',
+                  redNick: _rn.red || ''
                 });
                 // Send current replay score so late joiner doesn't start at 0-0
                 var bsEl = document.getElementById('blue-score');
@@ -1792,7 +1804,7 @@
             if (abs.bbd) {
               var _specBlue = document.getElementById('spectator-blue-body');
               if (_specBlue) {
-                _specBlue.object3D.visible = true;
+                _specBlue.setAttribute('visible', 'true');
                 _specBlue.object3D.position.set(abs.bbd.x, abs.bbd.y, abs.bbd.z);
               }
             }
@@ -2066,10 +2078,15 @@
       function onMatchStarted(data) {
         var mp = data.matchPlayers;
         if (!mp) return;
+        if (data.blueNick || data.redNick) {
+          window._replayNames = { blue: data.blueNick || '', red: data.redNick || '' };
+        } else {
+          window._replayNames = null;
+        }
         if (mp.blue === myPlayerId || mp.red === myPlayerId) {
           activateMatchMode(data.startTime);
         } else {
-          activateSpectatorView(mp, data.startTime);
+          activateSpectatorView(mp, data.startTime, data.blueNick, data.redNick);
         }
 
         // Close menu if open
@@ -2083,6 +2100,7 @@
 
       function onMatchEnded(data) {
         window._replayTimerText = null;
+        window._replayNames = null;
         // Apply the updated lobby state FIRST so positions are correct
         if (data && data.state) {
           lobbyState = data.state;
@@ -2094,7 +2112,7 @@
         applyLobbyPosition();
       }
 
-      function activateSpectatorView(mp, matchStartTime) {
+      function activateSpectatorView(mp, matchStartTime, msgBlueNick, msgRedNick) {
         console.log('[SPECTATOR] activateSpectatorView called. blue=' + mp.blue + ' red=' + mp.red + ' myId=' + myPlayerId);
         var _abRedActive = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
         var bot = document.querySelector('[advanced-bot]');
@@ -2132,15 +2150,17 @@
           ' timer visible=' + (timerDisplay ? timerDisplay.object3D.visible : 'null') +
           ' score=' + currentScore.blue + '-' + currentScore.red);
 
-        // Show player name labels
-        var blueNick = '', redNick = '';
-        if (mp.red === '__BOT__') {
-          redNick = 'Bot';
-        }
-        if (lobbyState && lobbyState.players) {
-          for (var i = 0; i < lobbyState.players.length; i++) {
-            if (lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
-            if (lobbyState.players[i].id === mp.red && mp.red !== '__BOT__') redNick = lobbyState.players[i].nickname;
+        // Show player name labels — prefer names passed in the message (e.g. from replay)
+        var blueNick = msgBlueNick || '', redNick = msgRedNick || '';
+        if (!blueNick || !redNick) {
+          if (mp.red === '__BOT__' && !redNick) {
+            redNick = 'Bot';
+          }
+          if (lobbyState && lobbyState.players) {
+            for (var i = 0; i < lobbyState.players.length; i++) {
+              if (!blueNick && lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
+              if (!redNick && lobbyState.players[i].id === mp.red && mp.red !== '__BOT__') redNick = lobbyState.players[i].nickname;
+            }
           }
         }
         var blueName = document.getElementById('spectator-blue-name');
@@ -4923,10 +4943,15 @@
           // Get ball world position
           this.el.object3D.getWorldPosition(this._pos);
 
-          // Push position into ring buffer
-          this.positions[this.headIndex].copy(this._pos);
-          this.headIndex = (this.headIndex + 1) % this.maxSeg;
-          if (this.filledCount < this.maxSeg) this.filledCount++;
+          // Only push to ring buffer if position actually changed (avoids
+          // duplicate entries on spectators where position updates come from
+          // the network and may skip frames)
+          var lastIdx = ((this.headIndex - 1) + this.maxSeg) % this.maxSeg;
+          if (this.filledCount === 0 || this._pos.distanceToSquared(this.positions[lastIdx]) > 0.000001) {
+            this.positions[this.headIndex].copy(this._pos);
+            this.headIndex = (this.headIndex + 1) % this.maxSeg;
+            if (this.filledCount < this.maxSeg) this.filledCount++;
+          }
 
           // Compute velocity from position deltas — works for grabbed, thrown,
           // and spectator-driven balls (body.velocity is zeroed while grabbed)
@@ -4937,7 +4962,18 @@
           } else {
             this._vel.set(0, 0, 0);
           }
-          const speed = this._vel.length();
+          var speed = this._vel.length();
+
+          // Fallback to body.velocity for spectator-driven balls where position
+          // may not update every frame but velocity data is available
+          if (speed < 0.3 || speed > 50) {
+            var bv = body.velocity;
+            var bodySpeed = Math.sqrt(bv.x * bv.x + bv.y * bv.y + bv.z * bv.z);
+            if (bodySpeed >= 0.3 && bodySpeed < 50) {
+              this._vel.set(bv.x, bv.y, bv.z);
+              speed = bodySpeed;
+            }
+          }
 
           // Ignore teleportation spikes (position resets, respawns)
           if (speed > 50) {
