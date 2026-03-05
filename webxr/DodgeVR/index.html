@@ -3367,6 +3367,7 @@
         const origOnBotHit = gm.Component.prototype.onBotHit;
         const origOnPlayerHit = gm.Component.prototype.onPlayerHit;
         gm.Component.prototype.onBotHit = function() {
+          if (window.replayActive) return;
           var _abActive = window.arenaBots && window.arenaBots.enabled;
           if (!_abActive && this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
           const now = Date.now();
@@ -3395,6 +3396,7 @@
           if (this.matchState === 'OVERTIME') this.endMatch();
         };
         gm.Component.prototype.onPlayerHit = function() {
+          if (window.replayActive) return;
           var _abActive = window.arenaBots && window.arenaBots.enabled;
           if (!_abActive && this.matchState !== 'PLAYING' && this.matchState !== 'OVERTIME') return;
           const now = Date.now();

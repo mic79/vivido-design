@@ -790,20 +790,10 @@
     }
 
     // Restore arena bots in multiplayer and notify spectators
+    // Player stays at spectator position, so both arena bot slots should be active
     if (window.isMultiplayer && window.isHost && window.arenaBots) {
-      var prev = window._replayPrevArenaState;
-      if (prev) {
-        window.arenaBots.redBotActive = prev.redActive;
-        window.arenaBots.blueBotActive = prev.blueActive;
-        if (prev.redActive) {
-          var rBotEl = document.querySelector('[advanced-bot]');
-          if (rBotEl) {
-            rBotEl.object3D.position.set(0, 1.6, -6);
-            rBotEl.setAttribute('advanced-bot', 'enabled', true);
-          }
-        }
-        window.arenaBots._updateBodyVisibility();
-      }
+      window.arenaBots.setSlotHuman('blue', false);
+      window.arenaBots.setSlotHuman('red', false);
       window._replayPrevArenaState = null;
       // Notify spectators that the replay/match ended
       var conns = window.connections;
