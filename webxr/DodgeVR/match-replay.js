@@ -1023,6 +1023,9 @@
 
     for (var i = 0; i < conns.length; i++) {
       if (!conns[i].conn.open) continue;
+      // Skip if data channel buffer is backed up to prevent overflow/freeze
+      var dc = conns[i].conn._dc || conns[i].conn.dataChannel;
+      if (dc && dc.bufferedAmount > 65536) continue;
       conns[i].conn.send({ type: 'spectator-player', fromId: '__replay_blue__', state: blueState });
       conns[i].conn.send({ type: 'spectator-player', fromId: '__replay_red__', state: redState });
       conns[i].conn.send({ type: 'spectator-ball', fromId: '__replay_blue__', state: blueBallState });

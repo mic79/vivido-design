@@ -1270,6 +1270,24 @@
               connections.push(entry);
               // Send initial lobby state to the new peer
               newConn.send({ type: 'lobby-state', state: lobbyState });
+              // If a replay is currently active, notify the new peer so it activates spectator view
+              if (window.replayActive) {
+                newConn.send({
+                  type: 'match-started',
+                  matchPlayers: { blue: '__replay_blue__', red: '__replay_red__' },
+                  startTime: Date.now()
+                });
+                // Send current replay score so late joiner doesn't start at 0-0
+                var bsEl = document.getElementById('blue-score');
+                var rsEl = document.getElementById('red-score');
+                if (bsEl && rsEl) {
+                  newConn.send({
+                    type: 'spectator-score',
+                    blueScore: parseInt(bsEl.getAttribute('text').value) || 0,
+                    redScore: parseInt(rsEl.getAttribute('text').value) || 0
+                  });
+                }
+              }
             });
           });
 
@@ -5590,7 +5608,9 @@
             try {
               var _wp = new THREE.Vector3();
               this.el.object3D.getWorldPosition(_wp);
-              impactSound.object3D.position.copy(_wp);
+              if (isFinite(_wp.x) && isFinite(_wp.y) && isFinite(_wp.z)) {
+                impactSound.object3D.position.copy(_wp);
+              }
               if (impactSound.components.sound) impactSound.components.sound.playSound();
             } catch(e) {}
           }
