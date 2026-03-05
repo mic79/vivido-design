@@ -571,22 +571,19 @@
         blueBall.components['simple-grab'].spectatorMode = true;
       }
 
-      // In singleplayer, move player to spectator position
-      if (!window.isMultiplayer) {
-        var playerEl = document.getElementById('player');
-        var rigEl = document.getElementById('rig');
-        if (playerEl) {
-          var curPos = playerEl.getAttribute('position');
-          _savedPlayerPos = { x: curPos.x, y: curPos.y, z: curPos.z };
-          _savedRigRotation = rigEl ? rigEl.getAttribute('rotation') : { x: 0, y: 0, z: 0 };
-          // Spectator slot: left side looking into arena
-          playerEl.setAttribute('position', '-4 0 3');
-          if (rigEl) rigEl.setAttribute('rotation', '0 -53 0');
-          var pc = playerEl.components['player-collision'];
-          if (pc && pc.body) {
-            pc.body.position.set(-4, 1.0, 3);
-            pc.body.velocity.set(0, 0, 0);
-          }
+      // Move player to spectator position to watch the replay
+      var playerEl = document.getElementById('player');
+      var rigEl = document.getElementById('rig');
+      if (playerEl) {
+        var curPos = playerEl.getAttribute('position');
+        _savedPlayerPos = { x: curPos.x, y: curPos.y, z: curPos.z };
+        _savedRigRotation = rigEl ? rigEl.getAttribute('rotation') : { x: 0, y: 0, z: 0 };
+        playerEl.setAttribute('position', '-4 0 3');
+        if (rigEl) rigEl.setAttribute('rotation', '0 -53 0');
+        var pc = playerEl.components['player-collision'];
+        if (pc && pc.body) {
+          pc.body.position.set(-4, 1.0, 3);
+          pc.body.velocity.set(0, 0, 0);
         }
       }
 
@@ -699,6 +696,7 @@
     }
 
     // In singleplayer, move player back to arena position
+    // In multiplayer, stay at spectator position (player must re-queue to rejoin arena)
     if (!window.isMultiplayer) {
       var playerEl = document.getElementById('player');
       var rigEl = document.getElementById('rig');
@@ -723,9 +721,9 @@
           pc.body.velocity.set(0, 0, 0);
         }
       }
-      _savedPlayerPos = null;
-      _savedRigRotation = null;
     }
+    _savedPlayerPos = null;
+    _savedRigRotation = null;
 
     // Reset ball positions, scales, and opacity
     var bb = blueBall && blueBall.components['simple-grab'];
