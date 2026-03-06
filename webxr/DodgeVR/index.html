@@ -1383,12 +1383,9 @@
               updateScoreDisplayMultiplayer();
               broadcastSpectatorScore();
               if (multiplayerScore.remote > _prevRemote) {
-                var _hitDedup = window._lastLocalPlayerHitTime || 0;
-                if (Date.now() - _hitDedup > 300) {
-                  var _pt = document.querySelector('#player-target');
-                  if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
-                  pulseHapticBothHands(1.0, 200);
-                }
+                var _pt = document.querySelector('#player-target');
+                if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+                pulseHapticBothHands(1.0, 200);
               }
             } else if (window.isSpectator && lobbyState && lobbyState.matchPlayers) {
               var smp = lobbyState.matchPlayers;
@@ -1672,12 +1669,9 @@
             multiplayerScore.remote = data.score.local;
             updateScoreDisplayMultiplayer();
             if (multiplayerScore.remote > _prevRemote) {
-              var _hitDedup = window._lastLocalPlayerHitTime || 0;
-              if (Date.now() - _hitDedup > 300) {
-                var _pt = document.querySelector('#player-target');
-                if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
-                pulseHapticBothHands(1.0, 200);
-              }
+              var _pt = document.querySelector('#player-target');
+              if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+              pulseHapticBothHands(1.0, 200);
             }
           } else if (data.type === 'racket-mode') {
             racketMode.player1[data.hand] = data.active;
@@ -3527,7 +3521,6 @@
           }
           if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             window._lastLocalPlayerHitTime = now;
-            pulseHapticBothHands(1.0, 200);
           } else {
             this.botScore += 1;
             this.updateScore();
@@ -5655,7 +5648,6 @@
           
           if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             window._lastLocalPlayerHitTime = now;
-            pulseHapticBothHands(1.0, 200);
           } else {
             this.botScore += 1;
             this.updateScore();
