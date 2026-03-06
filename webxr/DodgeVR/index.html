@@ -1383,9 +1383,12 @@
               updateScoreDisplayMultiplayer();
               broadcastSpectatorScore();
               if (multiplayerScore.remote > _prevRemote) {
-                var _pt = document.querySelector('#player-target');
-                if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
-                pulseHapticBothHands(1.0, 200);
+                var _hitDedup = window._lastLocalPlayerHitTime || 0;
+                if (Date.now() - _hitDedup > 300) {
+                  var _pt = document.querySelector('#player-target');
+                  if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+                  pulseHapticBothHands(1.0, 200);
+                }
               }
             } else if (window.isSpectator && lobbyState && lobbyState.matchPlayers) {
               var smp = lobbyState.matchPlayers;
@@ -1669,9 +1672,12 @@
             multiplayerScore.remote = data.score.local;
             updateScoreDisplayMultiplayer();
             if (multiplayerScore.remote > _prevRemote) {
-              var _pt = document.querySelector('#player-target');
-              if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
-              pulseHapticBothHands(1.0, 200);
+              var _hitDedup = window._lastLocalPlayerHitTime || 0;
+              if (Date.now() - _hitDedup > 300) {
+                var _pt = document.querySelector('#player-target');
+                if (_pt && _pt.components['impact-effect']) _pt.components['impact-effect'].playEffect();
+                pulseHapticBothHands(1.0, 200);
+              }
             }
           } else if (data.type === 'racket-mode') {
             racketMode.player1[data.hand] = data.active;
@@ -3521,6 +3527,7 @@
           }
           if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             window._lastLocalPlayerHitTime = now;
+            pulseHapticBothHands(1.0, 200);
           } else {
             this.botScore += 1;
             this.updateScore();
@@ -3570,23 +3577,25 @@
           
           world.addBody(this.body);
           
+          // Track if trigger is held
           this.isTriggerHeld = false;
           this.lastGrabCheck = 0;
-          this._triggerPressTime = 0;
 
+          // Determine which player this hand belongs to
           this.isLeftHand = this.el.id === 'leftHand';
-          this.player = this.isLeftHand ? 'player2' : 'player2';
+          this.player = this.isLeftHand ? 'player2' : 'player2'; // Both hands control player2's ball
         },
         
         tick: function() {
+          // Update physics body position to match hand position at full framerate
           const handWorldPos = new THREE.Vector3();
           this.el.object3D.getWorldPosition(handWorldPos);
           this.body.position.copy(handWorldPos);
           
+          // If trigger is held, check for grabbable objects at 144Hz
           if (this.isTriggerHeld) {
             const now = Date.now();
-            if (now - this._triggerPressTime > 500) return;
-            if (now - this.lastGrabCheck > 7) {
+            if (now - this.lastGrabCheck > 7) { // 144Hz - 6.94ms for Quest 3 optimization
               this.checkForGrabbableObjects();
               this.lastGrabCheck = now;
             }
@@ -3618,7 +3627,6 @@
         
         onGripDown: function(evt) {
           this.isTriggerHeld = true;
-          this._triggerPressTime = Date.now();
           this.checkForGrabbableObjects();
         },
         
@@ -5647,6 +5655,7 @@
           
           if (isMultiplayer && !window.isSpectator && !window.isLobbyBotMatch) {
             window._lastLocalPlayerHitTime = now;
+            pulseHapticBothHands(1.0, 200);
           } else {
             this.botScore += 1;
             this.updateScore();
@@ -6952,28 +6961,12 @@
         }
       });
 
+      // Helper: pulse haptic on a specific hand entity (or both)
       function pulseHaptic(handEl, intensity, durationMs) {
         if (!handEl) return;
-        var handedness = handEl.id === 'leftHand' ? 'left' :
-                         handEl.id === 'rightHand' ? 'right' : null;
-        var scene = document.querySelector('a-scene');
-        var session = scene && scene.xrSession;
-        if (session && session.inputSources && handedness) {
-          for (var i = 0; i < session.inputSources.length; i++) {
-            var src = session.inputSources[i];
-            if (src.handedness === handedness && src.gamepad &&
-                src.gamepad.hapticActuators && src.gamepad.hapticActuators[0]) {
-              src.gamepad.hapticActuators[0].pulse(intensity, durationMs).catch(function(){});
-              return;
-            }
-          }
-        }
-        var tc = handEl.components && (handEl.components['tracked-controls'] ||
-                 handEl.components['tracked-controls-webxr'] ||
-                 handEl.components['oculus-touch-controls']);
-        if (tc && tc.controller && tc.controller.gamepad &&
-            tc.controller.gamepad.hapticActuators && tc.controller.gamepad.hapticActuators[0]) {
-          tc.controller.gamepad.hapticActuators[0].pulse(intensity, durationMs).catch(function(){});
+        const tc = handEl.components?.['tracked-controls'];
+        if (tc?.controller?.gamepad?.hapticActuators?.[0]) {
+          tc.controller.gamepad.hapticActuators[0].pulse(intensity, durationMs).catch(() => {});
         }
       }
       function pulseHapticBothHands(intensity, durationMs) {
@@ -6981,12 +6974,19 @@
         pulseHaptic(document.querySelector('#rightHand'), intensity, durationMs);
       }
 
+      // Add haptic feedback on hand collision with a ball
       AFRAME.registerComponent('hand-haptics', {
         init: function() {
           this.el.addEventListener('obbcollisionstarted', (evt) => {
             const collider = evt.detail.withEl;
+            // Check if the collider is a ball (has simple-grab component)
             if (collider && collider.components && collider.components['simple-grab'] && !collider.components['simple-grab']._respawnPhase) {
-              pulseHaptic(this.el, 0.7, 100);
+              // Try to get the gamepad from the controller
+              const trackedControls = this.el.components['tracked-controls'];
+              if (trackedControls?.controller?.gamepad?.hapticActuators?.[0]) {
+                const haptics = trackedControls.controller.gamepad.hapticActuators[0];
+                haptics.pulse(0.7, 100).catch(() => {}); // Silently fail if haptics not supported
+              }
             }
           });
         }
