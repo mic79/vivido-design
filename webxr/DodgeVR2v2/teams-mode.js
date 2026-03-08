@@ -144,31 +144,30 @@
 
   function scaleBoundaryLines(width, halfWidth) {
     try {
-      // Find all a-box children of the scene that look like boundary lines
-      // and scale horizontal ones / reposition side ones.
       var allBoxes = document.querySelectorAll('a-box');
       allBoxes.forEach(function (box) {
         var geom = box.getAttribute('geometry');
         var pos = box.getAttribute('position');
         if (!geom || !pos) return;
-        // Skip arena walls (they have IDs)
         if (box.id && box.id.startsWith('arena-')) return;
 
-        // Thin horizontal floor/ceiling lines (height ≤ 0.01 or width is 4/8)
-        var isThinLine = (geom.height <= 0.01 && geom.depth <= 0.01);
-        if (isThinLine && (geom.width === 4 || geom.width === 8)) {
+        var w = geom.width, h = geom.height, d = geom.depth;
+
+        // Horizontal floor/ceiling lines: thin h+d, wide w
+        if (h <= 0.01 && d <= 0.01 && (w === 4 || w === 8)) {
           box.setAttribute('geometry', 'width', width);
         }
 
-        // Thin vertical side-marker lines at old x=±2 or x=±1.95
-        if (isThinLine && Math.abs(geom.depth - 4) < 0.5 && geom.width <= 0.01) {
+        // Floor/ceiling side lines running along Z: thin w+h, long d (~4)
+        if (w <= 0.01 && h <= 0.01 && Math.abs(d - 4) < 0.5) {
           if (Math.abs(Math.abs(pos.x) - 2) < 0.15 || Math.abs(Math.abs(pos.x) - 4) < 0.15) {
             var sign = pos.x > 0 ? 1 : -1;
             box.setAttribute('position', { x: sign * halfWidth, y: pos.y, z: pos.z });
           }
         }
-        // Side wall vertical line markers at x=±1.95 or x=±3.95
-        if (isThinLine && geom.height > 0.1 && geom.width <= 0.01) {
+
+        // Wall vertical lines: thin w+d, tall h (~4), at x near ±1.95 or ±3.95
+        if (w <= 0.01 && d <= 0.01 && h > 0.1) {
           if (Math.abs(Math.abs(pos.x) - 1.95) < 0.15 || Math.abs(Math.abs(pos.x) - 3.95) < 0.15) {
             var sign = pos.x > 0 ? 1 : -1;
             box.setAttribute('position', { x: sign * (halfWidth - 0.05), y: pos.y, z: pos.z });

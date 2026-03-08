@@ -1010,10 +1010,17 @@
             lobbyState = data.state;
             syncWindowState();
             var mp = lobbyState.matchPlayers;
-            if (mp && lobbyState.matchState === 'PLAYING' && mp.blue && mp.red) {
-              if (!spectatorMatchActive) {
-                activateSpectatorView(mp, lobbyState.matchStartTime);
+            var _lsMatchActive = false;
+            if (lobbyState.matchState === 'PLAYING') {
+              if (lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+                var _mp2 = lobbyState.matchPlayers2v2;
+                _lsMatchActive = !!(_mp2.blue1 || _mp2.blue2 || _mp2.red1 || _mp2.red2);
+              } else {
+                _lsMatchActive = !!(mp && mp.blue && mp.red);
               }
+            }
+            if (_lsMatchActive && !spectatorMatchActive) {
+              activateSpectatorView(mp, lobbyState.matchStartTime);
               updateMobileHudNames();
             }
             updateMobileHudStatus();
@@ -1026,6 +1033,9 @@
             window._lastArenaBotState = null;
             window._replayTimerText = null;
             window._replayNames = null;
+            if (window.matchFormat === '2v2' && window.teamsMode) {
+              window.teamsMode.deactivate2v2();
+            }
             var _mhtEnd = document.getElementById('mobile-hud-timer');
             if (_mhtEnd) _mhtEnd.textContent = '';
             if (data && data.state) {
@@ -1042,7 +1052,14 @@
             spectatorPlayerStates[data.fromId] = data.state;
             if (!spectatorMatchActive && lobbyState && lobbyState.matchPlayers) {
               var fmp = lobbyState.matchPlayers;
-              if (fmp.blue && fmp.red) {
+              var _fpMatchActive = false;
+              if (lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+                var _fmp2 = lobbyState.matchPlayers2v2;
+                _fpMatchActive = !!(_fmp2.blue1 || _fmp2.blue2 || _fmp2.red1 || _fmp2.red2);
+              } else {
+                _fpMatchActive = !!(fmp.blue && fmp.red);
+              }
+              if (_fpMatchActive) {
                 activateSpectatorView(fmp, lobbyState.matchStartTime);
                 updateMobileHudNames();
               }
@@ -1170,10 +1187,23 @@
         if (!lobbyState || !lobbyState.matchPlayers) return;
         var mp = lobbyState.matchPlayers;
         var blueNick = 'Blue', redNick = 'Red';
-        // Use replay names if available (replay uses synthetic IDs that won't match lobby players)
         if (window._replayNames) {
           blueNick = window._replayNames.blue || 'Blue';
           redNick = window._replayNames.red || 'Red';
+        } else if (lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+          var mp2 = lobbyState.matchPlayers2v2;
+          var blueNames = [], redNames = [];
+          if (lobbyState.players) {
+            for (var i = 0; i < lobbyState.players.length; i++) {
+              var p = lobbyState.players[i];
+              if (p.id === mp2.blue1 || p.id === mp2.blue2) blueNames.push(p.nickname);
+              if (p.id === mp2.red1 || p.id === mp2.red2) redNames.push(p.nickname);
+            }
+          }
+          if (mp2.blue1 === '__BOT__' || mp2.blue2 === '__BOT__') blueNames.push('Bot');
+          if (mp2.red1 === '__BOT__' || mp2.red2 === '__BOT__') redNames.push('Bot');
+          blueNick = blueNames.length > 0 ? blueNames.join(' & ') : 'Blue Team';
+          redNick = redNames.length > 0 ? redNames.join(' & ') : 'Red Team';
         } else {
           if (mp.red === '__BOT__') redNick = 'Bot';
           if (lobbyState.players) {
@@ -1197,8 +1227,17 @@
           return;
         }
         var mp = lobbyState.matchPlayers;
-        if (lobbyState.matchState === 'PLAYING' && mp && mp.blue && mp.red) {
-          statusEl.textContent = '';
+        var matchActive = false;
+        if (lobbyState.matchState === 'PLAYING') {
+          if (lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+            var mp2 = lobbyState.matchPlayers2v2;
+            matchActive = !!(mp2.blue1 || mp2.blue2 || mp2.red1 || mp2.red2);
+          } else {
+            matchActive = !!(mp && mp.blue && mp.red);
+          }
+        }
+        if (matchActive) {
+          statusEl.textContent = lobbyState.matchFormat === '2v2' ? '2v2 Match' : '';
         } else {
           var pc = lobbyState.players ? lobbyState.players.length : 0;
           statusEl.textContent = 'Waiting for match... (' + pc + ' player' + (pc !== 1 ? 's' : '') + ' in lobby)';
@@ -1374,12 +1413,23 @@
             broadcastLobbyState();
             peerConn.send({ type: 'lobby-state', state: lobbyState });
             // If a match is in progress, send match-started so they activate spectator view
-            if (lobbyState.matchState === 'PLAYING' && lobbyState.matchPlayers.blue && lobbyState.matchPlayers.red) {
-              peerConn.send({
-                type: 'match-started',
-                matchPlayers: lobbyState.matchPlayers,
-                startTime: lobbyState.matchStartTime
-              });
+            if (lobbyState.matchState === 'PLAYING') {
+              var _hasMatch = lobbyState.matchFormat === '2v2'
+                ? (lobbyState.matchPlayers2v2 && (lobbyState.matchPlayers2v2.blue1 || lobbyState.matchPlayers2v2.red1))
+                : (lobbyState.matchPlayers.blue && lobbyState.matchPlayers.red);
+              if (_hasMatch) {
+                var _msMsg = {
+                  type: 'match-started',
+                  matchPlayers: lobbyState.matchPlayers,
+                  startTime: lobbyState.matchStartTime
+                };
+                if (lobbyState.matchFormat === '2v2') {
+                  _msMsg.matchPlayers2v2 = lobbyState.matchPlayers2v2;
+                  _msMsg.matchFormat = '2v2';
+                  _msMsg.isBotMatch = !!window.isLobbyBotMatch;
+                }
+                peerConn.send(_msMsg);
+              }
             }
           } else if (data.type === 'queue-action') {
             handleQueueAction(entry.peerId, data.action);
@@ -1612,11 +1662,14 @@
         }
         if (lobbyState) {
           var wasMatchPlayer = (lobbyState.matchPlayers.blue === peerId || lobbyState.matchPlayers.red === peerId);
-          // End match first (before removing from players), so endLobbyMatch can still see who was in match
+          if (!wasMatchPlayer && lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+            var _dmp2 = lobbyState.matchPlayers2v2;
+            wasMatchPlayer = (_dmp2.blue1 === peerId || _dmp2.blue2 === peerId ||
+                              _dmp2.red1 === peerId || _dmp2.red2 === peerId);
+          }
           if (wasMatchPlayer) {
             endLobbyMatch();
           }
-          // Now remove the disconnected player from all state
           lobbyState.players = lobbyState.players.filter(function (p) { return p.id !== peerId; });
           lobbyState.queue = lobbyState.queue.filter(function (id) { return id !== peerId; });
           for (var s = 0; s < lobbyState.spectatorSlots.length; s++) {
@@ -1745,8 +1798,20 @@
             spectatorPlayerStates[data.fromId] = data.state;
             if (!spectatorMatchActive && lobbyState && lobbyState.matchPlayers) {
               var fmp = lobbyState.matchPlayers;
-              if (fmp.blue && fmp.red &&
-                  fmp.blue !== myPlayerId && fmp.red !== myPlayerId) {
+              var _vrFallbackActive = false;
+              if (lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+                var _vrmp2 = lobbyState.matchPlayers2v2;
+                _vrFallbackActive = !!(_vrmp2.blue1 || _vrmp2.blue2 || _vrmp2.red1 || _vrmp2.red2);
+                if (_vrFallbackActive) {
+                  var _meIn2v2 = (_vrmp2.blue1 === myPlayerId || _vrmp2.blue2 === myPlayerId ||
+                                  _vrmp2.red1 === myPlayerId || _vrmp2.red2 === myPlayerId);
+                  if (_meIn2v2) _vrFallbackActive = false;
+                }
+              } else {
+                _vrFallbackActive = !!(fmp.blue && fmp.red &&
+                  fmp.blue !== myPlayerId && fmp.red !== myPlayerId);
+              }
+              if (_vrFallbackActive) {
                 console.log('[SPECTATOR] Fallback activation from spectator-player message');
                 activateSpectatorView(fmp, lobbyState.matchStartTime);
               }
@@ -2205,7 +2270,28 @@
           applyBallScale('player1');
           applyBallScale('player2');
         }
-        if (mp.blue === myPlayerId || mp.red === myPlayerId) {
+
+        // Handle 2v2 format — activate arena scaling on this peer
+        var is2v2 = (data.matchFormat === '2v2');
+        if (is2v2) {
+          if (lobbyState) {
+            lobbyState.matchFormat = '2v2';
+            if (data.matchPlayers2v2) lobbyState.matchPlayers2v2 = data.matchPlayers2v2;
+          }
+          // activate2v2 sets window.matchFormat internally; call before setting it
+          // so the guard inside activate2v2 doesn't skip the work
+          if (window.teamsMode) window.teamsMode.activate2v2();
+        }
+
+        // Determine if this peer is a match player
+        var isMatchPlayer = (mp.blue === myPlayerId || mp.red === myPlayerId);
+        if (!isMatchPlayer && is2v2 && data.matchPlayers2v2) {
+          var mp2 = data.matchPlayers2v2;
+          isMatchPlayer = (mp2.blue1 === myPlayerId || mp2.blue2 === myPlayerId ||
+                           mp2.red1 === myPlayerId || mp2.red2 === myPlayerId);
+        }
+
+        if (isMatchPlayer) {
           activateMatchMode(data.startTime);
         } else {
           activateSpectatorView(mp, data.startTime, data.blueNick, data.redNick);
@@ -2223,6 +2309,10 @@
       function onMatchEnded(data) {
         window._replayTimerText = null;
         window._replayNames = null;
+        // Deactivate 2v2 mode if it was active on this peer
+        if (window.matchFormat === '2v2' && window.teamsMode) {
+          window.teamsMode.deactivate2v2();
+        }
         // Apply the updated lobby state FIRST so positions are correct
         if (data && data.state) {
           lobbyState = data.state;
@@ -2277,13 +2367,27 @@
         // Show player name labels — prefer names passed in the message (e.g. from replay)
         var blueNick = msgBlueNick || '', redNick = msgRedNick || '';
         if (!blueNick || !redNick) {
-          if (mp.red === '__BOT__' && !redNick) {
-            redNick = 'Bot';
-          }
-          if (lobbyState && lobbyState.players) {
-            for (var i = 0; i < lobbyState.players.length; i++) {
-              if (!blueNick && lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
-              if (!redNick && lobbyState.players[i].id === mp.red && mp.red !== '__BOT__') redNick = lobbyState.players[i].nickname;
+          if (lobbyState && lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+            var mp2 = lobbyState.matchPlayers2v2;
+            var bn = [], rn = [];
+            if (lobbyState.players) {
+              for (var i = 0; i < lobbyState.players.length; i++) {
+                var p = lobbyState.players[i];
+                if (p.id === mp2.blue1 || p.id === mp2.blue2) bn.push(p.nickname);
+                if (p.id === mp2.red1 || p.id === mp2.red2) rn.push(p.nickname);
+              }
+            }
+            if (mp2.blue1 === '__BOT__' || mp2.blue2 === '__BOT__') bn.push('Bot');
+            if (mp2.red1 === '__BOT__' || mp2.red2 === '__BOT__') rn.push('Bot');
+            if (!blueNick) blueNick = bn.length > 0 ? bn.join(' & ') : 'Blue Team';
+            if (!redNick) redNick = rn.length > 0 ? rn.join(' & ') : 'Red Team';
+          } else {
+            if (mp.red === '__BOT__' && !redNick) redNick = 'Bot';
+            if (lobbyState && lobbyState.players) {
+              for (var i = 0; i < lobbyState.players.length; i++) {
+                if (!blueNick && lobbyState.players[i].id === mp.blue) blueNick = lobbyState.players[i].nickname;
+                if (!redNick && lobbyState.players[i].id === mp.red && mp.red !== '__BOT__') redNick = lobbyState.players[i].nickname;
+              }
             }
           }
         }
@@ -3505,10 +3609,32 @@
       function broadcastSpectatorScore() {
         if (!isHost || !lobbyState) return;
         var mp = lobbyState.matchPlayers;
-        if (!mp || !mp.blue) return;
-        var opponentId = mp.blue === myPlayerId ? mp.red : mp.blue;
-        var blueScore = mp.blue === myPlayerId ? multiplayerScore.local : multiplayerScore.remote;
-        var redScore = mp.blue === myPlayerId ? multiplayerScore.remote : multiplayerScore.local;
+
+        // In 2v2, score is managed by the game-manager on the host; matchPlayers.blue/red
+        // may be null.  Determine match participant IDs to exclude from spectator broadcast.
+        var matchPlayerIds = [];
+        if (lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+          var mp2 = lobbyState.matchPlayers2v2;
+          [mp2.blue1, mp2.blue2, mp2.red1, mp2.red2].forEach(function (id) {
+            if (id && id !== '__BOT__') matchPlayerIds.push(id);
+          });
+        } else {
+          if (mp && mp.blue) matchPlayerIds.push(mp.blue);
+          if (mp && mp.red && mp.red !== '__BOT__') matchPlayerIds.push(mp.red);
+        }
+        if (matchPlayerIds.length === 0 && (!mp || !mp.blue)) return;
+
+        var opponentId = (mp && mp.blue) ? (mp.blue === myPlayerId ? mp.red : mp.blue) : null;
+        var blueScore, redScore;
+        if (mp && mp.blue) {
+          blueScore = mp.blue === myPlayerId ? multiplayerScore.local : multiplayerScore.remote;
+          redScore = mp.blue === myPlayerId ? multiplayerScore.remote : multiplayerScore.local;
+        } else {
+          var gm = document.querySelector('#game-manager');
+          var gmComp = gm && gm.components['game-manager'];
+          blueScore = gmComp ? gmComp.playerScore : 0;
+          redScore = gmComp ? gmComp.botScore : 0;
+        }
         var prevScore = lobbyState.matchScore || { blue: 0, red: 0 };
         var hitPlayer = null;
         if (blueScore > prevScore.blue) hitPlayer = 'red';
@@ -3517,7 +3643,7 @@
         var msg = { type: 'spectator-score', blueScore: blueScore, redScore: redScore, hitPlayer: hitPlayer };
         for (var i = 0; i < connections.length; i++) {
           var c = connections[i];
-          if (c.conn.open && c.peerId !== opponentId) {
+          if (c.conn.open && matchPlayerIds.indexOf(c.peerId) < 0) {
             c.conn.send(msg);
           }
         }
@@ -3526,9 +3652,18 @@
         if (!isHost || !lobbyState) return;
         var mp = lobbyState.matchPlayers;
         if (!mp) return;
+        var excludeIds = [];
+        if (lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+          var mp2 = lobbyState.matchPlayers2v2;
+          [mp2.blue1, mp2.blue2, mp2.red1, mp2.red2].forEach(function (id) {
+            if (id && id !== '__BOT__') excludeIds.push(id);
+          });
+        }
+        if (mp.blue) excludeIds.push(mp.blue);
+        if (mp.red && mp.red !== '__BOT__') excludeIds.push(mp.red);
         for (var i = 0; i < connections.length; i++) {
           var c = connections[i];
-          if (c.conn.open && c.peerId !== mp.blue && c.peerId !== mp.red) {
+          if (c.conn.open && excludeIds.indexOf(c.peerId) < 0) {
             c.conn.send({ type: 'spectator-game-state', state: state });
           }
         }
