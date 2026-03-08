@@ -209,6 +209,76 @@
                ('ontouchstart' in window || navigator.maxTouchPoints > 0);
       }
 
+      function apply2v2BotState(abs) {
+        if (!abs.is2v2) return;
+
+        // Red2 bot body
+        if (abs.rbd2) {
+          var bot2 = document.getElementById('bot2');
+          if (bot2) bot2.object3D.position.set(abs.rbd2.x, abs.rbd2.y, abs.rbd2.z);
+          var bot2Body = document.getElementById('bot2-body');
+          if (bot2Body) {
+            bot2Body.object3D.visible = true;
+            if (bot2Body.components['mixamo-body']) {
+              var hx = abs.rbd2.x, hy = abs.rbd2.y + 0.3, hz = abs.rbd2.z;
+              bot2Body.components['mixamo-body'].remoteHandData = {
+                head: { x: hx, y: hy, z: hz, qx: 0, qy: 1, qz: 0, qw: 0 },
+                leftHand: { x: hx + 0.3, y: hy - 0.5, z: hz + 0.25, qx: 0, qy: 1, qz: 0, qw: 0 },
+                rightHand: { x: hx - 0.3, y: hy - 0.5, z: hz + 0.25, qx: 0, qy: 1, qz: 0, qw: 0 }
+              };
+            }
+          }
+        }
+
+        // Blue teammate bot body
+        if (abs.bbd2) {
+          var btBot = document.getElementById('blue-teammate-bot');
+          if (btBot) btBot.object3D.position.set(abs.bbd2.x, 0, abs.bbd2.z);
+          var btBody = document.getElementById('blue-teammate-body');
+          if (btBody) {
+            btBody.object3D.visible = true;
+            if (btBody.components['mixamo-body']) {
+              var bx = abs.bbd2.x, by = abs.bbd2.y, bz = abs.bbd2.z;
+              btBody.components['mixamo-body'].remoteHandData = {
+                head: { x: bx, y: by, z: bz, qx: 0, qy: 0, qz: 0, qw: 1 },
+                leftHand: { x: bx - 0.3, y: by - 0.5, z: bz - 0.25, qx: 0, qy: 0, qz: 0, qw: 1 },
+                rightHand: { x: bx + 0.3, y: by - 0.5, z: bz - 0.25, qx: 0, qy: 0, qz: 0, qw: 1 }
+              };
+            }
+          }
+        }
+
+        // Red2 ball (player1b)
+        if (abs.rb2) {
+          var rb2 = document.getElementById('ball-player1b') ||
+                    document.querySelector('[simple-grab="player: player1b"]');
+          if (rb2) {
+            rb2.object3D.position.set(abs.rb2.x, abs.rb2.y, abs.rb2.z);
+            var rb2b = rb2.components['simple-grab'] && rb2.components['simple-grab'].body;
+            if (rb2b) {
+              rb2b.position.set(abs.rb2.x, abs.rb2.y, abs.rb2.z);
+              rb2b.velocity.set(0, 0, 0);
+              rb2b.angularVelocity.set(0, 0, 0);
+            }
+          }
+        }
+
+        // Blue2 ball (player2b)
+        if (abs.bb2) {
+          var bb2 = document.getElementById('ball-player2b') ||
+                    document.querySelector('[simple-grab="player: player2b"]');
+          if (bb2) {
+            bb2.object3D.position.set(abs.bb2.x, abs.bb2.y, abs.bb2.z);
+            var bb2b = bb2.components['simple-grab'] && bb2.components['simple-grab'].body;
+            if (bb2b) {
+              bb2b.position.set(abs.bb2.x, abs.bb2.y, abs.bb2.z);
+              bb2b.velocity.set(0, 0, 0);
+              bb2b.angularVelocity.set(0, 0, 0);
+            }
+          }
+        }
+      }
+
       // Physics world setup
       const world = new CANNON.World();
       window.world = world;
@@ -1152,6 +1222,7 @@
                 }
               }
             }
+            apply2v2BotState(abs);
             window._lastArenaBotState = abs;
           }
         });
@@ -1896,6 +1967,7 @@
                 _specBlue.object3D.position.set(abs.bbd.x, abs.bbd.y, abs.bbd.z);
               }
             }
+            apply2v2BotState(abs);
           }
         });
         hostConn.on('close', function () {
@@ -2329,8 +2401,22 @@
         var _abRedActive = window.arenaBots && window.arenaBots.enabled && window.arenaBots.redBotActive;
         var bot = document.querySelector('[advanced-bot]');
         if (bot && !_abRedActive) bot.setAttribute('advanced-bot', 'enabled', false);
-        spectatorMatchBlueId = mp.blue;
-        spectatorMatchRedId = mp.red;
+
+        // In 2v2, matchPlayers.blue/red may be null; derive from matchPlayers2v2
+        var blueId = mp.blue, redId = mp.red;
+        if (lobbyState && lobbyState.matchFormat === '2v2' && lobbyState.matchPlayers2v2) {
+          var mp2 = lobbyState.matchPlayers2v2;
+          if (!blueId) {
+            if (mp2.blue1 && mp2.blue1 !== '__BOT__') blueId = mp2.blue1;
+            else if (mp2.blue2 && mp2.blue2 !== '__BOT__') blueId = mp2.blue2;
+          }
+          if (!redId) {
+            if (mp2.red1 && mp2.red1 !== '__BOT__') redId = mp2.red1;
+            else if (mp2.red2 && mp2.red2 !== '__BOT__') redId = mp2.red2;
+          }
+        }
+        spectatorMatchBlueId = blueId;
+        spectatorMatchRedId = redId;
         spectatorMatchActive = true;
         spectatorMatchStartTime = matchStartTime || Date.now();
         _spectatorLogOnce = false;
@@ -3036,8 +3122,9 @@
           if (window.matchRecorder && window.matchRecorder.isRecording) {
             window.matchRecorder.tick();
           }
-          // 2v2 bot tick
-          if (window.teamsMode && window.matchFormat === '2v2') {
+          // 2v2 bot tick — only on the host/local player, not spectators
+          if (window.teamsMode && window.matchFormat === '2v2' &&
+              !window.isSpectator && !window.isMobileSpectator) {
             window.teamsMode.tick2v2(performance.now());
           }
           // In multiplayer, ALL players send head + hand transforms for full body sync
@@ -3121,6 +3208,32 @@
                 var _bbs = arenaBots._blueBotState.currentPos;
                 _abState.bbd = { x: _bbs.x, y: _bbs.y, z: _bbs.z };
               }
+            }
+            // 2v2: include extra bots and balls
+            if (window.matchFormat === '2v2' && window.teamsMode) {
+              var _bot2El = document.getElementById('bot2');
+              if (_bot2El) {
+                var _b2p = _bot2El.object3D.position;
+                _abState.rbd2 = { x: _b2p.x, y: _b2p.y, z: _b2p.z };
+              }
+              var _btState = window.teamsMode.getBlueTeammateState();
+              if (_btState) {
+                var _btp = _btState.currentPos;
+                _abState.bbd2 = { x: _btp.x, y: _btp.y, z: _btp.z };
+              }
+              var _rb2El = document.getElementById('ball-player1b') ||
+                           document.querySelector('[simple-grab="player: player1b"]');
+              if (_rb2El) {
+                var _rb2p = _rb2El.object3D.position;
+                _abState.rb2 = { x: _rb2p.x, y: _rb2p.y, z: _rb2p.z };
+              }
+              var _bb2El = document.getElementById('ball-player2b') ||
+                           document.querySelector('[simple-grab="player: player2b"]');
+              if (_bb2El) {
+                var _bb2p = _bb2El.object3D.position;
+                _abState.bb2 = { x: _bb2p.x, y: _bb2p.y, z: _bb2p.z };
+              }
+              _abState.is2v2 = true;
             }
             for (var _abi = 0; _abi < connections.length; _abi++) {
               if (connections[_abi].conn.open) {
