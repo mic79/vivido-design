@@ -97,6 +97,35 @@
         color: #ffcc00;
         min-height: 1.5em;
       }
+      #mobile-lobby-screen .preview-btn {
+        padding: 10px 32px;
+        border: 2px solid #555;
+        border-radius: 10px;
+        background: transparent;
+        color: #999;
+        font-size: 0.9em;
+        cursor: pointer;
+        touch-action: manipulation;
+        margin-top: 1.2em;
+      }
+      #mobile-lobby-screen .preview-btn:active { background: rgba(255,255,255,0.08); }
+      #mobile-preview-exit {
+        display: none;
+        position: absolute;
+        bottom: 12px;
+        right: 16px;
+        padding: 8px 20px;
+        border: 1px solid #555;
+        border-radius: 8px;
+        background: rgba(0,0,0,0.6);
+        color: #aaa;
+        font-size: 0.85em;
+        cursor: pointer;
+        touch-action: manipulation;
+        pointer-events: auto !important;
+      }
+      body.offline-preview #mobile-preview-exit { display: block; }
+      #mobile-preview-exit:active { background: rgba(255,255,255,0.12); }
 
       /* Match HUD (shown during spectating) */
       #mobile-match-hud {
@@ -2687,6 +2716,11 @@
             s.isHit = true;
             s.lastHitTime = time;
             resetStage('player1');
+            if (window.offlinePreview) {
+              var _gmEl = document.querySelector('#game-manager');
+              var _gmc = _gmEl && _gmEl.components['game-manager'];
+              if (_gmc) { _gmc.botScore += 1; _gmc.updateScore(); }
+            }
             grab.isReturning = true;
             grab.returningStartTime = Date.now();
             grab.returningGraceUntil = Date.now() + 2000;
@@ -8878,6 +8912,7 @@
           <button class="lobby-num-btn" id="mobile-lobby-plus">+</button>
         </div>
         <button class="watch-btn" id="mobile-watch-btn">WATCH</button>
+        <button class="preview-btn" id="mobile-preview-btn">OFFLINE PREVIEW</button>
         <div class="status-msg" id="mobile-status-msg"></div>
       </div>
       <div id="mobile-match-hud">
@@ -8896,6 +8931,7 @@
         </div>
         <div id="mobile-hud-timer"></div>
         <div id="mobile-hud-status">Waiting for match...</div>
+        <button id="mobile-preview-exit">EXIT PREVIEW</button>
       </div>
     </div>
 
@@ -8941,7 +8977,57 @@
           }
         });
 
-        // Register mobile spectator camera component
+        // Offline Preview: 2 bots play against each other locally
+        document.getElementById('mobile-preview-btn').addEventListener('click', function() {
+          window.offlinePreview = true;
+          document.body.classList.add('offline-preview');
+
+          var lobbyScreen = document.getElementById('mobile-lobby-screen');
+          var matchHud = document.getElementById('mobile-match-hud');
+          if (lobbyScreen) lobbyScreen.style.display = 'none';
+          if (matchHud) matchHud.classList.add('active');
+
+          var redName = document.getElementById('mobile-red-name');
+          var blueName = document.getElementById('mobile-blue-name');
+          if (redName) redName.textContent = 'Red Bot';
+          if (blueName) blueName.textContent = 'Blue Bot';
+
+          var hudStatus = document.getElementById('mobile-hud-status');
+          if (hudStatus) hudStatus.textContent = 'Offline Preview \u2014 swipe to orbit camera';
+
+          // Make in-scene score/timer visible for atmosphere
+          var scoreDisplay = document.getElementById('score-display');
+          var timerDisplay = document.getElementById('timer-display');
+          if (scoreDisplay) scoreDisplay.setAttribute('visible', true);
+          if (timerDisplay) timerDisplay.setAttribute('visible', true);
+
+          // Enable arena bots (both red and blue playing against each other)
+          if (window.arenaBots) {
+            window.arenaBots.enable();
+          }
+
+          // Running timer display on the mobile HUD
+          var previewStart = Date.now();
+          setInterval(function() {
+            var elapsed = Math.floor((Date.now() - previewStart) / 1000);
+            var min = Math.floor(elapsed / 60);
+            var sec = elapsed % 60;
+            var timerEl = document.getElementById('mobile-hud-timer');
+            if (timerEl) timerEl.textContent = min + ':' + (sec < 10 ? '0' : '') + sec;
+          }, 1000);
+
+          // Resume audio context for ball sounds
+          var scene = document.querySelector('a-scene');
+          if (scene && scene.audioContext && scene.audioContext.state === 'suspended') {
+            scene.audioContext.resume();
+          }
+        });
+
+        document.getElementById('mobile-preview-exit').addEventListener('click', function() {
+          location.reload();
+        });
+
+        // Register mobile spectator camera component (with orbit controls)
         AFRAME.registerComponent('mobile-spectator-cam', {
           init: function() {
             if (!window.isMobileSpectator) return;
@@ -8950,6 +9036,22 @@
             // Hide the VR button immediately via DOM
             var vrBtn = document.querySelector('.a-enter-vr');
             if (vrBtn) vrBtn.style.display = 'none';
+
+            // Orbit camera state: camera orbits the arena center at a fixed radius/height
+            // Default angle π/2 (90°) = side view. Range ±45° (π/4 to 3π/4).
+            this._orbitRadius = 10;
+            this._orbitHeight = 2.5;
+            this._orbitAngle = Math.PI / 2;
+            this._orbitTargetAngle = Math.PI / 2;
+            this._orbitMinAngle = Math.PI / 4;
+            this._orbitMaxAngle = 3 * Math.PI / 4;
+            this._touchStartX = 0;
+            this._touchStartAngle = 0;
+            this._isTouching = false;
+            this._orbitReady = false;
+            this._playerEl = null;
+            this._rigEl = null;
+            this._lastScoreSync = '';
 
             // Set up camera once scene is fully loaded
             if (this.el.hasLoaded) {
@@ -8972,15 +9074,20 @@
               cam.setAttribute('camera', 'fov', 50);
             }
 
-            // Position camera at side of arena using object3D for reliability
-            var player = document.getElementById('player');
-            if (player) {
-              player.object3D.position.set(10, 2.5, 0);
+            // Cache references for tick performance
+            this._playerEl = document.getElementById('player');
+            this._rigEl = document.getElementById('rig');
+
+            // Position camera at side of arena (default orbit angle = π/2 = side view)
+            if (this._playerEl) {
+              this._playerEl.object3D.position.set(
+                this._orbitRadius * Math.sin(this._orbitAngle),
+                this._orbitHeight,
+                this._orbitRadius * Math.cos(this._orbitAngle)
+              );
             }
-            var rig = document.getElementById('rig');
-            if (rig) {
-              // 90° around Y = face toward -X (toward the arena center)
-              rig.object3D.rotation.set(0, Math.PI / 2, 0);
+            if (this._rigEl) {
+              this._rigEl.object3D.rotation.set(0, this._orbitAngle, 0);
             }
 
             // Hide VR controllers
@@ -9014,10 +9121,80 @@
             this.el.appendChild(ambientLight);
 
             // Disable advanced-bot AI on mobile — bot positions come from the host
+            // (re-enabled later if offline preview is started)
             var botEl = document.querySelector('[advanced-bot]');
             if (botEl) botEl.setAttribute('advanced-bot', 'enabled', false);
 
-            console.log('[MOBILE SPECTATOR] Camera set to side view at (10, 2.5, 0) facing -X');
+            // Set up touch-based orbit controls
+            this.setupOrbitControls();
+
+            console.log('[MOBILE SPECTATOR] Camera set to side view with orbit controls (±45°)');
+          },
+
+          setupOrbitControls: function() {
+            var self = this;
+            var sensitivity = (Math.PI / 2) / window.innerWidth;
+
+            document.addEventListener('touchstart', function(e) {
+              if (!window.isMobileSpectator) return;
+              if (e.target.tagName === 'BUTTON' || e.target.closest('#mobile-lobby-screen')) return;
+              if (e.touches.length !== 1) return;
+              self._touchStartX = e.touches[0].clientX;
+              self._touchStartAngle = self._orbitTargetAngle;
+              self._isTouching = true;
+            }, { passive: true });
+
+            document.addEventListener('touchmove', function(e) {
+              if (!self._isTouching) return;
+              var deltaX = e.touches[0].clientX - self._touchStartX;
+              var newAngle = self._touchStartAngle - deltaX * sensitivity;
+              self._orbitTargetAngle = Math.max(self._orbitMinAngle, Math.min(self._orbitMaxAngle, newAngle));
+              e.preventDefault();
+            }, { passive: false });
+
+            document.addEventListener('touchend', function() {
+              self._isTouching = false;
+            }, { passive: true });
+
+            this._orbitReady = true;
+          },
+
+          tick: function() {
+            if (!window.isMobileSpectator || !this._orbitReady) return;
+
+            // Tick arena bots locally in offline preview mode
+            if (window.offlinePreview && window.arenaBots && window.arenaBots.enabled) {
+              window.arenaBots.tick(performance.now());
+            }
+
+            // Sync game-manager scores to mobile HUD in offline preview
+            if (window.offlinePreview) {
+              var _gmEl = document.querySelector('#game-manager');
+              var _gmc = _gmEl && _gmEl.components['game-manager'];
+              if (_gmc) {
+                var key = _gmc.playerScore + '-' + _gmc.botScore;
+                if (key !== this._lastScoreSync) {
+                  this._lastScoreSync = key;
+                  var bsEl = document.getElementById('mobile-blue-score');
+                  var rsEl = document.getElementById('mobile-red-score');
+                  if (bsEl) bsEl.textContent = _gmc.playerScore.toString();
+                  if (rsEl) rsEl.textContent = _gmc.botScore.toString();
+                }
+              }
+            }
+
+            // Smooth orbit interpolation
+            var diff = this._orbitTargetAngle - this._orbitAngle;
+            if (Math.abs(diff) < 0.0005) return;
+            this._orbitAngle += diff * 0.12;
+
+            if (!this._playerEl || !this._rigEl) return;
+            this._playerEl.object3D.position.set(
+              this._orbitRadius * Math.sin(this._orbitAngle),
+              this._orbitHeight,
+              this._orbitRadius * Math.cos(this._orbitAngle)
+            );
+            this._rigEl.object3D.rotation.set(0, this._orbitAngle, 0);
           }
         });
       })();
