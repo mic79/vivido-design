@@ -9420,73 +9420,72 @@
       <a-entity position="0 0.05 6" player-zone="player: player2; radius: 1">
       </a-entity>
 
-      <!-- Boundary lines at 4m from back wall -->
-      <!-- Floor lines -->
+      <!-- === RED SIDE (z < 0) === -->
+      <!-- Red rear boundary floor lines (z=-4 to z=-8) -->
       <a-entity position="0 0.05 -4">
-        <!-- Front line -->
-        <a-box position="0 0 0" width="4" height="0.001" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Back line -->
-        <a-box position="0 0 -4" width="4" height="0.001" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Left line -->
-        <a-box position="-2 0 -2" width="0.001" height="0.001" depth="4" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Right line -->
-        <a-box position="2 0 -2" width="0.001" height="0.001" depth="4" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
+        <a-box position="0 0 0" width="4" height="0.001" depth="0.001" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="0 0 -4" width="4" height="0.001" depth="0.001" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="-2 0 -2" width="0.001" height="0.001" depth="4" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="2 0 -2" width="0.001" height="0.001" depth="4" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
       </a-entity>
 
-      <!-- Wall lines -->
+      <!-- Red rear boundary wall verticals (z=-4 and z=-8) -->
       <a-entity position="0 2 -4">
-        <!-- Left wall vertical lines -->
-        <a-box position="-1.95 0 0" width="0.001" height="4" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <a-box position="-1.95 0 -4" width="0.001" height="4" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Right wall vertical lines -->
-        <a-box position="1.95 0 0" width="0.001" height="4" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <a-box position="1.95 0 -4" width="0.001" height="4" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
+        <a-box position="-2 0 0" width="0.001" height="4" depth="0.001" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="-2 0 -4" width="0.001" height="4" depth="0.001" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="2 0 0" width="0.001" height="4" depth="0.001" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="2 0 -4" width="0.001" height="4" depth="0.001" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
       </a-entity>
 
-      <!-- Ceiling lines -->
+      <!-- Red rear boundary ceiling lines (z=-4 to z=-8) -->
       <a-entity position="0 3.95 -4">
-        <!-- Front line -->
-        <a-box position="0 0 0" width="4" height="0.001" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Back line -->
-        <a-box position="0 0 -4" width="4" height="0.001" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Left line -->
-        <a-box position="-2 0 -2" width="0.001" height="0.001" depth="4" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Right line -->
-        <a-box position="2 0 -2" width="0.001" height="0.001" depth="4" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
+        <a-box position="0 0 0" width="4" height="0.001" depth="0.001" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="0 0 -4" width="4" height="0.001" depth="0.001" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="-2 0 -2" width="0.001" height="0.001" depth="4" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="2 0 -2" width="0.001" height="0.001" depth="4" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
       </a-entity>
 
-      <!-- Add a second boundary at 4m from front wall -->
+      <!-- Red middle zone side lines (z=-4 to z=0) -->
+      <a-box position="-2 0.05 -2" width="0.001" height="0.001" depth="4" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="2 0.05 -2" width="0.001" height="0.001" depth="4" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="-2 3.95 -2" width="0.001" height="0.001" depth="4" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="2 3.95 -2" width="0.001" height="0.001" depth="4" color="#882222" material="shader: standard; emissive: #ff4444; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+
+      <!-- === CENTER LINE (z=0) — white === -->
+      <a-box position="0 0.05 0" width="4" height="0.001" depth="0.001" color="#888888" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="0 3.95 0" width="4" height="0.001" depth="0.001" color="#888888" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="-2 2 0" width="0.001" height="4" depth="0.001" color="#888888" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="2 2 0" width="0.001" height="4" depth="0.001" color="#888888" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+
+      <!-- === BLUE SIDE (z > 0) === -->
+      <!-- Blue middle zone side lines (z=0 to z=+4) -->
+      <a-box position="-2 0.05 2" width="0.001" height="0.001" depth="4" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="2 0.05 2" width="0.001" height="0.001" depth="4" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="-2 3.95 2" width="0.001" height="0.001" depth="4" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+      <a-box position="2 3.95 2" width="0.001" height="0.001" depth="4" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+
+      <!-- Blue front boundary floor lines (z=4 to z=8) -->
       <a-entity position="0 0.05 4">
-        <!-- Front line -->
-        <a-box position="0 0 0" width="4" height="0.001" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Back line -->
-        <a-box position="0 0 -4" width="4" height="0.001" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Left line -->
-        <a-box position="-2 0 -2" width="0.001" height="0.001" depth="4" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Right line -->
-        <a-box position="2 0 -2" width="0.001" height="0.001" depth="4" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
+        <a-box position="0 0 0" width="4" height="0.001" depth="0.001" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="0 0 4" width="4" height="0.001" depth="0.001" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="-2 0 2" width="0.001" height="0.001" depth="4" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="2 0 2" width="0.001" height="0.001" depth="4" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
       </a-entity>
 
-      <!-- Wall lines for front boundary -->
+      <!-- Blue front boundary wall verticals (z=4 and z=8) -->
       <a-entity position="0 2 4">
-        <!-- Left wall vertical lines -->
-        <a-box position="-1.95 0 0" width="0.001" height="4" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <a-box position="-1.95 0 -4" width="0.001" height="4" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Right wall vertical lines -->
-        <a-box position="1.95 0 0" width="0.001" height="4" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <a-box position="1.95 0 -4" width="0.001" height="4" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
+        <a-box position="-2 0 0" width="0.001" height="4" depth="0.001" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="-2 0 4" width="0.001" height="4" depth="0.001" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="2 0 0" width="0.001" height="4" depth="0.001" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="2 0 4" width="0.001" height="4" depth="0.001" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
       </a-entity>
 
-      <!-- Ceiling lines for front boundary -->
+      <!-- Blue front boundary ceiling lines (z=4 to z=8) -->
       <a-entity position="0 3.95 4">
-        <!-- Front line -->
-        <a-box position="0 0 0" width="4" height="0.001" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Back line -->
-        <a-box position="0 0 -4" width="4" height="0.001" depth="0.001" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Left line -->
-        <a-box position="-2 0 -2" width="0.001" height="0.001" depth="4" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 0; metalness: 1; roughness: 0; opacity: 1"></a-box>
-        <!-- Right line -->
-        <a-box position="2 0 -2" width="0.001" height="0.001" depth="4" color="#ffffff" material="shader: standard; emissive: #ffffff; emissiveIntensity: 1.5; metalness: 0; roughness: 0; opacity: 0.5"></a-box>
+        <a-box position="0 0 0" width="4" height="0.001" depth="0.001" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="0 0 4" width="4" height="0.001" depth="0.001" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="-2 0 2" width="0.001" height="0.001" depth="4" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
+        <a-box position="2 0 2" width="0.001" height="0.001" depth="4" color="#224488" material="shader: standard; emissive: #4488ff; emissiveIntensity: 0.3; metalness: 0; roughness: 0; opacity: 1"></a-box>
       </a-entity>
 
       <!-- Add game manager entity with score display -->
