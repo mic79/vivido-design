@@ -9038,13 +9038,13 @@
             if (vrBtn) vrBtn.style.display = 'none';
 
             // Orbit camera state: camera orbits the arena center at a fixed radius/height
-            // Default angle π/2 (90°) = side view. Range ±45° (π/4 to 3π/4).
+            // Default angle π/2 (90°) = side view. Range ±90° (0 to π).
             this._orbitRadius = 10;
             this._orbitHeight = 2.5;
             this._orbitAngle = Math.PI / 2;
             this._orbitTargetAngle = Math.PI / 2;
-            this._orbitMinAngle = Math.PI / 4;
-            this._orbitMaxAngle = 3 * Math.PI / 4;
+            this._orbitMinAngle = 0;
+            this._orbitMaxAngle = Math.PI;
             this._touchStartX = 0;
             this._touchStartAngle = 0;
             this._isTouching = false;
@@ -9128,12 +9128,12 @@
             // Set up touch-based orbit controls
             this.setupOrbitControls();
 
-            console.log('[MOBILE SPECTATOR] Camera set to side view with orbit controls (±45°)');
+            console.log('[MOBILE SPECTATOR] Camera set to side view with orbit controls (±90°)');
           },
 
           setupOrbitControls: function() {
             var self = this;
-            var sensitivity = (Math.PI / 2) / window.innerWidth;
+            var sensitivity = Math.PI / window.innerWidth;
 
             document.addEventListener('touchstart', function(e) {
               if (!window.isMobileSpectator) return;
@@ -9259,26 +9259,26 @@
              class="collidable">
       </a-box>
       
-      <!-- Back wall -->
+      <!-- Back wall (glass - transparent so spectators can see in) -->
       <a-box position="0 2 -8" 
              width="4" 
              height="4" 
              depth="0.1" 
-             color="#808080"
-             material="shader: standard; metalness: 0; roughness: 1"
+             color="#aaccff"
+             material="shader: standard; metalness: 0.3; roughness: 0; transparent: true; opacity: 0.15; side: double; depthWrite: false"
              static-physics
              obb-collider
              honeycomb-shield
              class="collidable">
       </a-box>
       
-      <!-- Front wall -->
+      <!-- Front wall (glass - transparent so spectators can see in) -->
       <a-box position="0 2 8" 
              width="4" 
              height="4" 
              depth="0.1" 
-             color="#808080"
-             material="shader: standard; metalness: 0; roughness: 1"
+             color="#aaccff"
+             material="shader: standard; metalness: 0.3; roughness: 0; transparent: true; opacity: 0.15; side: double; depthWrite: false"
              static-physics
              obb-collider
              honeycomb-shield
