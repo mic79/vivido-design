@@ -227,6 +227,29 @@
       window.botMirrorMode = false;
       window.botRecordedMode = false;
 
+      // Keep screen awake during spectating (shared by online and offline modes)
+      window._wakeLock = null;
+      window._wakeLockSetup = false;
+      function requestWakeLock() {
+        if (!('wakeLock' in navigator) || window._wakeLockSetup) return;
+        window._wakeLockSetup = true;
+        function acquire() {
+          if (window._wakeLock) return;
+          navigator.wakeLock.request('screen').then(function(lock) {
+            window._wakeLock = lock;
+            lock.addEventListener('release', function() { window._wakeLock = null; });
+          }).catch(function() {});
+        }
+        acquire();
+        document.addEventListener('visibilitychange', function() {
+          if (document.visibilityState === 'visible') acquire();
+        });
+        // Periodic fallback: re-acquire every 60s in case it was silently dropped
+        setInterval(function() {
+          if (document.visibilityState === 'visible') acquire();
+        }, 60000);
+      }
+
       // Mobile spectator detection
       window.isMobileSpectator = false;
       function isMobileDevice() {
@@ -986,21 +1009,7 @@
             if (_hudSt) _hudSt.textContent = 'Watching lobby ' + _mobileSpectatorLobbyNum;
 
             // Prevent screen from sleeping while spectating
-            if ('wakeLock' in navigator && !window._wakeLockSetup) {
-              window._wakeLockSetup = true;
-              navigator.wakeLock.request('screen').then(function(lock) {
-                window._wakeLock = lock;
-                lock.addEventListener('release', function() { window._wakeLock = null; });
-              }).catch(function() {});
-              document.addEventListener('visibilitychange', function() {
-                if (document.visibilityState === 'visible' && !window._wakeLock) {
-                  navigator.wakeLock.request('screen').then(function(lock) {
-                    window._wakeLock = lock;
-                    lock.addEventListener('release', function() { window._wakeLock = null; });
-                  }).catch(function() {});
-                }
-              });
-            }
+            requestWakeLock();
 
             // Switch from lobby screen to match HUD
             var lobbyScreen = document.getElementById('mobile-lobby-screen');
@@ -9136,6 +9145,9 @@
           if (scene && scene.audioContext && scene.audioContext.state === 'suspended') {
             scene.audioContext.resume();
           }
+
+          // Prevent screen from sleeping during offline preview
+          requestWakeLock();
         });
 
         document.getElementById('mobile-preview-exit').addEventListener('click', function() {
