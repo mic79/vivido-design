@@ -365,17 +365,18 @@
 
                 let angle = FREST;
                 let currentAngle = FREST;
+                const _localQ = new CANNON.Quaternion();
+                const _finalQ = new CANNON.Quaternion();
+                const _localAV = new CANNON.Vec3();
+                const sign = isLeft ? 1 : -1;
 
                 function setAngle(a, av) {
                     currentAngle = a;
-                    const localQ = new CANNON.Quaternion();
-                    localQ.setFromEuler(0, isLeft ? a : -a, 0);
-                    const finalQ = new CANNON.Quaternion();
-                    pfBody.quaternion.mult(localQ, finalQ);
-                    fb.quaternion.copy(finalQ);
-                    const sign = isLeft ? 1 : -1;
-                    const localAV = new CANNON.Vec3(0, sign * (av || 0), 0);
-                    pfBody.quaternion.vmult(localAV, fb.angularVelocity);
+                    _localQ.setFromEuler(0, isLeft ? a : -a, 0);
+                    pfBody.quaternion.mult(_localQ, _finalQ);
+                    fb.quaternion.copy(_finalQ);
+                    _localAV.set(0, sign * (av || 0), 0);
+                    pfBody.quaternion.vmult(_localAV, fb.angularVelocity);
                 }
                 setAngle(FREST, 0);
 
@@ -414,15 +415,14 @@
             bb.ccdIterations = 20;
             world.addBody(bb);
 
-            // Convert world pos to playfield-local coords
+            const _w2lOff = new CANNON.Vec3();
+            const _w2lIq = new CANNON.Quaternion();
+            const _w2lLp = new CANNON.Vec3();
             function w2l(wp) {
-                const off = new CANNON.Vec3();
-                wp.vsub(pfBody.position, off);
-                const iq = new CANNON.Quaternion();
-                pfBody.quaternion.conjugate(iq);
-                const lp = new CANNON.Vec3();
-                iq.vmult(off, lp);
-                return lp;
+                wp.vsub(pfBody.position, _w2lOff);
+                pfBody.quaternion.conjugate(_w2lIq);
+                _w2lIq.vmult(_w2lOff, _w2lLp);
+                return _w2lLp;
             }
 
             // Check if ball is in the shooter lane area
@@ -439,15 +439,14 @@
                 bb.quaternion.set(0, 0, 0, 1);
                 ballIn = true; ballShot = false;
             }
+            const _launchLocal = new CANNON.Vec3();
+            const _launchWorld = new CANNON.Vec3();
             function launch(charge) {
-                // Allow re-launch if ball is back in the lane
                 if (ballShot && !ballInLane()) return;
                 ballShot = true;
-                const vel = -LAUNCH_VEL * Math.max(0.15, charge);
-                const localVel = new CANNON.Vec3(0, 0, vel);
-                const worldVel = new CANNON.Vec3();
-                pfBody.quaternion.vmult(localVel, worldVel);
-                bb.velocity.copy(worldVel);
+                _launchLocal.set(0, 0, -LAUNCH_VEL * Math.max(0.15, charge));
+                pfBody.quaternion.vmult(_launchLocal, _launchWorld);
+                bb.velocity.copy(_launchWorld);
             }
 
             // ============================================================
@@ -455,6 +454,7 @@
             // ============================================================
             const bumps = [{ x: -2 * S, z: -6 * S }, { x: 2 * S, z: -6 * S }, { x: 0, z: -4 * S }];
             const bumpMeshArr = [];
+            const _bumpD = new CANNON.Vec3();
             bumps.forEach((bp, i) => {
                 const b = new CANNON.Body({ mass: 0, material: matBump });
                 b.addShape(new CANNON.Cylinder(BUMR, BUMR, BUMH, 12));
@@ -463,13 +463,12 @@
                 world.addBody(b);
                 b.addEventListener('collide', e => {
                     if (e.body === bb) {
-                        const d = new CANNON.Vec3();
-                        bb.position.vsub(b.position, d);
-                        d.y = 0;
-                        d.normalize();
-                        d.scale(BUM_VEL, d);
-                        bb.velocity.x = d.x;
-                        bb.velocity.z = d.z;
+                        bb.position.vsub(b.position, _bumpD);
+                        _bumpD.y = 0;
+                        _bumpD.normalize();
+                        _bumpD.scale(BUM_VEL, _bumpD);
+                        bb.velocity.x = _bumpD.x;
+                        bb.velocity.z = _bumpD.z;
                         score += 100; updScore();
                         if (bumpMeshArr[i]) { bumpMeshArr[i].material.emissiveIntensity = 4; setTimeout(() => bumpMeshArr[i].material.emissiveIntensity = 1.2, 150); }
                     }
@@ -481,9 +480,7 @@
             // ============================================================
             function checkDrain() {
                 if (bb.position.y < TH - 0.5) { drain(); return; }
-                const off = new CANNON.Vec3(); bb.position.vsub(pfBody.position, off);
-                const iq = new CANNON.Quaternion(); pfBody.quaternion.conjugate(iq);
-                const lp = new CANNON.Vec3(); iq.vmult(off, lp);
+                const lp = w2l(bb.position);
                 if (lp.z > TL / 2 + 0.05) drain();
             }
             function drain() {
@@ -512,7 +509,7 @@
             ren.setPixelRatio(Math.min(devicePixelRatio, 2));
             ren.setSize(innerWidth, innerHeight);
             ren.shadowMap.enabled = true;
-            ren.shadowMap.type = THREE.PCFSoftShadowMap;
+            ren.shadowMap.type = THREE.PCFShadowMap;
             ren.toneMapping = THREE.ACESFilmicToneMapping;
             ren.toneMappingExposure = 1.4;
             ren.xr.enabled = true;
@@ -867,7 +864,7 @@
                     plFill.style.height = (ch * 100) + '%';
                     plM.position.z = TL / 2 + 0.01 + ch * 0.03;
 
-                    world.step(FIXED_DT, dt, 25);
+                    world.step(FIXED_DT, dt, 10);
                     if (ballIn) checkDrain();
 
                     // Auto-reset ballShot when ball settles in the lane
