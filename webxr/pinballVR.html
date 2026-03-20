@@ -797,6 +797,12 @@
                 dirL.shadow.mapSize.set(512, 512);
                 dirL.shadow.map?.dispose(); dirL.shadow.map = null;
                 ren.xr.setSession(s);
+                if (s.supportedFrameRates && s.supportedFrameRates.length && s.updateTargetFrameRate) {
+                    const best = Array.from(s.supportedFrameRates).sort((a, b) => b - a)[0];
+                    s.updateTargetFrameRate(best)
+                        .then(() => console.log('VR frame rate set to', best, 'Hz'))
+                        .catch(e => console.warn('Could not set VR frame rate:', e));
+                }
                 s.addEventListener('end', () => {
                     vrSess = null; vrBtn.textContent = 'ENTER VR';
                     vrRig.position.set(0, 0, 0);
@@ -808,9 +814,6 @@
                 });
                 const c0 = ren.xr.getController(0), c1 = ren.xr.getController(1);
                 scene.add(c0); scene.add(c1);
-                const cg = new THREE.SphereGeometry(0.01, 8, 8);
-                c0.add(new THREE.Mesh(cg, new THREE.MeshBasicMaterial({ color: 0x00ccff })));
-                c1.add(new THREE.Mesh(cg, new THREE.MeshBasicMaterial({ color: 0xff0066 })));
                 c0.addEventListener('selectstart', () => { vrIn.lt = true; }); c0.addEventListener('selectend', () => { vrIn.lt = false; });
                 c1.addEventListener('selectstart', () => { vrIn.rt = true; }); c1.addEventListener('selectend', () => { vrIn.rt = false; });
                 c0.addEventListener('squeezestart', () => {
