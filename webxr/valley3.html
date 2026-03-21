@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Valley — Layered 360° Panorama</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    #loading {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; background: #0a0d14;
+      z-index: 100; color: #fff; font-family: 'Georgia', serif;
+      gap: 20px; transition: opacity 0.8s ease;
+    }
+    #loading h2 { font-size: 22px; font-weight: normal; letter-spacing: 0.3em; opacity: 0.9; }
+    #loading-bar-wrap { width: 260px; height: 2px; background: rgba(255,255,255,0.15); }
+    #loading-bar { height: 100%; background: #7ab8e8; width: 0%; transition: width 0.3s ease; }
+    #loading-label { font-size: 12px; letter-spacing: 0.2em; opacity: 0.5; }
+    #info {
+      position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+      color: rgba(255,255,255,0.55); font-family: 'Georgia', serif;
+      font-size: 12px; letter-spacing: 0.25em; z-index: 10; pointer-events: none;
+      text-align: center;
+    }
+    #vr-button {
+      position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
+      padding: 11px 32px; background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.3); color: rgba(255,255,255,0.8);
+      font-family: 'Georgia', serif; letter-spacing: 0.2em;
+      font-size: 12px; cursor: pointer; z-index: 10;
+      transition: all 0.25s ease; backdrop-filter: blur(8px);
+    }
+    #vr-button:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.7); color: #fff; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <h2>V A L L E Y</h2>
+  <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
+  <div id="loading-label">Rendering panoramic layers…</div>
+</div>
+
+<div id="info">VALLEY · Drag to look · WASD to move · VR: left stick to move</div>
+<button id="vr-button">ENTER VR</button>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ─── RENDERER ────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 8000);
+const cameraRig = new THREE.Group();
+cameraRig.add(camera);
+scene.add(cameraRig);
+
+// ─── KEYBOARD STATE ──────────────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup',   e => keys[e.code] = false);
+
+// ─── MOUSE / TOUCH LOOK ──────────────────────────────────────────────────────
+let isDragging = false, prevX = 0, prevY = 0, yaw = 0, pitch = 0;
+const dom = renderer.domElement;
+dom.addEventListener('mousedown', e => { isDragging = true; prevX = e.clientX; prevY = e.clientY; });
+dom.addEventListener('mouseup', () => isDragging = false);
+dom.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  yaw -= (e.clientX - prevX) * 0.003; pitch -= (e.clientY - prevY) * 0.003;
+  pitch = Math.max(-1.3, Math.min(1.3, pitch));
+  prevX = e.clientX; prevY = e.clientY;
+});
+dom.addEventListener('touchstart', e => { isDragging = true; prevX = e.touches[0].clientX; prevY = e.touches[0].clientY; });
+dom.addEventListener('touchend', () => isDragging = false);
+dom.addEventListener('touchmove', e => {
+  if (!isDragging) return;
+  yaw -= (e.touches[0].clientX - prevX) * 0.003; pitch -= (e.touches[0].clientY - prevY) * 0.003;
+  pitch = Math.max(-1.3, Math.min(1.3, pitch));
+  prevX = e.touches[0].clientX; prevY = e.touches[0].clientY;
+});
+
+// ─── LOADING UI ───────────────────────────────────────────────────────────────
+function setProgress(pct, label) {
+  document.getElementById('loading-bar').style.width = pct + '%';
+  document.getElementById('loading-label').textContent = label;
+}
+
+// ─── NOISE UTILITY ────────────────────────────────────────────────────────────
+function noise(x, y, seed = 0) {
+  const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+  x -= Math.floor(x); y -= Math.floor(y);
+  const u = x*x*x*(x*(x*6-15)+10), v = y*y*y*(y*(y*6-15)+10);
+  const h = (X*374761393 + Y*668265263 + seed*1234577) & 0xffffffff;
+  const a = ((h^(h>>13))*1274126177)&0xffffffff;
+  const b = (((h+1)*374761393)^((h+1)>>13)*1274126177)&0xffffffff;
+  const c = (((h+256)*374761393)^((h+256)>>13)*1274126177)&0xffffffff;
+  const d = (((h+257)*374761393)^((h+257)>>13)*1274126177)&0xffffffff;
+  const lerp=(a,b,t)=>a+t*(b-a);
+  return lerp(lerp((a&255)/255,(b&255)/255,u),lerp((c&255)/255,(d&255)/255,u),v);
+}
+function fbm(x, y, oct=6, seed=0) {
+  let v=0,a=0.5,f=1;
+  for(let i=0;i<oct;i++){v+=a*noise(x*f,y*f,seed+i*37);a*=0.5;f*=2.1;}
+  return v;
+}
+
+// ─── TEXTURE GENERATORS ──────────────────────────────────────────────────────
+
+function makeProgressively(fn, W, H, label, pctStart, pctEnd) {
+  return new Promise(resolve => {
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    setProgress(pctStart, label);
+    setTimeout(() => {
+      fn(ctx, W, H);
+      setProgress(pctEnd, label + ' ✓');
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      resolve(tex);
+    }, 30);
+  });
+}
+
+// ── SHELL 2: MID VALLEY ───────────────────────────────────────────────────────
+function drawMidValley(ctx, W, H) {
+  ctx.clearRect(0, 0, W, H);
+  const horizon = H * 0.62;
+
+  // Ground — mossy valley floor
+  const gnd = ctx.createLinearGradient(0, horizon, 0, H);
+  gnd.addColorStop(0, 'rgba(28,52,22,0.0)');
+  gnd.addColorStop(0.04, 'rgba(30,58,24,0.88)');
+  gnd.addColorStop(0.3, 'rgba(22,44,18,0.96)');
+  gnd.addColorStop(1, 'rgba(14,28,12,0.99)');
+  ctx.fillStyle = gnd; ctx.fillRect(0, horizon, W, H - horizon);
+
+  // Soil noise texture on floor
+  for (let i = 0; i < 3000; i++) {
+    const tx = Math.random()*W, ty = horizon + Math.random()*(H-horizon);
+    const tn = fbm(tx*0.008, ty*0.008, 4, 99);
+    const tc = Math.floor(tn*30+10);
+    ctx.fillStyle = `rgba(${tc+8},${tc+15},${tc+4},0.25)`;
+    ctx.fillRect(tx, ty, 2, 1);
+  }
+
+  // Dense treeline — multiple depths
+  function drawTrees(count, yLine, hMin, hMax, colBase, alpha) {
+    for (let i = 0; i < count; i++) {
+      const tx = (i/count)*W + (fbm(i*0.17,1.0)-0.5)*W/count*2.5;
+      const th = hMin + fbm(i*0.23,2.0)*(hMax-hMin);
+      const tw = th*0.28;
+      const n = fbm(i*0.13,3)*0.3;
+      const [r,g,b] = colBase;
+      ctx.fillStyle = `rgba(${r+Math.floor(n*20)},${g+Math.floor(n*25)},${b+Math.floor(n*10)},${alpha})`;
+      // Pine tree silhouette
+      ctx.beginPath();
+      ctx.moveTo(tx, yLine);
+      ctx.lineTo(tx - tw*0.5, yLine);
+      ctx.lineTo(tx - tw*0.7, yLine - th*0.35);
+      ctx.lineTo(tx - tw*0.45, yLine - th*0.35);
+      ctx.lineTo(tx - tw*0.6, yLine - th*0.62);
+      ctx.lineTo(tx - tw*0.35, yLine - th*0.62);
+      ctx.lineTo(tx, yLine - th);
+      ctx.lineTo(tx + tw*0.35, yLine - th*0.62);
+      ctx.lineTo(tx + tw*0.6, yLine - th*0.62);
+      ctx.lineTo(tx + tw*0.45, yLine - th*0.35);
+      ctx.lineTo(tx + tw*0.7, yLine - th*0.35);
+      ctx.lineTo(tx + tw*0.5, yLine);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  drawTrees(90, horizon+12, 28, 58, [12,35,10], 0.90);
+  drawTrees(110, horizon+8, 20, 45, [15,42,12], 0.85);
+  drawTrees(70, horizon+18, 35, 70, [8,28,8], 0.95);
+
+  // River/lake — reflective water surface
+  const ry = H * 0.76, rh = H * 0.055;
+  const river = ctx.createLinearGradient(0, ry, 0, ry + rh);
+  river.addColorStop(0, 'rgba(40,80,140,0.75)');
+  river.addColorStop(0.4, 'rgba(55,110,170,0.65)');
+  river.addColorStop(1, 'rgba(30,60,110,0.45)');
+  ctx.fillStyle = river;
+  ctx.beginPath();
+  ctx.moveTo(W*0.08, ry+rh*0.2);
+  ctx.bezierCurveTo(W*0.25,ry-rh*0.3, W*0.45,ry+rh*0.1, W*0.55,ry);
+  ctx.bezierCurveTo(W*0.7,ry-rh*0.2, W*0.85,ry+rh*0.3, W*0.94,ry+rh*0.1);
+  ctx.lineTo(W*0.94, ry+rh);
+  ctx.bezierCurveTo(W*0.8,ry+rh*1.4, W*0.6,ry+rh*1.1, W*0.45,ry+rh*1.2);
+  ctx.bezierCurveTo(W*0.3,ry+rh*1.3, W*0.18,ry+rh*0.9, W*0.08,ry+rh*1.1);
+  ctx.closePath(); ctx.fill();
+
+  // Water shimmer highlights
+  ctx.strokeStyle = 'rgba(180,220,255,0.18)';
+  ctx.lineWidth = 1;
+  for (let r = 0; r < 22; r++) {
+    const lx = W*0.1 + Math.random()*W*0.82;
+    const ly = ry + Math.random()*rh;
+    ctx.beginPath();
+    ctx.moveTo(lx, ly); ctx.lineTo(lx + 15 + Math.random()*40, ly + 1);
+    ctx.stroke();
+  }
+
+  // Mist in valley floor
+  for (let m = 0; m < 6; m++) {
+    const mx = Math.random()*W, my = horizon + (H-horizon)*0.15 + Math.random()*(H-horizon)*0.25;
+    const mw = 200+Math.random()*400, mh2 = 15+Math.random()*30;
+    const mg = ctx.createRadialGradient(mx,my,0,mx,my,mw*0.5);
+    mg.addColorStop(0,'rgba(200,215,230,0.12)');
+    mg.addColorStop(1,'rgba(200,215,230,0)');
+    ctx.fillStyle = mg;
+    ctx.beginPath(); ctx.ellipse(mx,my,mw*0.5,mh2,0,0,Math.PI*2); ctx.fill();
+  }
+}
+
+// ── SHELL 1: NEAR CLIFFS ──────────────────────────────────────────────────────
+function drawNearCliffs(ctx, W, H) {
+  ctx.clearRect(0, 0, W, H);
+  const horizon = H * 0.58;
+
+  // Helper: rocky cliff face with texture
+  function drawCliffFace(x, y, w, h, seed, dark) {
+    // Base cliff gradient
+    const cg = ctx.createLinearGradient(x, y, x+w, y+h);
+    const r = dark ? 55 : 75, g = dark ? 50 : 65, b = dark ? 40 : 55;
+    cg.addColorStop(0, `rgba(${r+10},${g+8},${b+5},0.0)`);
+    cg.addColorStop(0.08, `rgba(${r},${g},${b},0.92)`);
+    cg.addColorStop(0.5, `rgba(${r-8},${g-8},${b-6},0.96)`);
+    cg.addColorStop(1, `rgba(${r-15},${g-15},${b-12},0.98)`);
+    ctx.fillStyle = cg;
+    ctx.fillRect(x, y, w, h);
+    // Strata lines (horizontal rock layers)
+    for (let s = 0; s < 18; s++) {
+      const sy = y + (s/18)*h + fbm(s*0.5,seed)*h*0.04;
+      const sa = 0.04 + fbm(s*0.3,seed+1)*0.09;
+      const sc = dark ? 30 : 50;
+      ctx.strokeStyle = `rgba(${sc+20},${sc+15},${sc+10},${sa})`;
+      ctx.lineWidth = 0.8 + fbm(s,seed+2)*2.5;
+      ctx.beginPath();
+      let px = x;
+      ctx.moveTo(px, sy);
+      while (px < x+w) {
+        px += 12 + Math.random()*20;
+        const dy = (fbm(px*0.004, sy*0.004, 3, seed)-0.5)*8;
+        ctx.lineTo(px, sy+dy);
+      }
+      ctx.stroke();
+    }
+    // Rock noise dots
+    for (let d = 0; d < 400; d++) {
+      const dx = x+Math.random()*w, dy = y+Math.random()*h;
+      const dn = fbm(dx*0.01,dy*0.01,3,seed+5);
+      const dc = Math.floor(dn*25);
+      ctx.fillStyle = `rgba(${dc+40},${dc+35},${dc+25},0.15)`;
+      ctx.fillRect(dx,dy,2,1);
+    }
+    // Moss/lichen patches
+    ctx.fillStyle = `rgba(40,60,25,0.18)`;
+    for (let l = 0; l < 12; l++) {
+      const lx=x+Math.random()*w, ly=y+Math.random()*h;
+      const lr=8+Math.random()*28;
+      ctx.beginPath(); ctx.arc(lx,ly,lr,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  // Left cliff wall
+  drawCliffFace(0, 0, W*0.24, H, 11, true);
+  // Left cliff overhang silhouette
+  ctx.fillStyle = 'rgba(35,30,22,0.97)';
+  ctx.beginPath();
+  ctx.moveTo(0, 0); ctx.lineTo(W*0.26, 0);
+  for (let x = W*0.26; x >= 0; x -= 6) {
+    const n = fbm(x*0.004, 0.3, 5, 7);
+    ctx.lineTo(x, horizon - n*H*0.22 - H*0.05);
+  }
+  ctx.closePath(); ctx.fill();
+
+  // Right cliff wall
+  drawCliffFace(W*0.76, 0, W*0.24, H, 21, true);
+  ctx.fillStyle = 'rgba(35,30,22,0.97)';
+  ctx.beginPath();
+  ctx.moveTo(W, 0); ctx.lineTo(W*0.74, 0);
+  for (let x = W*0.74; x <= W; x += 6) {
+    const n = fbm(x*0.004, 0.7, 5, 17);
+    ctx.lineTo(x, horizon - n*H*0.22 - H*0.05);
+  }
+  ctx.closePath(); ctx.fill();
+
+  // ── WATERFALL LEFT ─────────────────────────────────────────────────────────
+  // Carved channel in the cliff
+  const wfX = W*0.155, wfW = W*0.038, wfTop = H*0.02, wfBot = H*0.50;
+
+  // Dark channel behind water
+  ctx.fillStyle = 'rgba(20,25,35,0.85)';
+  ctx.fillRect(wfX - wfW*0.55, wfTop, wfW*1.1, wfBot-wfTop);
+
+  // Main water column — multi-layered
+  const wg1 = ctx.createLinearGradient(wfX,wfTop,wfX,wfBot);
+  wg1.addColorStop(0,'rgba(220,238,255,0.98)');
+  wg1.addColorStop(0.2,'rgba(180,215,255,0.85)');
+  wg1.addColorStop(0.6,'rgba(140,190,240,0.70)');
+  wg1.addColorStop(0.85,'rgba(120,175,230,0.45)');
+  wg1.addColorStop(1,'rgba(100,160,220,0.15)');
+  ctx.fillStyle = wg1;
+  ctx.fillRect(wfX-wfW*0.38, wfTop, wfW*0.76, wfBot-wfTop);
+
+  // Side foam streaks
+  for (let s = 0; s < 7; s++) {
+    const sx = wfX - wfW*0.3 + s*wfW*0.1;
+    const sg = ctx.createLinearGradient(sx,wfTop,sx,wfBot);
+    sg.addColorStop(0,`rgba(255,255,255,${0.3+s*0.04})`);
+    sg.addColorStop(0.5,`rgba(200,230,255,${0.15+s*0.02})`);
+    sg.addColorStop(1,'rgba(150,200,240,0)');
+    ctx.fillStyle = sg;
+    ctx.fillRect(sx, wfTop, wfW*0.09, wfBot-wfTop);
+  }
+
+  // Splash pool at base
+  const spX = wfX, spY = wfBot;
+  const sp = ctx.createRadialGradient(spX,spY,0,spX,spY,wfW*3.5);
+  sp.addColorStop(0,'rgba(200,228,255,0.72)');
+  sp.addColorStop(0.3,'rgba(160,205,250,0.42)');
+  sp.addColorStop(0.7,'rgba(120,175,230,0.18)');
+  sp.addColorStop(1,'rgba(80,140,200,0)');
+  ctx.fillStyle = sp;
+  ctx.beginPath(); ctx.ellipse(spX,spY+wfW*0.8,wfW*3.2,wfW*1.1,0,0,Math.PI*2); ctx.fill();
+
+  // Mist spray
+  for (let m = 0; m < 40; m++) {
+    const mx = wfX + (Math.random()-0.5)*wfW*6;
+    const my = wfBot + Math.random()*wfW*2;
+    const mr = 4+Math.random()*16;
+    const ma = 0.04+Math.random()*0.1;
+    const mg2 = ctx.createRadialGradient(mx,my,0,mx,my,mr);
+    mg2.addColorStop(0,`rgba(220,235,255,${ma})`);
+    mg2.addColorStop(1,'rgba(220,235,255,0)');
+    ctx.fillStyle=mg2; ctx.beginPath(); ctx.arc(mx,my,mr,0,Math.PI*2); ctx.fill();
+  }
+
+  // ── WATERFALL RIGHT (smaller) ───────────────────────────────────────────────
+  const wf2X = W*0.845, wf2W = W*0.022, wf2Bot = H*0.46;
+  ctx.fillStyle='rgba(20,25,35,0.75)';
+  ctx.fillRect(wf2X-wf2W*0.5,wfTop,wf2W,wf2Bot-wfTop);
+  const wg2=ctx.createLinearGradient(wf2X,wfTop,wf2X,wf2Bot);
+  wg2.addColorStop(0,'rgba(210,232,255,0.92)');
+  wg2.addColorStop(0.5,'rgba(160,200,248,0.65)');
+  wg2.addColorStop(1,'rgba(120,170,230,0.20)');
+  ctx.fillStyle=wg2; ctx.fillRect(wf2X-wf2W*0.35,wfTop,wf2W*0.7,wf2Bot-wfTop);
+  const sp2=ctx.createRadialGradient(wf2X,wf2Bot,0,wf2X,wf2Bot,wf2W*3);
+  sp2.addColorStop(0,'rgba(200,228,255,0.55)'); sp2.addColorStop(1,'rgba(80,140,200,0)');
+  ctx.fillStyle=sp2; ctx.beginPath(); ctx.ellipse(wf2X,wf2Bot+wf2W,wf2W*2.8,wf2W*0.9,0,0,Math.PI*2); ctx.fill();
+
+  // Foreground rocks at base
+  for (let r = 0; r < 18; r++) {
+    const rx=Math.random()*W*0.22+(r>9?W*0.78:0);
+    const ry2=horizon+H*0.05+Math.random()*H*0.18;
+    const rw=20+Math.random()*60, rh2=12+Math.random()*28;
+    const rg=ctx.createRadialGradient(rx,ry2,0,rx,ry2,rw);
+    rg.addColorStop(0,'rgba(80,72,58,0.9)');
+    rg.addColorStop(0.6,'rgba(55,50,40,0.85)');
+    rg.addColorStop(1,'rgba(30,28,20,0)');
+    ctx.fillStyle=rg; ctx.beginPath(); ctx.ellipse(rx,ry2,rw,rh2,fbm(r,0)*0.8,0,Math.PI*2); ctx.fill();
+  }
+}
+
+// ─── CUBEMAP LOADER UTILITY ──────────────────────────────────────────────────
+function loadCubemap(path, label, pctStart, pctEnd) {
+  return new Promise((resolve, reject) => {
+    setProgress(pctStart, label);
+    const loader = new THREE.CubeTextureLoader();
+    loader.setPath(path);
+    loader.load(
+      ['px.png', 'nx.png', 'py.png', 'ny.png', 'pz.png', 'nz.png'],
+      tex => { setProgress(pctEnd, label + ' ✓'); resolve(tex); },
+      undefined,
+      err => reject(err)
+    );
+  });
+}
+
+// ─── CUBEMAP LOADER (RGBA, pre-keyed PNGs with straight alpha) ──────────────
+function loadCubemapRGBA(path, label, pctStart, pctEnd) {
+  return new Promise((resolve, reject) => {
+    setProgress(pctStart, label);
+    const loader = new THREE.CubeTextureLoader();
+    loader.setPath(path);
+    loader.load(
+      ['px.png', 'nx.png', 'py.png', 'ny.png', 'pz.png', 'nz.png'],
+      tex => {
+        tex.format = THREE.RGBAFormat;
+        setProgress(pctEnd, label + ' ✓');
+        resolve(tex);
+      },
+      undefined,
+      err => reject(err)
+    );
+  });
+}
+
+// ─── CUBEMAP SHELL ──────────────────────────────────────────────────────────
+function makeCubeShell(cubeTex, radius, renderOrder) {
+  const vertShader = `
+    varying vec3 vWorldPos;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }`;
+  const fragShader = `
+    uniform samplerCube cubeMap;
+    varying vec3 vWorldPos;
+    void main() {
+      vec3 dir = normalize(vWorldPos);
+      dir.x = -dir.x;
+      vec4 c = textureCube(cubeMap, dir);
+      if (c.a < 0.01) discard;
+      gl_FragColor = vec4(c.rgb * c.a, c.a);
+    }`;
+
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: vertShader,
+    fragmentShader: fragShader,
+    uniforms: { cubeMap: { value: cubeTex } },
+    side: THREE.BackSide,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
+  });
+
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 64, 32), mat);
+  mesh.renderOrder = renderOrder;
+  scene.add(mesh);
+  return mesh;
+}
+
+// ─── ASYNC BUILD SCENE ────────────────────────────────────────────────────────
+async function buildScene() {
+  const skyCube   = await loadCubemap('assets/ElectricDreams_Cubemap/', 'Loading sky cubemap…', 5, 85);
+
+  setProgress(100, 'Complete');
+
+  scene.background = skyCube;
+
+  // Floor platform
+  const floorGeo = new THREE.CylinderGeometry(6, 6, 0.12, 32);
+  const floorMat = new THREE.MeshBasicMaterial({
+    color: 0x886644,
+    transparent: true, opacity: 1.0,
+  });
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.position.y = -1.7;
+  floor.renderOrder = 10;
+  scene.add(floor);
+
+  // Ambient light for any 3D objects
+  scene.add(new THREE.AmbientLight(0xffd8a0, 0.8));
+  const sun = new THREE.DirectionalLight(0xffe0a0, 1.4);
+  sun.position.set(4, 6, -2);
+  scene.add(sun);
+
+  // Fade out loading screen
+  setTimeout(() => {
+    const el = document.getElementById('loading');
+    el.style.opacity = '0';
+    setTimeout(() => el.style.display = 'none', 800);
+  }, 300);
+}
+
+// ─── VR BUTTON ────────────────────────────────────────────────────────────────
+const vrBtn = document.getElementById('vr-button');
+if ('xr' in navigator) {
+  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    if (!supported) { vrBtn.textContent = 'VR NOT SUPPORTED'; vrBtn.style.opacity='0.35'; return; }
+    vrBtn.addEventListener('click', () => {
+      if (renderer.xr.isPresenting) {
+        renderer.xr.getSession().end(); vrBtn.textContent = 'ENTER VR';
+      } else {
+        navigator.xr.requestSession('immersive-vr', { optionalFeatures:['local-floor','bounded-floor'] })
+          .then(s => { renderer.xr.setSession(s); vrBtn.textContent='EXIT VR'; s.addEventListener('end',()=>vrBtn.textContent='ENTER VR'); });
+      }
+    });
+  });
+} else { vrBtn.textContent='WEBXR N/A'; vrBtn.style.opacity='0.35'; }
+
+// ─── RESIZE ───────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ─── RENDER LOOP ─────────────────────────────────────────────────────────────
+let prevTime = performance.now();
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  const dt = Math.min((now - prevTime) / 1000, 0.1);
+  prevTime = now;
+
+  const moveSpeed = 3 * dt;
+  const dir = new THREE.Vector3();
+  const right = new THREE.Vector3();
+
+  if (!renderer.xr.isPresenting) {
+    const qY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), yaw);
+    const qP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), pitch);
+    camera.quaternion.copy(qY).multiply(qP);
+
+    camera.getWorldDirection(dir);
+    dir.y = 0; dir.normalize();
+    right.crossVectors(new THREE.Vector3(0,1,0), dir).normalize();
+    if (keys['KeyW'] || keys['ArrowUp'])    cameraRig.position.addScaledVector(dir, moveSpeed);
+    if (keys['KeyS'] || keys['ArrowDown'])  cameraRig.position.addScaledVector(dir, -moveSpeed);
+    if (keys['KeyA'] || keys['ArrowLeft'])  cameraRig.position.addScaledVector(right, moveSpeed);
+    if (keys['KeyD'] || keys['ArrowRight']) cameraRig.position.addScaledVector(right, -moveSpeed);
+  } else {
+    const session = renderer.xr.getSession();
+    if (session) {
+      for (const source of session.inputSources) {
+        if (!source.gamepad) continue;
+        const axes = source.gamepad.axes;
+        let sx = 0, sy = 0;
+        if (axes.length >= 4) { sx = axes[2]; sy = axes[3]; }
+        else if (axes.length >= 2) { sx = axes[0]; sy = axes[1]; }
+
+        if (source.handedness === 'left' && (Math.abs(sx) > 0.15 || Math.abs(sy) > 0.15)) {
+          camera.getWorldDirection(dir);
+          dir.y = 0; dir.normalize();
+          right.crossVectors(new THREE.Vector3(0,1,0), dir).normalize();
+          cameraRig.position.addScaledVector(dir, -sy * moveSpeed);
+          cameraRig.position.addScaledVector(right, -sx * moveSpeed);
+        }
+
+        if (source.handedness === 'right' && Math.abs(sx) > 0.15) {
+          const turnSpeed = 1.5 * dt;
+          cameraRig.rotation.y -= sx * turnSpeed;
+        }
+      }
+    }
+  }
+
+  const maxDist = 5;
+  const p = cameraRig.position;
+  const dist = Math.sqrt(p.x * p.x + p.z * p.z);
+  if (dist > maxDist) { p.x *= maxDist / dist; p.z *= maxDist / dist; }
+
+  renderer.render(scene, camera);
+});
+
+buildScene();
+</script>
+</body>
+</html>
