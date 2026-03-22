@@ -850,18 +850,20 @@ function updatePlayerIcons() {
     let player1Icon = 'fa-robot'; // Default for regular mode or normal random bot
     if (gameMode === 'random' && botDifficulty === 'smart') {
       player1Icon = 'fa-brain'; // Harder bot in random mode
+    } else if (gameMode === 'random' && botDifficulty === 'hardest') {
+      player1Icon = 'fa-skull-crossbones'; // Hardest bot in random mode
     }
-    $('.player.player--1 i').removeClass('fa-user-secret fa-robot fa-brain').addClass(player1Icon);
+    $('.player.player--1 i').removeClass('fa-user-secret fa-robot fa-brain fa-skull-crossbones').addClass(player1Icon);
 
     // Set Player 2 icon
-    $('.player.player--2 i').removeClass('fa-robot fa-brain').addClass('fa-user-secret');
+    $('.player.player--2 i').removeClass('fa-robot fa-brain fa-skull-crossbones').addClass('fa-user-secret');
 
     $('.player-indicator').remove(); // Remove any leftover MP indicators
     $('.turn-indicator').remove();   // Remove turn indicator (might be re-added by MP logic)
   } else {
     // Multiplayer: Both icons are fa-user-secret (this logic might be duplicated from updatePlayerIndicators, consider consolidating later)
-    $('.player.player--1 i').removeClass('fa-robot fa-brain').addClass('fa-user-secret');
-    $('.player.player--2 i').removeClass('fa-robot fa-brain').addClass('fa-user-secret');
+    $('.player.player--1 i').removeClass('fa-robot fa-brain fa-skull-crossbones').addClass('fa-user-secret');
+    $('.player.player--2 i').removeClass('fa-robot fa-brain fa-skull-crossbones').addClass('fa-user-secret');
   }
 }
 
@@ -2983,7 +2985,7 @@ function hostInitiateRematchStart() {
 }
 
 // Add direct click handlers for difficulty buttons
-$('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficulty="smart"]').on('click', function(e) {
+$('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficulty="smart"], .difficulty-option[data-difficulty="hardest"]').on('click', function(e) {
   console.log('Direct click handler - Difficulty button clicked:', $(this).data('difficulty'));
   e.preventDefault();
   e.stopPropagation();
@@ -3290,7 +3292,8 @@ try {
         startAnim(); 
     }
 
-    tutorial.checkStartTutorial(); // Now, check if tutorial should overlay this default game.
+    tutorial.checkStartTutorial(); // Now, check if tutorial should overla
+
 } catch (e) {
     console.error("Error initializing or starting tutorial module:", e);
     // Handle error appropriately, maybe show a message to the user

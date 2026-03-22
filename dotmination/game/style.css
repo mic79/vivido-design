@@ -408,6 +408,7 @@ a {
   background: #f2f2f2;
   z-index: 99999;
 }
+
 .menu ul {
   list-style: none;
   margin: 0;
@@ -418,6 +419,7 @@ a {
   align-items: center;
   justify-content: center;
 }
+
 .menu li {
   margin: 0.5rem 0;
   padding: 1rem;
@@ -425,9 +427,8 @@ a {
   font-size: 18px;
   text-align: center;
 }
-.menu .version {
 
-}
+.menu .version {}
 
 header {
   position: relative;
@@ -555,7 +556,8 @@ footer .time i {
 }
 
 footer .multiplayer {
-  display: none; /* Hidden by default */
+  display: none;
+  /* Hidden by default */
   cursor: pointer;
 }
 
@@ -576,12 +578,14 @@ footer .multiplayer {
 }
 
 .mode-multiplayer footer .multiplayer {
-  display: block; /* Show multiplayer button in MP mode */
+  display: block;
+  /* Show multiplayer button in MP mode */
 }
 
 .mode-regular footer .multiplayer,
 .mode-random footer .multiplayer {
-  display: none; /* Hide multiplayer button in SP modes */
+  display: none;
+  /* Hide multiplayer button in SP modes */
 }
 
 .container {
@@ -848,15 +852,20 @@ footer .multiplayer {
 
 /* Add styles for the increment animation */
 .increment-animation {
-  position: absolute; /* Position relative to the .field */
+  position: absolute;
+  /* Position relative to the .field */
   font-size: 1.5rem;
   font-weight: bold;
-  color: white; /* Default color */
+  color: white;
+  /* Default color */
   text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
-  pointer-events: none; /* Don't interfere with clicks */
-  z-index: 10; /* Above dots */
+  pointer-events: none;
+  /* Don't interfere with clicks */
+  z-index: 10;
+  /* Above dots */
   opacity: 1;
-  white-space: nowrap; /* Prevent wrapping if we use +N later */
+  white-space: nowrap;
+  /* Prevent wrapping if we use +N later */
 }
 
 .level-goals i {
@@ -906,22 +915,25 @@ footer .multiplayer {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-end; /* Revert to original */
+  justify-content: flex-end;
+  /* Revert to original */
   overflow: hidden;
-  pointer-events: none; 
+  pointer-events: none;
   z-index: 100;
 }
 
 .modal-open .modal.active .backdrop {
   /* Don't apply opacity for tutorial modal backdrop */
   /* opacity: 1; */
-  pointer-events: auto; /* Keep for OTHER modals */
+  pointer-events: auto;
+  /* Keep for OTHER modals */
 }
 
 .modal-open .modal.active .wrapper {
   /* Default transform */
   /* transform: translateY(0%); - Handled specifically for tutorial modal */
-  transform: translateY(0%); /* Revert to original */
+  transform: translateY(0%);
+  /* Revert to original */
 }
 
 .modal .backdrop {
@@ -959,13 +971,16 @@ footer .multiplayer {
 .welcome-tutorial-modal p {
   text-align: center;
 }
+
 .tutorial-step-modal .backdrop {
-  display: none; /* Hide backdrop specifically */
+  display: none;
+  /* Hide backdrop specifically */
 }
 
 /* Prevent blur when tutorial modal is active */
 body.modal-open.no-backdrop header,
-body.modal-open.no-backdrop footer, /* Also prevent footer blur */
+body.modal-open.no-backdrop footer,
+/* Also prevent footer blur */
 body.modal-open.no-backdrop .field-wrapper {
   filter: none;
 }
@@ -976,67 +991,83 @@ body.no-backdrop header {
 
 /* Position tutorial wrapper at the bottom */
 .tutorial-step-modal .wrapper {
-    position: absolute;
-    bottom: 5px;
-    left: 0;
-    max-height: 40vh; /* Limit height */
-    width: 95%; /* Adjust width */
-    /* Ensure visibility when active */
-    opacity: 1;
-    transition: opacity 0.3s; /* Optional fade */
+  position: absolute;
+  bottom: 5px;
+  left: 0;
+  max-height: 40vh;
+  /* Limit height */
+  width: 95%;
+  /* Adjust width */
+  /* Ensure visibility when active */
+  opacity: 1;
+  transition: opacity 0.3s;
+  /* Optional fade */
 }
 
 /* Hide when not active */
 .tutorial-step-modal:not(.active) .wrapper {
-    opacity: 0;
-    pointer-events: none; /* Prevent interaction when hidden */
+  opacity: 0;
+  pointer-events: none;
+  /* Prevent interaction when hidden */
 }
+
 .tutorial-step-modal p {
   text-align: center;
 }
+
 #tutorial-step-title {
   margin-top: 0;
 }
-#tutorial-step-instruction, #tutorial-step-objective {
+
+#tutorial-step-instruction,
+#tutorial-step-objective {
   font-size: 16px;
 }
+
 #tutorial-step-objective {
   margin-bottom: 2rem;
 }
+
 /* << END NEW Tutorial Modal CSS >> */
 
 /* Style for Quit Tutorial Button */
 .btn-quit-tutorial {
-    position: absolute;
-    bottom: 10px;
-    right: 15px;
-    padding: 4px 8px;
-    font-size: 0.8rem;
-    background-color: #f8f9fa;
-    color: #555;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    cursor: pointer;
-    pointer-events: auto; /* Ensure button is clickable */
-    z-index: 101; /* Above modal wrapper content */
+  position: absolute;
+  bottom: 10px;
+  right: 15px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  background-color: #f8f9fa;
+  color: #555;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+  /* Ensure button is clickable */
+  z-index: 101;
+  /* Above modal wrapper content */
 }
+
 .btn-quit-tutorial:hover {
-    background-color: #e9ecef;
+  background-color: #e9ecef;
 }
+
 /* End Style for Quit Tutorial Button */
 
 #btn-start-level-1 {
   display: none;
 }
+
 /* Show only on step 5 */
 .tutorial-step-modal.step-5 #btn-start-level-1 {
-    display: block !important;
+  display: block !important;
 }
 
 /* Hide quit button on step 5 */
 .tutorial-step-modal.step-5 #btn-quit-tutorial {
-    display: none;
+  display: none;
 }
+
 /* << END Style for Start Level 1 Button >> */
 
 .modal .wrapper {
@@ -1138,79 +1169,84 @@ div[data-modal] {
 }
 
 .connecting-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(255, 255, 255, 0.9);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 9999;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
 }
 
 .dark-mode .connecting-overlay {
-    background: rgba(47, 79, 79, 0.9);
+  background: rgba(47, 79, 79, 0.9);
 }
 
 .connecting-card {
-    background: white;
-    padding: 2rem;
-    border-radius: 1rem;
-    text-align: center;
-    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+  background: white;
+  padding: 2rem;
+  border-radius: 1rem;
+  text-align: center;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
 }
 
 .dark-mode .connecting-card {
-    background: darkslategrey;
-    color: white;
+  background: darkslategrey;
+  color: white;
 }
 
 .connecting-spinner {
-    width: 40px;
-    height: 40px;
-    margin: 20px auto;
-    border: 4px solid #f3f3f3;
-    border-top: 4px solid var(--color-2);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
+  width: 40px;
+  height: 40px;
+  margin: 20px auto;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid var(--color-2);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .cancel-connection-btn {
-    margin-top: 1rem;
-    padding: 0.5rem 1rem;
-    border: none;
-    border-radius: 0.5rem;
-    background: var(--color-2);
-    color: white;
-    cursor: pointer;
-    transition: opacity 0.2s;
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: var(--color-2);
+  color: white;
+  cursor: pointer;
+  transition: opacity 0.2s;
 }
 
 .cancel-connection-btn:hover {
-    opacity: 0.8;
+  opacity: 0.8;
 }
 
 .retry-connection-btn {
-    margin-top: 1rem;
-    padding: 0.5rem 1rem;
-    border: none;
-    border-radius: 0.5rem;
-    background: var(--color-1);
-    color: white;
-    cursor: pointer;
-    transition: opacity 0.2s;
-    display: none;
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: var(--color-1);
+  color: white;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  display: none;
 }
 
 .retry-connection-btn:hover {
-    opacity: 0.8;
+  opacity: 0.8;
 }
 
 .bot-difficulty {
@@ -1234,7 +1270,7 @@ div[data-modal] {
 }
 
 .bot-difficulty .card {
-  min-width: 120px;
+  min-width: 80px;
   text-align: center;
   opacity: 0.7;
   transition: all 0.3s ease;
@@ -1260,45 +1296,59 @@ div[data-modal] {
 .player-score {
   font-size: 1.4rem;
   font-weight: bold;
-  min-width: 30px; /* Ensure space for score */
+  min-width: 30px;
+  /* Ensure space for score */
   text-align: center;
-  margin: 0 5px; /* Spacing around the score */
+  margin: 0 5px;
+  /* Spacing around the score */
 }
 
-#player-1-score { color: var(--color-1); }
-#player-2-score { color: var(--color-2); }
+#player-1-score {
+  color: var(--color-1);
+}
+
+#player-2-score {
+  color: var(--color-2);
+}
 
 /* Style for the turn indicator */
 .turn-indicator {
-    padding: 5px 10px;
-    margin-top: 5px; /* Add some space below the player icons */
-    border-radius: 5px;
-    font-weight: bold;
-    text-align: center; /* Center the text */
+  padding: 5px 10px;
+  margin-top: 5px;
+  /* Add some space below the player icons */
+  border-radius: 5px;
+  font-weight: bold;
+  text-align: center;
+  /* Center the text */
 }
 
 .turn-indicator.your-turn {
-    background-color: var(--color-current); /* Use the current player's color */
-    color: white;
+  background-color: var(--color-current);
+  /* Use the current player's color */
+  color: white;
 }
 
 .turn-indicator.opponent-turn {
-    background-color: #f0f0f0; /* Light grey for opponent's turn */
-    color: #555;
+  background-color: #f0f0f0;
+  /* Light grey for opponent's turn */
+  color: #555;
 }
 
 .dark-mode .turn-indicator.opponent-turn {
-    background-color: #555;
-    color: #ccc;
+  background-color: #555;
+  color: #ccc;
 }
 
 /* Styles for Main Menu Modal Buttons */
 .main-menu-modal .btn-main-menu {
   text-align: center;
 }
+
 .main-menu-modal .btn-main-menu p {
-  margin: 0.5rem 0; /* Add some vertical spacing */
+  margin: 0.5rem 0;
+  /* Add some vertical spacing */
 }
+
 /* End Styles for Main Menu Modal Buttons */
 
 /* Styles for Multiplayer Start Options (mimicking Bot Difficulty) */
@@ -1318,8 +1368,10 @@ div[data-modal] {
   justify-content: center;
 }
 
-.multiplayer-start-options .card.start-type-option { /* Be specific */
-  min-width: 120px; /* Match bot difficulty */
+.multiplayer-start-options .card.start-type-option {
+  /* Be specific */
+  min-width: 120px;
+  /* Match bot difficulty */
   text-align: center;
   opacity: 0.7;
   transition: all 0.3s ease;
@@ -1330,18 +1382,22 @@ div[data-modal] {
   .multiplayer-start-options .card.start-type-option:hover {
     opacity: 1;
     transform: scale(1.05);
-    box-shadow: 0 0 20px rgba(var(--color-current-rgb, var(--color-2-rgb)), 0.2); /* Use current color if available */
+    box-shadow: 0 0 20px rgba(var(--color-current-rgb, var(--color-2-rgb)), 0.2);
+    /* Use current color if available */
   }
 }
 
 .multiplayer-start-options .card.start-type-option h1 {
-  font-size: 1.5rem; /* Match bot difficulty */
+  font-size: 1.5rem;
+  /* Match bot difficulty */
 }
 
 .multiplayer-start-options .card.start-type-option p {
   margin: 0;
-  font-size: 1rem; /* Match bot difficulty */
+  font-size: 1rem;
+  /* Match bot difficulty */
 }
+
 /* End Styles for Multiplayer Start Options */
 
 footer .rts {
@@ -1361,6 +1417,7 @@ footer .rts {
 
 /* TEMPORARY */
 .col.card.btn[data-mode="realTimeResource"] {
-    display: none;
+  display: none;
 }
+
 /* END TEMPORARY */

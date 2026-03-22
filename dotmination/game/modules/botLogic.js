@@ -334,6 +334,88 @@ function updateRecentMoves(moveIndex, smarterGameState, forceUpdate = false) {
 }
 
 
+function botActionHardest(hardestGameState) {
+    if (!hardestGameState.targets || hardestGameState.targets.length === 0) return;
+    
+    const myDots = hardestGameState.player1Dots;
+    const oppDots = hardestGameState.player2Dots;
+    const allDots = hardestGameState.dots;
+    const emptyDots = hardestGameState.targets.not(myDots);
+    
+    const getAdjacent = (dot, collection) => {
+        if (!hardestGameState.hitTest) return $([]); 
+        let adjacentElements = [];
+        collection.each(function() {
+            if ($(dot).attr('data-index') !== $(this).attr('data-index') && 
+                hardestGameState.hitTest(this, $(dot).find('.hitarea')[0])) {
+                adjacentElements.push(this);
+            }
+        });
+        return $(adjacentElements);
+    };
+
+    const isSafe = (dot, isMyDot) => {
+        const currentStage = isMyDot ? getStageNumber($(dot)) : 0;
+        if (currentStage === 5) return true;
+        const opps = getAdjacent(dot, oppDots);
+        if (opps.length === 0) return true;
+        
+        let maxOppStage = 0;
+        opps.each(function() {
+            maxOppStage = Math.max(maxOppStage, getStageNumber($(this)));
+        });
+        if (maxOppStage === 5) return false;
+        return maxOppStage <= (currentStage + 1);
+    };
+
+    const myDocsSorted = myDots.toArray().map(d => $(d)).sort((a,b) => getStageNumber(b) - getStageNumber(a));
+    const myS5 = myDots.filter(".stage--5").toArray().map(d => $(d));
+    const emptyDocsArr = emptyDots.toArray().map(d => $(d));
+
+    let chosenDot = null;
+
+    const findChoice = (sourceDots, oppFilterStage, checkSafe, safeAsMyDot) => {
+        for (let dot of sourceDots) {
+            const opps = getAdjacent(dot, oppDots);
+            let hasTargetOpp = opps.length > 0;
+            if (oppFilterStage) {
+                hasTargetOpp = false;
+                opps.each(function() { if (getStageNumber($(this)) === oppFilterStage) hasTargetOpp = true; });
+            }
+            if (hasTargetOpp) {
+                if (!checkSafe || isSafe(dot, safeAsMyDot)) return dot;
+            }
+        }
+        return null;
+    };
+
+    chosenDot = findChoice(myS5, 5, false, false);
+    if (!chosenDot) chosenDot = findChoice(myDots.filter(".stage--4").toArray().map(d => $(d)), 4, true, true);
+    if (!chosenDot) chosenDot = findChoice(myS5, null, false, false);
+    if (!chosenDot) chosenDot = findChoice(myDocsSorted, null, true, true);
+    if (!chosenDot) chosenDot = findChoice(emptyDocsArr, null, true, false);
+    if (!chosenDot && myS5.length > 0) chosenDot = myS5[0];
+    
+    if (!chosenDot) {
+        for (let dot of myDocsSorted) { if (isSafe(dot, true)) { chosenDot = dot; break; } }
+    }
+    if (!chosenDot) {
+        for (let dot of emptyDocsArr) { if (isSafe(dot, false)) { chosenDot = dot; break; } }
+    }
+    
+    if (!chosenDot) chosenDot = emptyDocsArr[0] || myDocsSorted[0];
+
+    if (chosenDot && chosenDot.length) {
+        console.log("Bot (Hardest) choosing dot at index:", chosenDot.attr("data-index"));
+        visualFeedback(chosenDot, hardestGameState.visualFeedbackDelay);
+        updateRecentMoves(chosenDot.attr("data-index"), hardestGameState);
+        chosenDot.click();
+    } else {
+        console.log("Bot (Hardest): Failed to choose any dot.");
+        updateRecentMoves(null, hardestGameState, true); 
+    }
+}
+
 // --- Main Exported Function ---
 export function getBotMove(gameState, difficulty, recentMovesArray, hitTestFunc, visualFeedbackDelayVal) {
     // Prepare the state object for the bot logic
@@ -352,7 +434,9 @@ export function getBotMove(gameState, difficulty, recentMovesArray, hitTestFunc,
         visualFeedbackDelay: visualFeedbackDelayVal
     };
 
-    if (difficulty === 'smart') {
+    if (difficulty === 'hardest') {
+        botActionHardest(botGameState);
+    } else if (difficulty === 'smart') {
         botActionSmarter(botGameState);
     } else {
         botActionRandom(botGameState); // botActionRandom also uses parts of botGameState
