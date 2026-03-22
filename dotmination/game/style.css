@@ -69,12 +69,7 @@ body.dark-mode {
   color: white;
 }
 
-/*@media (prefers-color-scheme: dark) {
-  body {
-    background: darkslategrey;
-    color: white;
-  }
-}*/
+
 
 h1 {
   margin-bottom: 20px;
@@ -108,12 +103,7 @@ a {
   transition: 0.3s box-shadow;
 }
 
-/*@media (prefers-color-scheme: dark) {
-  .card {
-    background: darkslategrey;
-    color: white;
-  }
-}*/
+
 
 .dark-mode .card {
   background: darkslategrey;
@@ -170,11 +160,7 @@ a {
   background: rgba(47, 79, 79, 0.8);
 }
 
-/*@media (prefers-color-scheme: dark) {
-  .overlay {
-    background: rgba(47, 79, 79, 0.8);
-  }
-}*/
+
 
 .overlay.end {
   text-transform: uppercase;
@@ -947,12 +933,7 @@ footer .multiplayer {
   transition: 0.3s opacity;
 }
 
-/*@media (prefers-color-scheme: dark) {
-  .modal .backdrop {
-    background: rgba(47, 79, 79, 0.5);
-    color: white;
-  }
-}*/
+
 
 .dark-mode .modal .backdrop {
   background: rgba(47, 79, 79, 0.5);
@@ -1086,12 +1067,7 @@ body.no-backdrop header {
   pointer-events: all;
 }
 
-/*@media (prefers-color-scheme: dark) {
-  .modal .wrapper {
-    background: darkslategrey;
-    color: white;
-  }
-}*/
+
 
 .dark-mode .modal .wrapper {
   background: darkslategrey;
@@ -1143,12 +1119,7 @@ body.no-backdrop header {
   text-align: center;
 }
 
-/*@media (prefers-color-scheme: dark) {
-  .modal .wrapper .list li .level-number {
-    background: darkslategrey;
-    color: white;
-  }
-}*/
+
 
 .dark-mode .modal .wrapper .list li .level-number {
   background: darkslategrey;
@@ -1421,3 +1392,43 @@ footer .rts {
 }
 
 /* END TEMPORARY */
+
+@media (prefers-color-scheme: dark) {
+  body {
+  background: darkslategrey;
+  color: white;
+}
+  .card  {
+  background: darkslategrey;
+  color: white;
+}
+  .overlay  {
+  background: rgba(47, 79, 79, 0.8);
+}
+  .header-icon-btn  {
+  color: white;
+}
+  .modal .backdrop  {
+  background: rgba(47, 79, 79, 0.5);
+  color: white;
+}
+  .modal .wrapper  {
+  background: darkslategrey;
+  color: white;
+}
+  .modal .wrapper .list li .level-number  {
+  background: darkslategrey;
+  color: white;
+}
+  .connecting-overlay  {
+  background: rgba(47, 79, 79, 0.9);
+}
+  .connecting-card  {
+  background: darkslategrey;
+  color: white;
+}
+  .turn-indicator.opponent-turn  {
+  background-color: #555;
+  color: #ccc;
+}
+}
