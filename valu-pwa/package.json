@@ -1,0 +1,6 @@
+{
+  "name": "valu-pwa",
+  "version": "1.0.0",
+  "description": "Personal finance PWA backed by Google Sheets",
+  "private": true
+}

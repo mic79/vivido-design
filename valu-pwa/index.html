@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#729c9c" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>Valu</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Vue 3 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- Google Identity Services (OAuth2 token client) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- Google API loader + Picker -->
+  <script src="https://apis.google.com/js/api.js"></script>
+  <script src="https://apis.google.com/js/picker.js"></script>
+  <!-- GSAP + DrawSVG (same stack as https://valu-app.com/ landing intro) -->
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+  <script src="vendor/DrawSVGPlugin.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/shake.js/1.2.2/shake.min.js"></script>
+</head>
+<body>
+  <div id="app">
+
+    <!-- Signed-in app or Demo (no Google account required for Demo) -->
+    <template v-if="inAppShell">
+
+      <!-- Top Bar (home/groups only — sub-pages render their own nav row) -->
+      <div class="topbar" v-if="currentPage === 'home' || currentPage === 'groups'">
+        <button class="topbar-btn" @click="sideNavOpen = true">
+          <span class="material-icons">menu</span>
+        </button>
+        <div class="valu-orb-sm">
+          <div class="spheres">
+            <div class="spheres-group">
+              <div class="sphere s1"></div>
+              <div class="sphere s2"></div>
+              <div class="sphere s3"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Side Nav Overlay -->
+      <div class="overlay" :class="{ open: sideNavOpen }" @click="sideNavOpen = false"></div>
+
+      <!-- Side Nav -->
+      <div class="sidenav" :class="{ open: sideNavOpen }">
+        <div class="sidenav-header">
+          <div v-if="isAuthenticated" class="sidenav-auth-row">
+            <span class="sidenav-email truncate">{{ userProfile?.email || '' }}</span>
+            <span class="sidenav-auth-dot">·</span>
+            <button type="button" class="sidenav-logout-link" @click="signOut">Sign out</button>
+          </div>
+          <div v-else class="sidenav-auth-row">
+            <span class="sidenav-email truncate">Demo preview</span>
+            <span class="sidenav-auth-dot">·</span>
+            <button type="button" class="sidenav-logout-link" @click="leaveDemoToSignIn">Sign in</button>
+          </div>
+        </div>
+
+        <div class="sidenav-body">
+          <button v-if="isAuthenticated" type="button" class="sidenav-menu-item" @click="navigateTo('groups'); sideNavOpen = false;">
+            <span class="material-icons sidenav-menu-icon">people</span>
+            <span>Groups</span>
+            <span class="sidenav-menu-after">{{ groups.length }} group{{ groups.length !== 1 ? 's' : '' }}</span>
+          </button>
+          <button v-else type="button" class="sidenav-menu-item" @click="leaveDemoToSignIn">
+            <span class="material-icons sidenav-menu-icon">login</span>
+            <span>Sign in with Google</span>
+            <span class="sidenav-menu-after">Your groups</span>
+          </button>
+          <button class="sidenav-menu-item" disabled>
+            <span class="material-icons sidenav-menu-icon">notifications</span>
+            <span>Activity</span>
+            <span class="sidenav-menu-after">0 updates</span>
+          </button>
+        </div>
+
+        <div class="sidenav-footer">
+          <span class="sidenav-version">v0.1</span>
+        </div>
+      </div>
+
+      <!-- Group Name Header (home page only) -->
+      <div v-if="activeGroup && currentPage === 'home'" class="home-group-header">
+        <button class="home-group-name" @click="showGroupSwitcher = true">
+          {{ activeGroupName }} <span class="material-icons home-group-sort">swap_vert</span>
+        </button>
+      </div>
+
+      <!-- Group Switcher Sheet -->
+      <div class="modal-overlay" :class="{ open: showGroupSwitcher }" @click.self="showGroupSwitcher = false">
+        <div class="modal">
+          <div class="sheet-handle"></div>
+          <div class="group-switcher-title">Groups</div>
+          <div class="group-switcher-list">
+            <button v-for="group in groupsForSwitcher" :key="group.id"
+                    class="group-switcher-card"
+                    :class="{ active: activeGroup && activeGroup.id === group.id }"
+                    @click="switchGroup(group); showGroupSwitcher = false;">
+              <div class="group-switcher-row">
+                <span class="group-switcher-name">{{ group.name.replace('Valu: ', '') }}</span>
+                <span class="group-switcher-users">1 user(s)</span>
+              </div>
+              <div class="group-switcher-sub" v-if="activeGroup && activeGroup.id === group.id && groupSettings">
+                <span v-for="list in (groupSettings.listsEnabled || '').split(',').filter(Boolean)" :key="list" class="comma-separated">{{ list.charAt(0).toUpperCase() + list.slice(1) }}</span>
+              </div>
+            </button>
+          </div>
+          <div class="group-switcher-footer">
+            <button v-if="isAuthenticated" type="button" class="group-switcher-link" @click="navigateTo('groups'); showGroupSwitcher = false;">Edit groups</button>
+            <button v-else type="button" class="group-switcher-link" @click="leaveDemoToSignIn; showGroupSwitcher = false;">Sign in for your groups</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Content -->
+      <div class="main-content">
+        <!-- No group: block sub-pages only — Home shows welcome / onboarding -->
+        <div v-if="!activeGroup && currentPage !== 'groups' && currentPage !== 'home' && currentPage !== 'settings'" class="empty-state" style="padding-top:80px;">
+          <span class="material-icons">folder_off</span>
+          <h3>No group selected</h3>
+          <p>Create or select a group to get started.</p>
+          <button class="btn btn-primary" @click="navigateTo('groups')">Manage Groups</button>
+        </div>
+
+        <!-- Group loading -->
+        <div v-else-if="groupLoading" class="loading" style="padding-top:80px;">
+          <div class="spinner"></div>
+          Loading group...
+        </div>
+
+        <!-- Reconnect banner (popup was blocked on page load) -->
+        <div v-else-if="needsReconnect" class="empty-state" style="padding-top:80px;">
+          <span class="material-icons" style="font-size:48px;color:var(--color-primary);">sync</span>
+          <h3>Session expired</h3>
+          <p>Tap below to reconnect to Google Drive.</p>
+          <button class="btn btn-primary" @click="reconnect">
+            <span class="material-icons">refresh</span> Reconnect
+          </button>
+        </div>
+
+        <!-- Pages -->
+        <component
+          v-else
+          :is="currentPageComponent"
+          :sheetId="activeSheetId"
+          :settings="groupSettings"
+          :accounts="accountsList"
+          :groups="groups"
+          :activeGroup="activeGroup"
+          :userProfile="userProfile"
+          :groupName="activeGroupName"
+          :showUpdateReminder="false"
+          :isDemoGroup="!!(activeGroup && activeGroup.id === demoSheetId)"
+          :demoCallout="demoHomeCallout"
+          @navigate="navigateTo"
+          @switch-group="switchGroup"
+          @create-group="onGroupCreated"
+          @open-shared="onSharedOpened"
+          @refresh-groups="refreshGroupsList"
+          @accounts-updated="onAccountsUpdated"
+          @settings-updated="onSettingsUpdated"
+          @refresh="refreshCurrentPage"
+          @go-home="navigateTo('home')"
+        ></component>
+      </div>
+
+      <!-- Bottom Tabs (home page only, sub-pages overlay everything) -->
+      <div class="bottombar" v-if="activeGroup && currentPage === 'home'">
+        <button
+          v-if="isListEnabled('accounts')"
+          class="tab-btn"
+          @click="navigateTo('accounts')"
+        >
+          <span class="material-icons">account_balance</span>
+          <span>Accounts</span>
+        </button>
+
+        <button
+          v-if="isListEnabled('expenses')"
+          class="tab-btn"
+          @click="navigateTo('expenses')"
+        >
+          <span class="material-icons">shopping_cart</span>
+          <span>Expenses</span>
+        </button>
+
+        <button
+          v-if="isListEnabled('income')"
+          class="tab-btn"
+          @click="navigateTo('income')"
+        >
+          <span class="material-icons">payments</span>
+          <span>Income</span>
+        </button>
+
+        <button
+          class="tab-btn"
+          @click="navigateTo('settings')"
+        >
+          <span class="material-icons">tune</span>
+          <span>Settings</span>
+        </button>
+      </div>
+
+    </template>
+
+    <!-- Landing (orb + CTAs) or sign-in only -->
+    <template v-else>
+      <div v-if="!showSignInFromLanding" class="valu-landing">
+        <div class="valu-landing-hero-wrap">
+          <div class="valu-landing-hero">
+            <div class="valu-landing-spheres-stack">
+              <!-- Markup + behavior ported from https://valu-app.com/ -->
+              <div class="valu-site-intro">
+                <div class="spheres">
+                  <div class="spheres-group">
+                    <div class="sphere s1"></div>
+                    <div class="sphere s2"></div>
+                    <div class="sphere s3"></div>
+                  </div>
+                </div>
+                <!-- Cropped viewBox; stroke 65 + no vector-effect (DrawSVG must measure path length). -->
+                <svg id="valu" class="valu-landing-wordmark-svg" xmlns="http://www.w3.org/2000/svg" viewBox="180 265 920 430" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Valu">
+                  <title>Valu</title>
+                  <g id="logo" fill="none" stroke="currentColor" stroke-width="65" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10">
+                    <polyline class="st0 ch1" shape-rendering="geometricPrecision" points="191.2,480 291.2,680 391.2,480"/>
+                    <path class="st0 ch2" shape-rendering="geometricPrecision" d="M889.8,480v100c0,55.2,44.8,100,100,100c55.2,0,100-44.8,100-100V480"/>
+                    <path class="st0 ch3" shape-rendering="geometricPrecision" d="M776.8,280v343.5c0,31.2-25.3,56.5-56.5,56.5s-56.5-25.3-56.5-56.5V580c0-55.2-44.8-100-100-100s-100,44.8-100,100s44.8,100,100,100"/>
+                  </g>
+                  <g id="gfx" fill="none" stroke="currentColor" stroke-width="65" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" aria-hidden="true">
+                    <circle class="st0 c1" cx="640" cy="512" r="56.5"/>
+                    <circle class="st0 c2" cx="640" cy="512" r="56.5"/>
+                    <circle class="st0 c3" cx="640" cy="512" r="56.5"/>
+                  </g>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="valu-landing-body">
+        <div class="valu-landing-tagline" :class="{ 'valu-landing-tagline--visible': landingShowCtas }">Private finance tracking, secured by your own Google Drive</div>
+        <div class="valu-landing-cta" :class="{ 'valu-landing-cta--visible': landingShowCtas }">
+          <p class="valu-landing-welcome">Welcome!</p>
+          <button type="button" class="valu-landing-card" @click="startQuickLookDemo">
+            <span class="material-icons valu-landing-card-icon">visibility</span>
+            <div>
+              <div class="valu-landing-card-title">Quick look</div>
+              <div class="valu-landing-card-desc">Without signing in, explore the app with sample data.</div>
+            </div>
+          </button>
+          <button type="button" class="valu-landing-card" @click="showSignInFromLanding = true">
+            <span class="material-icons valu-landing-card-icon">fast_forward</span>
+            <div>
+              <div class="valu-landing-card-title">Jump start</div>
+              <div class="valu-landing-card-desc">Sign in to start organizing your own data.</div>
+            </div>
+          </button>
+        </div>
+        </div>
+      </div>
+
+      <div v-else class="auth-screen">
+        <button type="button" class="auth-back" @click="showSignInFromLanding = false">← Back</button>
+        <div class="valu-orb">
+          <div class="spheres-group">
+            <div class="sphere s1"></div>
+            <div class="sphere s2"></div>
+            <div class="sphere s3"></div>
+          </div>
+        </div>
+        <svg class="valu-wordmark-svg valu-wordmark-svg--auth" viewBox="180 265 920 430" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Valu">
+          <title>Valu</title>
+          <g id="logo-auth" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+            <polyline class="st0 ch1 valu-logo-ch1" vector-effect="non-scaling-stroke" shape-rendering="geometricPrecision" points="191.2,480 291.2,680 391.2,480"/>
+            <path class="st0 ch2 valu-logo-ch2" vector-effect="non-scaling-stroke" shape-rendering="geometricPrecision" d="M889.8,480v100c0,55.2,44.8,100,100,100c55.2,0,100-44.8,100-100V480"/>
+            <path class="st0 ch3 valu-logo-ch3" vector-effect="non-scaling-stroke" shape-rendering="geometricPrecision" d="M776.8,280v343.5c0,31.2-25.3,56.5-56.5,56.5s-56.5-25.3-56.5-56.5V580c0-55.2-44.8-100-100-100s-100,44.8-100,100s44.8,100,100,100"/>
+          </g>
+        </svg>
+        <div class="auth-tagline">Private finance tracking, secured by your own Google Drive</div>
+        <button class="btn-google" @click="connect" :disabled="authLoading">
+          <svg viewBox="0 0 24 24" width="20" height="20" style="margin-right:10px;">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+          </svg>
+          {{ authLoading ? 'Connecting...' : 'Connect with Google' }}
+        </button>
+        <div class="auth-footer">
+          Your data stays in your Google account. Valu can only access spreadsheets it creates.
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <script type="module">
+    import GoogleAuth from './googleAuth.js';
+    import SheetsApi, { normalizeDiscontinuedCell, isDemoSheet } from './sheetsApi.js';
+    import { demoGroupMeta, demoSettingsObject, demoAccountsList, DEMO_SHEET_ID } from './demoData.js';
+    import ValuOrb from './valu.js';
+    import { killValuAppLandingIntro } from './valu-landing-intro.js';
+    import HomePage from './HomePage.js';
+    import AccountsPage from './AccountsPage.js';
+    import ExpensesPage from './ExpensesPage.js';
+    import IncomePage from './IncomePage.js';
+    import GroupsPage from './GroupsPage.js';
+    import SettingsPage from './SettingsPage.js';
+    import ValuDateField from './ValuDateField.js';
+    import ValuDropdown from './ValuDropdown.js';
+    import ValuCurrencyPicker from './ValuCurrencyPicker.js';
+
+    const { createApp, ref, computed, watch, onMounted, nextTick, provide } = Vue;
+
+    const app = createApp({
+      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage },
+
+      setup() {
+        // ── Auth state ──────────────────────────────────────────────────────
+        const isAuthenticated = ref(false);
+        const authLoading = ref(true);
+        const userProfile = ref(null);
+        const demoMode = ref(false);
+        const landingShowCtas = ref(false);
+        const showSignInFromLanding = ref(false);
+        let ensurePersonalInFlight = false;
+
+        // ── Group state ─────────────────────────────────────────────────────
+        const groups = ref([]);
+        const activeGroup = ref(null);
+        const groupSettings = ref({});
+        const groupLoading = ref(false);
+        const accountsList = ref([]);
+
+        // ── Navigation ──────────────────────────────────────────────────────
+        const currentPage = ref('home');
+        const sideNavOpen = ref(false);
+        const showGroupSwitcher = ref(false);
+        const dataLoaded = ref(false);
+        const needsReconnect = ref(false);
+
+        const PAGE_MAP = {
+          home:     'HomePage',
+          accounts: 'AccountsPage',
+          expenses: 'ExpensesPage',
+          income:   'IncomePage',
+          groups:   'GroupsPage',
+          settings: 'SettingsPage',
+        };
+
+        const PAGE_TITLES = {
+          home:     'Home',
+          accounts: 'Accounts',
+          expenses: 'Expenses',
+          income:   'Income',
+          groups:   'Groups',
+          settings: 'Settings',
+        };
+
+        const currentPageComponent = computed(() => PAGE_MAP[currentPage.value] || 'HomePage');
+        const currentPageTitle = computed(() => PAGE_TITLES[currentPage.value] || 'Valu');
+        const activeSheetId = computed(() => activeGroup.value ? activeGroup.value.id : null);
+        const activeGroupName = computed(() => {
+          const name = activeGroup.value ? activeGroup.value.name : '';
+          return name ? name.replace('Valu: ', '') : '';
+        });
+
+        const inAppShell = computed(() => isAuthenticated.value || demoMode.value);
+
+        const groupsForSwitcher = computed(() => {
+          const real = groups.value.filter((g) => g.id !== DEMO_SHEET_ID);
+          const demo = demoGroupMeta();
+          if (!isAuthenticated.value && demoMode.value) return [demo];
+          if (isAuthenticated.value) return [demo, ...real];
+          return [demo];
+        });
+
+        const demoHomeCallout = computed(() => {
+          if (!activeGroup.value || !isDemoSheet(activeGroup.value.id)) return 'none';
+          if (!isAuthenticated.value) return 'signin';
+          return 'readonly';
+        });
+
+        provide('activeSheetId', activeSheetId);
+        provide('groupSettings', groupSettings);
+        provide('activeGroup', activeGroup);
+
+        async function navigateTo(page) {
+          if (page === 'groups' && !isAuthenticated.value) {
+            currentPage.value = 'home';
+            return;
+          }
+          const allowedWithoutGroup = page === 'home' || page === 'groups' || page === 'settings';
+          if (!activeGroup.value && !allowedWithoutGroup) {
+            currentPage.value = 'home';
+            return;
+          }
+          currentPage.value = page;
+          // On first user navigation, load group data if we have an active group
+          if (!dataLoaded.value && activeGroup.value) {
+            await loadGroupData();
+          }
+        }
+
+        function isListEnabled(key) {
+          const enabled = (groupSettings.value?.listsEnabled || '').split(',');
+          return enabled.includes(key);
+        }
+
+        // ── Auth ────────────────────────────────────────────────────────────
+
+        function applyDemoShellState() {
+          activeGroup.value = demoGroupMeta();
+          groupSettings.value = { ...demoSettingsObject() };
+          accountsList.value = demoAccountsList();
+          dataLoaded.value = true;
+          groupLoading.value = false;
+          needsReconnect.value = false;
+          localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+          SheetsApi.stopChangeDetection();
+        }
+
+        function startQuickLookDemo() {
+          demoMode.value = true;
+          showSignInFromLanding.value = false;
+          currentPage.value = 'home';
+          applyDemoShellState();
+        }
+
+        function leaveDemoToSignIn() {
+          demoMode.value = false;
+          sideNavOpen.value = false;
+          activeGroup.value = null;
+          groupSettings.value = {};
+          accountsList.value = [];
+          dataLoaded.value = false;
+          groupLoading.value = false;
+          showSignInFromLanding.value = true;
+          landingShowCtas.value = true;
+        }
+
+        function onAuthChange(signedIn, profile) {
+          isAuthenticated.value = signedIn;
+          userProfile.value = profile;
+          authLoading.value = false;
+
+          if (signedIn) {
+            demoMode.value = false;
+            const cachedGroups = localStorage.getItem('valu_groups_cache');
+            const cachedSettings = localStorage.getItem('valu_settings_cache');
+            const lastGroupId = localStorage.getItem('valu_last_group');
+
+            console.log('onAuthChange: lastGroupId =', lastGroupId);
+
+            if (cachedGroups) {
+              try { groups.value = JSON.parse(cachedGroups); } catch {}
+              console.log('onAuthChange: restored', groups.value.length, 'cached groups');
+            }
+
+            if (lastGroupId && cachedSettings) {
+              const lastGroup = groups.value.find((g) => g.id === lastGroupId)
+                || (lastGroupId === DEMO_SHEET_ID ? demoGroupMeta() : null);
+              console.log('onAuthChange: matched lastGroup =', JSON.stringify(lastGroup));
+              if (lastGroup && lastGroup.id) {
+                activeGroup.value = lastGroup;
+                try { groupSettings.value = JSON.parse(cachedSettings); } catch {}
+                currentPage.value = 'home';
+                groupLoading.value = false;
+                if (isDemoSheet(lastGroup.id)) {
+                  applyDemoShellState();
+                } else {
+                  loadGroupData();
+                }
+              } else {
+                activeGroup.value = null;
+                groupSettings.value = {};
+                dataLoaded.value = false;
+                groupLoading.value = false;
+                localStorage.removeItem('valu_last_group');
+                localStorage.removeItem('valu_last_group_name');
+                localStorage.removeItem('valu_settings_cache');
+                currentPage.value = 'home';
+              }
+            } else {
+              currentPage.value = 'home';
+              groupLoading.value = false;
+            }
+
+            refreshGroupsList();
+          } else {
+            groups.value = [];
+            activeGroup.value = null;
+            groupSettings.value = {};
+            dataLoaded.value = false;
+            groupLoading.value = false;
+            localStorage.removeItem('valu_groups_cache');
+            localStorage.removeItem('valu_settings_cache');
+          }
+        }
+
+        async function connect() {
+          authLoading.value = true;
+          try {
+            await GoogleAuth.connect();
+          } catch (err) {
+            console.error('Connect failed:', err);
+            authLoading.value = false;
+          }
+        }
+
+        function signOut() {
+          sideNavOpen.value = false;
+          GoogleAuth.signOut();
+        }
+
+        // ── Groups ──────────────────────────────────────────────────────────
+
+        async function loadGroupData() {
+          if (!activeGroup.value || dataLoaded.value) return;
+          if (isDemoSheet(activeGroup.value.id)) {
+            applyDemoShellState();
+            return;
+          }
+          groupLoading.value = true;
+          needsReconnect.value = false;
+          try {
+            groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);
+            localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+
+            const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
+            accountsList.value = accRows.map(r => ({
+              id: r[0], name: r[1], currency: r[2],
+              type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
+            }));
+
+            dataLoaded.value = true;
+
+            SheetsApi.startChangeDetection([activeGroup.value.id], async (changedId) => {
+              if (changedId === activeGroup.value?.id) {
+                try {
+                  groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);
+                  localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+
+                  const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
+                  accountsList.value = accRows.map(r => ({
+                    id: r[0], name: r[1], currency: r[2],
+                    type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
+                  }));
+                } catch (err) {
+                  console.warn('Change detection refresh failed:', err);
+                }
+              }
+            });
+          } catch (err) {
+            if (err.message === 'popup_blocked') {
+              needsReconnect.value = true;
+            }
+            console.error('Failed to load group data:', err);
+          } finally {
+            groupLoading.value = false;
+          }
+        }
+
+        async function loadGroups() {
+          try {
+            const files = await SheetsApi.listSpreadsheets();
+            groups.value = files;
+            localStorage.setItem('valu_groups_cache', JSON.stringify(files));
+
+            const lastId = localStorage.getItem('valu_last_group');
+            const lastGroup = files.find(f => f.id === lastId);
+
+            if (lastGroup) {
+              await switchGroup(lastGroup);
+            } else if (files.length > 0) {
+              await switchGroup(files[0]);
+            } else {
+              activeGroup.value = null;
+              currentPage.value = 'home';
+            }
+          } catch (err) {
+            console.error('Failed to load groups:', err);
+          }
+        }
+
+        async function refreshGroupsList() {
+          try {
+            const files = await SheetsApi.listSpreadsheets();
+            groups.value = files;
+            localStorage.setItem('valu_groups_cache', JSON.stringify(files));
+
+            if (activeGroup.value && !isDemoSheet(activeGroup.value.id) && !files.find((f) => f.id === activeGroup.value.id)) {
+              activeGroup.value = null;
+              groupSettings.value = {};
+              dataLoaded.value = false;
+              groupLoading.value = false;
+              localStorage.removeItem('valu_last_group');
+              localStorage.removeItem('valu_last_group_name');
+              localStorage.removeItem('valu_settings_cache');
+              currentPage.value = 'groups';
+            }
+
+            if (isAuthenticated.value && files.length === 0 && userProfile.value?.email && !ensurePersonalInFlight) {
+              ensurePersonalInFlight = true;
+              try {
+                const created = await SheetsApi.createSpreadsheet('Personal', userProfile.value.email);
+                await SheetsApi.updateSetting(created.id, 'listsEnabled', '');
+                groups.value = [created];
+                localStorage.setItem('valu_groups_cache', JSON.stringify(groups.value));
+                await switchGroup(created);
+              } catch (e) {
+                console.error('ensurePersonalGroup:', e);
+              } finally {
+                ensurePersonalInFlight = false;
+              }
+            }
+          } catch (err) {
+            console.warn('Background groups refresh failed:', err);
+          }
+        }
+
+        async function switchGroup(group, navOptions = {}) {
+          if (!group || !group.id) {
+            console.error('switchGroup: invalid group object:', JSON.stringify(group));
+            currentPage.value = 'groups';
+            return;
+          }
+          console.log('switchGroup:', group.id, group.name);
+
+          if (isDemoSheet(group.id)) {
+            activeGroup.value = group;
+            localStorage.setItem('valu_last_group', group.id);
+            localStorage.setItem('valu_last_group_name', group.name || '');
+            dataLoaded.value = true;
+            groupLoading.value = false;
+            applyDemoShellState();
+            if (currentPage.value === 'groups' && !navOptions.keepOnGroupsPage) {
+              currentPage.value = 'home';
+            }
+            return;
+          }
+
+          activeGroup.value = group;
+          localStorage.setItem('valu_last_group', group.id);
+          localStorage.setItem('valu_last_group_name', group.name || '');
+          dataLoaded.value = false;
+          groupLoading.value = true;
+
+          try {
+            groupSettings.value = await SheetsApi.getSettings(group.id);
+            localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+
+            const accRows = await SheetsApi.getTabData(group.id, 'Accounts');
+            accountsList.value = accRows.map(r => ({
+              id: r[0], name: r[1], currency: r[2],
+              type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
+            }));
+
+            dataLoaded.value = true;
+
+            SheetsApi.startChangeDetection([group.id], (changedId) => {
+              if (changedId === activeGroup.value?.id) {
+                refreshCurrentPage();
+              }
+            });
+
+            if (currentPage.value === 'groups' && !navOptions.keepOnGroupsPage) {
+              currentPage.value = 'home';
+            }
+          } catch (err) {
+            console.error('Failed to load group settings:', err);
+            if (err.message && (err.message.includes('404') || err.message.includes('403'))) {
+              groups.value = groups.value.filter(g => g.id !== group.id);
+              localStorage.setItem('valu_groups_cache', JSON.stringify(groups.value));
+              activeGroup.value = null;
+              groupSettings.value = {};
+              dataLoaded.value = false;
+              localStorage.removeItem('valu_last_group');
+              localStorage.removeItem('valu_last_group_name');
+              localStorage.removeItem('valu_settings_cache');
+              currentPage.value = 'groups';
+            }
+          } finally {
+            groupLoading.value = false;
+          }
+        }
+
+        async function onGroupCreated(payload) {
+          console.log('onGroupCreated:', JSON.stringify(payload));
+          if (!payload || !payload.id) {
+            console.error('onGroupCreated: createSpreadsheet returned no id:', payload);
+            alert('Failed to create group — no spreadsheet ID returned.');
+            return;
+          }
+          const keepOnGroupsPage = payload.keepOnGroupsPage === true;
+          const result = { id: payload.id, name: payload.name };
+          groups.value.push(result);
+          localStorage.setItem('valu_groups_cache', JSON.stringify(groups.value));
+          await switchGroup(result, { keepOnGroupsPage });
+        }
+
+        async function onSharedOpened(picked) {
+          groups.value.push({ id: picked.id, name: picked.name });
+          localStorage.setItem('valu_groups_cache', JSON.stringify(groups.value));
+          await switchGroup({ id: picked.id, name: picked.name });
+        }
+
+        function onAccountsUpdated(updatedAccounts) {
+          accountsList.value = updatedAccounts;
+        }
+
+        function onSettingsUpdated(partial) {
+          groupSettings.value = { ...groupSettings.value, ...partial };
+          localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+
+          if (partial.groupName && activeGroup.value) {
+            const newName = 'Valu: ' + partial.groupName;
+            activeGroup.value = { ...activeGroup.value, name: newName };
+            const idx = groups.value.findIndex(g => g.id === activeGroup.value.id);
+            if (idx >= 0) {
+              groups.value[idx] = { ...groups.value[idx], name: newName };
+              localStorage.setItem('valu_groups_cache', JSON.stringify(groups.value));
+            }
+          }
+        }
+
+        async function reconnect() {
+          needsReconnect.value = false;
+          if (activeGroup.value) {
+            dataLoaded.value = false;
+            await loadGroupData();
+          }
+        }
+
+        async function refreshCurrentPage() {
+          if (!dataLoaded.value && activeGroup.value) {
+            await loadGroupData();
+          }
+          const temp = currentPage.value;
+          currentPage.value = '';
+          nextTick(() => { currentPage.value = temp; });
+        }
+
+        // ── Init ────────────────────────────────────────────────────────────
+
+        function reinitOrbs() {
+          nextTick(() => { requestAnimationFrame(() => { ValuOrb.initAll(); }); });
+        }
+
+        watch(isAuthenticated, reinitOrbs);
+        watch(inAppShell, reinitOrbs);
+        watch(currentPage, reinitOrbs);
+
+        watch(showSignInFromLanding, (toSignIn) => {
+          nextTick(() => {
+            requestAnimationFrame(() => {
+              if (toSignIn) {
+                killValuAppLandingIntro();
+                document.querySelectorAll('.valu-wordmark-svg--auth').forEach((svg) => ValuOrb.initValuWordmarkDraw(svg));
+              } else {
+                document.querySelectorAll('.valu-landing-hero').forEach((el) => ValuOrb.initLandingVisualStack(el));
+              }
+            });
+          });
+        });
+
+        onMounted(() => {
+          setTimeout(() => {
+            landingShowCtas.value = true;
+          }, 2000);
+          function tryInitGis() {
+            if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+              GoogleAuth.init(onAuthChange);
+            } else {
+              setTimeout(tryInitGis, 200);
+            }
+          }
+          tryInitGis();
+        });
+
+        // ── Service Worker ──────────────────────────────────────────────────
+
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.register('service-worker.js').catch(() => {});
+        }
+
+        return {
+          isAuthenticated, authLoading, userProfile,
+          demoSheetId: DEMO_SHEET_ID,
+          inAppShell, demoMode, landingShowCtas, showSignInFromLanding,
+          groups, groupsForSwitcher, activeGroup, groupSettings, groupLoading, accountsList,
+          currentPage, currentPageComponent, currentPageTitle,
+          activeSheetId, activeGroupName, sideNavOpen, showGroupSwitcher,
+          demoHomeCallout,
+          needsReconnect, reconnect, connect,
+          navigateTo, isListEnabled,
+          onAuthChange, signOut,
+          startQuickLookDemo, leaveDemoToSignIn,
+          switchGroup, onGroupCreated, onSharedOpened,
+          onAccountsUpdated, onSettingsUpdated, refreshCurrentPage,
+        };
+      },
+    });
+
+    app.component('ValuDateField', ValuDateField);
+    app.component('ValuDropdown', ValuDropdown);
+    app.component('ValuCurrencyPicker', ValuCurrencyPicker);
+    app.mount('#app');
+
+    // ── Init Valu orb animations after first render ──────────────────────
+    requestAnimationFrame(() => {
+      ValuOrb.initAll();
+    });
+
+    // ── Global sheet swipe-to-close ──────────────────────────────────────
+    (function() {
+      const THRESHOLD = 80;
+
+      document.addEventListener('touchstart', function onStart(e) {
+        const handle = e.target.closest('.sheet-handle');
+        if (!handle) return;
+        const modal = handle.closest('.modal');
+        if (!modal) return;
+
+        const startY = e.touches[0].clientY;
+        let currentY = startY;
+        let dragging = false;
+
+        function onMove(ev) {
+          currentY = ev.touches[0].clientY;
+          const dy = currentY - startY;
+          if (dy > 0) {
+            dragging = true;
+            modal.style.transition = 'none';
+            modal.style.transform = 'translateY(' + dy + 'px)';
+          }
+        }
+
+        function onEnd() {
+          const dy = currentY - startY;
+          modal.style.transition = '';
+          modal.style.transform = '';
+
+          if (dragging && dy > THRESHOLD) {
+            const closeBtn = modal.querySelector('.modal-header .btn-icon');
+            if (closeBtn) closeBtn.click();
+          }
+
+          document.removeEventListener('touchmove', onMove);
+          document.removeEventListener('touchend', onEnd);
+        }
+
+        document.addEventListener('touchmove', onMove, { passive: true });
+        document.addEventListener('touchend', onEnd);
+      }, { passive: true });
+    })();
+  </script>
+</body>
+</html>
