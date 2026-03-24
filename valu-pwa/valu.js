@@ -1,9 +1,4 @@
-import {
-  initValuAppLandingIntro,
-  killValuAppLandingIntro,
-  landingIntroShortAccel,
-  landingIntroHandleUserClick,
-} from './valu-landing-intro.js';
+import { initValuAppLandingIntro, killValuAppLandingIntro, landingIntroShortAccel } from './valu-landing-intro.js';
 
 /**
  * Valu orb animation — direct port from the original Framework7 app (valu.js).
@@ -221,18 +216,8 @@ function initLandingVisualStack(root) {
 
   const site = root.querySelector('.valu-site-intro');
   if (site) {
-    if (site._valuIntroRipple) {
-      site.removeEventListener('click', site._valuIntroRipple);
-      delete site._valuIntroRipple;
-    }
     killValuAppLandingIntro();
     initValuAppLandingIntro(site);
-    const onIntroClick = (e) => {
-      createRipple(site, e);
-      landingIntroHandleUserClick();
-    };
-    site._valuIntroRipple = onIntroClick;
-    site.addEventListener('click', onIntroClick);
     return;
   }
 

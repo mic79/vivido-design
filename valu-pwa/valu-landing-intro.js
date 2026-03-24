@@ -21,9 +21,6 @@ function killMeta(meta) {
       /* ignore */
     }
   }
-  if (meta.rootEl) {
-    delete meta.rootEl._valuIntroStatusClick;
-  }
 }
 
 export function killValuAppLandingIntro() {
@@ -35,15 +32,6 @@ export function killValuAppLandingIntro() {
 export function landingIntroShortAccel() {
   if (activeMeta && typeof activeMeta.shortBgAccel === 'function') {
     activeMeta.shortBgAccel();
-  }
-}
-
-/**
- * Reference: body click vibrates; if `animation === false`, `statusToggle()`.
- */
-export function landingIntroHandleUserClick() {
-  if (activeMeta && typeof activeMeta.onUserTap === 'function') {
-    activeMeta.onUserTap();
   }
 }
 
@@ -99,7 +87,6 @@ export function initValuAppLandingIntro(container) {
   }
 
   const meta = {
-    rootEl: root,
     tl: null,
     tlLogo: null,
     tlIdle: null,
@@ -333,14 +320,4 @@ export function initValuAppLandingIntro(container) {
 
   /* Reference waited 4s on gfx; shorten idle phase by gfxD so #logo draw starts sooner. */
   meta.delayedCall = gsap.delayedCall(4 * gfxD, statusToggle);
-
-  meta.onUserTap = () => {
-    if (window.navigator && window.navigator.vibrate) {
-      window.navigator.vibrate(10);
-    }
-    if (animation === false) {
-      statusToggle();
-    }
-  };
-  root._valuIntroStatusClick = meta.onUserTap;
 }
