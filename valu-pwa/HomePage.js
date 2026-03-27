@@ -35,6 +35,22 @@ export default {
       return map;
     });
 
+    const categoryIconMap = computed(() => {
+      const map = {};
+      for (const key of ['expenseCategories', 'incomeCategories']) {
+        const str = props.settings?.[key] || '';
+        str.split(',').filter(Boolean).forEach(c => {
+          const idx = c.indexOf(':');
+          if (idx > 0) map[c.slice(0, idx)] = c.slice(idx + 1);
+        });
+      }
+      return map;
+    });
+
+    function getCategoryIcon(name) {
+      return categoryIconMap.value[name] || '';
+    }
+
     function convertToBase(amount, fromCurrency) {
       if (!fromCurrency || fromCurrency === baseCurrency.value) return amount;
       const rate = currencyRates.value[fromCurrency];
@@ -387,7 +403,7 @@ export default {
       savingsRate, recentTransactions, needsBalanceUpdate,
       prevMonthInfo, chartMax, selectedBar, selectedPoint, displayedBalance,
       chartWidth, chartHeight, chartPath, chartAreaPath,
-      formatCurrency, formatDate, monthLabel, monthName, accountLabel,
+      formatCurrency, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon,
       toggleBar, emit,
       showDemoWelcomeSheet, dismissDemoWelcome,
       showOnboarding, accountsNeedsData, incomeNeedsData, expensesNeedsData,
@@ -508,7 +524,7 @@ export default {
             <div v-for="tx in recentTransactions" :key="tx.id" class="list-item">
               <div class="list-item-icon"
                 :style="{ background: tx.type === 'income' ? 'var(--color-primary-light)' : 'rgba(173,75,32,.1)', color: tx.type === 'income' ? 'var(--color-primary)' : 'var(--color-secondary)' }">
-                <span class="material-icons">{{ tx.type === 'income' ? 'payments' : 'receipt' }}</span>
+                <span class="material-icons">{{ getCategoryIcon(tx.category) || (tx.type === 'income' ? 'payments' : 'receipt') }}</span>
               </div>
               <div class="list-item-content">
                 <div class="list-item-title">{{ tx.title }}</div>

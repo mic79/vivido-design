@@ -59,6 +59,36 @@ export default {
     const newRateValue = ref('');
     const currencyDropdownOpen = ref(false);
     const currencySearch = ref('');
+    const iconPickerFor = ref(null);
+    const editingCatName = ref(null);
+    const editCatNameValue = ref('');
+
+    const CATEGORY_ICONS = [
+      'restaurant', 'fastfood', 'coffee', 'local_bar', 'bakery_dining', 'local_grocery_store',
+      'directions_car', 'directions_bus', 'flight', 'local_gas_station', 'local_parking', 'directions_bike',
+      'home', 'power', 'wifi', 'phone_iphone', 'tv', 'build',
+      'shopping_bag', 'checkroom', 'storefront', 'local_mall',
+      'movie', 'sports_esports', 'music_note', 'sports_bar',
+      'local_hospital', 'fitness_center', 'spa', 'medication',
+      'school', 'menu_book', 'work', 'laptop', 'business_center',
+      'pets', 'child_care', 'card_giftcard', 'volunteer_activism',
+      'payments', 'trending_up', 'account_balance', 'savings',
+      'receipt', 'attach_money', 'sell', 'real_estate_agent',
+      'cleaning_services', 'local_laundry_service',
+      'hotel', 'beach_access', 'hiking',
+      'security', 'gavel', 'category', 'more_horiz',
+    ];
+
+    function serializeCategories(arr) {
+      return arr.map(c => c.icon ? c.name + ':' + c.icon : c.name).join(',');
+    }
+    function parseCategories(str) {
+      return (str || '').split(',').filter(Boolean).map(c => {
+        const idx = c.indexOf(':');
+        if (idx < 0) return { name: c, icon: '' };
+        return { name: c.slice(0, idx), icon: c.slice(idx + 1) };
+      });
+    }
     /** True while configuring a group that does not exist yet (single-sheet create flow). */
     const configIsNewGroup = ref(false);
 
@@ -191,6 +221,8 @@ export default {
       newRateValue.value = '';
       currencyDropdownOpen.value = false;
       currencySearch.value = '';
+      iconPickerFor.value = null;
+      editingCatName.value = null;
       showConfigSheet.value = true;
     }
 
@@ -214,8 +246,8 @@ export default {
           SheetsApi.updateSetting(id, 'groupName', name),
           SheetsApi.updateSetting(id, 'baseCurrency', configBaseCurrency.value),
           SheetsApi.updateSetting(id, 'listsEnabled', listsCsv),
-          SheetsApi.updateSetting(id, 'expenseCategories', configExpenseCategories.value.join(',')),
-          SheetsApi.updateSetting(id, 'incomeCategories', configIncomeCategories.value.join(',')),
+          SheetsApi.updateSetting(id, 'expenseCategories', serializeCategories(configExpenseCategories.value)),
+          SheetsApi.updateSetting(id, 'incomeCategories', serializeCategories(configIncomeCategories.value)),
           SheetsApi.updateSetting(id, 'currencyRates', ratesStr),
         ]);
 
@@ -292,8 +324,8 @@ export default {
         configGroupName.value = settings.groupName || group.name.replace('Valu: ', '');
         configBaseCurrency.value = settings.baseCurrency || 'CAD';
         configEnabledLists.value = (settings.listsEnabled || '').split(',').filter(Boolean);
-        configExpenseCategories.value = (settings.expenseCategories || '').split(',').filter(Boolean);
-        configIncomeCategories.value = (settings.incomeCategories || '').split(',').filter(Boolean);
+        configExpenseCategories.value = parseCategories(settings.expenseCategories);
+        configIncomeCategories.value = parseCategories(settings.incomeCategories);
 
         const ratesStr = settings.currencyRates || '';
         configCurrencyRates.value = ratesStr.split(',').filter(Boolean).map(r => {
@@ -371,30 +403,111 @@ export default {
 
     function addConfigCategory(type) {
       if (type === 'expense') {
-        const cat = newExpenseCat.value.trim();
-        if (cat && !configExpenseCategories.value.includes(cat)) {
-          configExpenseCategories.value.push(cat);
+        const name = newExpenseCat.value.trim();
+        if (name && !configExpenseCategories.value.some(c => c.name === name)) {
+          configExpenseCategories.value.push({ name, icon: '' });
           newExpenseCat.value = '';
-          saveConfigField('expenseCategories', configExpenseCategories.value.join(','));
+          saveConfigField('expenseCategories', serializeCategories(configExpenseCategories.value));
         }
       } else {
-        const cat = newIncomeCat.value.trim();
-        if (cat && !configIncomeCategories.value.includes(cat)) {
-          configIncomeCategories.value.push(cat);
+        const name = newIncomeCat.value.trim();
+        if (name && !configIncomeCategories.value.some(c => c.name === name)) {
+          configIncomeCategories.value.push({ name, icon: '' });
           newIncomeCat.value = '';
-          saveConfigField('incomeCategories', configIncomeCategories.value.join(','));
+          saveConfigField('incomeCategories', serializeCategories(configIncomeCategories.value));
         }
       }
     }
 
     function removeConfigCategory(type, index) {
-      if (type === 'expense') {
-        configExpenseCategories.value.splice(index, 1);
-        saveConfigField('expenseCategories', configExpenseCategories.value.join(','));
-      } else {
-        configIncomeCategories.value.splice(index, 1);
-        saveConfigField('incomeCategories', configIncomeCategories.value.join(','));
+      const list = type === 'expense' ? configExpenseCategories : configIncomeCategories;
+      const name = list.value[index]?.name || 'this category';
+      if (!confirm('Delete "' + name + '"? This will not remove the category from existing entries.')) return;
+      list.value.splice(index, 1);
+      const key = type === 'expense' ? 'expenseCategories' : 'incomeCategories';
+      saveConfigField(key, serializeCategories(list.value));
+    }
+
+    function openIconPicker(type, index) {
+      iconPickerFor.value = { type, index };
+    }
+
+    function pickIcon(iconName) {
+      if (!iconPickerFor.value) return;
+      const { type, index } = iconPickerFor.value;
+      const list = type === 'expense' ? configExpenseCategories : configIncomeCategories;
+      list.value[index] = { ...list.value[index], icon: iconName };
+      iconPickerFor.value = null;
+      const key = type === 'expense' ? 'expenseCategories' : 'incomeCategories';
+      saveConfigField(key, serializeCategories(list.value));
+    }
+
+    function clearCategoryIcon() {
+      if (!iconPickerFor.value) return;
+      const { type, index } = iconPickerFor.value;
+      const list = type === 'expense' ? configExpenseCategories : configIncomeCategories;
+      list.value[index] = { ...list.value[index], icon: '' };
+      iconPickerFor.value = null;
+      const key = type === 'expense' ? 'expenseCategories' : 'incomeCategories';
+      saveConfigField(key, serializeCategories(list.value));
+    }
+
+    function startRenameCat(type, index) {
+      const list = type === 'expense' ? configExpenseCategories : configIncomeCategories;
+      editingCatName.value = { type, index };
+      editCatNameValue.value = list.value[index].name;
+    }
+
+    function saveRenameCat() {
+      if (!editingCatName.value) return;
+      const { type, index } = editingCatName.value;
+      const list = type === 'expense' ? configExpenseCategories : configIncomeCategories;
+      const newName = editCatNameValue.value.trim();
+      if (!newName || (list.value.some((c, i) => c.name === newName && i !== index))) {
+        editingCatName.value = null;
+        return;
       }
+      list.value[index] = { ...list.value[index], name: newName };
+      editingCatName.value = null;
+      const key = type === 'expense' ? 'expenseCategories' : 'incomeCategories';
+      saveConfigField(key, serializeCategories(list.value));
+    }
+
+    function cancelRenameCat() {
+      editingCatName.value = null;
+    }
+
+    function moveCategoryUp(type, index) {
+      if (index === 0) return;
+      const list = type === 'expense' ? configExpenseCategories : configIncomeCategories;
+      const arr = [...list.value];
+      [arr[index - 1], arr[index]] = [arr[index], arr[index - 1]];
+      list.value = arr;
+      const key = type === 'expense' ? 'expenseCategories' : 'incomeCategories';
+      saveConfigField(key, serializeCategories(arr));
+    }
+
+    function moveCategoryDown(type, index) {
+      const list = type === 'expense' ? configExpenseCategories : configIncomeCategories;
+      if (index >= list.value.length - 1) return;
+      const arr = [...list.value];
+      [arr[index], arr[index + 1]] = [arr[index + 1], arr[index]];
+      list.value = arr;
+      const key = type === 'expense' ? 'expenseCategories' : 'incomeCategories';
+      saveConfigField(key, serializeCategories(arr));
+    }
+
+    function toggleCategoriesEnabled(type) {
+      const key = type === 'expense' ? 'expenseCategoriesEnabled' : 'incomeCategoriesEnabled';
+      const current = type === 'expense'
+        ? (props.settings?.expenseCategoriesEnabled !== 'false')
+        : (props.settings?.incomeCategoriesEnabled !== 'false');
+      saveConfigField(key, current ? 'false' : 'true');
+    }
+
+    function areCategoriesEnabled(type) {
+      if (type === 'expense') return props.settings?.expenseCategoriesEnabled !== 'false';
+      return props.settings?.incomeCategoriesEnabled !== 'false';
     }
 
     function addConfigCurrencyRate() {
@@ -430,10 +543,15 @@ export default {
       configGroupName, configBaseCurrency, configEnabledLists,
       configExpenseCategories, configIncomeCategories, configCurrencyRates,
       newExpenseCat, newIncomeCat, newRateCurrency, newRateValue,
-      AVAILABLE_LISTS, CURRENCIES,
+      AVAILABLE_LISTS, CURRENCIES, CATEGORY_ICONS,
       currencyDropdownOpen, currencySearch, filteredCurrencies, currencyName,
+      iconPickerFor, editingCatName, editCatNameValue,
       openGroupConfig, saveConfigGroupName, saveConfigBaseCurrency, selectConfigBaseCurrency,
       toggleConfigList, addConfigCategory, removeConfigCategory,
+      openIconPicker, pickIcon, clearCategoryIcon,
+      startRenameCat, saveRenameCat, cancelRenameCat,
+      moveCategoryUp, moveCategoryDown,
+      toggleCategoriesEnabled, areCategoriesEnabled,
       addConfigCurrencyRate, removeConfigCurrencyRate,
     };
   },
@@ -596,13 +714,30 @@ export default {
 
             <!-- Expense Categories -->
             <div class="card mb-16" v-if="configEnabledLists.includes('expenses')">
-              <div class="card-header"><h3>Expense Categories</h3></div>
+              <div class="card-header">
+                <h3>Expense Categories</h3>
+                <label class="toggle toggle-sm" v-if="configExpenseCategories.length">
+                  <input type="checkbox" :checked="areCategoriesEnabled('expense')" @change="toggleCategoriesEnabled('expense')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </label>
+              </div>
               <div class="card-body">
-                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;" v-if="configExpenseCategories.length">
-                  <span class="chip" v-for="(cat, i) in configExpenseCategories" :key="cat">
-                    {{ cat }}
-                    <span class="chip-remove" @click="removeConfigCategory('expense', i)">&times;</span>
-                  </span>
+                <div class="cat-list" v-if="configExpenseCategories.length">
+                  <div class="cat-item" v-for="(cat, i) in configExpenseCategories" :key="i">
+                    <button class="cat-icon-btn" @click="openIconPicker('expense', i)">
+                      <span class="material-icons">{{ cat.icon || 'label' }}</span>
+                    </button>
+                    <template v-if="editingCatName && editingCatName.type === 'expense' && editingCatName.index === i">
+                      <input class="form-input cat-rename-input" v-model="editCatNameValue" @keyup.enter="saveRenameCat" @keyup.escape="cancelRenameCat" @blur="saveRenameCat" />
+                    </template>
+                    <span v-else class="cat-name" @click="startRenameCat('expense', i)">{{ cat.name }}</span>
+                    <div class="cat-order-btns">
+                      <button class="cat-order-btn" @click="moveCategoryUp('expense', i)" :disabled="i === 0"><span class="material-icons">arrow_upward</span></button>
+                      <button class="cat-order-btn" @click="moveCategoryDown('expense', i)" :disabled="i === configExpenseCategories.length - 1"><span class="material-icons">arrow_downward</span></button>
+                    </div>
+                    <button class="cat-remove-btn" @click="removeConfigCategory('expense', i)">&times;</button>
+                  </div>
                 </div>
                 <p v-else style="font-size:13px;color:var(--color-text-hint);margin-bottom:12px;">
                   No categories yet. Categories are optional.
@@ -616,13 +751,30 @@ export default {
 
             <!-- Income Categories -->
             <div class="card mb-16" v-if="configEnabledLists.includes('income')">
-              <div class="card-header"><h3>Income Categories</h3></div>
+              <div class="card-header">
+                <h3>Income Categories</h3>
+                <label class="toggle toggle-sm" v-if="configIncomeCategories.length">
+                  <input type="checkbox" :checked="areCategoriesEnabled('income')" @change="toggleCategoriesEnabled('income')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </label>
+              </div>
               <div class="card-body">
-                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;" v-if="configIncomeCategories.length">
-                  <span class="chip" v-for="(cat, i) in configIncomeCategories" :key="cat">
-                    {{ cat }}
-                    <span class="chip-remove" @click="removeConfigCategory('income', i)">&times;</span>
-                  </span>
+                <div class="cat-list" v-if="configIncomeCategories.length">
+                  <div class="cat-item" v-for="(cat, i) in configIncomeCategories" :key="i">
+                    <button class="cat-icon-btn" @click="openIconPicker('income', i)">
+                      <span class="material-icons">{{ cat.icon || 'label' }}</span>
+                    </button>
+                    <template v-if="editingCatName && editingCatName.type === 'income' && editingCatName.index === i">
+                      <input class="form-input cat-rename-input" v-model="editCatNameValue" @keyup.enter="saveRenameCat" @keyup.escape="cancelRenameCat" @blur="saveRenameCat" />
+                    </template>
+                    <span v-else class="cat-name" @click="startRenameCat('income', i)">{{ cat.name }}</span>
+                    <div class="cat-order-btns">
+                      <button class="cat-order-btn" @click="moveCategoryUp('income', i)" :disabled="i === 0"><span class="material-icons">arrow_upward</span></button>
+                      <button class="cat-order-btn" @click="moveCategoryDown('income', i)" :disabled="i === configIncomeCategories.length - 1"><span class="material-icons">arrow_downward</span></button>
+                    </div>
+                    <button class="cat-remove-btn" @click="removeConfigCategory('income', i)">&times;</button>
+                  </div>
                 </div>
                 <p v-else style="font-size:13px;color:var(--color-text-hint);margin-bottom:12px;">
                   No categories yet. Categories are optional.
@@ -630,6 +782,25 @@ export default {
                 <div class="flex gap-8">
                   <input class="form-input flex-1" v-model="newIncomeCat" placeholder="New category" @keyup.enter="addConfigCategory('income')" />
                   <button class="btn btn-outline" @click="addConfigCategory('income')" :disabled="!newIncomeCat.trim()">Add</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Icon Picker Overlay -->
+            <div class="modal-overlay modal-overlay-top" :class="{ open: !!iconPickerFor }" @click.self="iconPickerFor = null">
+              <div class="modal" v-if="iconPickerFor" style="max-height:60vh;">
+                <div class="sheet-handle"></div>
+                <div class="modal-header">
+                  <h2>Choose Icon</h2>
+                  <button class="btn-icon" @click="iconPickerFor = null"><span class="material-icons">close</span></button>
+                </div>
+                <div class="modal-body" style="padding:12px;">
+                  <div class="icon-picker-grid">
+                    <button v-for="ic in CATEGORY_ICONS" :key="ic" class="icon-picker-item" @click="pickIcon(ic)" :title="ic">
+                      <span class="material-icons">{{ ic }}</span>
+                    </button>
+                  </div>
+                  <button class="btn btn-text" style="width:100%;margin-top:8px;" @click="clearCategoryIcon">Remove icon</button>
                 </div>
               </div>
             </div>

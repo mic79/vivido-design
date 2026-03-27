@@ -28,10 +28,31 @@ export default {
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
 
+    const categoriesEnabled = computed(() => props.settings?.expenseCategoriesEnabled !== 'false');
+
     const categories = computed(() => {
+      if (!categoriesEnabled.value) return [];
       const str = props.settings?.expenseCategories || '';
-      return str.split(',').filter(Boolean);
+      return str.split(',').filter(Boolean).map(c => {
+        const idx = c.indexOf(':');
+        if (idx < 0) return { name: c, icon: '' };
+        return { name: c.slice(0, idx), icon: c.slice(idx + 1) };
+      });
     });
+
+    const allCategoryIcons = computed(() => {
+      const str = props.settings?.expenseCategories || '';
+      const map = {};
+      str.split(',').filter(Boolean).forEach(c => {
+        const idx = c.indexOf(':');
+        if (idx > 0) map[c.slice(0, idx)] = c.slice(idx + 1);
+      });
+      return map;
+    });
+
+    function getCategoryIcon(categoryName) {
+      return allCategoryIcons.value[categoryName] || '';
+    }
 
     const currencyRates = computed(() => {
       const ratesStr = props.settings?.currencyRates || '';
@@ -296,7 +317,7 @@ export default {
       newExpense, categories, baseCurrency,
       adjustBalance, editAdjustBalance,
       filterMonth, availableMonths, openDropdown, toggleDropdown, setDropdownOpen,
-      formatCurrency, getAccountName, getAccountCurrency, formatAccountDisplayName,
+      formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
       addExpense, startEdit, saveEdit, deleteExpense, duplicateExpense,
       formatDate, openNewExpenseModal,
     };
@@ -351,13 +372,17 @@ export default {
         <div class="valu-list" v-if="filteredExpenses.length > 0">
           <div v-for="exp in filteredExpenses" :key="exp.id" class="valu-list-item" @click="startEdit(exp)">
             <div class="valu-list-row">
-              <div class="valu-list-name">{{ exp.title }}</div>
-              <div class="valu-list-after">{{ formatCurrency(exp.amount, getAccountCurrency(exp.accountId)) }}</div>
-            </div>
-            <div class="valu-list-sub">
-              {{ formatDate(exp.date) }}
-              <span v-if="exp.category"> · {{ exp.category }}</span>
-              <span v-if="getAccountName(exp.accountId)"> · {{ getAccountName(exp.accountId) }}</span>
+              <span v-if="getCategoryIcon(exp.category)" class="material-icons valu-list-cat-icon">{{ getCategoryIcon(exp.category) }}</span>
+              <div class="valu-list-body">
+                <div class="valu-list-top">
+                  <div class="valu-list-name">{{ exp.title }}</div>
+                  <div class="valu-list-after">{{ formatCurrency(exp.amount, getAccountCurrency(exp.accountId)) }}</div>
+                </div>
+                <div class="valu-list-sub">
+                  {{ formatDate(exp.date) }}
+                  <span v-if="getAccountName(exp.accountId)"> · {{ getAccountName(exp.accountId) }}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -401,12 +426,18 @@ export default {
             <div class="sheet-list-item" v-if="categories.length > 0">
               <label>Category</label>
               <valu-dropdown :open="openDropdown === 'newCat'" @update:open="(v) => setDropdownOpen('newCat', v)">
-                <template #label>{{ newExpense.category || 'No category' }}</template>
+                <template #label>
+                  <span v-if="getCategoryIcon(newExpense.category)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(newExpense.category) }}</span>
+                  {{ newExpense.category || 'No category' }}
+                </template>
                 <div class="valu-dropdown-option" :class="{ selected: !newExpense.category }"
                      @click="newExpense.category = ''; openDropdown = null">No category</div>
-                <div v-for="c in categories" :key="c"
-                     class="valu-dropdown-option" :class="{ selected: newExpense.category === c }"
-                     @click="newExpense.category = c; openDropdown = null">{{ c }}</div>
+                <div v-for="c in categories" :key="c.name"
+                     class="valu-dropdown-option" :class="{ selected: newExpense.category === c.name }"
+                     @click="newExpense.category = c.name; openDropdown = null">
+                  <span v-if="c.icon" class="material-icons dropdown-cat-icon">{{ c.icon }}</span>
+                  {{ c.name }}
+                </div>
               </valu-dropdown>
             </div>
             <div class="sheet-list-item" v-if="accounts && accounts.length > 0">
@@ -457,12 +488,18 @@ export default {
             <div class="sheet-list-item" v-if="categories.length > 0">
               <label>Category</label>
               <valu-dropdown :open="openDropdown === 'editCat'" @update:open="(v) => setDropdownOpen('editCat', v)">
-                <template #label>{{ editingExpense.category || 'No category' }}</template>
+                <template #label>
+                  <span v-if="getCategoryIcon(editingExpense.category)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(editingExpense.category) }}</span>
+                  {{ editingExpense.category || 'No category' }}
+                </template>
                 <div class="valu-dropdown-option" :class="{ selected: !editingExpense.category }"
                      @click="editingExpense.category = ''; openDropdown = null">No category</div>
-                <div v-for="c in categories" :key="c"
-                     class="valu-dropdown-option" :class="{ selected: editingExpense.category === c }"
-                     @click="editingExpense.category = c; openDropdown = null">{{ c }}</div>
+                <div v-for="c in categories" :key="c.name"
+                     class="valu-dropdown-option" :class="{ selected: editingExpense.category === c.name }"
+                     @click="editingExpense.category = c.name; openDropdown = null">
+                  <span v-if="c.icon" class="material-icons dropdown-cat-icon">{{ c.icon }}</span>
+                  {{ c.name }}
+                </div>
               </valu-dropdown>
             </div>
             <div class="sheet-list-item" v-if="accounts && accounts.length > 0">
