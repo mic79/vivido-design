@@ -537,6 +537,9 @@
             groupSettings.value = {};
             dataLoaded.value = false;
             groupLoading.value = false;
+            needsReconnect.value = false;
+            currentPage.value = 'home';
+            SheetsApi.stopChangeDetection();
             localStorage.removeItem('valu_groups_cache');
             localStorage.removeItem('valu_settings_cache');
           }
@@ -793,8 +796,13 @@
 
         // ── Init ────────────────────────────────────────────────────────────
 
+        let _orbRafId = 0;
         function reinitOrbs() {
-          nextTick(() => { requestAnimationFrame(() => { ValuOrb.initAll(); }); });
+          cancelAnimationFrame(_orbRafId);
+          nextTick(() => {
+            cancelAnimationFrame(_orbRafId);
+            _orbRafId = requestAnimationFrame(() => { ValuOrb.initAll(); });
+          });
         }
 
         watch(isAuthenticated, reinitOrbs);

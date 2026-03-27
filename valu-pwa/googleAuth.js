@@ -13,13 +13,13 @@ const CLIENT_ID = '399400088485-h2nrjmo500qj4s7qrvfaog2tsqet3huo.apps.googleuser
 const API_KEY   = 'AIzaSyBdC9q6tLx1vLOFyUF-8Jeuy4gpuTYiaPs';
 const SCOPES    = 'https://www.googleapis.com/auth/drive.file openid email profile';
 
-let tokenClient      = null;
-let accessToken      = null;
-let userProfile      = null;
-let _onAuthChange         = null;
-let _tokenRejecter        = null;
-let _connectResolver      = null;
-let _pendingTokenPromise  = null;
+let tokenClient          = null;
+let accessToken          = null;
+let userProfile          = null;
+let _onAuthChange        = null;
+let _tokenRejecter       = null;
+let _connectResolver     = null;
+let _pendingTokenPromise = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -158,6 +158,18 @@ const GoogleAuth = {
   async connect() {
     const token = await new Promise((resolve, reject) => {
       _connectResolver = { resolve, reject };
+
+      tokenClient.callback = (resp) => {
+        _connectResolver = null;
+        if (resp.error) {
+          reject(new Error(resp.error));
+          return;
+        }
+        accessToken = resp.access_token;
+        cacheToken(resp.access_token, resp.expires_in);
+        resolve(accessToken);
+      };
+
       tokenClient.requestAccessToken({
         prompt: 'select_account',
       });
@@ -198,7 +210,14 @@ const GoogleAuth = {
     }
 
     _pendingTokenPromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        _pendingTokenPromise = null;
+        _tokenRejecter = null;
+        reject(new Error('popup_blocked'));
+      }, 6000);
+
       tokenClient.callback = (resp) => {
+        clearTimeout(timeout);
         _pendingTokenPromise = null;
         _tokenRejecter = null;
         if (resp.error) {
@@ -211,6 +230,7 @@ const GoogleAuth = {
       };
 
       _tokenRejecter = (err) => {
+        clearTimeout(timeout);
         _pendingTokenPromise = null;
         reject(err);
       };
@@ -236,6 +256,9 @@ const GoogleAuth = {
     }
     accessToken = null;
     userProfile = null;
+    _pendingTokenPromise = null;
+    _tokenRejecter = null;
+    _connectResolver = null;
     persistSession(null);
     clearCachedToken();
     if (_onAuthChange) _onAuthChange(false, null);
