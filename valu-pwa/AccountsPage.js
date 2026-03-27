@@ -452,10 +452,11 @@ export default {
       <div class="subpage-scroll">
       <!-- Nav row (matches original: ← ... Accounts ... orb) -->
       <div class="subpage-nav">
-        <button class="subpage-back" @click="$emit('go-home')">
+        <button class="subpage-back subpage-back--colored" @click="$emit('go-home')">
           <span class="material-icons">arrow_back</span>
         </button>
-        <div class="valu-orb-sm subpage-orb">
+        <h1 class="subpage-nav-title">Accounts</h1>
+        <div class="valu-orb-sm subpage-orb-inline">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>
@@ -471,7 +472,6 @@ export default {
       <template v-else>
         <!-- Centered header (matches screenshot exactly) -->
         <div class="subpage-header">
-          <h1 class="subpage-title">Accounts</h1>
           <h2 class="subpage-balance">{{ formatCurrency(totalNetWorth, baseCurrency) }}</h2>
           <div class="subpage-diff" :class="previousMonthDiff >= 0 ? 'diff-positive' : 'diff-negative'">
             <span class="material-icons subpage-diff-arrow">{{ previousMonthDiff >= 0 ? 'trending_up' : 'trending_down' }}</span>

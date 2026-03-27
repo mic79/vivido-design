@@ -16,8 +16,22 @@ export default {
     const showAddModal = ref(false);
     const showEditModal = ref(false);
     const editingIncome = ref(null);
-    const filterMonth = ref('');
+    const filterMonth = ref(getCurrentMonthKey());
+    const filterCategory = ref('');
+    const filterSearch = ref('');
+    const showMonthSheet = ref(false);
     const openDropdown = ref(null);
+
+    function getCurrentMonthKey() {
+      const d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    }
+
+    function formatMonthLabel(key) {
+      if (!key) return 'All months';
+      const [y, m] = key.split('-').map(Number);
+      return new Date(y, m - 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    }
 
     const newIncome = ref({
       title: '', amount: '', accountId: '', category: '', date: '', notes: '',
@@ -114,9 +128,22 @@ export default {
         list = list.filter(e => {
           if (!e.date) return false;
           const parts = e.date.split('-');
-          const key = `${parts[0]}-${parts[1]}`;
-          return key === filterMonth.value;
+          return `${parts[0]}-${parts[1]}` === filterMonth.value;
         });
+      }
+
+      if (filterCategory.value) {
+        list = list.filter(e => e.category === filterCategory.value);
+      }
+
+      if (filterSearch.value) {
+        const q = filterSearch.value.toLowerCase();
+        list = list.filter(e =>
+          (e.title && e.title.toLowerCase().includes(q)) ||
+          (e.notes && e.notes.toLowerCase().includes(q)) ||
+          (e.category && e.category.toLowerCase().includes(q)) ||
+          (getAccountName(e.accountId).toLowerCase().includes(q))
+        );
       }
 
       return list;
@@ -127,6 +154,41 @@ export default {
         const cur = getAccountCurrency(e.accountId);
         return sum + convertToBase(e.amount, cur);
       }, 0);
+    });
+
+    const monthTotals = computed(() => {
+      const map = {};
+      for (const e of incomeList.value) {
+        if (!e.date) continue;
+        const parts = e.date.split('-');
+        const key = `${parts[0]}-${parts[1]}`;
+        const cur = getAccountCurrency(e.accountId);
+        map[key] = (map[key] || 0) + convertToBase(e.amount, cur);
+      }
+      return map;
+    });
+
+    const usedCategories = computed(() => {
+      const set = new Set();
+      const src = filterMonth.value
+        ? incomeList.value.filter(e => {
+            if (!e.date) return false;
+            const parts = e.date.split('-');
+            return `${parts[0]}-${parts[1]}` === filterMonth.value;
+          })
+        : incomeList.value;
+      for (const e of src) {
+        if (e.category) set.add(e.category);
+      }
+      const allCats = (props.settings?.incomeCategories || '').split(',').filter(Boolean).map(c => {
+        const idx = c.indexOf(':');
+        return idx < 0 ? c : c.slice(0, idx);
+      });
+      const ordered = allCats.filter(name => set.has(name));
+      for (const name of set) {
+        if (!ordered.includes(name)) ordered.push(name);
+      }
+      return ordered;
     });
 
     async function fetchData() {
@@ -312,11 +374,13 @@ export default {
     }
 
     return {
-      incomeList, loading, filteredIncome, monthlyTotal,
+      incomeList, loading, filteredIncome, monthlyTotal, monthTotals,
       showAddModal, showEditModal, editingIncome,
       newIncome, categories, baseCurrency,
       adjustBalance, editAdjustBalance,
-      filterMonth, availableMonths, openDropdown, toggleDropdown, setDropdownOpen,
+      filterMonth, filterCategory, filterSearch, availableMonths, usedCategories,
+      showMonthSheet, formatMonthLabel,
+      openDropdown, toggleDropdown, setDropdownOpen,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
       addIncome, startEdit, saveEdit, deleteIncome, duplicateIncome,
       formatDate, openNewIncomeModal,
@@ -326,12 +390,13 @@ export default {
   template: `
     <div class="subpage">
       <div class="subpage-scroll">
-      <!-- Nav row -->
+      <!-- Nav row with centered title -->
       <div class="subpage-nav">
-        <button class="subpage-back" @click="$emit('go-home')">
+        <button class="subpage-back subpage-back--colored" @click="$emit('go-home')">
           <span class="material-icons">arrow_back</span>
         </button>
-        <div class="valu-orb-sm subpage-orb">
+        <h1 class="subpage-nav-title">Income</h1>
+        <div class="valu-orb-sm subpage-orb-inline">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>
@@ -345,25 +410,38 @@ export default {
       <div v-if="loading" class="loading" style="padding-top:40px;"><div class="spinner"></div>Loading income...</div>
 
       <template v-else>
-        <!-- Centered header -->
+        <!-- Month + total header -->
         <div class="subpage-header">
-          <h1 class="subpage-title">Income</h1>
+          <button class="subpage-month-btn" @click="showMonthSheet = true">
+            <span>{{ formatMonthLabel(filterMonth) }}</span>
+            <span class="material-icons subpage-month-arrow">unfold_more</span>
+          </button>
           <h2 class="subpage-balance">{{ formatCurrency(monthlyTotal, baseCurrency) }}</h2>
         </div>
 
-        <!-- Filter -->
-        <div style="padding:0 16px 8px;" v-if="availableMonths.length > 0">
-          <div class="form-dropdown" @click.stop>
-            <button type="button" class="form-dropdown-trigger" @click="toggleDropdown('filterMonth')">
-              <span>{{ filterMonth || 'All months' }}</span>
-              <span class="material-icons form-dropdown-arrow">expand_more</span>
+        <!-- Category filter -->
+        <div class="subpage-filter-bar">
+          <div class="subpage-filter-search" :class="{ expanded: filterSearch }">
+            <span class="material-icons subpage-filter-search-icon">search</span>
+            <input class="subpage-filter-search-input" v-model="filterSearch" placeholder="Search..." />
+            <button v-if="filterSearch" class="subpage-filter-search-clear" @click="filterSearch = ''">
+              <span class="material-icons">close</span>
             </button>
-            <div class="form-dropdown-list" v-if="openDropdown === 'filterMonth'">
-              <div class="form-dropdown-option" :class="{ selected: filterMonth === '' }"
-                   @click="filterMonth = ''; openDropdown = null">All months</div>
-              <div v-for="m in availableMonths" :key="m"
-                   class="form-dropdown-option" :class="{ selected: filterMonth === m }"
-                   @click="filterMonth = m; openDropdown = null">{{ m }}</div>
+          </div>
+          <div v-if="usedCategories.length > 0" style="position:relative;">
+            <button class="subpage-filter-btn" :class="{ active: filterCategory }" @click="toggleDropdown('filterCat')">
+              <span class="material-icons" style="font-size:16px;">filter_list</span>
+              <span>{{ filterCategory || 'Filter' }}</span>
+            </button>
+            <div class="subpage-filter-dropdown" v-if="openDropdown === 'filterCat'" @click.stop>
+              <div class="subpage-filter-option" :class="{ selected: !filterCategory }"
+                   @click="filterCategory = ''; openDropdown = null">All categories</div>
+              <div v-for="cat in usedCategories" :key="cat"
+                   class="subpage-filter-option" :class="{ selected: filterCategory === cat }"
+                   @click="filterCategory = cat; openDropdown = null">
+                <span v-if="getCategoryIcon(cat)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(cat) }}</span>
+                {{ cat }}
+              </div>
             </div>
           </div>
         </div>
@@ -462,6 +540,30 @@ export default {
           </div>
           <div class="modal-footer">
             <button class="btn-sheet-cta" @click="addIncome" :disabled="!newIncome.title.trim() || newIncome.amount === '' || newIncome.amount === undefined">Add income</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Month Selection Sheet -->
+      <div class="modal-overlay" :class="{ open: showMonthSheet }" @click.self="showMonthSheet = false">
+        <div class="modal">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Select Month</h2>
+            <button class="btn-icon" @click="showMonthSheet = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="padding:0;">
+            <div class="month-picker-option" :class="{ selected: !filterMonth }"
+                 @click="filterMonth = ''; filterCategory = ''; showMonthSheet = false">
+              <span class="month-picker-label">All months</span>
+              <span class="month-picker-total">{{ formatCurrency(Object.values(monthTotals).reduce((a,b) => a+b, 0), baseCurrency) }}</span>
+            </div>
+            <div v-for="m in availableMonths" :key="m"
+                 class="month-picker-option" :class="{ selected: filterMonth === m }"
+                 @click="filterMonth = m; filterCategory = ''; showMonthSheet = false">
+              <span class="month-picker-label">{{ formatMonthLabel(m) }}</span>
+              <span class="month-picker-total">{{ formatCurrency(monthTotals[m] || 0, baseCurrency) }}</span>
+            </div>
           </div>
         </div>
       </div>

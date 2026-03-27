@@ -560,10 +560,16 @@ export default {
     <div class="subpage">
       <div class="subpage-scroll">
       <div class="subpage-nav">
-        <button class="subpage-back" @click="$emit('go-home')">
+        <button class="subpage-back subpage-back--colored" @click="$emit('go-home')">
           <span class="material-icons">arrow_back</span>
         </button>
-        <div class="valu-orb-sm subpage-orb">
+        <h1 class="subpage-nav-title">
+          Groups
+          <button type="button" class="btn-icon subpage-header-refresh" @click="refreshGroups" :disabled="loading" aria-label="Refresh groups from Drive" style="vertical-align:middle;margin-left:2px;">
+            <span class="material-icons" :class="{ 'groups-refresh-spin': loading }" style="font-size:18px;">refresh</span>
+          </button>
+        </h1>
+        <div class="valu-orb-sm subpage-orb-inline">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>
@@ -571,15 +577,6 @@ export default {
               <div class="sphere s3"></div>
             </div>
           </div>
-        </div>
-      </div>
-
-      <div class="subpage-header subpage-header--groups">
-        <div class="subpage-header-title-row">
-          <h1 class="subpage-title subpage-title--strong">Groups</h1>
-          <button type="button" class="btn-icon subpage-header-refresh" @click="refreshGroups" :disabled="loading" aria-label="Refresh groups from Drive">
-            <span class="material-icons" :class="{ 'groups-refresh-spin': loading }">refresh</span>
-          </button>
         </div>
       </div>
 
