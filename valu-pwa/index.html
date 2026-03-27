@@ -514,7 +514,7 @@
                 try { groupSettings.value = JSON.parse(cachedSettings); } catch {}
                 currentPage.value = 'home';
                 groupLoading.value = false;
-                loadGroupData();
+                loadGroupData(true);
               } else {
                 activeGroup.value = null;
                 groupSettings.value = {};
@@ -559,13 +559,13 @@
 
         // ── Groups ──────────────────────────────────────────────────────────
 
-        async function loadGroupData() {
+        async function loadGroupData(background = false) {
           if (!activeGroup.value || dataLoaded.value) return;
           if (isDemoSheet(activeGroup.value.id)) {
             applyDemoShellState();
             return;
           }
-          groupLoading.value = true;
+          if (!background) groupLoading.value = true;
           needsReconnect.value = false;
           try {
             groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);

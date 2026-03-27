@@ -16,9 +16,10 @@ const SCOPES    = 'https://www.googleapis.com/auth/drive.file openid email profi
 let tokenClient      = null;
 let accessToken      = null;
 let userProfile      = null;
-let _onAuthChange    = null;
-let _tokenRejecter   = null;
-let _connectResolver = null;
+let _onAuthChange         = null;
+let _tokenRejecter        = null;
+let _connectResolver      = null;
+let _pendingTokenPromise  = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -175,30 +176,30 @@ const GoogleAuth = {
    * Throws 'popup_blocked' if the browser blocks the popup.
    */
   getAccessToken() {
-    return new Promise((resolve, reject) => {
-      if (accessToken) {
-        const expiry = parseInt(sessionStorage.getItem('valu_token_expiry') || '0', 10);
-        if (Date.now() < expiry - 60000) {
-          resolve(accessToken);
-          return;
-        }
-        accessToken = null;
-        clearCachedToken();
+    if (accessToken) {
+      const expiry = parseInt(sessionStorage.getItem('valu_token_expiry') || '0', 10);
+      if (Date.now() < expiry - 60000) {
+        return Promise.resolve(accessToken);
       }
+      accessToken = null;
+      clearCachedToken();
+    }
 
-      const cached = getCachedToken();
-      if (cached) {
-        accessToken = cached;
-        resolve(cached);
-        return;
-      }
+    const cached = getCachedToken();
+    if (cached) {
+      accessToken = cached;
+      return Promise.resolve(cached);
+    }
 
-      if (!tokenClient) {
-        reject(new Error('Not signed in'));
-        return;
-      }
+    if (_pendingTokenPromise) return _pendingTokenPromise;
 
+    if (!tokenClient) {
+      return Promise.reject(new Error('Not signed in'));
+    }
+
+    _pendingTokenPromise = new Promise((resolve, reject) => {
       tokenClient.callback = (resp) => {
+        _pendingTokenPromise = null;
         _tokenRejecter = null;
         if (resp.error) {
           reject(resp);
@@ -209,13 +210,18 @@ const GoogleAuth = {
         resolve(accessToken);
       };
 
-      _tokenRejecter = reject;
+      _tokenRejecter = (err) => {
+        _pendingTokenPromise = null;
+        reject(err);
+      };
 
       tokenClient.requestAccessToken({
         prompt: '',
         hint: localStorage.getItem('valu_user_email') || '',
       });
     });
+
+    return _pendingTokenPromise;
   },
 
   handleAuthFailure() {
