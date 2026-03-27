@@ -157,7 +157,7 @@ export default {
 
     async function addExpense() {
       const e = newExpense.value;
-      if (!e.title.trim() || !e.amount) return;
+      if (!e.title.trim() || e.amount === '' || e.amount === undefined) return;
 
       const id = SheetsApi.generateId();
       const now = new Date().toISOString();
@@ -352,7 +352,7 @@ export default {
           <div v-for="exp in filteredExpenses" :key="exp.id" class="valu-list-item" @click="startEdit(exp)">
             <div class="valu-list-row">
               <div class="valu-list-name">{{ exp.title }}</div>
-              <div class="valu-list-after">{{ exp.amount }}</div>
+              <div class="valu-list-after">{{ formatCurrency(exp.amount, getAccountCurrency(exp.accountId)) }}</div>
             </div>
             <div class="valu-list-sub">
               {{ formatDate(exp.date) }}
@@ -430,7 +430,7 @@ export default {
             </label>
           </div>
           <div class="modal-footer">
-            <button class="btn-sheet-cta" @click="addExpense" :disabled="!newExpense.title.trim() || !newExpense.amount">Add expense</button>
+            <button class="btn-sheet-cta" @click="addExpense" :disabled="!newExpense.title.trim() || newExpense.amount === '' || newExpense.amount === undefined">Add expense</button>
           </div>
         </div>
       </div>

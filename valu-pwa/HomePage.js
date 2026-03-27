@@ -521,7 +521,7 @@ export default {
               <div class="list-item-right">
                 <div class="list-item-amount"
                      :style="{ color: tx.type === 'income' ? 'var(--color-primary)' : 'var(--color-secondary)' }">
-                  {{ tx.type === 'income' ? '+' : '-' }}{{ formatCurrency(tx.amount, baseCurrency) }}
+                  {{ (tx.type === 'income' ? tx.amount >= 0 : tx.amount < 0) ? '+' : '-' }}{{ formatCurrency(Math.abs(tx.amount), baseCurrency) }}
                 </div>
               </div>
             </div>

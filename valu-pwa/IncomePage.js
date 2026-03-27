@@ -157,7 +157,7 @@ export default {
 
     async function addIncome() {
       const e = newIncome.value;
-      if (!e.title.trim() || !e.amount) return;
+      if (!e.title.trim() || e.amount === '' || e.amount === undefined) return;
 
       const id = SheetsApi.generateId();
       const now = new Date().toISOString();
@@ -352,7 +352,7 @@ export default {
           <div v-for="inc in filteredIncome" :key="inc.id" class="valu-list-item" @click="startEdit(inc)">
             <div class="valu-list-row">
               <div class="valu-list-name">{{ inc.title }}</div>
-              <div class="valu-list-after">{{ inc.amount }}</div>
+              <div class="valu-list-after">{{ formatCurrency(inc.amount, getAccountCurrency(inc.accountId)) }}</div>
             </div>
             <div class="valu-list-sub">
               {{ formatDate(inc.date) }}
@@ -430,7 +430,7 @@ export default {
             </label>
           </div>
           <div class="modal-footer">
-            <button class="btn-sheet-cta" @click="addIncome" :disabled="!newIncome.title.trim() || !newIncome.amount">Add income</button>
+            <button class="btn-sheet-cta" @click="addIncome" :disabled="!newIncome.title.trim() || newIncome.amount === '' || newIncome.amount === undefined">Add income</button>
           </div>
         </div>
       </div>
