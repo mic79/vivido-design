@@ -135,14 +135,14 @@
           <button class="btn btn-primary" @click="navigateTo('groups')">Manage Groups</button>
         </div>
 
-        <!-- Group loading -->
-        <div v-else-if="groupLoading" class="loading" style="padding-top:80px;">
+        <!-- Group loading (full-page, only before first data load) -->
+        <div v-else-if="groupLoading && !dataLoaded" class="loading" style="padding-top:80px;">
           <div class="spinner"></div>
           Loading group...
         </div>
 
-        <!-- Reconnect banner (popup was blocked on page load) -->
-        <div v-else-if="needsReconnect" class="empty-state" style="padding-top:80px;">
+        <!-- Reconnect banner (full-page, only before first data load) -->
+        <div v-else-if="needsReconnect && !dataLoaded" class="empty-state" style="padding-top:80px;">
           <span class="material-icons" style="font-size:48px;color:var(--color-primary);">sync</span>
           <h3>Session expired</h3>
           <p>Tap below to reconnect to Google Drive.</p>
@@ -175,6 +175,14 @@
           @refresh="refreshCurrentPage"
           @go-home="navigateTo('home')"
         ></component>
+
+        <!-- Non-destructive reconnect banner (after data was loaded — keeps component alive) -->
+        <div v-if="needsReconnect && dataLoaded" class="reconnect-bar">
+          <span>Session expired</span>
+          <button class="btn btn-primary btn-sm" @click="reconnect">
+            <span class="material-icons" style="font-size:16px;vertical-align:middle;margin-right:4px;">refresh</span>Reconnect
+          </button>
+        </div>
       </div>
 
       <!-- Bottom Tabs (home page only, sub-pages overlay everything) -->
@@ -599,10 +607,10 @@
               }
             });
           } catch (err) {
-            if (err.message === 'popup_blocked') {
+            if (err.message === 'popup_blocked' && !background) {
               needsReconnect.value = true;
             }
-            console.error('Failed to load group data:', err);
+            if (!background) console.error('Failed to load group data:', err);
           } finally {
             groupLoading.value = false;
           }
@@ -711,9 +719,19 @@
 
             dataLoaded.value = true;
 
-            SheetsApi.startChangeDetection([group.id], (changedId) => {
+            SheetsApi.startChangeDetection([group.id], async (changedId) => {
               if (changedId === activeGroup.value?.id) {
-                refreshCurrentPage();
+                try {
+                  groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);
+                  localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+                  const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
+                  accountsList.value = accRows.map(r => ({
+                    id: r[0], name: r[1], currency: r[2],
+                    type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
+                  }));
+                } catch (err) {
+                  console.warn('Change detection refresh failed:', err);
+                }
               }
             });
 
@@ -788,10 +806,20 @@
         async function refreshCurrentPage() {
           if (!dataLoaded.value && activeGroup.value) {
             await loadGroupData();
+            return;
           }
-          const temp = currentPage.value;
-          currentPage.value = '';
-          nextTick(() => { currentPage.value = temp; });
+          if (!activeGroup.value || isDemoSheet(activeGroup.value.id)) return;
+          try {
+            groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);
+            localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+            const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
+            accountsList.value = accRows.map(r => ({
+              id: r[0], name: r[1], currency: r[2],
+              type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
+            }));
+          } catch (err) {
+            console.warn('Background refresh failed:', err);
+          }
         }
 
         // ── Init ────────────────────────────────────────────────────────────
@@ -836,7 +864,7 @@
           isAuthenticated, authLoading, userProfile,
           demoSheetId: DEMO_SHEET_ID,
           inAppShell, demoMode, landingShowCtas, showSignInFromLanding,
-          groups, groupsForSwitcher, activeGroup, groupSettings, groupLoading, accountsList,
+          groups, groupsForSwitcher, activeGroup, groupSettings, groupLoading, dataLoaded, accountsList,
           currentPage, currentPageComponent, currentPageTitle,
           activeSheetId, activeGroupName, sideNavOpen, showGroupSwitcher,
           demoHomeCallout,

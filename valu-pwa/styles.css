@@ -2772,5 +2772,32 @@ select.form-input {
 .hidden { display: none !important; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.reconnect-bar {
+  position: fixed;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--color-surface, #fff);
+  border-radius: 12px;
+  box-shadow: 0 2px 16px rgba(0,0,0,.18);
+  z-index: 200;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  animation: reconnect-bar-in .3s ease;
+}
+.reconnect-bar .btn-sm {
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+@keyframes reconnect-bar-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* hide scrollbars globally on mobile */
 ::-webkit-scrollbar { width: 0; height: 0; }
