@@ -28,8 +28,8 @@ const TAB_HEADERS = {
   [TABS.SETTINGS]:        [['Key', 'Value']],
   [TABS.ACCOUNTS]:        [['ID', 'Name', 'Currency', 'Type', 'Discontinued', 'Order']],
   [TABS.BALANCE_HISTORY]: [['AccountID', 'Year', 'Month', 'Balance', 'UpdatedAt']],
-  [TABS.EXPENSES]:        [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt']],
-  [TABS.INCOME]:          [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt']],
+  [TABS.EXPENSES]:        [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt', 'BalanceAdjusted']],
+  [TABS.INCOME]:          [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt', 'BalanceAdjusted']],
 };
 
 // Default settings for a new group
@@ -349,6 +349,24 @@ const SheetsApi = {
     }
 
     invalidateCache(spreadsheetId, 'BalanceHistory');
+  },
+
+  /**
+   * Get the latest balance for an account by reading BalanceHistory
+   * and picking the most recent year+month entry.
+   */
+  async getCurrentBalance(spreadsheetId, accountId) {
+    const allRows = await this.getValues(spreadsheetId, 'BalanceHistory!A2:E');
+    if (!allRows) return 0;
+    const entries = allRows
+      .filter(r => r[0] === accountId)
+      .map(r => ({ year: parseInt(r[1]), month: parseInt(r[2]), balance: parseFloat(r[3]) || 0, updatedAt: r[4] || '' }))
+      .sort((a, b) => {
+        if (b.year !== a.year) return b.year - a.year;
+        if (b.month !== a.month) return b.month - a.month;
+        return b.updatedAt.localeCompare(a.updatedAt);
+      });
+    return entries.length > 0 ? entries[0].balance : 0;
   },
 
   // ── Structural operations ──────────────────────────────────────────────────

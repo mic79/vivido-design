@@ -165,7 +165,7 @@
           :showUpdateReminder="false"
           :isDemoGroup="!!(activeGroup && activeGroup.id === demoSheetId)"
           :demoCallout="demoHomeCallout"
-          @navigate="navigateTo"
+          @navigate="(page, opts) => navigateTo(page, opts)"
           @switch-group="switchGroup"
           @create-group="onGroupCreated"
           @open-shared="onSharedOpened"
@@ -293,7 +293,7 @@
               {{ authLoading ? 'Connecting...' : 'Connect with Google' }}
             </button>
             <p class="auth-footer valu-signin-sheet-footer">
-              Your data stays in your Google account. Valu can only access spreadsheets it creates.
+              Your finances stay between you and Google. The app syncs to spreadsheets in your account &mdash; nothing is sent elsewhere.
             </p>
           </div>
         </div>
@@ -331,6 +331,8 @@
         const landingShowCtas = ref(false);
         const showSignInFromLanding = ref(false);
         let ensurePersonalInFlight = false;
+        const _urlParams = new URLSearchParams(window.location.search);
+        const requestedDemo = _urlParams.has('demo');
 
         // ── Group state ─────────────────────────────────────────────────────
         const groups = ref([]);
@@ -392,7 +394,7 @@
         provide('groupSettings', groupSettings);
         provide('activeGroup', activeGroup);
 
-        async function navigateTo(page) {
+        async function navigateTo(page, opts) {
           if (page === 'groups' && !isAuthenticated.value) {
             currentPage.value = 'home';
             return;
@@ -402,10 +404,28 @@
             currentPage.value = 'home';
             return;
           }
+          if (page === 'groups' && opts && opts.autoOpenConfig) {
+            currentPage.value = page;
+            setTimeout(() => {
+              const pill = document.querySelector('.groups-active-pill');
+              if (pill) {
+                pill.closest('button').click();
+              } else {
+                const card = document.getElementsByClassName('groups-list-card')[0];
+                if (card) card.click();
+              }
+            }, 600);
+            return;
+          }
           currentPage.value = page;
-          // On first user navigation, load group data if we have an active group
           if (!dataLoaded.value && activeGroup.value) {
             await loadGroupData();
+          }
+          if (page === 'home' && activeGroup.value && !isDemoSheet(activeGroup.value.id)) {
+            SheetsApi.getSettings(activeGroup.value.id).then(s => {
+              groupSettings.value = s;
+              localStorage.setItem('valu_settings_cache', JSON.stringify(s));
+            }).catch(() => {});
           }
         }
 
@@ -445,6 +465,9 @@
           groupLoading.value = false;
           showSignInFromLanding.value = true;
           landingShowCtas.value = true;
+          localStorage.removeItem('valu_last_group');
+          localStorage.removeItem('valu_last_group_name');
+          localStorage.removeItem('valu_settings_cache');
         }
 
         function onAuthChange(signedIn, profile) {
@@ -454,10 +477,27 @@
 
           if (signedIn) {
             killValuAppLandingIntro();
+            showSignInFromLanding.value = false;
+
+            if (requestedDemo) {
+              demoMode.value = false;
+              switchGroup(demoGroupMeta());
+              refreshGroupsList();
+              return;
+            }
+
             demoMode.value = false;
+
             const cachedGroups = localStorage.getItem('valu_groups_cache');
             const cachedSettings = localStorage.getItem('valu_settings_cache');
-            const lastGroupId = localStorage.getItem('valu_last_group');
+            let lastGroupId = localStorage.getItem('valu_last_group');
+
+            if (isDemoSheet(lastGroupId)) {
+              lastGroupId = null;
+              localStorage.removeItem('valu_last_group');
+              localStorage.removeItem('valu_last_group_name');
+              localStorage.removeItem('valu_settings_cache');
+            }
 
             console.log('onAuthChange: lastGroupId =', lastGroupId);
 
@@ -467,32 +507,27 @@
             }
 
             if (lastGroupId && cachedSettings) {
-              const lastGroup = groups.value.find((g) => g.id === lastGroupId)
-                || (lastGroupId === DEMO_SHEET_ID ? demoGroupMeta() : null);
+              const lastGroup = groups.value.find((g) => g.id === lastGroupId);
               console.log('onAuthChange: matched lastGroup =', JSON.stringify(lastGroup));
               if (lastGroup && lastGroup.id) {
                 activeGroup.value = lastGroup;
                 try { groupSettings.value = JSON.parse(cachedSettings); } catch {}
                 currentPage.value = 'home';
                 groupLoading.value = false;
-                if (isDemoSheet(lastGroup.id)) {
-                  applyDemoShellState();
-                } else {
-                  loadGroupData();
-                }
+                loadGroupData();
               } else {
                 activeGroup.value = null;
                 groupSettings.value = {};
                 dataLoaded.value = false;
-                groupLoading.value = false;
                 localStorage.removeItem('valu_last_group');
                 localStorage.removeItem('valu_last_group_name');
                 localStorage.removeItem('valu_settings_cache');
                 currentPage.value = 'home';
+                groupLoading.value = true;
               }
             } else {
               currentPage.value = 'home';
-              groupLoading.value = false;
+              groupLoading.value = true;
             }
 
             refreshGroupsList();
@@ -607,6 +642,12 @@
               localStorage.removeItem('valu_last_group_name');
               localStorage.removeItem('valu_settings_cache');
               currentPage.value = 'groups';
+            }
+
+            if (isAuthenticated.value && !activeGroup.value && files.length > 0) {
+              const lastId = localStorage.getItem('valu_last_group');
+              const match = files.find(f => f.id === lastId);
+              await switchGroup(match || files[0]);
             }
 
             if (isAuthenticated.value && files.length === 0 && userProfile.value?.email && !ensurePersonalInFlight) {
@@ -761,9 +802,12 @@
         watch(currentPage, reinitOrbs);
 
         onMounted(() => {
-          setTimeout(() => {
-            landingShowCtas.value = true;
-          }, 2000);
+          if (requestedDemo) {
+            startQuickLookDemo();
+            window.history.replaceState({}, '', window.location.pathname);
+          } else {
+            setTimeout(() => { landingShowCtas.value = true; }, 2000);
+          }
           function tryInitGis() {
             if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
               GoogleAuth.init(onAuthChange);

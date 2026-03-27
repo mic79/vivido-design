@@ -359,20 +359,19 @@ export default {
       } catch (_) {}
     }
 
-    const isPersonalNew = computed(() => {
-      const n = (props.groupName || '').trim().toLowerCase();
-      return n === 'personal';
-    });
-
-    const hasAnyToolEnabled = computed(() =>
-      enabledLists.value.includes('accounts')
-      || enabledLists.value.includes('expenses')
-      || enabledLists.value.includes('income')
+    const accountsNeedsData = computed(() =>
+      enabledLists.value.includes('accounts') && (props.accounts || []).length === 0
+    );
+    const incomeNeedsData = computed(() =>
+      enabledLists.value.includes('income') && incomeList.value.length === 0
+    );
+    const expensesNeedsData = computed(() =>
+      enabledLists.value.includes('expenses') && expenses.value.length === 0
     );
 
-    const showPersonalJourney = computed(() =>
-      isPersonalNew.value
-      && !hasAnyToolEnabled.value
+    const showOnboarding = computed(() =>
+      !props.isDemoGroup
+      && (accountsNeedsData.value || incomeNeedsData.value || expensesNeedsData.value)
     );
 
     // Auto-select the last month when chart data becomes available
@@ -383,7 +382,7 @@ export default {
     });
 
     return {
-      loading, enabledLists, baseCurrency,
+      loading, enabledLists, baseCurrency, expenses, incomeList,
       monthlyExpenses, monthlyIncome, netWorth, netWorthHistory,
       savingsRate, recentTransactions, needsBalanceUpdate,
       prevMonthInfo, chartMax, selectedBar, selectedPoint, displayedBalance,
@@ -391,7 +390,7 @@ export default {
       formatCurrency, formatDate, monthLabel, monthName, accountLabel,
       toggleBar, emit,
       showDemoWelcomeSheet, dismissDemoWelcome,
-      showPersonalJourney,
+      showOnboarding, accountsNeedsData, incomeNeedsData, expensesNeedsData,
     };
   },
 
@@ -445,7 +444,7 @@ export default {
         </div>
 
         <!-- Total Balance + Area Chart (no card boundary) -->
-        <div v-if="enabledLists.includes('accounts')" class="balance-widget">
+        <div v-if="enabledLists.includes('accounts') && (accounts || []).length > 0" class="balance-widget">
           <div class="stat">
             <div class="stat-label">Total balance</div>
             <div class="stat-value">{{ formatCurrency(displayedBalance, baseCurrency) }}</div>
@@ -478,22 +477,22 @@ export default {
         </div>
 
         <!-- This Month Stats -->
-        <div class="card mb-16" v-if="enabledLists.includes('expenses') || enabledLists.includes('income')">
+        <div class="card mb-16" v-if="expenses.length > 0 || incomeList.length > 0">
           <div class="card-header"><h3>This Month</h3></div>
           <div class="stats-row">
-            <div class="stat" v-if="enabledLists.includes('income')">
+            <div class="stat" v-if="incomeList.length > 0">
               <div class="stat-value" style="font-size:20px;color:var(--color-primary);">
                 {{ formatCurrency(monthlyIncome, baseCurrency) }}
               </div>
               <div class="stat-label">Income</div>
             </div>
-            <div class="stat" v-if="enabledLists.includes('expenses')">
+            <div class="stat" v-if="expenses.length > 0">
               <div class="stat-value" style="font-size:20px;color:var(--color-secondary);">
                 {{ formatCurrency(monthlyExpenses, baseCurrency) }}
               </div>
               <div class="stat-label">Expenses</div>
             </div>
-            <div class="stat" v-if="enabledLists.includes('income') && enabledLists.includes('expenses') && savingsRate !== null">
+            <div class="stat" v-if="incomeList.length > 0 && expenses.length > 0 && savingsRate !== null">
               <div class="stat-value" style="font-size:20px;" :style="{ color: savingsRate >= 0 ? 'var(--color-primary)' : 'var(--color-secondary)' }">
                 {{ savingsRate }}%
               </div>
@@ -529,80 +528,35 @@ export default {
           </div>
         </div>
 
-        <!-- Personal first-run journey (no tools enabled yet) -->
-        <div v-if="showPersonalJourney" class="onboarding onboarding--personal">
-          <p class="onboarding-welcome onboarding-welcome--subtitle">
-            <strong>Welcome!</strong> Let's get started organizing your personal financial data, securely &amp; privately.
-          </p>
-
-          <button type="button" class="onboarding-card onboarding-card--active" @click="emit('navigate', 'groups')">
-            <span class="material-icons onboarding-card-icon">people</span>
-            <div class="onboarding-card-text">
-              <div class="onboarding-card-title">Group configuration</div>
-              <div class="onboarding-card-desc">Define the base currency for your group, change the name, and more.</div>
-            </div>
-          </button>
-
-          <button type="button" class="onboarding-card onboarding-card--active" @click="emit('navigate', 'groups')">
+        <!-- Onboarding: only shows enabled tools that still need data -->
+        <div v-if="showOnboarding" class="onboarding">
+          <button v-if="accountsNeedsData" type="button"
+            class="onboarding-card onboarding-card--active"
+            @click="emit('navigate', 'accounts')">
             <span class="material-icons onboarding-card-icon">account_balance</span>
             <div class="onboarding-card-text">
               <div class="onboarding-card-title">Bank account(s)</div>
-              <div class="onboarding-card-desc">Enable Accounts in your group config, then list your bank accounts.</div>
+              <div class="onboarding-card-desc">Add your first bank account.</div>
             </div>
           </button>
 
-          <div class="onboarding-card onboarding-card--locked">
+          <button v-if="incomeNeedsData" type="button"
+            class="onboarding-card onboarding-card--active"
+            @click="emit('navigate', 'income')">
             <span class="material-icons onboarding-card-icon">payments</span>
             <div class="onboarding-card-text">
               <div class="onboarding-card-title">Income</div>
-              <div class="onboarding-card-desc">Enable Income in group configuration when you're ready.</div>
+              <div class="onboarding-card-desc">Log your first income entry.</div>
             </div>
-          </div>
+          </button>
 
-          <div class="onboarding-card onboarding-card--locked">
+          <button v-if="expensesNeedsData" type="button"
+            class="onboarding-card onboarding-card--active"
+            @click="emit('navigate', 'expenses')">
             <span class="material-icons onboarding-card-icon">shopping_cart</span>
             <div class="onboarding-card-text">
               <div class="onboarding-card-title">Expenses</div>
-              <div class="onboarding-card-desc">Enable Expenses in group configuration to track spending.</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Generic onboarding (other new groups, no tools enabled) -->
-        <div v-else-if="!enabledLists.includes('accounts') && !enabledLists.includes('expenses') && !enabledLists.includes('income')" class="onboarding">
-          <p class="onboarding-welcome">
-            <strong>Welcome!</strong> Let's get started organizing your personal financial data, securely &amp; privately.
-          </p>
-
-          <button type="button" class="onboarding-card" @click="emit('navigate', 'groups')">
-            <span class="material-icons onboarding-card-icon">people</span>
-            <div class="onboarding-card-text">
-              <div class="onboarding-card-title">Group configuration</div>
-              <div class="onboarding-card-desc">Define the base currency for your group, enable tools, and more.</div>
-            </div>
-          </button>
-
-          <button type="button" class="onboarding-card" @click="emit('navigate', 'groups')">
-            <span class="material-icons onboarding-card-icon">account_balance</span>
-            <div class="onboarding-card-text">
-              <div class="onboarding-card-title">Bank account(s)</div>
-              <div class="onboarding-card-desc">Enable Accounts in your group config, then list your bank accounts.</div>
-            </div>
-          </button>
-
-          <button type="button" class="onboarding-card" @click="emit('navigate', 'groups')">
-            <span class="material-icons onboarding-card-icon">payments</span>
-            <div class="onboarding-card-text">
-              <div class="onboarding-card-title">Income</div>
-              <div class="onboarding-card-desc">Enable Income tracking in your group config to get started.</div>
-            </div>
-          </button>
-
-          <button type="button" class="onboarding-card" @click="emit('navigate', 'groups')">
-            <span class="material-icons onboarding-card-icon">shopping_cart</span>
-            <div class="onboarding-card-text">
-              <div class="onboarding-card-title">Expense</div>
-              <div class="onboarding-card-desc">Enable Expenses in your group config to start tracking spending.</div>
+              <div class="onboarding-card-desc">Log your first expense.</div>
             </div>
           </button>
         </div>

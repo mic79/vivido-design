@@ -22,6 +22,9 @@ export default {
     const newIncome = ref({
       title: '', amount: '', accountId: '', category: '', date: '', notes: '',
     });
+    const adjustBalance = ref(false);
+    const editAdjustBalance = ref(false);
+    const editOriginal = ref(null);
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
 
@@ -112,7 +115,7 @@ export default {
         incomeList.value = rows.map(r => ({
           id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
           accountId: r[3], category: r[4], date: r[5],
-          notes: r[6], createdAt: r[7],
+          notes: r[6], createdAt: r[7], balanceAdjusted: r[8] || '',
         }));
       } catch (err) {
         console.error('Failed to load income:', err);
@@ -148,6 +151,7 @@ export default {
 
     function openNewIncomeModal() {
       resetNewIncomeForm();
+      adjustBalance.value = false;
       showAddModal.value = true;
     }
 
@@ -158,11 +162,18 @@ export default {
       const id = SheetsApi.generateId();
       const now = new Date().toISOString();
       const date = e.date || localDateISO();
+      const shouldAdjust = adjustBalance.value && e.accountId;
 
       await SheetsApi.appendRow(getSheetId(), TABS.INCOME, [
         id, e.title.trim(), e.amount.toString(), e.accountId,
-        e.category, date, e.notes, now,
+        e.category, date, e.notes, now, shouldAdjust ? 'yes' : '',
       ]);
+
+      if (shouldAdjust) {
+        const [y, m] = date.split('-').map(Number);
+        const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+        await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur + parseFloat(e.amount), date);
+      }
 
       if (e.accountId) {
         try {
@@ -176,21 +187,52 @@ export default {
     }
 
     function startEdit(income) {
+      editOriginal.value = {
+        amount: income.amount,
+        accountId: income.accountId || '',
+        balanceAdjusted: income.balanceAdjusted || '',
+      };
       editingIncome.value = { ...income, amount: income.amount.toString() };
+      editAdjustBalance.value = income.balanceAdjusted === 'yes';
       showEditModal.value = true;
     }
 
     async function saveEdit() {
       const e = editingIncome.value;
-      if (!e) return;
+      const orig = editOriginal.value;
+      if (!e || !orig) return;
+
+      const shouldAdjust = editAdjustBalance.value && e.accountId;
+      const date = e.date || localDateISO();
 
       await SheetsApi.updateRow(getSheetId(), TABS.INCOME, e.id, [
         e.id, e.title, e.amount.toString(), e.accountId,
-        e.category, e.date, e.notes, e.createdAt,
+        e.category, date, e.notes, e.createdAt, shouldAdjust ? 'yes' : '',
       ]);
+
+      if (shouldAdjust) {
+        const [y, m] = date.split('-').map(Number);
+        const newAmt = parseFloat(e.amount) || 0;
+        const accountChanged = e.accountId !== orig.accountId;
+
+        if (accountChanged && orig.balanceAdjusted === 'yes' && orig.accountId) {
+          const oldBal = await SheetsApi.getCurrentBalance(getSheetId(), orig.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), orig.accountId, y, m, oldBal - orig.amount, date);
+          const newBal = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, newBal + newAmt, date);
+        } else if (orig.balanceAdjusted === 'yes') {
+          const delta = newAmt - orig.amount;
+          const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur + delta, date);
+        } else {
+          const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur + newAmt, date);
+        }
+      }
 
       showEditModal.value = false;
       editingIncome.value = null;
+      editOriginal.value = null;
       await fetchData();
     }
 
@@ -252,6 +294,7 @@ export default {
       incomeList, loading, filteredIncome, monthlyTotal,
       showAddModal, showEditModal, editingIncome,
       newIncome, categories, baseCurrency,
+      adjustBalance, editAdjustBalance,
       filterMonth, availableMonths, openDropdown, toggleDropdown, setDropdownOpen,
       formatCurrency, getAccountName, getAccountCurrency, formatAccountDisplayName,
       addIncome, startEdit, saveEdit, deleteIncome, duplicateIncome,
@@ -381,6 +424,10 @@ export default {
               <label class="form-label">Notes</label>
               <textarea class="form-input" v-model="newIncome.notes" rows="2" placeholder="Optional notes"></textarea>
             </div>
+            <label v-if="newIncome.accountId && accounts && accounts.length > 0" class="balance-adjust-check" @click.stop>
+              <input type="checkbox" v-model="adjustBalance" />
+              <span>Also update {{ getAccountName(newIncome.accountId) }} balance</span>
+            </label>
           </div>
           <div class="modal-footer">
             <button class="btn-sheet-cta" @click="addIncome" :disabled="!newIncome.title.trim() || !newIncome.amount">Add income</button>
@@ -433,6 +480,10 @@ export default {
               <label class="form-label">Notes</label>
               <textarea class="form-input" v-model="editingIncome.notes" rows="2"></textarea>
             </div>
+            <label v-if="editingIncome.accountId && accounts && accounts.length > 0" class="balance-adjust-check" @click.stop>
+              <input type="checkbox" v-model="editAdjustBalance" />
+              <span>Also update {{ getAccountName(editingIncome.accountId) }} balance</span>
+            </label>
           </div>
           <div class="modal-footer">
             <button class="btn-sheet-cta" @click="saveEdit">Save changes</button>

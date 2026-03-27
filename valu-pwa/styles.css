@@ -856,6 +856,26 @@ button.valu-list-card {
   color: var(--color-primary);
   margin-bottom: 4px;
 }
+.onboarding-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-text-hint);
+  background: var(--color-surface-alt, rgba(0,0,0,.06));
+  border-radius: 999px;
+  vertical-align: middle;
+  line-height: 1.6;
+  text-decoration: none;
+}
+
+.onboarding-card--completed .onboarding-tag {
+  display: none;
+}
+
 .onboarding-card-desc {
   font-size: 13px;
   color: var(--color-text-secondary);
@@ -876,6 +896,24 @@ button.valu-list-card {
 
 .onboarding-card--locked .onboarding-card-icon,
 .onboarding-card--locked .onboarding-card-title {
+  color: var(--color-text-hint);
+}
+
+.onboarding-card--completed {
+  border-left-color: var(--color-primary);
+  opacity: 0.65;
+}
+
+.onboarding-card--completed .onboarding-card-icon {
+  color: var(--color-primary);
+}
+
+.onboarding-card--completed .onboarding-card-title {
+  text-decoration: line-through;
+  color: var(--color-text-hint);
+}
+
+.onboarding-card--completed .onboarding-card-desc {
   color: var(--color-text-hint);
 }
 
@@ -1526,6 +1564,25 @@ button.valu-list-card {
 }
 .form-input:focus { border-color: var(--color-primary); }
 .form-input::placeholder { color: var(--color-text-hint); }
+
+.balance-adjust-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+.balance-adjust-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
 
 select.form-input {
   appearance: none;

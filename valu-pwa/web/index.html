@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#729c9c" />
+  <meta name="description" content="Valu — personal finance in your browser. Your data lives in spreadsheets you own in Google Drive. Private by design." />
+  <title>Valu — Your money, your spreadsheet, your account</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-logo" href="index.html" aria-label="Valu home">
+      <span class="site-logo-mark" aria-hidden="true"></span>
+      Valu
+    </a>
+    <a class="site-header-cta" href="../index.html?demo">Try the app</a>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <div>
+          <span class="hero-eyebrow">Personal finance</span>
+          <h1 id="hero-title">Track spending and balances—without handing your ledger to a black box.</h1>
+          <p class="hero-lead">
+            Valu runs in <strong>your browser</strong> and syncs to <strong>Google Sheets you own</strong> in your Google account. No separate Valu database holds your history: <strong>you own the file.</strong>
+          </p>
+          <div class="hero-actions">
+            <a class="btn-primary" href="../index.html?demo">Try Quick look</a>
+            <a class="btn-secondary" href="https://valu-app.com/" rel="noopener noreferrer">Valu on the web</a>
+          </div>
+          <p class="hero-micro">
+            <strong>Private by design.</strong> Sign in connects the app to Google’s APIs from your device so the spreadsheet stays <strong>for your eyes only</strong>—between you and Google—not routed through Valu to store your transactions.
+          </p>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="spheres-stage">
+            <div class="spheres-group">
+              <div class="sphere s1"></div>
+              <div class="sphere s2"></div>
+              <div class="sphere s3"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt" aria-labelledby="privacy-title">
+      <div class="section-inner">
+        <h2 id="privacy-title">Ownership &amp; privacy</h2>
+        <p class="section-intro">
+          Older wording like “only spreadsheets the app creates” describes <em>API permission scope</em>—the least access needed—not “the company reads your money.” Here is the clearer picture:
+        </p>
+        <div class="privacy-grid">
+          <article class="privacy-card">
+            <h3>You own your data</h3>
+            <p>Each group is a spreadsheet in <strong>your</strong> Google Drive. Open it in Sheets, export, copy, or delete it—like any file you control.</p>
+          </article>
+          <article class="privacy-card">
+            <h3>Browser → Google</h3>
+            <p>The PWA talks to <strong>Google’s APIs</strong> using your sign-in. Your transaction rows are not sent to Valu to be stored as a parallel ledger.</p>
+          </article>
+          <article class="privacy-card">
+            <h3>Scoped access</h3>
+            <p>The integration asks only for access to spreadsheets <strong>this app created</strong>—not your whole Drive—so permission stays minimal.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="how-title">
+      <div class="section-inner">
+        <h2 id="how-title">How it works</h2>
+        <p class="section-intro">Three steps. Your spreadsheet is the source of truth you can inspect anytime.</p>
+        <div class="steps">
+          <div class="step">
+            <h3>Sign in with Google</h3>
+            <p>You authorize the app to create and update specific spreadsheets in your account—only what Valu needs to run.</p>
+          </div>
+          <div class="step">
+            <h3>Valu creates your sheet</h3>
+            <p>Each group gets a structured workbook: accounts, expenses, income, balances, settings—ready to use from the app or from Sheets.</p>
+          </div>
+          <div class="step">
+            <h3>Use Valu day to day</h3>
+            <p>The UI reads and writes those tabs through your session. Same numbers you’ll see if you open the file in Google Sheets.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt" aria-labelledby="features-title">
+      <div class="section-inner">
+        <h2 id="features-title">What you can do</h2>
+        <p class="section-intro">Built for real households: multiple groups, currencies, and the lists you need—without losing the spreadsheet underneath.</p>
+        <ul class="feature-list">
+          <li>Multiple <strong>groups</strong>, each with its own spreadsheet</li>
+          <li><strong>Accounts</strong> with currencies, ordering, and discontinued accounts</li>
+          <li><strong>Expenses &amp; income</strong> with categories, dates, and notes</li>
+          <li><strong>Balance history</strong> and home summaries / charts where enabled</li>
+          <li><strong>Quick look</strong> demo with sample data before you connect Google</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="cta-band" aria-labelledby="cta-title">
+      <h2 id="cta-title">See it in your browser</h2>
+      <p>Open the app for a Quick look with sample data, then connect Google when you want your own spreadsheet.</p>
+      <a class="btn-primary" href="../index.html?demo">Open Valu</a>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      Marketing site: <a href="https://valu-app.com/" rel="noopener noreferrer">valu-app.com</a>
+      · Product context: <a href="product-overview.md">product overview</a>
+    </p>
+  </footer>
+</body>
+</html>

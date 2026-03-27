@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#2a3d3d" />
+  <meta name="description" content="Valu — personal finance that stays personal. Your data lives in Google Sheets you own. Nothing leaves your browser." />
+  <title>Valu — Personal finance that stays personal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,400;0,700;0,900;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ─── Nav ──────────────────────────────────────────────────────────── -->
+  <nav class="nav" aria-label="Main">
+    <a href="#" class="nav-brand" aria-label="Valu">
+      <span class="nav-orb" aria-hidden="true"></span>
+      <span class="nav-wordmark">Valu</span>
+    </a>
+    <div class="nav-links">
+      <a href="#privacy">Privacy</a>
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+    </div>
+    <a href="../index.html?demo" class="nav-cta">Try the app</a>
+  </nav>
+
+  <!-- ─── Hero ─────────────────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="hero-bg" aria-hidden="true">
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="orb orb-3"></div>
+    </div>
+
+    <div class="hero-content">
+      <h1>Personal finance<br />that stays <em>personal.</em></h1>
+      <p class="hero-sub">
+        Your money data lives in <strong>Google Sheets you own</strong>,
+        in <strong>your</strong> Google account.
+        The app runs in your browser. Nothing is sent to us.
+      </p>
+      <div class="hero-ctas">
+        <a href="../index.html?demo" class="cta cta-light">Try with sample data</a>
+        <a href="#how" class="cta cta-ghost">See how it works</a>
+      </div>
+    </div>
+
+    <div class="hero-fade" aria-hidden="true"></div>
+  </section>
+
+  <!-- ─── Thesis ───────────────────────────────────────────────────────── -->
+  <section class="thesis">
+    <div class="wrap">
+      <p class="thesis-text">
+        Most finance apps ask you to trust <em>their</em> database with years of
+        spending history. Valu takes a different position: <strong>the spreadsheet
+        is yours, the account is yours, and the app is just a window into
+        data you already control.</strong>
+      </p>
+    </div>
+  </section>
+
+  <!-- ─── Privacy ──────────────────────────────────────────────────────── -->
+  <section class="privacy" id="privacy">
+    <div class="wrap">
+      <span class="label">Ownership &amp; privacy</span>
+      <h2>For your eyes only.</h2>
+
+      <div class="pillars">
+        <div class="pillar">
+          <div class="pillar-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <h3>Private by design</h3>
+          <p>Your browser talks directly to Google's APIs using your sign-in. Transaction rows are never routed through a Valu server that stores your history.</p>
+        </div>
+
+        <div class="pillar">
+          <div class="pillar-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </div>
+          <h3>You own the file</h3>
+          <p>Each group creates a real spreadsheet in your Drive. Open it in Google Sheets, export it, copy it, share it, or delete it. It belongs to you.</p>
+        </div>
+
+        <div class="pillar">
+          <div class="pillar-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          </div>
+          <h3>Least access</h3>
+          <p>The app only asks for permission to spreadsheets <em>it created</em> — not your whole Drive. That's an API scope choice, not corporate surveillance.</p>
+        </div>
+      </div>
+
+      <p class="privacy-footnote">
+        "Only spreadsheets the app creates" describes <strong>OAuth permission scope</strong> —
+        the smallest footprint we could use. It does not mean a company reads your sheet.
+        The path is: <strong>your device → Google → your file.</strong>
+      </p>
+    </div>
+  </section>
+
+  <!-- ─── How it works ─────────────────────────────────────────────────── -->
+  <section class="how" id="how">
+    <div class="wrap">
+      <span class="label">How it works</span>
+      <h2>Three steps. One spreadsheet.</h2>
+
+      <ol class="timeline">
+        <li>
+          <div class="tl-marker" aria-hidden="true">1</div>
+          <div class="tl-body">
+            <h3>Sign in with Google</h3>
+            <p>You grant the app permission to create and update specific spreadsheets in your account — nothing more.</p>
+          </div>
+        </li>
+        <li>
+          <div class="tl-marker" aria-hidden="true">2</div>
+          <div class="tl-body">
+            <h3>A spreadsheet is created for you</h3>
+            <p>Each group gets a workbook with structured tabs: accounts, expenses, income, balance history, and settings. Ready to use from the app or from Sheets.</p>
+          </div>
+        </li>
+        <li>
+          <div class="tl-marker" aria-hidden="true">3</div>
+          <div class="tl-body">
+            <h3>Use Valu every day</h3>
+            <p>The app reads and writes those tabs through your session. The same numbers appear if you open the spreadsheet directly in Google Sheets.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ─── Features ─────────────────────────────────────────────────────── -->
+  <section class="features" id="features">
+    <div class="wrap">
+      <span class="label">Features</span>
+      <h2>Built for real households.</h2>
+      <p class="features-sub">Multiple groups, currencies, and the lists you actually need — without losing the spreadsheet underneath.</p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <h3>Groups</h3>
+          <p>Keep personal, household, and side-project finances in separate workspaces, each backed by its own spreadsheet.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Accounts &amp; currencies</h3>
+          <p>Track multiple accounts with different currencies, custom ordering, and discontinued-account support.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Expenses &amp; income</h3>
+          <p>Log transactions with amount, account, category, date, and notes. Categories are configurable per group.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Balance history</h3>
+          <p>Record account balances over time and see net-worth-style summaries on the home dashboard.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Home dashboard</h3>
+          <p>Monthly rollups and charts for enabled lists, with multi-currency conversion via your base currency and rates.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Quick look</h3>
+          <p>Explore the full app with sample data before connecting Google. No sign-up required to see what it does.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── CTA ──────────────────────────────────────────────────────────── -->
+  <section class="final-cta">
+    <div class="final-cta-bg" aria-hidden="true">
+      <div class="orb orb-cta-1"></div>
+      <div class="orb orb-cta-2"></div>
+    </div>
+    <div class="wrap final-cta-inner">
+      <h2>See it for yourself.</h2>
+      <p>Open Valu for a quick look with sample data. When you're ready, connect Google and the spreadsheet is yours.</p>
+      <a href="../index.html?demo" class="cta cta-light">Open Valu</a>
+    </div>
+  </section>
+
+  <!-- ─── Footer ───────────────────────────────────────────────────────── -->
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <span class="footer-brand">Valu</span>
+      <span class="footer-sep">&middot;</span>
+      <a href="https://valu-app.com/" rel="noopener noreferrer">valu-app.com</a>
+    </div>
+  </footer>
+
+</body>
+</html>
