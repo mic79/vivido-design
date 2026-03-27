@@ -388,7 +388,7 @@ export default {
             <button class="btn-icon" @click="showAddModal = false"><span class="material-icons">close</span></button>
           </div>
           <div class="sheet-hero">
-            <input class="sheet-hero-name" v-model="newExpense.title" placeholder="What did you spend on?" autofocus />
+            <input class="sheet-hero-name" v-model="newExpense.title" placeholder="What did you spend on?" />
             <input class="sheet-hero-amount" v-model="newExpense.amount" type="number" step="0.01" placeholder="0" />
             <div class="sheet-hero-label">Amount</div>
           </div>

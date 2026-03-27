@@ -546,7 +546,7 @@ export default {
         <div class="modal">
           <div class="sheet-handle"></div>
           <div class="modal-body" style="padding-top:8px; text-align:center;">
-            <input class="sheet-hero-name-solo" v-model="newAccount.name" placeholder="Account name" autofocus />
+            <input class="sheet-hero-name-solo" v-model="newAccount.name" placeholder="Account name" />
           </div>
           <div class="modal-body" @click="currencyDropdownOpen = false; openDropdown = null">
             <div class="sheet-section-title">Details</div>

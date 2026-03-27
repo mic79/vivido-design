@@ -388,7 +388,7 @@ export default {
             <button class="btn-icon" @click="showAddModal = false"><span class="material-icons">close</span></button>
           </div>
           <div class="sheet-hero">
-            <input class="sheet-hero-name" v-model="newIncome.title" placeholder="Income source" autofocus />
+            <input class="sheet-hero-name" v-model="newIncome.title" placeholder="Income source" />
             <input class="sheet-hero-amount" v-model="newIncome.amount" type="number" step="0.01" placeholder="0" />
             <div class="sheet-hero-label">Amount</div>
           </div>
