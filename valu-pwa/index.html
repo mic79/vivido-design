@@ -86,7 +86,8 @@
         </div>
 
         <div class="sidenav-footer">
-          <span class="sidenav-version">v0.1</span>
+          <span class="sidenav-version">v122</span>
+          <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
 
@@ -353,6 +354,8 @@
         const showGroupSwitcher = ref(false);
         const dataLoaded = ref(false);
         const needsReconnect = ref(false);
+        const swUpdateReady = ref(false);
+        let waitingSW = null;
 
         const PAGE_MAP = {
           home:     'HomePage',
@@ -559,6 +562,14 @@
         function signOut() {
           sideNavOpen.value = false;
           GoogleAuth.signOut();
+        }
+
+        function applySwUpdate() {
+          if (waitingSW) {
+            waitingSW.postMessage({ type: 'SKIP_WAITING' });
+          } else {
+            window.location.reload();
+          }
         }
 
         // ── Groups ──────────────────────────────────────────────────────────
@@ -848,7 +859,22 @@
         // ── Service Worker ──────────────────────────────────────────────────
 
         if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.register('service-worker.js').catch(() => {});
+          navigator.serviceWorker.register('service-worker.js').then(reg => {
+            reg.addEventListener('updatefound', () => {
+              const newSW = reg.installing;
+              if (!newSW) return;
+              newSW.addEventListener('statechange', () => {
+                if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+                  waitingSW = newSW;
+                  swUpdateReady.value = true;
+                }
+              });
+            });
+          }).catch(() => {});
+
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            window.location.reload();
+          });
         }
 
         return {
@@ -859,7 +885,7 @@
           currentPage, currentPageComponent, currentPageTitle,
           activeSheetId, activeGroupName, sideNavOpen, showGroupSwitcher,
           demoHomeCallout,
-          needsReconnect, reconnect, connect,
+          needsReconnect, reconnect, connect, swUpdateReady, applySwUpdate,
           navigateTo, isListEnabled,
           onAuthChange, signOut,
           startQuickLookDemo, leaveDemoToSignIn,

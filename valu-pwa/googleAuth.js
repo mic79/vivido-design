@@ -84,7 +84,8 @@ function clearAllTokens() {
 }
 
 function getRedirectUri() {
-  const path = window.location.pathname;
+  let path = window.location.pathname;
+  path = path.replace(/\/index\.html$/, '/');
   if (path === '/') return window.location.origin;
   return window.location.origin + path;
 }
