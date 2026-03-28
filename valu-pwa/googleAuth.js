@@ -1,27 +1,40 @@
 /**
- * Google OAuth2 auth module — single-step flow.
+ * Google OAuth2 — Authorization Code Flow with Cloudflare Worker.
  *
- * Uses google.accounts.oauth2.initTokenClient with expanded scopes
- * (drive.file + openid/email/profile) so one account-selection prompt
- * grants both API access and user identity.
+ * Uses the standard OAuth2 authorization code flow with a Cloudflare Worker
+ * for the server-side token exchange, enabling long-lived refresh tokens
+ * for seamless, persistent authentication.
  *
- * Token is cached in sessionStorage for seamless reloads within its
- * ~1 hour lifetime. User profile is cached in localStorage.
+ * Sign-in flow (one-time):
+ *  1. User clicks "Sign in" → redirect to Google consent screen
+ *  2. Google redirects back with ?code=...
+ *  3. Code sent to Worker → returns access token + encrypted refresh token
+ *  4. Encrypted refresh token stored in localStorage
+ *
+ * Subsequent visits (seamless):
+ *  1. Page loads → finds encrypted refresh token in localStorage
+ *  2. Calls Worker /auth/refresh → gets fresh access token
+ *  3. User is signed in with zero interaction
  */
 
-const CLIENT_ID = '399400088485-h2nrjmo500qj4s7qrvfaog2tsqet3huo.apps.googleusercontent.com';
-const API_KEY   = 'AIzaSyBdC9q6tLx1vLOFyUF-8Jeuy4gpuTYiaPs';
-const SCOPES    = 'https://www.googleapis.com/auth/drive.file openid email profile';
+// ── Configuration ─────────────────────────────────────────────────────────────
+// Update WORKER_URL after deploying the Cloudflare Worker.
 
-let tokenClient          = null;
-let accessToken          = null;
-let userProfile          = null;
-let _onAuthChange        = null;
-let _tokenRejecter       = null;
-let _connectResolver     = null;
-let _pendingTokenPromise = null;
+const CLIENT_ID   = '399400088485-h2nrjmo500qj4s7qrvfaog2tsqet3huo.apps.googleusercontent.com';
+const API_KEY     = 'AIzaSyBdC9q6tLx1vLOFyUF-8Jeuy4gpuTYiaPs';
+const SCOPES      = 'https://www.googleapis.com/auth/drive.file openid email profile';
+const WORKER_URL  = 'https://valu-auth.valu.workers.dev';
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+
+let accessToken    = null;
+let userProfile    = null;
+let _onAuthChange  = null;
+let _pendingRefresh = null;
+let _refreshTimer  = null;
+
+// ── Storage helpers ───────────────────────────────────────────────────────────
 
 function persistSession(profile) {
   if (profile) {
@@ -48,22 +61,30 @@ function getStoredProfile() {
 }
 
 function cacheToken(token, expiresIn) {
-  sessionStorage.setItem('valu_access_token', token);
-  sessionStorage.setItem('valu_token_expiry', String(Date.now() + ((expiresIn || 3600) * 1000)));
+  localStorage.setItem('valu_access_token', token);
+  localStorage.setItem('valu_token_expiry', String(Date.now() + ((expiresIn || 3600) * 1000)));
 }
 
 function getCachedToken() {
-  const token = sessionStorage.getItem('valu_access_token');
-  const expiry = parseInt(sessionStorage.getItem('valu_token_expiry') || '0', 10);
+  const token = localStorage.getItem('valu_access_token');
+  const expiry = parseInt(localStorage.getItem('valu_token_expiry') || '0', 10);
   if (token && Date.now() < expiry - 60000) {
     return token;
   }
   return null;
 }
 
-function clearCachedToken() {
+function clearAllTokens() {
+  localStorage.removeItem('valu_access_token');
+  localStorage.removeItem('valu_token_expiry');
+  localStorage.removeItem('valu_encrypted_refresh');
+  // Clean up old sessionStorage keys from previous auth implementation
   sessionStorage.removeItem('valu_access_token');
   sessionStorage.removeItem('valu_token_expiry');
+}
+
+function getRedirectUri() {
+  return window.location.origin + window.location.pathname;
 }
 
 async function fetchUserInfo(token) {
@@ -80,7 +101,57 @@ async function fetchUserInfo(token) {
   };
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────────
+// ── Worker communication ──────────────────────────────────────────────────────
+
+async function exchangeCodeForTokens(code) {
+  const res = await fetch(`${WORKER_URL}/auth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, redirect_uri: getRedirectUri() }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error || 'Token exchange failed');
+  }
+  return data;
+}
+
+async function refreshViaWorker(encryptedRefreshToken) {
+  const res = await fetch(`${WORKER_URL}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ encrypted_refresh_token: encryptedRefreshToken }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error || 'Token refresh failed');
+  }
+  return data;
+}
+
+// ── Proactive refresh ─────────────────────────────────────────────────────────
+
+function scheduleRefresh(expiresIn) {
+  if (_refreshTimer) clearTimeout(_refreshTimer);
+  const refreshMs = Math.max((expiresIn - 300) * 1000, 60000);
+  _refreshTimer = setTimeout(() => silentRefresh(), refreshMs);
+}
+
+async function silentRefresh() {
+  const encryptedRefresh = localStorage.getItem('valu_encrypted_refresh');
+  if (!encryptedRefresh) return;
+
+  try {
+    const result = await refreshViaWorker(encryptedRefresh);
+    accessToken = result.access_token;
+    cacheToken(result.access_token, result.expires_in);
+    scheduleRefresh(result.expires_in);
+  } catch (err) {
+    console.warn('Silent token refresh failed:', err.message);
+  }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 const GoogleAuth = {
 
@@ -89,178 +160,175 @@ const GoogleAuth = {
   get isSignedIn() { return !!userProfile; },
 
   /**
-   * Initialize the OAuth2 token client. Call once after the GIS script loads.
-   * Restores cached profile + token from storage for seamless reloads.
+   * Initialize auth. Called once on app startup.
+   * Handles OAuth callback if ?code= is in the URL.
+   * Otherwise restores session from localStorage and refreshes token silently.
    */
-  init(onAuthChange) {
+  async init(onAuthChange) {
     _onAuthChange = onAuthChange;
 
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+
+    if (code) {
+      window.history.replaceState({}, '', window.location.pathname);
+
+      const savedState = sessionStorage.getItem('valu_oauth_state');
+      sessionStorage.removeItem('valu_oauth_state');
+
+      if (state !== savedState) {
+        console.error('OAuth state mismatch — possible CSRF');
+        onAuthChange(false, null);
+        return;
+      }
+
+      try {
+        const result = await exchangeCodeForTokens(code);
+        accessToken = result.access_token;
+        cacheToken(result.access_token, result.expires_in);
+        localStorage.setItem('valu_encrypted_refresh', result.encrypted_refresh_token);
+
+        const profile = await fetchUserInfo(accessToken);
+        userProfile = profile;
+        persistSession(profile);
+
+        scheduleRefresh(result.expires_in);
+        onAuthChange(true, userProfile);
+      } catch (err) {
+        console.error('OAuth callback failed:', err);
+        onAuthChange(false, null);
+      }
+      return;
+    }
+
+    // Normal page load — restore session
     const storedProfile = getStoredProfile();
+    const encryptedRefresh = localStorage.getItem('valu_encrypted_refresh');
+
     if (storedProfile) {
       userProfile = storedProfile;
+
+      const cached = getCachedToken();
+      if (cached) {
+        accessToken = cached;
+        const expiry = parseInt(localStorage.getItem('valu_token_expiry') || '0', 10);
+        const remaining = Math.max(0, Math.floor((expiry - Date.now()) / 1000));
+        scheduleRefresh(remaining);
+        onAuthChange(true, userProfile);
+        return;
+      }
+
+      // No valid cached token — show app shell with cached profile
+      // while we refresh the token in the background
+      onAuthChange(true, userProfile);
+
+      if (encryptedRefresh) {
+        try {
+          const result = await refreshViaWorker(encryptedRefresh);
+          accessToken = result.access_token;
+          cacheToken(result.access_token, result.expires_in);
+          scheduleRefresh(result.expires_in);
+        } catch (err) {
+          console.warn('Background token refresh failed:', err.message);
+        }
+      }
+      return;
     }
 
-    const cached = getCachedToken();
-    if (cached) {
-      accessToken = cached;
-    }
+    onAuthChange(false, null);
+  },
 
-    tokenClient = google.accounts.oauth2.initTokenClient({
+  /**
+   * Start the sign-in flow. Redirects the browser to Google's consent screen.
+   * Must be called from a user gesture (button click).
+   */
+  connect() {
+    const state = crypto.randomUUID
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36);
+    sessionStorage.setItem('valu_oauth_state', state);
+
+    const params = new URLSearchParams({
       client_id: CLIENT_ID,
+      redirect_uri: getRedirectUri(),
+      response_type: 'code',
       scope: SCOPES,
-      callback: (resp) => {
-        if (resp.error) {
-          if (_connectResolver) {
-            _connectResolver.reject(new Error(resp.error));
-            _connectResolver = null;
-          }
-          return;
-        }
-        if (resp.access_token) {
-          accessToken = resp.access_token;
-          cacheToken(resp.access_token, resp.expires_in);
-
-          if (_connectResolver) {
-            _connectResolver.resolve(resp.access_token);
-            _connectResolver = null;
-          }
-        }
-      },
-      error_callback: (err) => {
-        console.warn('Token popup error:', err);
-        if (_tokenRejecter) {
-          _tokenRejecter(new Error('popup_blocked'));
-          _tokenRejecter = null;
-        }
-        if (_connectResolver) {
-          _connectResolver.reject(new Error('popup_blocked'));
-          _connectResolver = null;
-        }
-      },
+      access_type: 'offline',
+      prompt: 'consent',
+      state,
     });
 
-    if (storedProfile && accessToken) {
-      if (_onAuthChange) _onAuthChange(true, userProfile);
-    } else if (storedProfile) {
-      // Profile cached but token expired — still show as "signed in"
-      // so cached data displays, but API calls will need reconnect
-      if (_onAuthChange) _onAuthChange(true, userProfile);
-    } else {
-      if (_onAuthChange) _onAuthChange(false, null);
-    }
+    window.location.href = `${GOOGLE_AUTH_URL}?${params}`;
   },
 
   /**
-   * Initiate the single-step connect flow. Must be called from a user gesture.
-   * Opens Google account selector, grants Drive + profile access, fetches
-   * user info, and notifies the app.
+   * Get a valid access token. Refreshes via Worker if expired.
+   * Throws 'refresh_failed' if unable to get a token (triggers reconnect UI).
    */
-  async connect() {
-    const token = await new Promise((resolve, reject) => {
-      _connectResolver = { resolve, reject };
-
-      tokenClient.callback = (resp) => {
-        _connectResolver = null;
-        if (resp.error) {
-          reject(new Error(resp.error));
-          return;
-        }
-        accessToken = resp.access_token;
-        cacheToken(resp.access_token, resp.expires_in);
-        resolve(accessToken);
-      };
-
-      tokenClient.requestAccessToken({
-        prompt: 'select_account',
-      });
-    });
-
-    const profile = await fetchUserInfo(token);
-    userProfile = profile;
-    persistSession(profile);
-
-    if (_onAuthChange) _onAuthChange(true, userProfile);
-  },
-
-  /**
-   * Get a valid access token. Returns cached token if available.
-   * If no token exists, attempts a silent refresh (prompt:'').
-   * Throws 'popup_blocked' if the browser blocks the popup.
-   */
-  getAccessToken() {
+  async getAccessToken() {
     if (accessToken) {
-      const expiry = parseInt(sessionStorage.getItem('valu_token_expiry') || '0', 10);
+      const expiry = parseInt(localStorage.getItem('valu_token_expiry') || '0', 10);
       if (Date.now() < expiry - 60000) {
-        return Promise.resolve(accessToken);
+        return accessToken;
       }
       accessToken = null;
-      clearCachedToken();
     }
 
     const cached = getCachedToken();
     if (cached) {
       accessToken = cached;
-      return Promise.resolve(cached);
+      return cached;
     }
 
-    if (_pendingTokenPromise) return _pendingTokenPromise;
-
-    if (!tokenClient) {
-      return Promise.reject(new Error('Not signed in'));
+    const encryptedRefresh = localStorage.getItem('valu_encrypted_refresh');
+    if (!encryptedRefresh) {
+      throw new Error('Not signed in');
     }
 
-    _pendingTokenPromise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        _pendingTokenPromise = null;
-        _tokenRejecter = null;
-        reject(new Error('popup_blocked'));
-      }, 6000);
+    if (_pendingRefresh) return _pendingRefresh;
 
-      tokenClient.callback = (resp) => {
-        clearTimeout(timeout);
-        _pendingTokenPromise = null;
-        _tokenRejecter = null;
-        if (resp.error) {
-          reject(resp);
-          return;
-        }
-        accessToken = resp.access_token;
-        cacheToken(resp.access_token, resp.expires_in);
-        resolve(accessToken);
-      };
-
-      _tokenRejecter = (err) => {
-        clearTimeout(timeout);
-        _pendingTokenPromise = null;
-        reject(err);
-      };
-
-      tokenClient.requestAccessToken({
-        prompt: '',
-        hint: localStorage.getItem('valu_user_email') || '',
+    _pendingRefresh = refreshViaWorker(encryptedRefresh)
+      .then(result => {
+        accessToken = result.access_token;
+        cacheToken(result.access_token, result.expires_in);
+        scheduleRefresh(result.expires_in);
+        _pendingRefresh = null;
+        return accessToken;
+      })
+      .catch(err => {
+        _pendingRefresh = null;
+        accessToken = null;
+        throw new Error('refresh_failed');
       });
-    });
 
-    return _pendingTokenPromise;
+    return _pendingRefresh;
   },
 
+  /**
+   * Called by sheetsApi on 401 responses. Clears current token and retries.
+   */
   handleAuthFailure() {
     accessToken = null;
-    clearCachedToken();
+    localStorage.removeItem('valu_access_token');
+    localStorage.removeItem('valu_token_expiry');
     return this.getAccessToken();
   },
 
+  /**
+   * Sign out and revoke the access token.
+   */
   signOut() {
     if (accessToken) {
-      google.accounts.oauth2.revoke(accessToken, () => {});
+      fetch(`${GOOGLE_REVOKE_URL}?token=${accessToken}`, { method: 'POST' }).catch(() => {});
     }
     accessToken = null;
     userProfile = null;
-    _pendingTokenPromise = null;
-    _tokenRejecter = null;
-    _connectResolver = null;
+    _pendingRefresh = null;
+    if (_refreshTimer) clearTimeout(_refreshTimer);
+    _refreshTimer = null;
     persistSession(null);
-    clearCachedToken();
+    clearAllTokens();
     if (_onAuthChange) _onAuthChange(false, null);
   },
 
@@ -270,7 +338,7 @@ const GoogleAuth = {
   async showPicker(query = 'Valu:') {
     const token = await this.getAccessToken();
 
-    if (typeof google.picker === 'undefined' || !google.picker.PickerBuilder) {
+    if (typeof google === 'undefined' || !google.picker || !google.picker.PickerBuilder) {
       await new Promise((res, rej) => {
         if (typeof gapi !== 'undefined') {
           gapi.load('picker', { callback: res, onerror: rej });

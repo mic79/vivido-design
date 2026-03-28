@@ -19,8 +19,6 @@
 
   <!-- Vue 3 -->
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-  <!-- Google Identity Services (OAuth2 token client) -->
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <!-- Google API loader + Picker -->
   <script src="https://apis.google.com/js/api.js"></script>
   <script src="https://apis.google.com/js/picker.js"></script>
@@ -553,14 +551,9 @@
           }
         }
 
-        async function connect() {
+        function connect() {
           authLoading.value = true;
-          try {
-            await GoogleAuth.connect();
-          } catch (err) {
-            console.error('Connect failed:', err);
-            authLoading.value = false;
-          }
+          GoogleAuth.connect();
         }
 
         function signOut() {
@@ -797,9 +790,14 @@
 
         async function reconnect() {
           needsReconnect.value = false;
-          if (activeGroup.value) {
-            dataLoaded.value = false;
-            await loadGroupData();
+          try {
+            await GoogleAuth.getAccessToken();
+            if (activeGroup.value) {
+              dataLoaded.value = false;
+              await loadGroupData();
+            }
+          } catch (err) {
+            GoogleAuth.connect();
           }
         }
 
@@ -844,14 +842,7 @@
           } else {
             setTimeout(() => { landingShowCtas.value = true; }, 2000);
           }
-          function tryInitGis() {
-            if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
-              GoogleAuth.init(onAuthChange);
-            } else {
-              setTimeout(tryInitGis, 200);
-            }
-          }
-          tryInitGis();
+          GoogleAuth.init(onAuthChange);
         });
 
         // ── Service Worker ──────────────────────────────────────────────────

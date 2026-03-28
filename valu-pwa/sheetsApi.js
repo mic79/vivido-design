@@ -84,7 +84,7 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
     try {
       token = await GoogleAuth.getAccessToken();
     } catch (err) {
-      if (err.message === 'popup_blocked') {
+      if (err.message === 'popup_blocked' || err.message === 'refresh_failed') {
         throw new Error('popup_blocked');
       }
       throw err;
@@ -121,7 +121,7 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
       const body = await res.text();
       lastError = new Error(`Sheets API ${res.status}: ${body}`);
     } catch (err) {
-      if (err.message === 'popup_blocked') throw err;
+      if (err.message === 'popup_blocked' || err.message === 'refresh_failed') throw err;
       lastError = err;
       if (attempt < maxRetries) {
         await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));

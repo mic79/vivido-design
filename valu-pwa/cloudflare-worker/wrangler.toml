@@ -1,0 +1,16 @@
+name = "valu-auth"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+
+[vars]
+GOOGLE_CLIENT_ID = "399400088485-h2nrjmo500qj4s7qrvfaog2tsqet3huo.apps.googleusercontent.com"
+ALLOWED_ORIGINS = "https://vivido-design.com/valu-pwa/,https://valu-app.com,http://localhost:8080,http://127.0.0.1:8080"
+# ↑ Add your GitHub Pages URL here, e.g.:
+# ALLOWED_ORIGINS = "https://yourname.github.io,http://localhost:8080"
+
+# These must be set as secrets (never commit them):
+#   wrangler secret put GOOGLE_CLIENT_SECRET
+#   wrangler secret put ENCRYPTION_SECRET
+#
+# GOOGLE_CLIENT_SECRET: from Google Cloud Console → Credentials → OAuth 2.0 Client
+# ENCRYPTION_SECRET:    any random 32+ character string (e.g. from: openssl rand -base64 32)
