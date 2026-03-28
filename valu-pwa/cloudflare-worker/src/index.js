@@ -90,12 +90,18 @@ async function handleTokenExchange(request, env) {
 
   const data = await resp.json();
   if (data.error) {
-    return corsResponse(request, env, { error: data.error_description || data.error }, 400);
+    console.error('Google token error:', JSON.stringify(data));
+    return corsResponse(request, env, {
+      error: data.error,
+      error_description: data.error_description || '',
+      redirect_uri_sent: redirect_uri,
+    }, 400);
   }
 
   if (!data.refresh_token) {
     return corsResponse(request, env, {
-      error: 'No refresh token received. Ensure access_type=offline and prompt=consent.',
+      error: 'no_refresh_token',
+      error_description: 'No refresh token received. Ensure access_type=offline and prompt=consent.',
     }, 400);
   }
 

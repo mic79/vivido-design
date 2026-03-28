@@ -104,14 +104,17 @@ async function fetchUserInfo(token) {
 // ── Worker communication ──────────────────────────────────────────────────────
 
 async function exchangeCodeForTokens(code) {
+  const redirectUri = getRedirectUri();
+  console.log('Token exchange — redirect_uri:', redirectUri);
   const res = await fetch(`${WORKER_URL}/auth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, redirect_uri: getRedirectUri() }),
+    body: JSON.stringify({ code, redirect_uri: redirectUri }),
   });
   const data = await res.json();
   if (!res.ok || data.error) {
-    throw new Error(data.error || 'Token exchange failed');
+    console.error('Token exchange failed:', JSON.stringify(data));
+    throw new Error(data.error_description || data.error || 'Token exchange failed');
   }
   return data;
 }
