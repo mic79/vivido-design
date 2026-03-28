@@ -84,7 +84,9 @@ function clearAllTokens() {
 }
 
 function getRedirectUri() {
-  return window.location.origin + window.location.pathname;
+  const path = window.location.pathname;
+  if (path === '/') return window.location.origin;
+  return window.location.origin + path;
 }
 
 async function fetchUserInfo(token) {
