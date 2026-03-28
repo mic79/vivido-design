@@ -177,8 +177,8 @@ const GoogleAuth = {
     if (code) {
       window.history.replaceState({}, '', window.location.pathname);
 
-      const savedState = sessionStorage.getItem('valu_oauth_state');
-      sessionStorage.removeItem('valu_oauth_state');
+      const savedState = localStorage.getItem('valu_oauth_state');
+      localStorage.removeItem('valu_oauth_state');
 
       if (state !== savedState) {
         console.error('OAuth state mismatch — possible CSRF');
@@ -250,7 +250,7 @@ const GoogleAuth = {
     const state = crypto.randomUUID
       ? crypto.randomUUID()
       : Math.random().toString(36).slice(2) + Date.now().toString(36);
-    sessionStorage.setItem('valu_oauth_state', state);
+    localStorage.setItem('valu_oauth_state', state);
 
     const params = new URLSearchParams({
       client_id: CLIENT_ID,
