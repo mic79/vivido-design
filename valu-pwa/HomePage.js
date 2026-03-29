@@ -418,6 +418,85 @@ export default {
       }
     });
 
+    // ── Yearly Balance Table ─────────────────────────────────────────────────
+    const balanceTableYear = ref(new Date().getFullYear());
+
+    const availableYears = computed(() => {
+      const years = new Set(balanceHistory.value.map(h => h.year));
+      return [...years].sort((a, b) => a - b);
+    });
+
+    const yearlyBalanceTable = computed(() => {
+      const year = balanceTableYear.value;
+      const activeAccounts = (props.accounts || [])
+        .filter(a => a.discontinued !== 'true')
+        .slice()
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+      const rows = activeAccounts.map(acc => {
+        const months = [];
+        for (let m = 1; m <= 12; m++) {
+          const entry = balanceHistory.value.find(
+            h => h.accountId === acc.id && h.year === year && h.month === m
+          );
+          months.push(entry !== undefined ? entry.balance : null);
+        }
+        return { id: acc.id, name: acc.name, currency: acc.currency || baseCurrency.value, months };
+      });
+
+      const totals = [];
+      for (let m = 0; m < 12; m++) {
+        let sum = 0;
+        let hasAny = false;
+        for (const row of rows) {
+          if (row.months[m] !== null) {
+            hasAny = true;
+            sum += convertToBase(row.months[m], row.currency);
+          }
+        }
+        totals.push(hasAny ? sum : null);
+      }
+
+      return { rows, totals };
+    });
+
+    const showBalanceTable = computed(() =>
+      enabledLists.value.includes('accounts') && balanceHistory.value.length > 0
+    );
+
+    function prevYear() {
+      const idx = availableYears.value.indexOf(balanceTableYear.value);
+      if (idx > 0) balanceTableYear.value = availableYears.value[idx - 1];
+    }
+    function nextYear() {
+      const idx = availableYears.value.indexOf(balanceTableYear.value);
+      if (idx < availableYears.value.length - 1) balanceTableYear.value = availableYears.value[idx + 1];
+    }
+    const canPrevYear = computed(() => availableYears.value.indexOf(balanceTableYear.value) > 0);
+    const canNextYear = computed(() => {
+      const idx = availableYears.value.indexOf(balanceTableYear.value);
+      return idx < availableYears.value.length - 1;
+    });
+
+    const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    const balanceTooltip = ref(null);
+    let tooltipTimer = null;
+    function showNameTooltip(event, name) {
+      clearTimeout(tooltipTimer);
+      const rect = event.target.getBoundingClientRect();
+      balanceTooltip.value = {
+        text: name,
+        top: rect.top - 6,
+        left: rect.left + rect.width / 2,
+      };
+      tooltipTimer = setTimeout(() => { balanceTooltip.value = null; }, 2000);
+    }
+    function hideNameTooltip() {
+      clearTimeout(tooltipTimer);
+      balanceTooltip.value = null;
+    }
+
     return {
       loading, enabledLists, baseCurrency, expenses, incomeList,
       monthlyExpenses, monthlyIncome, netWorth, netWorthHistory,
@@ -428,6 +507,9 @@ export default {
       toggleBar, emit,
       showDemoWelcomeSheet, dismissDemoWelcome,
       showOnboarding, noToolsEnabled, accountsNeedsData, incomeNeedsData, expensesNeedsData,
+      balanceTableYear, availableYears, yearlyBalanceTable, showBalanceTable,
+      prevYear, nextYear, canPrevYear, canNextYear, MONTH_ABBR,
+      balanceTooltip, showNameTooltip, hideNameTooltip,
     };
   },
 
@@ -559,6 +641,55 @@ export default {
             </div>
           </div>
         </div>
+
+        <!-- Yearly Balance Table -->
+        <div v-if="showBalanceTable" class="card mb-16">
+          <div class="card-header">
+            <h3>Balance Overview</h3>
+            <div class="balance-table-year-nav">
+              <button class="balance-table-year-arrow" :disabled="!canPrevYear" @click="prevYear">
+                <span class="material-icons">chevron_left</span>
+              </button>
+              <span class="balance-table-year-label">{{ balanceTableYear }}</span>
+              <button class="balance-table-year-arrow" :disabled="!canNextYear" @click="nextYear">
+                <span class="material-icons">chevron_right</span>
+              </button>
+            </div>
+          </div>
+          <div class="balance-table-wrap">
+            <table class="balance-table">
+              <thead>
+                <tr>
+                  <th class="balance-table-sticky"></th>
+                  <th v-for="m in MONTH_ABBR" :key="m">{{ m }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in yearlyBalanceTable.rows" :key="row.id">
+                  <td class="balance-table-sticky balance-table-name"
+                      :title="row.name"
+                      @click="showNameTooltip($event, row.name)">{{ row.name }}</td>
+                  <td v-for="(val, i) in row.months" :key="i"
+                      :class="{ 'balance-table-empty': val === null }">
+                    {{ val !== null ? formatCurrency(val, row.currency) : '--' }}
+                  </td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr class="balance-table-total">
+                  <td class="balance-table-sticky balance-table-name">Total</td>
+                  <td v-for="(val, i) in yearlyBalanceTable.totals" :key="i"
+                      :class="{ 'balance-table-empty': val === null }">
+                    {{ val !== null ? formatCurrency(val, baseCurrency) : '--' }}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+        <div v-if="balanceTooltip" class="balance-table-tooltip"
+             :style="{ top: balanceTooltip.top + 'px', left: balanceTooltip.left + 'px' }"
+             @click="hideNameTooltip">{{ balanceTooltip.text }}</div>
 
         <!-- Onboarding: first-time welcome -->
         <div v-if="noToolsEnabled && !isDemoGroup" class="onboarding">
