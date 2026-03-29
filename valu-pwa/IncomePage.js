@@ -420,7 +420,7 @@ export default {
         </div>
 
         <!-- Category filter -->
-        <div class="subpage-filter-bar">
+        <div class="subpage-filter-bar" v-if="incomeList.length > 0">
           <div class="subpage-filter-search" :class="{ expanded: filterSearch }">
             <span class="material-icons subpage-filter-search-icon">search</span>
             <input class="subpage-filter-search-input" v-model="filterSearch" placeholder="Search..." />

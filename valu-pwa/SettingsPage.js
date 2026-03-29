@@ -156,7 +156,7 @@ export default {
               Valu helps you organize your personal financial data, securely and privately. Your data is stored exclusively in your own Google Drive.
             </p>
             <p style="font-size:12px;color:var(--color-text-hint);margin-top:8px;">
-              Version 0.1
+              
             </p>
           </div>
         </div>

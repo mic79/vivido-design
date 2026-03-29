@@ -385,9 +385,13 @@ export default {
       enabledLists.value.includes('expenses') && expenses.value.length === 0
     );
 
+    const noToolsEnabled = computed(() =>
+      enabledLists.value.length === 0
+    );
+
     const showOnboarding = computed(() =>
       !props.isDemoGroup
-      && (accountsNeedsData.value || incomeNeedsData.value || expensesNeedsData.value)
+      && (noToolsEnabled.value || accountsNeedsData.value || incomeNeedsData.value || expensesNeedsData.value)
     );
 
     // Auto-select the last month when chart data becomes available
@@ -406,7 +410,7 @@ export default {
       formatCurrency, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon,
       toggleBar, emit,
       showDemoWelcomeSheet, dismissDemoWelcome,
-      showOnboarding, accountsNeedsData, incomeNeedsData, expensesNeedsData,
+      showOnboarding, noToolsEnabled, accountsNeedsData, incomeNeedsData, expensesNeedsData,
     };
   },
 
@@ -544,8 +548,70 @@ export default {
           </div>
         </div>
 
-        <!-- Onboarding: only shows enabled tools that still need data -->
-        <div v-if="showOnboarding" class="onboarding">
+        <!-- Onboarding: first-time welcome -->
+        <div v-if="noToolsEnabled && !isDemoGroup" class="onboarding">
+          <div class="onboarding-hero">
+            <h2 class="onboarding-hero-title">Welcome to Valu</h2>
+            <p class="onboarding-hero-desc">Your personal finance tracker — private, flexible, and stored in your own Google Drive.</p>
+          </div>
+
+          <div class="onboarding-info-card">
+            <div class="onboarding-info-icon"><span class="material-icons">folder</span></div>
+            <div class="onboarding-info-body">
+              <div class="onboarding-info-title">Your data, your Drive</div>
+              <p>A spreadsheet named <strong>"Valu: Personal"</strong> was just created in your Google Drive. All your data lives there — Valu simply reads and writes to it. Nothing is stored on any otherserver.</p>
+              <p>In Valu, a spreadsheet like this is called a <strong>Group</strong>. You can rename it, create more, or even share one with someone — each Group has its own settings and data.</p>
+            </div>
+          </div>
+
+          <div class="onboarding-info-card">
+            <div class="onboarding-info-icon"><span class="material-icons">language</span></div>
+            <div class="onboarding-info-body">
+              <div class="onboarding-info-title">Currency: {{ baseCurrency }}</div>
+              <p>Your base currency is set to <strong>{{ baseCurrency }}</strong>. You can change this and other settings anytime by opening your Group configuration in the Group page, accessible in the side navigation.</p>
+            </div>
+          </div>
+
+          <hr class="onboarding-divider" />
+
+          <div class="onboarding-section-header">
+            <h3 class="onboarding-section-title">What can you track?</h3>
+            <p class="onboarding-section-desc">Each works on its own, but they offer more insights when used together. You can enable or disable these anytime from your Group configuration.</p>
+          </div>
+
+          <div class="onboarding-info-card">
+            <div class="onboarding-info-icon"><span class="material-icons">shopping_cart</span></div>
+            <div class="onboarding-info-body">
+              <div class="onboarding-info-title">Expenses</div>
+              <p>Log what you spend day to day. See monthly totals, filter by category, and spot trends. Categories are optional — start simple and add them when you're ready.</p>
+            </div>
+          </div>
+
+          <div class="onboarding-info-card">
+            <div class="onboarding-info-icon"><span class="material-icons">payments</span></div>
+            <div class="onboarding-info-body">
+              <div class="onboarding-info-title">Income</div>
+              <p>Record your earnings — salary, freelance, side income. When combined with Expenses, you'll see savings rates and monthly comparisons. Categories are optional here too.</p>
+            </div>
+          </div>
+
+          <div class="onboarding-info-card">
+            <div class="onboarding-info-icon"><span class="material-icons">account_balance</span></div>
+            <div class="onboarding-info-body">
+              <div class="onboarding-info-title">Accounts</div>
+              <p>Keep an eye on your bank balances over time. See your total net worth at a glance and track how it changes month to month.</p>
+            </div>
+          </div>
+
+          <p class="onboarding-footer-note">More data means a little more effort, but also more valuable insights. Over time, new features and options will be added — you decide if and when they're relevant to you.</p>
+
+          <button type="button" class="btn btn-primary onboarding-cta" @click="emit('navigate', 'groups', { autoOpenConfig: true })">
+            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:6px;">settings</span>Open Group Configuration
+          </button>
+        </div>
+
+        <!-- Onboarding: per-tool data prompts (after at least one tool is enabled) -->
+        <div v-else-if="showOnboarding" class="onboarding">
           <button v-if="accountsNeedsData" type="button"
             class="onboarding-card onboarding-card--active"
             @click="emit('navigate', 'accounts')">

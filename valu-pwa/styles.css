@@ -966,6 +966,106 @@ button.valu-list-card {
 .onboarding {
   padding: 16px;
 }
+.onboarding-hero {
+  text-align: center;
+  padding: 24px 8px 8px;
+  margin-bottom: 8px;
+}
+.onboarding-hero-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0 0 8px;
+}
+.onboarding-hero-desc {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+.onboarding-info-card {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+}
+.onboarding-info-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+.onboarding-info-icon .material-icons {
+  font-size: 20px;
+}
+.onboarding-info-body {
+  flex: 1;
+  min-width: 0;
+}
+.onboarding-info-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+.onboarding-info-body p {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0 0 6px;
+}
+.onboarding-info-body p:last-child {
+  margin-bottom: 0;
+}
+.onboarding-info-body strong {
+  color: var(--color-text);
+  font-weight: 600;
+}
+.onboarding-divider {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 16px 0;
+}
+.onboarding-section-header {
+  margin-bottom: 12px;
+}
+.onboarding-section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0 0 4px;
+}
+.onboarding-section-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+.onboarding-footer-note {
+  font-size: 12px;
+  color: var(--color-text-hint);
+  line-height: 1.5;
+  text-align: center;
+  margin: 8px 0 0;
+  padding: 0 8px;
+}
+.onboarding-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px 20px;
+  font-size: 15px;
+  font-weight: 600;
+}
 .onboarding-welcome {
   text-align: center;
   font-size: 15px;
@@ -1037,7 +1137,7 @@ button.valu-list-card {
 }
 
 .onboarding-card-desc {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--color-text-secondary);
   line-height: 1.4;
 }
@@ -3027,6 +3127,12 @@ select.form-input {
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.spinner.spinner-sm {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+  flex-shrink: 0;
+}
 
 /* ── Empty States ───────────────────────────────────────────────────────────── */
 
