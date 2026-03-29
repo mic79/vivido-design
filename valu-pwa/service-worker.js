@@ -1,4 +1,4 @@
-const CACHE_NAME = 'valu-app-v131';
+const CACHE_NAME = 'valu-app-v132';
 
 const PRECACHE_URLS = [
   'index.html',

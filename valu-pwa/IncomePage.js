@@ -19,6 +19,7 @@ export default {
     const filterMonth = ref(getCurrentMonthKey());
     const filterCategory = ref('');
     const filterSearch = ref('');
+    const showUpcoming = ref(true);
     const showMonthSheet = ref(false);
     const openDropdown = ref(null);
 
@@ -146,8 +147,16 @@ export default {
         );
       }
 
+      if (!showUpcoming.value) {
+        list = list.filter(e => !isFutureDate(e.date));
+      }
+
       return list;
     });
+
+    const hasFutureEntries = computed(() =>
+      incomeList.value.some(e => isFutureDate(e.date))
+    );
 
     const monthlyTotal = computed(() => {
       return filteredIncome.value.reduce((sum, e) => {
@@ -386,7 +395,7 @@ export default {
       showAddModal, showEditModal, editingIncome,
       newIncome, categories, baseCurrency,
       adjustBalance, editAdjustBalance,
-      filterMonth, filterCategory, filterSearch, availableMonths, usedCategories,
+      filterMonth, filterCategory, filterSearch, showUpcoming, hasFutureEntries, availableMonths, usedCategories,
       showMonthSheet, formatMonthLabel,
       openDropdown, toggleDropdown, setDropdownOpen,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
@@ -452,6 +461,10 @@ export default {
               </div>
             </div>
           </div>
+          <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="showUpcoming = !showUpcoming">
+            <span class="material-icons" style="font-size:16px;">event</span>
+            <span>Upcoming</span>
+          </button>
         </div>
 
         <!-- Income List -->
