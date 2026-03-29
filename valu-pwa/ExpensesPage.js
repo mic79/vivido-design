@@ -343,6 +343,14 @@ export default {
       await fetchData();
     }
 
+    function isFutureDate(dateStr) {
+      if (!dateStr) return false;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const [y, m, d] = dateStr.split('-').map(Number);
+      return new Date(y, m - 1, d) > today;
+    }
+
     function formatDate(dateStr) {
       if (!dateStr) return '';
       const [y, m, d] = dateStr.split('-').map(Number);
@@ -383,7 +391,7 @@ export default {
       openDropdown, toggleDropdown, setDropdownOpen,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
       addExpense, startEdit, saveEdit, deleteExpense, duplicateExpense,
-      formatDate, openNewExpenseModal,
+      isFutureDate, formatDate, openNewExpenseModal,
     };
   },
 
@@ -448,7 +456,7 @@ export default {
 
         <!-- Expenses List -->
         <div class="valu-list" v-if="filteredExpenses.length > 0">
-          <div v-for="exp in filteredExpenses" :key="exp.id" class="valu-list-item" @click="startEdit(exp)">
+          <div v-for="exp in filteredExpenses" :key="exp.id" class="valu-list-item" :style="isFutureDate(exp.date) ? { opacity: 0.5 } : {}" @click="startEdit(exp)">
             <div class="valu-list-row">
               <span v-if="getCategoryIcon(exp.category)" class="material-icons valu-list-cat-icon">{{ getCategoryIcon(exp.category) }}</span>
               <div class="valu-list-body">

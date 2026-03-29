@@ -343,6 +343,14 @@ export default {
       await fetchData();
     }
 
+    function isFutureDate(dateStr) {
+      if (!dateStr) return false;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const [y, m, d] = dateStr.split('-').map(Number);
+      return new Date(y, m - 1, d) > today;
+    }
+
     function formatDate(dateStr) {
       if (!dateStr) return '';
       const [y, m, d] = dateStr.split('-').map(Number);
@@ -383,7 +391,7 @@ export default {
       openDropdown, toggleDropdown, setDropdownOpen,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
       addIncome, startEdit, saveEdit, deleteIncome, duplicateIncome,
-      formatDate, openNewIncomeModal,
+      isFutureDate, formatDate, openNewIncomeModal,
     };
   },
 
@@ -448,7 +456,7 @@ export default {
 
         <!-- Income List -->
         <div class="valu-list" v-if="filteredIncome.length > 0">
-          <div v-for="inc in filteredIncome" :key="inc.id" class="valu-list-item" @click="startEdit(inc)">
+          <div v-for="inc in filteredIncome" :key="inc.id" class="valu-list-item" :style="isFutureDate(inc.date) ? { opacity: 0.6 } : {}" @click="startEdit(inc)">
             <div class="valu-list-row">
               <span v-if="getCategoryIcon(inc.category)" class="material-icons valu-list-cat-icon">{{ getCategoryIcon(inc.category) }}</span>
               <div class="valu-list-body">

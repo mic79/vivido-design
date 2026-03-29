@@ -175,7 +175,15 @@ export default {
         }
       }
 
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
       return all
+        .filter(tx => {
+          if (!tx.date) return true;
+          const [y, m, d] = tx.date.split('-').map(Number);
+          return new Date(y, m - 1, d) <= today;
+        })
         .sort((a, b) => {
           const da = a.date ? new Date(a.date) : new Date(0);
           const db = b.date ? new Date(b.date) : new Date(0);
@@ -559,7 +567,7 @@ export default {
             <div class="onboarding-info-icon"><span class="material-icons">folder</span></div>
             <div class="onboarding-info-body">
               <div class="onboarding-info-title">Your data, your Drive</div>
-              <p>A spreadsheet named <strong>"Valu: Personal"</strong> was just created in your Google Drive. All your data lives there — Valu simply reads and writes to it. Nothing is stored on any otherserver.</p>
+              <p>A spreadsheet named <strong>"Valu: Personal"</strong> was just created in your Google Drive. All your data lives there — Valu simply reads and writes to it. Nothing is stored on any other server.</p>
               <p>In Valu, a spreadsheet like this is called a <strong>Group</strong>. You can rename it, create more, or even share one with someone — each Group has its own settings and data.</p>
             </div>
           </div>
@@ -576,7 +584,7 @@ export default {
 
           <div class="onboarding-section-header">
             <h3 class="onboarding-section-title">What can you track?</h3>
-            <p class="onboarding-section-desc">Each works on its own, but they offer more insights when used together. You can enable or disable these anytime from your Group configuration.</p>
+            <p class="onboarding-section-desc">Each of the following tools works on its own, but they offer more insights when used together. You can enable or disable these anytime from your Group configuration.</p>
           </div>
 
           <div class="onboarding-info-card">
