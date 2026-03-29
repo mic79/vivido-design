@@ -95,13 +95,51 @@ export default {
       return rate ? amount * rate : amount;
     }
 
+    function getNumberLocale() {
+      const pref = localStorage.getItem('valu_number_format') || 'auto';
+      return pref === 'auto' ? undefined : pref;
+    }
+
+    function amountToInput(num) {
+      const pref = localStorage.getItem('valu_number_format') || 'auto';
+      const str = Number(num).toString();
+      if (pref === 'de-DE') return str.replace('.', ',');
+      return str;
+    }
+
+    function sanitizeAmount(obj, key) {
+      const raw = obj[key];
+      if (typeof raw !== 'string') return;
+      let s = raw.replace(/[^0-9.,-]/g, '');
+      s = s.replace(/^(-?)(.*)/, (_, sign, rest) => sign + rest.replace(/-/g, ''));
+      s = s.replace(/([.,])([.,])/g, '$1');
+      s = s.replace(/([.,])([.,])/g, '$1');
+      obj[key] = s;
+    }
+
+    function parseAmount(val) {
+      if (typeof val === 'number') return val;
+      if (!val || typeof val !== 'string') return NaN;
+      const s = val.trim();
+      const lastDot = s.lastIndexOf('.');
+      const lastComma = s.lastIndexOf(',');
+      if (lastComma > lastDot) {
+        return parseFloat(s.replace(/\./g, '').replace(',', '.'));
+      }
+      return parseFloat(s.replace(/,/g, ''));
+    }
+
     function formatCurrency(amount, currency) {
       try {
-        return new Intl.NumberFormat(undefined, {
-          style: 'currency', currency: currency || baseCurrency.value,
-          currencyDisplay: 'narrowSymbol',
+        const cur = currency || baseCurrency.value;
+        const numLocale = getNumberLocale();
+        const sym = new Intl.NumberFormat(undefined, {
+          style: 'currency', currency: cur, currencyDisplay: 'narrowSymbol',
+        }).formatToParts(0).find(p => p.type === 'currency')?.value || cur;
+        const num = new Intl.NumberFormat(numLocale, {
           minimumFractionDigits: 2, maximumFractionDigits: 2,
         }).format(amount);
+        return sym + num;
       } catch {
         return amount.toFixed(2) + ' ' + (currency || '');
       }
@@ -250,6 +288,8 @@ export default {
     async function addExpense() {
       const e = newExpense.value;
       if (!e.title.trim() || e.amount === '' || e.amount === undefined) return;
+      const amt = parseAmount(e.amount);
+      if (isNaN(amt)) return;
 
       const id = SheetsApi.generateId();
       const now = new Date().toISOString();
@@ -257,14 +297,14 @@ export default {
       const shouldAdjust = adjustBalance.value && e.accountId;
 
       await SheetsApi.appendRow(getSheetId(), TABS.EXPENSES, [
-        id, e.title.trim(), e.amount.toString(), e.accountId,
+        id, e.title.trim(), amt.toString(), e.accountId,
         e.category, date, e.notes, now, shouldAdjust ? 'yes' : '',
       ]);
 
       if (shouldAdjust) {
         const [y, m] = date.split('-').map(Number);
         const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
-        await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur - parseFloat(e.amount), date);
+        await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur - amt, date);
       }
 
       if (e.accountId) {
@@ -284,7 +324,7 @@ export default {
         accountId: expense.accountId || '',
         balanceAdjusted: expense.balanceAdjusted || '',
       };
-      editingExpense.value = { ...expense, amount: expense.amount.toString() };
+      editingExpense.value = { ...expense, amount: amountToInput(expense.amount) };
       editAdjustBalance.value = expense.balanceAdjusted === 'yes';
       showEditModal.value = true;
     }
@@ -293,18 +333,20 @@ export default {
       const e = editingExpense.value;
       const orig = editOriginal.value;
       if (!e || !orig) return;
+      const amt = parseAmount(e.amount);
+      if (isNaN(amt)) return;
 
       const shouldAdjust = editAdjustBalance.value && e.accountId;
       const date = e.date || localDateISO();
 
       await SheetsApi.updateRow(getSheetId(), TABS.EXPENSES, e.id, [
-        e.id, e.title, e.amount.toString(), e.accountId,
+        e.id, e.title, amt.toString(), e.accountId,
         e.category, date, e.notes, e.createdAt, shouldAdjust ? 'yes' : '',
       ]);
 
       if (shouldAdjust) {
         const [y, m] = date.split('-').map(Number);
-        const newAmt = parseFloat(e.amount) || 0;
+        const newAmt = amt;
         const accountChanged = e.accountId !== orig.accountId;
 
         if (accountChanged && orig.balanceAdjusted === 'yes' && orig.accountId) {
@@ -333,7 +375,7 @@ export default {
       if (!e) return;
       newExpense.value = {
         title: e.title,
-        amount: e.amount.toString(),
+        amount: amountToInput(parseAmount(e.amount)),
         accountId: e.accountId || '',
         category: e.category || '',
         date: localDateISO(),
@@ -400,7 +442,7 @@ export default {
       openDropdown, toggleDropdown, setDropdownOpen,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
       addExpense, startEdit, saveEdit, deleteExpense, duplicateExpense,
-      isFutureDate, formatDate, openNewExpenseModal,
+      isFutureDate, formatDate, sanitizeAmount, openNewExpenseModal,
     };
   },
 
@@ -513,7 +555,7 @@ export default {
           </div>
           <div class="sheet-hero">
             <input class="sheet-hero-name" v-model="newExpense.title" placeholder="What did you spend on?" />
-            <input class="sheet-hero-amount" v-model="newExpense.amount" type="number" step="0.01" placeholder="0" />
+            <input class="sheet-hero-amount" v-model="newExpense.amount" @input="sanitizeAmount(newExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" />
             <div class="sheet-hero-label">Amount</div>
           </div>
           <div class="modal-body" @click="openDropdown = null">
@@ -599,7 +641,7 @@ export default {
           </div>
           <div class="sheet-hero">
             <input class="sheet-hero-name" v-model="editingExpense.title" placeholder="Title" />
-            <input class="sheet-hero-amount" v-model="editingExpense.amount" type="number" step="0.01" placeholder="0" />
+            <input class="sheet-hero-amount" v-model="editingExpense.amount" @input="sanitizeAmount(editingExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" />
             <div class="sheet-hero-label">Amount</div>
           </div>
           <div class="modal-body" @click="openDropdown = null">

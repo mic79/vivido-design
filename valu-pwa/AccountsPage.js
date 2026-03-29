@@ -111,13 +111,51 @@ export default {
       return rate ? amount * rate : amount;
     }
 
+    function getNumberLocale() {
+      const pref = localStorage.getItem('valu_number_format') || 'auto';
+      return pref === 'auto' ? undefined : pref;
+    }
+
+    function amountToInput(num) {
+      const pref = localStorage.getItem('valu_number_format') || 'auto';
+      const str = Number(num).toString();
+      if (pref === 'de-DE') return str.replace('.', ',');
+      return str;
+    }
+
+    function sanitizeAmount(obj, key) {
+      const raw = obj[key];
+      if (typeof raw !== 'string') return;
+      let s = raw.replace(/[^0-9.,-]/g, '');
+      s = s.replace(/^(-?)(.*)/, (_, sign, rest) => sign + rest.replace(/-/g, ''));
+      s = s.replace(/([.,])([.,])/g, '$1');
+      s = s.replace(/([.,])([.,])/g, '$1');
+      obj[key] = s;
+    }
+
+    function parseAmount(val) {
+      if (typeof val === 'number') return val;
+      if (!val || typeof val !== 'string') return NaN;
+      const s = val.trim();
+      const lastDot = s.lastIndexOf('.');
+      const lastComma = s.lastIndexOf(',');
+      if (lastComma > lastDot) {
+        return parseFloat(s.replace(/\./g, '').replace(',', '.'));
+      }
+      return parseFloat(s.replace(/,/g, ''));
+    }
+
     function formatCurrency(amount, currency) {
       try {
-        return new Intl.NumberFormat(undefined, {
-          style: 'currency', currency: currency || baseCurrency.value,
-          currencyDisplay: 'narrowSymbol',
+        const cur = currency || baseCurrency.value;
+        const numLocale = getNumberLocale();
+        const sym = new Intl.NumberFormat(undefined, {
+          style: 'currency', currency: cur, currencyDisplay: 'narrowSymbol',
+        }).formatToParts(0).find(p => p.type === 'currency')?.value || cur;
+        const num = new Intl.NumberFormat(numLocale, {
           minimumFractionDigits: 2, maximumFractionDigits: 2,
         }).format(amount);
+        return sym + num;
       } catch {
         return amount.toFixed(2) + ' ' + (currency || '');
       }
@@ -305,7 +343,7 @@ export default {
       balanceEntry.value = {
         accountId: account.id,
         date: todayStr(),
-        amount: lastBal ? lastBal.toString() : '',
+        amount: lastBal ? amountToInput(lastBal) : '',
       };
       showBalanceModal.value = true;
     }
@@ -319,7 +357,7 @@ export default {
       balanceEntry.value = {
         accountId: historyAccount.value.id,
         date: dateStr,
-        amount: h.balance.toString(),
+        amount: amountToInput(h.balance),
       };
       showBalanceModal.value = true;
     }
@@ -327,11 +365,13 @@ export default {
     async function saveBalance() {
       const entry = balanceEntry.value;
       if (!entry.accountId || entry.amount === '') return;
+      const amt = parseAmount(entry.amount);
+      if (isNaN(amt)) return;
 
       const { year, month } = parseDateParts(entry.date);
       const dateStr = entry.date;
 
-      await upsertBalance(entry.accountId, year, month, entry.amount, dateStr);
+      await upsertBalance(entry.accountId, year, month, amt, dateStr);
       showBalanceModal.value = false;
       await fetchData();
     }
@@ -344,7 +384,7 @@ export default {
       const balances = {};
       for (const acc of activeAccounts.value) {
         const lastBal = getCurrentBalance(acc.id);
-        balances[acc.id] = lastBal ? lastBal.toString() : '';
+        balances[acc.id] = lastBal ? amountToInput(lastBal) : '';
       }
       updateBalances.value = balances;
     }
@@ -356,7 +396,9 @@ export default {
       for (const acc of activeAccounts.value) {
         const val = updateBalances.value[acc.id];
         if (val === '' || val === undefined) continue;
-        await upsertBalance(acc.id, year, month, val, dateStr);
+        const amt = parseAmount(val);
+        if (isNaN(amt)) continue;
+        await upsertBalance(acc.id, year, month, amt, dateStr);
       }
 
       updateMode.value = false;
@@ -439,7 +481,7 @@ export default {
       currencyName, selectCurrency,
       setDropdownOpen, selectDropdownOption,
       formatAccountDisplayName,
-      formatCurrency, getCurrentBalance, getLastUpdateDate, formatUpdateDate,
+      formatCurrency, sanitizeAmount, getCurrentBalance, getLastUpdateDate, formatUpdateDate,
       convertToBase, getAccountDiff,
       addAccount, startEdit, saveEdit, persistEditToSheet, deleteAccount,
       showHistory, openBalanceUpdate, saveBalance, editHistoryEntry,
@@ -655,7 +697,7 @@ export default {
         <div class="modal" v-if="showBalanceModal">
           <div class="sheet-handle"></div>
           <div class="modal-body" style="padding-top:8px; text-align:center;">
-            <input class="sheet-hero-amount-input" type="number" step="0.01" v-model="balanceEntry.amount" placeholder="0" autofocus />
+            <input class="sheet-hero-amount-input" type="text" inputmode="decimal" v-model="balanceEntry.amount" @input="sanitizeAmount(balanceEntry, 'amount')" placeholder="0" autofocus />
             <div class="sheet-hero-label">Balance</div>
           </div>
           <div class="modal-body">

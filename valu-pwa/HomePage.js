@@ -57,13 +57,22 @@ export default {
       return rate ? amount * rate : amount;
     }
 
+    function getNumberLocale() {
+      const pref = localStorage.getItem('valu_number_format') || 'auto';
+      return pref === 'auto' ? undefined : pref;
+    }
+
     function formatCurrency(amount, currency) {
       try {
-        return new Intl.NumberFormat(undefined, {
-          style: 'currency', currency: currency || baseCurrency.value,
-          currencyDisplay: 'narrowSymbol',
+        const cur = currency || baseCurrency.value;
+        const numLocale = getNumberLocale();
+        const sym = new Intl.NumberFormat(undefined, {
+          style: 'currency', currency: cur, currencyDisplay: 'narrowSymbol',
+        }).formatToParts(0).find(p => p.type === 'currency')?.value || cur;
+        const num = new Intl.NumberFormat(numLocale, {
           minimumFractionDigits: 2, maximumFractionDigits: 2,
         }).format(amount);
+        return sym + num;
       } catch {
         return amount.toFixed(2);
       }
