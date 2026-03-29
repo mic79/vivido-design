@@ -529,12 +529,7 @@ export default {
               </div>
               <div class="stat-label">Expenses</div>
             </div>
-            <div class="stat" v-if="incomeList.length > 0 && expenses.length > 0 && savingsRate !== null">
-              <div class="stat-value" style="font-size:20px;" :style="{ color: savingsRate >= 0 ? 'var(--color-primary)' : 'var(--color-secondary)' }">
-                {{ savingsRate }}%
-              </div>
-              <div class="stat-label">Savings Rate</div>
-            </div>
+            <!-- Savings Rate hidden for now -->
           </div>
         </div>
 
