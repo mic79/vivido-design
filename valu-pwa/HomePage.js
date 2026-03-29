@@ -431,7 +431,7 @@ export default {
       const activeAccounts = (props.accounts || [])
         .filter(a => a.discontinued !== 'true')
         .slice()
-        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        .sort((a, b) => (parseInt(a.order) || 0) - (parseInt(b.order) || 0));
 
       const rows = activeAccounts.map(acc => {
         const months = [];

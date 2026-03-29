@@ -570,6 +570,56 @@ button.valu-list-card {
 .valu-list-card.discontinued { opacity: .5; }
 
 /* Accounts: discontinued section + badge */
+.accounts-reorder-toggle {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.btn-text-sm {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+}
+.btn-text-sm:active {
+  background: var(--color-primary-light);
+}
+.account-reorder-arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: 10px;
+  flex-shrink: 0;
+}
+.account-reorder-btn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.account-reorder-btn .material-icons {
+  font-size: 16px;
+}
+.account-reorder-btn:disabled {
+  color: var(--color-text-hint);
+  border-color: transparent;
+  cursor: default;
+}
+.account-reorder-btn:not(:disabled):active {
+  background: var(--color-primary-light);
+}
+
 .accounts-discontinued-block {
   margin-top: 28px;
   padding-top: 8px;

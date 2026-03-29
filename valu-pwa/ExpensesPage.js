@@ -255,8 +255,13 @@ export default {
     }
 
     function activeAccountsList() {
-      return (props.accounts || []).filter((a) => a.discontinued !== 'true');
+      return (props.accounts || [])
+        .filter((a) => a.discontinued !== 'true')
+        .slice()
+        .sort((a, b) => (parseInt(a.order) || 0) - (parseInt(b.order) || 0));
     }
+
+    const sortedAccounts = computed(() => activeAccountsList());
 
     function defaultAccountIdForNewExpense() {
       const list = activeAccountsList();
@@ -440,6 +445,7 @@ export default {
       filterMonth, filterCategory, filterSearch, showUpcoming, hasFutureEntries, availableMonths, usedCategories,
       showMonthSheet, formatMonthLabel,
       openDropdown, toggleDropdown, setDropdownOpen,
+      sortedAccounts,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
       addExpense, startEdit, saveEdit, deleteExpense, duplicateExpense,
       isFutureDate, formatDate, sanitizeAmount, openNewExpenseModal,
@@ -581,13 +587,13 @@ export default {
                 </div>
               </valu-dropdown>
             </div>
-            <div class="sheet-list-item" v-if="accounts && accounts.length > 0">
+            <div class="sheet-list-item" v-if="sortedAccounts.length > 0">
               <label>Account</label>
               <valu-dropdown :open="openDropdown === 'newAcct'" @update:open="(v) => setDropdownOpen('newAcct', v)">
                 <template #label>{{ newExpense.accountId ? getAccountName(newExpense.accountId) : 'No account' }}</template>
                 <div class="valu-dropdown-option" :class="{ selected: !newExpense.accountId }"
                      @click="newExpense.accountId = ''; openDropdown = null">No account</div>
-                <div v-for="a in accounts" :key="a.id"
+                <div v-for="a in sortedAccounts" :key="a.id"
                      class="valu-dropdown-option" :class="{ selected: newExpense.accountId === a.id }"
                      @click="newExpense.accountId = a.id; openDropdown = null">{{ formatAccountDisplayName(a) }}</div>
               </valu-dropdown>
@@ -596,7 +602,7 @@ export default {
               <label class="form-label">Notes</label>
               <textarea class="form-input" v-model="newExpense.notes" rows="2" placeholder="Optional notes"></textarea>
             </div>
-            <label v-if="newExpense.accountId && accounts && accounts.length > 0" class="balance-adjust-check" @click.stop>
+            <label v-if="newExpense.accountId && sortedAccounts.length > 0" class="balance-adjust-check" @click.stop>
               <input type="checkbox" v-model="adjustBalance" />
               <span>Also update {{ getAccountName(newExpense.accountId) }} balance</span>
             </label>
@@ -667,13 +673,13 @@ export default {
                 </div>
               </valu-dropdown>
             </div>
-            <div class="sheet-list-item" v-if="accounts && accounts.length > 0">
+            <div class="sheet-list-item" v-if="sortedAccounts.length > 0">
               <label>Account</label>
               <valu-dropdown :open="openDropdown === 'editAcct'" @update:open="(v) => setDropdownOpen('editAcct', v)">
                 <template #label>{{ editingExpense.accountId ? getAccountName(editingExpense.accountId) : 'No account' }}</template>
                 <div class="valu-dropdown-option" :class="{ selected: !editingExpense.accountId }"
                      @click="editingExpense.accountId = ''; openDropdown = null">No account</div>
-                <div v-for="a in accounts" :key="a.id"
+                <div v-for="a in sortedAccounts" :key="a.id"
                      class="valu-dropdown-option" :class="{ selected: editingExpense.accountId === a.id }"
                      @click="editingExpense.accountId = a.id; openDropdown = null">{{ formatAccountDisplayName(a) }}</div>
               </valu-dropdown>
@@ -682,7 +688,7 @@ export default {
               <label class="form-label">Notes</label>
               <textarea class="form-input" v-model="editingExpense.notes" rows="2"></textarea>
             </div>
-            <label v-if="editingExpense.accountId && accounts && accounts.length > 0" class="balance-adjust-check" @click.stop>
+            <label v-if="editingExpense.accountId && sortedAccounts.length > 0" class="balance-adjust-check" @click.stop>
               <input type="checkbox" v-model="editAdjustBalance" />
               <span>Also update {{ getAccountName(editingExpense.accountId) }} balance</span>
             </label>

@@ -206,12 +206,18 @@ export default {
       return current - prevEntries[0].balance;
     }
 
+    function orderSort(a, b) {
+      const oa = parseInt(a.order) || 0;
+      const ob = parseInt(b.order) || 0;
+      return oa - ob;
+    }
+
     const activeAccounts = computed(() =>
-      accounts.value.filter(a => a.discontinued !== 'true')
+      accounts.value.filter(a => a.discontinued !== 'true').slice().sort(orderSort)
     );
 
     const discontinuedAccounts = computed(() =>
-      accounts.value.filter(a => a.discontinued === 'true')
+      accounts.value.filter(a => a.discontinued === 'true').slice().sort(orderSort)
     );
 
     const totalNetWorth = computed(() => {
@@ -460,6 +466,47 @@ export default {
       else if (openDropdown.value === id) openDropdown.value = null;
     }
 
+    // ── Reorder accounts ───────────────────────────────────────────────────
+    const reorderMode = ref(false);
+
+    async function moveAccountUp(acc) {
+      const list = activeAccounts.value;
+      const idx = list.findIndex(a => a.id === acc.id);
+      if (idx <= 0) return;
+      const other = list[idx - 1];
+      const tmpOrder = acc.order;
+      acc.order = other.order;
+      other.order = tmpOrder;
+      await Promise.all([
+        SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
+          acc.id, acc.name, acc.currency, acc.type, acc.discontinued, acc.order,
+        ]),
+        SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, other.id, [
+          other.id, other.name, other.currency, other.type, other.discontinued, other.order,
+        ]),
+      ]);
+      await fetchData();
+    }
+
+    async function moveAccountDown(acc) {
+      const list = activeAccounts.value;
+      const idx = list.findIndex(a => a.id === acc.id);
+      if (idx < 0 || idx >= list.length - 1) return;
+      const other = list[idx + 1];
+      const tmpOrder = acc.order;
+      acc.order = other.order;
+      other.order = tmpOrder;
+      await Promise.all([
+        SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
+          acc.id, acc.name, acc.currency, acc.type, acc.discontinued, acc.order,
+        ]),
+        SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, other.id, [
+          other.id, other.name, other.currency, other.type, other.discontinued, other.order,
+        ]),
+      ]);
+      await fetchData();
+    }
+
     function selectDropdownOption(name, value, target, field) {
       if (target === 'new') {
         newAccount.value[field] = value;
@@ -486,6 +533,7 @@ export default {
       addAccount, startEdit, saveEdit, persistEditToSheet, deleteAccount,
       showHistory, openBalanceUpdate, saveBalance, editHistoryEntry,
       enterUpdateMode, saveBalanceUpdates, monthName,
+      reorderMode, moveAccountUp, moveAccountDown,
     };
   },
 
@@ -524,16 +572,31 @@ export default {
           </div>
         </div>
 
+        <!-- Reorder toggle -->
+        <div v-if="activeAccounts.length > 1" class="accounts-reorder-toggle">
+          <button class="btn-text-sm" @click="reorderMode = !reorderMode">
+            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">swap_vert</span>{{ reorderMode ? 'Done' : 'Reorder' }}
+          </button>
+        </div>
+
         <!-- Account list (card rows matching original) -->
         <div class="valu-list">
-          <div v-for="acc in activeAccounts" :key="acc.id"
+          <div v-for="(acc, idx) in activeAccounts" :key="acc.id"
                class="valu-list-card"
-               @click="startEdit(acc)">
+               @click="reorderMode ? null : startEdit(acc)">
             <div class="valu-list-row">
+              <div v-if="reorderMode" class="account-reorder-arrows">
+                <button class="account-reorder-btn" :disabled="idx === 0" @click.stop="moveAccountUp(acc)">
+                  <span class="material-icons">arrow_upward</span>
+                </button>
+                <button class="account-reorder-btn" :disabled="idx === activeAccounts.length - 1" @click.stop="moveAccountDown(acc)">
+                  <span class="material-icons">arrow_downward</span>
+                </button>
+              </div>
               <div class="valu-list-name">{{ formatAccountDisplayName(acc) }}</div>
               <div class="valu-list-after">{{ formatCurrency(getCurrentBalance(acc.id), acc.currency || baseCurrency) }}</div>
             </div>
-            <div class="valu-list-row valu-list-row-sub">
+            <div v-if="!reorderMode" class="valu-list-row valu-list-row-sub">
               <div class="valu-list-sub">
                 <span v-if="getLastUpdateDate(acc.id)">Updated {{ formatUpdateDate(getLastUpdateDate(acc.id)) }}</span>
                 <span v-else>No updates yet</span>
