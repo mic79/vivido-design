@@ -1,6 +1,6 @@
-import SheetsApi, { TABS, normalizeDiscontinuedCell, formatAccountDisplayName } from './sheetsApi.js';
+import SheetsApi, { TABS, normalizeDiscontinuedCell, formatAccountDisplayName, CURRENCIES } from './sheetsApi.js';
 
-const { ref, computed, onMounted, watch, inject } = Vue;
+const { ref, computed, onMounted, watch, inject, nextTick } = Vue;
 
 export default {
   props: ['sheetId', 'settings', 'showUpdateReminder'],
@@ -38,29 +38,7 @@ export default {
 
     const ACCOUNT_TYPES = ['Checking/Debit', 'Saving', 'Credit', 'Investment'];
 
-    const CURRENCIES = [
-      { name: 'Brazilian Real', code: 'BRL' },
-      { name: 'Canadian Dollar', code: 'CAD' },
-      { name: 'Euro', code: 'EUR' },
-      { name: 'US Dollar', code: 'USD' },
-      { name: 'West African CFA Franc', code: 'XOF' },
-      { name: 'Australian Dollar', code: 'AUD' },
-      { name: 'British Pound', code: 'GBP' },
-      { name: 'Chinese Yuan', code: 'CNY' },
-      { name: 'Danish Krone', code: 'DKK' },
-      { name: 'Hong Kong Dollar', code: 'HKD' },
-      { name: 'Indian Rupee', code: 'INR' },
-      { name: 'Japanese Yen', code: 'JPY' },
-      { name: 'Mexican Peso', code: 'MXN' },
-      { name: 'New Zealand Dollar', code: 'NZD' },
-      { name: 'Norwegian Krone', code: 'NOK' },
-      { name: 'Singapore Dollar', code: 'SGD' },
-      { name: 'South African Rand', code: 'ZAR' },
-      { name: 'South Korean Won', code: 'KRW' },
-      { name: 'Swedish Krona', code: 'SEK' },
-      { name: 'Swiss Franc', code: 'CHF' },
-      { name: 'Taiwan Dollar', code: 'TWD' },
-    ];
+    // CURRENCIES imported from sheetsApi.js
 
     const filteredCurrencies = computed(() => {
       const q = currencySearch.value.toLowerCase();
@@ -444,6 +422,7 @@ export default {
 
     watch(() => getSheetId(), (id) => { if (id) fetchData(); }, { immediate: true });
 
+    const addNameInput = ref(null);
     watch(showAddModal, (v) => {
       if (!v) {
         currencyDropdownOpen.value = false;
@@ -451,6 +430,7 @@ export default {
         openDropdown.value = null;
       } else {
         newAccount.value.currency = baseCurrency.value;
+        nextTick(() => { addNameInput.value?.focus(); });
       }
     });
     watch(showEditModal, (v) => {
@@ -533,7 +513,7 @@ export default {
       addAccount, startEdit, saveEdit, persistEditToSheet, deleteAccount,
       showHistory, openBalanceUpdate, saveBalance, editHistoryEntry,
       enterUpdateMode, saveBalanceUpdates, monthName,
-      reorderMode, moveAccountUp, moveAccountDown,
+      reorderMode, moveAccountUp, moveAccountDown, addNameInput,
     };
   },
 
@@ -651,7 +631,7 @@ export default {
         <div class="modal">
           <div class="sheet-handle"></div>
           <div class="modal-body" style="padding-top:8px; text-align:center;">
-            <input class="sheet-hero-name-solo" v-model="newAccount.name" placeholder="Account name" />
+            <input ref="addNameInput" class="sheet-hero-name-solo" v-model="newAccount.name" placeholder="Account name" />
           </div>
           <div class="modal-body" @click="currencyDropdownOpen = false; openDropdown = null">
             <div class="sheet-section-title">Details</div>

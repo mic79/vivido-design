@@ -1,14 +1,14 @@
-import SheetsApi, { TABS, formatAccountDisplayName, localDateISO } from './sheetsApi.js';
+import SheetsApi, { TABS, formatAccountDisplayName, localDateISO, CATEGORY_ICONS, CURRENCIES } from './sheetsApi.js';
 
-const { ref, computed, watch, inject } = Vue;
+const { ref, computed, watch, inject, nextTick } = Vue;
 
 const LS_LAST_ACCOUNT_EXPENSE = 'valu_last_account_expense';
 
 export default {
   props: ['sheetId', 'settings', 'accounts'],
-  emits: ['refresh', 'go-home'],
+  emits: ['refresh', 'go-home', 'settings-updated', 'accounts-updated'],
 
-  setup(props) {
+  setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
     function getSheetId() { return props.sheetId || injectedSheetId.value; }
     const expenses = ref([]);
@@ -417,8 +417,11 @@ export default {
 
     watch(() => getSheetId(), (id) => { if (id) fetchData(); }, { immediate: true });
 
+    const addNameInput = ref(null);
     watch(showAddModal, (v) => {
-      if (!v && (openDropdown.value === 'newCat' || openDropdown.value === 'newAcct')) {
+      if (v) {
+        nextTick(() => { addNameInput.value?.focus(); });
+      } else if (openDropdown.value === 'newCat' || openDropdown.value === 'newAcct') {
         openDropdown.value = null;
       }
     });
@@ -437,6 +440,134 @@ export default {
       else if (openDropdown.value === id) openDropdown.value = null;
     }
 
+    // ── Category Manager ──────────────────────────────────────────────────
+    const showCategoryManager = ref(false);
+    const managedCategories = ref([]);
+    const newManagedCat = ref('');
+    const editingCatName = ref(null);
+    const editCatNameValue = ref('');
+    const catIconPickerFor = ref(null);
+
+    function serializeCats(arr) {
+      return arr.map(c => c.icon ? c.name + ':' + c.icon : c.name).join(',');
+    }
+
+    function openCategoryManager() {
+      openDropdown.value = null;
+      const str = props.settings?.expenseCategories || '';
+      managedCategories.value = str.split(',').filter(Boolean).map(c => {
+        const idx = c.indexOf(':');
+        if (idx < 0) return { name: c, icon: '' };
+        return { name: c.slice(0, idx), icon: c.slice(idx + 1) };
+      });
+      showCategoryManager.value = true;
+    }
+
+    async function saveManagedCategories() {
+      const serialized = serializeCats(managedCategories.value);
+      await SheetsApi.updateSetting(getSheetId(), 'expenseCategories', serialized);
+      emit('settings-updated', { expenseCategories: serialized });
+    }
+
+    function addManagedCat() {
+      const name = newManagedCat.value.trim();
+      if (!name || managedCategories.value.some(c => c.name === name)) return;
+      managedCategories.value.push({ name, icon: '' });
+      newManagedCat.value = '';
+      saveManagedCategories();
+    }
+    function removeManagedCat(i) {
+      const name = managedCategories.value[i]?.name || 'this category';
+      if (!confirm('Delete "' + name + '"? This will not remove the category from existing entries.')) return;
+      managedCategories.value.splice(i, 1);
+      saveManagedCategories();
+    }
+    function startRenameManagedCat(i) {
+      editingCatName.value = i;
+      editCatNameValue.value = managedCategories.value[i].name;
+    }
+    function saveRenameManagedCat() {
+      if (editingCatName.value === null) return;
+      const val = editCatNameValue.value.trim();
+      if (val) managedCategories.value[editingCatName.value].name = val;
+      editingCatName.value = null;
+      saveManagedCategories();
+    }
+    function cancelRenameManagedCat() { editingCatName.value = null; }
+    function moveManagedCatUp(i) {
+      if (i <= 0) return;
+      const arr = managedCategories.value;
+      [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+      saveManagedCategories();
+    }
+    function moveManagedCatDown(i) {
+      const arr = managedCategories.value;
+      if (i >= arr.length - 1) return;
+      [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]];
+      saveManagedCategories();
+    }
+    function openCatIconPicker(i) { catIconPickerFor.value = i; }
+    function pickCatIcon(iconName) {
+      if (catIconPickerFor.value === null) return;
+      managedCategories.value[catIconPickerFor.value].icon = iconName;
+      catIconPickerFor.value = null;
+      saveManagedCategories();
+    }
+    function clearCatIcon() {
+      if (catIconPickerFor.value === null) return;
+      managedCategories.value[catIconPickerFor.value].icon = '';
+      catIconPickerFor.value = null;
+      saveManagedCategories();
+    }
+
+    // ── Account Manager ──────────────────────────────────────────────────
+    const showAccountManager = ref(false);
+    const newManagedAccount = ref({ name: '', currency: '', type: 'Checking/Debit' });
+    const ACCOUNT_TYPES = ['Checking/Debit', 'Saving', 'Credit', 'Investment'];
+    const acctCurrencyOpen = ref(false);
+    const acctCurrencySearch = ref('');
+    const acctFilteredCurrencies = computed(() => {
+      const q = acctCurrencySearch.value.toLowerCase();
+      if (!q) return CURRENCIES;
+      return CURRENCIES.filter(c => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q));
+    });
+    function acctCurrencyName(code) {
+      const found = CURRENCIES.find(c => c.code === code);
+      return found ? found.name : code;
+    }
+    function selectAcctCurrency(code) {
+      newManagedAccount.value.currency = code;
+      acctCurrencyOpen.value = false;
+      acctCurrencySearch.value = '';
+    }
+
+    function openAccountManager() {
+      openDropdown.value = null;
+      newManagedAccount.value = { name: '', currency: baseCurrency.value, type: 'Checking/Debit' };
+      showAccountManager.value = true;
+    }
+
+    async function addManagedAccount() {
+      const acc = newManagedAccount.value;
+      if (!acc.name.trim()) return;
+      const id = SheetsApi.generateId();
+      const currency = acc.currency || baseCurrency.value;
+      const order = (props.accounts || []).length.toString();
+      await SheetsApi.appendRow(getSheetId(), TABS.ACCOUNTS, [
+        id, acc.name.trim(), currency, acc.type, 'false', order,
+      ]);
+      newManagedAccount.value = { name: '', currency: baseCurrency.value, type: 'Checking/Debit' };
+      emit('refresh');
+    }
+
+    async function toggleManagedAccountDiscontinued(acc) {
+      const newVal = acc.discontinued === 'true' ? 'false' : 'true';
+      await SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
+        acc.id, acc.name, acc.currency, acc.type, newVal, acc.order,
+      ]);
+      emit('refresh');
+    }
+
     return {
       expenses, loading, filteredExpenses, monthlyTotal, monthTotals,
       showAddModal, showEditModal, editingExpense,
@@ -448,7 +579,15 @@ export default {
       sortedAccounts,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
       addExpense, startEdit, saveEdit, deleteExpense, duplicateExpense,
-      isFutureDate, formatDate, sanitizeAmount, openNewExpenseModal,
+      isFutureDate, formatDate, sanitizeAmount, openNewExpenseModal, addNameInput,
+      showCategoryManager, managedCategories, newManagedCat, editingCatName, editCatNameValue, catIconPickerFor,
+      openCategoryManager, addManagedCat, removeManagedCat,
+      startRenameManagedCat, saveRenameManagedCat, cancelRenameManagedCat,
+      moveManagedCatUp, moveManagedCatDown, openCatIconPicker, pickCatIcon, clearCatIcon,
+      CATEGORY_ICONS,
+      showAccountManager, newManagedAccount, ACCOUNT_TYPES,
+      acctCurrencyOpen, acctCurrencySearch, acctFilteredCurrencies, acctCurrencyName, selectAcctCurrency,
+      openAccountManager, addManagedAccount, toggleManagedAccountDiscontinued,
     };
   },
 
@@ -560,7 +699,7 @@ export default {
             <button class="btn-icon" @click="showAddModal = false"><span class="material-icons">close</span></button>
           </div>
           <div class="sheet-hero">
-            <input class="sheet-hero-name" v-model="newExpense.title" placeholder="What did you spend on?" />
+            <input ref="addNameInput" class="sheet-hero-name" v-model="newExpense.title" placeholder="What did you spend on?" />
             <input class="sheet-hero-amount" v-model="newExpense.amount" @input="sanitizeAmount(newExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" />
             <div class="sheet-hero-label">Amount</div>
           </div>
@@ -570,7 +709,7 @@ export default {
               <label>Date</label>
               <valu-date-field v-model="newExpense.date" />
             </div>
-            <div class="sheet-list-item" v-if="categories.length > 0">
+            <div class="sheet-list-item">
               <label>Category</label>
               <valu-dropdown :open="openDropdown === 'newCat'" @update:open="(v) => setDropdownOpen('newCat', v)">
                 <template #label>
@@ -585,9 +724,12 @@ export default {
                   <span v-if="c.icon" class="material-icons dropdown-cat-icon">{{ c.icon }}</span>
                   {{ c.name }}
                 </div>
+                <div class="valu-dropdown-option valu-dropdown-manage" @click="openCategoryManager()">
+                  <span class="material-icons dropdown-cat-icon">settings</span> Manage categories
+                </div>
               </valu-dropdown>
             </div>
-            <div class="sheet-list-item" v-if="sortedAccounts.length > 0">
+            <div class="sheet-list-item">
               <label>Account</label>
               <valu-dropdown :open="openDropdown === 'newAcct'" @update:open="(v) => setDropdownOpen('newAcct', v)">
                 <template #label>{{ newExpense.accountId ? getAccountName(newExpense.accountId) : 'No account' }}</template>
@@ -596,6 +738,9 @@ export default {
                 <div v-for="a in sortedAccounts" :key="a.id"
                      class="valu-dropdown-option" :class="{ selected: newExpense.accountId === a.id }"
                      @click="newExpense.accountId = a.id; openDropdown = null">{{ formatAccountDisplayName(a) }}</div>
+                <div class="valu-dropdown-option valu-dropdown-manage" @click="openAccountManager()">
+                  <span class="material-icons dropdown-cat-icon">settings</span> Manage accounts
+                </div>
               </valu-dropdown>
             </div>
             <div class="form-group" style="margin-top:16px;">
@@ -656,7 +801,7 @@ export default {
               <label>Date</label>
               <valu-date-field v-model="editingExpense.date" />
             </div>
-            <div class="sheet-list-item" v-if="categories.length > 0">
+            <div class="sheet-list-item">
               <label>Category</label>
               <valu-dropdown :open="openDropdown === 'editCat'" @update:open="(v) => setDropdownOpen('editCat', v)">
                 <template #label>
@@ -671,9 +816,12 @@ export default {
                   <span v-if="c.icon" class="material-icons dropdown-cat-icon">{{ c.icon }}</span>
                   {{ c.name }}
                 </div>
+                <div class="valu-dropdown-option valu-dropdown-manage" @click="openCategoryManager()">
+                  <span class="material-icons dropdown-cat-icon">settings</span> Manage categories
+                </div>
               </valu-dropdown>
             </div>
-            <div class="sheet-list-item" v-if="sortedAccounts.length > 0">
+            <div class="sheet-list-item">
               <label>Account</label>
               <valu-dropdown :open="openDropdown === 'editAcct'" @update:open="(v) => setDropdownOpen('editAcct', v)">
                 <template #label>{{ editingExpense.accountId ? getAccountName(editingExpense.accountId) : 'No account' }}</template>
@@ -682,6 +830,9 @@ export default {
                 <div v-for="a in sortedAccounts" :key="a.id"
                      class="valu-dropdown-option" :class="{ selected: editingExpense.accountId === a.id }"
                      @click="editingExpense.accountId = a.id; openDropdown = null">{{ formatAccountDisplayName(a) }}</div>
+                <div class="valu-dropdown-option valu-dropdown-manage" @click="openAccountManager()">
+                  <span class="material-icons dropdown-cat-icon">settings</span> Manage accounts
+                </div>
               </valu-dropdown>
             </div>
             <div class="form-group" style="margin-top:16px;">
@@ -699,6 +850,106 @@ export default {
               <button class="btn btn-text btn-danger" @click="deleteExpense(editingExpense.id)">Delete</button>
               <button class="btn btn-text" @click="duplicateExpense"><span class="material-icons" style="font-size:18px;vertical-align:middle;">content_copy</span> Duplicate</button>
               <button class="btn btn-text" @click="showEditModal = false">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Category Manager Sheet -->
+      <div class="modal-overlay" :class="{ open: showCategoryManager }" @click.self="showCategoryManager = false">
+        <div class="modal" v-if="showCategoryManager">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Expense Categories</h2>
+            <button class="btn-icon" @click="showCategoryManager = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="padding:12px;">
+            <div class="cat-list" v-if="managedCategories.length">
+              <div class="cat-item" v-for="(cat, i) in managedCategories" :key="i">
+                <button class="cat-icon-btn" @click="openCatIconPicker(i)">
+                  <span class="material-icons">{{ cat.icon || 'label' }}</span>
+                </button>
+                <template v-if="editingCatName === i">
+                  <input class="form-input cat-rename-input" v-model="editCatNameValue" @keyup.enter="saveRenameManagedCat" @keyup.escape="cancelRenameManagedCat" @blur="saveRenameManagedCat" />
+                </template>
+                <span v-else class="cat-name" @click="startRenameManagedCat(i)">{{ cat.name }}</span>
+                <div class="cat-order-btns">
+                  <button class="cat-order-btn" @click="moveManagedCatUp(i)" :disabled="i === 0"><span class="material-icons">arrow_upward</span></button>
+                  <button class="cat-order-btn" @click="moveManagedCatDown(i)" :disabled="i === managedCategories.length - 1"><span class="material-icons">arrow_downward</span></button>
+                </div>
+                <button class="cat-remove-btn" @click="removeManagedCat(i)">&times;</button>
+              </div>
+            </div>
+            <p v-else style="font-size:13px;color:var(--color-text-hint);margin-bottom:12px;">No categories yet.</p>
+            <div class="flex gap-8" style="margin-top:12px;">
+              <input class="form-input flex-1" v-model="newManagedCat" placeholder="New category" @keyup.enter="addManagedCat" />
+              <button class="btn btn-outline" @click="addManagedCat" :disabled="!newManagedCat.trim()">Add</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Category Icon Picker -->
+      <div class="modal-overlay modal-overlay-top" :class="{ open: catIconPickerFor !== null }" @click.self="catIconPickerFor = null">
+        <div class="modal" v-if="catIconPickerFor !== null" style="max-height:60vh;">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Choose Icon</h2>
+            <button class="btn-icon" @click="catIconPickerFor = null"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="padding:12px;">
+            <div class="icon-picker-grid">
+              <button v-for="ic in CATEGORY_ICONS" :key="ic" class="icon-picker-item" @click="pickCatIcon(ic)" :title="ic">
+                <span class="material-icons">{{ ic }}</span>
+              </button>
+            </div>
+            <button class="btn btn-text" style="width:100%;margin-top:8px;" @click="clearCatIcon">Remove icon</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Account Manager Sheet -->
+      <div class="modal-overlay" :class="{ open: showAccountManager }" @click.self="showAccountManager = false">
+        <div class="modal" v-if="showAccountManager">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Accounts</h2>
+            <button class="btn-icon" @click="showAccountManager = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="padding:12px;">
+            <div v-if="(accounts || []).length" class="cat-list">
+              <div class="cat-item" v-for="acc in sortedAccounts" :key="acc.id">
+                <span class="material-icons" style="font-size:20px;color:var(--color-primary);margin-right:8px;">account_balance</span>
+                <span class="cat-name" style="cursor:default;">{{ formatAccountDisplayName(acc) }}</span>
+              </div>
+              <div v-for="acc in (accounts || []).filter(a => a.discontinued === 'true')" :key="acc.id" class="cat-item" style="opacity:0.5;">
+                <span class="material-icons" style="font-size:20px;color:var(--color-text-hint);margin-right:8px;">account_balance</span>
+                <span class="cat-name" style="cursor:default;text-decoration:line-through;">{{ formatAccountDisplayName(acc) }}</span>
+              </div>
+            </div>
+            <p v-else style="font-size:13px;color:var(--color-text-hint);margin-bottom:12px;">No accounts yet.</p>
+            <div style="margin-top:16px;border-top:1px solid var(--color-border);padding-top:12px;">
+              <div class="sheet-section-title">Add account</div>
+              <input class="form-input" v-model="newManagedAccount.name" placeholder="Account name" style="margin-bottom:8px;" />
+              <div class="sheet-list-item" style="margin-bottom:8px;">
+                <label>Type</label>
+                <valu-dropdown :open="openDropdown === 'acctType'" @update:open="(v) => setDropdownOpen('acctType', v)">
+                  <template #label>{{ newManagedAccount.type }}</template>
+                  <div v-for="t in ACCOUNT_TYPES" :key="t"
+                       class="valu-dropdown-option" :class="{ selected: newManagedAccount.type === t }"
+                       @click="newManagedAccount.type = t; openDropdown = null">{{ t }}</div>
+                </valu-dropdown>
+              </div>
+              <div class="sheet-list-item" style="margin-bottom:12px;">
+                <label>Currency</label>
+                <valu-currency-picker v-model:open="acctCurrencyOpen" v-model:search="acctCurrencySearch">
+                  <template #label>{{ newManagedAccount.currency ? acctCurrencyName(newManagedAccount.currency) : 'Select currency' }}</template>
+                  <div v-for="c in acctFilteredCurrencies" :key="c.code"
+                       class="currency-picker-option" :class="{ selected: c.code === newManagedAccount.currency }"
+                       @click="selectAcctCurrency(c.code)">{{ c.name }}</div>
+                  <div v-if="acctFilteredCurrencies.length === 0" class="currency-picker-empty">No match</div>
+                </valu-currency-picker>
+              </div>
+              <button class="btn btn-primary" style="width:100%;" @click="addManagedAccount" :disabled="!newManagedAccount.name.trim()">Add account</button>
             </div>
           </div>
         </div>

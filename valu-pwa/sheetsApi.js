@@ -32,13 +32,38 @@ const TAB_HEADERS = {
   [TABS.INCOME]:          [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt', 'BalanceAdjusted']],
 };
 
+// Default categories for new groups
+const DEFAULT_EXPENSE_CATEGORIES = [
+  { name: 'Housing', icon: 'home' },
+  { name: 'Food', icon: 'shopping_cart' },
+  { name: 'Transportation', icon: 'directions_car' },
+  { name: 'Utilities', icon: 'bolt' },
+  { name: 'Healthcare', icon: 'local_hospital' },
+  { name: 'Debt Payments', icon: 'credit_card' },
+  { name: 'Personal Care', icon: 'face' },
+  { name: 'Leisure', icon: 'celebration' },
+  { name: 'Miscellaneous', icon: 'category' },
+];
+
+const DEFAULT_INCOME_CATEGORIES = [
+  { name: 'Primary Salary/Wages', icon: 'work' },
+  { name: 'Bonuses & Commission', icon: 'emoji_events' },
+  { name: 'Investment Income', icon: 'trending_up' },
+  { name: 'Side Hustles/Freelance', icon: 'laptop' },
+  { name: 'Other Income', icon: 'attach_money' },
+];
+
+function serializeDefaultCategories(arr) {
+  return arr.map(c => c.icon ? c.name + ':' + c.icon : c.name).join(',');
+}
+
 // Default settings for a new group
 const DEFAULT_SETTINGS = [
   ['groupName',          'My Group'],
   ['baseCurrency',       'CAD'],
-  ['listsEnabled',       'expenses'],
-  ['expenseCategories',  ''],
-  ['incomeCategories',   ''],
+  ['listsEnabled',       'expenses,income,accounts'],
+  ['expenseCategories',  serializeDefaultCategories(DEFAULT_EXPENSE_CATEGORIES)],
+  ['incomeCategories',   serializeDefaultCategories(DEFAULT_INCOME_CATEGORIES)],
   ['currencyRates',      ''],
   ['createdAt',          ''],
   ['createdBy',          ''],
@@ -602,4 +627,45 @@ const SheetsApi = {
 };
 
 export default SheetsApi;
-export { TAB_HEADERS };
+const CATEGORY_ICONS = [
+  'restaurant', 'fastfood', 'coffee', 'local_bar', 'bakery_dining', 'local_grocery_store',
+  'directions_car', 'directions_bus', 'flight', 'local_gas_station', 'local_parking', 'directions_bike',
+  'home', 'power', 'wifi', 'phone_iphone', 'tv', 'build',
+  'shopping_bag', 'checkroom', 'storefront', 'local_mall',
+  'movie', 'sports_esports', 'music_note', 'sports_bar',
+  'local_hospital', 'fitness_center', 'spa', 'medication',
+  'school', 'menu_book', 'work', 'laptop', 'business_center',
+  'pets', 'child_care', 'card_giftcard', 'volunteer_activism',
+  'payments', 'trending_up', 'account_balance', 'savings',
+  'receipt', 'attach_money', 'sell', 'real_estate_agent',
+  'cleaning_services', 'local_laundry_service',
+  'hotel', 'beach_access', 'hiking',
+  'security', 'gavel', 'category', 'more_horiz',
+  'shopping_cart', 'bolt', 'credit_card', 'face', 'celebration', 'emoji_events',
+];
+
+const CURRENCIES = [
+  { name: 'Brazilian Real', code: 'BRL' },
+  { name: 'Canadian Dollar', code: 'CAD' },
+  { name: 'Euro', code: 'EUR' },
+  { name: 'US Dollar', code: 'USD' },
+  { name: 'West African CFA Franc', code: 'XOF' },
+  { name: 'Australian Dollar', code: 'AUD' },
+  { name: 'British Pound', code: 'GBP' },
+  { name: 'Chinese Yuan', code: 'CNY' },
+  { name: 'Danish Krone', code: 'DKK' },
+  { name: 'Hong Kong Dollar', code: 'HKD' },
+  { name: 'Indian Rupee', code: 'INR' },
+  { name: 'Japanese Yen', code: 'JPY' },
+  { name: 'Mexican Peso', code: 'MXN' },
+  { name: 'New Zealand Dollar', code: 'NZD' },
+  { name: 'Norwegian Krone', code: 'NOK' },
+  { name: 'Singapore Dollar', code: 'SGD' },
+  { name: 'South African Rand', code: 'ZAR' },
+  { name: 'South Korean Won', code: 'KRW' },
+  { name: 'Swedish Krona', code: 'SEK' },
+  { name: 'Swiss Franc', code: 'CHF' },
+  { name: 'Taiwan Dollar', code: 'TWD' },
+];
+
+export { TAB_HEADERS, DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, CATEGORY_ICONS, CURRENCIES };

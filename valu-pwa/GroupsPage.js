@@ -1,4 +1,4 @@
-import SheetsApi from './sheetsApi.js';
+import SheetsApi, { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, CATEGORY_ICONS } from './sheetsApi.js';
 import GoogleAuth from './googleAuth.js';
 
 const { ref, computed, watch } = Vue;
@@ -63,21 +63,7 @@ export default {
     const editingCatName = ref(null);
     const editCatNameValue = ref('');
 
-    const CATEGORY_ICONS = [
-      'restaurant', 'fastfood', 'coffee', 'local_bar', 'bakery_dining', 'local_grocery_store',
-      'directions_car', 'directions_bus', 'flight', 'local_gas_station', 'local_parking', 'directions_bike',
-      'home', 'power', 'wifi', 'phone_iphone', 'tv', 'build',
-      'shopping_bag', 'checkroom', 'storefront', 'local_mall',
-      'movie', 'sports_esports', 'music_note', 'sports_bar',
-      'local_hospital', 'fitness_center', 'spa', 'medication',
-      'school', 'menu_book', 'work', 'laptop', 'business_center',
-      'pets', 'child_care', 'card_giftcard', 'volunteer_activism',
-      'payments', 'trending_up', 'account_balance', 'savings',
-      'receipt', 'attach_money', 'sell', 'real_estate_agent',
-      'cleaning_services', 'local_laundry_service',
-      'hotel', 'beach_access', 'hiking',
-      'security', 'gavel', 'category', 'more_horiz',
-    ];
+    // CATEGORY_ICONS imported from sheetsApi.js
 
     function serializeCategories(arr) {
       return arr.map(c => c.icon ? c.name + ':' + c.icon : c.name).join(',');
@@ -211,9 +197,9 @@ export default {
       configGroupId.value = null;
       configGroupName.value = '';
       configBaseCurrency.value = 'CAD';
-      configEnabledLists.value = ['expenses'];
-      configExpenseCategories.value = [];
-      configIncomeCategories.value = [];
+      configEnabledLists.value = ['expenses', 'income', 'accounts'];
+      configExpenseCategories.value = DEFAULT_EXPENSE_CATEGORIES.map(c => ({ ...c }));
+      configIncomeCategories.value = DEFAULT_INCOME_CATEGORIES.map(c => ({ ...c }));
       configCurrencyRates.value = [];
       newExpenseCat.value = '';
       newIncomeCat.value = '';
@@ -563,12 +549,7 @@ export default {
         <button class="subpage-back subpage-back--colored" @click="$emit('go-home')">
           <span class="material-icons">arrow_back</span>
         </button>
-        <h1 class="subpage-nav-title">
-          Groups
-          <button type="button" class="btn-icon subpage-header-refresh" @click="refreshGroups" :disabled="loading" aria-label="Refresh groups from Drive" style="vertical-align:middle;margin-left:2px;">
-            <span class="material-icons" :class="{ 'groups-refresh-spin': loading }" style="font-size:18px;">refresh</span>
-          </button>
-        </h1>
+        <h1 class="subpage-nav-title">Groups</h1>
         <div class="valu-orb-sm subpage-orb-inline">
           <div class="spheres">
             <div class="spheres-group">
@@ -580,7 +561,13 @@ export default {
         </div>
       </div>
 
-      <div class="groups-sort-bar">
+      <div class="subpage-header">
+        <button type="button" class="btn-icon subpage-header-refresh" @click="refreshGroups" :disabled="loading" aria-label="Refresh groups from Drive">
+          <span class="material-icons" :class="{ 'groups-refresh-spin': loading }" style="font-size:18px;">refresh</span>
+        </button>
+      </div>
+
+      <div v-if="displayGroups.length > 1" class="groups-sort-bar">
         <button type="button" class="groups-sort-btn" @click="toggleSortMode">
           <span class="material-icons">filter_list</span>
           <span>Sort</span>

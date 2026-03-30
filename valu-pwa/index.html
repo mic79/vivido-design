@@ -78,15 +78,14 @@
             <span>Sign in with Google</span>
             <span class="sidenav-menu-after">Your groups</span>
           </button>
-          <button class="sidenav-menu-item" disabled>
+          <button class="sidenav-menu-item" @click="currentPage = 'activity'; sideNavOpen = false;">
             <span class="material-icons sidenav-menu-icon">notifications</span>
             <span>Activity</span>
-            <span class="sidenav-menu-after">0 updates</span>
           </button>
         </div>
 
         <div class="sidenav-footer">
-          <span class="sidenav-version">v141</span>
+          <span class="sidenav-version">v142</span>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -320,6 +319,7 @@
     import IncomePage from './IncomePage.js';
     import GroupsPage from './GroupsPage.js';
     import SettingsPage from './SettingsPage.js';
+    import ActivityPage from './ActivityPage.js';
     import ValuDateField from './ValuDateField.js';
     import ValuDropdown from './ValuDropdown.js';
     import ValuCurrencyPicker from './ValuCurrencyPicker.js';
@@ -327,7 +327,7 @@
     const { createApp, ref, computed, watch, onMounted, nextTick, provide } = Vue;
 
     const app = createApp({
-      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage },
+      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage, ActivityPage },
 
       setup() {
         // ── Auth state ──────────────────────────────────────────────────────
@@ -364,6 +364,7 @@
           income:   'IncomePage',
           groups:   'GroupsPage',
           settings: 'SettingsPage',
+          activity: 'ActivityPage',
         };
 
         const PAGE_TITLES = {
@@ -373,6 +374,7 @@
           income:   'Income',
           groups:   'Groups',
           settings: 'Settings',
+          activity: 'Activity',
         };
 
         const currentPageComponent = computed(() => PAGE_MAP[currentPage.value] || 'HomePage');
@@ -669,7 +671,6 @@
               ensurePersonalInFlight = true;
               try {
                 const created = await SheetsApi.createSpreadsheet('Personal', userProfile.value.email);
-                await SheetsApi.updateSetting(created.id, 'listsEnabled', '');
                 groups.value = [created];
                 localStorage.setItem('valu_groups_cache', JSON.stringify(groups.value));
                 await switchGroup(created);
