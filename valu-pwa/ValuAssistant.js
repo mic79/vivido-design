@@ -95,6 +95,8 @@ export default {
     let syncTimer = null;
     let chatTabEnsured = false;
 
+    const lastContext = { searchTerm: null, period: null, intent: null };
+
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
 
     const currencyRates = computed(() => {
@@ -439,6 +441,8 @@ export default {
         return;
       }
 
+      saveContext(raw, period, 'categorySpending');
+
       const total = totalExpenses(found);
       const goals = getGoals();
 
@@ -522,6 +526,7 @@ export default {
       if (found.length === 0) {
         const allFound = searchExpensesByKeywords(keywords, expenses.value);
         if (allFound.length > 0) {
+          saveContext(keywords.join(' '), period, 'search');
           const total = totalExpenses(allFound);
           const months = [...new Set(allFound.map(e => e.date.slice(0, 7)))].sort();
           reply(`No results in ${periodLabel}, but found ${allFound.length} matching transaction${allFound.length !== 1 ? 's' : ''} overall, totalling ${fmt(total)} (${monthLabel(months[0])} – ${monthLabel(months[months.length - 1])}).`, {
@@ -535,6 +540,7 @@ export default {
         return;
       }
 
+      saveContext(keywords.join(' '), period, 'search');
       const total = totalExpenses(found);
       let msg = `Found ${found.length} transaction${found.length !== 1 ? 's' : ''} matching "${keywords.join(', ')}" in ${periodLabel}, totalling ${fmt(total)}.`;
 
@@ -566,34 +572,42 @@ export default {
 
     function handleGoalStatus() {
       const goals = getGoals();
-      const cats = categoryBreakdown(expensesForMonth(thisMonth()));
+      const tm = thisMonth();
+      const monthExp = expensesForMonth(tm);
+      const cats = categoryBreakdown(monthExp);
+      const totalSpent = totalExpenses(monthExp);
+      const totalGoal = Object.values(goals).reduce((s, g) => s + g, 0);
+
       if (Object.keys(goals).length === 0) {
-        reply("You haven't set any category goals yet. You can set them in the Average Monthly Expenses widget on the Home page.", {
+        reply(`You've spent ${fmt(totalSpent)} this month, but you haven't set any category goals yet. You can set them in the Average Monthly Expenses widget on the Home page.`, {
           suggestions: ['Go home', 'Show spending', 'What are goals?'],
         });
         return;
       }
 
-      const lines = [];
       let overCount = 0;
       for (const [cat, goal] of Object.entries(goals)) {
         const spent = cats.find(c => c.name === cat)?.total || 0;
-        const status = spent > goal ? '⚠ Over' : '✓ OK';
         if (spent > goal) overCount++;
-        lines.push(`${cat}: ${fmt(spent)} / ${fmt(goal)} ${status}`);
       }
 
-      let summary = overCount === 0
-        ? "You're on track with all your goals this month."
-        : `You're over budget on ${overCount} categor${overCount > 1 ? 'ies' : 'y'} this month.`;
+      const remaining = totalGoal - totalSpent;
+      let summary = `Total spent this month: ${fmt(totalSpent)}\nTotal monthly goal: ${fmt(totalGoal)}`;
+      if (remaining >= 0) {
+        summary += `\n${fmt(remaining)} remaining within budget.`;
+      } else {
+        summary += `\n${fmt(Math.abs(remaining))} over budget overall.`;
+      }
+      if (overCount > 0) {
+        summary += ` (${overCount} categor${overCount > 1 ? 'ies' : 'y'} over)`;
+      }
 
       reply(summary, {
-        table: lines,
         chart: buildGoalChart(
           Object.keys(goals).map(name => ({ name, total: cats.find(c => c.name === name)?.total || 0 })),
           goals
         ),
-        suggestions: ['Show chart', 'Compare months', 'Tips'],
+        suggestions: ['Spending breakdown', 'Compare months', 'Tips'],
       });
     }
 
@@ -883,23 +897,80 @@ export default {
       });
     }
 
+    // ── Follow-up detection ──────────────────────────────────────────────────
+    const FOLLOWUP_PATTERNS = [
+      /^(?:how\s+about|what\s+about|and\s+(?:for|in|what\s+about))\s+(.+)/i,
+      /^(?:show|break\s*(?:it|that|this)?\s*down|now)\s+(.+)/i,
+      /^(?:and|but)\s+(.+)/i,
+    ];
+    const TIME_ONLY_PATTERNS = [
+      /^(?:how\s+about\s+)?(?:each|every|per|by)\s+month/i,
+      /^(?:how\s+about\s+)?(?:this|last)\s+(?:year|month)/i,
+      /^(?:how\s+about\s+)?(?:last|past)\s+\d+\s+months?/i,
+      /^(?:how\s+about\s+)?(?:monthly|yearly|per\s*month)/i,
+      /^(?:how\s+about\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)/i,
+      /^(?:how\s+about\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i,
+    ];
+
+    function tryFollowUp(text) {
+      if (!lastContext.searchTerm) return null;
+      const lower = text.toLowerCase().trim();
+
+      for (const pat of TIME_ONLY_PATTERNS) {
+        if (pat.test(lower)) {
+          const cleaned = lower.replace(/^how\s+about\s+/i, '').replace(/\?+$/, '').trim();
+          const synth = `${lastContext.searchTerm} spending ${cleaned}`;
+          return synth;
+        }
+      }
+
+      for (const pat of FOLLOWUP_PATTERNS) {
+        const m = text.match(pat);
+        if (m) {
+          const rest = m[1].trim().replace(/\?+$/, '');
+          const period = parseTimePeriod(rest);
+          if (period && extractKeywords(rest).length === 0) {
+            const synth = `${lastContext.searchTerm} spending ${rest}`;
+            return synth;
+          }
+        }
+      }
+
+      return null;
+    }
+
+    function saveContext(searchTerm, period, intent) {
+      if (searchTerm) lastContext.searchTerm = searchTerm;
+      if (period) lastContext.period = period;
+      if (intent) lastContext.intent = intent;
+    }
+
+    function clearContext() {
+      lastContext.searchTerm = null;
+      lastContext.period = null;
+      lastContext.intent = null;
+    }
+
     // ── Intent router ────────────────────────────────────────────────────────
     function processInput(text) {
       addMsg('user', text);
       inputText.value = '';
 
-      const intent = matchIntent(text);
+      const followUp = tryFollowUp(text);
+      const effectiveText = followUp || text;
+
+      const intent = matchIntent(effectiveText);
       if (!intent) {
-        handleSearchFallback(text);
+        handleSearchFallback(effectiveText);
         return;
       }
 
       switch (intent.id) {
-        case 'greeting':        greet(); break;
+        case 'greeting':        clearContext(); greet(); break;
         case 'spending':
-        case 'spendingOverview': handleSpending(text); break;
-        case 'categorySpending': handleCategorySpending(intent.match, text); break;
-        case 'searchExpenses':   handleCategorySpending(intent.match, text); break;
+        case 'spendingOverview': handleSpending(effectiveText); break;
+        case 'categorySpending': handleCategorySpending(intent.match, effectiveText); break;
+        case 'searchExpenses':   handleCategorySpending(intent.match, effectiveText); break;
         case 'goalStatus':      handleGoalStatus(); break;
         case 'compare':         handleCompare(); break;
         case 'trend':           handleTrend(); break;
@@ -926,7 +997,7 @@ export default {
         case 'tips':            handleTips(); break;
         case 'thanks':          handleThanks(); break;
         default:
-          handleSearchFallback(text);
+          handleSearchFallback(effectiveText);
       }
     }
 
@@ -1071,6 +1142,7 @@ export default {
 
     function createNewChat(greetAfterData) {
       flushSync();
+      clearContext();
       const id = crypto.randomUUID();
       const nowIso = new Date().toISOString();
       const chat = { id, title: 'New chat', createdAt: nowIso, updatedAt: nowIso, messages: [] };
@@ -1085,6 +1157,7 @@ export default {
 
     function openChat(chatId) {
       flushSync();
+      clearContext();
       const chat = chatList.value.find(c => c.id === chatId);
       if (!chat) return;
       activeChatId.value = chatId;

@@ -426,9 +426,9 @@ export default {
     function formatDate(dateStr) {
       if (!dateStr) return '';
       const [y, m, d] = dateStr.split('-').map(Number);
-      return new Date(y, m - 1, d).toLocaleDateString(undefined, {
-        month: 'short', day: 'numeric',
-      });
+      const opts = { month: 'short', day: 'numeric' };
+      if (!filterMonth.value && y !== new Date().getFullYear()) opts.year = 'numeric';
+      return new Date(y, m - 1, d).toLocaleDateString(undefined, opts);
     }
 
     watch(() => getSheetId(), (id) => { if (id) fetchData(); }, { immediate: true });
