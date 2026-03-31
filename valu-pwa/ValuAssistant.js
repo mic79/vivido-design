@@ -212,6 +212,10 @@ export default {
       if (/per\s*month|monthly|each\s*month|by\s*month/i.test(lower)) {
         return { type: 'monthly-breakdown', label: 'monthly breakdown' };
       }
+      const bareYear = lower.match(/\b(20\d{2})\b/);
+      if (bareYear) {
+        return { type: 'year', year: parseInt(bareYear[1]), label: bareYear[1] };
+      }
       return null;
     }
 
@@ -413,11 +417,21 @@ export default {
     }
 
     function handleCategorySpending(match, fullText) {
-      const raw = match?.[1]?.trim();
+      let raw = match?.[1]?.trim();
       if (!raw) { handleSpending(); return; }
 
       const period = parseTimePeriod(fullText || raw);
       const { list: pool, label: periodLabel } = getExpensesForPeriod(period);
+      raw = raw
+        .replace(/\?+$/, '')
+        .replace(/\b(?:in|for|during|from|of)\s+(?:20\d{2})\b/gi, '')
+        .replace(/\b(?:this|last)\s+(?:year|month)\b/gi, '')
+        .replace(/\b(?:last|past)\s+\d+\s+months?\b/gi, '')
+        .replace(/\b(?:per|each|every|by)\s+month\b/gi, '')
+        .replace(/\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/gi, '')
+        .replace(/\b20\d{2}\b/g, '')
+        .trim();
+      if (!raw) { handleSpending(fullText); return; }
       const search = raw.toLowerCase();
 
       let found = pool.filter(e => (e.category || '').toLowerCase().includes(search));
@@ -910,6 +924,7 @@ export default {
       /^(?:how\s+about\s+)?(?:monthly|yearly|per\s*month)/i,
       /^(?:how\s+about\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)/i,
       /^(?:how\s+about\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i,
+      /^(?:how\s+about\s+)?(?:in\s+)?20\d{2}\??$/i,
     ];
 
     function tryFollowUp(text) {
@@ -929,9 +944,14 @@ export default {
         if (m) {
           const rest = m[1].trim().replace(/\?+$/, '');
           const period = parseTimePeriod(rest);
-          if (period && extractKeywords(rest).length === 0) {
-            const synth = `${lastContext.searchTerm} spending ${rest}`;
-            return synth;
+          if (period) {
+            const withoutTimeParts = rest
+              .replace(/\b20\d{2}\b/g, '')
+              .replace(/\b(?:in|for|during|from|of)\b/gi, '');
+            if (extractKeywords(withoutTimeParts).length === 0) {
+              const synth = `${lastContext.searchTerm} spending ${rest}`;
+              return synth;
+            }
           }
         }
       }
