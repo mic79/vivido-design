@@ -16,6 +16,16 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
   <link rel="stylesheet" href="styles.css" />
+  <script>
+    (function(){
+      var t=localStorage.getItem('valu_theme');
+      if(t==='dark'||t==='light'){
+        document.documentElement.setAttribute('data-theme',t);
+        var m=document.querySelector('meta[name="theme-color"]');
+        if(m)m.setAttribute('content',t==='dark'?'#211f1d':'#729c9c');
+      }
+    })();
+  </script>
 
   <!-- Vue 3 -->
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
@@ -38,7 +48,7 @@
         <button class="topbar-btn" @click="sideNavOpen = true">
           <span class="material-icons">menu</span>
         </button>
-        <div class="valu-orb-sm">
+        <div class="valu-orb-sm" style="cursor:pointer;" @click="navigateTo('assistant')">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>
@@ -78,14 +88,14 @@
             <span>Sign in with Google</span>
             <span class="sidenav-menu-after">Your groups</span>
           </button>
-          <button class="sidenav-menu-item" @click="currentPage = 'activity'; sideNavOpen = false;">
+          <button class="sidenav-menu-item" @click="navigateTo('activity'); sideNavOpen = false;">
             <span class="material-icons sidenav-menu-icon">notifications</span>
             <span>Activity</span>
           </button>
         </div>
 
         <div class="sidenav-footer">
-          <span class="sidenav-version">v142</span>
+          <span class="sidenav-version">v150</span>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -109,7 +119,7 @@
                     @click="switchGroup(group); showGroupSwitcher = false;">
               <div class="group-switcher-row">
                 <span class="group-switcher-name">{{ group.name.replace('Valu: ', '') }}</span>
-                <span class="group-switcher-users">1 user(s)</span>
+                <span class="group-switcher-users" v-if="activeGroup && activeGroup.id === group.id"><span class="material-icons" style="font-size:14px;vertical-align:middle;">check</span></span>
               </div>
               <div class="group-switcher-sub" v-if="activeGroup && activeGroup.id === group.id && groupSettings">
                 <span v-for="list in (groupSettings.listsEnabled || '').split(',').filter(Boolean)" :key="list" class="comma-separated">{{ list.charAt(0).toUpperCase() + list.slice(1) }}</span>
@@ -118,7 +128,7 @@
           </div>
           <div class="group-switcher-footer">
             <button v-if="isAuthenticated" type="button" class="group-switcher-link" @click="navigateTo('groups'); showGroupSwitcher = false;">Edit groups</button>
-            <button v-else type="button" class="group-switcher-link" @click="leaveDemoToSignIn; showGroupSwitcher = false;">Sign in for your groups</button>
+            <button v-else type="button" class="group-switcher-link" @click="leaveDemoToSignIn(); showGroupSwitcher = false;">Sign in for your groups</button>
           </div>
         </div>
       </div>
@@ -305,6 +315,17 @@
         </div>
       </div>
     </template>
+
+    <!-- Global dialog (replaces native alert/confirm) -->
+    <div class="modal-overlay valu-dialog-overlay" :class="{ open: dialogVisible }" @click.self="dialogCancel">
+      <div class="valu-dialog" @click.stop>
+        <p class="valu-dialog-message">{{ dialogMessage }}</p>
+        <div class="valu-dialog-actions">
+          <button v-if="dialogIsConfirm" class="btn btn-text" @click="dialogCancel">Cancel</button>
+          <button class="btn btn-primary btn-sm" @click="dialogOk">{{ dialogIsConfirm ? 'Confirm' : 'OK' }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script type="module">
@@ -320,6 +341,7 @@
     import GroupsPage from './GroupsPage.js';
     import SettingsPage from './SettingsPage.js';
     import ActivityPage from './ActivityPage.js';
+    import ValuAssistant from './ValuAssistant.js';
     import ValuDateField from './ValuDateField.js';
     import ValuDropdown from './ValuDropdown.js';
     import ValuCurrencyPicker from './ValuCurrencyPicker.js';
@@ -327,7 +349,7 @@
     const { createApp, ref, computed, watch, onMounted, nextTick, provide } = Vue;
 
     const app = createApp({
-      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage, ActivityPage },
+      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage, ActivityPage, ValuAssistant },
 
       setup() {
         // ── Auth state ──────────────────────────────────────────────────────
@@ -365,20 +387,10 @@
           groups:   'GroupsPage',
           settings: 'SettingsPage',
           activity: 'ActivityPage',
-        };
-
-        const PAGE_TITLES = {
-          home:     'Home',
-          accounts: 'Accounts',
-          expenses: 'Expenses',
-          income:   'Income',
-          groups:   'Groups',
-          settings: 'Settings',
-          activity: 'Activity',
+          assistant: 'ValuAssistant',
         };
 
         const currentPageComponent = computed(() => PAGE_MAP[currentPage.value] || 'HomePage');
-        const currentPageTitle = computed(() => PAGE_TITLES[currentPage.value] || 'Valu');
         const activeSheetId = computed(() => activeGroup.value ? activeGroup.value.id : null);
         const activeGroupName = computed(() => {
           const name = activeGroup.value ? activeGroup.value.name : '';
@@ -405,6 +417,60 @@
         provide('groupSettings', groupSettings);
         provide('activeGroup', activeGroup);
 
+        // ── Global dialog system (replaces native alert/confirm) ─────────
+        const dialogVisible = ref(false);
+        const dialogMessage = ref('');
+        const dialogIsConfirm = ref(false);
+        let dialogResolve = null;
+
+        function showAlert(message) {
+          return new Promise(resolve => {
+            dialogMessage.value = message;
+            dialogIsConfirm.value = false;
+            dialogResolve = resolve;
+            dialogVisible.value = true;
+          });
+        }
+        function showConfirm(message) {
+          return new Promise(resolve => {
+            dialogMessage.value = message;
+            dialogIsConfirm.value = true;
+            dialogResolve = resolve;
+            dialogVisible.value = true;
+          });
+        }
+        function dialogOk() {
+          dialogVisible.value = false;
+          if (dialogResolve) dialogResolve(true);
+          dialogResolve = null;
+        }
+        function dialogCancel() {
+          dialogVisible.value = false;
+          if (dialogResolve) dialogResolve(false);
+          dialogResolve = null;
+        }
+
+        provide('showAlert', showAlert);
+        provide('showConfirm', showConfirm);
+
+        // ── Hash-based routing ───────────────────────────────────────────
+        let _navFromPopstate = false;
+        function readHash() {
+          const h = window.location.hash.replace('#', '');
+          return PAGE_MAP[h] ? h : 'home';
+        }
+        watch(currentPage, (page) => {
+          if (_navFromPopstate) { _navFromPopstate = false; return; }
+          const hash = page === 'home' ? '' : '#' + page;
+          if (window.location.hash !== hash) {
+            history.pushState({ page }, '', hash || window.location.pathname + window.location.search);
+          }
+        });
+        window.addEventListener('popstate', () => {
+          _navFromPopstate = true;
+          currentPage.value = readHash();
+        });
+
         async function navigateTo(page, opts) {
           if (page === 'groups' && !isAuthenticated.value) {
             currentPage.value = 'home';
@@ -419,8 +485,9 @@
             currentPage.value = page;
             setTimeout(() => {
               const pill = document.querySelector('.groups-active-pill');
-              if (pill) {
-                pill.closest('button').click();
+              const btn = pill ? pill.closest('button') : null;
+              if (btn) {
+                btn.click();
               } else {
                 const card = document.getElementsByClassName('groups-list-card')[0];
                 if (card) card.click();
@@ -510,6 +577,11 @@
               localStorage.removeItem('valu_settings_cache');
             }
 
+            if (!lastGroupId) {
+              const defaultGroup = localStorage.getItem('valu_default_group');
+              if (defaultGroup) lastGroupId = defaultGroup;
+            }
+
             console.log('onAuthChange: lastGroupId =', lastGroupId);
 
             if (cachedGroups) {
@@ -523,7 +595,7 @@
               if (lastGroup && lastGroup.id) {
                 activeGroup.value = lastGroup;
                 try { groupSettings.value = JSON.parse(cachedSettings); } catch {}
-                currentPage.value = 'home';
+                currentPage.value = readHash();
                 groupLoading.value = false;
                 loadGroupData(true);
               } else {
@@ -542,7 +614,7 @@
             }
 
             refreshGroupsList();
-          } else {
+          } else if (!demoMode.value) {
             groups.value = [];
             activeGroup.value = null;
             groupSettings.value = {};
@@ -558,6 +630,7 @@
 
         function connect() {
           authLoading.value = true;
+          setTimeout(() => { authLoading.value = false; }, 60000);
           GoogleAuth.connect();
         }
 
@@ -576,6 +649,28 @@
 
         // ── Groups ──────────────────────────────────────────────────────────
 
+        function mapAccountRows(rows) {
+          return rows.map(r => ({
+            id: r[0], name: r[1], currency: r[2],
+            type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
+          }));
+        }
+
+        function setupChangeDetection(sheetId) {
+          SheetsApi.startChangeDetection([sheetId], async (changedId) => {
+            if (changedId === activeGroup.value?.id) {
+              try {
+                groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);
+                localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+                const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
+                accountsList.value = mapAccountRows(accRows);
+              } catch (err) {
+                console.warn('Change detection refresh failed:', err);
+              }
+            }
+          });
+        }
+
         async function loadGroupData(background = false) {
           if (!activeGroup.value || dataLoaded.value) return;
           if (isDemoSheet(activeGroup.value.id)) {
@@ -589,58 +684,17 @@
             localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
 
             const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
-            accountsList.value = accRows.map(r => ({
-              id: r[0], name: r[1], currency: r[2],
-              type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
-            }));
+            accountsList.value = mapAccountRows(accRows);
 
             dataLoaded.value = true;
-
-            SheetsApi.startChangeDetection([activeGroup.value.id], async (changedId) => {
-              if (changedId === activeGroup.value?.id) {
-                try {
-                  groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);
-                  localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
-
-                  const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
-                  accountsList.value = accRows.map(r => ({
-                    id: r[0], name: r[1], currency: r[2],
-                    type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
-                  }));
-                } catch (err) {
-                  console.warn('Change detection refresh failed:', err);
-                }
-              }
-            });
+            setupChangeDetection(activeGroup.value.id);
           } catch (err) {
-            if (err.message === 'popup_blocked' && !background) {
+            if (!background) {
               needsReconnect.value = true;
+              console.error('Failed to load group data:', err);
             }
-            if (!background) console.error('Failed to load group data:', err);
           } finally {
             groupLoading.value = false;
-          }
-        }
-
-        async function loadGroups() {
-          try {
-            const files = await SheetsApi.listSpreadsheets();
-            groups.value = files;
-            localStorage.setItem('valu_groups_cache', JSON.stringify(files));
-
-            const lastId = localStorage.getItem('valu_last_group');
-            const lastGroup = files.find(f => f.id === lastId);
-
-            if (lastGroup) {
-              await switchGroup(lastGroup);
-            } else if (files.length > 0) {
-              await switchGroup(files[0]);
-            } else {
-              activeGroup.value = null;
-              currentPage.value = 'home';
-            }
-          } catch (err) {
-            console.error('Failed to load groups:', err);
           }
         }
 
@@ -663,7 +717,8 @@
 
             if (isAuthenticated.value && !activeGroup.value && files.length > 0) {
               const lastId = localStorage.getItem('valu_last_group');
-              const match = files.find(f => f.id === lastId);
+              const defaultId = localStorage.getItem('valu_default_group');
+              const match = files.find(f => f.id === lastId) || (defaultId && files.find(f => f.id === defaultId));
               await switchGroup(match || files[0]);
             }
 
@@ -717,28 +772,10 @@
             localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
 
             const accRows = await SheetsApi.getTabData(group.id, 'Accounts');
-            accountsList.value = accRows.map(r => ({
-              id: r[0], name: r[1], currency: r[2],
-              type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
-            }));
+            accountsList.value = mapAccountRows(accRows);
 
             dataLoaded.value = true;
-
-            SheetsApi.startChangeDetection([group.id], async (changedId) => {
-              if (changedId === activeGroup.value?.id) {
-                try {
-                  groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);
-                  localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
-                  const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
-                  accountsList.value = accRows.map(r => ({
-                    id: r[0], name: r[1], currency: r[2],
-                    type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
-                  }));
-                } catch (err) {
-                  console.warn('Change detection refresh failed:', err);
-                }
-              }
-            });
+            setupChangeDetection(group.id);
 
             if (currentPage.value === 'groups' && !navOptions.keepOnGroupsPage) {
               currentPage.value = 'home';
@@ -755,6 +792,8 @@
               localStorage.removeItem('valu_last_group_name');
               localStorage.removeItem('valu_settings_cache');
               currentPage.value = 'groups';
+            } else {
+              needsReconnect.value = true;
             }
           } finally {
             groupLoading.value = false;
@@ -765,7 +804,7 @@
           console.log('onGroupCreated:', JSON.stringify(payload));
           if (!payload || !payload.id) {
             console.error('onGroupCreated: createSpreadsheet returned no id:', payload);
-            alert('Failed to create group — no spreadsheet ID returned.');
+            showAlert('Failed to create group — no spreadsheet ID returned.');
             return;
           }
           const keepOnGroupsPage = payload.keepOnGroupsPage === true;
@@ -801,14 +840,15 @@
         }
 
         async function reconnect() {
-          needsReconnect.value = false;
           try {
+            needsReconnect.value = false;
             await GoogleAuth.getAccessToken();
             if (activeGroup.value) {
               dataLoaded.value = false;
               await loadGroupData();
             }
           } catch (err) {
+            needsReconnect.value = true;
             GoogleAuth.connect();
           }
         }
@@ -823,10 +863,7 @@
             groupSettings.value = await SheetsApi.getSettings(activeGroup.value.id);
             localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
             const accRows = await SheetsApi.getTabData(activeGroup.value.id, 'Accounts');
-            accountsList.value = accRows.map(r => ({
-              id: r[0], name: r[1], currency: r[2],
-              type: r[3], discontinued: normalizeDiscontinuedCell(r[4]), order: r[5],
-            }));
+            accountsList.value = mapAccountRows(accRows);
           } catch (err) {
             console.warn('Background refresh failed:', err);
           }
@@ -883,7 +920,7 @@
           demoSheetId: DEMO_SHEET_ID,
           inAppShell, demoMode, landingShowCtas, showSignInFromLanding,
           groups, groupsForSwitcher, activeGroup, groupSettings, groupLoading, dataLoaded, accountsList,
-          currentPage, currentPageComponent, currentPageTitle,
+          currentPage, currentPageComponent,
           activeSheetId, activeGroupName, sideNavOpen, showGroupSwitcher,
           demoHomeCallout,
           needsReconnect, reconnect, connect, swUpdateReady, applySwUpdate,
@@ -891,7 +928,8 @@
           onAuthChange, signOut,
           startQuickLookDemo, leaveDemoToSignIn,
           switchGroup, onGroupCreated, onSharedOpened,
-          onAccountsUpdated, onSettingsUpdated, refreshCurrentPage,
+          onAccountsUpdated, onSettingsUpdated, refreshCurrentPage, refreshGroupsList,
+          dialogVisible, dialogMessage, dialogIsConfirm, dialogOk, dialogCancel,
         };
       },
     });

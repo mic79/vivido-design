@@ -1,6 +1,6 @@
 import SheetsApi, { TABS, formatAccountDisplayName } from './sheetsApi.js';
 
-const { ref, computed, watch, inject } = Vue;
+const { ref, computed, watch, inject, nextTick } = Vue;
 
 const DEMO_WELCOME_KEY = 'valu_demo_welcome_seen';
 
@@ -54,7 +54,7 @@ export default {
     function convertToBase(amount, fromCurrency) {
       if (!fromCurrency || fromCurrency === baseCurrency.value) return amount;
       const rate = currencyRates.value[fromCurrency];
-      return rate ? amount * rate : amount;
+      return rate ? Math.round(amount * rate * 100) / 100 : amount;
     }
 
     function getNumberLocale() {
@@ -146,19 +146,25 @@ export default {
         .filter(a => a.discontinued !== 'true')
         .map(a => ({ id: a.id, currency: a.currency || baseCurrency.value }));
 
-      return Object.entries(monthMap)
-        .map(([key, accs]) => {
+      const sortedMonths = Object.keys(monthMap).sort();
+      const lastKnown = {};
+      return sortedMonths
+        .map(key => {
+          const accs = monthMap[key];
+          for (const a of activeIds) {
+            if (accs[a.id] != null) lastKnown[a.id] = accs[a.id];
+          }
           const total = activeIds.reduce((sum, a) => {
-            const bal = accs[a.id] || 0;
+            const bal = accs[a.id] != null ? accs[a.id] : (lastKnown[a.id] || 0);
             return sum + convertToBase(bal, a.currency);
           }, 0);
           return { month: key, total };
         })
-        .sort((a, b) => a.month.localeCompare(b.month))
         .slice(-12);
     });
 
     const needsBalanceUpdate = computed(() => {
+      if (localStorage.getItem('valu_balance_reminders') === 'false') return false;
       if (!enabledLists.value.includes('accounts')) return false;
       const activeAccounts = (props.accounts || []).filter(a => a.discontinued !== 'true');
       if (activeAccounts.length === 0) return false;
@@ -194,17 +200,11 @@ export default {
           return new Date(y, m - 1, d) <= today;
         })
         .sort((a, b) => {
-          const da = a.date ? new Date(a.date) : new Date(0);
-          const db = b.date ? new Date(b.date) : new Date(0);
-          return db - da;
+          return (b.date || '').localeCompare(a.date || '');
         })
         .slice(0, 5);
     });
 
-    const savingsRate = computed(() => {
-      if (monthlyIncome.value === 0) return null;
-      return ((monthlyIncome.value - monthlyExpenses.value) / monthlyIncome.value * 100).toFixed(0);
-    });
 
     // ── Net worth area chart (SVG) ──────────────────────────────────────────
 
@@ -312,6 +312,8 @@ export default {
                 }));
               })
           );
+        } else {
+          expenses.value = [];
         }
 
         if (enabledLists.value.includes('income')) {
@@ -325,6 +327,8 @@ export default {
                 }));
               })
           );
+        } else {
+          incomeList.value = [];
         }
 
         if (enabledLists.value.includes('accounts')) {
@@ -338,11 +342,13 @@ export default {
                 }));
               })
           );
+        } else {
+          balanceHistory.value = [];
         }
 
         await Promise.all(promises);
       } catch (err) {
-        if (err.message === 'popup_blocked') return;
+        if (err.message === 'popup_blocked' || err.message === 'refresh_failed') return;
         console.error('Failed to load home data:', err);
       } finally {
         loading.value = false;
@@ -475,12 +481,12 @@ export default {
     }
     function nextYear() {
       const idx = availableYears.value.indexOf(balanceTableYear.value);
-      if (idx < availableYears.value.length - 1) balanceTableYear.value = availableYears.value[idx + 1];
+      if (idx >= 0 && idx < availableYears.value.length - 1) balanceTableYear.value = availableYears.value[idx + 1];
     }
     const canPrevYear = computed(() => availableYears.value.indexOf(balanceTableYear.value) > 0);
     const canNextYear = computed(() => {
       const idx = availableYears.value.indexOf(balanceTableYear.value);
-      return idx < availableYears.value.length - 1;
+      return idx >= 0 && idx < availableYears.value.length - 1;
     });
 
     const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -502,13 +508,162 @@ export default {
       balanceTooltip.value = null;
     }
 
+    // ── Expense Category Table (yearly averages + chart) ─────────────────
+    const EXP_CAT_COLORS = [
+      '#5B8DB8','#E2725B','#F0C75E','#5AAD6E','#E8935A',
+      '#6ECBDB','#8B6DB0','#E88B9C','#F5E16B','#5F9EA0',
+      '#D4A574','#999999',
+    ];
+
+    const definedExpenseCategories = computed(() => {
+      const str = props.settings?.expenseCategories || '';
+      return str.split(',').filter(Boolean).map(c => {
+        const idx = c.indexOf(':');
+        return idx > 0 ? c.slice(0, idx) : c;
+      });
+    });
+
+    const expCatTable = computed(() => {
+      const currentYear = new Date().getFullYear();
+      const yearsSet = new Set();
+      const catYearTotals = {};
+
+      for (const e of expenses.value) {
+        if (!e.date) continue;
+        const parts = e.date.split('-');
+        const y = parseInt(parts[0]);
+        if (y >= currentYear) continue;
+        const cat = e.category || 'Uncategorized';
+        const cur = getAccountCurrency(e.accountId);
+        const base = convertToBase(e.amount, cur);
+        yearsSet.add(y);
+        if (!catYearTotals[cat]) catYearTotals[cat] = {};
+        catYearTotals[cat][y] = (catYearTotals[cat][y] || 0) + base;
+      }
+
+      const years = [...yearsSet].sort((a, b) => a - b);
+      const defined = definedExpenseCategories.value;
+
+      const rows = Object.entries(catYearTotals)
+        .map(([name, yearTotals]) => {
+          const values = {};
+          for (const y of years) {
+            if (yearTotals[y] != null) {
+              values[y] = Math.round((yearTotals[y] / 12) * 100) / 100;
+            }
+          }
+          return { name, icon: categoryIconMap.value[name] || '', values };
+        })
+        .sort((a, b) => {
+          const ai = defined.indexOf(a.name);
+          const bi = defined.indexOf(b.name);
+          if (ai >= 0 && bi >= 0) return ai - bi;
+          if (ai >= 0) return -1;
+          if (bi >= 0) return 1;
+          return a.name.localeCompare(b.name);
+        });
+
+      const totals = {};
+      for (const y of years) {
+        let sum = 0;
+        let hasAny = false;
+        for (const row of rows) {
+          if (row.values[y] != null) { hasAny = true; sum += row.values[y]; }
+        }
+        if (hasAny) totals[y] = Math.round(sum * 100) / 100;
+      }
+
+      return { years, rows, totals };
+    });
+
+    const expCatChartData = computed(() => {
+      const t = expCatTable.value;
+      if (!t.rows.length) return null;
+      const maxTotal = Math.max(...t.years.map(y => t.totals[y] || 0), 1);
+      const bars = t.years.map(y => {
+        const segments = t.rows.map((row, i) => ({
+          name: row.name,
+          value: row.values[y] || 0,
+          color: EXP_CAT_COLORS[i % EXP_CAT_COLORS.length],
+        })).filter(s => s.value > 0);
+        return { year: y, total: t.totals[y] || 0, segments };
+      });
+      const legendItems = t.rows.map((row, i) => ({
+        name: row.name,
+        color: EXP_CAT_COLORS[i % EXP_CAT_COLORS.length],
+      }));
+      return { bars, maxTotal, legendItems };
+    });
+
+    const showExpCatTable = computed(() =>
+      enabledLists.value.includes('expenses') && expenses.value.length > 0
+    );
+
+    const expCatScrollRef = ref(null);
+    watch(expCatScrollRef, (el) => {
+      if (el) nextTick(() => { el.scrollLeft = el.scrollWidth; });
+    });
+
+    const categoryGoals = ref({});
+    function loadCategoryGoals() {
+      const goalsStr = props.settings?.expenseCategoryGoals || '';
+      const map = {};
+      goalsStr.split(',').filter(Boolean).forEach(g => {
+        const idx = g.lastIndexOf(':');
+        if (idx > 0) map[g.slice(0, idx)] = parseFloat(g.slice(idx + 1)) || 0;
+      });
+      categoryGoals.value = map;
+    }
+    loadCategoryGoals();
+    watch(() => props.settings?.expenseCategoryGoals, loadCategoryGoals);
+
+    const goalInputs = ref({});
+    function initGoalInput(catName) {
+      if (goalInputs.value[catName] === undefined) {
+        const val = categoryGoals.value[catName];
+        goalInputs.value[catName] = val != null ? String(val) : '';
+      }
+      return goalInputs.value[catName];
+    }
+    function updateGoalInput(catName, val) {
+      goalInputs.value[catName] = val;
+    }
+
+    let goalSaveTimer = null;
+    async function saveGoal(catName) {
+      const raw = goalInputs.value[catName] || '';
+      const val = parseFloat(raw.replace(',', '.'));
+      if (!isNaN(val) && val >= 0) {
+        categoryGoals.value[catName] = val;
+      } else {
+        delete categoryGoals.value[catName];
+      }
+      clearTimeout(goalSaveTimer);
+      goalSaveTimer = setTimeout(async () => {
+        const entries = Object.entries(categoryGoals.value)
+          .filter(([, v]) => v >= 0)
+          .map(([k, v]) => k + ':' + v);
+        try {
+          await SheetsApi.updateSetting(getSheetId(), 'expenseCategoryGoals', entries.join(','));
+        } catch (err) {
+          console.error('Failed to save goals:', err);
+        }
+      }, 800);
+    }
+
+    const goalTotal = computed(() => {
+      const vals = Object.values(categoryGoals.value);
+      if (vals.length === 0) return null;
+      return Math.round(vals.reduce((s, v) => s + v, 0) * 100) / 100;
+    });
+
     return {
       loading, enabledLists, baseCurrency, expenses, incomeList,
       monthlyExpenses, monthlyIncome, netWorth, netWorthHistory,
-      savingsRate, recentTransactions, needsBalanceUpdate,
+      recentTransactions, needsBalanceUpdate,
       prevMonthInfo, chartMax, selectedBar, selectedPoint, displayedBalance,
       chartWidth, chartHeight, chartPath, chartAreaPath,
-      formatCurrency, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon,
+      formatCurrency, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon, getAccountCurrency,
       toggleBar, emit,
       showDemoWelcomeSheet, dismissDemoWelcome,
       showOnboarding, accountsNeedsData, incomeNeedsData, expensesNeedsData,
@@ -516,6 +671,8 @@ export default {
       balanceTableYear, availableYears, yearlyBalanceTable, showBalanceTable,
       prevYear, nextYear, canPrevYear, canNextYear, MONTH_ABBR,
       balanceTooltip, showNameTooltip, hideNameTooltip,
+      expCatTable, showExpCatTable, expCatChartData, EXP_CAT_COLORS, expCatScrollRef,
+      categoryGoals, goalTotal, goalInputs, initGoalInput, updateGoalInput, saveGoal,
     };
   },
 
@@ -617,7 +774,7 @@ export default {
         </div>
 
         <!-- This Month Stats -->
-        <div class="card mb-16" v-if="expenses.length > 0 || incomeList.length > 0">
+        <div class="card mb-16" v-if="(enabledLists.includes('expenses') && expenses.length > 0) || (enabledLists.includes('income') && incomeList.length > 0)">
           <div class="card-header"><h3>This Month</h3></div>
           <div class="stats-row">
             <div class="stat" v-if="incomeList.length > 0">
@@ -642,7 +799,7 @@ export default {
           <div style="padding:0;">
             <div v-for="tx in recentTransactions" :key="tx.id" class="list-item">
               <div class="list-item-icon"
-                :style="{ background: tx.type === 'income' ? 'var(--color-primary-light)' : 'rgba(173,75,32,.1)', color: tx.type === 'income' ? 'var(--color-primary)' : 'var(--color-secondary)' }">
+                :style="{ background: tx.type === 'income' ? 'var(--color-primary-light)' : 'var(--color-expense-light, rgba(173,75,32,.1))', color: tx.type === 'income' ? 'var(--color-primary)' : 'var(--color-secondary)' }">
                 <span class="material-icons">{{ getCategoryIcon(tx.category) || (tx.type === 'income' ? 'payments' : 'receipt') }}</span>
               </div>
               <div class="list-item-content">
@@ -656,7 +813,7 @@ export default {
               <div class="list-item-right">
                 <div class="list-item-amount"
                      :style="{ color: tx.type === 'income' ? 'var(--color-primary)' : 'var(--color-secondary)' }">
-                  {{ (tx.type === 'income' ? tx.amount >= 0 : tx.amount < 0) ? '+' : '-' }}{{ formatCurrency(Math.abs(tx.amount), baseCurrency) }}
+                  {{ (tx.type === 'income' ? tx.amount >= 0 : tx.amount < 0) ? '+' : '-' }}{{ formatCurrency(Math.abs(tx.amount), getAccountCurrency(tx.accountId)) }}
                 </div>
               </div>
             </div>
@@ -711,6 +868,76 @@ export default {
         <div v-if="balanceTooltip" class="balance-table-tooltip"
              :style="{ top: balanceTooltip.top + 'px', left: balanceTooltip.left + 'px' }"
              @click="hideNameTooltip">{{ balanceTooltip.text }}</div>
+
+        <!-- Expense Categories Table -->
+        <div v-if="showExpCatTable" class="card mb-16">
+          <div class="card-header"><h3>Average Monthly Expenses</h3></div>
+          <div class="balance-table-wrap" ref="expCatScrollRef">
+            <table class="balance-table">
+              <thead>
+                <tr>
+                  <th class="balance-table-sticky"></th>
+                  <th v-for="y in expCatTable.years" :key="y">{{ y }}</th>
+                  <th>Goal</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, ri) in expCatTable.rows" :key="row.name">
+                  <td class="balance-table-sticky balance-table-name"
+                      :title="row.name"
+                      @click="showNameTooltip($event, row.name)">
+                    <span v-if="row.icon" class="material-icons" style="font-size:14px;vertical-align:middle;margin-right:3px;color:var(--color-primary);">{{ row.icon }}</span>{{ row.name }}
+                  </td>
+                  <td v-for="y in expCatTable.years" :key="y"
+                      :class="{ 'balance-table-empty': row.values[y] == null }">
+                    {{ row.values[y] != null ? formatCurrency(row.values[y], baseCurrency) : '--' }}
+                  </td>
+                  <td class="balance-table-goal-cell">
+                    <input class="balance-table-goal-input"
+                           :value="initGoalInput(row.name)"
+                           @input="updateGoalInput(row.name, $event.target.value)"
+                           @change="saveGoal(row.name)"
+                           inputmode="decimal"
+                           placeholder="—" />
+                  </td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr class="balance-table-total">
+                  <td class="balance-table-sticky balance-table-name">Total</td>
+                  <td v-for="y in expCatTable.years" :key="y"
+                      :class="{ 'balance-table-empty': expCatTable.totals[y] == null }">
+                    {{ expCatTable.totals[y] != null ? formatCurrency(expCatTable.totals[y], baseCurrency) : '--' }}
+                  </td>
+                  <td class="balance-table-goal-cell" style="font-weight:600;">
+                    {{ goalTotal != null ? formatCurrency(goalTotal, baseCurrency) : '' }}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <div v-if="expCatChartData" class="expcat-chart">
+            <div class="expcat-chart-bars">
+              <div v-for="bar in expCatChartData.bars" :key="bar.year" class="expcat-chart-col">
+                <div class="expcat-chart-bar" :style="{ height: Math.round(bar.total / expCatChartData.maxTotal * 180) + 'px' }">
+                  <div v-for="(seg, si) in bar.segments" :key="si"
+                       class="expcat-chart-seg"
+                       :style="{ height: (seg.value / bar.total * 100) + '%', background: seg.color }"
+                       :title="seg.name + ': ' + formatCurrency(seg.value, baseCurrency)">
+                  </div>
+                </div>
+                <div class="expcat-chart-year">{{ bar.year }}</div>
+              </div>
+            </div>
+            <div class="expcat-chart-legend">
+              <span v-for="item in expCatChartData.legendItems" :key="item.name" class="expcat-chart-legend-item">
+                <span class="expcat-chart-legend-dot" :style="{ background: item.color }"></span>
+                {{ item.name }}
+              </span>
+            </div>
+          </div>
+        </div>
 
         <!-- Quick-start hints for empty tools -->
         <div v-if="showOnboarding && !isDemoGroup" class="onboarding">

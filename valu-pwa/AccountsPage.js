@@ -4,10 +4,12 @@ const { ref, computed, onMounted, watch, inject, nextTick } = Vue;
 
 export default {
   props: ['sheetId', 'settings', 'showUpdateReminder'],
-  emits: ['refresh', 'go-home', 'accounts-updated'],
+  emits: ['refresh', 'go-home', 'accounts-updated', 'settings-updated'],
 
   setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
+    const showAlert = inject('showAlert', m => window.alert(m));
+    const showConfirm = inject('showConfirm', m => Promise.resolve(window.confirm(m)));
     function getSheetId() { return props.sheetId || injectedSheetId.value; }
     const accounts = ref([]);
     const balanceHistory = ref([]);
@@ -86,7 +88,7 @@ export default {
     function convertToBase(amount, fromCurrency) {
       if (!fromCurrency || fromCurrency === baseCurrency.value) return amount;
       const rate = currencyRates.value[fromCurrency];
-      return rate ? amount * rate : amount;
+      return rate ? Math.round(amount * rate * 100) / 100 : amount;
     }
 
     function getNumberLocale() {
@@ -179,9 +181,10 @@ export default {
 
       const current = getCurrentBalance(accountId);
       const prevEntries = balanceHistory.value
-        .filter(h => h.accountId === accountId && h.year === prevY && h.month === prevM);
+        .filter(h => h.accountId === accountId && h.year === prevY && h.month === prevM)
+        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
       if (prevEntries.length === 0) return null;
-      return current - prevEntries[0].balance;
+      return Math.round((current - prevEntries[0].balance) * 100) / 100;
     }
 
     function orderSort(a, b) {
@@ -233,13 +236,13 @@ export default {
 
         balanceHistory.value = histRows.map(r => ({
           accountId: r[0], year: parseInt(r[1]),
-          month: parseInt(r[2]), balance: parseFloat(r[3]) || 0,
+          month: parseInt(r[2]), balance: Math.round((parseFloat(r[3]) || 0) * 100) / 100,
           updatedAt: r[4],
         }));
 
         emit('accounts-updated', accounts.value);
       } catch (err) {
-        if (err.message === 'popup_blocked') return;
+        if (err.message === 'popup_blocked' || err.message === 'refresh_failed') return;
         console.error('Failed to load accounts:', err);
       } finally {
         loading.value = false;
@@ -249,22 +252,24 @@ export default {
     async function addAccount() {
       const acc = newAccount.value;
       if (!acc.name.trim()) return;
-
-      const id = SheetsApi.generateId();
-      const currency = acc.currency || baseCurrency.value;
-      const order = accounts.value.length.toString();
-
-      await SheetsApi.appendRow(getSheetId(), TABS.ACCOUNTS, [
-        id, acc.name.trim(), currency, acc.type, 'false', order,
-      ]);
-
-      showAddModal.value = false;
-      newAccount.value = {
-        name: '',
-        currency: baseCurrency.value,
-        type: 'Checking/Debit',
-      };
-      await fetchData();
+      try {
+        const id = SheetsApi.generateId();
+        const currency = acc.currency || baseCurrency.value;
+        const order = accounts.value.length.toString();
+        await SheetsApi.appendRow(getSheetId(), TABS.ACCOUNTS, [
+          id, acc.name.trim(), currency, acc.type, 'false', order,
+        ]);
+        showAddModal.value = false;
+        newAccount.value = {
+          name: '',
+          currency: baseCurrency.value,
+          type: 'Checking/Debit',
+        };
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to add account:', err);
+        showAlert('Failed to save. Please try again.');
+      }
     }
 
     function startEdit(account) {
@@ -274,7 +279,7 @@ export default {
       balanceEntry.value = {
         accountId: account.id,
         date: todayStr(),
-        amount: lastBal ? lastBal.toString() : '',
+        amount: lastBal != null ? amountToInput(lastBal) : '',
       };
       sheetSwipeStep.value = false;
       showEditModal.value = true;
@@ -286,10 +291,15 @@ export default {
     async function persistEditToSheet() {
       const acc = editingAccount.value;
       if (!acc) return;
-      await SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
-        acc.id, acc.name, acc.currency, acc.type, acc.discontinued, acc.order,
-      ]);
-      await fetchData();
+      try {
+        await SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
+          acc.id, acc.name, acc.currency, acc.type, acc.discontinued, acc.order,
+        ]);
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to save account:', err);
+        showAlert('Failed to save. Please try again.');
+      }
     }
 
     async function saveEdit() {
@@ -299,9 +309,16 @@ export default {
     }
 
     async function deleteAccount(id) {
-      if (!confirm('Delete this account and all its balance history?')) return;
-      await SheetsApi.deleteRows(getSheetId(), TABS.ACCOUNTS, [id]);
-      await fetchData();
+      if (!(await showConfirm('Delete this account? Balance history entries will be kept.'))) return;
+      try {
+        await SheetsApi.deleteRows(getSheetId(), TABS.ACCOUNTS, [id]);
+        showEditModal.value = false;
+        editingAccount.value = null;
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to delete account:', err);
+        showAlert('Failed to delete. Please try again.');
+      }
     }
 
     function showHistory(account) {
@@ -327,7 +344,7 @@ export default {
       balanceEntry.value = {
         accountId: account.id,
         date: todayStr(),
-        amount: lastBal ? amountToInput(lastBal) : '',
+        amount: lastBal != null ? amountToInput(lastBal) : '',
       };
       showBalanceModal.value = true;
     }
@@ -351,13 +368,16 @@ export default {
       if (!entry.accountId || entry.amount === '') return;
       const amt = parseAmount(entry.amount);
       if (isNaN(amt)) return;
-
-      const { year, month } = parseDateParts(entry.date);
-      const dateStr = entry.date;
-
-      await upsertBalance(entry.accountId, year, month, amt, dateStr);
-      showBalanceModal.value = false;
-      await fetchData();
+      try {
+        const { year, month } = parseDateParts(entry.date);
+        const dateStr = entry.date;
+        await upsertBalance(entry.accountId, year, month, amt, dateStr);
+        showBalanceModal.value = false;
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to save balance:', err);
+        showAlert('Failed to save. Please try again.');
+      }
     }
 
     // ── Bulk update mode ─────────────────────────────────────────────────────
@@ -368,25 +388,28 @@ export default {
       const balances = {};
       for (const acc of activeAccounts.value) {
         const lastBal = getCurrentBalance(acc.id);
-        balances[acc.id] = lastBal ? amountToInput(lastBal) : '';
+        balances[acc.id] = lastBal != null ? amountToInput(lastBal) : '';
       }
       updateBalances.value = balances;
     }
 
     async function saveBalanceUpdates() {
-      const { year, month } = parseDateParts(updateDate.value);
-      const dateStr = updateDate.value;
-
-      for (const acc of activeAccounts.value) {
-        const val = updateBalances.value[acc.id];
-        if (val === '' || val === undefined) continue;
-        const amt = parseAmount(val);
-        if (isNaN(amt)) continue;
-        await upsertBalance(acc.id, year, month, amt, dateStr);
+      try {
+        const { year, month } = parseDateParts(updateDate.value);
+        const dateStr = updateDate.value;
+        for (const acc of activeAccounts.value) {
+          const val = updateBalances.value[acc.id];
+          if (val === '' || val === undefined) continue;
+          const amt = parseAmount(val);
+          if (isNaN(amt)) continue;
+          await upsertBalance(acc.id, year, month, amt, dateStr);
+        }
+        updateMode.value = false;
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to save balances:', err);
+        showAlert('Failed to save. Please try again.');
       }
-
-      updateMode.value = false;
-      await fetchData();
     }
 
     // ── Shared upsert helper ─────────────────────────────────────────────────
@@ -412,7 +435,8 @@ export default {
         currentTotal += convertToBase(cur, acc.currency);
 
         const prevEntries = balanceHistory.value
-          .filter(h => h.accountId === acc.id && h.year === prevY && h.month === prevM);
+          .filter(h => h.accountId === acc.id && h.year === prevY && h.month === prevM)
+          .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
         if (prevEntries.length > 0) {
           prevTotal += convertToBase(prevEntries[0].balance, acc.currency);
         }
@@ -423,6 +447,10 @@ export default {
     watch(() => getSheetId(), (id) => { if (id) fetchData(); }, { immediate: true });
 
     const addNameInput = ref(null);
+    const balanceAmountInput = ref(null);
+    watch(showBalanceModal, (v) => {
+      if (v) nextTick(() => { balanceAmountInput.value?.focus(); });
+    });
     watch(showAddModal, (v) => {
       if (!v) {
         currencyDropdownOpen.value = false;
@@ -453,38 +481,46 @@ export default {
       const list = activeAccounts.value;
       const idx = list.findIndex(a => a.id === acc.id);
       if (idx <= 0) return;
-      const other = list[idx - 1];
-      const tmpOrder = acc.order;
-      acc.order = other.order;
-      other.order = tmpOrder;
-      await Promise.all([
-        SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
-          acc.id, acc.name, acc.currency, acc.type, acc.discontinued, acc.order,
-        ]),
-        SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, other.id, [
-          other.id, other.name, other.currency, other.type, other.discontinued, other.order,
-        ]),
-      ]);
-      await fetchData();
+      try {
+        const other = list[idx - 1];
+        const tmpOrder = acc.order;
+        acc.order = other.order;
+        other.order = tmpOrder;
+        await Promise.all([
+          SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
+            acc.id, acc.name, acc.currency, acc.type, acc.discontinued, acc.order,
+          ]),
+          SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, other.id, [
+            other.id, other.name, other.currency, other.type, other.discontinued, other.order,
+          ]),
+        ]);
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to reorder account:', err);
+      }
     }
 
     async function moveAccountDown(acc) {
       const list = activeAccounts.value;
       const idx = list.findIndex(a => a.id === acc.id);
       if (idx < 0 || idx >= list.length - 1) return;
-      const other = list[idx + 1];
-      const tmpOrder = acc.order;
-      acc.order = other.order;
-      other.order = tmpOrder;
-      await Promise.all([
-        SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
-          acc.id, acc.name, acc.currency, acc.type, acc.discontinued, acc.order,
-        ]),
-        SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, other.id, [
-          other.id, other.name, other.currency, other.type, other.discontinued, other.order,
-        ]),
-      ]);
-      await fetchData();
+      try {
+        const other = list[idx + 1];
+        const tmpOrder = acc.order;
+        acc.order = other.order;
+        other.order = tmpOrder;
+        await Promise.all([
+          SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
+            acc.id, acc.name, acc.currency, acc.type, acc.discontinued, acc.order,
+          ]),
+          SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, other.id, [
+            other.id, other.name, other.currency, other.type, other.discontinued, other.order,
+          ]),
+        ]);
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to reorder account:', err);
+      }
     }
 
     function selectDropdownOption(name, value, target, field) {
@@ -495,6 +531,19 @@ export default {
         persistEditToSheet();
       }
       openDropdown.value = null;
+    }
+
+    async function disableTool() {
+      try {
+        const current = (props.settings?.listsEnabled || '').split(',').filter(Boolean);
+        const updated = current.filter(t => t !== 'accounts').join(',');
+        await SheetsApi.updateSetting(getSheetId(), 'listsEnabled', updated);
+        emit('settings-updated', { listsEnabled: updated });
+        emit('go-home');
+      } catch (err) {
+        console.error('Failed to disable tool:', err);
+        showAlert('Failed to save. Please try again.');
+      }
     }
 
     return {
@@ -513,7 +562,8 @@ export default {
       addAccount, startEdit, saveEdit, persistEditToSheet, deleteAccount,
       showHistory, openBalanceUpdate, saveBalance, editHistoryEntry,
       enterUpdateMode, saveBalanceUpdates, monthName,
-      reorderMode, moveAccountUp, moveAccountDown, addNameInput,
+      reorderMode, moveAccountUp, moveAccountDown, addNameInput, balanceAmountInput,
+      disableTool,
     };
   },
 
@@ -613,10 +663,15 @@ export default {
         </div>
 
         <!-- Empty state -->
-        <div v-if="accounts.length === 0" class="empty-state" style="padding-top:40px;">
+        <div v-if="accounts.length === 0" class="empty-state" style="padding-top:40px;text-align:center;">
           <span class="material-icons">account_balance</span>
           <h3>No accounts yet</h3>
           <p>Add your bank accounts, savings, or investment accounts.</p>
+          <div class="empty-state-disable">
+            <p>Not ready to use this tool?</p>
+            <button class="btn-disable-tool" @click="disableTool">Disable Accounts for now</button>
+            <p class="empty-state-hint">You can re-enable it anytime from your Group configuration.</p>
+          </div>
         </div>
 
         <!-- Fixed ADD ACCOUNT at bottom with gradient fade -->
@@ -671,10 +726,10 @@ export default {
             <div class="modal-body" style="padding-top:8px;">
               <div class="sheet-hero-name-row">
                 <input class="sheet-hero-name" v-model="editingAccount.name" placeholder="Account name"
-                       @change="saveEdit()" />
+                       @change="persistEditToSheet()" />
                 <span class="material-icons sheet-hero-edit-icon">edit</span>
               </div>
-              <div class="sheet-hero-amount-display">{{ formatCurrency(getCurrentBalance(editingAccount.id), editingAccount.currency || baseCurrency) }}</div>
+              <div class="sheet-hero-amount-display" style="cursor:pointer;" @click="openBalanceUpdate(editingAccount)">{{ formatCurrency(getCurrentBalance(editingAccount.id), editingAccount.currency || baseCurrency) }}</div>
               <div class="sheet-hero-label">Balance</div>
             </div>
 
@@ -729,7 +784,7 @@ export default {
               </label>
             </div>
             <div style="padding:16px;">
-              <button class="btn btn-text btn-danger" @click="deleteAccount(editingAccount.id); showEditModal = false;">Delete account</button>
+              <button class="btn btn-text btn-danger" @click="deleteAccount(editingAccount.id)">Delete account</button>
             </div>
           </div>
         </div>
@@ -740,7 +795,7 @@ export default {
         <div class="modal" v-if="showBalanceModal">
           <div class="sheet-handle"></div>
           <div class="modal-body" style="padding-top:8px; text-align:center;">
-            <input class="sheet-hero-amount-input" type="text" inputmode="decimal" v-model="balanceEntry.amount" @input="sanitizeAmount(balanceEntry, 'amount')" placeholder="0" autofocus />
+            <input ref="balanceAmountInput" class="sheet-hero-amount-input" type="text" inputmode="decimal" v-model="balanceEntry.amount" @input="sanitizeAmount(balanceEntry, 'amount')" placeholder="0" />
             <div class="sheet-hero-label">Balance</div>
           </div>
           <div class="modal-body">

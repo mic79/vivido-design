@@ -1,7 +1,7 @@
-import SheetsApi, { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, CATEGORY_ICONS } from './sheetsApi.js';
+import SheetsApi, { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, CATEGORY_ICONS, CURRENCIES } from './sheetsApi.js';
 import GoogleAuth from './googleAuth.js';
 
-const { ref, computed, watch } = Vue;
+const { ref, computed, watch, inject } = Vue;
 
 const AVAILABLE_LISTS = [
   { key: 'accounts',  label: 'Accounts',  icon: 'account_balance', description: 'Track bank accounts, savings, and net worth over time' },
@@ -9,35 +9,13 @@ const AVAILABLE_LISTS = [
   { key: 'income',    label: 'Income',    icon: 'payments',        description: 'Track income sources and earnings' },
 ];
 
-const CURRENCIES = [
-  { name: 'Brazilian Real', code: 'BRL' },
-  { name: 'Canadian Dollar', code: 'CAD' },
-  { name: 'Euro', code: 'EUR' },
-  { name: 'US Dollar', code: 'USD' },
-  { name: 'West African CFA Franc', code: 'XOF' },
-  { name: 'Australian Dollar', code: 'AUD' },
-  { name: 'British Pound', code: 'GBP' },
-  { name: 'Chinese Yuan', code: 'CNY' },
-  { name: 'Danish Krone', code: 'DKK' },
-  { name: 'Hong Kong Dollar', code: 'HKD' },
-  { name: 'Indian Rupee', code: 'INR' },
-  { name: 'Japanese Yen', code: 'JPY' },
-  { name: 'Mexican Peso', code: 'MXN' },
-  { name: 'New Zealand Dollar', code: 'NZD' },
-  { name: 'Norwegian Krone', code: 'NOK' },
-  { name: 'Singapore Dollar', code: 'SGD' },
-  { name: 'South African Rand', code: 'ZAR' },
-  { name: 'South Korean Won', code: 'KRW' },
-  { name: 'Swedish Krona', code: 'SEK' },
-  { name: 'Swiss Franc', code: 'CHF' },
-  { name: 'Taiwan Dollar', code: 'TWD' },
-];
-
 export default {
   props: ['groups', 'activeGroup', 'userProfile', 'settings'],
   emits: ['switch-group', 'create-group', 'refresh-groups', 'open-shared', 'settings-updated', 'go-home'],
 
   setup(props, { emit }) {
+    const showAlert = inject('showAlert', m => window.alert(m));
+    const showConfirm = inject('showConfirm', m => Promise.resolve(window.confirm(m)));
     const creating = ref(false);
     const loading = ref(false);
     const sortMode = ref('modified');
@@ -53,6 +31,8 @@ export default {
     const configExpenseCategories = ref([]);
     const configIncomeCategories = ref([]);
     const configCurrencyRates = ref([]);
+    const configExpenseCatsEnabled = ref(true);
+    const configIncomeCatsEnabled = ref(true);
     const newExpenseCat = ref('');
     const newIncomeCat = ref('');
     const newRateCurrency = ref('');
@@ -201,6 +181,8 @@ export default {
       configExpenseCategories.value = DEFAULT_EXPENSE_CATEGORIES.map(c => ({ ...c }));
       configIncomeCategories.value = DEFAULT_INCOME_CATEGORIES.map(c => ({ ...c }));
       configCurrencyRates.value = [];
+      configExpenseCatsEnabled.value = true;
+      configIncomeCatsEnabled.value = true;
       newExpenseCat.value = '';
       newIncomeCat.value = '';
       newRateCurrency.value = '';
@@ -252,7 +234,7 @@ export default {
         });
       } catch (err) {
         configGroupId.value = null;
-        alert('Failed to create group: ' + err.message);
+        showAlert('Failed to create group: ' + err.message);
       } finally {
         creating.value = false;
       }
@@ -265,7 +247,7 @@ export default {
           emit('open-shared', picked);
         }
       } catch (err) {
-        alert('Failed to open picker: ' + err.message);
+        showAlert('Failed to open picker: ' + err.message);
       }
     }
 
@@ -288,14 +270,11 @@ export default {
         delete cleared[id];
       });
       listLabelsByGroupId.value = cleared;
-      try {
-        emit('refresh-groups');
-      } finally {
-        setTimeout(() => {
-          loading.value = false;
-          scheduleHydrateListLabels();
-        }, 400);
-      }
+      emit('refresh-groups');
+      setTimeout(() => {
+        loading.value = false;
+        scheduleHydrateListLabels();
+      }, 1500);
     }
 
     // ── Group Configuration Sheet ──────────────────────────────────────────
@@ -312,6 +291,8 @@ export default {
         configEnabledLists.value = (settings.listsEnabled || '').split(',').filter(Boolean);
         configExpenseCategories.value = parseCategories(settings.expenseCategories);
         configIncomeCategories.value = parseCategories(settings.incomeCategories);
+        configExpenseCatsEnabled.value = settings.expenseCategoriesEnabled !== 'false';
+        configIncomeCatsEnabled.value = settings.incomeCategoriesEnabled !== 'false';
 
         const ratesStr = settings.currencyRates || '';
         configCurrencyRates.value = ratesStr.split(',').filter(Boolean).map(r => {
@@ -324,7 +305,7 @@ export default {
         };
       } catch (err) {
         console.error('Failed to load group settings:', err);
-        alert('Failed to load group configuration: ' + err.message);
+        showAlert('Failed to load group configuration: ' + err.message);
         showConfigSheet.value = false;
       }
     }
@@ -347,7 +328,7 @@ export default {
           emit('settings-updated', { [key]: value });
         }
       } catch (err) {
-        alert('Failed to save: ' + err.message);
+        showAlert('Failed to save: ' + err.message);
       } finally {
         configSaving.value = false;
       }
@@ -405,10 +386,10 @@ export default {
       }
     }
 
-    function removeConfigCategory(type, index) {
+    async function removeConfigCategory(type, index) {
       const list = type === 'expense' ? configExpenseCategories : configIncomeCategories;
       const name = list.value[index]?.name || 'this category';
-      if (!confirm('Delete "' + name + '"? This will not remove the category from existing entries.')) return;
+      if (!(await showConfirm('Delete "' + name + '"? This will not remove the category from existing entries.'))) return;
       list.value.splice(index, 1);
       const key = type === 'expense' ? 'expenseCategories' : 'incomeCategories';
       saveConfigField(key, serializeCategories(list.value));
@@ -484,16 +465,18 @@ export default {
     }
 
     function toggleCategoriesEnabled(type) {
-      const key = type === 'expense' ? 'expenseCategoriesEnabled' : 'incomeCategoriesEnabled';
-      const current = type === 'expense'
-        ? (props.settings?.expenseCategoriesEnabled !== 'false')
-        : (props.settings?.incomeCategoriesEnabled !== 'false');
-      saveConfigField(key, current ? 'false' : 'true');
+      if (type === 'expense') {
+        configExpenseCatsEnabled.value = !configExpenseCatsEnabled.value;
+        saveConfigField('expenseCategoriesEnabled', configExpenseCatsEnabled.value ? 'true' : 'false');
+      } else {
+        configIncomeCatsEnabled.value = !configIncomeCatsEnabled.value;
+        saveConfigField('incomeCategoriesEnabled', configIncomeCatsEnabled.value ? 'true' : 'false');
+      }
     }
 
     function areCategoriesEnabled(type) {
-      if (type === 'expense') return props.settings?.expenseCategoriesEnabled !== 'false';
-      return props.settings?.incomeCategoriesEnabled !== 'false';
+      if (type === 'expense') return configExpenseCatsEnabled.value;
+      return configIncomeCatsEnabled.value;
     }
 
     function addConfigCurrencyRate() {

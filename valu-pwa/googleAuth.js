@@ -33,6 +33,7 @@ let userProfile    = null;
 let _onAuthChange  = null;
 let _pendingRefresh = null;
 let _refreshTimer  = null;
+let _signedOut     = false;
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
 
@@ -114,10 +115,14 @@ async function exchangeCodeForTokens(code) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, redirect_uri: redirectUri }),
   });
+  if (!res.ok) {
+    let msg = `Token exchange failed (${res.status})`;
+    try { const d = await res.json(); msg = d.error_description || d.error || msg; } catch {}
+    throw new Error(msg);
+  }
   const data = await res.json();
-  if (!res.ok || data.error) {
-    console.error('Token exchange failed:', JSON.stringify(data));
-    throw new Error(data.error_description || data.error || 'Token exchange failed');
+  if (data.error) {
+    throw new Error(data.error_description || data.error);
   }
   return data;
 }
@@ -128,9 +133,14 @@ async function refreshViaWorker(encryptedRefreshToken) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ encrypted_refresh_token: encryptedRefreshToken }),
   });
+  if (!res.ok) {
+    let msg = `Token refresh failed (${res.status})`;
+    try { const d = await res.json(); msg = d.error || msg; } catch {}
+    throw new Error(msg);
+  }
   const data = await res.json();
-  if (!res.ok || data.error) {
-    throw new Error(data.error || 'Token refresh failed');
+  if (data.error) {
+    throw new Error(data.error);
   }
   return data;
 }
@@ -149,11 +159,13 @@ async function silentRefresh() {
 
   try {
     const result = await refreshViaWorker(encryptedRefresh);
+    if (_signedOut) return;
     accessToken = result.access_token;
     cacheToken(result.access_token, result.expires_in);
     scheduleRefresh(result.expires_in);
   } catch (err) {
     console.warn('Silent token refresh failed:', err.message);
+    if (!_signedOut) accessToken = null;
   }
 }
 
@@ -183,7 +195,7 @@ const GoogleAuth = {
       const savedState = localStorage.getItem('valu_oauth_state');
       localStorage.removeItem('valu_oauth_state');
 
-      if (state !== savedState) {
+      if (!state || !savedState || state !== savedState) {
         console.error('OAuth state mismatch — possible CSRF');
         onAuthChange(false, null);
         return;
@@ -212,7 +224,7 @@ const GoogleAuth = {
     const storedProfile = getStoredProfile();
     const encryptedRefresh = localStorage.getItem('valu_encrypted_refresh');
 
-    if (storedProfile) {
+    if (storedProfile && encryptedRefresh) {
       userProfile = storedProfile;
 
       const cached = getCachedToken();
@@ -225,19 +237,16 @@ const GoogleAuth = {
         return;
       }
 
-      // No valid cached token — show app shell with cached profile
-      // while we refresh the token in the background
       onAuthChange(true, userProfile);
 
-      if (encryptedRefresh) {
-        try {
-          const result = await refreshViaWorker(encryptedRefresh);
-          accessToken = result.access_token;
-          cacheToken(result.access_token, result.expires_in);
-          scheduleRefresh(result.expires_in);
-        } catch (err) {
-          console.warn('Background token refresh failed:', err.message);
-        }
+      try {
+        const result = await refreshViaWorker(encryptedRefresh);
+        accessToken = result.access_token;
+        cacheToken(result.access_token, result.expires_in);
+        scheduleRefresh(result.expires_in);
+      } catch (err) {
+        console.warn('Background token refresh failed:', err.message);
+        accessToken = null;
       }
       return;
     }
@@ -250,9 +259,10 @@ const GoogleAuth = {
    * Must be called from a user gesture (button click).
    */
   connect() {
+    _signedOut = false;
     const state = crypto.randomUUID
       ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2) + Date.now().toString(36);
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
     localStorage.setItem('valu_oauth_state', state);
 
     const params = new URLSearchParams({
@@ -296,15 +306,16 @@ const GoogleAuth = {
 
     _pendingRefresh = refreshViaWorker(encryptedRefresh)
       .then(result => {
+        _pendingRefresh = null;
+        if (_signedOut) return null;
         accessToken = result.access_token;
         cacheToken(result.access_token, result.expires_in);
         scheduleRefresh(result.expires_in);
-        _pendingRefresh = null;
         return accessToken;
       })
       .catch(err => {
         _pendingRefresh = null;
-        accessToken = null;
+        if (!_signedOut) accessToken = null;
         throw new Error('refresh_failed');
       });
 
@@ -325,6 +336,7 @@ const GoogleAuth = {
    * Sign out and revoke the access token.
    */
   signOut() {
+    _signedOut = true;
     if (accessToken) {
       fetch(`${GOOGLE_REVOKE_URL}?token=${accessToken}`, { method: 'POST' }).catch(() => {});
     }
@@ -367,9 +379,15 @@ const GoogleAuth = {
         .setTitle('Select a Valu group spreadsheet')
         .setCallback((data) => {
           if (data.action === google.picker.Action.PICKED) {
-            const doc = data.docs[0];
-            resolve({ id: doc.id, name: doc.name });
+            const doc = data.docs && data.docs[0];
+            if (doc) {
+              resolve({ id: doc.id, name: doc.name });
+            } else {
+              resolve(null);
+            }
           } else if (data.action === google.picker.Action.CANCEL) {
+            resolve(null);
+          } else if (data.action === 'error') {
             resolve(null);
           }
         })

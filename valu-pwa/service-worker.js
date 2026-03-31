@@ -1,4 +1,4 @@
-const CACHE_NAME = 'valu-app-v142';
+const CACHE_NAME = 'valu-app-v150';
 
 const PRECACHE_URLS = [
   'index.html',
@@ -15,6 +15,7 @@ const PRECACHE_URLS = [
   'GroupsPage.js',
   'SettingsPage.js',
   'ActivityPage.js',
+  'ValuAssistant.js',
   'ValuDateField.js',
   'ValuDropdown.js',
   'ValuCurrencyPicker.js',
@@ -26,9 +27,9 @@ const PRECACHE_URLS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(PRECACHE_URLS))
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -39,9 +40,8 @@ self.addEventListener('activate', (event) => {
           .filter((name) => name !== CACHE_NAME)
           .map((name) => caches.delete(name))
       )
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener('message', (event) => {
@@ -53,7 +53,6 @@ self.addEventListener('message', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Only cache same-origin app shell requests, not API calls
   if (url.origin !== self.location.origin) return;
 
   event.respondWith(

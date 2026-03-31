@@ -6,10 +6,12 @@ const LS_LAST_ACCOUNT_INCOME = 'valu_last_account_income';
 
 export default {
   props: ['sheetId', 'settings', 'accounts'],
-  emits: ['refresh', 'go-home', 'settings-updated', 'accounts-updated'],
+  emits: ['refresh', 'go-home', 'settings-updated'],
 
   setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
+    const showAlert = inject('showAlert', m => window.alert(m));
+    const showConfirm = inject('showConfirm', m => Promise.resolve(window.confirm(m)));
     function getSheetId() { return props.sheetId || injectedSheetId.value; }
     const incomeList = ref([]);
     const loading = ref(true);
@@ -157,11 +159,7 @@ export default {
     });
 
     const filteredIncome = computed(() => {
-      let list = [...incomeList.value].sort((a, b) => {
-        const da = a.date ? new Date(a.date) : new Date(0);
-        const db = b.date ? new Date(b.date) : new Date(0);
-        return db - da;
-      });
+      let list = [...incomeList.value].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
       if (filterMonth.value) {
         list = list.filter(e => {
@@ -295,32 +293,30 @@ export default {
       if (!e.title.trim() || e.amount === '' || e.amount === undefined) return;
       const amt = parseAmount(e.amount);
       if (isNaN(amt)) return;
-
-      const id = SheetsApi.generateId();
-      const now = new Date().toISOString();
-      const date = e.date || localDateISO();
-      const shouldAdjust = adjustBalance.value && e.accountId;
-
-      await SheetsApi.appendRow(getSheetId(), TABS.INCOME, [
-        id, e.title.trim(), amt.toString(), e.accountId,
-        e.category, date, e.notes, now, shouldAdjust ? 'yes' : '',
-      ]);
-
-      if (shouldAdjust) {
-        const [y, m] = date.split('-').map(Number);
-        const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
-        await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur + amt, date);
+      try {
+        const id = SheetsApi.generateId();
+        const now = new Date().toISOString();
+        const date = e.date || localDateISO();
+        const shouldAdjust = adjustBalance.value && e.accountId;
+        await SheetsApi.appendRow(getSheetId(), TABS.INCOME, [
+          id, e.title.trim(), amt.toString(), e.accountId,
+          e.category, date, e.notes, now, shouldAdjust ? 'yes' : '',
+        ]);
+        if (shouldAdjust) {
+          const [y, m] = date.split('-').map(Number);
+          const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur + amt, date);
+        }
+        if (e.accountId) {
+          try { localStorage.setItem(LS_LAST_ACCOUNT_INCOME, e.accountId); } catch (_) {}
+        }
+        showAddModal.value = false;
+        resetNewIncomeForm();
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to add income:', err);
+        showAlert('Failed to save. Please try again.');
       }
-
-      if (e.accountId) {
-        try {
-          localStorage.setItem(LS_LAST_ACCOUNT_INCOME, e.accountId);
-        } catch (_) { /* private mode */ }
-      }
-
-      showAddModal.value = false;
-      resetNewIncomeForm();
-      await fetchData();
     }
 
     function startEdit(income) {
@@ -328,6 +324,7 @@ export default {
         amount: income.amount,
         accountId: income.accountId || '',
         balanceAdjusted: income.balanceAdjusted || '',
+        date: income.date || '',
       };
       editingIncome.value = { ...income, amount: amountToInput(income.amount) };
       editAdjustBalance.value = income.balanceAdjusted === 'yes';
@@ -340,39 +337,47 @@ export default {
       if (!e || !orig) return;
       const amt = parseAmount(e.amount);
       if (isNaN(amt)) return;
-
-      const shouldAdjust = editAdjustBalance.value && e.accountId;
-      const date = e.date || localDateISO();
-
-      await SheetsApi.updateRow(getSheetId(), TABS.INCOME, e.id, [
-        e.id, e.title, amt.toString(), e.accountId,
-        e.category, date, e.notes, e.createdAt, shouldAdjust ? 'yes' : '',
-      ]);
-
-      if (shouldAdjust) {
-        const [y, m] = date.split('-').map(Number);
-        const newAmt = amt;
-        const accountChanged = e.accountId !== orig.accountId;
-
-        if (accountChanged && orig.balanceAdjusted === 'yes' && orig.accountId) {
-          const oldBal = await SheetsApi.getCurrentBalance(getSheetId(), orig.accountId);
-          await SheetsApi.upsertBalanceRow(getSheetId(), orig.accountId, y, m, oldBal - orig.amount, date);
-          const newBal = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
-          await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, newBal + newAmt, date);
-        } else if (orig.balanceAdjusted === 'yes') {
-          const delta = newAmt - orig.amount;
-          const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
-          await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur + delta, date);
-        } else {
-          const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
-          await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur + newAmt, date);
+      try {
+        const shouldAdjust = editAdjustBalance.value && e.accountId;
+        const date = e.date || localDateISO();
+        await SheetsApi.updateRow(getSheetId(), TABS.INCOME, e.id, [
+          e.id, e.title, amt.toString(), e.accountId,
+          e.category, date, e.notes, e.createdAt, shouldAdjust ? 'yes' : '',
+        ]);
+        if (shouldAdjust) {
+          const [newY, newM] = date.split('-').map(Number);
+          const newAmt = amt;
+          const accountChanged = e.accountId !== orig.accountId;
+          const origDate = orig.date || date;
+          const [origY, origM] = origDate.split('-').map(Number);
+          if (accountChanged && orig.balanceAdjusted === 'yes' && orig.accountId) {
+            const oldBal = await SheetsApi.getCurrentBalance(getSheetId(), orig.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), orig.accountId, origY, origM, oldBal - orig.amount, origDate);
+            const newBal = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, newY, newM, newBal + newAmt, date);
+          } else if (orig.balanceAdjusted === 'yes') {
+            const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, origY, origM, cur - orig.amount, origDate);
+            const cur2 = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, newY, newM, cur2 + newAmt, date);
+          } else {
+            const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, newY, newM, cur + newAmt, date);
+          }
+        } else if (!shouldAdjust && orig.balanceAdjusted === 'yes' && orig.accountId) {
+          const origDate = orig.date || date;
+          const [origY, origM] = origDate.split('-').map(Number);
+          const cur = await SheetsApi.getCurrentBalance(getSheetId(), orig.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), orig.accountId, origY, origM, cur - orig.amount, origDate);
         }
+        showEditModal.value = false;
+        editingIncome.value = null;
+        editOriginal.value = null;
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to save income:', err);
+        showAlert('Failed to save. Please try again.');
       }
-
-      showEditModal.value = false;
-      editingIncome.value = null;
-      editOriginal.value = null;
-      await fetchData();
     }
 
     function duplicateIncome() {
@@ -392,11 +397,22 @@ export default {
     }
 
     async function deleteIncome(id) {
-      if (!confirm('Delete this income entry?')) return;
-      await SheetsApi.deleteRows(getSheetId(), TABS.INCOME, [id]);
-      showEditModal.value = false;
-      editingIncome.value = null;
-      await fetchData();
+      if (!(await showConfirm('Delete this income entry?'))) return;
+      try {
+        const orig = editOriginal.value;
+        if (orig && orig.balanceAdjusted === 'yes' && orig.accountId && orig.date) {
+          const [y, m] = orig.date.split('-').map(Number);
+          const cur = await SheetsApi.getCurrentBalance(getSheetId(), orig.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), orig.accountId, y, m, cur - orig.amount, orig.date);
+        }
+        await SheetsApi.deleteRows(getSheetId(), TABS.INCOME, [id]);
+        showEditModal.value = false;
+        editingIncome.value = null;
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to delete income:', err);
+        showAlert('Failed to delete. Please try again.');
+      }
     }
 
     function isFutureDate(dateStr) {
@@ -464,9 +480,14 @@ export default {
     }
 
     async function saveManagedCategories() {
-      const serialized = serializeCats(managedCategories.value);
-      await SheetsApi.updateSetting(getSheetId(), 'incomeCategories', serialized);
-      emit('settings-updated', { incomeCategories: serialized });
+      try {
+        const serialized = serializeCats(managedCategories.value);
+        await SheetsApi.updateSetting(getSheetId(), 'incomeCategories', serialized);
+        emit('settings-updated', { incomeCategories: serialized });
+      } catch (err) {
+        console.error('Failed to save categories:', err);
+        showAlert('Failed to save categories. Please try again.');
+      }
     }
 
     function addManagedCat() {
@@ -476,9 +497,9 @@ export default {
       newManagedCat.value = '';
       saveManagedCategories();
     }
-    function removeManagedCat(i) {
+    async function removeManagedCat(i) {
       const name = managedCategories.value[i]?.name || 'this category';
-      if (!confirm('Delete "' + name + '"? This will not remove the category from existing entries.')) return;
+      if (!(await showConfirm('Delete "' + name + '"? This will not remove the category from existing entries.'))) return;
       managedCategories.value.splice(i, 1);
       saveManagedCategories();
     }
@@ -568,6 +589,19 @@ export default {
       emit('refresh');
     }
 
+    async function disableTool() {
+      try {
+        const current = (props.settings?.listsEnabled || '').split(',').filter(Boolean);
+        const updated = current.filter(t => t !== 'income').join(',');
+        await SheetsApi.updateSetting(getSheetId(), 'listsEnabled', updated);
+        emit('settings-updated', { listsEnabled: updated });
+        emit('go-home');
+      } catch (err) {
+        console.error('Failed to disable tool:', err);
+        showAlert('Failed to save. Please try again.');
+      }
+    }
+
     return {
       incomeList, loading, filteredIncome, monthlyTotal, monthTotals,
       showAddModal, showEditModal, editingIncome,
@@ -588,6 +622,7 @@ export default {
       showAccountManager, newManagedAccount, ACCOUNT_TYPES,
       acctCurrencyOpen, acctCurrencySearch, acctFilteredCurrencies, acctCurrencyName, selectAcctCurrency,
       openAccountManager, addManagedAccount, toggleManagedAccountDiscontinued,
+      disableTool,
     };
   },
 
@@ -624,7 +659,7 @@ export default {
         </div>
 
         <!-- Category filter -->
-        <div class="subpage-filter-bar" v-if="incomeList.length > 0">
+        <div class="subpage-filter-bar" v-if="filteredIncome.length > 0 || filterSearch || filterCategory || hasFutureEntries">
           <div class="subpage-filter-search" :class="{ expanded: filterSearch }">
             <span class="material-icons subpage-filter-search-icon">search</span>
             <input class="subpage-filter-search-input" v-model="filterSearch" placeholder="Search..." />
@@ -678,10 +713,15 @@ export default {
           <h3>No income for this period</h3>
         </div>
 
-        <div v-if="incomeList.length === 0" class="empty-state" style="padding-top:40px;">
+        <div v-if="incomeList.length === 0" class="empty-state" style="padding-top:40px;text-align:center;">
           <span class="material-icons">payments</span>
           <h3>No income recorded yet</h3>
           <p>Track your earnings by adding income entries.</p>
+          <div class="empty-state-disable">
+            <p>Not ready to use this tool?</p>
+            <button class="btn-disable-tool" @click="disableTool">Disable Income for now</button>
+            <p class="empty-state-hint">You can re-enable it anytime from your Group configuration.</p>
+          </div>
         </div>
 
         <div class="subpage-bottom-fixed">

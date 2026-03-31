@@ -29,12 +29,17 @@ export default {
 
     function applyTheme(mode) {
       const root = document.documentElement;
+      const meta = document.querySelector('meta[name="theme-color"]');
       if (mode === 'dark') {
         root.setAttribute('data-theme', 'dark');
+        if (meta) meta.setAttribute('content', '#211f1d');
       } else if (mode === 'light') {
         root.setAttribute('data-theme', 'light');
+        if (meta) meta.setAttribute('content', '#729c9c');
       } else {
         root.removeAttribute('data-theme');
+        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (meta) meta.setAttribute('content', isDark ? '#211f1d' : '#729c9c');
       }
     }
 
@@ -54,12 +59,6 @@ export default {
       localStorage.setItem('valu_balance_reminders', balanceReminders.value);
     }
 
-    function activeGroupName() {
-      if (!defaultGroupId.value) return '';
-      const g = (props.groups || []).find(g => g.id === defaultGroupId.value);
-      return g ? g.name.replace('Valu: ', '') : '';
-    }
-
     onMounted(() => {
       applyTheme(theme.value);
     });
@@ -72,7 +71,7 @@ export default {
     return {
       THEME_OPTIONS, NUMBER_FORMAT_OPTIONS, theme, numberFormat, defaultGroupId, balanceReminders,
       openDropdown, toggleDropdown,
-      saveTheme, saveNumberFormat, saveDefaultGroup, saveBalanceReminders, activeGroupName,
+      saveTheme, saveNumberFormat, saveDefaultGroup, saveBalanceReminders,
     };
   },
 
@@ -186,9 +185,6 @@ export default {
           <div class="card-body">
             <p style="font-size:13px;color:var(--color-text-secondary);line-height:1.5;">
               Valu helps you organize your personal financial data, securely and privately. Your data is stored exclusively in your own Google Drive.
-            </p>
-            <p style="font-size:12px;color:var(--color-text-hint);margin-top:8px;">
-              
             </p>
           </div>
         </div>

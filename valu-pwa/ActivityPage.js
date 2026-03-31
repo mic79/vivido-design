@@ -1,6 +1,6 @@
-import { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES } from './sheetsApi.js';
+import SheetsApi, { TABS, DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES } from './sheetsApi.js';
 
-const { ref, computed } = Vue;
+const { ref, computed, watch, inject } = Vue;
 
 const EXPENSE_CAT_DESCRIPTIONS = {
   'Housing': 'Rent/mortgage, property taxes, home insurance, maintenance.',
@@ -22,13 +22,129 @@ const INCOME_CAT_DESCRIPTIONS = {
   'Other Income': 'Tax refunds, child support, rental income, or gift money.',
 };
 
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
 export default {
-  props: ['settings', 'groupName'],
+  props: ['sheetId', 'settings', 'groupName', 'accounts'],
   emits: ['go-home'],
 
   setup(props) {
+    const injectedSheetId = inject('activeSheetId', ref(null));
+    function getSheetId() { return props.sheetId || injectedSheetId.value; }
+
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
+    const enabledLists = computed(() => (props.settings?.listsEnabled || '').split(',').filter(Boolean));
     const onboardingCollapsed = ref(localStorage.getItem('valu_onboarding_dismissed') === '1');
+
+    const expenses = ref([]);
+    const incomeList = ref([]);
+    const loading = ref(false);
+
+    function formatCurrency(amount, currency) {
+      try {
+        return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD', currencyDisplay: 'narrowSymbol' }).format(amount);
+      } catch { return amount.toFixed(2); }
+    }
+
+    async function fetchData() {
+      const sid = getSheetId();
+      if (!sid) return;
+      loading.value = true;
+      try {
+        const [expRows, incRows] = await Promise.all([
+          enabledLists.value.includes('expenses') ? SheetsApi.getValues(sid, `${TABS.EXPENSES}!A2:I`) : [],
+          enabledLists.value.includes('income') ? SheetsApi.getValues(sid, `${TABS.INCOME}!A2:I`) : [],
+        ]);
+        expenses.value = (expRows || []).map(r => ({
+          id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
+          accountId: r[3], category: r[4], date: r[5], notes: r[6],
+        }));
+        incomeList.value = (incRows || []).map(r => ({
+          id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
+          accountId: r[3], category: r[4], date: r[5], notes: r[6],
+        }));
+      } catch (err) {
+        if (err.message === 'popup_blocked' || err.message === 'refresh_failed') throw err;
+        console.warn('ActivityPage fetchData:', err.message);
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    watch(() => getSheetId(), (sid) => { if (sid) fetchData(); }, { immediate: true });
+
+    // ── Monthly Summary ──────────────────────────────────────────────────
+    const monthlySummary = computed(() => {
+      const now = new Date();
+      let month = now.getMonth(); // 0-based, current month
+      let year = now.getFullYear();
+      // Use previous month
+      month -= 1;
+      if (month < 0) { month = 11; year -= 1; }
+      const key = `${year}-${String(month + 1).padStart(2, '0')}`;
+      const monthName = MONTH_NAMES[month];
+
+      const monthExpenses = expenses.value.filter(e => e.date && e.date.startsWith(key));
+      const monthIncome = incomeList.value.filter(e => e.date && e.date.startsWith(key));
+
+      if (monthExpenses.length === 0 && monthIncome.length === 0) return null;
+
+      const totalExpenses = monthExpenses.reduce((s, e) => s + e.amount, 0);
+      const totalIncome = monthIncome.reduce((s, e) => s + e.amount, 0);
+      const savingsRate = totalIncome > 0 ? Math.round((totalIncome - totalExpenses) / totalIncome * 100) : null;
+
+      const catTotals = {};
+      for (const e of monthExpenses) {
+        const cat = e.category || 'Uncategorized';
+        catTotals[cat] = (catTotals[cat] || 0) + e.amount;
+      }
+      const topCategories = Object.entries(catTotals)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([name, total]) => ({ name, total }));
+
+      return { monthName, year, totalExpenses, totalIncome, savingsRate, topCategories, expenseCount: monthExpenses.length, incomeCount: monthIncome.length };
+    });
+
+    // ── Milestones ───────────────────────────────────────────────────────
+    const milestones = computed(() => {
+      const list = [];
+      const expCount = expenses.value.length;
+      const incCount = incomeList.value.length;
+
+      if (expCount >= 1) list.push({ icon: 'receipt_long', label: 'First expense logged', done: true });
+      if (expCount >= 10) list.push({ icon: 'trending_up', label: '10 expenses tracked', done: true });
+      if (expCount >= 50) list.push({ icon: 'star_half', label: '50 expenses tracked', done: true });
+      if (expCount >= 100) list.push({ icon: 'star', label: '100 expenses tracked', done: true });
+
+      if (incCount >= 1) list.push({ icon: 'payments', label: 'First income logged', done: true });
+      if (incCount >= 10) list.push({ icon: 'savings', label: '10 income entries tracked', done: true });
+
+      const accountCount = (props.accounts || []).length;
+      if (accountCount >= 1) list.push({ icon: 'account_balance', label: 'First account added', done: true });
+
+      const hasMultipleMonths = (() => {
+        const months = new Set();
+        for (const e of expenses.value) { if (e.date) months.add(e.date.slice(0, 7)); }
+        for (const e of incomeList.value) { if (e.date) months.add(e.date.slice(0, 7)); }
+        return months.size >= 2;
+      })();
+      if (hasMultipleMonths) list.push({ icon: 'date_range', label: 'Multiple months tracked', done: true });
+
+      // Upcoming milestones (not yet reached)
+      if (expCount === 0) list.push({ icon: 'receipt_long', label: 'Log your first expense', done: false });
+      else if (expCount < 10) list.push({ icon: 'trending_up', label: `10 expenses (${expCount}/10)`, done: false });
+      else if (expCount < 50) list.push({ icon: 'star_half', label: `50 expenses (${expCount}/50)`, done: false });
+      else if (expCount < 100) list.push({ icon: 'star', label: `100 expenses (${expCount}/100)`, done: false });
+
+      if (incCount === 0) list.push({ icon: 'payments', label: 'Log your first income', done: false });
+      if (accountCount === 0) list.push({ icon: 'account_balance', label: 'Add your first account', done: false });
+      if (!hasMultipleMonths && (expCount > 0 || incCount > 0)) {
+        list.push({ icon: 'date_range', label: 'Track a second month', done: false });
+      }
+
+      return list;
+    });
 
     function collapseOnboarding() {
       onboardingCollapsed.value = true;
@@ -43,6 +159,7 @@ export default {
       baseCurrency, onboardingCollapsed, collapseOnboarding, expandOnboarding,
       DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES,
       EXPENSE_CAT_DESCRIPTIONS, INCOME_CAT_DESCRIPTIONS,
+      loading, monthlySummary, milestones, formatCurrency,
     };
   },
 
@@ -111,7 +228,7 @@ export default {
             <div class="activity-section-label">Default Expense Categories</div>
             <div class="activity-cat-list">
               <div v-for="cat in DEFAULT_EXPENSE_CATEGORIES" :key="cat.name" class="activity-cat-item">
-                <span class="material-icons activity-cat-icon">{{ cat.icon }}</span>
+                <span class="material-icons activity-cat-icon">{{ cat.icon || 'label' }}</span>
                 <div>
                   <strong>{{ cat.name }}</strong>
                   <span class="activity-cat-desc">{{ EXPENSE_CAT_DESCRIPTIONS[cat.name] || '' }}</span>
@@ -122,7 +239,7 @@ export default {
             <div class="activity-section-label">Default Income Categories</div>
             <div class="activity-cat-list">
               <div v-for="cat in DEFAULT_INCOME_CATEGORIES" :key="cat.name" class="activity-cat-item">
-                <span class="material-icons activity-cat-icon">{{ cat.icon }}</span>
+                <span class="material-icons activity-cat-icon">{{ cat.icon || 'label' }}</span>
                 <div>
                   <strong>{{ cat.name }}</strong>
                   <span class="activity-cat-desc">{{ INCOME_CAT_DESCRIPTIONS[cat.name] || '' }}</span>
@@ -142,21 +259,89 @@ export default {
           </div>
         </div>
 
+        <!-- Monthly Summary -->
+        <div v-if="monthlySummary" class="card mb-16 activity-feed-card">
+          <div class="activity-feed-header">
+            <span class="material-icons activity-feed-icon" style="color:#6a8caf;">insights</span>
+            <div>
+              <div class="activity-feed-title">{{ monthlySummary.monthName }} {{ monthlySummary.year }}</div>
+              <div class="activity-feed-date">Monthly Summary</div>
+            </div>
+          </div>
+          <div class="activity-feed-body">
+            <div class="activity-summary-stats">
+              <div class="activity-summary-stat" v-if="monthlySummary.expenseCount > 0">
+                <span class="activity-summary-label">Spent</span>
+                <span class="activity-summary-value" style="color:var(--color-expense);">{{ formatCurrency(monthlySummary.totalExpenses, baseCurrency) }}</span>
+              </div>
+              <div class="activity-summary-stat" v-if="monthlySummary.incomeCount > 0">
+                <span class="activity-summary-label">Earned</span>
+                <span class="activity-summary-value" style="color:var(--color-income);">{{ formatCurrency(monthlySummary.totalIncome, baseCurrency) }}</span>
+              </div>
+              <div class="activity-summary-stat" v-if="monthlySummary.savingsRate !== null">
+                <span class="activity-summary-label">Savings rate</span>
+                <span class="activity-summary-value">{{ monthlySummary.savingsRate }}%</span>
+              </div>
+            </div>
+            <div v-if="monthlySummary.topCategories.length > 0" class="activity-summary-cats">
+              <div class="activity-summary-cat-label">Top expense categories</div>
+              <div v-for="cat in monthlySummary.topCategories" :key="cat.name" class="activity-summary-cat-row">
+                <span class="activity-summary-cat-name">{{ cat.name }}</span>
+                <span class="activity-summary-cat-amount">{{ formatCurrency(cat.total, baseCurrency) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="card mb-16 activity-feed-card activity-feed-card--muted">
+          <div class="activity-feed-header">
+            <span class="material-icons activity-feed-icon" style="color:#6a8caf;">insights</span>
+            <div>
+              <div class="activity-feed-title">Monthly Summary</div>
+              <div class="activity-feed-date">No data for last month yet</div>
+            </div>
+          </div>
+          <div class="activity-feed-body">
+            <p>Once you log expenses or income, a monthly recap will appear here — total spent, total earned, savings rate, and top categories.</p>
+          </div>
+        </div>
+
+        <!-- Milestones -->
+        <div class="card mb-16 activity-feed-card">
+          <div class="activity-feed-header">
+            <span class="material-icons activity-feed-icon" style="color:#b07d4f;">emoji_events</span>
+            <div>
+              <div class="activity-feed-title">Milestones</div>
+              <div class="activity-feed-date">{{ milestones.filter(m => m.done).length }} achieved</div>
+            </div>
+          </div>
+          <div class="activity-feed-body">
+            <div v-if="milestones.length === 0" style="color:var(--color-text-secondary);">Start logging to earn milestones.</div>
+            <div v-for="(m, i) in milestones" :key="i" class="activity-milestone-row">
+              <span class="material-icons activity-milestone-icon" :style="{ color: m.done ? 'var(--color-primary)' : 'var(--color-text-hint)' }">{{ m.icon }}</span>
+              <span class="activity-milestone-label" :class="{ 'activity-milestone--pending': !m.done }">{{ m.label }}</span>
+              <span v-if="m.done" class="material-icons activity-milestone-check">check_circle</span>
+            </div>
+          </div>
+        </div>
+
         <!-- What's New -->
         <div class="card mb-16 activity-feed-card">
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>
-              <div class="activity-feed-title">What's New in v142</div>
+              <div class="activity-feed-title">What's New in v150</div>
               <div class="activity-feed-date">March 2026</div>
             </div>
           </div>
           <div class="activity-feed-body">
             <ul class="activity-feed-list">
-              <li><strong>Manage in-context</strong> — Tap "Manage categories" or "Manage accounts" directly from any dropdown while logging entries.</li>
-              <li><strong>Activity page</strong> — This page! A central feed for onboarding, updates, and future insights.</li>
-              <li><strong>Default categories</strong> — New groups come pre-configured with expense and income categories.</li>
-              <li><strong>Auto-focus</strong> — The name field is now focused when opening an Add sheet.</li>
+              <li><strong>Custom dialogs</strong> — Native browser alerts replaced with styled in-app dialogs.</li>
+              <li><strong>Back button support</strong> — Browser back/forward navigation now works within the app.</li>
+              <li><strong>Monthly summaries</strong> — Real monthly recaps with spending, income, savings rate, and top categories.</li>
+              <li><strong>Milestones</strong> — Track your progress with achievements that unlock as you use the app.</li>
+              <li><strong>Balance reminders</strong> — Toggle on/off from Settings to get reminded to update balances each month.</li>
+              <li><strong>Expense Categories widget</strong> — Monthly breakdown per category with editable goals, right on the Home page.</li>
+              <li><strong>Valu assistant</strong> — On-device smart assistant with spending analysis, goal tracking, tips, and inline charts. Tap the orb to chat.</li>
             </ul>
           </div>
         </div>
@@ -172,34 +357,6 @@ export default {
           </div>
           <div class="activity-feed-body">
             <p>When logging an expense or income, you can add, rename, reorder, or remove categories without leaving the form. Just scroll to the bottom of any category dropdown and tap <strong>"Manage categories"</strong>. The same works for accounts.</p>
-          </div>
-        </div>
-
-        <!-- Monthly Summary (demo) -->
-        <div class="card mb-16 activity-feed-card activity-feed-card--muted">
-          <div class="activity-feed-header">
-            <span class="material-icons activity-feed-icon" style="color:#6a8caf;">insights</span>
-            <div>
-              <div class="activity-feed-title">Monthly Summary</div>
-              <div class="activity-feed-date">Coming soon</div>
-            </div>
-          </div>
-          <div class="activity-feed-body">
-            <p>At the end of each month, you'll see a recap here — total spent, total earned, savings rate, and your top expense categories. The more you track, the more useful these summaries become.</p>
-          </div>
-        </div>
-
-        <!-- Milestones (demo) -->
-        <div class="card mb-16 activity-feed-card activity-feed-card--muted">
-          <div class="activity-feed-header">
-            <span class="material-icons activity-feed-icon" style="color:#b07d4f;">emoji_events</span>
-            <div>
-              <div class="activity-feed-title">Milestones</div>
-              <div class="activity-feed-date">Coming soon</div>
-            </div>
-          </div>
-          <div class="activity-feed-body">
-            <p>Track your progress with milestones like "First month fully tracked", "100 expenses logged", or "Net worth up this quarter". Achievements will appear here as you use the app.</p>
           </div>
         </div>
       </div>

@@ -21,6 +21,7 @@ export const TABS = {
   BALANCE_HISTORY:'BalanceHistory',
   EXPENSES:       'Expenses',
   INCOME:         'Income',
+  CHAT_HISTORY:   'ChatHistory',
 };
 
 // Default headers for each tab when creating a new spreadsheet
@@ -30,6 +31,7 @@ const TAB_HEADERS = {
   [TABS.BALANCE_HISTORY]: [['AccountID', 'Year', 'Month', 'Balance', 'UpdatedAt']],
   [TABS.EXPENSES]:        [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt', 'BalanceAdjusted']],
   [TABS.INCOME]:          [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt', 'BalanceAdjusted']],
+  [TABS.CHAT_HISTORY]:    [['ChatID', 'Title', 'CreatedAt', 'UpdatedAt', 'Messages']],
 };
 
 // Default categories for new groups
@@ -110,7 +112,7 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
       token = await GoogleAuth.getAccessToken();
     } catch (err) {
       if (err.message === 'popup_blocked' || err.message === 'refresh_failed') {
-        throw new Error('popup_blocked');
+        throw err;
       }
       throw err;
     }
@@ -124,6 +126,7 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
       },
     };
 
+    let nonRetryable = false;
     try {
       const res = await fetch(url, opts);
 
@@ -145,18 +148,24 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
 
       const body = await res.text();
       lastError = new Error(`Sheets API ${res.status}: ${body}`);
+      if (res.status >= 400 && res.status < 500 && res.status !== 401 && res.status !== 429) {
+        nonRetryable = true;
+      }
     } catch (err) {
       if (err.message === 'popup_blocked' || err.message === 'refresh_failed') throw err;
       lastError = err;
-      if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
-      }
+    }
+    if (nonRetryable) throw lastError;
+    if (attempt < maxRetries) {
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
     }
   }
   throw lastError;
 }
 
 // ── Row cache helpers ──────────────────────────────────────────────────────────
+
+const _numericSheetIdCache = new Map();
 
 function cacheKey(spreadsheetId, tabName) {
   return `${spreadsheetId}::${tabName}`;
@@ -283,10 +292,10 @@ const SheetsApi = {
     // Ensure cache is fresh
     await this.getTabData(spreadsheetId, tabName, idColumnIndex);
 
-    const rowIndices = ids
+    const rowIndices = [...new Set(ids)]
       .map(id => getCachedRowIndex(spreadsheetId, tabName, id))
       .filter(Boolean)
-      .sort((a, b) => b - a); // delete from bottom up
+      .sort((a, b) => b - a);
 
     if (rowIndices.length === 0) return;
 
@@ -340,6 +349,7 @@ const SheetsApi = {
         }),
       }
     );
+    invalidateCache(spreadsheetId, tabName);
   },
 
   /**
@@ -348,12 +358,13 @@ const SheetsApi = {
    */
   async upsertBalanceRow(spreadsheetId, accountId, year, month, balance, dateStr) {
     if (isDemoSheet(spreadsheetId)) return;
+    balance = Math.round(balance * 100) / 100;
     const allRows = await this.getValues(spreadsheetId, 'BalanceHistory!A2:E');
     let rowIndex = -1;
 
     if (allRows) {
       for (let i = 0; i < allRows.length; i++) {
-        if (allRows[i][0] === accountId &&
+        if (String(allRows[i][0]) === String(accountId) &&
             parseInt(allRows[i][1]) === year &&
             parseInt(allRows[i][2]) === month) {
           rowIndex = i + 2;
@@ -409,12 +420,33 @@ const SheetsApi = {
 
   async getNumericSheetId(spreadsheetId, tabName) {
     if (isDemoSheet(spreadsheetId)) return 0;
+    const key = `${spreadsheetId}::${tabName}`;
+    if (_numericSheetIdCache.has(key)) return _numericSheetIdCache.get(key);
     const data = await fetchWithRetry(
       `${SHEETS_BASE}/${spreadsheetId}?fields=sheets.properties`
     );
     const sheet = data.sheets.find(s => s.properties.title === tabName);
     if (!sheet) throw new Error(`Tab "${tabName}" not found`);
+    _numericSheetIdCache.set(key, sheet.properties.sheetId);
     return sheet.properties.sheetId;
+  },
+
+  async ensureTab(spreadsheetId, tabName) {
+    if (isDemoSheet(spreadsheetId)) return;
+    try {
+      await this.getNumericSheetId(spreadsheetId, tabName);
+    } catch {
+      await this.batchUpdate(spreadsheetId, [{
+        addSheet: { properties: { title: tabName } },
+      }]);
+      const headers = TAB_HEADERS[tabName];
+      if (headers) {
+        await fetchWithRetry(
+          `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(tabName + '!A1')}?valueInputOption=RAW`,
+          { method: 'PUT', body: JSON.stringify({ values: headers }) }
+        );
+      }
+    }
   },
 
   // ── Spreadsheet management ─────────────────────────────────────────────────

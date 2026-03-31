@@ -1,5 +1,7 @@
 /**
  * Built-in Demo group: in-memory only, no Google Sheet, edits are not persisted.
+ * Data based on Canadian household averages, dynamically generated for the
+ * last 5 years from the current date.
  */
 
 export const DEMO_SHEET_ID = '__valu_demo__';
@@ -16,151 +18,161 @@ export function demoGroupMeta() {
   };
 }
 
-/** Key-value settings as consumed by the app (object). */
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function seededRandom(seed) {
+  let s = seed;
+  return () => {
+    s = (s * 16807 + 0) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+
 export function demoSettingsObject() {
   return {
     groupName: 'Demo',
-    baseCurrency: 'EUR',
+    baseCurrency: 'CAD',
     listsEnabled: 'accounts,expenses,income',
-    expenseCategories: 'Groceries,Transport,Utilities,Dining',
-    incomeCategories: 'Salary,Freelance,Other',
-    currencyRates: 'USD:0.92,GBP:1.17',
+    expenseCategories: 'Housing:home,Groceries:shopping_cart,Transportation:directions_car,Utilities:bolt,Healthcare:health_and_safety,Debt Payments:credit_card,Personal Care:face,Leisure:local_activity,Miscellaneous:category',
+    incomeCategories: 'Salary:work,Bonuses:emoji_events,Investment Income:trending_up,Freelance:laptop,Other Income:attach_money',
+    expenseCategoryGoals: 'Housing:1800,Groceries:600,Transportation:400,Utilities:250,Healthcare:150,Debt Payments:300,Personal Care:100,Leisure:350,Miscellaneous:100',
+    currencyRates: 'USD:1.36,EUR:1.48',
     createdAt: '',
     createdBy: '',
   };
 }
 
-/** Accounts rows (sheet row shape, no header). */
 export function demoAccountsRows() {
   return [
-    ['demo_acc_1', 'Main checking', 'EUR', 'checking', 'false', '1'],
-    ['demo_acc_2', 'Savings', 'EUR', 'savings', 'false', '2'],
+    ['demo_acc_chk', 'Chequing', 'CAD', 'checking', 'false', '1'],
+    ['demo_acc_sav', 'Savings', 'CAD', 'savings', 'false', '2'],
+    ['demo_acc_cc', 'Credit Card', 'CAD', 'credit', 'false', '3'],
   ];
 }
 
-function pad2(n) {
-  return String(n).padStart(2, '0');
-}
+const MONTHS_BACK = 60;
 
-/** ~12 months of balance history for two accounts (wavy growth toward ~21.8k total). */
-export function demoBalanceHistoryRows() {
-  const rows = [];
-  const now = new Date();
-  for (let back = 11; back >= 0; back--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - back, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth() + 1;
-    const t = (11 - back) / 11;
-    const wave = Math.sin(t * Math.PI * 2) * 400;
-    const base1 = 12000 + t * 6200 + wave;
-    const base2 = 4500 + t * 2100 - wave * 0.3;
-    rows.push(
-      ['demo_acc_1', String(y), String(m), base1.toFixed(2), `${y}-${pad2(m)}-01`],
-      ['demo_acc_2', String(y), String(m), base2.toFixed(2), `${y}-${pad2(m)}-01`],
-    );
-  }
-  return rows;
-}
-
-const EXPENSE_TITLES = [
-  ['Weekly groceries', 'Groceries', 82.5],
-  ['Train ticket', 'Transport', 34],
-  ['Electric bill', 'Utilities', 112.3],
-  ['Coffee & snacks', 'Dining', 18.75],
-  ['Pharmacy', 'Groceries', 45.2],
-  ['Restaurant', 'Dining', 64],
-  ['Fuel', 'Transport', 58.9],
-  ['Internet', 'Utilities', 39.99],
+// Canadian average monthly expenses by category (approximate CAD)
+const EXPENSE_TEMPLATES = [
+  { cat: 'Housing',        base: 1750, variance: 100,  titles: ['Rent', 'Mortgage payment', 'Property tax', 'Home insurance', 'Condo fees'] },
+  { cat: 'Groceries',      base: 520,  variance: 120,  titles: ['Grocery run', 'Superstore', 'No Frills', 'Costco trip', 'Walmart groceries', 'Metro'] },
+  { cat: 'Transportation', base: 380,  variance: 100,  titles: ['Gas', 'Car insurance', 'Presto reload', 'Parking', 'Car maintenance', 'Oil change', 'Transit pass'] },
+  { cat: 'Utilities',      base: 220,  variance: 60,   titles: ['Hydro bill', 'Internet bill', 'Phone bill', 'Natural gas', 'Water bill'] },
+  { cat: 'Healthcare',     base: 120,  variance: 80,   titles: ['Pharmacy', 'Dental cleaning', 'Physio', 'Eye exam', 'Gym membership'] },
+  { cat: 'Debt Payments',  base: 280,  variance: 50,   titles: ['Student loan', 'Credit card payment', 'Line of credit', 'Car loan'] },
+  { cat: 'Personal Care',  base: 85,   variance: 40,   titles: ['Haircut', 'Cosmetics', 'Clothing', 'Dry cleaning', 'Shoes'] },
+  { cat: 'Leisure',        base: 310,  variance: 120,  titles: ['Restaurant', 'Netflix', 'Spotify', 'Movie tickets', 'Coffee shop', 'Bar night', 'Concert tickets', 'Hobby supplies'] },
+  { cat: 'Miscellaneous',  base: 90,   variance: 60,   titles: ['Gift', 'Donation', 'Amazon order', 'Office supplies', 'Pet food'] },
 ];
 
-const INCOME_TITLES = [
-  ['Salary deposit', 'Salary', 3200],
-  ['Side project', 'Freelance', 450],
-  ['Cashback', 'Other', 12.5],
+const INCOME_TEMPLATES = [
+  { cat: 'Salary',            base: 4800, variance: 0,    titles: ['Salary deposit'] },
+  { cat: 'Bonuses',           base: 400,  variance: 300,  titles: ['Performance bonus', 'Year-end bonus'], frequency: 0.15 },
+  { cat: 'Investment Income', base: 120,  variance: 80,   titles: ['Dividend payment', 'Interest income', 'Capital gain'], frequency: 0.3 },
+  { cat: 'Freelance',         base: 350,  variance: 200,  titles: ['Freelance project', 'Side gig', 'Consulting'], frequency: 0.4 },
+  { cat: 'Other Income',      base: 80,   variance: 60,   titles: ['Tax refund', 'Cashback', 'Gift money'], frequency: 0.2 },
 ];
 
-/** Expense rows for last ~12 months (sparse). */
 export function demoExpenseRows() {
   const rows = [];
   const now = new Date();
+  const rand = seededRandom(42);
   let id = 1;
-  for (let back = 0; back < 12; back++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - back, 15 - (back % 7));
-    const ds = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-    const [title, cat, amt] = EXPENSE_TITLES[(back + id) % EXPENSE_TITLES.length];
-    rows.push([
-      `demo_exp_${id}`,
-      title,
-      String(amt + (back % 5) * 3),
-      'demo_acc_1',
-      cat,
-      ds,
-      '',
-      ds,
-    ]);
-    id++;
-    if (back % 2 === 0) {
-      const [t2, c2, a2] = EXPENSE_TITLES[(id) % EXPENSE_TITLES.length];
-      const d2 = new Date(now.getFullYear(), now.getMonth() - back, 22);
-      const ds2 = `${d2.getFullYear()}-${pad2(d2.getMonth() + 1)}-${pad2(d2.getDate())}`;
-      rows.push([
-        `demo_exp_${id}`,
-        t2,
-        String(a2),
-        'demo_acc_1',
-        c2,
-        ds2,
-        '',
-        ds2,
-      ]);
-      id++;
+
+  for (let back = 0; back < MONTHS_BACK; back++) {
+    const monthDate = new Date(now.getFullYear(), now.getMonth() - back, 1);
+    const y = monthDate.getFullYear();
+    const m = monthDate.getMonth() + 1;
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const inflation = 1 + (MONTHS_BACK - back) * 0.003;
+
+    for (const tmpl of EXPENSE_TEMPLATES) {
+      const numEntries = tmpl.base > 400 ? 1 + Math.floor(rand() * 3) : 1 + Math.floor(rand() * 2);
+      const totalTarget = (tmpl.base + (rand() - 0.5) * 2 * tmpl.variance) * inflation;
+
+      for (let e = 0; e < numEntries; e++) {
+        const portion = totalTarget / numEntries;
+        const amt = Math.round((portion + (rand() - 0.5) * portion * 0.3) * 100) / 100;
+        if (amt <= 0) continue;
+        const day = Math.max(1, Math.min(daysInMonth, 1 + Math.floor(rand() * daysInMonth)));
+        const ds = `${y}-${pad2(m)}-${pad2(day)}`;
+        const title = tmpl.titles[Math.floor(rand() * tmpl.titles.length)];
+        const acc = tmpl.cat === 'Groceries' || tmpl.cat === 'Leisure'
+          ? (rand() > 0.4 ? 'demo_acc_cc' : 'demo_acc_chk')
+          : 'demo_acc_chk';
+
+        rows.push([`demo_exp_${id++}`, title, String(amt), acc, tmpl.cat, ds, '', ds]);
+      }
     }
   }
+
   return rows;
 }
 
 export function demoIncomeRows() {
   const rows = [];
   const now = new Date();
+  const rand = seededRandom(99);
   let id = 1;
-  for (let back = 0; back < 12; back++) {
-    const day = Math.min(28, 1 + (back % 5) * 5);
-    const d = new Date(now.getFullYear(), now.getMonth() - back, day);
-    const ds = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-    const [title, cat, amt] = INCOME_TITLES[back % INCOME_TITLES.length];
-    rows.push([
-      `demo_inc_${id}`,
-      title,
-      String(amt),
-      'demo_acc_1',
-      cat,
-      ds,
-      '',
-      ds,
-    ]);
-    id++;
+
+  for (let back = 0; back < MONTHS_BACK; back++) {
+    const monthDate = new Date(now.getFullYear(), now.getMonth() - back, 1);
+    const y = monthDate.getFullYear();
+    const m = monthDate.getMonth() + 1;
+    const inflation = 1 + (MONTHS_BACK - back) * 0.004;
+
+    for (const tmpl of INCOME_TEMPLATES) {
+      const freq = tmpl.frequency || 1;
+      if (rand() > freq) continue;
+      const amt = Math.round(((tmpl.base + (rand() - 0.5) * 2 * tmpl.variance) * inflation) * 100) / 100;
+      if (amt <= 0) continue;
+      const day = Math.min(28, 1 + Math.floor(rand() * 27));
+      const ds = `${y}-${pad2(m)}-${pad2(day)}`;
+      const title = tmpl.titles[Math.floor(rand() * tmpl.titles.length)];
+
+      rows.push([`demo_inc_${id++}`, title, String(amt), 'demo_acc_chk', tmpl.cat, ds, '', ds]);
+    }
+  }
+
+  return rows;
+}
+
+export function demoBalanceHistoryRows() {
+  const rows = [];
+  const now = new Date();
+  const rand = seededRandom(77);
+
+  for (let back = MONTHS_BACK; back >= 0; back--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - back, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth() + 1;
+    const t = (MONTHS_BACK - back) / MONTHS_BACK;
+    const wave = Math.sin(t * Math.PI * 6) * 800;
+    const growth = t * t;
+
+    const chk = 5200 + growth * 8000 + wave + (rand() - 0.5) * 600;
+    const sav = 8000 + growth * 22000 - wave * 0.3 + (rand() - 0.5) * 400;
+    const cc  = -(800 + (rand() - 0.5) * 600 + Math.sin(t * Math.PI * 4) * 300);
+
+    const ds = `${y}-${pad2(m)}-01`;
+    rows.push(
+      ['demo_acc_chk', String(y), String(m), chk.toFixed(2), ds],
+      ['demo_acc_sav', String(y), String(m), sav.toFixed(2), ds],
+      ['demo_acc_cc',  String(y), String(m), cc.toFixed(2), ds],
+    );
   }
   return rows;
 }
 
-/** Map Settings!A2:B style range to rows. */
 function demoSettingsRows() {
   const o = demoSettingsObject();
-  return [
-    ['groupName', o.groupName],
-    ['baseCurrency', o.baseCurrency],
-    ['listsEnabled', o.listsEnabled],
-    ['expenseCategories', o.expenseCategories],
-    ['incomeCategories', o.incomeCategories],
-    ['currencyRates', o.currencyRates],
-    ['createdAt', o.createdAt],
-    ['createdBy', o.createdBy],
-  ];
+  return Object.entries(o).map(([k, v]) => [k, v]);
 }
 
 /**
  * Return cell rows for a Sheets range (used by getValues).
- * @param {string} range e.g. "Settings!A2:B" or "Accounts!A2:Z"
  */
 export function demoValuesForRange(range) {
   const [tabPart] = range.split('!');
@@ -182,7 +194,6 @@ export function demoValuesForRange(range) {
   }
 }
 
-/** Accounts list shape used by index.html / pages. */
 export function demoAccountsList() {
   return demoAccountsRows().map((r) => ({
     id: r[0],
