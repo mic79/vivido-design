@@ -187,6 +187,15 @@ export default {
       const cy = n.getFullYear();
       const cm = n.getMonth() + 1;
 
+      if (/\b(?:in\s+)?total\b|all\s*time|overall|ever\b|all\s+years/i.test(lower)) {
+        return { type: 'all', label: 'all time' };
+      }
+      const rangeMatch = lower.match(/(?:from\s+)(20\d{2})\s+(?:to|through|until|–|-)\s+(20\d{2})/i);
+      if (rangeMatch) {
+        const startY = parseInt(rangeMatch[1]);
+        const endY = parseInt(rangeMatch[2]);
+        return { type: 'range', startYm: `${startY}-01`, endYm: `${endY}-12`, label: `${startY}–${endY}` };
+      }
       if (/this\s+year/i.test(lower)) {
         return { type: 'year', year: cy, label: String(cy) };
       }
@@ -221,6 +230,7 @@ export default {
 
     function getExpensesForPeriod(period) {
       if (!period) return { list: expensesForMonth(thisMonth()), label: monthLabel(thisMonth()) };
+      if (period.type === 'all') return { list: [...expenses.value], label: 'all time' };
       if (period.type === 'year') return { list: expensesForYear(period.year), label: period.label };
       if (period.type === 'month') return { list: expensesForMonth(period.ym), label: monthLabel(period.ym) };
       if (period.type === 'range') return { list: expensesInRange(period.startYm, period.endYm), label: period.label };
@@ -424,12 +434,16 @@ export default {
       const { list: pool, label: periodLabel } = getExpensesForPeriod(period);
       raw = raw
         .replace(/\?+$/, '')
+        .replace(/\b(?:in\s+)?(?:total|overall)\b/gi, '')
+        .replace(/\b(?:all\s*time|ever)\b/gi, '')
+        .replace(/\b(?:from\s+)?20\d{2}\s*(?:to|through|until|–|-)\s*20\d{2}\b/gi, '')
         .replace(/\b(?:in|for|during|from|of)\s+(?:20\d{2})\b/gi, '')
         .replace(/\b(?:this|last)\s+(?:year|month)\b/gi, '')
         .replace(/\b(?:last|past)\s+\d+\s+months?\b/gi, '')
         .replace(/\b(?:per|each|every|by)\s+month\b/gi, '')
         .replace(/\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/gi, '')
         .replace(/\b20\d{2}\b/g, '')
+        .replace(/\b(?:from|to|through|until)\b/gi, '')
         .trim();
       if (!raw) { handleSpending(fullText); return; }
       const search = raw.toLowerCase();
@@ -918,13 +932,16 @@ export default {
       /^(?:and|but)\s+(.+)/i,
     ];
     const TIME_ONLY_PATTERNS = [
-      /^(?:how\s+about\s+)?(?:each|every|per|by)\s+month/i,
-      /^(?:how\s+about\s+)?(?:this|last)\s+(?:year|month)/i,
-      /^(?:how\s+about\s+)?(?:last|past)\s+\d+\s+months?/i,
-      /^(?:how\s+about\s+)?(?:monthly|yearly|per\s*month)/i,
-      /^(?:how\s+about\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)/i,
-      /^(?:how\s+about\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i,
-      /^(?:how\s+about\s+)?(?:in\s+)?20\d{2}\??$/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:in\s+)?(?:total|overall|all\s*time|ever)\b/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:each|every|per|by)\s+month/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:this|last)\s+(?:year|month)/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:last|past)\s+\d+\s+months?/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:monthly|yearly|per\s*month)/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:in\s+)?20\d{2}\??$/i,
+      /^(?:(?:how|what)\s+about\s+)?(?:from\s+)?20\d{2}\s+(?:to|through|until|–|-)\s+20\d{2}/i,
+      /^(?:and\s+)?(?:in\s+)?(?:total|overall)\b/i,
     ];
 
     function tryFollowUp(text) {
