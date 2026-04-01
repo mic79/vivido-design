@@ -1,1 +1,4 @@
-cloudflare-worker/node_modules/
+node_modules/
+cloudflare-worker/
+package.json
+package-lock.json
