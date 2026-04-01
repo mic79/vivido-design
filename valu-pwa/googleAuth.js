@@ -206,7 +206,9 @@ const GoogleAuth = {
         const result = await exchangeCodeForTokens(code);
         accessToken = result.access_token;
         cacheToken(result.access_token, result.expires_in);
-        localStorage.setItem('valu_encrypted_refresh', result.encrypted_refresh_token);
+        if (result.encrypted_refresh_token) {
+          localStorage.setItem('valu_encrypted_refresh', result.encrypted_refresh_token);
+        }
 
         const profile = await fetchUserInfo(accessToken);
         userProfile = profile;

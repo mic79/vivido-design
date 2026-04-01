@@ -98,20 +98,16 @@ async function handleTokenExchange(request, env) {
     }, 400);
   }
 
-  if (!data.refresh_token) {
-    return corsResponse(request, env, {
-      error: 'no_refresh_token',
-      error_description: 'No refresh token received. Ensure access_type=offline and prompt=consent.',
-    }, 400);
-  }
-
-  const encryptedRefresh = await encrypt(data.refresh_token, env.ENCRYPTION_SECRET);
-
-  return corsResponse(request, env, {
+  const result = {
     access_token: data.access_token,
     expires_in: data.expires_in,
-    encrypted_refresh_token: encryptedRefresh,
-  });
+  };
+
+  if (data.refresh_token) {
+    result.encrypted_refresh_token = await encrypt(data.refresh_token, env.ENCRYPTION_SECRET);
+  }
+
+  return corsResponse(request, env, result);
 }
 
 async function handleTokenRefresh(request, env) {
