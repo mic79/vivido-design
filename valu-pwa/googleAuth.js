@@ -75,11 +75,12 @@ function getCachedToken() {
   return null;
 }
 
-function clearAllTokens() {
+function clearAllTokens(revokeRefresh = false) {
   localStorage.removeItem('valu_access_token');
   localStorage.removeItem('valu_token_expiry');
-  localStorage.removeItem('valu_encrypted_refresh');
-  // Clean up old sessionStorage keys from previous auth implementation
+  if (revokeRefresh) {
+    localStorage.removeItem('valu_encrypted_refresh');
+  }
   sessionStorage.removeItem('valu_access_token');
   sessionStorage.removeItem('valu_token_expiry');
 }
