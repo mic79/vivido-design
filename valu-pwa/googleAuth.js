@@ -265,13 +265,14 @@ const GoogleAuth = {
       : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
     localStorage.setItem('valu_oauth_state', state);
 
+    const hasRefreshToken = !!localStorage.getItem('valu_encrypted_refresh');
     const params = new URLSearchParams({
       client_id: CLIENT_ID,
       redirect_uri: getRedirectUri(),
       response_type: 'code',
       scope: SCOPES,
       access_type: 'offline',
-      prompt: 'consent',
+      prompt: hasRefreshToken ? 'select_account' : 'consent',
       state,
     });
 
