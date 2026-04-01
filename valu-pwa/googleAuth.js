@@ -335,13 +335,11 @@ const GoogleAuth = {
   },
 
   /**
-   * Sign out and revoke the access token.
+   * Sign out locally. Keeps the refresh token and Google grant intact
+   * so re-signing in doesn't require full consent again.
    */
   signOut() {
     _signedOut = true;
-    if (accessToken) {
-      fetch(`${GOOGLE_REVOKE_URL}?token=${accessToken}`, { method: 'POST' }).catch(() => {});
-    }
     accessToken = null;
     userProfile = null;
     _pendingRefresh = null;
