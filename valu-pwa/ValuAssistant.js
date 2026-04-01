@@ -38,6 +38,7 @@ const INTENTS = [
   { id: 'categories',       patterns: [/categor/i, /set\s*up.*categor/i, /manage.*categor/i] },
   { id: 'currency',         patterns: [/currency/i, /exchange.*rate/i, /base\s*currency/i] },
   { id: 'privacy',          patterns: [/privacy/i, /data.*safe/i, /secure/i, /who.*access/i] },
+  { id: 'smartInsights',    patterns: [/smart\s*insight/i, /derived.*expense/i, /estimate.*spend/i, /balance.*based/i] },
   { id: 'tips',             patterns: [/\btips?\b/i, /\badvice\b/i, /\brecommend/i, /what\s*should/i] },
   { id: 'thanks',           patterns: [/thank/i, /awesome/i, /\bgreat\b/i, /perfect/i, /\bnice\b/i, /\bcool\b/i] },
 
@@ -301,6 +302,48 @@ export default {
       return Math.round(total * 100) / 100;
     }
 
+    // ── Smart Insights (derived expenses from balance + income) ────────────
+    const smartInsightsMode = computed(() =>
+      enabledLists.value.includes('accounts')
+      && enabledLists.value.includes('income')
+      && !enabledLists.value.includes('expenses')
+    );
+
+    function getAccountType(accountId) {
+      const acc = (props.accounts || []).find(a => a.id === accountId);
+      return acc ? (acc.type || '') : '';
+    }
+
+    function cashFlowBalanceForYm(ym) {
+      const [y, m] = ym.split('-').map(Number);
+      const cashAccounts = (props.accounts || [])
+        .filter(a => a.discontinued !== 'true' && a.type !== 'Investment');
+      const lastKnown = {};
+      const sorted = [...balanceHistory.value].sort((a, b) => (a.year * 100 + a.month) - (b.year * 100 + b.month));
+      for (const h of sorted) {
+        if (h.year * 100 + h.month > y * 100 + m) break;
+        if (getAccountType(h.accountId) === 'Investment') continue;
+        lastKnown[h.accountId] = { balance: h.balance, currency: getAccountCurrency(h.accountId) };
+      }
+      return cashAccounts.reduce((sum, a) => {
+        const info = lastKnown[a.id];
+        return info ? sum + convertToBase(info.balance, info.currency) : sum;
+      }, 0);
+    }
+
+    function prevYm(ym) {
+      const [y, m] = ym.split('-').map(Number);
+      return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+    }
+
+    function estimatedSpendingForMonth(ym) {
+      const inc = totalIncome(incomeForMonth(ym));
+      const endBal = cashFlowBalanceForYm(ym);
+      const startBal = cashFlowBalanceForYm(prevYm(ym));
+      if (startBal === 0 && endBal === 0) return null;
+      return Math.round((inc - (endBal - startBal)) * 100) / 100;
+    }
+
     function monthlyAvg() {
       const months = new Set();
       for (const e of expenses.value) {
@@ -376,6 +419,8 @@ export default {
 
     // ── Response generators ──────────────────────────────────────────────────
     function handleSpending(fullText) {
+      if (smartInsightsMode.value) return handleSmartSpending(fullText);
+
       const period = fullText ? parseTimePeriod(fullText) : null;
       const tm = thisMonth();
       const lm = lastMonth();
@@ -426,7 +471,52 @@ export default {
       });
     }
 
+    function handleSmartSpending(fullText) {
+      const period = fullText ? parseTimePeriod(fullText) : null;
+      const tm = thisMonth();
+      const lm = lastMonth();
+
+      const targetYm = (period?.type === 'month') ? period.ym : tm;
+      const targetLabel = (period?.type === 'month') ? period.label : monthLabel(tm);
+      const est = estimatedSpendingForMonth(targetYm);
+      const inc = totalIncome(incomeForMonth(targetYm));
+
+      if (est === null) {
+        reply("I don't have enough balance data to estimate spending for that period. Make sure your account balances are up to date.", {
+          suggestions: ['Update balances', 'Net worth', 'Income details'],
+        });
+        return;
+      }
+
+      let text = `Estimated spending in ${targetLabel}: ${fmt(Math.max(0, est))}.`;
+      text += ` Income: ${fmt(inc)}.`;
+      if (inc > 0) {
+        const saved = inc - Math.max(0, est);
+        text += ` ${saved >= 0 ? 'Saved' : 'Overspent'}: ${fmt(Math.abs(saved))} (${Math.round(saved / inc * 100)}% savings rate).`;
+      }
+
+      if (!period || targetYm === tm) {
+        const lastEst = estimatedSpendingForMonth(lm);
+        if (lastEst !== null && lastEst > 0) {
+          const diff = Math.round(((Math.max(0, est) - lastEst) / lastEst) * 100);
+          if (diff > 0) text += ` That's ${diff}% higher than last month.`;
+          else if (diff < 0) text += ` That's ${Math.abs(diff)}% lower than last month.`;
+        }
+      }
+
+      text += '\n\n_Estimated from your account balance changes and income — enable Expenses for detailed tracking._';
+
+      reply(text, { suggestions: ['Spending trend', 'Savings rate', 'Net worth', 'Income details'] });
+    }
+
     function handleCategorySpending(match, fullText) {
+      if (smartInsightsMode.value) {
+        reply("Smart Insights estimates your total spending from balance changes, but can't break it down by category without expense logs. Enable Expenses in your group settings for category-level tracking.", {
+          suggestions: ['Show spending', 'Spending trend', 'Smart Insights'],
+        });
+        return;
+      }
+
       let raw = match?.[1]?.trim();
       if (!raw) { handleSpending(); return; }
 
@@ -539,6 +629,13 @@ export default {
     }
 
     function handleSearchFallback(text) {
+      if (smartInsightsMode.value) {
+        reply("Smart Insights estimates total spending from your balance changes, but can't search individual transactions. Enable Expenses in your group settings for detailed tracking.\n\nHere's what I can help with:", {
+          suggestions: ['Show spending', 'Spending trend', 'Savings rate', 'Smart Insights'],
+        });
+        return;
+      }
+
       const period = parseTimePeriod(text);
       const { list: pool, label: periodLabel } = getExpensesForPeriod(period);
       const keywords = extractKeywords(text);
@@ -599,6 +696,12 @@ export default {
     }
 
     function handleGoalStatus() {
+      if (smartInsightsMode.value) {
+        reply("Category goals require expense logging to track per-category spending. Enable Expenses in your group settings, or ask me about your overall estimated spending and savings rate.", {
+          suggestions: ['Show spending', 'Savings rate', 'Smart Insights'],
+        });
+        return;
+      }
       const goals = getGoals();
       const tm = thisMonth();
       const monthExp = expensesForMonth(tm);
@@ -642,6 +745,22 @@ export default {
     function handleCompare() {
       const tm = thisMonth();
       const lm = lastMonth();
+
+      if (smartInsightsMode.value) {
+        const thisEst = estimatedSpendingForMonth(tm);
+        const lastEst = estimatedSpendingForMonth(lm);
+        const thisVal = thisEst !== null ? Math.max(0, thisEst) : 0;
+        const lastVal = lastEst !== null ? Math.max(0, lastEst) : 0;
+        let text = `${monthLabel(tm)}: est. ${fmt(thisVal)} vs ${monthLabel(lm)}: est. ${fmt(lastVal)}.`;
+        if (lastVal > 0) {
+          const change = (thisVal - lastVal) / lastVal;
+          text += ` That's ${change >= 0 ? '+' : ''}${pct(change)}%.`;
+        }
+        text += '\n\n_Estimates based on balance changes and income._';
+        reply(text, { suggestions: ['Spending trend', 'Savings rate', 'Net worth'] });
+        return;
+      }
+
       const thisTotal = totalExpenses(expensesForMonth(tm));
       const lastTotal = totalExpenses(expensesForMonth(lm));
       const thisCats = categoryBreakdown(expensesForMonth(tm));
@@ -679,12 +798,20 @@ export default {
       for (let i = 5; i >= 0; i--) {
         const d = new Date(n.getFullYear(), n.getMonth() - i, 1);
         const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        months.push({ month: ym, total: Math.round(totalExpenses(expensesForMonth(ym)) * 100) / 100 });
+        if (smartInsightsMode.value) {
+          const est = estimatedSpendingForMonth(ym);
+          months.push({ month: ym, total: est !== null ? Math.max(0, Math.round(est * 100) / 100) : 0 });
+        } else {
+          months.push({ month: ym, total: Math.round(totalExpenses(expensesForMonth(ym)) * 100) / 100 });
+        }
       }
       const avg = months.reduce((s, m) => s + m.total, 0) / months.length;
-      reply(`Here's your spending over the last 6 months. Your average is ${fmt(avg)}/month.`, {
+      const prefix = smartInsightsMode.value ? 'estimated ' : '';
+      reply(`Here's your ${prefix}spending over the last 6 months. Your average is ${fmt(avg)}/month.`, {
         chart: buildTrendChart(months),
-        suggestions: ['Goal status', 'Compare months', 'Show spending'],
+        suggestions: smartInsightsMode.value
+          ? ['Savings rate', 'Net worth', 'Show spending']
+          : ['Goal status', 'Compare months', 'Show spending'],
       });
     }
 
@@ -697,10 +824,18 @@ export default {
 
       let text = `Income this month: ${fmt(thisTotal)}.`;
       if (lastTotal > 0) text += ` Last month: ${fmt(lastTotal)}.`;
-      const expTotal = totalExpenses(expensesForMonth(tm));
+
+      let expTotal;
+      if (smartInsightsMode.value) {
+        const est = estimatedSpendingForMonth(tm);
+        expTotal = est !== null ? Math.max(0, est) : 0;
+      } else {
+        expTotal = totalExpenses(expensesForMonth(tm));
+      }
       if (thisTotal > 0 && expTotal > 0) {
         const saved = thisTotal - expTotal;
-        text += ` Net: ${saved >= 0 ? '+' : ''}${fmt(saved)}.`;
+        const prefix = smartInsightsMode.value ? 'Est. net' : 'Net';
+        text += ` ${prefix}: ${saved >= 0 ? '+' : ''}${fmt(saved)}.`;
       }
       reply(text, {
         chart: thisCats.length > 0 ? buildBarChart(thisCats, 'name', 'total') : null,
@@ -735,6 +870,12 @@ export default {
     }
 
     function handleBiggestExpense() {
+      if (smartInsightsMode.value) {
+        reply("I can't identify individual expenses without expense logging. With Smart Insights, I estimate your total spending from balance changes. Enable Expenses for detailed transaction tracking.", {
+          suggestions: ['Show spending', 'Spending trend', 'Smart Insights'],
+        });
+        return;
+      }
       const tm = thisMonth();
       const monthExp = expensesForMonth(tm);
       if (monthExp.length === 0) { reply('No expenses this month yet.'); return; }
@@ -747,19 +888,41 @@ export default {
     function handleSavingsRate() {
       const tm = thisMonth();
       const inc = totalIncome(incomeForMonth(tm));
-      const exp = totalExpenses(expensesForMonth(tm));
+      let exp;
+      if (smartInsightsMode.value) {
+        const est = estimatedSpendingForMonth(tm);
+        exp = est !== null ? Math.max(0, est) : 0;
+      } else {
+        exp = totalExpenses(expensesForMonth(tm));
+      }
       if (inc === 0) {
         reply("No income recorded this month, so I can't calculate a savings rate.", { suggestions: ['Add income', 'Show spending'] });
         return;
       }
       const rate = (inc - exp) / inc;
       const saved = inc - exp;
-      reply(`This month: earned ${fmt(inc)}, spent ${fmt(exp)}. ${saved >= 0 ? 'Saved' : 'Overspent'} ${fmt(Math.abs(saved))} (${pct(rate)}% savings rate).`, {
-        suggestions: ['Show spending', 'Income details', 'Compare months'],
+      const prefix = smartInsightsMode.value ? 'est. ' : '';
+      reply(`This month: earned ${fmt(inc)}, ${prefix}spent ${fmt(exp)}. ${saved >= 0 ? 'Saved' : 'Overspent'} ${fmt(Math.abs(saved))} (${pct(rate)}% savings rate).`, {
+        suggestions: ['Show spending', 'Income details', 'Spending trend'],
       });
     }
 
     function handleChart() {
+      if (smartInsightsMode.value) {
+        const n = now();
+        const months = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date(n.getFullYear(), n.getMonth() - i, 1);
+          const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          const est = estimatedSpendingForMonth(ym);
+          months.push({ month: ym, total: est !== null ? Math.max(0, Math.round(est * 100) / 100) : 0 });
+        }
+        reply('Here\'s your estimated spending trend:', {
+          chart: buildTrendChart(months),
+          suggestions: ['Savings rate', 'Net worth', 'Show spending'],
+        });
+        return;
+      }
       const cats = categoryBreakdown(expensesForMonth(thisMonth()));
       if (cats.length === 0) {
         reply('No expense data to chart this month.', { suggestions: ['Spending trend', 'Show spending'] });
@@ -789,8 +952,11 @@ export default {
     }
 
     function handleWhatIsValu() {
-      reply("Valu is a personal finance tracker that stores all your data in your own Google Sheets — no servers, no subscriptions, full privacy. You can track expenses, income, account balances, set category goals, and see how your money flows over time. Your data stays yours.", {
-        suggestions: ['Getting started', 'Privacy', 'Show spending'],
+      let text = "Valu is a personal finance tracker that stores all your data in your own Google Sheets — no servers, no subscriptions, full privacy. You can track expenses, income, account balances, set category goals, and see how your money flows over time.";
+      text += "\n\nWith **Smart Insights**, you can get ~80% of the financial picture with ~10% of the effort — just track balances and income, and Valu estimates your spending automatically.";
+      text += "\n\nYour data stays yours.";
+      reply(text, {
+        suggestions: ['Smart Insights', 'Getting started', 'Privacy'],
       });
     }
 
@@ -841,10 +1007,55 @@ export default {
       });
     }
 
+    function handleSmartInsightsExplainer() {
+      reply("**Smart Insights** lets you understand your spending without logging every expense.\n\n" +
+        "How it works: Valu looks at changes in your cash accounts (checking, savings, credit) along with your income to estimate monthly spending.\n\n" +
+        "• ~80% of the financial picture with ~10% of the effort\n" +
+        "• Just update your balances monthly and log income\n" +
+        "• Get spending estimates, savings rates, and trends\n" +
+        "• Investment accounts are excluded so market fluctuations don't distort estimates\n\n" +
+        "Want detailed category tracking? Enable Expenses in your group settings anytime.", {
+        suggestions: ['Show spending', 'Savings rate', 'Spending trend'],
+      });
+    }
+
     // ── Contextual tips ──────────────────────────────────────────────────────
     function handleTips() {
       const tips = [];
       const tm = thisMonth();
+
+      const accs = (props.accounts || []).filter(a => a.discontinued !== 'true');
+      for (const acc of accs) {
+        const entries = balanceHistory.value
+          .filter(h => h.accountId === acc.id)
+          .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+        if (entries.length > 0) {
+          const last = entries[0].updatedAt || `${entries[0].year}-${String(entries[0].month).padStart(2, '0')}`;
+          const daysSince = Math.floor((now() - new Date(last)) / 86400000);
+          if (daysSince > 35) tips.push(`Your ${acc.name} balance hasn't been updated in ${daysSince} days.`);
+        }
+      }
+
+      if (smartInsightsMode.value) {
+        const est = estimatedSpendingForMonth(tm);
+        const lastEst = estimatedSpendingForMonth(lastMonth());
+        if (est !== null && lastEst !== null && lastEst > 0) {
+          const change = (Math.max(0, est) - Math.max(0, lastEst)) / Math.max(0, lastEst);
+          if (change > 0.15) tips.push(`Your estimated spending is ${pct(change)}% higher than last month. Consider reviewing your expenses.`);
+          else if (change < -0.15) tips.push(`Your estimated spending is ${pct(Math.abs(change))}% lower than last month — nice work!`);
+        }
+        const inc = totalIncome(incomeForMonth(tm));
+        if (est !== null && inc > 0) {
+          const rate = (inc - Math.max(0, est)) / inc;
+          if (rate > 0.3) tips.push(`Your savings rate is ${pct(rate)}% this month — well above the recommended 20%.`);
+          else if (rate < 0.1) tips.push(`Your savings rate is only ${pct(rate)}% this month. Aim for at least 20% to build a healthy buffer.`);
+        }
+        tips.push("Keep your account balances up to date for the most accurate Smart Insights estimates.");
+        if (tips.length <= 1) tips.push("Everything looks solid! Smart Insights is tracking your finances.");
+        reply(tips.join('\n\n'), { suggestions: ['Show spending', 'Savings rate', 'Spending trend'] });
+        return;
+      }
+
       const goals = getGoals();
       const cats = categoryBreakdown(expensesForMonth(tm));
 
@@ -857,18 +1068,6 @@ export default {
       const thisTotal = totalExpenses(expensesForMonth(tm));
       if (avg > 0 && thisTotal > avg * 1.15) {
         tips.push(`You're spending ${pct((thisTotal - avg) / avg)}% above your monthly average. Check which categories are driving the increase.`);
-      }
-
-      const accs = (props.accounts || []).filter(a => a.discontinued !== 'true');
-      for (const acc of accs) {
-        const entries = balanceHistory.value
-          .filter(h => h.accountId === acc.id)
-          .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-        if (entries.length > 0) {
-          const last = entries[0].updatedAt || `${entries[0].year}-${String(entries[0].month).padStart(2, '0')}`;
-          const daysSince = Math.floor((now() - new Date(last)) / 86400000);
-          if (daysSince > 35) tips.push(`Your ${acc.name} balance hasn't been updated in ${daysSince} days.`);
-        }
       }
 
       if (Object.keys(goals).length === 0 && cats.length > 0) {
@@ -886,6 +1085,35 @@ export default {
     function greet() {
       const hour = now().getHours();
       const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+
+      if (smartInsightsMode.value) {
+        const tm = thisMonth();
+        const est = estimatedSpendingForMonth(tm);
+        const inc = totalIncome(incomeForMonth(tm));
+        const nw = getNetWorth();
+
+        if (balanceHistory.value.length === 0 && incomeList.value.length === 0) {
+          reply(`${greeting}! Smart Insights is active — I'll estimate your spending from balance changes and income. Start by adding your accounts and logging income.`, {
+            suggestions: ['What is Valu?', 'Getting started', 'Smart Insights'],
+          });
+          return;
+        }
+
+        let text = `${greeting}! Smart Insights is active.`;
+        if (est !== null) {
+          text += ` Estimated spending this month: ${fmt(Math.max(0, est))}.`;
+          if (inc > 0) {
+            const rate = Math.round((inc - Math.max(0, est)) / inc * 100);
+            text += ` Savings rate: ${rate}%.`;
+          }
+        }
+        if (nw > 0) text += ` Net worth: ${fmt(nw)}.`;
+
+        reply(text, {
+          suggestions: ['Show spending', 'Spending trend', 'Savings rate', 'Smart Insights'],
+        });
+        return;
+      }
 
       if (expenses.value.length === 0 && incomeList.value.length === 0) {
         reply(`${greeting}! It looks like you're just getting started. I can help you learn about Valu and set things up.`, {
@@ -1031,6 +1259,7 @@ export default {
         case 'categories':      handleCategories(); break;
         case 'currency':        handleCurrency(); break;
         case 'privacy':         handlePrivacy(); break;
+        case 'smartInsights':   handleSmartInsightsExplainer(); break;
         case 'tips':            handleTips(); break;
         case 'thanks':          handleThanks(); break;
         default:

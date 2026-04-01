@@ -10,6 +10,23 @@ export function isDemoSheet(id) {
   return id === DEMO_SHEET_ID;
 }
 
+// In-memory settings overrides — persist within the session only
+const _demoOverrides = {};
+
+export function setDemoOverride(key, value) {
+  _demoOverrides[key] = value;
+}
+
+export function setDemoOverrides(obj) {
+  for (const [k, v] of Object.entries(obj)) {
+    _demoOverrides[k] = v;
+  }
+}
+
+export function getDemoSettings() {
+  return { ...demoSettingsObject(), ..._demoOverrides };
+}
+
 export function demoGroupMeta() {
   return {
     id: DEMO_SHEET_ID,
@@ -140,34 +157,55 @@ export function demoIncomeRows() {
 }
 
 export function demoBalanceHistoryRows() {
-  const rows = [];
+  const expRows = demoExpenseRows();
+  const incRows = demoIncomeRows();
   const now = new Date();
   const rand = seededRandom(77);
+
+  const monthlyNet = {};
+  for (const r of incRows) {
+    const ym = r[5].slice(0, 7);
+    monthlyNet[ym] = (monthlyNet[ym] || 0) + (parseFloat(r[2]) || 0);
+  }
+  for (const r of expRows) {
+    const ym = r[5].slice(0, 7);
+    monthlyNet[ym] = (monthlyNet[ym] || 0) - (parseFloat(r[2]) || 0);
+  }
+
+  let chk = 5200;
+  let sav = 8000;
+  let cc = -800;
+  const rows = [];
 
   for (let back = MONTHS_BACK; back >= 0; back--) {
     const d = new Date(now.getFullYear(), now.getMonth() - back, 1);
     const y = d.getFullYear();
     const m = d.getMonth() + 1;
-    const t = (MONTHS_BACK - back) / MONTHS_BACK;
-    const wave = Math.sin(t * Math.PI * 6) * 800;
-    const growth = t * t;
+    const net = monthlyNet[`${y}-${pad2(m)}`] || 0;
 
-    const chk = 5200 + growth * 8000 + wave + (rand() - 0.5) * 600;
-    const sav = 8000 + growth * 22000 - wave * 0.3 + (rand() - 0.5) * 400;
-    const cc  = -(800 + (rand() - 0.5) * 600 + Math.sin(t * Math.PI * 4) * 300);
+    const ccDrift = (rand() - 0.5) * 200;
+    let ccChange = ((-800 + ccDrift) - cc) * 0.3;
+    const ccNew = cc + ccChange;
+    if (ccNew > -100) ccChange = -100 - cc;
+    cc += ccChange;
+
+    const remaining = net - ccChange;
+    const toSavings = remaining > 0 ? remaining * (0.35 + rand() * 0.15) : remaining * 0.1;
+    sav += toSavings;
+    chk += remaining - toSavings;
 
     const ds = `${y}-${pad2(m)}-01`;
     rows.push(
-      ['demo_acc_chk', String(y), String(m), chk.toFixed(2), ds],
-      ['demo_acc_sav', String(y), String(m), sav.toFixed(2), ds],
-      ['demo_acc_cc',  String(y), String(m), cc.toFixed(2), ds],
+      ['demo_acc_chk', String(y), String(m), (Math.round(chk * 100) / 100).toFixed(2), ds],
+      ['demo_acc_sav', String(y), String(m), (Math.round(sav * 100) / 100).toFixed(2), ds],
+      ['demo_acc_cc',  String(y), String(m), (Math.round(cc * 100) / 100).toFixed(2), ds],
     );
   }
   return rows;
 }
 
 function demoSettingsRows() {
-  const o = demoSettingsObject();
+  const o = { ...demoSettingsObject(), ..._demoOverrides };
   return Object.entries(o).map(([k, v]) => [k, v]);
 }
 

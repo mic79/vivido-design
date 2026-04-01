@@ -4310,5 +4310,102 @@ html[data-theme="light"] .valu-orb-sm .sphere { mix-blend-mode: multiply; }
   font-style: italic;
 }
 
+/* ── Smart Insights ─────────────────────────────────────────────────────── */
+.smart-insights-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  padding: 0 16px 12px;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.smart-insights-trend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border);
+}
+
+.si-chart-labels {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 8px 0;
+  font-size: 10px;
+  color: var(--color-text-hint);
+}
+
+.si-chart-label {
+  text-align: center;
+}
+
+.si-chart-legend {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 6px 0 12px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.si-chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.si-chart-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* ── PWA Install Card ──────────────────────────────────────────────── */
+
+.install-card {
+  padding: 16px;
+}
+
+.install-card-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.install-card-icon {
+  font-size: 28px;
+  color: var(--color-primary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.install-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.install-card-content strong {
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.install-card-content span {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.install-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 /* hide scrollbars globally on mobile */
 ::-webkit-scrollbar { width: 0; height: 0; }

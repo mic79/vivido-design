@@ -11,6 +11,13 @@ export default {
   setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
     function getSheetId() { return props.sheetId || injectedSheetId.value; }
+    const installBanner = inject('installBanner', { installed: ref(true), install: () => {} });
+    const installDismissedHome = ref(!!localStorage.getItem('valu_install_dismissed_home'));
+    const showInstallCard = computed(() => !installBanner.installed.value && !installDismissedHome.value);
+    function dismissInstallHome() {
+      installDismissedHome.value = true;
+      localStorage.setItem('valu_install_dismissed_home', '1');
+    }
 
     const expenses = ref([]);
     const incomeList = ref([]);
@@ -398,6 +405,157 @@ export default {
       } catch (_) {}
     }
 
+    // ── Smart Insights (derived expenses from balance + income) ────────────
+
+    const smartInsightsMode = computed(() =>
+      enabledLists.value.includes('accounts')
+      && enabledLists.value.includes('income')
+      && !enabledLists.value.includes('expenses')
+    );
+
+    function getAccountType(accountId) {
+      const acc = (props.accounts || []).find(a => a.id === accountId);
+      return acc ? (acc.type || '') : '';
+    }
+
+    function cashFlowBalanceForMonth(ym) {
+      const [y, m] = ym.split('-').map(Number);
+      const cashAccounts = (props.accounts || [])
+        .filter(a => a.discontinued !== 'true' && a.type !== 'Investment');
+      const lastKnown = {};
+
+      const sortedHistory = [...balanceHistory.value].sort((a, b) =>
+        (a.year * 100 + a.month) - (b.year * 100 + b.month)
+      );
+
+      for (const h of sortedHistory) {
+        if (h.year * 100 + h.month > y * 100 + m) break;
+        if (getAccountType(h.accountId) === 'Investment') continue;
+        lastKnown[h.accountId] = { balance: h.balance, currency: getAccountCurrency(h.accountId) };
+      }
+
+      return cashAccounts.reduce((sum, a) => {
+        const info = lastKnown[a.id];
+        if (!info) return sum;
+        return sum + convertToBase(info.balance, info.currency);
+      }, 0);
+    }
+
+    function incomeForMonth(ym) {
+      return incomeList.value
+        .filter(e => e.date && e.date.slice(0, 7) === ym)
+        .reduce((sum, e) => sum + convertToBase(e.amount, getAccountCurrency(e.accountId)), 0);
+    }
+
+    function prevYm(ym) {
+      const [y, m] = ym.split('-').map(Number);
+      if (m === 1) return `${y - 1}-12`;
+      return `${y}-${String(m - 1).padStart(2, '0')}`;
+    }
+
+    function estimatedSpending(ym) {
+      const inc = incomeForMonth(ym);
+      const endBal = cashFlowBalanceForMonth(ym);
+      const startBal = cashFlowBalanceForMonth(prevYm(ym));
+      if (startBal === 0 && endBal === 0) return null;
+      return Math.round((inc - (endBal - startBal)) * 100) / 100;
+    }
+
+    const smartInsightsData = computed(() => {
+      if (!smartInsightsMode.value) return null;
+      if (balanceHistory.value.length === 0 && incomeList.value.length === 0) return null;
+
+      const now = new Date();
+      const months = [];
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+      }
+
+      const points = months.map(ym => {
+        const est = estimatedSpending(ym);
+        const inc = incomeForMonth(ym);
+        return { month: ym, estimatedSpending: est, income: inc };
+      }).filter(p => p.estimatedSpending !== null);
+
+      if (points.length === 0) return null;
+
+      const current = points[points.length - 1];
+      const prev = points.length >= 2 ? points[points.length - 2] : null;
+
+      const validPoints = points.filter(p => p.estimatedSpending > 0);
+      const avg = validPoints.length > 0
+        ? Math.round(validPoints.reduce((s, p) => s + p.estimatedSpending, 0) / validPoints.length)
+        : 0;
+
+      const savingsRates = points.map(p => {
+        if (!p.income || p.income <= 0) return { month: p.month, rate: null };
+        const saved = p.income - Math.max(0, p.estimatedSpending);
+        return { month: p.month, rate: Math.round(saved / p.income * 100) };
+      });
+
+      const currentSavingsRate = savingsRates.length > 0
+        ? savingsRates[savingsRates.length - 1].rate
+        : null;
+
+      const trendChange = prev && prev.estimatedSpending > 0
+        ? Math.round((current.estimatedSpending - prev.estimatedSpending) / prev.estimatedSpending * 100)
+        : null;
+
+      return {
+        currentMonth: current,
+        previousMonth: prev,
+        average: avg,
+        trendChange,
+        savingsRate: currentSavingsRate,
+        history: points,
+        savingsRates,
+      };
+    });
+
+    const siChartWidth = 360;
+    const siChartHeight = 140;
+    const siChartPad = { top: 8, bottom: 20, left: 8, right: 8 };
+
+    const siChartPath = computed(() => {
+      const d = smartInsightsData.value;
+      if (!d || d.history.length < 2) return null;
+
+      const pts = d.history;
+      const maxVal = Math.max(...pts.map(p => Math.max(Math.abs(p.estimatedSpending), p.income || 0)));
+      if (maxVal === 0) return null;
+
+      const w = siChartWidth - siChartPad.left - siChartPad.right;
+      const h = siChartHeight - siChartPad.top - siChartPad.bottom;
+      const step = w / (pts.length - 1);
+
+      const spendPts = pts.map((p, i) => ({
+        x: siChartPad.left + i * step,
+        y: siChartPad.top + h - (Math.max(0, p.estimatedSpending) / maxVal * h),
+      }));
+      const incomePts = pts.map((p, i) => ({
+        x: siChartPad.left + i * step,
+        y: siChartPad.top + h - ((p.income || 0) / maxVal * h),
+      }));
+
+      const line = points => points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+      const area = points => {
+        const bottom = siChartPad.top + h;
+        return line(points) + ` L${points[points.length - 1].x.toFixed(1)},${bottom} L${points[0].x.toFixed(1)},${bottom} Z`;
+      };
+
+      return {
+        spendLine: line(spendPts),
+        spendArea: area(spendPts),
+        incomeLine: line(incomePts),
+        incomeArea: area(incomePts),
+        labels: pts.map((p, i) => ({
+          x: siChartPad.left + i * step,
+          label: monthLabel(p.month),
+        })),
+      };
+    });
+
     const accountsNeedsData = computed(() =>
       enabledLists.value.includes('accounts') && (props.accounts || []).length === 0
     );
@@ -666,6 +824,7 @@ export default {
       formatCurrency, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon, getAccountCurrency,
       toggleBar, emit,
       showDemoWelcomeSheet, dismissDemoWelcome,
+      smartInsightsMode, smartInsightsData, siChartWidth, siChartHeight, siChartPath,
       showOnboarding, accountsNeedsData, incomeNeedsData, expensesNeedsData,
       showOnboardingBanner, dismissOnboardingBanner,
       balanceTableYear, availableYears, yearlyBalanceTable, showBalanceTable,
@@ -673,6 +832,7 @@ export default {
       balanceTooltip, showNameTooltip, hideNameTooltip,
       expCatTable, showExpCatTable, expCatChartData, EXP_CAT_COLORS, expCatScrollRef,
       categoryGoals, goalTotal, goalInputs, initGoalInput, updateGoalInput, saveGoal,
+      showInstallCard, installBanner, dismissInstallHome,
     };
   },
 
@@ -684,6 +844,7 @@ export default {
           <div class="sheet-handle"></div>
           <div class="demo-welcome-body">
             <p class="demo-welcome-text"><strong class="demo-welcome-lead">Welcome!</strong> This Demo group is filled with dummy data to give you a quick idea what the interface looks like.</p>
+            <p class="demo-welcome-text" style="font-size:12px;color:var(--color-text-secondary);margin-top:8px;">Try disabling Expenses in Groups → Demo to see <strong>Smart Insights</strong> — Valu estimates your spending from balance changes and income alone.</p>
             <button type="button" class="btn btn-primary demo-welcome-btn" @click="dismissDemoWelcome">Got it</button>
           </div>
         </div>
@@ -731,6 +892,21 @@ export default {
           </div>
         </div>
 
+        <!-- Install app card -->
+        <div v-if="showInstallCard" class="card mb-16 install-card">
+          <div class="install-card-body">
+            <span class="material-icons install-card-icon">download</span>
+            <div class="install-card-content">
+              <strong>Install Valu</strong>
+              <span>Add to your home screen for the best experience — fast access, works offline.</span>
+            </div>
+          </div>
+          <div class="install-card-actions">
+            <button class="btn btn-text btn-sm" @click="dismissInstallHome()">Not now</button>
+            <button class="btn btn-primary btn-sm" @click="installBanner.install()">Install</button>
+          </div>
+        </div>
+
         <!-- Balance update reminder -->
         <div v-if="needsBalanceUpdate" class="banner banner-warning" @click="emit('navigate', 'accounts')" style="cursor:pointer;">
           <span class="material-icons">update</span>
@@ -774,7 +950,7 @@ export default {
         </div>
 
         <!-- This Month Stats -->
-        <div class="card mb-16" v-if="(enabledLists.includes('expenses') && expenses.length > 0) || (enabledLists.includes('income') && incomeList.length > 0)">
+        <div class="card mb-16" v-if="!smartInsightsMode && ((enabledLists.includes('expenses') && expenses.length > 0) || (enabledLists.includes('income') && incomeList.length > 0))">
           <div class="card-header"><h3>This Month</h3></div>
           <div class="stats-row">
             <div class="stat" v-if="incomeList.length > 0">
@@ -790,6 +966,94 @@ export default {
               <div class="stat-label">Expenses</div>
             </div>
             <!-- Savings Rate hidden for now -->
+          </div>
+        </div>
+
+        <!-- Smart Insights (accounts + income, no expense logging) -->
+        <div v-if="smartInsightsMode && smartInsightsData" class="card mb-16 smart-insights-card">
+          <div class="card-header">
+            <h3><span class="material-icons" style="font-size:18px;vertical-align:text-bottom;margin-right:4px;color:var(--color-primary);">auto_awesome</span>Smart Insights</h3>
+          </div>
+          <p class="smart-insights-desc">Based on your account balances and income — no expense logging needed.</p>
+
+          <div class="stats-row">
+            <div class="stat">
+              <div class="stat-value" style="font-size:20px;color:var(--color-primary);">
+                {{ formatCurrency(smartInsightsData.currentMonth.income, baseCurrency) }}
+              </div>
+              <div class="stat-label">Income</div>
+            </div>
+            <div class="stat">
+              <div class="stat-value" style="font-size:20px;color:var(--color-secondary);">
+                {{ formatCurrency(Math.max(0, smartInsightsData.currentMonth.estimatedSpending), baseCurrency) }}
+              </div>
+              <div class="stat-label">Est. spending</div>
+            </div>
+            <div v-if="smartInsightsData.savingsRate != null" class="stat">
+              <div class="stat-value" style="font-size:20px;"
+                   :style="{ color: smartInsightsData.savingsRate >= 0 ? 'var(--color-primary)' : 'var(--color-secondary)' }">
+                {{ smartInsightsData.savingsRate }}%
+              </div>
+              <div class="stat-label">Savings rate</div>
+            </div>
+          </div>
+
+          <div v-if="smartInsightsData.trendChange != null" class="smart-insights-trend">
+            <span class="material-icons" style="font-size:16px;vertical-align:middle;">
+              {{ smartInsightsData.trendChange > 0 ? 'trending_up' : smartInsightsData.trendChange < 0 ? 'trending_down' : 'trending_flat' }}
+            </span>
+            <span v-if="smartInsightsData.trendChange > 0">Estimated spending is <strong>{{ smartInsightsData.trendChange }}% higher</strong> than last month</span>
+            <span v-else-if="smartInsightsData.trendChange < 0">Estimated spending is <strong>{{ Math.abs(smartInsightsData.trendChange) }}% lower</strong> than last month</span>
+            <span v-else>Spending is about the same as last month</span>
+          </div>
+        </div>
+
+        <!-- Smart Insights Chart -->
+        <div v-if="smartInsightsMode && siChartPath" class="card mb-16">
+          <div class="card-header"><h3>Income vs Estimated Spending</h3></div>
+          <div style="padding:4px 0 0;">
+            <svg :width="siChartWidth" :height="siChartHeight" :viewBox="'0 0 ' + siChartWidth + ' ' + siChartHeight" style="width:100%;display:block;">
+              <path :d="siChartPath.incomeArea" fill="var(--color-primary)" opacity="0.10" />
+              <path :d="siChartPath.incomeLine" fill="none" stroke="var(--color-primary)" stroke-width="2" />
+              <path :d="siChartPath.spendArea" fill="var(--color-secondary)" opacity="0.10" />
+              <path :d="siChartPath.spendLine" fill="none" stroke="var(--color-secondary)" stroke-width="2" />
+            </svg>
+            <div class="si-chart-labels">
+              <span v-for="lbl in siChartPath.labels" :key="lbl.label" class="si-chart-label">{{ lbl.label }}</span>
+            </div>
+            <div class="si-chart-legend">
+              <span class="si-chart-legend-item"><span class="si-chart-legend-dot" style="background:var(--color-primary);"></span>Income</span>
+              <span class="si-chart-legend-item"><span class="si-chart-legend-dot" style="background:var(--color-secondary);"></span>Est. spending</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Smart Insights Monthly Breakdown -->
+        <div v-if="smartInsightsMode && smartInsightsData && smartInsightsData.history.length > 1" class="card mb-16">
+          <div class="card-header"><h3>Monthly Breakdown</h3></div>
+          <div class="balance-table-wrap">
+            <table class="balance-table">
+              <thead>
+                <tr>
+                  <th class="balance-table-sticky">Month</th>
+                  <th>Income</th>
+                  <th>Est. Spending</th>
+                  <th>Saved</th>
+                  <th>Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in smartInsightsData.history.slice().reverse()" :key="row.month">
+                  <td class="balance-table-sticky balance-table-name">{{ monthLabel(row.month) }} {{ row.month.split('-')[0] }}</td>
+                  <td>{{ formatCurrency(row.income, baseCurrency) }}</td>
+                  <td>{{ formatCurrency(Math.max(0, row.estimatedSpending), baseCurrency) }}</td>
+                  <td :style="{ color: row.income - Math.max(0, row.estimatedSpending) >= 0 ? 'var(--color-primary)' : 'var(--color-secondary)' }">
+                    {{ formatCurrency(row.income - Math.max(0, row.estimatedSpending), baseCurrency) }}
+                  </td>
+                  <td>{{ row.income > 0 ? Math.round((row.income - Math.max(0, row.estimatedSpending)) / row.income * 100) + '%' : '--' }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
 

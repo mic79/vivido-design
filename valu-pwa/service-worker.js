@@ -1,9 +1,13 @@
-const CACHE_NAME = 'valu-app-v150';
+const CACHE_NAME = 'valu-app-v157';
 
 const PRECACHE_URLS = [
   'index.html',
   'icons/favicon.png',
   'icons/apple-touch-icon.png',
+  'icons/android-chrome-192x192.png',
+  'icons/android-chrome-512x512.png',
+  'icons/maskable_icon_x192.png',
+  'icons/maskable_icon_x512.png',
   'styles.css',
   'googleAuth.js',
   'sheetsApi.js',

@@ -7,10 +7,15 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Valu — a personal finance tracker that's private, simple, and free. Track income, expenses, and account balances using your own Google Sheet." />
+  <meta property="og:title" content="Valu — Personal Finance Tracker" />
+  <meta property="og:description" content="Private, simple, free. Track your finances using your own Google Sheet — no database, no server, your data stays yours." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="icons/android-chrome-512x512.png" />
   <title>Valu</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icons/favicon.png" type="image/png" sizes="128x128" />
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="256x256" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="180x180" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap" />
@@ -78,12 +83,12 @@
         </div>
 
         <div class="sidenav-body">
-          <button v-if="isAuthenticated" type="button" class="sidenav-menu-item" @click="navigateTo('groups'); sideNavOpen = false;">
+          <button type="button" class="sidenav-menu-item" @click="navigateTo('groups'); sideNavOpen = false;">
             <span class="material-icons sidenav-menu-icon">people</span>
             <span>Groups</span>
-            <span class="sidenav-menu-after">{{ groups.length }} group{{ groups.length !== 1 ? 's' : '' }}</span>
+            <span class="sidenav-menu-after">{{ groupsForSwitcher.length }} group{{ groupsForSwitcher.length !== 1 ? 's' : '' }}</span>
           </button>
-          <button v-else type="button" class="sidenav-menu-item" @click="leaveDemoToSignIn">
+          <button v-if="!isAuthenticated" type="button" class="sidenav-menu-item" @click="leaveDemoToSignIn">
             <span class="material-icons sidenav-menu-icon">login</span>
             <span>Sign in with Google</span>
             <span class="sidenav-menu-after">Your groups</span>
@@ -95,7 +100,7 @@
         </div>
 
         <div class="sidenav-footer">
-          <span class="sidenav-version">v150</span>
+          <span class="sidenav-version">v157</span>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -166,7 +171,7 @@
           :sheetId="activeSheetId"
           :settings="groupSettings"
           :accounts="accountsList"
-          :groups="groups"
+          :groups="groupsForSwitcher"
           :activeGroup="activeGroup"
           :userProfile="userProfile"
           :groupName="activeGroupName"
@@ -331,7 +336,7 @@
   <script type="module">
     import GoogleAuth from './googleAuth.js';
     import SheetsApi, { normalizeDiscontinuedCell, isDemoSheet } from './sheetsApi.js';
-    import { demoGroupMeta, demoSettingsObject, demoAccountsList, DEMO_SHEET_ID } from './demoData.js';
+    import { demoGroupMeta, demoSettingsObject, demoAccountsList, getDemoSettings, DEMO_SHEET_ID } from './demoData.js';
     import ValuOrb from './valu.js';
     import { killValuAppLandingIntro } from './valu-landing-intro.js';
     import HomePage from './HomePage.js';
@@ -378,6 +383,10 @@
         const needsReconnect = ref(false);
         const swUpdateReady = ref(false);
         let waitingSW = null;
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+          || window.navigator.standalone === true;
+        const appInstalled = ref(isStandalone || !!localStorage.getItem('valu_app_installed'));
+        let deferredInstallPrompt = null;
 
         const PAGE_MAP = {
           home:     'HomePage',
@@ -452,6 +461,7 @@
 
         provide('showAlert', showAlert);
         provide('showConfirm', showConfirm);
+        provide('installBanner', { installed: appInstalled, install: installApp });
 
         // ── Hash-based routing ───────────────────────────────────────────
         let _navFromPopstate = false;
@@ -472,10 +482,6 @@
         });
 
         async function navigateTo(page, opts) {
-          if (page === 'groups' && !isAuthenticated.value) {
-            currentPage.value = 'home';
-            return;
-          }
           const allowedWithoutGroup = page === 'home' || page === 'groups' || page === 'settings';
           if (!activeGroup.value && !allowedWithoutGroup) {
             currentPage.value = 'home';
@@ -516,7 +522,7 @@
 
         function applyDemoShellState() {
           activeGroup.value = demoGroupMeta();
-          groupSettings.value = { ...demoSettingsObject() };
+          groupSettings.value = getDemoSettings();
           accountsList.value = demoAccountsList();
           dataLoaded.value = true;
           groupLoading.value = false;
@@ -644,6 +650,38 @@
             waitingSW.postMessage({ type: 'SKIP_WAITING' });
           } else {
             window.location.reload();
+          }
+        }
+
+        // ── PWA Install Prompt ───────────────────────────────────────────────
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+          e.preventDefault();
+          deferredInstallPrompt = e;
+        });
+
+        window.addEventListener('appinstalled', () => {
+          appInstalled.value = true;
+          localStorage.setItem('valu_app_installed', '1');
+          deferredInstallPrompt = null;
+        });
+
+        function installApp() {
+          if (deferredInstallPrompt) {
+            deferredInstallPrompt.prompt();
+            deferredInstallPrompt.userChoice.then((result) => {
+              if (result.outcome === 'accepted') {
+                appInstalled.value = true;
+                localStorage.setItem('valu_app_installed', '1');
+              }
+              deferredInstallPrompt = null;
+            });
+          } else {
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+            const msg = isIOS
+              ? 'To install Valu, tap the Share button in Safari, then "Add to Home Screen".'
+              : 'To install Valu, open your browser menu and look for "Install app" or "Add to Home Screen".';
+            showAlert(msg);
           }
         }
 

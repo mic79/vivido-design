@@ -1,4 +1,4 @@
-import SheetsApi, { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, CATEGORY_ICONS, CURRENCIES } from './sheetsApi.js';
+import SheetsApi, { isDemoSheet, DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, CATEGORY_ICONS, CURRENCIES } from './sheetsApi.js';
 import GoogleAuth from './googleAuth.js';
 
 const { ref, computed, watch, inject } = Vue;
@@ -283,6 +283,10 @@ export default {
       configIsNewGroup.value = false;
       configGroupId.value = group.id;
       showConfigSheet.value = true;
+
+      if (isDemoSheet(group.id) && (!props.activeGroup || props.activeGroup.id !== group.id)) {
+        emit('switch-group', group, { keepOnGroupsPage: true });
+      }
 
       try {
         const settings = await SheetsApi.getSettings(group.id);

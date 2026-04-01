@@ -28,8 +28,9 @@ export default {
   props: ['sheetId', 'settings', 'groupName', 'accounts'],
   emits: ['go-home'],
 
-  setup(props) {
+  setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
+    const installBanner = inject('installBanner', { installed: ref(true), install: () => {} });
     function getSheetId() { return props.sheetId || injectedSheetId.value; }
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
@@ -159,7 +160,8 @@ export default {
       baseCurrency, onboardingCollapsed, collapseOnboarding, expandOnboarding,
       DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES,
       EXPENSE_CAT_DESCRIPTIONS, INCOME_CAT_DESCRIPTIONS,
-      loading, monthlySummary, milestones, formatCurrency,
+      loading, monthlySummary, milestones, formatCurrency, emit,
+      installBanner,
     };
   },
 
@@ -329,7 +331,7 @@ export default {
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>
-              <div class="activity-feed-title">What's New in v150</div>
+              <div class="activity-feed-title">What's New in v152</div>
               <div class="activity-feed-date">March 2026</div>
             </div>
           </div>
@@ -342,6 +344,8 @@ export default {
               <li><strong>Balance reminders</strong> — Toggle on/off from Settings to get reminded to update balances each month.</li>
               <li><strong>Expense Categories widget</strong> — Monthly breakdown per category with editable goals, right on the Home page.</li>
               <li><strong>Valu assistant</strong> — On-device smart assistant with spending analysis, goal tracking, tips, and inline charts. Tap the orb to chat.</li>
+              <li><strong>Demo customisation</strong> — Toggle tools and categories on/off in the Demo group to preview different configurations.</li>
+              <li><strong>Smart Insights</strong> — Get ~80% of the financial picture with ~10% of the effort. Valu estimates spending from balance changes and income — no expense logging needed.</li>
             </ul>
           </div>
         </div>
@@ -357,6 +361,20 @@ export default {
           </div>
           <div class="activity-feed-body">
             <p>When logging an expense or income, you can add, rename, reorder, or remove categories without leaving the form. Just scroll to the bottom of any category dropdown and tap <strong>"Manage categories"</strong>. The same works for accounts.</p>
+          </div>
+        </div>
+
+        <!-- Install app card -->
+        <div v-if="!installBanner.installed.value" class="card mb-16 install-card">
+          <div class="install-card-body">
+            <span class="material-icons install-card-icon">download</span>
+            <div class="install-card-content">
+              <strong>Install Valu</strong>
+              <span>Add to your home screen for the best experience — fast access, works offline.</span>
+            </div>
+          </div>
+          <div class="install-card-actions">
+            <button class="btn btn-primary btn-sm" @click="installBanner.install()">Install</button>
           </div>
         </div>
       </div>

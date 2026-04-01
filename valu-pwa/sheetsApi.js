@@ -6,7 +6,7 @@
  */
 
 import GoogleAuth from './googleAuth.js';
-import { isDemoSheet, demoValuesForRange, demoGroupMeta } from './demoData.js';
+import { isDemoSheet, demoValuesForRange, demoGroupMeta, setDemoOverride, setDemoOverrides } from './demoData.js';
 
 export { isDemoSheet } from './demoData.js';
 export { DEMO_SHEET_ID } from './demoData.js';
@@ -528,7 +528,7 @@ const SheetsApi = {
   },
 
   async updateSetting(spreadsheetId, key, value) {
-    if (isDemoSheet(spreadsheetId)) return;
+    if (isDemoSheet(spreadsheetId)) { setDemoOverride(key, value); return; }
     const rows = await this.getValues(spreadsheetId, 'Settings!A2:B');
     let rowIndex = -1;
     for (let i = 0; i < rows.length; i++) {
@@ -554,7 +554,7 @@ const SheetsApi = {
   },
 
   async updateSettings(spreadsheetId, settingsObj) {
-    if (isDemoSheet(spreadsheetId)) return;
+    if (isDemoSheet(spreadsheetId)) { setDemoOverrides(settingsObj); return; }
     const rows = await this.getValues(spreadsheetId, 'Settings!A2:B');
     const updates = [];
     const appends = [];
