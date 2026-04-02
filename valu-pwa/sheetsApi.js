@@ -63,7 +63,7 @@ function serializeDefaultCategories(arr) {
 const DEFAULT_SETTINGS = [
   ['groupName',          'My Group'],
   ['baseCurrency',       'CAD'],
-  ['listsEnabled',       'expenses,income,accounts'],
+  ['listsEnabled',       'expenses,income,accounts,fi'],
   ['expenseCategories',  serializeDefaultCategories(DEFAULT_EXPENSE_CATEGORIES)],
   ['incomeCategories',   serializeDefaultCategories(DEFAULT_INCOME_CATEGORIES)],
   ['currencyRates',      ''],
@@ -606,6 +606,17 @@ const SheetsApi = {
       `${DRIVE_BASE}/${fileId}?fields=modifiedTime`
     );
     return data.modifiedTime;
+  },
+
+  async getFileUpdateInfo(fileId) {
+    if (isDemoSheet(fileId)) return { modifiedTime: demoGroupMeta().modifiedTime, lastModifyingUser: null };
+    const data = await fetchWithRetry(
+      `${DRIVE_BASE}/${fileId}?fields=modifiedTime,lastModifyingUser`
+    );
+    return {
+      modifiedTime: data.modifiedTime,
+      lastModifyingUser: data.lastModifyingUser || null,
+    };
   },
 
   // ── Change detection ───────────────────────────────────────────────────────

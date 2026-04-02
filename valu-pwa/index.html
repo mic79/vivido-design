@@ -40,6 +40,8 @@
   <!-- GSAP + DrawSVG (same stack as https://valu-app.com/ landing intro) -->
   <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
   <script src="vendor/DrawSVGPlugin.min.js"></script>
+  <script src="vendor/Draggable.min.js"></script>
+  <script src="vendor/InertiaPlugin.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/shake.js/1.2.2/shake.min.js"></script>
 </head>
 <body>
@@ -97,10 +99,18 @@
             <span class="material-icons sidenav-menu-icon">notifications</span>
             <span>Activity</span>
           </button>
+          <button class="sidenav-menu-item" @click="navigateTo('faq'); sideNavOpen = false;">
+            <span class="material-icons sidenav-menu-icon">help_outline</span>
+            <span>FAQ</span>
+          </button>
+          <button class="sidenav-menu-item" @click="navigateTo('about'); sideNavOpen = false;">
+            <span class="material-icons sidenav-menu-icon">info_outline</span>
+            <span>About</span>
+          </button>
         </div>
 
         <div class="sidenav-footer">
-          <span class="sidenav-version">v159</span>
+          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v181 — What's new</button>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -139,7 +149,7 @@
       </div>
 
       <!-- Main Content -->
-      <div class="main-content">
+      <div class="main-content" :class="{ 'is-demo-group': demoHomeCallout !== 'none' }">
         <!-- No group: block sub-pages only — Home shows welcome / onboarding -->
         <div v-if="!activeGroup && currentPage !== 'groups' && currentPage !== 'home' && currentPage !== 'settings'" class="empty-state" style="padding-top:80px;">
           <span class="material-icons">folder_off</span>
@@ -164,10 +174,26 @@
           </button>
         </div>
 
-        <!-- Pages -->
-        <component
-          v-else
-          :is="currentPageComponent"
+        <!-- Pages (with optional demo notice above) -->
+        <template v-else>
+          <div v-if="demoHomeCallout !== 'none' && currentPage === 'home' && !demoNoticeDismissed" class="demo-notice" style="margin:16px 16px 0;">
+            <div class="demo-notice-body">
+              <span class="material-icons demo-notice-icon">info</span>
+              <div class="demo-notice-content">
+                <strong>Demo data</strong>
+                <p>This group is pre-filled with sample data so you can explore the app. Any changes you make here are temporary and will not be saved.</p>
+                <p v-if="demoHomeCallout === 'signin'">
+                  <strong>Ready to start for real?</strong> Sign in with Google to create your own group — your data will be stored privately in your Drive.
+                </p>
+                <div class="demo-notice-actions">
+                  <button v-if="demoHomeCallout === 'signin'" class="btn-text-link" @click="leaveDemoToSignIn()">Sign in</button>
+                  <button class="btn-text-link btn-text-muted" @click="demoNoticeDismissed = true">Dismiss</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <component
+            :is="currentPageComponent"
           :sheetId="activeSheetId"
           :settings="groupSettings"
           :accounts="accountsList"
@@ -188,6 +214,7 @@
           @refresh="refreshCurrentPage"
           @go-home="navigateTo('home')"
         ></component>
+        </template>
 
         <!-- Non-destructive reconnect banner (after data was loaded — keeps component alive) -->
         <div v-if="needsReconnect && dataLoaded" class="reconnect-bar">
@@ -225,6 +252,15 @@
         >
           <span class="material-icons">payments</span>
           <span>Income</span>
+        </button>
+
+        <button
+          v-if="isListEnabled('fi')"
+          class="tab-btn"
+          @click="navigateTo('fi')"
+        >
+          <span class="material-icons">trending_up</span>
+          <span>FI Calc</span>
         </button>
 
         <button
@@ -346,7 +382,10 @@
     import GroupsPage from './GroupsPage.js';
     import SettingsPage from './SettingsPage.js';
     import ActivityPage from './ActivityPage.js';
+    import FaqPage from './FaqPage.js';
+    import AboutPage from './AboutPage.js';
     import ValuAssistant from './ValuAssistant.js';
+    import FiCalculatorPage from './FiCalculatorPage.js';
     import ValuDateField from './ValuDateField.js';
     import ValuDropdown from './ValuDropdown.js';
     import ValuCurrencyPicker from './ValuCurrencyPicker.js';
@@ -354,7 +393,7 @@
     const { createApp, ref, computed, watch, onMounted, nextTick, provide } = Vue;
 
     const app = createApp({
-      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage, ActivityPage, ValuAssistant },
+      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage, ActivityPage, FaqPage, AboutPage, ValuAssistant, FiCalculatorPage },
 
       setup() {
         // ── Auth state ──────────────────────────────────────────────────────
@@ -396,7 +435,10 @@
           groups:   'GroupsPage',
           settings: 'SettingsPage',
           activity: 'ActivityPage',
+          faq: 'FaqPage',
+          about: 'AboutPage',
           assistant: 'ValuAssistant',
+          fi: 'FiCalculatorPage',
         };
 
         const currentPageComponent = computed(() => PAGE_MAP[currentPage.value] || 'HomePage');
@@ -421,6 +463,8 @@
           if (!isAuthenticated.value) return 'signin';
           return 'readonly';
         });
+        const demoNoticeDismissed = ref(false);
+        watch(demoHomeCallout, () => { demoNoticeDismissed.value = false; });
 
         provide('activeSheetId', activeSheetId);
         provide('groupSettings', groupSettings);
@@ -502,14 +546,33 @@
             return;
           }
           currentPage.value = page;
+          if (opts && opts.scrollTo) {
+            nextTick(() => {
+              setTimeout(() => {
+                let el = document.getElementById(opts.scrollTo);
+                if (!el) {
+                  const titles = document.querySelectorAll('.activity-feed-title');
+                  for (const t of titles) {
+                    if (t.textContent.includes("What's New")) { el = t.closest('.card'); break; }
+                  }
+                }
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }, 150);
+            });
+          }
           if (!dataLoaded.value && activeGroup.value) {
             await loadGroupData();
           }
-          if (page === 'home' && activeGroup.value && !isDemoSheet(activeGroup.value.id)) {
-            SheetsApi.getSettings(activeGroup.value.id).then(s => {
-              groupSettings.value = s;
-              localStorage.setItem('valu_settings_cache', JSON.stringify(s));
-            }).catch(() => {});
+          if (page === 'home' && activeGroup.value) {
+            if (isDemoSheet(activeGroup.value.id)) {
+              groupSettings.value = getDemoSettings();
+              localStorage.setItem('valu_settings_cache', JSON.stringify(groupSettings.value));
+            } else {
+              SheetsApi.getSettings(activeGroup.value.id).then(s => {
+                groupSettings.value = s;
+                localStorage.setItem('valu_settings_cache', JSON.stringify(s));
+              }).catch(() => {});
+            }
           }
         }
 
@@ -562,6 +625,14 @@
           if (signedIn) {
             killValuAppLandingIntro();
             showSignInFromLanding.value = false;
+
+            const prevEmail = localStorage.getItem('valu_last_user_email') || '';
+            const curEmail = profile?.email || '';
+            if (curEmail && curEmail !== prevEmail) {
+              localStorage.removeItem('valu_onboarding_dismissed');
+              localStorage.removeItem('valu_default_group');
+              localStorage.setItem('valu_last_user_email', curEmail);
+            }
 
             if (requestedDemo) {
               demoMode.value = false;
@@ -960,7 +1031,7 @@
           groups, groupsForSwitcher, activeGroup, groupSettings, groupLoading, dataLoaded, accountsList,
           currentPage, currentPageComponent,
           activeSheetId, activeGroupName, sideNavOpen, showGroupSwitcher,
-          demoHomeCallout,
+          demoHomeCallout, demoNoticeDismissed,
           needsReconnect, reconnect, connect, swUpdateReady, applySwUpdate,
           navigateTo, isListEnabled,
           onAuthChange, signOut,

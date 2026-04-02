@@ -1,4 +1,4 @@
-const CACHE_NAME = 'valu-app-v159';
+const CACHE_NAME = 'valu-app-v181';
 
 const PRECACHE_URLS = [
   'index.html',
@@ -19,6 +19,9 @@ const PRECACHE_URLS = [
   'GroupsPage.js',
   'SettingsPage.js',
   'ActivityPage.js',
+  'FaqPage.js',
+  'AboutPage.js',
+  'faqData.js',
   'ValuAssistant.js',
   'ValuDateField.js',
   'ValuDropdown.js',
@@ -26,6 +29,9 @@ const PRECACHE_URLS = [
   'valu.js',
   'valu-landing-intro.js',
   'vendor/DrawSVGPlugin.min.js',
+  'vendor/Draggable.min.js',
+  'vendor/InertiaPlugin.min.js',
+  'FiCalculatorPage.js',
   'manifest.json',
 ];
 

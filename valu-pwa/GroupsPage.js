@@ -7,11 +7,12 @@ const AVAILABLE_LISTS = [
   { key: 'accounts',  label: 'Accounts',  icon: 'account_balance', description: 'Track bank accounts, savings, and net worth over time' },
   { key: 'expenses',  label: 'Expenses',  icon: 'shopping_cart',   description: 'Log and categorize your spending' },
   { key: 'income',    label: 'Income',    icon: 'payments',        description: 'Track income sources and earnings' },
+  { key: 'fi',        label: 'FI Calculator', icon: 'trending_up', description: 'Visualize your path to financial independence' },
 ];
 
 export default {
   props: ['groups', 'activeGroup', 'userProfile', 'settings'],
-  emits: ['switch-group', 'create-group', 'refresh-groups', 'open-shared', 'settings-updated', 'go-home'],
+  emits: ['switch-group', 'create-group', 'refresh-groups', 'open-shared', 'settings-updated', 'go-home', 'navigate'],
 
   setup(props, { emit }) {
     const showAlert = inject('showAlert', m => window.alert(m));
@@ -537,7 +538,7 @@ export default {
           <span class="material-icons">arrow_back</span>
         </button>
         <h1 class="subpage-nav-title">Groups</h1>
-        <div class="valu-orb-sm subpage-orb-inline">
+        <div class="valu-orb-sm subpage-orb-inline" @click="$emit('navigate', 'assistant')">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>
@@ -594,6 +595,11 @@ export default {
       <div class="subpage-bottom-fixed subpage-bottom-fixed--stack">
         <button type="button" class="btn-add-outline" @click="openNewGroupFlow">ADD GROUP</button>
         <button type="button" class="btn-add-outline btn-add-outline--muted" @click="openSharedSheet">OPEN SHARED GROUP</button>
+
+        <div class="groups-share-hint">
+          <span class="material-icons groups-share-hint-icon">people</span>
+          <p><strong>Want to share a group?</strong> Open Google Drive, find the spreadsheet named <strong>Valu: [Group]</strong>, and share it with someone. They can then open it here via "Open shared group".</p>
+        </div>
       </div>
       </div>
 

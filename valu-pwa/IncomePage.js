@@ -6,7 +6,7 @@ const LS_LAST_ACCOUNT_INCOME = 'valu_last_account_income';
 
 export default {
   props: ['sheetId', 'settings', 'accounts'],
-  emits: ['refresh', 'go-home', 'settings-updated'],
+  emits: ['refresh', 'go-home', 'settings-updated', 'navigate'],
 
   setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
@@ -635,7 +635,7 @@ export default {
           <span class="material-icons">arrow_back</span>
         </button>
         <h1 class="subpage-nav-title">Income</h1>
-        <div class="valu-orb-sm subpage-orb-inline">
+        <div class="valu-orb-sm subpage-orb-inline" @click="$emit('navigate', 'assistant')">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>

@@ -2,5 +2,12 @@
   "name": "valu-pwa",
   "version": "1.0.0",
   "description": "Personal finance PWA backed by Google Sheets",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^4.79.0"
+  },
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "preview": "wrangler dev"
+  }
 }

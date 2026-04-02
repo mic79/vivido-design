@@ -24,6 +24,7 @@ export default {
     const balanceHistory = ref([]);
     const selectedBar = ref(null);
     const loading = ref(true);
+    const lastUpdateInfo = ref(null);
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
 
@@ -353,6 +354,12 @@ export default {
           balanceHistory.value = [];
         }
 
+        promises.push(
+          SheetsApi.getFileUpdateInfo(sheetId)
+            .then(info => { lastUpdateInfo.value = info; })
+            .catch(() => {})
+        );
+
         await Promise.all(promises);
       } catch (err) {
         if (err.message === 'popup_blocked' || err.message === 'refresh_failed') return;
@@ -398,6 +405,9 @@ export default {
       },
       { immediate: true }
     );
+    const demoCalloutDismissed = ref(false);
+    function dismissDemoCallout() { demoCalloutDismissed.value = true; }
+
     function dismissDemoWelcome() {
       showDemoWelcomeSheet.value = false;
       try {
@@ -571,9 +581,22 @@ export default {
       && (accountsNeedsData.value || incomeNeedsData.value || expensesNeedsData.value)
     );
 
+    const lastUpdateLabel = computed(() => {
+      const info = lastUpdateInfo.value;
+      if (!info || !info.modifiedTime) return null;
+      const d = new Date(info.modifiedTime);
+      const timeStr = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const who = info.lastModifyingUser?.displayName || info.lastModifyingUser?.emailAddress || null;
+      return who ? `${timeStr} by ${who}` : timeStr;
+    });
+
     const onboardingDismissed = ref(localStorage.getItem('valu_onboarding_dismissed') === '1');
+    const isDemo = computed(() => props.groupName === 'Demo');
+    const showDemoNotice = computed(() =>
+      isDemo.value && !showDemoWelcomeSheet.value && !demoCalloutDismissed.value
+    );
     const showOnboardingBanner = computed(() =>
-      !props.isDemoGroup && !onboardingDismissed.value
+      !isDemo.value && !onboardingDismissed.value
     );
     function dismissOnboardingBanner() {
       onboardingDismissed.value = true;
@@ -823,7 +846,7 @@ export default {
       chartWidth, chartHeight, chartPath, chartAreaPath,
       formatCurrency, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon, getAccountCurrency,
       toggleBar, emit,
-      showDemoWelcomeSheet, dismissDemoWelcome,
+      showDemoWelcomeSheet, dismissDemoWelcome, showDemoNotice, demoCalloutDismissed, dismissDemoCallout, lastUpdateLabel,
       smartInsightsMode, smartInsightsData, siChartWidth, siChartHeight, siChartPath,
       showOnboarding, accountsNeedsData, incomeNeedsData, expensesNeedsData,
       showOnboardingBanner, dismissOnboardingBanner,
@@ -850,26 +873,19 @@ export default {
         </div>
       </div>
 
-      <!-- Signed-in prompt on demo (optional card could go here; index passes isDemoGroup) -->
-      <div v-if="demoCallout === 'signin' && !showDemoWelcomeSheet" class="card mb-16 demo-signin-hint">
-        <div class="list-item" style="cursor:default;">
-          <div class="list-item-icon" style="background:var(--color-surface-alt);color:var(--color-text-secondary);">
-            <span class="material-icons">lock</span>
-          </div>
-          <div class="list-item-content">
-            <div class="list-item-title" style="color:var(--color-primary);font-weight:700;">Start your personal finance</div>
-            <div class="list-item-subtitle">Sign in with Google to organize your own data in Drive. Demo changes are not saved.</div>
-          </div>
-        </div>
-      </div>
-      <div v-else-if="demoCallout === 'readonly' && !showDemoWelcomeSheet" class="card mb-16 demo-readonly-hint">
-        <div class="list-item" style="cursor:default;">
-          <div class="list-item-icon" style="background:var(--color-surface-alt);color:var(--color-primary);">
-            <span class="material-icons">visibility</span>
-          </div>
-          <div class="list-item-content">
-            <div class="list-item-title" style="font-weight:700;">Demo group</div>
-            <div class="list-item-subtitle">Sample data for preview. Edits are not saved to any spreadsheet.</div>
+      <!-- Demo data persistence notice (dismissable) -->
+      <div v-if="groupName === 'Demo' && !showDemoWelcomeSheet && !demoCalloutDismissed" class="demo-notice mb-16">
+        <button class="demo-notice-close" @click="dismissDemoCallout" aria-label="Dismiss">
+          <span class="material-icons">close</span>
+        </button>
+        <div class="demo-notice-body">
+          <span class="material-icons demo-notice-icon">info</span>
+          <div>
+            <strong>You're viewing demo data</strong>
+            <p>This group is pre-filled with sample data so you can explore the app. Any changes you make here (adding entries, editing categories, etc.) are temporary and will not be saved.</p>
+            <p v-if="demoCallout === 'signin'" style="margin-top:6px;">
+              <strong>Ready to start for real?</strong> Sign in with Google to create your own group — your data will be stored privately in your Drive.
+            </p>
           </div>
         </div>
       </div>
@@ -877,13 +893,13 @@ export default {
       <div v-if="loading" class="loading"><div class="spinner"></div>Loading...</div>
 
       <template v-else>
-        <!-- Onboarding summary banner -->
-        <div v-if="showOnboardingBanner" class="card mb-16 onboarding-banner">
+        <!-- Onboarding summary banner (never for demo) -->
+        <div v-if="groupName !== 'Demo' && showOnboardingBanner" class="card mb-16 onboarding-banner">
           <div class="onboarding-banner-body">
             <span class="material-icons onboarding-banner-icon">auto_awesome</span>
             <div class="onboarding-banner-content">
               <strong>Welcome to Valu</strong>
-              <p>Your finances are stored privately in your Google Drive. Three tools are ready to go — Expenses, Income, and Accounts — with default categories already set up.</p>
+              <p>Your finances are stored privately in your Google Drive. Three tools are ready to go — Expenses, Income, and Accounts — with default categories already set up.<br><br>Need help? Tap the orb in the top-right to open the Valu assistant.</p>
               <div class="onboarding-banner-actions">
                 <button class="btn-text-link" @click="emit('navigate', 'activity')">Read more</button>
                 <button class="btn-text-link btn-text-muted" @click="dismissOnboardingBanner">Dismiss</button>
@@ -1234,6 +1250,11 @@ export default {
               <div class="onboarding-card-desc">Log your first expense.</div>
             </div>
           </button>
+        </div>
+
+        <div v-if="lastUpdateLabel" class="home-last-update">
+          <span class="material-icons home-last-update-icon">sync</span>
+          Last updated {{ lastUpdateLabel }}
         </div>
       </template>
     </div>

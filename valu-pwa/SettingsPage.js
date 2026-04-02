@@ -2,7 +2,7 @@ const { ref, computed, onMounted } = Vue;
 
 export default {
   props: ['groups', 'activeGroup'],
-  emits: ['go-home'],
+  emits: ['go-home', 'navigate'],
 
   setup(props) {
     const THEME_OPTIONS = [
@@ -82,7 +82,7 @@ export default {
         <button class="subpage-back" @click="$emit('go-home')">
           <span class="material-icons">arrow_back</span>
         </button>
-        <div class="valu-orb-sm subpage-orb">
+        <div class="valu-orb-sm subpage-orb" @click="$emit('navigate', 'assistant')">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>
@@ -176,16 +176,6 @@ export default {
                 <div class="toggle-thumb"></div>
               </label>
             </div>
-          </div>
-        </div>
-
-        <!-- About -->
-        <div class="card mb-16">
-          <div class="card-header"><h3>About</h3></div>
-          <div class="card-body">
-            <p style="font-size:13px;color:var(--color-text-secondary);line-height:1.5;">
-              Valu helps you organize your personal financial data, securely and privately. Your data is stored exclusively in your own Google Drive.
-            </p>
           </div>
         </div>
 

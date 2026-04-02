@@ -4,7 +4,7 @@ compatibility_date = "2024-09-01"
 
 [vars]
 GOOGLE_CLIENT_ID = "399400088485-h2nrjmo500qj4s7qrvfaog2tsqet3huo.apps.googleusercontent.com"
-ALLOWED_ORIGINS = "https://vivido-design.com,https://valu-app.com,http://localhost:8000,http://localhost:8080,http://127.0.0.1:8000,http://127.0.0.1:8080"
+ALLOWED_ORIGINS = "https://vivido-design.com,https://valu-app.com,https://pwa.valu-app.com,http://localhost:8000,http://localhost:8080,http://127.0.0.1:8000,http://127.0.0.1:8080"
 # ↑ Add your GitHub Pages URL here, e.g.:
 # ALLOWED_ORIGINS = "https://yourname.github.io,http://localhost:8080"
 

@@ -4,7 +4,7 @@ const { ref, computed, onMounted, watch, inject, nextTick } = Vue;
 
 export default {
   props: ['sheetId', 'settings', 'showUpdateReminder'],
-  emits: ['refresh', 'go-home', 'accounts-updated', 'settings-updated'],
+  emits: ['refresh', 'go-home', 'accounts-updated', 'settings-updated', 'navigate'],
 
   setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
@@ -576,7 +576,7 @@ export default {
           <span class="material-icons">arrow_back</span>
         </button>
         <h1 class="subpage-nav-title">Accounts</h1>
-        <div class="valu-orb-sm subpage-orb-inline">
+        <div class="valu-orb-sm subpage-orb-inline" @click="$emit('navigate', 'assistant')">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>

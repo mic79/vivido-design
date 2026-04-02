@@ -26,7 +26,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 
 export default {
   props: ['sheetId', 'settings', 'groupName', 'accounts'],
-  emits: ['go-home'],
+  emits: ['go-home', 'navigate'],
 
   setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
@@ -173,7 +173,7 @@ export default {
           <span class="material-icons">arrow_back</span>
         </button>
         <h1 class="subpage-nav-title">Activity</h1>
-        <div class="valu-orb-sm subpage-orb-inline">
+        <div class="valu-orb-sm subpage-orb-inline" @click="$emit('navigate', 'assistant')">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>
@@ -327,7 +327,7 @@ export default {
         </div>
 
         <!-- What's New -->
-        <div class="card mb-16 activity-feed-card">
+        <div id="whats-new" class="card mb-16 activity-feed-card">
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>

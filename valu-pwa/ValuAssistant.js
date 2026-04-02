@@ -1,4 +1,5 @@
 import SheetsApi, { TABS, isDemoSheet } from './sheetsApi.js';
+import { getFaqById } from './faqData.js';
 
 const { ref, computed, watch, inject, onMounted, onBeforeUnmount, nextTick } = Vue;
 
@@ -10,7 +11,18 @@ const INTENTS = [
   // Exact / greeting
   { id: 'greeting',         patterns: [/^(hi|hello|hey|good morning|good evening)\b/i] },
 
-  // Specific intents (checked before broad catch-alls)
+  // Navigation & actions (checked before broad data intents)
+  { id: 'addExpense',       patterns: [/add.*(expense|purchase|cost)/i, /log.*(expense|purchase)/i, /new expense/i] },
+  { id: 'addIncome',        patterns: [/add.*income/i, /log.*income/i, /new income/i] },
+  { id: 'goExpenses',       patterns: [/go\s*to\s*expense/i, /open\s*expense/i, /expense.*page/i, /expense.*list/i] },
+  { id: 'goIncome',         patterns: [/go\s*to\s*income/i, /open\s*income/i, /income.*page/i] },
+  { id: 'goAccounts',       patterns: [/go\s*to\s*account/i, /open\s*account/i, /account.*page/i] },
+  { id: 'goSettings',       patterns: [/setting/i, /preference/i, /config/i] },
+  { id: 'goGroups',         patterns: [/group/i, /switch.*group/i] },
+  { id: 'goFi',             patterns: [/fi\s*calc/i, /financial\s*independence/i, /go\s*to\s*fi/i, /open\s*fi/i] },
+  { id: 'updateBalance',    patterns: [/update.*balance/i, /store.*balance/i, /record.*balance/i] },
+
+  // Specific data intents
   { id: 'biggestExpense',   patterns: [/biggest|largest|most expensive|highest/i] },
   { id: 'goalStatus',       patterns: [/goal/i, /on track/i, /budget\s*status/i, /over\s*budget/i, /under\s*budget/i, /am i on/i] },
   { id: 'compare',          patterns: [/compare/i, /vs\.?\s/i, /versus/i, /this month.*(last|prev)/i, /last month.*(this|current)/i, /month.*over.*month/i] },
@@ -21,16 +33,6 @@ const INTENTS = [
   { id: 'netWorth',         patterns: [/net\s*worth/i, /total.*balance/i, /all.*account/i, /how much.*have\b/i] },
   { id: 'balance',          patterns: [/\bbalance/i, /account.*status/i] },
 
-  // Navigation & actions
-  { id: 'addExpense',       patterns: [/add.*(expense|purchase|cost)/i, /log.*(expense|purchase)/i, /new expense/i] },
-  { id: 'addIncome',        patterns: [/add.*income/i, /log.*income/i, /new income/i] },
-  { id: 'goExpenses',       patterns: [/go\s*to\s*expense/i, /open\s*expense/i, /expense.*page/i, /expense.*list/i] },
-  { id: 'goIncome',         patterns: [/go\s*to\s*income/i, /open\s*income/i, /income.*page/i] },
-  { id: 'goAccounts',       patterns: [/go\s*to\s*account/i, /open\s*account/i, /account.*page/i] },
-  { id: 'goSettings',       patterns: [/setting/i, /preference/i, /config/i] },
-  { id: 'goGroups',         patterns: [/group/i, /switch.*group/i] },
-  { id: 'updateBalance',    patterns: [/update.*balance/i, /store.*balance/i, /record.*balance/i] },
-
   // FAQ & informational
   { id: 'whatsNew',         patterns: [/what'?s\s*new/i, /changelog/i, /update/i, /latest.*feature/i, /new feature/i, /release note/i] },
   { id: 'help',             patterns: [/^help$/i, /how\s*(do|can)\s*i/i, /what\s*(can|do)\s*you/i, /getting\s*started/i, /how.*work/i] },
@@ -39,6 +41,12 @@ const INTENTS = [
   { id: 'currency',         patterns: [/currency/i, /exchange.*rate/i, /base\s*currency/i] },
   { id: 'privacy',          patterns: [/privacy/i, /data.*safe/i, /secure/i, /who.*access/i] },
   { id: 'smartInsights',    patterns: [/smart\s*insight/i, /derived.*expense/i, /estimate.*spend/i, /balance.*based/i] },
+  { id: 'assistantInfo',    patterns: [/what.*assistant/i, /who.*are.*you/i, /what.*can.*you.*do/i, /what.*is.*the.*orb/i, /what.*orb/i, /the.*logo/i] },
+  { id: 'sharing',          patterns: [/how.*share/i, /share.*data/i, /share.*sheet/i, /share.*group/i, /multi.*user/i] },
+  { id: 'offline',          patterns: [/\boffline\b/i, /work.*without.*internet/i, /no.*connection/i] },
+  { id: 'install',          patterns: [/\binstall\b/i, /add.*home\s*screen/i, /\bpwa\b/i, /download.*app/i] },
+  { id: 'howGoalsWork',     patterns: [/how.*goal.*work/i, /set.*goal/i, /what.*goal/i, /goal.*explain/i] },
+  { id: 'reminders',        patterns: [/reminder/i, /balance.*remind/i, /remind.*balance/i] },
   { id: 'tips',             patterns: [/\btips?\b/i, /\badvice\b/i, /\brecommend/i, /what\s*should/i] },
   { id: 'thanks',           patterns: [/thank/i, /awesome/i, /\bgreat\b/i, /perfect/i, /\bnice\b/i, /\bcool\b/i] },
 
@@ -94,6 +102,16 @@ export default {
     const activeChatId = ref(null);
     const showHistory = ref(false);
     let syncTimer = null;
+
+    const answeredFaqIntents = new Set();
+    const FAQ_SUGGESTION_TO_INTENT = {
+      'What is Valu?': 'whatIsValu',
+      'Privacy': 'privacy',
+      'Smart Insights': 'smartInsights',
+      "What's new": 'whatsNew',
+      'Getting started': 'help',
+      'Install as app': 'install',
+    };
     let chatTabEnsured = false;
 
     const lastContext = { searchTerm: null, period: null, intent: null };
@@ -415,7 +433,15 @@ export default {
       });
       onNewMessage();
     }
-    function reply(text, opts = {}) { addMsg('valu', text, opts); }
+    function reply(text, opts = {}) {
+      if (opts.suggestions) {
+        opts.suggestions = opts.suggestions.filter(s => {
+          const intentId = FAQ_SUGGESTION_TO_INTENT[s];
+          return !intentId || !answeredFaqIntents.has(intentId);
+        });
+      }
+      addMsg('valu', text, opts);
+    }
 
     // ── Response generators ──────────────────────────────────────────────────
     function handleSpending(fullText) {
@@ -942,20 +968,34 @@ export default {
 
     // ── FAQ / Onboarding ─────────────────────────────────────────────────────
     function handleHelp() {
-      reply("Here are some things I can help with:", {
-        suggestions: [
-          'Show spending', 'Goal status', 'Compare months', 'Spending trend',
-          'Income details', 'Net worth', 'Biggest expenses', 'Tips',
-          'What is Valu?', 'Privacy', "What's new",
-        ],
-      });
+      const hasData = expenses.value.length > 0 || incomeList.value.length > 0 || balanceHistory.value.length > 0;
+      if (!hasData) {
+        const enabledTools = (props.settings?.listsEnabled || '').split(',').filter(Boolean);
+        const steps = [];
+        if (enabledTools.includes('accounts')) steps.push('Go to accounts');
+        if (enabledTools.includes('expenses')) steps.push('Go to expenses');
+        if (enabledTools.includes('income')) steps.push('Go to income');
+        if (enabledTools.includes('fi')) steps.push('FI Calculator');
+        steps.push('What is Valu?', 'Privacy');
+
+        const faq = getFaqById('gettingStarted');
+        reply("Looks like you haven't logged any data yet.\n\n" + faq.answer, {
+          suggestions: steps,
+        });
+      } else {
+        reply("Here are some things I can help with:", {
+          suggestions: [
+            'Show spending', 'Goal status', 'Compare months', 'Spending trend',
+            'Income details', 'Net worth', 'Biggest expenses', 'Tips',
+            'What is Valu?', 'Privacy', "What's new",
+          ],
+        });
+      }
     }
 
     function handleWhatIsValu() {
-      let text = "Valu is a personal finance tracker that stores all your data in your own Google Sheets — no servers, no subscriptions, full privacy. You can track expenses, income, account balances, set category goals, and see how your money flows over time.";
-      text += "\n\nWith **Smart Insights**, you can get ~80% of the financial picture with ~10% of the effort — just track balances and income, and Valu estimates your spending automatically.";
-      text += "\n\nYour data stays yours.";
-      reply(text, {
+      const faq = getFaqById('whatIsValu');
+      reply(faq.answer, {
         suggestions: ['Smart Insights', 'Getting started', 'Privacy'],
       });
     }
@@ -985,7 +1025,8 @@ export default {
     }
 
     function handlePrivacy() {
-      reply("Your financial data is stored exclusively in Google Sheets on your own Google Drive. Valu never sends your data to any external server. The app runs entirely in your browser — even this assistant works 100% on-device with no cloud AI. Only you (and anyone you explicitly share your Sheet with) can access your data.", {
+      const faq = getFaqById('privacy');
+      reply(faq.answer, {
         suggestions: ['What is Valu?', 'Getting started'],
       });
     }
@@ -1008,15 +1049,21 @@ export default {
     }
 
     function handleSmartInsightsExplainer() {
-      reply("**Smart Insights** lets you understand your spending without logging every expense.\n\n" +
-        "How it works: Valu looks at changes in your cash accounts (checking, savings, credit) along with your income to estimate monthly spending.\n\n" +
-        "• ~80% of the financial picture with ~10% of the effort\n" +
-        "• Just update your balances monthly and log income\n" +
-        "• Get spending estimates, savings rates, and trends\n" +
-        "• Investment accounts are excluded so market fluctuations don't distort estimates\n\n" +
-        "Want detailed category tracking? Enable Expenses in your group settings anytime.", {
+      const faq = getFaqById('smartInsights');
+      reply(faq.answer, {
         suggestions: ['Show spending', 'Savings rate', 'Spending trend'],
       });
+    }
+
+    function handleFaqGeneric(faqId, suggestions) {
+      const faq = getFaqById(faqId);
+      if (faq) {
+        reply(faq.answer, { suggestions });
+      } else {
+        reply("I don't have info on that yet. Try 'Getting started' or 'What is Valu?'", {
+          suggestions: ['Getting started', 'What is Valu?'],
+        });
+      }
     }
 
     // ── Contextual tips ──────────────────────────────────────────────────────
@@ -1230,8 +1277,12 @@ export default {
         return;
       }
 
+      if (FAQ_SUGGESTION_TO_INTENT[text] || Object.values(FAQ_SUGGESTION_TO_INTENT).includes(intent.id)) {
+        answeredFaqIntents.add(intent.id);
+      }
+
       switch (intent.id) {
-        case 'greeting':        clearContext(); greet(); break;
+        case 'greeting':        clearContext(); answeredFaqIntents.clear(); greet(); break;
         case 'spending':
         case 'spendingOverview': handleSpending(effectiveText); break;
         case 'categorySpending': handleCategorySpending(intent.match, effectiveText); break;
@@ -1252,6 +1303,7 @@ export default {
         case 'goAccounts':      handleNav('accounts', 'Accounts'); break;
         case 'goSettings':      handleNav('settings', 'Settings'); break;
         case 'goGroups':        handleNav('groups', 'Groups'); break;
+        case 'goFi':            handleNav('fi', 'FI Calculator'); break;
         case 'updateBalance':   handleNav('accounts', 'Accounts'); break;
         case 'whatsNew':        handleWhatsNew(); break;
         case 'help':            handleHelp(); break;
@@ -1260,6 +1312,12 @@ export default {
         case 'currency':        handleCurrency(); break;
         case 'privacy':         handlePrivacy(); break;
         case 'smartInsights':   handleSmartInsightsExplainer(); break;
+        case 'assistantInfo':   handleFaqGeneric('assistant', ['Smart Insights', 'Privacy', 'Getting started']); break;
+        case 'sharing':         handleFaqGeneric('sharing', ['Privacy', 'What is Valu?']); break;
+        case 'offline':         handleFaqGeneric('offline', ['Install as app', 'Getting started']); break;
+        case 'install':         handleFaqGeneric('install', ['Getting started', 'What is Valu?']); break;
+        case 'howGoalsWork':    handleFaqGeneric('goals', ['Goal status', 'Show spending']); break;
+        case 'reminders':       handleFaqGeneric('balanceReminders', ['Go to settings', 'Getting started']); break;
         case 'tips':            handleTips(); break;
         case 'thanks':          handleThanks(); break;
         default:
@@ -1409,6 +1467,7 @@ export default {
     function createNewChat(greetAfterData) {
       flushSync();
       clearContext();
+      answeredFaqIntents.clear();
       const id = crypto.randomUUID();
       const nowIso = new Date().toISOString();
       const chat = { id, title: 'New chat', createdAt: nowIso, updatedAt: nowIso, messages: [] };
@@ -1424,6 +1483,7 @@ export default {
     function openChat(chatId) {
       flushSync();
       clearContext();
+      answeredFaqIntents.clear();
       const chat = chatList.value.find(c => c.id === chatId);
       if (!chat) return;
       activeChatId.value = chatId;

@@ -194,6 +194,7 @@ ul, ol { list-style: none; }
   padding: 16px 16px 0;
   flex-shrink: 0;
   min-height: 52px;
+  z-index: 10;
 }
 
 .subpage-nav-title {
@@ -533,6 +534,24 @@ ul, ol { list-style: none; }
   background: var(--color-primary-light);
   border-color: var(--color-primary);
   color: var(--color-primary);
+}
+.groups-share-hint {
+  display: flex;
+  gap: 10px;
+  padding: 14px 0;
+  margin-top: 8px;
+}
+.groups-share-hint-icon {
+  font-size: 20px;
+  color: var(--color-text-hint);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.groups-share-hint p {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  margin: 0;
 }
 
 /* ── Popover ──────────────────────────────────────────────────────────────── */
@@ -963,7 +982,12 @@ html[data-theme="light"] .tab-btn .material-icons {
 .sidenav-version {
   font-size: 12px;
   color: var(--color-text-hint);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
 }
+.sidenav-version:hover { color: var(--color-text-secondary); }
 
 /* ── Home Group Header ─────────────────────────────────────────────────────── */
 
@@ -991,6 +1015,17 @@ html[data-theme="light"] .tab-btn .material-icons {
   font-size: 20px;
   color: var(--color-text-hint);
 }
+
+.home-last-update {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-hint);
+  padding: 16px 16px 8px;
+}
+.home-last-update-icon { font-size: 14px; }
 
 /* ── Group Switcher Sheet ──────────────────────────────────────────────────── */
 
@@ -1568,10 +1603,61 @@ html[data-theme="light"] .valu-site-intro .s3 { background: #4f4f4f; }
   width: 100%;
 }
 
-.demo-signin-hint .list-item,
-.demo-readonly-hint .list-item {
-  padding: 12px 16px;
+.demo-notice {
+  position: relative;
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 16px;
 }
+.demo-notice-body {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.demo-notice-icon {
+  font-size: 24px;
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+.demo-notice-content {
+  flex: 1;
+  min-width: 0;
+}
+.demo-notice-content strong {
+  font-size: 15px;
+  display: block;
+  margin-bottom: 4px;
+}
+.demo-notice-content p {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+.demo-notice-content p:last-child { margin-bottom: 0; }
+.demo-notice-actions {
+  display: flex;
+  gap: 16px;
+}
+.demo-notice-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--color-text-hint);
+  cursor: pointer;
+  border-radius: 50%;
+  padding: 0;
+}
+.demo-notice-close:hover { background: var(--color-surface-alt); }
+.demo-notice-close .material-icons { font-size: 18px; }
 
 /* ── Cards ──────────────────────────────────────────────────────────────────── */
 
@@ -1709,6 +1795,11 @@ html[data-theme="light"] .valu-site-intro .s3 { background: #4f4f4f; }
   flex-direction: column;
 }
 
+.modal.sheet-swipe-step {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .sheet-swipe-step .sheet-step-details {
   max-height: 0;
   overflow: hidden;
@@ -1743,6 +1834,10 @@ html[data-theme="light"] .valu-site-intro .s3 { background: #4f4f4f; }
   margin: 0 16px 12px;
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
+  transition: max-height .3s ease;
+}
+.sheet-swipe-step.expanded .sheet-history-list {
+  max-height: 160px;
 }
 .sheet-history-item {
   display: flex;
@@ -3987,6 +4082,9 @@ html[data-theme="light"] .valu-orb-sm .sphere { mix-blend-mode: multiply; }
   margin-bottom: 2px;
   padding-left: 2px;
 }
+.assistant-msg--user .assistant-label {
+  color: #fff;
+}
 .assistant-bubble {
   padding: 10px 14px;
   border-radius: var(--radius-md);
@@ -4395,7 +4493,7 @@ html[data-theme="light"] .valu-orb-sm .sphere { mix-blend-mode: multiply; }
 }
 
 .install-card-content span {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--color-text-secondary);
   line-height: 1.4;
 }
@@ -4406,6 +4504,420 @@ html[data-theme="light"] .valu-orb-sm .sphere { mix-blend-mode: multiply; }
   gap: 8px;
   margin-top: 12px;
 }
+
+/* ── About Page ─────────────────────────────────────────────────────────── */
+.about-feature {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+}
+.about-feature + .about-feature { border-top: 1px solid var(--color-border); }
+.about-feature-icon {
+  font-size: 22px;
+  color: var(--color-primary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ── FAQ Page ───────────────────────────────────────────────────────────── */
+.faq-categories {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 0 16px 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.faq-cat-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.faq-cat-chip .faq-cat-icon { font-size: 16px; }
+.faq-cat-chip.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.faq-item {
+  border-bottom: 1px solid var(--color-border);
+}
+.faq-item:first-child { border-top: 1px solid var(--color-border); }
+.faq-question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 14px 0;
+  background: none;
+  border: none;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.faq-q-text { flex: 1; margin-right: 8px; }
+.faq-chevron {
+  font-size: 20px;
+  color: var(--color-text-hint);
+  transition: transform .2s;
+}
+.faq-item.expanded .faq-chevron { transform: rotate(180deg); }
+.faq-answer {
+  padding: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+/* Hide onboarding banner inside page component when viewing demo group */
+.is-demo-group .onboarding-banner { display: none !important; }
+
+/* ── FI Calculator (ported from CodePen) ─────────────────────────────────── */
+
+.fi-page { padding-bottom: 32px; }
+
+.fi-intro-block { text-align: center; padding: 0 16px; }
+.fi-subtitle {
+  font-size: 1rem; font-weight: 700; line-height: 1.15;
+  letter-spacing: 0.0225em; opacity: 0.6;
+  margin: 0;
+}
+@media (max-width: 767px) {
+  .fi-subtitle { margin-top: -1.4rem; margin-bottom: 1rem; }
+}
+.fi-heading {
+  font-size: 2rem; font-weight: 700; line-height: 1.15;
+  letter-spacing: 0.005em; margin: 0 0 1rem;
+}
+.fi-intro-text {
+  position: relative; z-index: 1; font-size: 125%;
+  margin: 0;
+}
+
+.color-primary { color: #729c9c !important; }
+.color-secondary { color: #ad4b20 !important; }
+.color-tertiary { color: #c5a32d !important; }
+
+/* Graph area — contains the sphere animation + results overlays */
+.fi-graph-area { position: relative; width: 100%; }
+.fi-results {
+  position: relative; height: 260px; margin-bottom: 1rem;
+}
+@media (max-width: 489px) { .fi-results { top: 20px; } }
+
+/* Count display — 150px white circle, only visible when knob active */
+.fi-display {
+  position: absolute; height: 150px; width: 150px;
+  top: 120px; left: 50%; margin-top: 2px;
+  display: flex; align-items: center; justify-content: center;
+  background: white; border-radius: 999rem;
+  opacity: 0; visibility: hidden;
+  transform: translate(-50%, -50%); z-index: 4;
+}
+.fi-count {
+  position: relative; width: auto; min-width: 80px;
+  font-size: 42px; font-weight: 300; letter-spacing: -2px;
+  text-align: center; color: #4f4f4f; white-space: nowrap;
+}
+.fi-count .count-type {
+  position: relative; top: 0; left: 5px;
+  font-size: 32px; color: #4f4f4f;
+}
+
+/* FI index — only visible in calculator mode (GSAP autoAlpha) */
+.fi-info-area {
+  position: relative; width: 140px; left: 50%; top: 41px;
+  transform: translateX(-50%);
+  opacity: 0; visibility: hidden; z-index: 2;
+  text-align: center;
+}
+.fi-intersection-wrapper {
+  position: absolute; height: 220px; width: 220px;
+  top: 50%; left: 50%; border-radius: 999rem; overflow: hidden;
+  transform: translate(-50%, -50%); pointer-events: none;
+}
+.fi-intersection {
+  position: absolute; height: 150px;
+  top: 50%; left: 50%; margin-top: 11px;
+  color: var(--color-card-bg, #fff);
+  transform: translate(-50%, -50%);
+}
+.fi-index-block { position: relative; z-index: 2; }
+.fi-index-value {
+  font-size: 2.625rem; font-weight: 400; padding-top: 1rem;
+  line-height: 1.15; letter-spacing: 0.005em;
+}
+.fi-index-value small { font-size: 1rem; }
+.fi-index-label {
+  font-size: 80%; line-height: 1.15; opacity: 0.6; margin: 0;
+}
+
+/* Sphere graph — MUST be position:absolute to not block elements below */
+.financial-independence-graph.spheres {
+  position: absolute;
+  height: 400px; width: 100%;
+  top: 50%; left: 0;
+  transform: translateY(-50%);
+  overflow: visible;
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+.financial-independence-graph.is-active { pointer-events: auto; }
+.financial-independence-graph.is-active .spheres-wrapper { z-index: 2; }
+.financial-independence-graph.is-active .sphere,
+.financial-independence-graph.is-active .sphere-wrapper { opacity: 0.05; }
+.financial-independence-graph.is-active .sphere.current,
+.financial-independence-graph.is-active .sphere-wrapper.current {
+  top: 43% !important; left: 50% !important;
+  opacity: 0.65; z-index: 2;
+}
+.financial-independence-graph.is-active .sphere-wrapper.current {
+  border: 1px solid rgba(79,79,79,0.3); z-index: 3;
+}
+.financial-independence-graph.is-active .sphere-wrapper.current .trigger {
+  display: block; pointer-events: auto;
+}
+.financial-independence-graph .sphere,
+.financial-independence-graph .sphere-wrapper {
+  transition: 0.6s top, 0.6s left, 0.6s opacity;
+}
+.financial-independence-graph .sphere {
+  border-radius: 999rem; mix-blend-mode: multiply;
+}
+.financial-independence-graph .spheres-wrapper {
+  position: absolute; height: 100%; width: 100%;
+  top: 50%; left: 50%;
+  transform-origin: 50% 50%; transform: translate(-50%, -50%);
+}
+.financial-independence-graph .sphere-wrapper {
+  position: absolute; height: 44px; width: 44px;
+  border: 1px solid rgba(79,79,79,0.05); border-radius: 999rem;
+  transform-origin: 50% 50%; transform: translate(-50%, -50%);
+}
+.financial-independence-graph .sphere-wrapper:nth-child(1) {
+  top: calc(50% - 100%/6); left: calc(50% - 100%/3);
+}
+.financial-independence-graph .sphere-wrapper:nth-child(2) {
+  top: calc(50% - 100%/6); left: calc(50% + 100%/3);
+}
+.financial-independence-graph .sphere-wrapper:nth-child(3) {
+  top: calc(50% + 100%/3); left: 50%;
+}
+.financial-independence-graph .sphere-wrapper:nth-child(4) {
+  top: 50%; left: 50%;
+}
+
+.graph-spheres-group {
+  position: relative; top: 89px;
+  opacity: 0; transform-origin: center center;
+}
+
+/* Sphere base — 14px circles (scaled by GSAP) */
+.fi-page .sphere.gs1, .fi-page .sphere.gs2, .fi-page .sphere.gs3 {
+  position: absolute; height: 14px; width: 14px;
+  border-radius: 999rem; transform-origin: center center;
+  transform: translate(-50%, -50%);
+}
+.fi-page .gs1 {
+  top: calc(50% - 100%/6); left: calc(50% - 100%/3);
+  background: #729c9c; opacity: 0.4;
+}
+.fi-page .gs2 {
+  top: calc(50% - 100%/6); left: calc(50% + 100%/3);
+  background: #ad4b20; opacity: 0.2;
+}
+.fi-page .gs3 {
+  top: calc(50% + 100%/3); left: 50%;
+  background: #c5a32d; opacity: 0.2;
+}
+
+/* Curved arrow hint on first-interaction savings knob (wizard graph only) */
+.spheres.financial-independence-graph .sphere-wrapper.gws3.knob.current::after {
+  content: ''; position: absolute;
+  height: 18px; width: 37px;
+  top: -5px; left: calc(50% + 10px);
+  background-image: url("images/icon-arrow-curved.svg");
+  background-size: contain; background-repeat: no-repeat;
+  opacity: 0; transform: scale(0.8);
+  transition: 0.3s all;
+}
+.spheres.financial-independence-graph .sphere-wrapper.gws3.knob.first-interaction.current::after {
+  opacity: 1;
+}
+
+/* Trigger — knob drag handle */
+.fi-page .trigger {
+  position: absolute; height: 28px; width: 28px;
+  top: -15px; left: 50%;
+  border-radius: 99rem; transform: translateX(-50%);
+  transition: 0.3s all; cursor: pointer; z-index: 3;
+  display: none; pointer-events: auto;
+}
+.fi-page .trigger:before {
+  content: ''; position: absolute;
+  height: 30%; width: 30%;
+  top: 50%; left: 50%;
+  background: white;
+  border: 1px solid rgba(79,79,79,0.4);
+  border-radius: 99rem;
+  transform: translate(-50%, -50%);
+  transition: 0.3s all; z-index: 2;
+}
+.fi-page .trigger.ripple:after {
+  content: ''; position: absolute;
+  height: 60px; width: 60px;
+  top: 50%; left: 50%;
+  background: #729c9c; border-radius: 99rem;
+  transform: translate(-50%, -50%) scale(0);
+  animation: fi-ripple 1s linear infinite;
+}
+@keyframes fi-ripple {
+  100% { transform: translate(-50%, -50%) scale(1); background-color: transparent; }
+}
+.fi-page .trigger:hover:before {
+  height: 100%; width: 100%;
+  box-shadow: 0 0 8px rgba(0,0,0,0.1);
+}
+
+/* Step wizard */
+.fi-steps-wrapper { max-width: 900px; margin: 0 auto; position: relative; z-index: 5; }
+.fi-step-action {
+  padding: 0 16px 16px; text-align: center;
+}
+.fi-step-btn {
+  max-width: 360px; width: 100%;
+  padding: 13px 24px; font-size: 14px;
+  border-radius: 999px; cursor: pointer;
+  background: white; color: #729c9c;
+  border: 1px solid #729c9c;
+  text-transform: uppercase; font-weight: 400;
+  letter-spacing: 0.05em;
+}
+.fi-step-btn:active { background: rgba(114,156,156,0.08); }
+.fi-step-hint {
+  font-size: 80%; margin-top: 0.5rem;
+  text-align: center; opacity: 0.6;
+}
+.fi-step-explainer {
+  margin: 1rem; padding: 1rem;
+}
+.fi-step-explainer h3 {
+  font-weight: 700; margin: 0 0 0.5rem;
+}
+.fi-step-explainer p {
+  line-height: 1.5;
+  color: var(--color-text-secondary, #888);
+  margin: 0 0 0.75rem;
+}
+
+/* Calculator panel */
+.fi-calculator-panel { position: relative; z-index: 5; }
+.fi-calculator-panel .fi-heading {
+  text-align: center;
+}
+
+/* Calculator button cards */
+.fi-btn-row {
+  display: flex; gap: 8px; align-items: center;
+  height: 132px;
+}
+.btn-graph-activate {
+  flex: 1; margin: auto;
+  border: 2px solid transparent;
+  background: var(--color-surface, #fff);
+  border-radius: var(--radius, 12px);
+  box-shadow: var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
+  cursor: pointer; position: relative;
+  overflow: visible; padding: 0.5rem;
+  line-height: 1.15; text-align: center;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.btn-graph-activate.current {
+  max-width: 132px; border-radius: 100%;
+  aspect-ratio: 1; align-content: center;
+}
+.btn-graph-activate.current.btn-savings { border-color: #c5a32d; }
+.btn-graph-activate.current.btn-income { border-color: #729c9c; }
+.btn-graph-activate.current.btn-expenses { border-color: #ad4b20; }
+
+.fi-btn-inner {
+  display: flex; flex-direction: column;
+  align-content: center; justify-content: center;
+  text-align: center;
+}
+.fi-btn-value {
+  color: var(--color-text); font-size: 2rem; font-weight: 700; line-height: 1.15;
+  display: flex; align-self: center; align-items: baseline;
+}
+.fi-btn-value .multiplier { font-size: 50%; text-transform: none; }
+.fi-btn-label {
+  font-size: 12px; font-weight: 700; letter-spacing: 0;
+}
+
+/* Calculator buttons knob area */
+.calculator-buttons.financial-independence-graph.is-active .knob {
+  height: 100%; width: 100%; top: 50% !important; left: 50% !important;
+}
+
+/* Sliders */
+.fi-sliders { margin: 1rem 0; }
+.fi-slider-row { margin: 0 0 0.5rem; }
+.fi-slider-header {
+  display: flex; justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+.fi-slider-header small { font-size: 13px; }
+.fi-range {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 16px;
+  background: linear-gradient(to right, #729c9c 0%, white 0%);
+  border: 1px solid #f0f0f0;
+  border-radius: 8px; outline: none;
+  cursor: pointer;
+}
+.fi-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  height: 28px; width: 28px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(79,79,79,0.4);
+  cursor: pointer;
+}
+.fi-range::-moz-range-thumb {
+  height: 28px; width: 28px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(79,79,79,0.4);
+  cursor: pointer;
+}
+
+/* Chart */
+.fi-chart-area { position: relative; }
+.fi-chart-label { position: absolute; top: 0; left: 16px; z-index: 1; }
+.fi-chart-label small { color: #4f4f4f; }
+#fi-curve-chart { width: 100%; max-width: 800px; margin: auto; }
+
+.fi-calc-inputs { margin: 1rem 0; padding: 1rem;}
+
+/* Reset link */
+.fi-reset { text-align: center; margin: 1rem 0 0; }
 
 /* hide scrollbars globally on mobile */
 ::-webkit-scrollbar { width: 0; height: 0; }
