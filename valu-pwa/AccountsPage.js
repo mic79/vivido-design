@@ -371,7 +371,11 @@ export default {
       try {
         const { year, month } = parseDateParts(entry.date);
         const dateStr = entry.date;
-        await upsertBalance(entry.accountId, year, month, amt, dateStr);
+        const result = await upsertBalance(entry.accountId, year, month, amt, dateStr);
+        if (result && result.skipped) {
+          showAlert(`Balance not updated — a newer entry from ${result.existingDate} already exists for this month.`);
+          return;
+        }
         showBalanceModal.value = false;
         await fetchData();
       } catch (err) {
@@ -397,15 +401,20 @@ export default {
       try {
         const { year, month } = parseDateParts(updateDate.value);
         const dateStr = updateDate.value;
+        const skipped = [];
         for (const acc of activeAccounts.value) {
           const val = updateBalances.value[acc.id];
           if (val === '' || val === undefined) continue;
           const amt = parseAmount(val);
           if (isNaN(amt)) continue;
-          await upsertBalance(acc.id, year, month, amt, dateStr);
+          const result = await upsertBalance(acc.id, year, month, amt, dateStr);
+          if (result && result.skipped) skipped.push(acc.name);
         }
         updateMode.value = false;
         await fetchData();
+        if (skipped.length) {
+          showAlert(`${skipped.join(', ')}: balance not updated — a newer entry already exists for this month.`);
+        }
       } catch (err) {
         console.error('Failed to save balances:', err);
         showAlert('Failed to save. Please try again.');
@@ -415,7 +424,7 @@ export default {
     // ── Shared upsert helper ─────────────────────────────────────────────────
 
     async function upsertBalance(accountId, year, month, amount, dateStr) {
-      await SheetsApi.upsertBalanceRow(getSheetId(), accountId, year, month, amount, dateStr);
+      return await SheetsApi.upsertBalanceRow(getSheetId(), accountId, year, month, amount, dateStr);
     }
 
     function monthName(m) {

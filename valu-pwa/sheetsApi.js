@@ -368,6 +368,10 @@ const SheetsApi = {
             parseInt(allRows[i][1]) === year &&
             parseInt(allRows[i][2]) === month) {
           rowIndex = i + 2;
+          const existingDate = allRows[i][4] || '';
+          if (existingDate && dateStr && existingDate > dateStr) {
+            return { skipped: true, existingDate };
+          }
           break;
         }
       }
