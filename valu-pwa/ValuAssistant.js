@@ -1,5 +1,5 @@
 import SheetsApi, { TABS, isDemoSheet } from './sheetsApi.js';
-import { getFaqById } from './faqData.js';
+import { getFaqById, FAQ_ENTRIES } from './faqData.js';
 
 const { ref, computed, watch, inject, onMounted, onBeforeUnmount, nextTick } = Vue;
 
@@ -17,20 +17,23 @@ const INTENTS = [
   { id: 'goExpenses',       patterns: [/go\s*to\s*expense/i, /open\s*expense/i, /expense.*page/i, /expense.*list/i] },
   { id: 'goIncome',         patterns: [/go\s*to\s*income/i, /open\s*income/i, /income.*page/i] },
   { id: 'goAccounts',       patterns: [/go\s*to\s*account/i, /open\s*account/i, /account.*page/i] },
-  { id: 'goSettings',       patterns: [/setting/i, /preference/i, /config/i] },
-  { id: 'goGroups',         patterns: [/group/i, /switch.*group/i] },
+  { id: 'goSettings',       patterns: [/(?:go\s*to|open)\s*setting/i, /\bsettings?\s*page/i, /\bpreference/i, /\bmy\s+settings?\b/i] },
+  { id: 'goGroups',         patterns: [/(?:go\s*to|open|switch)\s*group/i, /\bgroups?\s*page/i, /switch.*group/i, /change\s*group/i] },
   { id: 'goFi',             patterns: [/go\s*to\s*fi/i, /open\s*fi/i, /open.*fi\s*calc/i] },
   { id: 'aboutFi',          patterns: [/fi\s*calc/i, /financial\s*independence/i] },
   { id: 'updateBalance',    patterns: [/update.*balance/i, /store.*balance/i, /record.*balance/i] },
 
   // Specific data intents
   { id: 'biggestExpense',   patterns: [/biggest|largest|most expensive|highest/i] },
-  { id: 'goalStatus',       patterns: [/goal/i, /on track/i, /budget\s*status/i, /over\s*budget/i, /under\s*budget/i, /am i on/i] },
+  { id: 'goalStatus',       patterns: [/\bgoal\s*status\b/i, /\bmy\s+goals?\b/i, /\bon\s*track/i, /\bbudget\s*status/i, /\bover\s*budget/i, /\bunder\s*budget/i, /\bam\s+i\s+on\b/i, /^goals?\s*$/i] },
   { id: 'compare',          patterns: [/compare/i, /vs\.?\s/i, /versus/i, /this month.*(last|prev)/i, /last month.*(this|current)/i, /month.*over.*month/i] },
+  { id: 'ytd',              patterns: [/year\s*to\s*date/i, /\bytd\b/i, /how.*doing\s+this\s+year/i, /this\s+year.*summary/i, /summary.*this\s+year/i] },
   { id: 'trend',            patterns: [/trend/i, /spending.*over.*time/i, /year.*over.*year/i, /^history$/i] },
   { id: 'savingsRate',      patterns: [/savings?\s*rate/i, /save.*percent/i, /saving/i] },
+  { id: 'netWorthChart',    patterns: [/net\s*worth.*(chart|graph|visual|progression|over\s*time|history)/i, /(chart|graph|visual|progression|history).*net\s*worth/i] },
+  { id: 'incomeChart',      patterns: [/income.*(chart|graph|trend|over\s*time|history|visual)/i, /(chart|graph|trend|visual|history).*income/i] },
   { id: 'chart',            patterns: [/\bchart\b/i, /\bgraph\b/i, /\bvisual\b/i, /show.*chart/i, /breakdown.*chart/i] },
-  { id: 'income',           patterns: [/income/i, /earn(ed|ing)?/i, /salary/i, /revenue/i] },
+  { id: 'income',           patterns: [/\bincome\b(?!.*(?:chart|graph|trend|over\s*time|history|visual))/i, /\bearn(ed|ing)?\b/i, /\bsalary\b/i, /\brevenue\b/i] },
   { id: 'netWorth',         patterns: [/net\s*worth/i, /total.*balance/i, /all.*account/i, /how much.*have\b/i] },
   { id: 'balance',          patterns: [/\bbalance/i, /account.*status/i] },
 
@@ -655,8 +658,25 @@ export default {
       });
     }
 
+    function matchFaq(text) {
+      const lower = text.toLowerCase();
+      const words = lower.split(/\s+/).filter(w => w.length > 2);
+      let bestMatch = null, bestScore = 0;
+      for (const entry of FAQ_ENTRIES) {
+        const haystack = (entry.question + ' ' + entry.answer).toLowerCase();
+        const score = words.filter(w => haystack.includes(w)).length;
+        if (score > bestScore && score >= 2) { bestScore = score; bestMatch = entry; }
+      }
+      return bestMatch;
+    }
+
     function handleSearchFallback(text) {
       if (smartInsightsMode.value) {
+        const faq = matchFaq(text);
+        if (faq) {
+          reply(faq.answer, { suggestions: ['Show spending', 'Net worth', 'Help'] });
+          return;
+        }
         reply("Smart Insights estimates total spending from your balance changes, but can't search individual transactions. Enable Expenses in your group settings for detailed tracking.\n\nHere's what I can help with:", {
           suggestions: ['Show spending', 'Spending trend', 'Savings rate', 'Smart Insights'],
         });
@@ -668,6 +688,11 @@ export default {
       const keywords = extractKeywords(text);
 
       if (keywords.length === 0) {
+        const faq = matchFaq(text);
+        if (faq) {
+          reply(faq.answer, { suggestions: ['Show spending', 'Net worth', 'Help'] });
+          return;
+        }
         reply("I'm not sure I understand. Here are some things I can help with:", {
           suggestions: ['Show spending', 'Goal status', 'Compare months', 'Income details', 'Net worth', 'Tips', 'Help'],
         });
@@ -685,9 +710,14 @@ export default {
             suggestions: ['Show all spending', 'Goal status', 'Help'],
           });
         } else {
-          reply(`I couldn't find any expenses matching "${keywords.join(', ')}". Try a different term or ask me something else.`, {
-            suggestions: ['Show spending', 'Goal status', 'Help'],
-          });
+          const faq = matchFaq(text);
+          if (faq) {
+            reply(faq.answer, { suggestions: ['Show spending', 'Net worth', 'Help'] });
+          } else {
+            reply(`I couldn't find any expenses matching "${keywords.join(', ')}". Try a different term or ask me something else.`, {
+              suggestions: ['Show spending', 'Goal status', 'Help'],
+            });
+          }
         }
         return;
       }
@@ -819,10 +849,25 @@ export default {
       reply(text, { suggestions: ['Goal status', 'Spending trend', 'Tips'] });
     }
 
-    function handleTrend() {
+    function parsePeriodMonths(text) {
+      const m = text.match(/(?:last|past)\s+(\d+)\s+months?/i);
+      if (m) return Math.min(parseInt(m[1]), 60);
+      if (/this\s+year/i.test(text)) return now().getMonth() + 1;
+      if (/last\s+year/i.test(text)) return 12;
+      const yMatch = text.match(/\b(20\d{2})\b/);
+      if (yMatch) {
+        const y = parseInt(yMatch[1]), n = now();
+        if (y === n.getFullYear()) return n.getMonth() + 1;
+        return 12;
+      }
+      return 6;
+    }
+
+    function handleTrend(fullText) {
+      const count = fullText ? parsePeriodMonths(fullText) : 6;
       const months = [];
       const n = now();
-      for (let i = 5; i >= 0; i--) {
+      for (let i = count - 1; i >= 0; i--) {
         const d = new Date(n.getFullYear(), n.getMonth() - i, 1);
         const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         if (smartInsightsMode.value) {
@@ -834,7 +879,7 @@ export default {
       }
       const avg = months.reduce((s, m) => s + m.total, 0) / months.length;
       const prefix = smartInsightsMode.value ? 'estimated ' : '';
-      reply(`Here's your ${prefix}spending over the last 6 months. Your average is ${fmt(avg)}/month.`, {
+      reply(`Here's your ${prefix}spending over the last ${count} months. Your average is ${fmt(avg)}/month.`, {
         chart: buildTrendChart(months),
         suggestions: smartInsightsMode.value
           ? ['Savings rate', 'Net worth', 'Show spending']
@@ -866,7 +911,47 @@ export default {
       }
       reply(text, {
         chart: thisCats.length > 0 ? buildBarChart(thisCats, 'name', 'total') : null,
-        suggestions: ['Show spending', 'Savings rate', 'Go to income'],
+        suggestions: ['Income trend', 'Savings rate', 'Go to income'],
+      });
+    }
+
+    function buildNetWorthHistory() {
+      const accs = (props.accounts || []).filter(a => a.discontinued !== 'true');
+      const monthMap = {};
+      for (const h of balanceHistory.value) {
+        const ym = `${h.year}-${String(h.month).padStart(2, '0')}`;
+        if (!monthMap[ym]) monthMap[ym] = {};
+        monthMap[ym][h.accountId] = h.balance;
+      }
+      const sortedMonths = Object.keys(monthMap).sort();
+      const lastKnown = {};
+      return sortedMonths.map(ym => {
+        const snap = monthMap[ym];
+        for (const [aid, bal] of Object.entries(snap)) lastKnown[aid] = bal;
+        const total = accs.reduce((sum, a) => {
+          const bal = lastKnown[a.id];
+          return bal != null ? sum + convertToBase(bal, a.currency || baseCurrency.value) : sum;
+        }, 0);
+        return { month: ym, total: Math.round(total * 100) / 100 };
+      });
+    }
+
+    function handleNetWorthChart(fullText) {
+      const count = fullText ? parsePeriodMonths(fullText) : 12;
+      const history = buildNetWorthHistory();
+      if (history.length < 2) {
+        reply("Not enough balance history to show a net worth progression. Update your balances for at least 2 months.", {
+          suggestions: ['Net worth', 'Update balances'],
+        });
+        return;
+      }
+      const recent = history.slice(-count);
+      const first = recent[0].total, last = recent[recent.length - 1].total;
+      const diff = last - first;
+      const direction = diff >= 0 ? 'up' : 'down';
+      reply(`Your net worth progression over ${recent.length} months — currently ${fmt(last)}, ${direction} ${fmt(Math.abs(diff))} from ${fmt(first)}.`, {
+        chart: buildTrendChart(recent),
+        suggestions: ['Net worth', 'Spending trend', 'Savings rate'],
       });
     }
 
@@ -879,7 +964,7 @@ export default {
       });
       reply(`Your net worth is ${fmt(nw)} across ${accs.length} account${accs.length !== 1 ? 's' : ''}.`, {
         table: lines,
-        suggestions: ['Update balances', 'Go to accounts', 'Spending trend'],
+        suggestions: ['Net worth progression', 'Update balances', 'Go to accounts'],
       });
     }
 
@@ -931,6 +1016,62 @@ export default {
       const prefix = smartInsightsMode.value ? 'est. ' : '';
       reply(`This month: earned ${fmt(inc)}, ${prefix}spent ${fmt(exp)}. ${saved >= 0 ? 'Saved' : 'Overspent'} ${fmt(Math.abs(saved))} (${pct(rate)}% savings rate).`, {
         suggestions: ['Show spending', 'Income details', 'Spending trend'],
+      });
+    }
+
+    function handleYTD() {
+      const n = now();
+      const year = n.getFullYear();
+      let totalInc = 0, totalExp = 0;
+      const monthCount = n.getMonth() + 1;
+      for (let m = 1; m <= monthCount; m++) {
+        const ym = `${year}-${String(m).padStart(2, '0')}`;
+        totalInc += totalIncome(incomeForMonth(ym));
+        if (smartInsightsMode.value) {
+          const est = estimatedSpendingForMonth(ym);
+          totalExp += est !== null ? Math.max(0, est) : 0;
+        } else {
+          totalExp += totalExpenses(expensesForMonth(ym));
+        }
+      }
+      const net = totalInc - totalExp;
+      const avgMonthly = monthCount > 0 ? totalExp / monthCount : 0;
+
+      const janYm = `${year}-01`;
+      const nwHistory = buildNetWorthHistory();
+      const janEntry = nwHistory.find(h => h.month <= janYm);
+      const currentNw = getNetWorth();
+      const nwChange = janEntry != null ? currentNw - janEntry.total : null;
+
+      const prefix = smartInsightsMode.value ? 'est. ' : '';
+      let text = `Year-to-date summary (${year}):\n`;
+      text += `• Total income: ${fmt(totalInc)}\n`;
+      text += `• Total ${prefix}spending: ${fmt(totalExp)}\n`;
+      text += `• Net savings: ${net >= 0 ? '+' : ''}${fmt(net)}\n`;
+      text += `• Avg monthly spend: ${fmt(avgMonthly)}`;
+      if (nwChange != null) {
+        text += `\n• Net worth change since Jan: ${nwChange >= 0 ? '+' : ''}${fmt(nwChange)}`;
+      }
+      reply(text, { suggestions: ['Spending trend', 'Net worth progression', 'Savings rate'] });
+    }
+
+    function handleIncomeChart(fullText) {
+      const count = fullText ? parsePeriodMonths(fullText) : 12;
+      const n = now();
+      const months = [];
+      for (let i = count - 1; i >= 0; i--) {
+        const d = new Date(n.getFullYear(), n.getMonth() - i, 1);
+        const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        months.push({ month: ym, total: Math.round(totalIncome(incomeForMonth(ym)) * 100) / 100 });
+      }
+      if (months.every(m => m.total === 0)) {
+        reply("No income data found for the selected period.", { suggestions: ['Add income', 'Show spending'] });
+        return;
+      }
+      const avg = months.reduce((s, m) => s + m.total, 0) / months.length;
+      reply(`Here's your income over the last ${count} months. Average: ${fmt(avg)}/month.`, {
+        chart: buildTrendChart(months),
+        suggestions: ['Income details', 'Spending trend', 'Savings rate'],
       });
     }
 
@@ -1041,7 +1182,8 @@ export default {
     }
 
     function handleWhatsNew() {
-      reply("Recent updates include:\n• Expense Categories widget with yearly averages and goals on the Home page\n• Stacked bar chart for category spending visualization\n• Custom styled dialogs replacing browser alerts\n• Browser back/forward navigation support\n• Monthly summaries with real spending data\n• Milestones tracking your progress\n• Balance reminders toggle\n• This assistant!", {
+      const entry = getFaqById('whatsNew');
+      reply(entry ? entry.answer : "Check out the latest features by exploring the app!", {
         suggestions: ['Show spending', 'Goal status', 'Getting started'],
       });
     }
@@ -1228,15 +1370,30 @@ export default {
       /^(?:and\s+)?(?:in\s+)?(?:total|overall)\b/i,
     ];
 
+    const CHART_FOLLOWUP = /^(?:in\s+)?(?:a\s+)?(?:chart|graph|visual|progression)\s*\??$/i;
+    const INTENT_TO_CHART_QUERY = {
+      netWorth: 'net worth progression graph',
+      income: 'income trend graph',
+      spending: 'spending chart',
+      spendingOverview: 'spending chart',
+      trend: 'spending trend graph',
+      savingsRate: 'savings rate',
+    };
+
     function tryFollowUp(text) {
-      if (!lastContext.searchTerm) return null;
       const lower = text.toLowerCase().trim();
+
+      if (lastContext.intent && CHART_FOLLOWUP.test(lower)) {
+        const synth = INTENT_TO_CHART_QUERY[lastContext.intent];
+        if (synth) return synth;
+      }
+
+      if (!lastContext.searchTerm) return null;
 
       for (const pat of TIME_ONLY_PATTERNS) {
         if (pat.test(lower)) {
           const cleaned = lower.replace(/^how\s+about\s+/i, '').replace(/\?+$/, '').trim();
-          const synth = `${lastContext.searchTerm} spending ${cleaned}`;
-          return synth;
+          return `${lastContext.searchTerm} spending ${cleaned}`;
         }
       }
 
@@ -1250,8 +1407,7 @@ export default {
               .replace(/\b20\d{2}\b/g, '')
               .replace(/\b(?:in|for|during|from|of)\b/gi, '');
             if (extractKeywords(withoutTimeParts).length === 0) {
-              const synth = `${lastContext.searchTerm} spending ${rest}`;
-              return synth;
+              return `${lastContext.searchTerm} spending ${rest}`;
             }
           }
         }
@@ -1290,6 +1446,9 @@ export default {
         answeredFaqIntents.add(intent.id);
       }
 
+      const dataIntents = ['spending','spendingOverview','trend','income','netWorthChart','incomeChart','netWorth','balance','savingsRate','chart','compare','goalStatus','biggestExpense','ytd'];
+      if (dataIntents.includes(intent.id)) lastContext.intent = intent.id;
+
       switch (intent.id) {
         case 'greeting':        clearContext(); answeredFaqIntents.clear(); greet(); break;
         case 'spending':
@@ -1298,8 +1457,11 @@ export default {
         case 'searchExpenses':   handleCategorySpending(intent.match, effectiveText); break;
         case 'goalStatus':      handleGoalStatus(); break;
         case 'compare':         handleCompare(); break;
-        case 'trend':           handleTrend(); break;
+        case 'ytd':             handleYTD(); break;
+        case 'trend':           handleTrend(effectiveText); break;
+        case 'incomeChart':     handleIncomeChart(effectiveText); break;
         case 'income':          handleIncome(); break;
+        case 'netWorthChart':   handleNetWorthChart(effectiveText); break;
         case 'netWorth':        handleNetWorth(); break;
         case 'balance':         handleBalance(); break;
         case 'biggestExpense':  handleBiggestExpense(); break;

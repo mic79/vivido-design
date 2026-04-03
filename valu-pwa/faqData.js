@@ -151,6 +151,21 @@ export const FAQ_ENTRIES = [
       'Set goals from the Home page by tapping the goal icon next to a category in the expense chart.',
   },
   {
+    id: 'whatsNew',
+    category: 'basics',
+    question: "What's new in Valu?",
+    answer:
+      'Recent updates include:\n' +
+      '\u2022 Year-to-date summary and income trend charts\n' +
+      '\u2022 Smarter assistant with context-aware follow-ups\n' +
+      '\u2022 Configurable trend periods (e.g. "spending trend last 12 months")\n' +
+      '\u2022 FI Calculator auto-populates from your data\n' +
+      '\u2022 Balance history preserves the newest entry per month\n' +
+      '\u2022 Expense Categories widget with yearly averages and goals\n' +
+      '\u2022 Smart Insights for balance-based expense estimation\n' +
+      '\u2022 This assistant!',
+  },
+  {
     id: 'fiCalculator',
     category: 'features',
     question: 'What is the FI Calculator?',
