@@ -38,7 +38,7 @@ const INTENTS = [
   { id: 'balance',          patterns: [/\bbalance/i, /account.*status/i] },
 
   // FAQ & informational
-  { id: 'whatsNew',         patterns: [/what'?s\s*new/i, /changelog/i, /update/i, /latest.*feature/i, /new feature/i, /release note/i] },
+  { id: 'whatsNew',         patterns: [/what'?s\s*new/i, /changelog/i, /latest.*feature/i, /new feature/i, /release note/i, /recent\s*update/i] },
   { id: 'help',             patterns: [/^help$/i, /how\s*(do|can)\s*i/i, /what\s*(can|do)\s*you/i, /getting\s*started/i, /how.*work/i] },
   { id: 'whatIsValu',       patterns: [/what\s*is\s*valu/i, /about\s*valu/i, /tell.*about/i] },
   { id: 'categories',       patterns: [/categor/i, /set\s*up.*categor/i, /manage.*categor/i] },
@@ -1900,7 +1900,7 @@ export default {
           <input class="assistant-input" ref="inputEl"
                  v-model="inputText"
                  @keydown="onKeydown"
-                 placeholder="Type here.." />
+                 placeholder="Type here..." />
           <button class="assistant-send" @click="onSend" :disabled="!inputText.trim()">
             <span class="material-icons">send</span>
           </button>

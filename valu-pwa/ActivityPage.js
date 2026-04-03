@@ -331,21 +331,23 @@ export default {
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>
-              <div class="activity-feed-title">What's New in v152</div>
+              <div class="activity-feed-title">What's New in v181</div>
               <div class="activity-feed-date">March 2026</div>
             </div>
           </div>
           <div class="activity-feed-body">
             <ul class="activity-feed-list">
-              <li><strong>Custom dialogs</strong> — Native browser alerts replaced with styled in-app dialogs.</li>
-              <li><strong>Back button support</strong> — Browser back/forward navigation now works within the app.</li>
+              <li><strong>Smarter assistant</strong> — Context-aware follow-ups, year-to-date summaries, income trend charts, configurable trend periods, and FAQ-powered fallback answers.</li>
+              <li><strong>FI Calculator</strong> — Financial Independence calculator with auto-populated data from your accounts, income, and expenses.</li>
+              <li><strong>Balance history protection</strong> — Storing an older balance no longer overwrites a newer one for the same month.</li>
+              <li><strong>Smart Insights</strong> — Estimate spending from balance changes and income — no expense logging needed.</li>
+              <li><strong>Expense Categories widget</strong> — Monthly breakdown per category with editable goals, right on the Home page.</li>
               <li><strong>Monthly summaries</strong> — Real monthly recaps with spending, income, savings rate, and top categories.</li>
               <li><strong>Milestones</strong> — Track your progress with achievements that unlock as you use the app.</li>
+              <li><strong>Custom dialogs</strong> — Styled in-app dialogs replacing native browser alerts.</li>
+              <li><strong>Back button support</strong> — Browser back/forward navigation now works within the app.</li>
               <li><strong>Balance reminders</strong> — Toggle on/off from Settings to get reminded to update balances each month.</li>
-              <li><strong>Expense Categories widget</strong> — Monthly breakdown per category with editable goals, right on the Home page.</li>
-              <li><strong>Valu assistant</strong> — On-device smart assistant with spending analysis, goal tracking, tips, and inline charts. Tap the orb to chat.</li>
               <li><strong>Demo customisation</strong> — Toggle tools and categories on/off in the Demo group to preview different configurations.</li>
-              <li><strong>Smart Insights</strong> — Get ~80% of the financial picture with ~10% of the effort. Valu estimates spending from balance changes and income — no expense logging needed.</li>
             </ul>
           </div>
         </div>

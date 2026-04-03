@@ -621,7 +621,7 @@ export default {
         </div>
         <div class="fi-step-explainer" v-else-if="currentStep === 4">
           <h3>What is the average Annual Return on Investment that you expect?</h3>
-          <p>As a reference, typically savings accounts offer around 2%, the average annual increase in Canadian home prices has been 6.3% since 1990, while the S&P 500 has averaged around 9% over the last 30 years and the Magnificent Seven stocks have had a combined annualized return of over 46% over the last five years.</p>
+          <p>As a reference (as of early 2025): savings accounts typically offer around 2%, the average annual increase in Canadian home prices has been roughly 6.3% since 1990, the S&P 500 has averaged around 9–10% annually over the last 30 years, and top-performing tech stocks have seen significantly higher but more volatile returns. Past performance does not guarantee future results.</p>
         </div>
       </div>
 

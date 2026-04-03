@@ -80,7 +80,8 @@ export const FAQ_ENTRIES = [
       '1. **Add accounts** \u2014 set up your bank accounts and record balances\n' +
       '2. **Log income** \u2014 track your salary and other earnings\n' +
       '3. **Track expenses** \u2014 log your spending as you go\n\n' +
-      'You can enable or disable tools and customize categories from your Group configuration.',
+      'You can also enable the **FI Calculator** to project your path to financial independence.\n\n' +
+      'Enable or disable tools and customize categories from your Group configuration.',
   },
   {
     id: 'categories',
