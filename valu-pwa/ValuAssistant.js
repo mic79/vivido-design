@@ -19,7 +19,8 @@ const INTENTS = [
   { id: 'goAccounts',       patterns: [/go\s*to\s*account/i, /open\s*account/i, /account.*page/i] },
   { id: 'goSettings',       patterns: [/setting/i, /preference/i, /config/i] },
   { id: 'goGroups',         patterns: [/group/i, /switch.*group/i] },
-  { id: 'goFi',             patterns: [/fi\s*calc/i, /financial\s*independence/i, /go\s*to\s*fi/i, /open\s*fi/i] },
+  { id: 'goFi',             patterns: [/go\s*to\s*fi/i, /open\s*fi/i, /open.*fi\s*calc/i] },
+  { id: 'aboutFi',          patterns: [/fi\s*calc/i, /financial\s*independence/i] },
   { id: 'updateBalance',    patterns: [/update.*balance/i, /store.*balance/i, /record.*balance/i] },
 
   // Specific data intents
@@ -966,6 +967,14 @@ export default {
       setTimeout(() => emit('navigate', page), 400);
     }
 
+    function handleFi() {
+      const faq = getFaqById('fiCalculator');
+      const answer = faq ? faq.answer : 'The FI Calculator helps you visualize your path to financial independence.';
+      reply(answer, {
+        suggestions: ['Open FI Calculator', 'Smart Insights', 'What is Valu?'],
+      });
+    }
+
     // ── FAQ / Onboarding ─────────────────────────────────────────────────────
     function handleHelp() {
       const hasData = expenses.value.length > 0 || incomeList.value.length > 0 || balanceHistory.value.length > 0;
@@ -1304,6 +1313,7 @@ export default {
         case 'goSettings':      handleNav('settings', 'Settings'); break;
         case 'goGroups':        handleNav('groups', 'Groups'); break;
         case 'goFi':            handleNav('fi', 'FI Calculator'); break;
+        case 'aboutFi':         handleFi(); break;
         case 'updateBalance':   handleNav('accounts', 'Accounts'); break;
         case 'whatsNew':        handleWhatsNew(); break;
         case 'help':            handleHelp(); break;
@@ -1355,7 +1365,7 @@ export default {
             from: m.from, text: m.text, ts: m.ts,
             ...(m.table ? { table: m.table } : {}),
             ...(m.suggestions ? { suggestions: m.suggestions } : {}),
-            ...(m.chart ? { hadChart: true } : {}),
+            ...(m.chart ? { chart: m.chart } : {}),
           })),
         }));
         localStorage.setItem(key, JSON.stringify(stripped));
@@ -1375,7 +1385,7 @@ export default {
         from: m.from, text: m.text, ts: m.ts,
         ...(m.table ? { table: m.table } : {}),
         ...(m.suggestions ? { suggestions: m.suggestions } : {}),
-        ...(m.chart ? { hadChart: true } : {}),
+        ...(m.chart ? { chart: m.chart } : {}),
       })));
     }
 
