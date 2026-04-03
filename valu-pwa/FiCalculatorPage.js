@@ -106,30 +106,64 @@ export default {
         }
 
         const now = new Date();
-        const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+        const twelveMonthsAgo = new Date(now.getFullYear() - 1, now.getMonth(), 1);
         if (incRows.length) {
-          const recent = incRows.filter(r => new Date(r[5]) >= sixMonthsAgo);
+          const recent = incRows.filter(r => new Date(r[5]) >= twelveMonthsAgo);
           if (recent.length) {
             const total = recent.reduce((s, r) => s + (parseFloat(r[2]) || 0), 0);
             const months = Math.max(1, mSpan(recent, 5));
             income.value = Math.round(total / months / 1000 * 10) / 10;
           }
         }
+        let expPopulated = false;
         if (expRows.length) {
-          const recent = expRows.filter(r => new Date(r[5]) >= sixMonthsAgo);
+          const recent = expRows.filter(r => new Date(r[5]) >= twelveMonthsAgo);
           if (recent.length) {
             const total = recent.reduce((s, r) => s + (parseFloat(r[2]) || 0), 0);
             const months = Math.max(1, mSpan(recent, 5));
             expenses.value = Math.round(total / months / 1000 * 10) / 10;
+            expPopulated = true;
+          }
+        }
+
+        if (!expPopulated && balRows.length && incRows.length) {
+          const balByMonth = {};
+          for (const r of balRows) {
+            const ym = `${r[1]}-${String(parseInt(r[2])).padStart(2, '0')}`;
+            balByMonth[ym] = (balByMonth[ym] || 0) + (parseFloat(r[3]) || 0);
+          }
+          const sortedMonths = Object.keys(balByMonth).sort();
+          const recentInc = incRows.filter(r => new Date(r[5]) >= twelveMonthsAgo);
+          const incByMonth = {};
+          for (const r of recentInc) {
+            const d = new Date(r[5]);
+            if (isNaN(d)) continue;
+            const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            incByMonth[ym] = (incByMonth[ym] || 0) + (parseFloat(r[2]) || 0);
+          }
+          let spendTotal = 0, spendCount = 0;
+          for (let i = 1; i < sortedMonths.length; i++) {
+            const ym = sortedMonths[i], prevYm = sortedMonths[i - 1];
+            if (ym < twelveMonthsAgo.toISOString().slice(0, 7)) continue;
+            const inc = incByMonth[ym] || 0;
+            const balChange = balByMonth[ym] - balByMonth[prevYm];
+            const est = inc - balChange;
+            if (est > 0) { spendTotal += est; spendCount++; }
+          }
+          if (spendCount) {
+            expenses.value = Math.round(spendTotal / spendCount / 1000 * 10) / 10;
           }
         }
       } catch (_) {}
     }
 
     function mSpan(rows, dateIdx) {
-      const dates = rows.map(r => new Date(r[dateIdx])).filter(d => !isNaN(d));
-      if (!dates.length) return 1;
-      return Math.max(1, Math.ceil((Math.max(...dates) - Math.min(...dates)) / (1000*60*60*24*30.44)));
+      const months = new Set();
+      for (const r of rows) {
+        const d = new Date(r[dateIdx]);
+        if (!isNaN(d)) months.add(d.getFullYear() * 12 + d.getMonth());
+      }
+      return Math.max(1, months.size);
     }
 
     function q(sel) { return rootEl ? rootEl.querySelector(sel) : null; }

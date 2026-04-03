@@ -631,6 +631,13 @@
             if (curEmail && curEmail !== prevEmail) {
               localStorage.removeItem('valu_onboarding_dismissed');
               localStorage.removeItem('valu_default_group');
+              localStorage.removeItem('valu_groups_cache');
+              localStorage.removeItem('valu_settings_cache');
+              localStorage.removeItem('valu_last_group');
+              localStorage.removeItem('valu_last_group_name');
+              groups.value = [];
+              activeGroup.value = null;
+              groupSettings.value = {};
               localStorage.setItem('valu_last_user_email', curEmail);
             }
 
