@@ -1,5 +1,5 @@
 import SheetsApi, { TABS, DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES } from './sheetsApi.js';
-import { getCurrentYM } from './recurringService.js';
+import { getCurrentYM, getPendingRecurring } from './recurringService.js';
 
 const { ref, computed, watch, inject } = Vue;
 
@@ -166,12 +166,8 @@ export default {
     const hasRecurringPending = computed(() => {
       if (recurringCount.value === 0) return false;
       const lastChecked = props.settings?.repeatsLastChecked || '';
-      if (!lastChecked) return true;
-      if (lastChecked < getCurrentYM()) return true;
-      // Even when up-to-date, check if any recurring item was created after lastChecked
-      return [...expenses.value, ...incomeList.value].some(
-        i => i.repeats && i.createdAt && i.createdAt > lastChecked
-      );
+      const pending = getPendingRecurring(expenses.value, incomeList.value, lastChecked);
+      return pending.length > 0;
     });
 
     const recurringLastChecked = computed(() => {

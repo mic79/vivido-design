@@ -23,6 +23,10 @@ export default {
     const filterCategory = ref('');
     const filterSearch = ref('');
     const showUpcoming = ref(localStorage.getItem('valu_show_upcoming') !== 'false');
+    function toggleUpcoming() {
+      showUpcoming.value = !showUpcoming.value;
+      localStorage.setItem('valu_show_upcoming', showUpcoming.value ? 'true' : 'false');
+    }
     const showMonthSheet = ref(false);
     const openDropdown = ref(null);
 
@@ -624,7 +628,7 @@ export default {
       showAddModal, showEditModal, editingExpense,
       newExpense, categories, baseCurrency,
       adjustBalance, editAdjustBalance,
-      filterMonth, filterCategory, filterSearch, showUpcoming, hasFutureEntries, availableMonths, usedCategories,
+      filterMonth, filterCategory, filterSearch, showUpcoming, toggleUpcoming, hasFutureEntries, availableMonths, usedCategories,
       showMonthSheet, formatMonthLabel,
       openDropdown, toggleDropdown, setDropdownOpen,
       sortedAccounts,
@@ -701,7 +705,7 @@ export default {
               </div>
             </div>
           </div>
-          <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="showUpcoming = !showUpcoming; localStorage.setItem('valu_show_upcoming', showUpcoming ? 'true' : 'false')">
+          <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="toggleUpcoming">
             <span class="material-icons" style="font-size:16px;">event</span>
             <span>Upcoming</span>
           </button>
