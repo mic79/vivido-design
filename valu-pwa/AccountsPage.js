@@ -1,4 +1,5 @@
 import SheetsApi, { TABS, normalizeDiscontinuedCell, formatAccountDisplayName, CURRENCIES } from './sheetsApi.js';
+import { useFxConvert } from './useFxConvert.js';
 
 const { ref, computed, onMounted, watch, inject, nextTick } = Vue;
 
@@ -31,6 +32,10 @@ export default {
     const balanceEntry = ref({ accountId: '', date: todayStr(), amount: '' });
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
+    const manualRates = computed(() => {
+      const str = props.settings?.currencyRates || '';
+      return str.split(',').filter(Boolean).map(r => { const [currency, rate] = r.split(':'); return { currency, rate }; });
+    });
 
     const newAccount = ref({
       name: '',
@@ -65,16 +70,6 @@ export default {
       currencySearch.value = '';
     }
 
-    const currencyRates = computed(() => {
-      const ratesStr = props.settings?.currencyRates || '';
-      const map = {};
-      ratesStr.split(',').filter(Boolean).forEach(r => {
-        const [cur, val] = r.split(':');
-        if (cur && val) map[cur] = parseFloat(val);
-      });
-      return map;
-    });
-
     function todayStr() {
       const d = new Date();
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -85,11 +80,6 @@ export default {
       return { year: y, month: m };
     }
 
-    function convertToBase(amount, fromCurrency) {
-      if (!fromCurrency || fromCurrency === baseCurrency.value) return amount;
-      const rate = currencyRates.value[fromCurrency];
-      return rate ? Math.round(amount * rate * 100) / 100 : amount;
-    }
 
     function getNumberLocale() {
       const pref = localStorage.getItem('valu_number_format') || 'auto';
@@ -204,7 +194,7 @@ export default {
     const totalNetWorth = computed(() => {
       return activeAccounts.value.reduce((sum, a) => {
         const bal = getCurrentBalance(a.id);
-        return sum + convertToBase(bal, a.currency);
+        return bal != null ? sum + bal : sum;
       }, 0);
     });
 
@@ -339,6 +329,19 @@ export default {
 
     // ── Individual balance recording ─────────────────────────────────────────
 
+    function getBalanceAccountCurrency() {
+      const acc = accounts.value.find(a => a.id === balanceEntry.value.accountId);
+      return acc ? (acc.currency || baseCurrency.value) : baseCurrency.value;
+    }
+
+    const balFx = useFxConvert({
+      foreignCurrency: computed(() => getBalanceAccountCurrency()),
+      baseCurrency,
+      dateStr: computed(() => balanceEntry.value.date || todayStr()),
+      setAmount: v => { balanceEntry.value.amount = v; },
+      manualRates,
+    });
+
     function openBalanceUpdate(account) {
       const lastBal = getCurrentBalance(account.id);
       balanceEntry.value = {
@@ -346,6 +349,7 @@ export default {
         date: todayStr(),
         amount: lastBal != null ? amountToInput(lastBal) : '',
       };
+      balFx.reset();
       showBalanceModal.value = true;
     }
 
@@ -441,13 +445,13 @@ export default {
       let currentTotal = 0, prevTotal = 0;
       for (const acc of activeAccounts.value) {
         const cur = getCurrentBalance(acc.id);
-        currentTotal += convertToBase(cur, acc.currency);
+        if (cur != null) currentTotal += cur;
 
         const prevEntries = balanceHistory.value
           .filter(h => h.accountId === acc.id && h.year === prevY && h.month === prevM)
           .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
         if (prevEntries.length > 0) {
-          prevTotal += convertToBase(prevEntries[0].balance, acc.currency);
+          prevTotal += prevEntries[0].balance;
         }
       }
       return currentTotal - prevTotal;
@@ -567,12 +571,13 @@ export default {
       setDropdownOpen, selectDropdownOption,
       formatAccountDisplayName,
       formatCurrency, sanitizeAmount, getCurrentBalance, getLastUpdateDate, formatUpdateDate,
-      convertToBase, getAccountDiff,
+      getAccountDiff,
       addAccount, startEdit, saveEdit, persistEditToSheet, deleteAccount,
       showHistory, openBalanceUpdate, saveBalance, editHistoryEntry,
       enterUpdateMode, saveBalanceUpdates, monthName,
       reorderMode, moveAccountUp, moveAccountDown, addNameInput, balanceAmountInput,
       disableTool,
+      balFx,
     };
   },
 
@@ -633,7 +638,7 @@ export default {
                 </button>
               </div>
               <div class="valu-list-name">{{ formatAccountDisplayName(acc) }}</div>
-              <div class="valu-list-after">{{ formatCurrency(getCurrentBalance(acc.id), acc.currency || baseCurrency) }}</div>
+              <div class="valu-list-after">{{ formatCurrency(getCurrentBalance(acc.id), baseCurrency) }}</div>
             </div>
             <div v-if="!reorderMode" class="valu-list-row valu-list-row-sub">
               <div class="valu-list-sub">
@@ -642,7 +647,7 @@ export default {
               </div>
               <div class="valu-list-diff" v-if="getAccountDiff(acc.id) !== null"
                    :class="getAccountDiff(acc.id) >= 0 ? 'diff-positive' : 'diff-negative'">
-                {{ getAccountDiff(acc.id) >= 0 ? '+ ' : '- ' }}{{ formatCurrency(Math.abs(getAccountDiff(acc.id)), acc.currency || baseCurrency) }}
+                {{ getAccountDiff(acc.id) >= 0 ? '+ ' : '- ' }}{{ formatCurrency(Math.abs(getAccountDiff(acc.id)), baseCurrency) }}
               </div>
             </div>
           </div>
@@ -659,7 +664,7 @@ export default {
                  @click="startEdit(acc)">
               <div class="valu-list-row">
                 <div class="valu-list-name">{{ formatAccountDisplayName(acc) }}</div>
-                <div class="valu-list-after">{{ formatCurrency(getCurrentBalance(acc.id), acc.currency || baseCurrency) }}</div>
+                <div class="valu-list-after">{{ formatCurrency(getCurrentBalance(acc.id), baseCurrency) }}</div>
               </div>
               <div class="valu-list-row valu-list-row-sub">
                 <div class="valu-list-sub">
@@ -738,7 +743,7 @@ export default {
                        @change="persistEditToSheet()" />
                 <span class="material-icons sheet-hero-edit-icon">edit</span>
               </div>
-              <div class="sheet-hero-amount-display" style="cursor:pointer;" @click="openBalanceUpdate(editingAccount)">{{ formatCurrency(getCurrentBalance(editingAccount.id), editingAccount.currency || baseCurrency) }}</div>
+              <div class="sheet-hero-amount-display" style="cursor:pointer;" @click="openBalanceUpdate(editingAccount)">{{ formatCurrency(getCurrentBalance(editingAccount.id), baseCurrency) }}</div>
               <div class="sheet-hero-label">Balance</div>
             </div>
 
@@ -748,7 +753,7 @@ export default {
                    class="sheet-history-item" @click="editHistoryEntry(h)">
                 <span class="sheet-history-date">{{ monthName(h.month) }} {{ h.year }}</span>
                 <span class="sheet-history-amount">
-                  {{ formatCurrency(h.balance, editingAccount.currency || baseCurrency) }}
+                  {{ formatCurrency(h.balance, baseCurrency) }}
                 </span>
               </div>
             </div>
@@ -804,8 +809,23 @@ export default {
         <div class="modal" v-if="showBalanceModal">
           <div class="sheet-handle"></div>
           <div class="modal-body" style="padding-top:8px; text-align:center;">
-            <input ref="balanceAmountInput" class="sheet-hero-amount-input" type="text" inputmode="decimal" v-model="balanceEntry.amount" @input="sanitizeAmount(balanceEntry, 'amount')" placeholder="0" />
-            <div class="sheet-hero-label">Balance</div>
+            <input ref="balanceAmountInput" class="sheet-hero-amount-input" type="text" inputmode="decimal" v-model="balanceEntry.amount" @input="sanitizeAmount(balanceEntry, 'amount')" placeholder="0" :readonly="balFx.fxActive.value" :class="{ 'fx-readonly': balFx.fxActive.value }" />
+            <div class="sheet-hero-label">Balance <span v-if="balFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
+          </div>
+          <div v-if="balFx.needsFx.value" class="fx-convert-section" style="padding:0 24px;">
+            <button class="fx-toggle-btn" @click="balFx.toggle()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              {{ balFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + balFx.fxCurrency.value }}
+            </button>
+            <div v-if="balFx.fxActive.value" class="fx-convert-body">
+              <div class="fx-input-row">
+                <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="balFx.fxForeignAmount.value" @input="balFx.updateConverted()" :placeholder="'Balance in ' + balFx.fxCurrency.value" />
+                <span class="fx-currency-label">{{ balFx.fxCurrency.value }}</span>
+              </div>
+              <div v-if="balFx.fxLoading.value" class="fx-rate-info">Fetching rate...</div>
+              <div v-else-if="balFx.fxError.value" class="fx-rate-info fx-rate-error">{{ balFx.fxError.value }} — enter balance in {{ baseCurrency }} directly.</div>
+              <div v-else-if="balFx.fxRate.value" class="fx-rate-info">1 {{ balFx.fxCurrency.value }} = {{ balFx.fxRate.value.toFixed(4) }} {{ baseCurrency }} <span class="fx-rate-date">({{ balFx.fxRateDate.value }})</span></div>
+            </div>
           </div>
           <div class="modal-body">
             <div class="sheet-list-item">

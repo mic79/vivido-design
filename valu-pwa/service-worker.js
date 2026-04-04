@@ -1,4 +1,4 @@
-const CACHE_NAME = 'valu-app-v181';
+const CACHE_NAME = 'valu-app-v184';
 
 const PRECACHE_URLS = [
   'index.html',
@@ -11,6 +11,9 @@ const PRECACHE_URLS = [
   'styles.css',
   'googleAuth.js',
   'sheetsApi.js',
+  'fxService.js',
+  'useFxConvert.js',
+  'recurringService.js',
   'demoData.js',
   'HomePage.js',
   'AccountsPage.js',

@@ -1,4 +1,6 @@
 import SheetsApi, { TABS, formatAccountDisplayName } from './sheetsApi.js';
+import { getPendingRecurring } from './recurringService.js';
+import { getRate } from './fxService.js';
 
 const { ref, computed, watch, inject, nextTick } = Vue;
 
@@ -25,22 +27,14 @@ export default {
     const selectedBar = ref(null);
     const loading = ref(true);
     const lastUpdateInfo = ref(null);
+    const pendingRecurring = ref([]);
+    const pendingFxUpdates = ref([]);
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
 
     const enabledLists = computed(() => {
       const str = props.settings?.listsEnabled || '';
       return str.split(',').filter(Boolean);
-    });
-
-    const currencyRates = computed(() => {
-      const ratesStr = props.settings?.currencyRates || '';
-      const map = {};
-      ratesStr.split(',').filter(Boolean).forEach(r => {
-        const [cur, val] = r.split(':');
-        if (cur && val) map[cur] = parseFloat(val);
-      });
-      return map;
     });
 
     const categoryIconMap = computed(() => {
@@ -57,12 +51,6 @@ export default {
 
     function getCategoryIcon(name) {
       return categoryIconMap.value[name] || '';
-    }
-
-    function convertToBase(amount, fromCurrency) {
-      if (!fromCurrency || fromCurrency === baseCurrency.value) return amount;
-      const rate = currencyRates.value[fromCurrency];
-      return rate ? Math.round(amount * rate * 100) / 100 : amount;
     }
 
     function getNumberLocale() {
@@ -114,7 +102,7 @@ export default {
           const parts = e.date.split('-');
           return `${parts[0]}-${parts[1]}` === currentMonth.value;
         })
-        .reduce((sum, e) => sum + convertToBase(e.amount, getAccountCurrency(e.accountId)), 0);
+        .reduce((sum, e) => sum + e.amount, 0);
     });
 
     const monthlyIncome = computed(() => {
@@ -124,7 +112,7 @@ export default {
           const parts = e.date.split('-');
           return `${parts[0]}-${parts[1]}` === currentMonth.value;
         })
-        .reduce((sum, e) => sum + convertToBase(e.amount, getAccountCurrency(e.accountId)), 0);
+        .reduce((sum, e) => sum + e.amount, 0);
     });
 
     const netWorth = computed(() => {
@@ -136,7 +124,7 @@ export default {
             .filter(h => h.accountId === a.id)
             .sort((x, y) => (y.year * 100 + y.month) - (x.year * 100 + x.month))[0];
           const bal = latest ? latest.balance : 0;
-          return sum + convertToBase(bal, a.currency);
+          return sum + bal;
         }, 0);
     });
 
@@ -164,7 +152,7 @@ export default {
           }
           const total = activeIds.reduce((sum, a) => {
             const bal = accs[a.id] != null ? accs[a.id] : (lastKnown[a.id] || 0);
-            return sum + convertToBase(bal, a.currency);
+            return sum + bal;
           }, 0);
           return { month: key, total };
         })
@@ -316,7 +304,7 @@ export default {
                 expenses.value = rows.map(r => ({
                   id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
                   accountId: r[3], category: r[4], date: r[5],
-                  notes: r[6], createdAt: r[7],
+                  notes: r[6], createdAt: r[7], balanceAdjusted: r[8] || '', repeats: r[9] || '',
                 }));
               })
           );
@@ -331,7 +319,7 @@ export default {
                 incomeList.value = rows.map(r => ({
                   id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
                   accountId: r[3], category: r[4], date: r[5],
-                  notes: r[6], createdAt: r[7],
+                  notes: r[6], createdAt: r[7], balanceAdjusted: r[8] || '', repeats: r[9] || '',
                 }));
               })
           );
@@ -361,6 +349,14 @@ export default {
         );
 
         await Promise.all(promises);
+        pendingRecurring.value = getPendingRecurring(
+          expenses.value, incomeList.value,
+          props.settings?.repeatsLastChecked || ''
+        );
+        pendingFxUpdates.value = detectPendingFxUpdates(
+          expenses.value, incomeList.value,
+          props.settings?.fxLastRechecked || ''
+        );
       } catch (err) {
         if (err.message === 'popup_blocked' || err.message === 'refresh_failed') return;
         console.error('Failed to load home data:', err);
@@ -447,14 +443,14 @@ export default {
       return cashAccounts.reduce((sum, a) => {
         const info = lastKnown[a.id];
         if (!info) return sum;
-        return sum + convertToBase(info.balance, info.currency);
+        return sum + info.balance;
       }, 0);
     }
 
     function incomeForMonth(ym) {
       return incomeList.value
         .filter(e => e.date && e.date.slice(0, 7) === ym)
-        .reduce((sum, e) => sum + convertToBase(e.amount, getAccountCurrency(e.accountId)), 0);
+        .reduce((sum, e) => sum + e.amount, 0);
     }
 
     function prevYm(ym) {
@@ -643,7 +639,7 @@ export default {
         for (const row of rows) {
           if (row.months[m] !== null) {
             hasAny = true;
-            sum += convertToBase(row.months[m], row.currency);
+            sum += row.months[m];
           }
         }
         totals.push(hasAny ? sum : null);
@@ -671,6 +667,27 @@ export default {
     });
 
     const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    const balanceTableScrollRef = ref(null);
+    function scrollBalanceTable() {
+      const el = balanceTableScrollRef.value;
+      if (!el) return;
+      nextTick(() => {
+        if (balanceTableYear.value === new Date().getFullYear()) {
+          const monthIdx = new Date().getMonth();
+          const cells = el.querySelectorAll('thead th');
+          if (cells[monthIdx + 1]) {
+            const cellLeft = cells[monthIdx + 1].offsetLeft;
+            const stickyWidth = cells[0] ? cells[0].offsetWidth : 0;
+            el.scrollLeft = cellLeft - stickyWidth - 8;
+          }
+        } else {
+          el.scrollLeft = el.scrollWidth;
+        }
+      });
+    }
+    watch(balanceTableScrollRef, (el) => { if (el) scrollBalanceTable(); });
+    watch(balanceTableYear, () => scrollBalanceTable());
 
     const balanceTooltip = ref(null);
     let tooltipTimer = null;
@@ -705,7 +722,10 @@ export default {
     });
 
     const expCatTable = computed(() => {
-      const currentYear = new Date().getFullYear();
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1;
+      const completedMonths = Math.max(currentMonth - 1, 1);
       const yearsSet = new Set();
       const catYearTotals = {};
 
@@ -713,16 +733,18 @@ export default {
         if (!e.date) continue;
         const parts = e.date.split('-');
         const y = parseInt(parts[0]);
-        if (y >= currentYear) continue;
+        const m = parseInt(parts[1]);
+        if (y === currentYear && m >= currentMonth) continue;
         const cat = e.category || 'Uncategorized';
-        const cur = getAccountCurrency(e.accountId);
-        const base = convertToBase(e.amount, cur);
+        const base = e.amount;
         yearsSet.add(y);
         if (!catYearTotals[cat]) catYearTotals[cat] = {};
         catYearTotals[cat][y] = (catYearTotals[cat][y] || 0) + base;
       }
 
-      const years = [...yearsSet].sort((a, b) => a - b);
+      let years = [...yearsSet].sort((a, b) => a - b);
+      const hasPriorYears = years.some(y => y < currentYear);
+      if (hasPriorYears) years = years.filter(y => y !== currentYear);
       const defined = definedExpenseCategories.value;
 
       const rows = Object.entries(catYearTotals)
@@ -730,7 +752,8 @@ export default {
           const values = {};
           for (const y of years) {
             if (yearTotals[y] != null) {
-              values[y] = Math.round((yearTotals[y] / 12) * 100) / 100;
+              const divisor = y === currentYear ? completedMonths : 12;
+              values[y] = Math.round((yearTotals[y] / divisor) * 100) / 100;
             }
           }
           return { name, icon: categoryIconMap.value[name] || '', values };
@@ -838,6 +861,184 @@ export default {
       return Math.round(vals.reduce((s, v) => s + v, 0) * 100) / 100;
     });
 
+    // ── Recurring transactions review ───────────────────────────────────────
+    const showRecurringReview = ref(false);
+    const recurringApplying = ref(false);
+
+    function toggleRecurringItem(idx) {
+      if (!pendingRecurring.value.length) return;
+      pendingRecurring.value[idx].checked = !pendingRecurring.value[idx].checked;
+    }
+
+    const FX_TAG_RE = /\s*\(([A-Z]{3})\s+([\d.,]+)\)\s*$/;
+
+    function parseFxTag(notes) {
+      const match = (notes || '').match(FX_TAG_RE);
+      if (!match) return null;
+      const amount = parseFloat(match[2].replace(/,/g, ''));
+      if (isNaN(amount)) return null;
+      return { currency: match[1], amount };
+    }
+
+    function detectDuplicates(pendingItems) {
+      const allItems = [...expenses.value, ...incomeList.value];
+      for (const item of pendingItems) {
+        item.isDuplicate = allItems.some(existing =>
+          existing.title === item.title &&
+          existing.date === item.newDate &&
+          existing.amount === item.amount &&
+          existing.id !== item.sourceId
+        );
+        if (item.isDuplicate) item.checked = false;
+      }
+    }
+
+    async function openRecurringReview() {
+      showRecurringReview.value = true;
+      detectDuplicates(pendingRecurring.value);
+      const updates = pendingRecurring.value.map(async (item) => {
+        const fx = parseFxTag(item.notes);
+        if (!fx) return;
+        const result = await getRate(fx.currency, baseCurrency.value, item.newDate);
+        if (!result.error && result.rate) {
+          item.amount = Math.round(fx.amount * result.rate * 100) / 100;
+          item.fxConverted = true;
+        }
+      });
+      await Promise.all(updates);
+    }
+
+    async function applyRecurring() {
+      const items = pendingRecurring.value.filter(i => i.checked);
+      if (!items.length) {
+        await dismissRecurring();
+        return;
+      }
+      recurringApplying.value = true;
+      try {
+        for (const item of items) {
+          const id = SheetsApi.generateId();
+          const now = new Date().toISOString();
+          const tab = item.type === 'expense' ? TABS.EXPENSES : TABS.INCOME;
+          let amount = item.amount;
+          let notes = item.notes || '';
+
+          const fx = parseFxTag(notes);
+          if (fx) {
+            const result = await getRate(fx.currency, baseCurrency.value, item.newDate);
+            if (!result.error && result.rate) {
+              amount = Math.round(fx.amount * result.rate * 100) / 100;
+            }
+          }
+
+          await SheetsApi.appendRow(getSheetId(), tab, [
+            id, item.title, amount.toString(), item.accountId,
+            item.category, item.newDate, notes, now, '', item.repeats || '',
+          ]);
+        }
+        await SheetsApi.updateSetting(getSheetId(), 'repeatsLastChecked', new Date().toISOString());
+        showRecurringReview.value = false;
+        pendingRecurring.value = [];
+        emit('refresh');
+      } catch (err) {
+        console.error('Failed to apply recurring items:', err);
+      } finally {
+        recurringApplying.value = false;
+      }
+    }
+
+    async function dismissRecurring() {
+      try {
+        await SheetsApi.updateSetting(getSheetId(), 'repeatsLastChecked', new Date().toISOString());
+        showRecurringReview.value = false;
+        pendingRecurring.value = [];
+      } catch (err) {
+        console.error('Failed to dismiss recurring:', err);
+      }
+    }
+
+    // ── FX recheck for upcoming items that reached their date ────────────
+    const showFxReview = ref(false);
+    const fxApplying = ref(false);
+
+    function todayISO() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    function detectPendingFxUpdates(expenseList, incomeItems, lastRechecked) {
+      const today = todayISO();
+      const items = [];
+      function scan(list, type) {
+        for (const item of list) {
+          if (!item.notes || !item.date || !item.createdAt) continue;
+          const fx = parseFxTag(item.notes);
+          if (!fx) continue;
+          if (item.date > today) continue;
+          if (item.createdAt.slice(0, 10) >= item.date) continue;
+          if (lastRechecked && item.date <= lastRechecked.slice(0, 10)) continue;
+          items.push({ ...item, type, fx, checked: true, oldAmount: item.amount });
+        }
+      }
+      scan(expenseList, 'expense');
+      scan(incomeItems, 'income');
+      items.sort((a, b) => a.date.localeCompare(b.date));
+      return items;
+    }
+
+    function toggleFxItem(idx) {
+      if (!pendingFxUpdates.value.length) return;
+      pendingFxUpdates.value[idx].checked = !pendingFxUpdates.value[idx].checked;
+    }
+
+    async function openFxReview() {
+      showFxReview.value = true;
+      const updates = pendingFxUpdates.value.map(async (item) => {
+        const result = await getRate(item.fx.currency, baseCurrency.value, item.date);
+        if (!result.error && result.rate) {
+          item.newAmount = Math.round(item.fx.amount * result.rate * 100) / 100;
+        }
+      });
+      await Promise.all(updates);
+    }
+
+    async function applyFxUpdates() {
+      const items = pendingFxUpdates.value.filter(i => i.checked && i.newAmount != null);
+      if (!items.length) {
+        await dismissFxUpdates();
+        return;
+      }
+      fxApplying.value = true;
+      try {
+        for (const item of items) {
+          const tab = item.type === 'expense' ? TABS.EXPENSES : TABS.INCOME;
+          await SheetsApi.updateRow(getSheetId(), tab, item.id, [
+            item.id, item.title, item.newAmount.toString(), item.accountId,
+            item.category, item.date, item.notes, item.createdAt,
+            item.balanceAdjusted || '', item.repeats || '',
+          ]);
+        }
+        await SheetsApi.updateSetting(getSheetId(), 'fxLastRechecked', new Date().toISOString());
+        showFxReview.value = false;
+        pendingFxUpdates.value = [];
+        emit('refresh');
+      } catch (err) {
+        console.error('Failed to apply FX updates:', err);
+      } finally {
+        fxApplying.value = false;
+      }
+    }
+
+    async function dismissFxUpdates() {
+      try {
+        await SheetsApi.updateSetting(getSheetId(), 'fxLastRechecked', new Date().toISOString());
+        showFxReview.value = false;
+        pendingFxUpdates.value = [];
+      } catch (err) {
+        console.error('Failed to dismiss FX updates:', err);
+      }
+    }
+
     return {
       loading, enabledLists, baseCurrency, expenses, incomeList,
       monthlyExpenses, monthlyIncome, netWorth, netWorthHistory,
@@ -851,11 +1052,13 @@ export default {
       showOnboarding, accountsNeedsData, incomeNeedsData, expensesNeedsData,
       showOnboardingBanner, dismissOnboardingBanner,
       balanceTableYear, availableYears, yearlyBalanceTable, showBalanceTable,
-      prevYear, nextYear, canPrevYear, canNextYear, MONTH_ABBR,
+      prevYear, nextYear, canPrevYear, canNextYear, MONTH_ABBR, balanceTableScrollRef,
       balanceTooltip, showNameTooltip, hideNameTooltip,
       expCatTable, showExpCatTable, expCatChartData, EXP_CAT_COLORS, expCatScrollRef,
       categoryGoals, goalTotal, goalInputs, initGoalInput, updateGoalInput, saveGoal,
       showInstallCard, installBanner, dismissInstallHome,
+      pendingRecurring, showRecurringReview, recurringApplying, toggleRecurringItem, openRecurringReview, applyRecurring, dismissRecurring,
+      pendingFxUpdates, showFxReview, fxApplying, toggleFxItem, openFxReview, applyFxUpdates, dismissFxUpdates,
     };
   },
 
@@ -930,6 +1133,26 @@ export default {
             Update your account balances for {{ monthName(prevMonthInfo.month) }} {{ prevMonthInfo.year }}
           </div>
           <span class="banner-action">Update</span>
+        </div>
+
+        <!-- Recurring transactions reminder -->
+        <div v-if="pendingRecurring && pendingRecurring.length" class="banner banner-info" style="cursor:pointer;" @click="openRecurringReview()">
+          <span class="material-icons">repeat</span>
+          <div class="banner-content">
+            {{ pendingRecurring.length }} recurring item(s) ready to apply
+          </div>
+          <span class="banner-action">Review</span>
+          <span class="material-icons banner-dismiss" @click.stop="dismissRecurring">close</span>
+        </div>
+
+        <!-- FX rate update reminder -->
+        <div v-if="pendingFxUpdates && pendingFxUpdates.length" class="banner banner-info" style="cursor:pointer;" @click="openFxReview()">
+          <span class="material-icons">currency_exchange</span>
+          <div class="banner-content">
+            {{ pendingFxUpdates.length }} item(s) need exchange rate update
+          </div>
+          <span class="banner-action">Review</span>
+          <span class="material-icons banner-dismiss" @click.stop="dismissFxUpdates">close</span>
         </div>
 
         <!-- Total Balance + Area Chart (no card boundary) -->
@@ -1093,7 +1316,7 @@ export default {
               <div class="list-item-right">
                 <div class="list-item-amount"
                      :style="{ color: tx.type === 'income' ? 'var(--color-primary)' : 'var(--color-secondary)' }">
-                  {{ (tx.type === 'income' ? tx.amount >= 0 : tx.amount < 0) ? '+' : '-' }}{{ formatCurrency(Math.abs(tx.amount), getAccountCurrency(tx.accountId)) }}
+                  {{ (tx.type === 'income' ? tx.amount >= 0 : tx.amount < 0) ? '+' : '-' }}{{ formatCurrency(Math.abs(tx.amount), baseCurrency) }}
                 </div>
               </div>
             </div>
@@ -1114,7 +1337,7 @@ export default {
               </button>
             </div>
           </div>
-          <div class="balance-table-wrap">
+          <div class="balance-table-wrap" ref="balanceTableScrollRef">
             <table class="balance-table">
               <thead>
                 <tr>
@@ -1150,7 +1373,7 @@ export default {
              @click="hideNameTooltip">{{ balanceTooltip.text }}</div>
 
         <!-- Expense Categories Table -->
-        <div v-if="showExpCatTable" class="card mb-16">
+        <div v-if="showExpCatTable" id="expense-goals" class="card mb-16">
           <div class="card-header"><h3>Average Monthly Expenses</h3></div>
           <div class="balance-table-wrap" ref="expCatScrollRef">
             <table class="balance-table">
@@ -1257,6 +1480,92 @@ export default {
           Last updated {{ lastUpdateLabel }}
         </div>
       </template>
+
+      <!-- Recurring review modal -->
+      <div class="modal-overlay" :class="{ open: showRecurringReview }" @click.self="showRecurringReview = false">
+        <div class="modal" v-if="showRecurringReview">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Recurring Items</h2>
+            <button class="btn-icon" @click="showRecurringReview = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="max-height:50vh;overflow-y:auto;">
+            <p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px;">
+              Select items to apply, then confirm.
+            </p>
+            <div v-for="(item, idx) in pendingRecurring" :key="idx"
+              class="recurring-review-item" :style="item.isDuplicate ? { opacity: 0.6 } : {}" @click="toggleRecurringItem(idx)">
+              <span class="material-icons" style="font-size:22px;margin-right:8px;color:var(--primary);">
+                {{ item.checked ? 'check_box' : 'check_box_outline_blank' }}
+              </span>
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:500;font-size:14px;">{{ item.title }}</div>
+                <div style="font-size:12px;color:var(--text-secondary);">
+                  {{ item.type === 'expense' ? '−' : '+' }}{{ formatCurrency(item.amount, baseCurrency) }}
+                  <template v-if="item.fxConverted">
+                    <span class="material-icons" style="font-size:12px;vertical-align:middle;">currency_exchange</span>
+                  </template>
+                  &middot; {{ item.newDate }}
+                  &middot; {{ item.sourceLabel }}
+                </div>
+                <div v-if="item.isDuplicate" style="font-size:11px;color:var(--color-warning);margin-top:2px;">
+                  <span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">warning</span>
+                  Possible duplicate — a similar entry already exists this month
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer" style="display:flex;gap:8px;">
+            <button class="btn btn-text" @click="showRecurringReview = false" style="flex:1;">Cancel</button>
+            <button class="btn-sheet-cta" @click="applyRecurring" :disabled="recurringApplying" style="flex:2;">
+              {{ recurringApplying ? 'Applying...' : 'Apply selected' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- FX rate update review modal -->
+      <div class="modal-overlay" :class="{ open: showFxReview }" @click.self="showFxReview = false">
+        <div class="modal" v-if="showFxReview">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Exchange Rate Updates</h2>
+            <button class="btn-icon" @click="showFxReview = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="max-height:50vh;overflow-y:auto;">
+            <p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px;">
+              These upcoming items have reached their date. Select items to update with the correct exchange rate.
+            </p>
+            <div v-for="(item, idx) in pendingFxUpdates" :key="idx"
+              class="recurring-review-item" @click="toggleFxItem(idx)">
+              <span class="material-icons" style="font-size:22px;margin-right:8px;color:var(--primary);">
+                {{ item.checked ? 'check_box' : 'check_box_outline_blank' }}
+              </span>
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:500;font-size:14px;">{{ item.title }}</div>
+                <div style="font-size:12px;color:var(--text-secondary);">
+                  {{ item.fx.currency }} {{ item.fx.amount.toFixed(2) }}
+                  &middot; {{ item.date }}
+                </div>
+                <div v-if="item.newAmount != null" style="font-size:12px;">
+                  <span style="color:var(--text-secondary);text-decoration:line-through;">{{ formatCurrency(item.oldAmount, baseCurrency) }}</span>
+                  <span class="material-icons" style="font-size:12px;vertical-align:middle;margin:0 2px;">arrow_forward</span>
+                  <span style="color:var(--color-primary);font-weight:600;">{{ formatCurrency(item.newAmount, baseCurrency) }}</span>
+                </div>
+                <div v-else style="font-size:12px;color:var(--text-secondary);">
+                  Loading rate…
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer" style="display:flex;gap:8px;">
+            <button class="btn btn-text" @click="showFxReview = false" style="flex:1;">Cancel</button>
+            <button class="btn-sheet-cta" @click="applyFxUpdates" :disabled="fxApplying" style="flex:2;">
+              {{ fxApplying ? 'Updating...' : 'Update selected' }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   `,
 };

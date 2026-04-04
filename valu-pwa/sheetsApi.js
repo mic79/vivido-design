@@ -67,6 +67,8 @@ const DEFAULT_SETTINGS = [
   ['expenseCategories',  serializeDefaultCategories(DEFAULT_EXPENSE_CATEGORIES)],
   ['incomeCategories',   serializeDefaultCategories(DEFAULT_INCOME_CATEGORIES)],
   ['currencyRates',      ''],
+  ['repeatsLastChecked', ''],
+  ['fxLastRechecked',    ''],
   ['createdAt',          ''],
   ['createdBy',          ''],
 ];
@@ -602,6 +604,14 @@ const SheetsApi = {
       `${DRIVE_BASE}?q=${encodeURIComponent("mimeType='application/vnd.google-apps.spreadsheet'")}&fields=${encodeURIComponent('files(id,name,modifiedTime,shared,owners)')}&orderBy=modifiedTime desc&pageSize=50`
     );
     return (data.files || []).filter(f => f.name.startsWith('Valu:'));
+  },
+
+  async renameSpreadsheet(fileId, newName) {
+    if (isDemoSheet(fileId)) return;
+    await fetchWithRetry(`${DRIVE_BASE}/${fileId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: newName }),
+    });
   },
 
   async getFileModifiedTime(fileId) {

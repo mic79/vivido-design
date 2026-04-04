@@ -339,10 +339,17 @@ export default {
       }
     }
 
-    function saveConfigGroupName() {
+    async function saveConfigGroupName() {
       const name = configGroupName.value.trim();
       if (!name) return;
-      saveConfigField('groupName', name);
+      await saveConfigField('groupName', name);
+      if (configGroupId.value && !configIsNewGroup.value) {
+        try {
+          await SheetsApi.renameSpreadsheet(configGroupId.value, `Valu: ${name}`);
+        } catch (err) {
+          console.error('Failed to rename spreadsheet file:', err);
+        }
+      }
     }
 
     function saveConfigBaseCurrency() {
@@ -648,10 +655,10 @@ export default {
 
             <!-- Currency Conversion Rates -->
             <div class="card mb-16">
-              <div class="card-header"><h3>Currency Rates</h3></div>
+              <div class="card-header"><h3>Fallback Rates</h3></div>
               <div class="card-body">
                 <p style="font-size:13px;color:var(--color-text-secondary);margin-bottom:12px;">
-                  Set conversion rates from other currencies to {{ configBaseCurrency }}.
+                  Rates are fetched automatically when logging transactions. These manual rates are used as a fallback if the rate service is unavailable.
                 </p>
                 <div v-for="(r, i) in configCurrencyRates" :key="i" class="flex items-center gap-8 mb-8">
                   <span style="font-size:14px;font-weight:500;min-width:40px;">{{ r.currency }}</span>

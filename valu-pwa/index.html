@@ -110,7 +110,7 @@
         </div>
 
         <div class="sidenav-footer">
-          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v181 — What's new</button>
+          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v184 — What's new</button>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -547,18 +547,22 @@
           }
           currentPage.value = page;
           if (opts && opts.scrollTo) {
-            nextTick(() => {
-              setTimeout(() => {
-                let el = document.getElementById(opts.scrollTo);
-                if (!el) {
-                  const titles = document.querySelectorAll('.activity-feed-title');
-                  for (const t of titles) {
-                    if (t.textContent.includes("What's New")) { el = t.closest('.card'); break; }
-                  }
+            const scrollTarget = opts.scrollTo;
+            const tryScroll = (attempts) => {
+              let el = document.getElementById(scrollTarget);
+              if (!el) {
+                const titles = document.querySelectorAll('.activity-feed-title');
+                for (const t of titles) {
+                  if (t.textContent.includes("What's New")) { el = t.closest('.card'); break; }
                 }
-                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }, 150);
-            });
+              }
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              } else if (attempts > 0) {
+                setTimeout(() => tryScroll(attempts - 1), 300);
+              }
+            };
+            nextTick(() => setTimeout(() => tryScroll(8), 200));
           }
           if (!dataLoaded.value && activeGroup.value) {
             await loadGroupData();

@@ -1,4 +1,5 @@
 import SheetsApi, { TABS, DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES } from './sheetsApi.js';
+import { getCurrentYM } from './recurringService.js';
 
 const { ref, computed, watch, inject } = Vue;
 
@@ -53,16 +54,18 @@ export default {
       loading.value = true;
       try {
         const [expRows, incRows] = await Promise.all([
-          enabledLists.value.includes('expenses') ? SheetsApi.getValues(sid, `${TABS.EXPENSES}!A2:I`) : [],
-          enabledLists.value.includes('income') ? SheetsApi.getValues(sid, `${TABS.INCOME}!A2:I`) : [],
+          enabledLists.value.includes('expenses') ? SheetsApi.getValues(sid, `${TABS.EXPENSES}!A2:J`) : [],
+          enabledLists.value.includes('income') ? SheetsApi.getValues(sid, `${TABS.INCOME}!A2:J`) : [],
         ]);
         expenses.value = (expRows || []).map(r => ({
           id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
           accountId: r[3], category: r[4], date: r[5], notes: r[6],
+          createdAt: r[7] || '', repeats: r[9] || '',
         }));
         incomeList.value = (incRows || []).map(r => ({
           id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
           accountId: r[3], category: r[4], date: r[5], notes: r[6],
+          createdAt: r[7] || '', repeats: r[9] || '',
         }));
       } catch (err) {
         if (err.message === 'popup_blocked' || err.message === 'refresh_failed') throw err;
@@ -156,12 +159,70 @@ export default {
       try { localStorage.removeItem('valu_onboarding_dismissed'); } catch (_) {}
     }
 
+    const recurringCount = computed(() => {
+      return [...expenses.value, ...incomeList.value].filter(i => i.repeats).length;
+    });
+
+    const hasRecurringPending = computed(() => {
+      if (recurringCount.value === 0) return false;
+      const lastChecked = props.settings?.repeatsLastChecked || '';
+      if (!lastChecked) return true;
+      if (lastChecked < getCurrentYM()) return true;
+      // Even when up-to-date, check if any recurring item was created after lastChecked
+      return [...expenses.value, ...incomeList.value].some(
+        i => i.repeats && i.createdAt && i.createdAt > lastChecked
+      );
+    });
+
+    const recurringLastChecked = computed(() => {
+      const lc = props.settings?.repeatsLastChecked || '';
+      if (!lc) return null;
+      const [y, m] = lc.split('-').map(Number);
+      return new Date(y, m - 1).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    });
+
+    function recheckRecurring() {
+      emit('navigate', 'home');
+    }
+
+    // ── FX rate update status ─────────────────────────────────────────────
+    const FX_TAG_RE = /\s*\([A-Z]{3}\s+[\d.,]+\)\s*$/;
+
+    const fxUpcomingCount = computed(() => {
+      return [...expenses.value, ...incomeList.value].filter(i => i.notes && FX_TAG_RE.test(i.notes)).length;
+    });
+
+    const hasFxPending = computed(() => {
+      if (fxUpcomingCount.value === 0) return false;
+      const lastRechecked = props.settings?.fxLastRechecked || '';
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      return [...expenses.value, ...incomeList.value].some(i => {
+        if (!i.notes || !i.date || !i.createdAt) return false;
+        if (!FX_TAG_RE.test(i.notes)) return false;
+        if (i.date > todayStr) return false;
+        if (i.createdAt.slice(0, 10) >= i.date) return false;
+        if (lastRechecked && i.date <= lastRechecked.slice(0, 10)) return false;
+        return true;
+      });
+    });
+
+    const fxLastRechecked = computed(() => {
+      const lc = props.settings?.fxLastRechecked || '';
+      if (!lc) return null;
+      const d = new Date(lc);
+      return isNaN(d) ? null : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    });
+
     return {
       baseCurrency, onboardingCollapsed, collapseOnboarding, expandOnboarding,
       DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES,
       EXPENSE_CAT_DESCRIPTIONS, INCOME_CAT_DESCRIPTIONS,
       loading, monthlySummary, milestones, formatCurrency, emit,
       installBanner,
+      recurringCount, hasRecurringPending, recurringLastChecked,
+      recheckRecurring,
+      fxUpcomingCount, hasFxPending, fxLastRechecked,
     };
   },
 
@@ -185,6 +246,52 @@ export default {
       </div>
 
       <div class="page">
+        <!-- Recurring status card -->
+        <div v-if="recurringCount > 0" class="card mb-16 activity-feed-card">
+          <div class="activity-feed-header">
+            <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">repeat</span>
+            <div>
+              <div class="activity-feed-title">Recurring Items</div>
+              <div class="activity-feed-date">{{ recurringCount }} item{{ recurringCount === 1 ? '' : 's' }} set to repeat</div>
+            </div>
+          </div>
+          <div class="activity-feed-body" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <div v-if="hasRecurringPending" style="flex:1;">
+              <span class="material-icons" style="font-size:14px;vertical-align:middle;color:var(--color-warning);margin-right:4px;">info</span>
+              Items are waiting to be reviewed.
+              <a href="#" @click.prevent="$emit('navigate', 'home')" style="color:var(--color-primary);font-weight:600;margin-left:4px;">Review</a>
+            </div>
+            <div v-else style="flex:1;color:var(--text-secondary);">
+              Up to date<span v-if="recurringLastChecked"> · checked {{ recurringLastChecked }}</span>
+            </div>
+            <button class="btn btn-text btn-sm" @click.stop="recheckRecurring" style="white-space:nowrap;flex-shrink:0;">
+              <span class="material-icons" style="font-size:16px;vertical-align:middle;margin-right:2px;">refresh</span>
+              Recheck
+            </button>
+          </div>
+        </div>
+
+        <!-- FX rate update status card -->
+        <div v-if="fxUpcomingCount > 0" class="card mb-16 activity-feed-card">
+          <div class="activity-feed-header">
+            <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">currency_exchange</span>
+            <div>
+              <div class="activity-feed-title">Exchange Rates</div>
+              <div class="activity-feed-date">{{ fxUpcomingCount }} item{{ fxUpcomingCount === 1 ? '' : 's' }} with currency conversion</div>
+            </div>
+          </div>
+          <div class="activity-feed-body" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <div v-if="hasFxPending" style="flex:1;">
+              <span class="material-icons" style="font-size:14px;vertical-align:middle;color:var(--color-warning);margin-right:4px;">info</span>
+              Upcoming items need rate updates.
+              <a href="#" @click.prevent="$emit('navigate', 'home')" style="color:var(--color-primary);font-weight:600;margin-left:4px;">Review</a>
+            </div>
+            <div v-else style="flex:1;color:var(--text-secondary);">
+              Up to date<span v-if="fxLastRechecked"> · checked {{ fxLastRechecked }}</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Getting Started Card: collapsed -->
         <div v-if="onboardingCollapsed" class="card mb-16 activity-card activity-card--collapsed" @click="expandOnboarding">
           <div class="activity-collapsed-row">
@@ -331,23 +438,18 @@ export default {
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>
-              <div class="activity-feed-title">What's New in v181</div>
-              <div class="activity-feed-date">March 2026</div>
+              <div class="activity-feed-title">What's New in v184</div>
+              <div class="activity-feed-date">April 2026</div>
             </div>
           </div>
           <div class="activity-feed-body">
             <ul class="activity-feed-list">
-              <li><strong>Smarter assistant</strong> — Context-aware follow-ups, year-to-date summaries, income trend charts, configurable trend periods, and FAQ-powered fallback answers.</li>
+              <li><strong>Currency auto-conversion</strong> — Log expenses, income, or balances in a foreign-currency account and auto-convert at the official central bank rate for the transaction date. Fallback to manual rates when offline.</li>
+              <li><strong>Smarter assistant</strong> — Context-aware follow-ups, year-to-date summaries, income trend charts, budget queries, and FAQ-powered fallback answers.</li>
               <li><strong>FI Calculator</strong> — Financial Independence calculator with auto-populated data from your accounts, income, and expenses.</li>
               <li><strong>Balance history protection</strong> — Storing an older balance no longer overwrites a newer one for the same month.</li>
               <li><strong>Smart Insights</strong> — Estimate spending from balance changes and income — no expense logging needed.</li>
               <li><strong>Expense Categories widget</strong> — Monthly breakdown per category with editable goals, right on the Home page.</li>
-              <li><strong>Monthly summaries</strong> — Real monthly recaps with spending, income, savings rate, and top categories.</li>
-              <li><strong>Milestones</strong> — Track your progress with achievements that unlock as you use the app.</li>
-              <li><strong>Custom dialogs</strong> — Styled in-app dialogs replacing native browser alerts.</li>
-              <li><strong>Back button support</strong> — Browser back/forward navigation now works within the app.</li>
-              <li><strong>Balance reminders</strong> — Toggle on/off from Settings to get reminded to update balances each month.</li>
-              <li><strong>Demo customisation</strong> — Toggle tools and categories on/off in the Demo group to preview different configurations.</li>
             </ul>
           </div>
         </div>

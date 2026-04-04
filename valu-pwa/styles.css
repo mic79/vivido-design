@@ -2068,6 +2068,82 @@ html[data-theme="light"] .valu-site-intro .s3 { background: #4f4f4f; }
   flex-shrink: 0;
 }
 
+/* ── FX conversion toggle ──────────────────────────────────────────────────── */
+.fx-convert-section {
+  padding: 0 24px 8px;
+}
+.fx-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid var(--color-border, #ddd);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.fx-toggle-btn:hover {
+  background: rgba(0,0,0,0.04);
+}
+.fx-toggle-icon {
+  font-size: 18px;
+}
+.fx-convert-body {
+  margin-top: 10px;
+}
+.fx-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fx-foreign-input {
+  flex: 1;
+  border: none;
+  border-bottom: 2px solid var(--color-primary);
+  background: none;
+  font-size: 18px;
+  font-weight: 600;
+  padding: 6px 0;
+  outline: none;
+  color: var(--color-text);
+}
+.fx-foreign-input::placeholder {
+  color: var(--color-text-hint);
+  font-weight: 400;
+}
+.fx-currency-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.fx-rate-info {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 6px;
+}
+.fx-rate-error {
+  color: var(--color-danger, #d9534f);
+}
+.fx-rate-date {
+  opacity: 0.7;
+}
+.fx-future-hint {
+  color: var(--color-primary);
+  font-style: italic;
+}
+.fx-base-tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  margin-left: 4px;
+}
+.fx-readonly {
+  opacity: 0.6;
+}
+
 select.form-input {
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%234f4f4f' d='M3 4.5L6 7.5L9 4.5'/%3E%3C/svg%3E");
@@ -2445,7 +2521,6 @@ html[data-theme="light"] .sheet-handle::after { background: #999; }
 }
 
 /* Absolute menus extend past the body box; overflow:auto would clip them */
-.modal-body:has(.valu-dropdown--open),
 .modal-body:has(.currency-picker--open),
 .modal-body:has(.valu-date-picker-popover),
 .modal-body:has(.form-dropdown-list) {
@@ -3112,6 +3187,32 @@ html[data-theme="dark"] .valu-date-picker-nav:hover {
 .banner .material-icons { font-size: 20px; flex-shrink: 0; }
 .banner-content { flex: 1; }
 .banner-action { font-weight: 600; cursor: pointer; white-space: nowrap; }
+.banner-dismiss { font-size: 18px; cursor: pointer; opacity: .6; margin-left: 4px; }
+.banner-dismiss:hover { opacity: 1; }
+
+/* Recurring review items */
+.recurring-review-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+}
+.recurring-review-item:last-child { border-bottom: none; }
+
+
+
+/* Repeats badge on list items */
+.repeats-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 500;
+  opacity: .8;
+}
 
 /* ── Stat Widget ────────────────────────────────────────────────────────────── */
 

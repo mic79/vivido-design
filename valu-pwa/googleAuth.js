@@ -374,10 +374,12 @@ const GoogleAuth = {
         .setMimeTypes('application/vnd.google-apps.spreadsheet')
         .setQuery(query);
 
+      const appId = CLIENT_ID.split('-')[0];
       new google.picker.PickerBuilder()
         .addView(view)
         .setOAuthToken(token)
         .setDeveloperKey(API_KEY)
+        .setAppId(appId)
         .setTitle('Select a Valu group spreadsheet')
         .setCallback((data) => {
           if (data.action === google.picker.Action.PICKED) {

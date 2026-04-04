@@ -14,6 +14,9 @@ const INTENTS = [
   // Navigation & actions (checked before broad data intents)
   { id: 'addExpense',       patterns: [/add.*(expense|purchase|cost)/i, /log.*(expense|purchase)/i, /new expense/i] },
   { id: 'addIncome',        patterns: [/add.*income/i, /log.*income/i, /new income/i] },
+  { id: 'goHome',           patterns: [/go\s*(to\s*)?home/i, /open\s*home/i, /home\s*page/i, /^home$/i] },
+  { id: 'goExpenseGoals',   patterns: [/go\s*to\s*expense\s*goals/i, /expense\s*goals/i, /set\s*up\s*(?:expense\s*)?goals/i, /category\s*goals/i] },
+  { id: 'goActivity',       patterns: [/go\s*to\s*activity/i, /open\s*activity/i, /activity\s*page/i] },
   { id: 'goExpenses',       patterns: [/go\s*to\s*expense/i, /open\s*expense/i, /expense.*page/i, /expense.*list/i] },
   { id: 'goIncome',         patterns: [/go\s*to\s*income/i, /open\s*income/i, /income.*page/i] },
   { id: 'goAccounts',       patterns: [/go\s*to\s*account/i, /open\s*account/i, /account.*page/i] },
@@ -43,6 +46,7 @@ const INTENTS = [
   { id: 'whatIsValu',       patterns: [/what\s*is\s*valu/i, /about\s*valu/i, /tell.*about/i] },
   { id: 'categories',       patterns: [/categor/i, /set\s*up.*categor/i, /manage.*categor/i] },
   { id: 'currency',         patterns: [/currency/i, /exchange.*rate/i, /base\s*currency/i] },
+  { id: 'recurring',        patterns: [/recurring/i, /\brepeats?\b/i, /\brepeat.*transaction/i, /monthly.*repeat/i, /yearly.*repeat/i] },
   { id: 'privacy',          patterns: [/privacy/i, /data.*safe/i, /secure/i, /who.*access/i] },
   { id: 'smartInsights',    patterns: [/smart\s*insight/i, /derived.*expense/i, /estimate.*spend/i, /balance.*based/i] },
   { id: 'assistantInfo',    patterns: [/what.*assistant/i, /who.*are.*you/i, /what.*can.*you.*do/i, /what.*is.*the.*orb/i, /what.*orb/i, /the.*logo/i] },
@@ -50,6 +54,7 @@ const INTENTS = [
   { id: 'offline',          patterns: [/\boffline\b/i, /work.*without.*internet/i, /no.*connection/i] },
   { id: 'install',          patterns: [/\binstall\b/i, /add.*home\s*screen/i, /\bpwa\b/i, /download.*app/i] },
   { id: 'howGoalsWork',     patterns: [/how.*goal.*work/i, /set.*goal/i, /what.*goal/i, /goal.*explain/i] },
+  { id: 'budget',           patterns: [/\bbudget\b/i, /\bbudgeting\b/i, /spending\s*limit/i, /spending\s*target/i] },
   { id: 'reminders',        patterns: [/reminder/i, /balance.*remind/i, /remind.*balance/i] },
   { id: 'tips',             patterns: [/\btips?\b/i, /\badvice\b/i, /\brecommend/i, /what\s*should/i] },
   { id: 'thanks',           patterns: [/thank/i, /awesome/i, /\bgreat\b/i, /perfect/i, /\bnice\b/i, /\bcool\b/i] },
@@ -122,16 +127,6 @@ export default {
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
 
-    const currencyRates = computed(() => {
-      const ratesStr = props.settings?.currencyRates || '';
-      const map = {};
-      ratesStr.split(',').filter(Boolean).forEach(r => {
-        const [cur, val] = r.split(':');
-        if (cur && val) map[cur] = parseFloat(val);
-      });
-      return map;
-    });
-
     const enabledLists = computed(() => (props.settings?.listsEnabled || '').split(',').filter(Boolean));
 
     function getAccountCurrency(accountId) {
@@ -141,12 +136,6 @@ export default {
     function getAccountName(accountId) {
       const acc = (props.accounts || []).find(a => a.id === accountId);
       return acc ? acc.name : '';
-    }
-
-    function convertToBase(amount, fromCurrency) {
-      if (!fromCurrency || fromCurrency === baseCurrency.value) return amount;
-      const rate = currencyRates.value[fromCurrency];
-      return rate ? Math.round(amount * rate * 100) / 100 : amount;
     }
 
     function getNumberLocale() {
@@ -279,17 +268,17 @@ export default {
     }
 
     function totalExpenses(list) {
-      return list.reduce((s, e) => s + convertToBase(e.amount, getAccountCurrency(e.accountId)), 0);
+      return list.reduce((s, e) => s + e.amount, 0);
     }
     function totalIncome(list) {
-      return list.reduce((s, e) => s + convertToBase(e.amount, getAccountCurrency(e.accountId)), 0);
+      return list.reduce((s, e) => s + e.amount, 0);
     }
 
     function categoryBreakdown(list) {
       const map = {};
       for (const e of list) {
         const cat = e.category || 'Uncategorized';
-        const base = convertToBase(e.amount, getAccountCurrency(e.accountId));
+        const base = e.amount;
         map[cat] = (map[cat] || 0) + base;
       }
       return Object.entries(map)
@@ -319,7 +308,7 @@ export default {
       for (const acc of (props.accounts || [])) {
         if (acc.discontinued === 'true') continue;
         const bal = getCurrentBalance(acc.id);
-        if (bal !== null) total += convertToBase(bal, acc.currency || baseCurrency.value);
+        if (bal !== null) total += bal;
       }
       return Math.round(total * 100) / 100;
     }
@@ -349,7 +338,7 @@ export default {
       }
       return cashAccounts.reduce((sum, a) => {
         const info = lastKnown[a.id];
-        return info ? sum + convertToBase(info.balance, info.currency) : sum;
+        return info ? sum + info.balance : sum;
       }, 0);
     }
 
@@ -603,7 +592,7 @@ export default {
         const monthMap = {};
         for (const e of found) {
           const ym = e.date.slice(0, 7);
-          monthMap[ym] = (monthMap[ym] || 0) + convertToBase(e.amount, getAccountCurrency(e.accountId));
+          monthMap[ym] = (monthMap[ym] || 0) + e.amount;
         }
         const sortedMonths = Object.keys(monthMap).sort();
         const perMonth = sortedMonths.length > 0 ? total / sortedMonths.length : 0;
@@ -643,7 +632,7 @@ export default {
       const monthMap = {};
       for (const e of expenseList) {
         const ym = e.date.slice(0, 7);
-        monthMap[ym] = (monthMap[ym] || 0) + convertToBase(e.amount, getAccountCurrency(e.accountId));
+        monthMap[ym] = (monthMap[ym] || 0) + e.amount;
       }
       const sorted = Object.keys(monthMap).sort();
       if (sorted.length === 0) {
@@ -740,7 +729,7 @@ export default {
         const monthMap = {};
         for (const e of found) {
           const ym = e.date.slice(0, 7);
-          monthMap[ym] = (monthMap[ym] || 0) + convertToBase(e.amount, getAccountCurrency(e.accountId));
+          monthMap[ym] = (monthMap[ym] || 0) + e.amount;
         }
         const trendData = Object.keys(monthMap).sort().map(ym => ({ month: ym, total: Math.round(monthMap[ym] * 100) / 100 }));
         reply(msg, {
@@ -930,7 +919,7 @@ export default {
         for (const [aid, bal] of Object.entries(snap)) lastKnown[aid] = bal;
         const total = accs.reduce((sum, a) => {
           const bal = lastKnown[a.id];
-          return bal != null ? sum + convertToBase(bal, a.currency || baseCurrency.value) : sum;
+          return bal != null ? sum + bal : sum;
         }, 0);
         return { month: ym, total: Math.round(total * 100) / 100 };
       });
@@ -1103,9 +1092,9 @@ export default {
     }
 
     // ── Quick actions ────────────────────────────────────────────────────────
-    function handleNav(page, label) {
+    function handleNav(page, label, opts) {
       reply(`Opening ${label}...`);
-      setTimeout(() => emit('navigate', page), 400);
+      setTimeout(() => emit('navigate', page, opts), 400);
     }
 
     function handleFi() {
@@ -1164,14 +1153,19 @@ export default {
 
     function handleCurrency() {
       const base = baseCurrency.value;
-      const rates = currencyRates.value;
-      const rateList = Object.entries(rates);
-      let text = `Your base currency is ${base}.`;
-      if (rateList.length > 0) {
-        text += ' Exchange rates: ' + rateList.map(([c, r]) => `1 ${c} = ${r} ${base}`).join(', ') + '.';
-      }
-      text += ' You can change this in your Group configuration.';
+      let text = `Your base currency is ${base}. All amounts are stored in ${base}.`;
+      text += ' When logging transactions from foreign-currency accounts, use the "Convert from" toggle to auto-convert using the official central bank rate for the transaction date.';
+      text += ' For future-dated transactions, today\'s rate is used and the amount is automatically updated when the actual date arrives.';
+      text += ' If the rate service is unavailable, fallback rates from your Group configuration are used.';
+      text += ' You can change your base currency in Group configuration.';
       reply(text, { suggestions: ['Go to groups', 'Show spending'] });
+    }
+
+    function handleRecurring() {
+      const entry = getFaqById('recurring');
+      reply(entry ? entry.answer : 'You can set expenses or income to repeat monthly or yearly. Check the Activity page for status.', {
+        suggestions: ['Go to expenses', 'Go to activity', "What's new"],
+      });
     }
 
     function handlePrivacy() {
@@ -1186,6 +1180,18 @@ export default {
       reply(entry ? entry.answer : "Check out the latest features by exploring the app!", {
         suggestions: ['Show spending', 'Goal status', 'Getting started'],
       });
+    }
+
+    function handleBudget() {
+      const goals = getGoals();
+      const hasGoals = Object.keys(goals).length > 0;
+      let text = 'Valu uses **category goals** as your budget. You can set a monthly spending target for each expense category — the Home page shows your progress against these goals.';
+      if (hasGoals) {
+        text += `\n\nYou currently have ${Object.keys(goals).length} category goal(s) set. Ask me "goal status" to see how you're tracking.`;
+      } else {
+        text += '\n\nYou haven\'t set any goals yet. Head to the **Expense Categories** chart on the Home page and tap the Goal column to set targets.';
+      }
+      reply(text, { suggestions: hasGoals ? ['Goal status', 'Show spending', 'Tips'] : ['Go to expense goals', 'Show spending', 'What are goals?'] });
     }
 
     function handleThanks() {
@@ -1469,6 +1475,9 @@ export default {
         case 'chart':           handleChart(); break;
         case 'addExpense':      handleNav('expenses', 'Expenses'); break;
         case 'addIncome':       handleNav('income', 'Income'); break;
+        case 'goHome':          handleNav('home', 'Home'); break;
+        case 'goExpenseGoals':  handleNav('home', 'Expense Goals', { scrollTo: 'expense-goals' }); break;
+        case 'goActivity':      handleNav('activity', 'Activity'); break;
         case 'goExpenses':      handleNav('expenses', 'Expenses'); break;
         case 'goIncome':        handleNav('income', 'Income'); break;
         case 'goAccounts':      handleNav('accounts', 'Accounts'); break;
@@ -1482,6 +1491,7 @@ export default {
         case 'whatIsValu':      handleWhatIsValu(); break;
         case 'categories':      handleCategories(); break;
         case 'currency':        handleCurrency(); break;
+        case 'recurring':       handleRecurring(); break;
         case 'privacy':         handlePrivacy(); break;
         case 'smartInsights':   handleSmartInsightsExplainer(); break;
         case 'assistantInfo':   handleFaqGeneric('assistant', ['Smart Insights', 'Privacy', 'Getting started']); break;
@@ -1489,6 +1499,7 @@ export default {
         case 'offline':         handleFaqGeneric('offline', ['Install as app', 'Getting started']); break;
         case 'install':         handleFaqGeneric('install', ['Getting started', 'What is Valu?']); break;
         case 'howGoalsWork':    handleFaqGeneric('goals', ['Goal status', 'Show spending']); break;
+        case 'budget':          handleBudget(); break;
         case 'reminders':       handleFaqGeneric('balanceReminders', ['Go to settings', 'Getting started']); break;
         case 'tips':            handleTips(); break;
         case 'thanks':          handleThanks(); break;
@@ -1746,11 +1757,11 @@ export default {
         ]);
         expenses.value = expRows.map(r => ({
           id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
-          accountId: r[3], category: r[4], date: r[5],
+          accountId: r[3], category: r[4], date: r[5], repeats: r[9] || '',
         }));
         incomeList.value = incRows.map(r => ({
           id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
-          accountId: r[3], category: r[4], date: r[5],
+          accountId: r[3], category: r[4], date: r[5], repeats: r[9] || '',
         }));
         balanceHistory.value = balRows.map(r => ({
           accountId: r[0], year: parseInt(r[1]), month: parseInt(r[2]),

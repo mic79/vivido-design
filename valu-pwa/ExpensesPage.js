@@ -1,4 +1,5 @@
 import SheetsApi, { TABS, formatAccountDisplayName, localDateISO, CATEGORY_ICONS, CURRENCIES } from './sheetsApi.js';
+import { useFxConvert } from './useFxConvert.js';
 
 const { ref, computed, watch, inject, nextTick } = Vue;
 
@@ -21,7 +22,7 @@ export default {
     const filterMonth = ref(getCurrentMonthKey());
     const filterCategory = ref('');
     const filterSearch = ref('');
-    const showUpcoming = ref(true);
+    const showUpcoming = ref(localStorage.getItem('valu_show_upcoming') !== 'false');
     const showMonthSheet = ref(false);
     const openDropdown = ref(null);
 
@@ -37,13 +38,17 @@ export default {
     }
 
     const newExpense = ref({
-      title: '', amount: '', accountId: '', category: '', date: '', notes: '',
+      title: '', amount: '', accountId: '', category: '', date: '', notes: '', repeats: '',
     });
     const adjustBalance = ref(false);
     const editAdjustBalance = ref(false);
     const editOriginal = ref(null);
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
+    const manualRates = computed(() => {
+      const str = props.settings?.currencyRates || '';
+      return str.split(',').filter(Boolean).map(r => { const [currency, rate] = r.split(':'); return { currency, rate }; });
+    });
 
     const categoriesEnabled = computed(() => props.settings?.expenseCategoriesEnabled !== 'false');
 
@@ -71,16 +76,6 @@ export default {
       return allCategoryIcons.value[categoryName] || '';
     }
 
-    const currencyRates = computed(() => {
-      const ratesStr = props.settings?.currencyRates || '';
-      const map = {};
-      ratesStr.split(',').filter(Boolean).forEach(r => {
-        const [cur, val] = r.split(':');
-        if (cur && val) map[cur] = parseFloat(val);
-      });
-      return map;
-    });
-
     function getAccountCurrency(accountId) {
       const acc = (props.accounts || []).find(a => a.id === accountId);
       return acc ? (acc.currency || baseCurrency.value) : baseCurrency.value;
@@ -91,11 +86,23 @@ export default {
       return acc ? formatAccountDisplayName(acc) : '';
     }
 
-    function convertToBase(amount, fromCurrency) {
-      if (!fromCurrency || fromCurrency === baseCurrency.value) return amount;
-      const rate = currencyRates.value[fromCurrency];
-      return rate ? amount * rate : amount;
-    }
+    // FX conversion for the Add modal
+    const addFx = useFxConvert({
+      foreignCurrency: computed(() => getAccountCurrency(newExpense.value.accountId)),
+      baseCurrency,
+      dateStr: computed(() => newExpense.value.date || localDateISO()),
+      setAmount: v => { newExpense.value.amount = v; },
+      manualRates,
+    });
+
+    // FX conversion for the Edit modal
+    const editFx = useFxConvert({
+      foreignCurrency: computed(() => editingExpense.value ? getAccountCurrency(editingExpense.value.accountId) : baseCurrency.value),
+      baseCurrency,
+      dateStr: computed(() => editingExpense.value?.date || localDateISO()),
+      setAmount: v => { if (editingExpense.value) editingExpense.value.amount = v; },
+      manualRates,
+    });
 
     function getNumberLocale() {
       const pref = localStorage.getItem('valu_number_format') || 'auto';
@@ -195,10 +202,7 @@ export default {
     );
 
     const monthlyTotal = computed(() => {
-      return filteredExpenses.value.reduce((sum, e) => {
-        const cur = getAccountCurrency(e.accountId);
-        return sum + convertToBase(e.amount, cur);
-      }, 0);
+      return filteredExpenses.value.reduce((sum, e) => sum + e.amount, 0);
     });
 
     const monthTotals = computed(() => {
@@ -207,8 +211,7 @@ export default {
         if (!e.date) continue;
         const parts = e.date.split('-');
         const key = `${parts[0]}-${parts[1]}`;
-        const cur = getAccountCurrency(e.accountId);
-        map[key] = (map[key] || 0) + convertToBase(e.amount, cur);
+        map[key] = (map[key] || 0) + e.amount;
       }
       return map;
     });
@@ -244,6 +247,7 @@ export default {
           id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
           accountId: r[3], category: r[4], date: r[5],
           notes: r[6], createdAt: r[7], balanceAdjusted: r[8] || '',
+          repeats: r[9] || '',
         }));
       } catch (err) {
         console.error('Failed to load expenses:', err);
@@ -279,6 +283,7 @@ export default {
         category: '',
         date: localDateISO(),
         notes: '',
+        repeats: '',
       };
     }
 
@@ -293,14 +298,20 @@ export default {
       if (!e.title.trim() || e.amount === '' || e.amount === undefined) return;
       const amt = parseAmount(e.amount);
       if (isNaN(amt)) return;
+      const date = e.date || localDateISO();
+      const dup = expenses.value.find(x => x.title === e.title.trim() && x.date === date && x.amount === amt);
+      if (dup) {
+        const dupInfo = `"${dup.title}" on ${dup.date} (${formatCurrency(dup.amount, baseCurrency.value)})`;
+        if (!(await showConfirm(`A similar expense already exists:\n${dupInfo}\n\nAdd anyway?`))) return;
+      }
       try {
         const id = SheetsApi.generateId();
         const now = new Date().toISOString();
-        const date = e.date || localDateISO();
         const shouldAdjust = adjustBalance.value && e.accountId;
+        const notes = addFx.appendFxTag(e.notes);
         await SheetsApi.appendRow(getSheetId(), TABS.EXPENSES, [
           id, e.title.trim(), amt.toString(), e.accountId,
-          e.category, date, e.notes, now, shouldAdjust ? 'yes' : '',
+          e.category, date, notes, now, shouldAdjust ? 'yes' : '', e.repeats || '',
         ]);
         if (shouldAdjust) {
           const [y, m] = date.split('-').map(Number);
@@ -340,9 +351,10 @@ export default {
       try {
         const shouldAdjust = editAdjustBalance.value && e.accountId;
         const date = e.date || localDateISO();
+        const notes = editFx.appendFxTag(e.notes);
         await SheetsApi.updateRow(getSheetId(), TABS.EXPENSES, e.id, [
           e.id, e.title, amt.toString(), e.accountId,
-          e.category, date, e.notes, e.createdAt, shouldAdjust ? 'yes' : '',
+          e.category, date, notes, e.createdAt, shouldAdjust ? 'yes' : '', e.repeats || '',
         ]);
         if (shouldAdjust) {
           const [newY, newM] = date.split('-').map(Number);
@@ -391,6 +403,7 @@ export default {
         category: e.category || '',
         date: localDateISO(),
         notes: e.notes || '',
+        repeats: e.repeats || '',
       };
       showEditModal.value = false;
       editingExpense.value = null;
@@ -437,13 +450,16 @@ export default {
     const addNameInput = ref(null);
     watch(showAddModal, (v) => {
       if (v) {
+        addFx.reset();
         nextTick(() => { addNameInput.value?.focus(); });
       } else if (openDropdown.value === 'newCat' || openDropdown.value === 'newAcct') {
         openDropdown.value = null;
       }
     });
     watch(showEditModal, (v) => {
-      if (!v && (openDropdown.value === 'editCat' || openDropdown.value === 'editAcct')) {
+      if (v) {
+        editFx.reset();
+      } else if (openDropdown.value === 'editCat' || openDropdown.value === 'editAcct') {
         openDropdown.value = null;
       }
     });
@@ -624,6 +640,7 @@ export default {
       acctCurrencyOpen, acctCurrencySearch, acctFilteredCurrencies, acctCurrencyName, selectAcctCurrency,
       openAccountManager, addManagedAccount, toggleManagedAccountDiscontinued,
       disableTool,
+      addFx, editFx,
     };
   },
 
@@ -684,7 +701,7 @@ export default {
               </div>
             </div>
           </div>
-          <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="showUpcoming = !showUpcoming">
+          <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="showUpcoming = !showUpcoming; localStorage.setItem('valu_show_upcoming', showUpcoming)">
             <span class="material-icons" style="font-size:16px;">event</span>
             <span>Upcoming</span>
           </button>
@@ -698,11 +715,12 @@ export default {
               <div class="valu-list-body">
                 <div class="valu-list-top">
                   <div class="valu-list-name">{{ exp.title }}</div>
-                  <div class="valu-list-after">{{ formatCurrency(exp.amount, getAccountCurrency(exp.accountId)) }}</div>
+                  <div class="valu-list-after">{{ formatCurrency(exp.amount, baseCurrency) }}</div>
                 </div>
                 <div class="valu-list-sub">
                   {{ formatDate(exp.date) }}
                   <span v-if="getAccountName(exp.accountId)"> · {{ getAccountName(exp.accountId) }}</span>
+                  <span v-if="exp.repeats" class="repeats-badge"><span class="material-icons" style="font-size:12px;vertical-align:middle;">repeat</span> {{ exp.repeats === 'monthly' ? 'Monthly' : 'Yearly' }}</span>
                 </div>
               </div>
             </div>
@@ -741,8 +759,27 @@ export default {
           </div>
           <div class="sheet-hero">
             <input ref="addNameInput" class="sheet-hero-name" v-model="newExpense.title" placeholder="What did you spend on?" />
-            <input class="sheet-hero-amount" v-model="newExpense.amount" @input="sanitizeAmount(newExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" />
-            <div class="sheet-hero-label">Amount</div>
+            <input class="sheet-hero-amount" v-model="newExpense.amount" @input="sanitizeAmount(newExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="addFx.fxActive.value" :class="{ 'fx-readonly': addFx.fxActive.value }" />
+            <div class="sheet-hero-label">Amount <span v-if="addFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
+          </div>
+          <div v-if="addFx.needsFx.value" class="fx-convert-section">
+            <button class="fx-toggle-btn" @click="addFx.toggle()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              {{ addFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + addFx.fxCurrency.value }}
+            </button>
+            <div v-if="addFx.fxActive.value" class="fx-convert-body">
+              <div class="fx-input-row">
+                <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="addFx.fxForeignAmount.value" @input="addFx.updateConverted()" :placeholder="'Amount in ' + addFx.fxCurrency.value" />
+                <span class="fx-currency-label">{{ addFx.fxCurrency.value }}</span>
+              </div>
+              <div v-if="addFx.fxLoading.value" class="fx-rate-info">Fetching rate...</div>
+              <div v-else-if="addFx.fxError.value" class="fx-rate-info fx-rate-error">{{ addFx.fxError.value }} — enter amount in {{ baseCurrency }} directly.</div>
+              <div v-else-if="addFx.fxRate.value" class="fx-rate-info">1 {{ addFx.fxCurrency.value }} = {{ addFx.fxRate.value.toFixed(4) }} {{ baseCurrency }} <span class="fx-rate-date">({{ addFx.fxRateDate.value }})</span></div>
+              <div v-if="addFx.fxIsFuture.value && addFx.fxRate.value && !addFx.fxLoading.value" class="fx-rate-info fx-future-hint">
+                <span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">schedule</span>
+                Using today's rate — will be updated automatically when the date arrives.
+              </div>
+            </div>
           </div>
           <div class="modal-body" @click="openDropdown = null">
             <div class="sheet-section-title">Details</div>
@@ -787,6 +824,18 @@ export default {
             <div class="form-group" style="margin-top:16px;">
               <label class="form-label">Notes</label>
               <textarea class="form-input" v-model="newExpense.notes" rows="2" placeholder="Optional notes"></textarea>
+            </div>
+            <div class="sheet-list-item">
+              <label>Repeats</label>
+              <valu-dropdown :open="openDropdown === 'newRepeats'" @update:open="(v) => setDropdownOpen('newRepeats', v)">
+                <template #label>{{ newExpense.repeats === 'monthly' ? 'Monthly' : newExpense.repeats === 'yearly' ? 'Yearly' : 'None' }}</template>
+                <div class="valu-dropdown-option" :class="{ selected: !newExpense.repeats }"
+                     @click="newExpense.repeats = ''; openDropdown = null">None</div>
+                <div class="valu-dropdown-option" :class="{ selected: newExpense.repeats === 'monthly' }"
+                     @click="newExpense.repeats = 'monthly'; openDropdown = null">Monthly</div>
+                <div class="valu-dropdown-option" :class="{ selected: newExpense.repeats === 'yearly' }"
+                     @click="newExpense.repeats = 'yearly'; openDropdown = null">Yearly</div>
+              </valu-dropdown>
             </div>
             <label v-if="newExpense.accountId && sortedAccounts.length > 0" class="balance-adjust-check" @click.stop>
               <input type="checkbox" v-model="adjustBalance" />
@@ -833,8 +882,27 @@ export default {
           </div>
           <div class="sheet-hero">
             <input class="sheet-hero-name" v-model="editingExpense.title" placeholder="Title" />
-            <input class="sheet-hero-amount" v-model="editingExpense.amount" @input="sanitizeAmount(editingExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" />
-            <div class="sheet-hero-label">Amount</div>
+            <input class="sheet-hero-amount" v-model="editingExpense.amount" @input="sanitizeAmount(editingExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="editFx.fxActive.value" :class="{ 'fx-readonly': editFx.fxActive.value }" />
+            <div class="sheet-hero-label">Amount <span v-if="editFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
+          </div>
+          <div v-if="editFx.needsFx.value" class="fx-convert-section">
+            <button class="fx-toggle-btn" @click="editFx.toggle()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              {{ editFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + editFx.fxCurrency.value }}
+            </button>
+            <div v-if="editFx.fxActive.value" class="fx-convert-body">
+              <div class="fx-input-row">
+                <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="editFx.fxForeignAmount.value" @input="editFx.updateConverted()" :placeholder="'Amount in ' + editFx.fxCurrency.value" />
+                <span class="fx-currency-label">{{ editFx.fxCurrency.value }}</span>
+              </div>
+              <div v-if="editFx.fxLoading.value" class="fx-rate-info">Fetching rate...</div>
+              <div v-else-if="editFx.fxError.value" class="fx-rate-info fx-rate-error">{{ editFx.fxError.value }} — enter amount in {{ baseCurrency }} directly.</div>
+              <div v-else-if="editFx.fxRate.value" class="fx-rate-info">1 {{ editFx.fxCurrency.value }} = {{ editFx.fxRate.value.toFixed(4) }} {{ baseCurrency }} <span class="fx-rate-date">({{ editFx.fxRateDate.value }})</span></div>
+              <div v-if="editFx.fxIsFuture.value && editFx.fxRate.value && !editFx.fxLoading.value" class="fx-rate-info fx-future-hint">
+                <span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">schedule</span>
+                Using today's rate — will be updated automatically when the date arrives.
+              </div>
+            </div>
           </div>
           <div class="modal-body" @click="openDropdown = null">
             <div class="sheet-section-title">Details</div>
@@ -879,6 +947,18 @@ export default {
             <div class="form-group" style="margin-top:16px;">
               <label class="form-label">Notes</label>
               <textarea class="form-input" v-model="editingExpense.notes" rows="2"></textarea>
+            </div>
+            <div class="sheet-list-item">
+              <label>Repeats</label>
+              <valu-dropdown :open="openDropdown === 'editRepeats'" @update:open="(v) => setDropdownOpen('editRepeats', v)">
+                <template #label>{{ editingExpense.repeats === 'monthly' ? 'Monthly' : editingExpense.repeats === 'yearly' ? 'Yearly' : 'None' }}</template>
+                <div class="valu-dropdown-option" :class="{ selected: !editingExpense.repeats }"
+                     @click="editingExpense.repeats = ''; openDropdown = null">None</div>
+                <div class="valu-dropdown-option" :class="{ selected: editingExpense.repeats === 'monthly' }"
+                     @click="editingExpense.repeats = 'monthly'; openDropdown = null">Monthly</div>
+                <div class="valu-dropdown-option" :class="{ selected: editingExpense.repeats === 'yearly' }"
+                     @click="editingExpense.repeats = 'yearly'; openDropdown = null">Yearly</div>
+              </valu-dropdown>
             </div>
             <label v-if="editingExpense.accountId && sortedAccounts.length > 0" class="balance-adjust-check" @click.stop>
               <input type="checkbox" v-model="editAdjustBalance" />

@@ -69,7 +69,7 @@ export const FAQ_ENTRIES = [
       '1. Open Google Drive and find the spreadsheet named **Valu: [Your Group]**\n' +
       '2. Right-click \u2192 **Share** (or click the Share button)\n' +
       '3. Add the other person\u2019s email address\n\n' +
-      'Once shared, both of you can use Valu with the same data. The other person will see the sheet appear when they sign in to Valu and go to **Groups \u2192 Open shared sheet**.',
+      'Once shared, both of you can use Valu with the same data. The other person will see the sheet appear when they sign in to Valu and go to **Groups \u2192 Open shared group**.',
   },
   {
     id: 'gettingStarted',
@@ -98,8 +98,24 @@ export const FAQ_ENTRIES = [
     question: 'How do I change my currency?',
     answer:
       'Your base currency is set per group. Go to **Groups**, tap your group, and change the **Base currency** setting. ' +
-      'If you have accounts in multiple currencies, you can add exchange rates in the same configuration screen. ' +
-      'Valu will convert foreign-currency amounts to your base currency for totals and charts.',
+      'All amounts are stored in the base currency.\n\n' +
+      'If you have accounts in other currencies, set each account\u2019s currency accordingly. ' +
+      'When logging an expense, income, or balance, a **"Convert from [currency]"** toggle appears ' +
+      'to automatically convert from the account\u2019s currency using the historical exchange rate for the transaction date. ' +
+      'For future-dated transactions, today\u2019s rate is used and the amount is automatically flagged for update when the actual date arrives. ' +
+      'If the rate service is unavailable, fallback rates from your Group configuration are used.',
+  },
+  {
+    id: 'recurring',
+    category: 'features',
+    question: 'How do recurring transactions work?',
+    answer:
+      'When adding or editing an expense or income, set **Repeats** to **Monthly** or **Yearly**. ' +
+      'When a new period starts, the app detects items that should repeat and shows a banner on the Home page.\n\n' +
+      'Tap **Review** to see pending items, uncheck any you want to skip, and confirm. ' +
+      'Applied copies inherit the repeat setting so the chain continues automatically. ' +
+      'If an item has currency conversion, the exchange rate is recalculated for the new date.\n\n' +
+      'The Activity page shows the status of recurring items and lets you **Recheck** if you\u2019ve added new repeating items.',
   },
   {
     id: 'groups',
@@ -157,14 +173,17 @@ export const FAQ_ENTRIES = [
     question: "What's new in Valu?",
     answer:
       'Recent updates include:\n' +
-      '\u2022 Year-to-date summary and income trend charts\n' +
-      '\u2022 Smarter assistant with context-aware follow-ups\n' +
-      '\u2022 Configurable trend periods (e.g. "spending trend last 12 months")\n' +
-      '\u2022 FI Calculator auto-populates from your data\n' +
-      '\u2022 Balance history preserves the newest entry per month\n' +
-      '\u2022 Expense Categories widget with yearly averages and goals\n' +
-      '\u2022 Smart Insights for balance-based expense estimation\n' +
-      '\u2022 This assistant!',
+      '\u2022 Group renaming \u2014 changing a group name now also renames the Google Sheet file\n' +
+      '\u2022 Shared groups \u2014 improved support for opening spreadsheets shared by other users\n' +
+      '\u2022 Balance overview \u2014 auto-scrolls to the current month\n' +
+      '\u2022 Expense category averages \u2014 smarter calculation that excludes incomplete months\n' +
+      '\u2022 Assistant navigation \u2014 "Go home", "Go to expense goals" and other navigation commands now work from suggestions\n' +
+      '\u2022 Recurring transactions \u2014 set expenses or income to repeat monthly or yearly with interactive review\n' +
+      '\u2022 FX rate updates for upcoming items \u2014 future-dated foreign currency transactions auto-correct when the date arrives\n' +
+      '\u2022 Duplicate detection \u2014 warnings when adding transactions that match an existing entry\n' +
+      '\u2022 Automatic currency conversion using official central bank rates\n' +
+      '\u2022 FI Calculator, Smart Insights, Expense Categories with goals\n' +
+      '\u2022 Smarter assistant with context-aware follow-ups and income trend charts',
   },
   {
     id: 'fiCalculator',
