@@ -701,7 +701,7 @@ export default {
               </div>
             </div>
           </div>
-          <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="showUpcoming = !showUpcoming; localStorage.setItem('valu_show_upcoming', showUpcoming)">
+          <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="showUpcoming = !showUpcoming; localStorage.setItem('valu_show_upcoming', showUpcoming ? 'true' : 'false')">
             <span class="material-icons" style="font-size:16px;">event</span>
             <span>Upcoming</span>
           </button>
