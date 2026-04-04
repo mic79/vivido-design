@@ -110,7 +110,7 @@
         </div>
 
         <div class="sidenav-footer">
-          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v184 — What's new</button>
+          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v185 — What's new</button>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -1017,7 +1017,8 @@
         // ── Service Worker ──────────────────────────────────────────────────
 
         if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.register('service-worker.js').then(reg => {
+          navigator.serviceWorker.register('service-worker.js', { updateViaCache: 'none' }).then(reg => {
+            reg.update().catch(() => {});
             reg.addEventListener('updatefound', () => {
               const newSW = reg.installing;
               if (!newSW) return;

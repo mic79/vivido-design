@@ -1,4 +1,4 @@
-const CACHE_NAME = 'valu-app-v184';
+const CACHE_NAME = 'valu-app-v185';
 
 const PRECACHE_URLS = [
   'index.html',
@@ -39,6 +39,7 @@ const PRECACHE_URLS = [
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(PRECACHE_URLS))
@@ -67,6 +68,8 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   if (url.origin !== self.location.origin) return;
+
+  if (url.pathname.endsWith('service-worker.js')) return;
 
   event.respondWith(
     fetch(event.request)
