@@ -1,7 +1,7 @@
 import SheetsApi, { TABS, formatAccountDisplayName, localDateISO, CATEGORY_ICONS, CURRENCIES } from './sheetsApi.js';
 import { useFxConvert } from './useFxConvert.js';
 
-const { ref, computed, watch, inject, nextTick } = Vue;
+const { ref, computed, watch, inject, nextTick, onMounted, onUnmounted } = Vue;
 
 const LS_LAST_ACCOUNT_INCOME = 'valu_last_account_income';
 
@@ -36,7 +36,8 @@ export default {
     }
 
     function formatMonthLabel(key) {
-      if (!key) return 'All months';
+      if (!key) return 'All time';
+      if (key.length === 4) return 'All ' + key;
       const [y, m] = key.split('-').map(Number);
       return new Date(y, m - 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
     }
@@ -156,9 +157,28 @@ export default {
       }
     }
 
+    const filterAwareIncome = computed(() => {
+      let list = incomeList.value;
+      if (!showUpcoming.value) {
+        list = list.filter(e => !isFutureDate(e.date));
+      }
+      if (filterCategory.value) {
+        list = list.filter(e => e.category === filterCategory.value);
+      }
+      if (filterSearch.value) {
+        const q = filterSearch.value.toLowerCase();
+        list = list.filter(e =>
+          (e.title && e.title.toLowerCase().includes(q)) ||
+          (e.notes && e.notes.toLowerCase().includes(q)) ||
+          (e.category && e.category.toLowerCase().includes(q))
+        );
+      }
+      return list;
+    });
+
     const availableMonths = computed(() => {
       const months = new Set();
-      for (const e of incomeList.value) {
+      for (const e of filterAwareIncome.value) {
         if (e.date) {
           const parts = e.date.split('-');
           months.add(`${parts[0]}-${parts[1]}`);
@@ -167,14 +187,53 @@ export default {
       return [...months].sort().reverse();
     });
 
+    const periodOptions = computed(() => {
+      const months = availableMonths.value;
+      const byYear = {};
+      for (const m of months) {
+        const y = m.split('-')[0];
+        if (!byYear[y]) byYear[y] = [];
+        byYear[y].push(m);
+      }
+      const years = Object.keys(byYear).sort().reverse();
+      const options = [];
+      for (const y of years) {
+        const yMonths = byYear[y];
+        if (yMonths.length > 1) {
+          const yearTotal = yMonths.reduce((sum, m) => sum + (monthTotals.value[m] || 0), 0);
+          options.push({ key: y, label: 'All ' + y, total: yearTotal, isYear: true });
+        }
+        for (const m of yMonths) {
+          options.push({ key: m, label: formatMonthLabel(m), total: monthTotals.value[m] || 0, isYear: false });
+        }
+      }
+      return options;
+    });
+
+    function onPeriodKeydown(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const keys = ['', ...periodOptions.value.map(o => o.key)];
+      const idx = keys.indexOf(filterMonth.value);
+      if (e.key === 'ArrowDown' && idx < keys.length - 1) {
+        filterMonth.value = keys[idx + 1];
+      } else if (e.key === 'ArrowUp' && idx > 0) {
+        filterMonth.value = keys[idx - 1];
+      }
+    }
+    onMounted(() => window.addEventListener('keydown', onPeriodKeydown));
+    onUnmounted(() => window.removeEventListener('keydown', onPeriodKeydown));
+
     const filteredIncome = computed(() => {
       let list = [...incomeList.value].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
       if (filterMonth.value) {
+        const isYear = filterMonth.value.length === 4;
         list = list.filter(e => {
           if (!e.date) return false;
           const parts = e.date.split('-');
-          return `${parts[0]}-${parts[1]}` === filterMonth.value;
+          return isYear ? parts[0] === filterMonth.value : `${parts[0]}-${parts[1]}` === filterMonth.value;
         });
       }
 
@@ -209,7 +268,7 @@ export default {
 
     const monthTotals = computed(() => {
       const map = {};
-      for (const e of incomeList.value) {
+      for (const e of filterAwareIncome.value) {
         if (!e.date) continue;
         const parts = e.date.split('-');
         const key = `${parts[0]}-${parts[1]}`;
@@ -219,26 +278,34 @@ export default {
     });
 
     const usedCategories = computed(() => {
-      const set = new Set();
-      const src = filterMonth.value
+      const activeSet = new Set();
+      const isYear = filterMonth.value && filterMonth.value.length === 4;
+      let src = filterMonth.value
         ? incomeList.value.filter(e => {
             if (!e.date) return false;
             const parts = e.date.split('-');
-            return `${parts[0]}-${parts[1]}` === filterMonth.value;
+            return isYear ? parts[0] === filterMonth.value : `${parts[0]}-${parts[1]}` === filterMonth.value;
           })
         : incomeList.value;
+      if (!showUpcoming.value) {
+        src = src.filter(e => !isFutureDate(e.date));
+      }
       for (const e of src) {
-        if (e.category) set.add(e.category);
+        if (e.category) activeSet.add(e.category);
       }
       const allCats = (props.settings?.incomeCategories || '').split(',').filter(Boolean).map(c => {
         const idx = c.indexOf(':');
         return idx < 0 ? c : c.slice(0, idx);
       });
-      const ordered = allCats.filter(name => set.has(name));
-      for (const name of set) {
+      const everUsed = new Set();
+      for (const e of incomeList.value) {
+        if (e.category) everUsed.add(e.category);
+      }
+      const ordered = allCats.filter(name => everUsed.has(name));
+      for (const name of everUsed) {
         if (!ordered.includes(name)) ordered.push(name);
       }
-      return ordered;
+      return ordered.map(name => ({ name, active: activeSet.has(name) }));
     });
 
     async function fetchData() {
@@ -442,7 +509,8 @@ export default {
       if (!dateStr) return '';
       const [y, m, d] = dateStr.split('-').map(Number);
       const opts = { month: 'short', day: 'numeric' };
-      if (!filterMonth.value && y !== new Date().getFullYear()) opts.year = 'numeric';
+      const singleMonth = filterMonth.value && filterMonth.value.length > 4;
+      if (!singleMonth && y !== new Date().getFullYear()) opts.year = 'numeric';
       return new Date(y, m - 1, d).toLocaleDateString(undefined, opts);
     }
 
@@ -625,7 +693,7 @@ export default {
       showAddModal, showEditModal, editingIncome,
       newIncome, categories, baseCurrency,
       adjustBalance, editAdjustBalance,
-      filterMonth, filterCategory, filterSearch, showUpcoming, toggleUpcoming, hasFutureEntries, availableMonths, usedCategories,
+      filterMonth, filterCategory, filterSearch, showUpcoming, toggleUpcoming, hasFutureEntries, availableMonths, periodOptions, usedCategories,
       showMonthSheet, formatMonthLabel,
       openDropdown, toggleDropdown, setDropdownOpen,
       sortedAccounts,
@@ -694,11 +762,12 @@ export default {
             <div class="subpage-filter-dropdown" v-if="openDropdown === 'filterCat'" @click.stop>
               <div class="subpage-filter-option" :class="{ selected: !filterCategory }"
                    @click="filterCategory = ''; openDropdown = null">All categories</div>
-              <div v-for="cat in usedCategories" :key="cat"
-                   class="subpage-filter-option" :class="{ selected: filterCategory === cat }"
-                   @click="filterCategory = cat; openDropdown = null">
-                <span v-if="getCategoryIcon(cat)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(cat) }}</span>
-                {{ cat }}
+              <div v-for="cat in usedCategories" :key="cat.name"
+                   class="subpage-filter-option" :class="{ selected: filterCategory === cat.name }"
+                   :style="!cat.active ? { opacity: 0.5 } : {}"
+                   @click="filterCategory = cat.name; openDropdown = null">
+                <span v-if="getCategoryIcon(cat.name)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(cat.name) }}</span>
+                {{ cat.name }}
               </div>
             </div>
           </div>
@@ -859,15 +928,15 @@ export default {
           </div>
           <div class="modal-body" style="padding:0;">
             <div class="month-picker-option" :class="{ selected: !filterMonth }"
-                 @click="filterMonth = ''; filterCategory = ''; showMonthSheet = false">
-              <span class="month-picker-label">All months</span>
+                 @click="filterMonth = ''; showMonthSheet = false">
+              <span class="month-picker-label">All time</span>
               <span class="month-picker-total">{{ formatCurrency(Object.values(monthTotals).reduce((a,b) => a+b, 0), baseCurrency) }}</span>
             </div>
-            <div v-for="m in availableMonths" :key="m"
-                 class="month-picker-option" :class="{ selected: filterMonth === m }"
-                 @click="filterMonth = m; filterCategory = ''; showMonthSheet = false">
-              <span class="month-picker-label">{{ formatMonthLabel(m) }}</span>
-              <span class="month-picker-total">{{ formatCurrency(monthTotals[m] || 0, baseCurrency) }}</span>
+            <div v-for="opt in periodOptions" :key="opt.key"
+                 class="month-picker-option" :class="{ selected: filterMonth === opt.key, 'month-picker-year': opt.isYear }"
+                 @click="filterMonth = opt.key; showMonthSheet = false">
+              <span class="month-picker-label">{{ opt.label }}</span>
+              <span class="month-picker-total">{{ formatCurrency(opt.total, baseCurrency) }}</span>
             </div>
           </div>
         </div>
