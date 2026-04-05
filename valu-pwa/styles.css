@@ -411,6 +411,24 @@ ul, ol { list-style: none; }
   border-top: 1px solid var(--color-border);
 }
 .month-picker-option.month-picker-year .month-picker-label { font-weight: 600; }
+.month-picker-filters {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 2px;
+  margin-top: -6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.month-picker-filter-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: .75rem;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-weight: 500;
+}
 
 .subpage-diff {
   display: inline-flex;
@@ -3662,6 +3680,15 @@ html[data-theme="light"] .valu-orb-sm .sphere { mix-blend-mode: multiply; }
   font-size: 11px !important;
   color: var(--color-text-hint);
   max-width: 220px;
+}
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
 }
 
 /* ── Section headers ────────────────────────────────────────────────────────── */

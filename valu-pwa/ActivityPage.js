@@ -370,7 +370,7 @@ export default {
             <span class="material-icons activity-feed-icon" style="color:#6a8caf;">insights</span>
             <div>
               <div class="activity-feed-title">{{ monthlySummary.monthName }} {{ monthlySummary.year }}</div>
-              <div class="activity-feed-date">Monthly Summary</div>
+              <div class="activity-feed-date">Previous month summary</div>
             </div>
           </div>
           <div class="activity-feed-body">
@@ -434,7 +434,7 @@ export default {
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>
-              <div class="activity-feed-title">What's New in v185</div>
+              <div class="activity-feed-title">What's New in v186</div>
               <div class="activity-feed-date">April 2026</div>
             </div>
           </div>

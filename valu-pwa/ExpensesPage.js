@@ -201,10 +201,8 @@ export default {
       const options = [];
       for (const y of years) {
         const yMonths = byYear[y];
-        if (yMonths.length > 1) {
-          const yearTotal = yMonths.reduce((sum, m) => sum + (monthTotals.value[m] || 0), 0);
-          options.push({ key: y, label: 'All ' + y, total: yearTotal, isYear: true });
-        }
+        const yearTotal = yMonths.reduce((sum, m) => sum + (monthTotals.value[m] || 0), 0);
+        options.push({ key: y, label: 'All ' + y, total: yearTotal, isYear: true });
         for (const m of yMonths) {
           options.push({ key: m, label: formatMonthLabel(m), total: monthTotals.value[m] || 0, isYear: false });
         }
@@ -803,6 +801,8 @@ export default {
         <div v-if="filteredExpenses.length === 0 && expenses.length > 0" class="empty-state">
           <span class="material-icons">filter_list</span>
           <h3>No expenses for this period</h3>
+          <p>Try adjusting your search, category filter, or period.</p>
+          <button v-if="filterMonth || filterCategory || filterSearch" class="btn-link" style="margin-top:8px;" @click="filterMonth = ''; filterCategory = ''; filterSearch = ''">Clear all filters</button>
         </div>
 
         <div v-if="expenses.length === 0" class="empty-state" style="padding-top:40px;text-align:center;">
@@ -926,8 +926,12 @@ export default {
         <div class="modal">
           <div class="sheet-handle"></div>
           <div class="modal-header">
-            <h2>Select Month</h2>
+            <h2>Select Period</h2>
             <button class="btn-icon" @click="showMonthSheet = false"><span class="material-icons">close</span></button>
+          </div>
+          <div v-if="filterCategory || filterSearch" class="month-picker-filters">
+            <span v-if="filterSearch" class="month-picker-filter-tag"><span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">search</span>{{ filterSearch }}</span>
+            <span v-if="filterCategory" class="month-picker-filter-tag"><span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">filter_list</span>{{ filterCategory }}</span>
           </div>
           <div class="modal-body" style="padding:0;">
             <div class="month-picker-option" :class="{ selected: !filterMonth }"
@@ -954,7 +958,7 @@ export default {
             <button class="btn-icon" @click="showEditModal = false"><span class="material-icons">close</span></button>
           </div>
           <div class="sheet-hero">
-            <input class="sheet-hero-name" v-model="editingExpense.title" placeholder="Title" />
+            <input class="sheet-hero-name" v-model="editingExpense.title" placeholder="What did you spend on?" />
             <input class="sheet-hero-amount" v-model="editingExpense.amount" @input="sanitizeAmount(editingExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="editFx.fxActive.value" :class="{ 'fx-readonly': editFx.fxActive.value }" />
             <div class="sheet-hero-label">Amount <span v-if="editFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
           </div>
@@ -1019,7 +1023,7 @@ export default {
             </div>
             <div class="form-group" style="margin-top:16px;">
               <label class="form-label">Notes</label>
-              <textarea class="form-input" v-model="editingExpense.notes" rows="2"></textarea>
+              <textarea class="form-input" v-model="editingExpense.notes" rows="2" placeholder="Optional notes"></textarea>
             </div>
             <div class="sheet-list-item">
               <label>Repeats</label>

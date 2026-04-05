@@ -1246,6 +1246,12 @@ export default {
             <span v-else>Spending is about the same as last month</span>
           </div>
         </div>
+        <div v-else-if="smartInsightsMode && !smartInsightsData" class="card mb-16 smart-insights-card" style="opacity:0.7;">
+          <div class="card-header">
+            <h3><span class="material-icons" style="font-size:18px;vertical-align:text-bottom;margin-right:4px;color:var(--color-primary);">auto_awesome</span>Smart Insights</h3>
+          </div>
+          <p class="smart-insights-desc" style="padding-bottom:8px;">Smart Insights will appear here once you have at least one month of account balance history and some income logged. Keep tracking to unlock spending estimates, savings rate, and trends.</p>
+        </div>
 
         <!-- Smart Insights Chart -->
         <div v-if="smartInsightsMode && siChartPath" class="card mb-16">
@@ -1300,7 +1306,7 @@ export default {
         <div v-if="recentTransactions.length > 0" class="card mb-16">
           <div class="card-header"><h3>Recent Transactions</h3></div>
           <div style="padding:0;">
-            <div v-for="tx in recentTransactions" :key="tx.id" class="list-item">
+            <div v-for="tx in recentTransactions" :key="tx.id" class="list-item" style="cursor:pointer;" @click="emit('navigate', tx.type === 'income' ? 'income' : 'expenses')">
               <div class="list-item-icon"
                 :style="{ background: tx.type === 'income' ? 'var(--color-primary-light)' : 'var(--color-expense-light, rgba(173,75,32,.1))', color: tx.type === 'income' ? 'var(--color-primary)' : 'var(--color-secondary)' }">
                 <span class="material-icons">{{ getCategoryIcon(tx.category) || (tx.type === 'income' ? 'payments' : 'receipt') }}</span>

@@ -1678,6 +1678,7 @@ export default {
     }
 
     async function deleteChat(chatId) {
+      if (!confirm('Delete this conversation?')) return;
       const idx = chatList.value.findIndex(c => c.id === chatId);
       if (idx === -1) return;
       chatList.value.splice(idx, 1);
@@ -1856,7 +1857,7 @@ export default {
               </div>
               <div class="assistant-bubble" :class="'assistant-bubble--' + msg.from">
                 <div class="assistant-label">{{ msg.from === 'valu' ? 'Valu' : 'You' }}</div>
-                <div class="assistant-text" v-html="msg.text.replace(/\\n/g, '<br>')"></div>
+                <div class="assistant-text" v-html="msg.text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\\n/g, '<br>')"></div>
 
                 <div v-if="msg.table" class="assistant-table">
                   <div v-for="(line, li) in msg.table" :key="li" class="assistant-table-row">{{ line }}</div>

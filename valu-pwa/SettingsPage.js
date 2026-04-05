@@ -79,10 +79,11 @@ export default {
     <div class="subpage">
       <div class="subpage-scroll">
       <div class="subpage-nav">
-        <button class="subpage-back" @click="$emit('go-home')">
+        <button class="subpage-back subpage-back--colored" @click="$emit('go-home')">
           <span class="material-icons">arrow_back</span>
         </button>
-        <div class="valu-orb-sm subpage-orb" @click="$emit('navigate', 'assistant')">
+        <h1 class="subpage-nav-title">Settings</h1>
+        <div class="valu-orb-sm subpage-orb-inline" @click="$emit('navigate', 'assistant')">
           <div class="spheres">
             <div class="spheres-group">
               <div class="sphere s1"></div>
@@ -91,10 +92,6 @@ export default {
             </div>
           </div>
         </div>
-      </div>
-
-      <div class="subpage-header">
-        <h1 class="subpage-title">Settings</h1>
       </div>
 
       <div style="padding:0 16px;">
