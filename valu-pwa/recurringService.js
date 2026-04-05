@@ -65,11 +65,26 @@ export function getPendingRecurring(expenses, income, lastChecked) {
   // When no lastChecked exists, treat previous month as the baseline
   // to avoid generating a massive backlog from old items
   const effectiveLast = lastYM || prevMonth(cur);
-  const upToDate = lastYM && (lastYM.year > cur.year || (lastYM.year === cur.year && lastYM.month >= cur.month));
+  const effectiveLastStr = formatYearMonth(effectiveLast.year, effectiveLast.month);
+
+  // Lookahead for yearly: include next month so upcoming annual items are visible
+  const yearlyUpTo = cur.month === 12
+    ? { year: cur.year + 1, month: 1 }
+    : { year: cur.year, month: cur.month + 1 };
+
+  // Build set of existing entries to prevent regenerating already-applied copies
+  const existingKeys = new Set();
+  for (const e of expenses) {
+    if (e.title && e.date) existingKeys.add(`expense|${e.title}|${e.date}`);
+  }
+  for (const i of income) {
+    if (i.title && i.date) existingKeys.add(`income|${i.title}|${i.date}`);
+  }
 
   const pending = [];
 
   function makePending(item, type, newDate, sourceLabel) {
+    if (existingKeys.has(`${type}|${item.title}|${newDate}`)) return;
     pending.push({
       sourceId: item.id,
       sourceDate: item.date,
@@ -93,30 +108,21 @@ export function getPendingRecurring(expenses, income, lastChecked) {
       if (!itemDate) continue;
       const [iy, im] = itemDate.split('-').map(Number);
 
-      // When already up-to-date, only process items created after lastChecked
-      // (e.g. user added a new recurring item for an earlier month)
-      const isNew = item.createdAt && lastChecked && item.createdAt > lastChecked;
-      if (upToDate && !isNew) continue;
-
       if (item.repeats === 'monthly') {
-        // For new items found during recheck, generate from their own date;
-        // for normal flow, generate from the effective last-checked month
-        const fromYM = upToDate
-          ? { year: iy, month: im }
-          : (effectiveLast.year > iy || (effectiveLast.year === iy && effectiveLast.month >= im))
-            ? effectiveLast
-            : { year: iy, month: im };
+        const fromYM = (effectiveLast.year > iy || (effectiveLast.year === iy && effectiveLast.month >= im))
+          ? effectiveLast
+          : { year: iy, month: im };
         const gaps = monthsBetween(fromYM, cur);
         const label = `Monthly from ${new Date(iy, im - 1).toLocaleDateString(undefined, { month: 'short' })}`;
         for (const gap of gaps) {
           makePending(item, type, clampDate(itemDate, gap.year, gap.month), label);
         }
       } else if (item.repeats === 'yearly') {
-        const fromYear = upToDate ? iy : effectiveLast.year;
         const label = `Yearly from ${new Date(iy, im - 1).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}`;
-        for (let y = fromYear + 1; y <= cur.year; y++) {
-          if (y === iy) continue;
-          if (y === cur.year && im > cur.month) continue;
+        for (let y = iy + 1; y <= yearlyUpTo.year; y++) {
+          if (y === yearlyUpTo.year && im > yearlyUpTo.month) continue;
+          const targetYM = formatYearMonth(y, im);
+          if (targetYM <= effectiveLastStr) continue;
           makePending(item, type, clampDate(itemDate, y, im), label);
         }
       }
