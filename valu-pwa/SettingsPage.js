@@ -1,4 +1,30 @@
-const { ref, computed, onMounted } = Vue;
+const { ref, computed, onMounted, inject } = Vue;
+
+const DEFAULT_WIDGETS = [
+  { id: 'totalBalance',       label: 'Total Balance',          icon: 'account_balance_wallet', requires: ['accounts'] },
+  { id: 'thisMonth',          label: 'This Month / Insights',  icon: 'insights',               requires: [] },
+  { id: 'recentTransactions', label: 'Recent Transactions',    icon: 'receipt_long',           requires: [] },
+  { id: 'balanceOverview',    label: 'Balance Overview',       icon: 'table_chart',            requires: ['accounts'] },
+  { id: 'expenseCategories',  label: 'Expense Categories',     icon: 'donut_large',            requires: ['expenses'] },
+];
+const LAYOUT_KEY = 'valu_home_layout';
+
+function loadWidgetLayout() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(LAYOUT_KEY));
+    if (!Array.isArray(stored) || stored.length === 0) return DEFAULT_WIDGETS.map(w => ({ ...w, enabled: true }));
+    const merged = stored
+      .filter(s => DEFAULT_WIDGETS.some(d => d.id === s.id))
+      .map(s => {
+        const def = DEFAULT_WIDGETS.find(d => d.id === s.id);
+        return { ...def, enabled: s.enabled !== false };
+      });
+    for (const d of DEFAULT_WIDGETS) {
+      if (!merged.some(m => m.id === d.id)) merged.push({ ...d, enabled: true });
+    }
+    return merged;
+  } catch { return DEFAULT_WIDGETS.map(w => ({ ...w, enabled: true })); }
+}
 
 export default {
   props: ['groups', 'activeGroup'],
@@ -68,10 +94,39 @@ export default {
       openDropdown.value = openDropdown.value === name ? null : name;
     }
 
+    const homeWidgets = ref(loadWidgetLayout());
+    const groupSettingsRef = inject('groupSettings', ref({}));
+    const enabledLists = computed(() => {
+      const str = groupSettingsRef.value?.listsEnabled || '';
+      return str.split(',').filter(Boolean);
+    });
+
+    function saveWidgetLayout() {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(homeWidgets.value.map(w => ({ id: w.id, enabled: w.enabled }))));
+    }
+    function toggleWidget(id) {
+      const w = homeWidgets.value.find(w => w.id === id);
+      if (w) { w.enabled = !w.enabled; saveWidgetLayout(); }
+    }
+    function moveWidget(id, dir) {
+      const idx = homeWidgets.value.findIndex(w => w.id === id);
+      const targetIdx = idx + dir;
+      if (targetIdx < 0 || targetIdx >= homeWidgets.value.length) return;
+      const arr = [...homeWidgets.value];
+      [arr[idx], arr[targetIdx]] = [arr[targetIdx], arr[idx]];
+      homeWidgets.value = arr;
+      saveWidgetLayout();
+    }
+    function isWidgetAvailable(w) {
+      if (!w.requires || w.requires.length === 0) return true;
+      return w.requires.every(r => enabledLists.value.includes(r));
+    }
+
     return {
       THEME_OPTIONS, NUMBER_FORMAT_OPTIONS, theme, numberFormat, defaultGroupId, balanceReminders,
       openDropdown, toggleDropdown,
       saveTheme, saveNumberFormat, saveDefaultGroup, saveBalanceReminders,
+      homeWidgets, toggleWidget, moveWidget, isWidgetAvailable,
     };
   },
 
@@ -173,6 +228,36 @@ export default {
                 <div class="toggle-thumb"></div>
               </label>
             </div>
+          </div>
+        </div>
+
+        <!-- Home Layout -->
+        <div class="card mb-16">
+          <div class="card-header"><h3><span class="material-icons" style="font-size:18px;vertical-align:text-bottom;margin-right:4px;">dashboard_customize</span>Home Layout</h3></div>
+          <div class="card-body" style="padding:0;">
+            <div v-for="(w, idx) in homeWidgets" :key="w.id" class="home-layout-item" :style="!isWidgetAvailable(w) ? { opacity: 0.45 } : {}">
+              <span class="material-icons home-layout-icon">{{ w.icon }}</span>
+              <div class="home-layout-label">
+                <span>{{ w.label }}</span>
+                <span v-if="!isWidgetAvailable(w)" class="home-layout-hint">Requires {{ w.requires.join(', ') }}</span>
+              </div>
+              <label class="toggle toggle-sm" @click.stop>
+                <input type="checkbox" :checked="w.enabled" @change="toggleWidget(w.id)" />
+                <div class="toggle-track"></div>
+                <div class="toggle-thumb"></div>
+              </label>
+              <div class="home-layout-arrows">
+                <button class="home-layout-arrow" :disabled="idx === 0" @click="moveWidget(w.id, -1)">
+                  <span class="material-icons">keyboard_arrow_up</span>
+                </button>
+                <button class="home-layout-arrow" :disabled="idx === homeWidgets.length - 1" @click="moveWidget(w.id, 1)">
+                  <span class="material-icons">keyboard_arrow_down</span>
+                </button>
+              </div>
+            </div>
+            <p style="font-size:12px;color:var(--color-text-hint);padding:8px 16px 12px;">
+              Choose which widgets appear on the Home page and in what order.
+            </p>
           </div>
         </div>
 

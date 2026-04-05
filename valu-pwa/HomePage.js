@@ -6,6 +6,32 @@ const { ref, computed, watch, inject, nextTick } = Vue;
 
 const DEMO_WELCOME_KEY = 'valu_demo_welcome_seen';
 
+const DEFAULT_WIDGETS = [
+  { id: 'totalBalance',       label: 'Total Balance',          icon: 'account_balance_wallet', requires: ['accounts'] },
+  { id: 'thisMonth',          label: 'This Month / Insights',  icon: 'insights',               requires: [] },
+  { id: 'recentTransactions', label: 'Recent Transactions',    icon: 'receipt_long',           requires: [] },
+  { id: 'balanceOverview',    label: 'Balance Overview',       icon: 'table_chart',            requires: ['accounts'] },
+  { id: 'expenseCategories',  label: 'Expense Categories',     icon: 'donut_large',            requires: ['expenses'] },
+];
+const LAYOUT_KEY = 'valu_home_layout';
+
+function loadWidgetLayout() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(LAYOUT_KEY));
+    if (!Array.isArray(stored) || stored.length === 0) return DEFAULT_WIDGETS.map(w => ({ ...w, enabled: true }));
+    const merged = stored
+      .filter(s => DEFAULT_WIDGETS.some(d => d.id === s.id))
+      .map(s => {
+        const def = DEFAULT_WIDGETS.find(d => d.id === s.id);
+        return { ...def, enabled: s.enabled !== false };
+      });
+    for (const d of DEFAULT_WIDGETS) {
+      if (!merged.some(m => m.id === d.id)) merged.push({ ...d, enabled: true });
+    }
+    return merged;
+  } catch { return DEFAULT_WIDGETS.map(w => ({ ...w, enabled: true })); }
+}
+
 export default {
   props: ['sheetId', 'settings', 'groupName', 'accounts', 'isDemoGroup', 'demoCallout'],
   emits: ['navigate', 'refresh'],
@@ -15,6 +41,8 @@ export default {
     function getSheetId() { return props.sheetId || injectedSheetId.value; }
     const installBanner = inject('installBanner', { installed: ref(true), install: () => {} });
     const installDismissedHome = ref(!!localStorage.getItem('valu_install_dismissed_home'));
+    const widgetLayout = ref(loadWidgetLayout());
+    const widgetOrder = computed(() => widgetLayout.value.filter(w => w.enabled));
     const showInstallCard = computed(() => !installBanner.installed.value && !installDismissedHome.value);
     function dismissInstallHome() {
       installDismissedHome.value = true;
@@ -1059,6 +1087,7 @@ export default {
       showInstallCard, installBanner, dismissInstallHome,
       pendingRecurring, showRecurringReview, recurringApplying, toggleRecurringItem, openRecurringReview, applyRecurring, dismissRecurring,
       pendingFxUpdates, showFxReview, fxApplying, toggleFxItem, openFxReview, applyFxUpdates, dismissFxUpdates,
+      widgetOrder,
     };
   },
 
@@ -1155,8 +1184,9 @@ export default {
           <span class="material-icons banner-dismiss" @click.stop="dismissFxUpdates">close</span>
         </div>
 
-        <!-- Total Balance + Area Chart (no card boundary) -->
-        <div v-if="enabledLists.includes('accounts') && (accounts || []).length > 0" class="balance-widget">
+        <template v-for="w in widgetOrder" :key="w.id">
+        <!-- Total Balance + Area Chart -->
+        <div v-if="w.id === 'totalBalance' && enabledLists.includes('accounts') && (accounts || []).length > 0" class="balance-widget">
           <div class="stat">
             <div class="stat-label">Total balance</div>
             <div class="stat-value">{{ formatCurrency(displayedBalance, baseCurrency) }}</div>
@@ -1188,7 +1218,8 @@ export default {
           </div>
         </div>
 
-        <!-- This Month Stats -->
+        <!-- This Month Stats / Smart Insights -->
+        <template v-if="w.id === 'thisMonth'">
         <div class="card mb-16" v-if="!smartInsightsMode && ((enabledLists.includes('expenses') && expenses.length > 0) || (enabledLists.includes('income') && incomeList.length > 0))">
           <div class="card-header"><h3>This Month</h3></div>
           <div class="stats-row">
@@ -1204,11 +1235,9 @@ export default {
               </div>
               <div class="stat-label">Expenses</div>
             </div>
-            <!-- Savings Rate hidden for now -->
           </div>
         </div>
 
-        <!-- Smart Insights (accounts + income, no expense logging) -->
         <div v-if="smartInsightsMode && smartInsightsData" class="card mb-16 smart-insights-card">
           <div class="card-header">
             <h3><span class="material-icons" style="font-size:18px;vertical-align:text-bottom;margin-right:4px;color:var(--color-primary);">auto_awesome</span>Smart Insights</h3>
@@ -1253,7 +1282,6 @@ export default {
           <p class="smart-insights-desc" style="padding-bottom:8px;">Smart Insights will appear here once you have at least one month of account balance history and some income logged. Keep tracking to unlock spending estimates, savings rate, and trends.</p>
         </div>
 
-        <!-- Smart Insights Chart -->
         <div v-if="smartInsightsMode && siChartPath" class="card mb-16">
           <div class="card-header"><h3>Income vs Estimated Spending</h3></div>
           <div style="padding:4px 0 0;">
@@ -1273,7 +1301,6 @@ export default {
           </div>
         </div>
 
-        <!-- Smart Insights Monthly Breakdown -->
         <div v-if="smartInsightsMode && smartInsightsData && smartInsightsData.history.length > 1" class="card mb-16">
           <div class="card-header"><h3>Monthly Breakdown</h3></div>
           <div class="balance-table-wrap">
@@ -1301,9 +1328,10 @@ export default {
             </table>
           </div>
         </div>
+        </template>
 
         <!-- Recent Transactions -->
-        <div v-if="recentTransactions.length > 0" class="card mb-16">
+        <div v-if="w.id === 'recentTransactions' && recentTransactions.length > 0" class="card mb-16">
           <div class="card-header"><h3>Recent Transactions</h3></div>
           <div style="padding:0;">
             <div v-for="tx in recentTransactions" :key="tx.id" class="list-item" style="cursor:pointer;" @click="emit('navigate', tx.type === 'income' ? 'income' : 'expenses')">
@@ -1329,8 +1357,9 @@ export default {
           </div>
         </div>
 
-        <!-- Yearly Balance Table -->
-        <div v-if="showBalanceTable" class="card mb-16">
+        <!-- Balance Overview -->
+        <template v-if="w.id === 'balanceOverview' && showBalanceTable">
+        <div class="card mb-16">
           <div class="card-header">
             <h3>Balance Overview</h3>
             <div class="balance-table-year-nav">
@@ -1377,9 +1406,10 @@ export default {
         <div v-if="balanceTooltip" class="balance-table-tooltip"
              :style="{ top: balanceTooltip.top + 'px', left: balanceTooltip.left + 'px' }"
              @click="hideNameTooltip">{{ balanceTooltip.text }}</div>
+        </template>
 
-        <!-- Expense Categories Table -->
-        <div v-if="showExpCatTable" id="expense-goals" class="card mb-16">
+        <!-- Expense Categories -->
+        <div v-if="w.id === 'expenseCategories' && showExpCatTable" id="expense-goals" class="card mb-16">
           <div class="card-header"><h3>Average Monthly Expenses</h3></div>
           <div class="balance-table-wrap" ref="expCatScrollRef">
             <table class="balance-table">
@@ -1447,6 +1477,7 @@ export default {
             </div>
           </div>
         </div>
+        </template>
 
         <!-- Quick-start hints for empty tools -->
         <div v-if="showOnboarding && !isDemoGroup" class="onboarding">
