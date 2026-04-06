@@ -51,7 +51,7 @@ export function demoSettingsObject() {
   return {
     groupName: 'Demo',
     baseCurrency: 'CAD',
-    listsEnabled: 'accounts,expenses,income,fi',
+    listsEnabled: 'accounts,expenses,income,fi,forecast',
     expenseCategories: 'Housing:home,Groceries:shopping_cart,Transportation:directions_car,Utilities:bolt,Healthcare:health_and_safety,Debt Payments:credit_card,Personal Care:face,Leisure:local_activity,Miscellaneous:category',
     incomeCategories: 'Salary:work,Bonuses:emoji_events,Investment Income:trending_up,Freelance:laptop,Other Income:attach_money',
     expenseCategoryGoals: 'Housing:1800,Groceries:600,Transportation:400,Utilities:250,Healthcare:150,Debt Payments:300,Personal Care:100,Leisure:350,Miscellaneous:100',

@@ -68,7 +68,7 @@ export default {
     const assumptionExpenses = ref(5000);
     const assumptionRoi = ref(2);
     const projectionMonthsMonthly = ref(24);
-    const projectionMonthsYearly = ref(240);
+    const projectionYears = ref(20);
     const goalStart = ref(0);
     const goalIncrement = ref(5000);
 
@@ -108,7 +108,7 @@ export default {
           assumptionExpenses.value = saved.expenses ?? 5000;
           assumptionRoi.value = saved.roi ?? 2;
           projectionMonthsMonthly.value = saved.monthsMonthly ?? saved.months ?? 24;
-          projectionMonthsYearly.value = saved.monthsYearly ?? 240;
+          projectionYears.value = saved.years ?? (saved.monthsYearly ? Math.round(saved.monthsYearly / 12) : 20);
           goalStart.value = saved.goalStart ?? 0;
           goalIncrement.value = saved.goalIncrement ?? 5000;
         } else {
@@ -144,7 +144,7 @@ export default {
         expenses: assumptionExpenses.value,
         roi: assumptionRoi.value,
         monthsMonthly: projectionMonthsMonthly.value,
-        monthsYearly: projectionMonthsYearly.value,
+        years: projectionYears.value,
         goalStart: goalStart.value,
         goalIncrement: goalIncrement.value,
       });
@@ -213,7 +213,9 @@ export default {
       let m = last.month;
       const rows = [];
 
-      const maxProjection = Math.max(projectionMonthsMonthly.value, projectionMonthsYearly.value);
+      const endYear = last.year + projectionYears.value;
+      const yearlyMonths = (endYear - last.year) * 12 + (12 - last.month);
+      const maxProjection = Math.max(projectionMonthsMonthly.value, yearlyMonths);
       for (let i = 0; i < maxProjection; i++) {
         m++;
         if (m > 12) { m = 1; y++; }
@@ -240,7 +242,7 @@ export default {
       const hist = historicalRows.value;
       const proj = projectedRows.value;
       const combined = [...hist, ...proj];
-      const gs = goalStart.value || (hist.length > 0 ? hist[0].total : 0);
+      const gs = goalStart.value != null ? goalStart.value : (hist.length > 0 ? hist[0].total : 0);
       const gi = goalIncrement.value;
       for (let i = 0; i < combined.length; i++) {
         combined[i] = { ...combined[i], goal: gs + gi * i };
@@ -251,9 +253,10 @@ export default {
     const yearlyRows = computed(() => {
       const byYear = {};
       const hist = historicalRows.value;
-      const maxRows = hist.length + projectionMonthsYearly.value;
-      const capped = allRows.value.slice(0, maxRows);
-      for (const r of capped) {
+      const lastHistRow = hist.length > 0 ? hist[hist.length - 1] : null;
+      const maxYear = lastHistRow ? lastHistRow.year + projectionYears.value : 9999;
+      for (const r of allRows.value) {
+        if (r.year > maxYear) continue;
         if (!byYear[r.year]) byYear[r.year] = { rows: [], isProjected: r.isProjected };
         byYear[r.year].rows.push(r);
         if (r.isProjected) byYear[r.year].isProjected = true;
@@ -366,7 +369,7 @@ export default {
     }
 
     watch(() => getSheetId(), () => fetchData(), { immediate: true });
-    watch([assumptionIncome, assumptionExpenses, assumptionRoi, projectionMonthsMonthly, projectionMonthsYearly, goalStart, goalIncrement], () => {
+    watch([assumptionIncome, assumptionExpenses, assumptionRoi, projectionMonthsMonthly, projectionYears, goalStart, goalIncrement], () => {
       persistAssumptions();
     });
     watch(viewMode, () => { selectedChart1.value = null; selectedChart2.value = null; });
@@ -376,7 +379,7 @@ export default {
     return {
       loading, viewMode, showAssumptions, displayRows,
       assumptionIncome, assumptionExpenses, assumptionRoi,
-      projectionMonthsMonthly, projectionMonthsYearly, goalStart, goalIncrement,
+      projectionMonthsMonthly, projectionYears, goalStart, goalIncrement,
       chart1, chart2, chartW, chartH, chartPad,
       selectedChart1, selectedChart2, selectPoint,
       fc, fmtNum, baseCurrency,
@@ -502,7 +505,7 @@ export default {
               </div>
               <div class="forecast-input-row">
                 <label>Yearly view horizon</label>
-                <input type="number" v-model.number="projectionMonthsYearly" min="12" max="600" step="12" inputmode="numeric" class="form-input" />
+                <input type="number" v-model.number="projectionYears" min="1" max="50" inputmode="numeric" class="form-input" />
               </div>
               <div class="forecast-input-row">
                 <label>Goal Start Value</label>
