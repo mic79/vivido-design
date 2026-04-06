@@ -222,8 +222,9 @@ export default {
         const inc = assumptionIncome.value;
         const exp = assumptionExpenses.value;
         const monthSum = inc - exp;
-        const roi = prevTotal * (assumptionRoi.value / 100);
-        const total = prevTotal + monthSum + roi;
+        const balanceAfterCashflow = prevTotal + monthSum;
+        const roi = balanceAfterCashflow * (assumptionRoi.value / 100);
+        const total = balanceAfterCashflow + roi;
         const roiPct = assumptionRoi.value;
         const key = `${y}-${String(m).padStart(2, '0')}`;
 
