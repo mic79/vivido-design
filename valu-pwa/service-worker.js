@@ -1,4 +1,4 @@
-const CACHE_NAME = 'valu-app-v187';
+const CACHE_NAME = 'valu-app-v188';
 
 const PRECACHE_URLS = [
   'index.html',
@@ -35,6 +35,7 @@ const PRECACHE_URLS = [
   'vendor/Draggable.min.js',
   'vendor/InertiaPlugin.min.js',
   'FiCalculatorPage.js',
+  'ForecastPage.js',
   'manifest.json',
 ];
 

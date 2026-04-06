@@ -110,7 +110,7 @@
         </div>
 
         <div class="sidenav-footer">
-          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v187 — What's new</button>
+          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v188 — What's new</button>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -264,6 +264,15 @@
         </button>
 
         <button
+          v-if="isListEnabled('forecast')"
+          class="tab-btn"
+          @click="navigateTo('forecast')"
+        >
+          <span class="material-icons">show_chart</span>
+          <span>Forecast</span>
+        </button>
+
+        <button
           class="tab-btn"
           @click="navigateTo('settings')"
         >
@@ -386,6 +395,7 @@
     import AboutPage from './AboutPage.js';
     import ValuAssistant from './ValuAssistant.js';
     import FiCalculatorPage from './FiCalculatorPage.js';
+    import ForecastPage from './ForecastPage.js';
     import ValuDateField from './ValuDateField.js';
     import ValuDropdown from './ValuDropdown.js';
     import ValuCurrencyPicker from './ValuCurrencyPicker.js';
@@ -393,7 +403,7 @@
     const { createApp, ref, computed, watch, onMounted, nextTick, provide } = Vue;
 
     const app = createApp({
-      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage, ActivityPage, FaqPage, AboutPage, ValuAssistant, FiCalculatorPage },
+      components: { HomePage, AccountsPage, ExpensesPage, IncomePage, GroupsPage, SettingsPage, ActivityPage, FaqPage, AboutPage, ValuAssistant, FiCalculatorPage, ForecastPage },
 
       setup() {
         // ── Auth state ──────────────────────────────────────────────────────
@@ -439,6 +449,7 @@
           about: 'AboutPage',
           assistant: 'ValuAssistant',
           fi: 'FiCalculatorPage',
+          forecast: 'ForecastPage',
         };
 
         const currentPageComponent = computed(() => PAGE_MAP[currentPage.value] || 'HomePage');

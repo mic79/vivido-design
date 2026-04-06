@@ -8,6 +8,7 @@ const AVAILABLE_LISTS = [
   { key: 'expenses',  label: 'Expenses',  icon: 'shopping_cart',   description: 'Log and categorize your spending' },
   { key: 'income',    label: 'Income',    icon: 'payments',        description: 'Track income sources and earnings' },
   { key: 'fi',        label: 'FI Calculator', icon: 'trending_up', description: 'Visualize your path to financial independence' },
+  { key: 'forecast',  label: 'Forecast',      icon: 'show_chart',  description: 'Project your net worth with historical data and assumptions' },
 ];
 
 export default {

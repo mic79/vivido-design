@@ -817,9 +817,8 @@ html[data-theme="light"] .subpage-bottom-fixed { background: linear-gradient(rgb
   height: var(--bottombar-height);
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 10px;
-  padding: 8px 20px calc(8px + env(safe-area-inset-bottom));
+  padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
   background: var(--color-background);
   flex-shrink: 0;
   z-index: 20;
@@ -830,7 +829,8 @@ html[data-theme="light"] .subpage-bottom-fixed { background: linear-gradient(rgb
 .bottombar::-webkit-scrollbar { display: none; }
 
 .tab-btn {
-  min-width: 64px;
+  min-width: 56px;
+  flex: 1 0 auto;
   height: 56px;
   display: flex;
   flex-direction: column;
@@ -4793,6 +4793,125 @@ html[data-theme="light"] .valu-orb-sm .sphere { mix-blend-mode: multiply; }
 
 /* Hide onboarding banner inside page component when viewing demo group */
 .is-demo-group .onboarding-banner { display: none !important; }
+
+/* ── Forecast Page ──────────────────────────────────────────────────────── */
+
+.forecast-toggle {
+  display: flex;
+  background: var(--color-card);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 56px;
+  margin-bottom: 16px;
+  border: 1px solid var(--color-border);
+}
+.forecast-toggle button {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  background: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.forecast-toggle button.active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.forecast-chart-wrap {
+  padding: 4px 0 0;
+  overflow: hidden;
+  position: relative;
+}
+.forecast-chart-svg {
+  width: 100%;
+  height: 220px;
+  display: block;
+}
+
+.forecast-tooltip {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.forecast-chart-labels {
+  position: relative;
+  height: 18px;
+  margin-top: 2px;
+}
+.forecast-chart-label {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--color-text-hint);
+  white-space: nowrap;
+}
+
+.forecast-chart-legend {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  padding: 6px 0 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.forecast-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.forecast-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.forecast-assumptions {
+  padding: 12px 16px 16px;
+}
+.forecast-input-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.forecast-input-row label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.forecast-input-row .form-input {
+  width: 120px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.forecast-table td,
+.forecast-table th {
+  white-space: nowrap;
+  font-size: 12px;
+}
+.forecast-projected td {
+  opacity: 0.6;
+}
+.forecast-projected td.balance-table-sticky {
+  font-style: italic;
+  opacity: 1;
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+}
 
 /* ── FI Calculator (ported from CodePen) ─────────────────────────────────── */
 
