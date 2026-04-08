@@ -134,6 +134,10 @@ export default {
       assumptionRoi.value = Math.round(avgRoi * 100) / 100;
       goalStart.value = Math.round(hist[0].total);
       goalIncrement.value = 5000;
+      if (props.isDemoGroup) {
+        projectionMonthsMonthly.value = 12;
+        projectionYears.value = 5;
+      }
     }
 
     function persistAssumptions() {

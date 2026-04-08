@@ -698,8 +698,9 @@ export default {
 
     const balanceTableScrollRef = ref(null);
     function scrollBalanceTable() {
-      const el = balanceTableScrollRef.value;
-      if (!el) return;
+      let el = balanceTableScrollRef.value;
+      if (Array.isArray(el)) el = el[0];
+      if (!el || !el.querySelectorAll) return;
       nextTick(() => {
         if (balanceTableYear.value === new Date().getFullYear()) {
           const monthIdx = new Date().getMonth();
@@ -714,7 +715,7 @@ export default {
         }
       });
     }
-    watch(balanceTableScrollRef, (el) => { if (el) scrollBalanceTable(); });
+    watch(balanceTableScrollRef, (raw) => { const el = Array.isArray(raw) ? raw[0] : raw; if (el) scrollBalanceTable(); });
     watch(balanceTableYear, () => scrollBalanceTable());
 
     const balanceTooltip = ref(null);
@@ -832,8 +833,9 @@ export default {
     );
 
     const expCatScrollRef = ref(null);
-    watch(expCatScrollRef, (el) => {
-      if (el) nextTick(() => { el.scrollLeft = el.scrollWidth; });
+    watch(expCatScrollRef, (raw) => {
+      const el = Array.isArray(raw) ? raw[0] : raw;
+      if (el && el.scrollLeft !== undefined) nextTick(() => { el.scrollLeft = el.scrollWidth; });
     });
 
     const categoryGoals = ref({});

@@ -66,6 +66,8 @@ export function demoAccountsRows() {
     ['demo_acc_chk', 'Chequing', 'CAD', 'checking', 'false', '1'],
     ['demo_acc_sav', 'Savings', 'CAD', 'savings', 'false', '2'],
     ['demo_acc_cc', 'Credit Card', 'CAD', 'credit', 'false', '3'],
+    ['demo_acc_tfsa', 'TFSA', 'CAD', 'investment', 'false', '4'],
+    ['demo_acc_rrsp', 'RRSP', 'CAD', 'investment', 'false', '5'],
   ];
 }
 
@@ -175,6 +177,8 @@ export function demoBalanceHistoryRows() {
   let chk = 5200;
   let sav = 8000;
   let cc = -800;
+  let tfsa = 12000;
+  let rrsp = 22000;
   const rows = [];
 
   for (let back = MONTHS_BACK; back >= 0; back--) {
@@ -190,15 +194,29 @@ export function demoBalanceHistoryRows() {
     cc += ccChange;
 
     const remaining = net - ccChange;
-    const toSavings = remaining > 0 ? remaining * (0.35 + rand() * 0.15) : remaining * 0.1;
+
+    const tfsaContrib = 250 + rand() * 200;
+    const rrspContrib = 350 + rand() * 250;
+    const totalInvContrib = tfsaContrib + rrspContrib;
+
+    const afterInv = remaining - totalInvContrib;
+    const toSavings = afterInv > 0 ? afterInv * (0.35 + rand() * 0.15) : afterInv * 0.1;
     sav += toSavings;
-    chk += remaining - toSavings;
+    chk += afterInv - toSavings;
+
+    const tfsaReturn = tfsa * (0.005 + (rand() - 0.5) * 0.012);
+    const rrspReturn = rrsp * (0.006 + (rand() - 0.5) * 0.014);
+    tfsa += tfsaContrib + tfsaReturn;
+    rrsp += rrspContrib + rrspReturn;
 
     const ds = `${y}-${pad2(m)}-01`;
+    const fmt = v => (Math.round(v * 100) / 100).toFixed(2);
     rows.push(
-      ['demo_acc_chk', String(y), String(m), (Math.round(chk * 100) / 100).toFixed(2), ds],
-      ['demo_acc_sav', String(y), String(m), (Math.round(sav * 100) / 100).toFixed(2), ds],
-      ['demo_acc_cc',  String(y), String(m), (Math.round(cc * 100) / 100).toFixed(2), ds],
+      ['demo_acc_chk',  String(y), String(m), fmt(chk),  ds],
+      ['demo_acc_sav',  String(y), String(m), fmt(sav),  ds],
+      ['demo_acc_cc',   String(y), String(m), fmt(cc),   ds],
+      ['demo_acc_tfsa', String(y), String(m), fmt(tfsa), ds],
+      ['demo_acc_rrsp', String(y), String(m), fmt(rrsp), ds],
     );
   }
   return rows;

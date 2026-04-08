@@ -1,4 +1,4 @@
-const CACHE_NAME = 'valu-app-v188';
+const CACHE_NAME = 'valu-app-v189';
 
 const PRECACHE_URLS = [
   'index.html',
@@ -71,6 +71,8 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (url.pathname.endsWith('service-worker.js')) return;
+
+  if (event.request.method !== 'GET') return;
 
   event.respondWith(
     fetch(event.request)
