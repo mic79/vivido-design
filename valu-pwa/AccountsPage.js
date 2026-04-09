@@ -381,6 +381,8 @@ export default {
       }
     }
 
+    const sheetSwipeStep = ref(false);
+
     async function startEdit(account) {
       editingAccount.value = { ...account };
       historyAccount.value = account;
@@ -400,8 +402,6 @@ export default {
         editHoldingsCash.value = { amount: '' };
       }
     }
-
-    const sheetSwipeStep = ref(false);
 
     /** Write current editingAccount row to the sheet without closing the modal */
     async function persistEditToSheet() {
@@ -996,7 +996,7 @@ export default {
 
             <template v-if="isInvestmentAccountType(editingAccount.type)">
               <div class="sheet-section-title sheet-holdings-section-title">Holdings</div>
-              <p class="sheet-holdings-hint">Tickers as in Google Sheets <code>GOOGLEFINANCE</code> (e.g. <code>NASDAQ:AAPL</code>, <code>TSE:VFV</code>). Market values are converted to <strong>{{ editingAccount.currency || baseCurrency }}</strong> in your Sheet.</p>
+              <p class="sheet-holdings-hint">Tickers as in Google Sheets <code>GOOGLEFINANCE</code> (e.g. <code>NASDAQ:AAPL</code>, <code>TSE:VFV</code>). Market values are converted to <strong>{{ editingAccount.currency || baseCurrency }}</strong> in your Sheet — open the spreadsheet to refresh quotes.</p>
               <div v-if="loadingHoldingsEdit" class="sheet-holdings-loading">Loading holdings…</div>
               <template v-else>
                 <div v-for="(line, hi) in editHoldingsLines" :key="'h'+hi" class="sheet-holdings-row">

@@ -1,5 +1,5 @@
 /** Bump this string on every deploy so precached assets and stale caches are replaced. */
-const CACHE_NAME = 'valu-app-v191';
+const CACHE_NAME = 'valu-app-v194';
 
 const PRECACHE_URLS = [
   'index.html',

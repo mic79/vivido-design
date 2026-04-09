@@ -434,7 +434,7 @@ export default {
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>
-              <div class="activity-feed-title">What's New in v191</div>
+              <div class="activity-feed-title">What's New in v194</div>
               <div class="activity-feed-date">April 2026</div>
             </div>
           </div>
