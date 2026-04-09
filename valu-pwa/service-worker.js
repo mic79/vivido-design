@@ -1,5 +1,5 @@
 /** Bump this string on every deploy so precached assets and stale caches are replaced. */
-const CACHE_NAME = 'valu-app-v194';
+const CACHE_NAME = 'valu-app-v195';
 
 const PRECACHE_URLS = [
   'index.html',
@@ -40,11 +40,29 @@ const PRECACHE_URLS = [
   'manifest.json',
 ];
 
+/** Bypass HTTP disk cache (fixes stale JS/CSS on mobile Safari / installed PWA). */
+const FETCH_BUST = { cache: 'reload' };
+
+function precacheUrl(relativePath) {
+  return new URL(relativePath, self.registration.scope).href;
+}
+
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
+    caches.open(CACHE_NAME).then(async (cache) => {
+      await Promise.all(
+        PRECACHE_URLS.map(async (rel) => {
+          const url = precacheUrl(rel);
+          try {
+            const res = await fetch(url, FETCH_BUST);
+            if (res.ok) await cache.put(url, res);
+          } catch (_) {
+            /* offline install: skip missing */
+          }
+        })
+      );
+    })
   );
 });
 
@@ -75,8 +93,13 @@ self.addEventListener('fetch', (event) => {
 
   if (event.request.method !== 'GET') return;
 
+  const path = url.pathname;
+  const useBust =
+    /\.(js|css)$/i.test(path) ||
+    event.request.mode === 'navigate';
+
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, useBust ? FETCH_BUST : {})
       .then((response) => {
         if (response.ok) {
           const clone = response.clone();
