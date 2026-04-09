@@ -110,7 +110,7 @@
         </div>
 
         <div class="sidenav-footer">
-          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v190 — What's new</button>
+          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v191 — What's new</button>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -435,6 +435,7 @@
         const needsReconnect = ref(false);
         const swUpdateReady = ref(false);
         let waitingSW = null;
+        let swRegistration = null;
         const isStandalone = window.matchMedia('(display-mode: standalone)').matches
           || window.navigator.standalone === true;
         const appInstalled = ref(isStandalone || !!localStorage.getItem('valu_app_installed'));
@@ -1040,6 +1041,7 @@
 
         if ('serviceWorker' in navigator) {
           navigator.serviceWorker.register('service-worker.js', { updateViaCache: 'none' }).then(reg => {
+            swRegistration = reg;
             reg.update().catch(() => {});
             reg.addEventListener('updatefound', () => {
               const newSW = reg.installing;
@@ -1052,6 +1054,12 @@
               });
             });
           }).catch(() => {});
+
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && swRegistration) {
+              swRegistration.update().catch(() => {});
+            }
+          });
 
           navigator.serviceWorker.addEventListener('controllerchange', () => {
             window.location.reload();
