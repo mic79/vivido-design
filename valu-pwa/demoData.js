@@ -229,7 +229,10 @@ function demoSettingsRows() {
 
 /** In-memory holdings per account for demo (symbol + shares). MarketValue in sheet is simulated. */
 const _demoHoldingsByAccount = {
-  demo_acc_tfsa: [{ symbol: 'TSE:VFV', shares: 120 }],
+  demo_acc_tfsa: [
+    { symbol: 'TSE:VFV', shares: 120 },
+    { symbol: 'CASH', shares: 2500 },
+  ],
   demo_acc_rrsp: [
     { symbol: 'NASDAQ:MSFT', shares: 8 },
     { symbol: 'NASDAQ:AAPL', shares: 15 },
@@ -265,7 +268,9 @@ export function getDemoHoldingsRows() {
   let id = 1;
   for (const [accId, lineList] of Object.entries(_demoHoldingsByAccount)) {
     for (const l of lineList) {
-      const price = DEMO_HOLDING_PRICES[l.symbol] || 50;
+      const price = String(l.symbol).toUpperCase().trim() === 'CASH'
+        ? 1
+        : (DEMO_HOLDING_PRICES[l.symbol] || 50);
       const val = (Math.round(l.shares * price * 100) / 100).toFixed(2);
       rows.push([`demo_hold_${id++}`, accId, l.symbol, String(l.shares), val]);
     }

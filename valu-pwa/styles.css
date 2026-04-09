@@ -2723,6 +2723,10 @@ html[data-theme="light"] .sheet-handle::after { background: #999; }
   padding-top: 8px;
 }
 
+.sheet-holdings-cash-item {
+  margin-bottom: 4px;
+}
+
 .sheet-holdings-hint,
 .sheet-holdings-live-hint,
 .sheet-holdings-balance-note {

@@ -440,7 +440,7 @@ export default {
           </div>
           <div class="activity-feed-body">
             <ul class="activity-feed-list">
-              <li><strong>Investment holdings</strong> — For Investment accounts, add tickers and shares in account details. Valu writes a <code>Holdings</code> tab in your Google Sheet with <code>GOOGLEFINANCE</code> market values. Home and Accounts can prompt you to record month-end balances from those totals.</li>
+              <li><strong>Investment holdings</strong> — For Investment accounts, add tickers, shares, and a Cash balance in account details. Market values are automatically converted to the account's currency. Valu writes a <code>Holdings</code> tab in your Google Sheet with <code>GOOGLEFINANCE</code> market values. Home and Accounts can prompt you to record month-end balances from those totals.</li>
               <li><strong>Currency auto-conversion</strong> — Log expenses, income, or balances in a foreign-currency account and auto-convert at the official central bank rate for the transaction date. Fallback to manual rates when offline.</li>
               <li><strong>Smarter assistant</strong> — Context-aware follow-ups, year-to-date summaries, income trend charts, budget queries, and FAQ-powered fallback answers.</li>
               <li><strong>FI Calculator</strong> — Financial Independence calculator with auto-populated data from your accounts, income, and expenses.</li>

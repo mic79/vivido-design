@@ -37,6 +37,8 @@ export default {
     /** accountId -> count of holdings rows with a symbol */
     const holdingsRowCount = ref({});
     const editHoldingsLines = ref([{ symbol: '', shares: '' }]);
+    /** Uninvested cash in account currency; synced as a CASH row in Holdings. */
+    const editHoldingsCash = ref({ amount: '' });
     const savingHoldings = ref(false);
     const loadingHoldingsEdit = ref(false);
     const sheetTotalLoading = ref(false);
@@ -306,15 +308,49 @@ export default {
       loadingHoldingsEdit.value = true;
       try {
         const lines = await SheetsApi.getHoldingsLinesForAccount(getSheetId(), accountId);
-        editHoldingsLines.value = lines.length
-          ? lines.map(l => ({ symbol: l.symbol, shares: String(l.shares) }))
+        let cashTotal = 0;
+        let anyCash = false;
+        const stockOnly = [];
+        for (const l of lines) {
+          if ((l.symbol || '').trim().toUpperCase() === 'CASH') {
+            let sh = l.shares;
+            if (typeof sh === 'string') sh = sh.replace(',', '.');
+            const v = parseFloat(sh);
+            if (!Number.isNaN(v)) {
+              cashTotal += v;
+              anyCash = true;
+            }
+            continue;
+          }
+          stockOnly.push({ symbol: l.symbol, shares: String(l.shares) });
+        }
+        editHoldingsCash.value = { amount: anyCash ? amountToInput(cashTotal) : '' };
+        editHoldingsLines.value = stockOnly.length
+          ? stockOnly
           : [{ symbol: '', shares: '' }];
       } catch (err) {
         console.error('Holdings load failed:', err);
         editHoldingsLines.value = [{ symbol: '', shares: '' }];
+        editHoldingsCash.value = { amount: '' };
       } finally {
         loadingHoldingsEdit.value = false;
       }
+    }
+
+    function buildHoldingsLinesForSheetSave() {
+      const out = [];
+      for (const l of editHoldingsLines.value) {
+        const sym = (l.symbol || '').trim();
+        if (!sym || sym.toUpperCase() === 'CASH') continue;
+        const sh = parseAmount(l.shares);
+        if (Number.isNaN(sh) || sh === 0) continue;
+        out.push({ symbol: sym, shares: l.shares });
+      }
+      const cash = parseAmount(editHoldingsCash.value.amount);
+      if (!Number.isNaN(cash) && cash !== 0) {
+        out.push({ symbol: 'CASH', shares: String(cash) });
+      }
+      return out;
     }
 
     function addHoldingRow() {
@@ -333,7 +369,7 @@ export default {
         await SheetsApi.syncHoldingsForAccount(
           getSheetId(),
           editingAccount.value.id,
-          editHoldingsLines.value.map(l => ({ symbol: l.symbol, shares: l.shares }))
+          buildHoldingsLinesForSheetSave()
         );
         await refreshHoldingsRowCounts();
         showAlert('Holdings saved. Market values use GOOGLEFINANCE in your Google Sheet.');
@@ -357,9 +393,11 @@ export default {
       sheetSwipeStep.value = false;
       showEditModal.value = true;
       if (isInvestmentAccountType(account.type)) {
+        editHoldingsCash.value = { amount: '' };
         await loadEditHoldingsLines(account.id);
       } else {
         editHoldingsLines.value = [{ symbol: '', shares: '' }];
+        editHoldingsCash.value = { amount: '' };
       }
     }
 
@@ -741,7 +779,7 @@ export default {
       reorderMode, moveAccountUp, moveAccountDown, addNameInput, balanceAmountInput,
       disableTool,
       balFx,
-      editHoldingsLines, addHoldingRow, removeHoldingRow, saveHoldings, savingHoldings, loadingHoldingsEdit,
+      editHoldingsLines, editHoldingsCash, addHoldingRow, removeHoldingRow, saveHoldings, savingHoldings, loadingHoldingsEdit,
       isInvestmentAccountType, hasHoldingsRows, fillBalanceFromSheetTotal, sheetTotalLoading,
       investmentAccountsNeedingPrevMonth, prevMonthForHistory,
     };
@@ -957,8 +995,8 @@ export default {
             </div>
 
             <template v-if="isInvestmentAccountType(editingAccount.type)">
-              <div class="sheet-section-title sheet-holdings-section-title">Stock &amp; ETF holdings</div>
-              <p class="sheet-holdings-hint">Enter tickers as used in Google Sheets <code>GOOGLEFINANCE</code> (e.g. <code>NASDAQ:AAPL</code>, <code>TSE:VFV</code>). Market column is calculated in your Sheet — open the spreadsheet to refresh quotes.</p>
+              <div class="sheet-section-title sheet-holdings-section-title">Holdings</div>
+              <p class="sheet-holdings-hint">Tickers as in Google Sheets <code>GOOGLEFINANCE</code> (e.g. <code>NASDAQ:AAPL</code>, <code>TSE:VFV</code>). Market values are converted to <strong>{{ editingAccount.currency || baseCurrency }}</strong> in your Sheet.</p>
               <div v-if="loadingHoldingsEdit" class="sheet-holdings-loading">Loading holdings…</div>
               <template v-else>
                 <div v-for="(line, hi) in editHoldingsLines" :key="'h'+hi" class="sheet-holdings-row">
@@ -968,10 +1006,17 @@ export default {
                     <span class="material-icons">close</span>
                   </button>
                 </div>
-                <div class="sheet-holdings-actions">
+                <div style="padding:0 4px 8px;">
                   <button type="button" class="btn btn-text btn-sm" @click="addHoldingRow">
                     <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">add</span>Add line
                   </button>
+                </div>
+                <div class="sheet-list-item sheet-holdings-cash-item">
+                  <label>Cash ({{ editingAccount.currency || baseCurrency }})</label>
+                  <input v-model="editHoldingsCash.amount" class="form-input" type="text" inputmode="decimal" placeholder="0" autocomplete="off"
+                         @input="sanitizeAmount(editHoldingsCash, 'amount')" />
+                </div>
+                <div class="sheet-holdings-actions">
                   <button type="button" class="btn btn-primary btn-sm" :disabled="savingHoldings" @click="saveHoldings">{{ savingHoldings ? 'Saving…' : 'Save holdings' }}</button>
                 </div>
               </template>

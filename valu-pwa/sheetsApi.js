@@ -39,12 +39,38 @@ const TAB_HEADERS = {
 /** Holdings!Z1 — as-of date for GOOGLEFINANCE close; blank = use live price */
 const HOLDINGS_AS_OF_Z1 = 'Z1';
 
-function holdingsMarketValueFormula(row) {
-  return `=IF(OR(C${row}="",D${row}=""),0,D${row}*IF(OR(ISBLANK($Z$1),$Z$1=""),IFERROR(N(GOOGLEFINANCE(C${row},"price")),0),IFERROR(N(INDEX(GOOGLEFINANCE(C${row},"close",$Z$1,$Z$1),2,2)),IFERROR(N(GOOGLEFINANCE(C${row},"price")),0))))`;
+/**
+ * Column E formula for one Holdings row.
+ * CASH rows: N(D) in the account currency (no quote).
+ * Stock/ETF rows: shares × price × FX rate from listing currency → accountCurrency.
+ * Uses LET to avoid repeated GOOGLEFINANCE calls.
+ * @param {number} row - Sheet row (2-based)
+ * @param {string} [accountCurrency] - ISO code from the Accounts tab (e.g. "CAD")
+ */
+function holdingsMarketValueFormula(row, accountCurrency) {
+  const c = `C${row}`;
+  const d = `D${row}`;
+  const cur = (accountCurrency || 'CAD').toUpperCase();
+
+  const priceFx = [
+    `LET(`,
+    `lc,IFERROR(GOOGLEFINANCE(sym,"currency"),"${cur}"),`,
+    `lp,IFERROR(N(GOOGLEFINANCE(sym,"price")),0),`,
+    `hp,IFERROR(N(INDEX(GOOGLEFINANCE(sym,"close",$Z$1,$Z$1),2,2)),lp),`,
+    `p,IF(OR(ISBLANK($Z$1),$Z$1=""),lp,hp),`,
+    `fp,"CURRENCY:"&lc&"${cur}",`,
+    `lf,IFERROR(IF(lc="${cur}",1,N(GOOGLEFINANCE(fp))),1),`,
+    `hf,IFERROR(IF(lc="${cur}",1,N(INDEX(GOOGLEFINANCE(fp,"close",$Z$1,$Z$1),2,2))),lf),`,
+    `fx,IF(OR(ISBLANK($Z$1),$Z$1=""),lf,hf),`,
+    `sh*p*fx)`,
+  ].join('');
+
+  return `=LET(sym,${c},sh,${d},IF(OR(sym="",sh=""),0,IF(UPPER(TRIM(sym))="CASH",N(sh),${priceFx})))`;
 }
 
 const HOLDINGS_FM_STORAGE_PREFIX = 'valu_holdings_fm_';
-const HOLDINGS_FM_REV = 'z1';
+/** Bump when column E formula changes to trigger rewrite on existing sheets. */
+const HOLDINGS_FM_REV = 'fxcash1';
 
 function holdingsFormulasNeedRefresh(spreadsheetId) {
   try {
@@ -471,7 +497,8 @@ const SheetsApi = {
 
   /**
    * Replace all holdings lines for one account; keeps other accounts' rows.
-   * Column E is a GOOGLEFINANCE-based formula (refreshes when the sheet recalculates).
+   * Column E is usually GOOGLEFINANCE × shares; use symbol CASH (any case) and put the
+   * cash dollar amount in shares/D for uninvested brokerage cash (no quote lookup).
    * @param {Array<{symbol: string, shares: number|string}>} lines
    */
   async syncHoldingsForAccount(spreadsheetId, accountId, lines) {
@@ -480,7 +507,13 @@ const SheetsApi = {
       return;
     }
     await this.ensureTab(spreadsheetId, TABS.HOLDINGS);
-    const raw = (await this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:E2000`)) || [];
+    const [raw, accRows] = await Promise.all([
+      this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:E2000`).then(r => r || []),
+      this.getValues(spreadsheetId, `${TABS.ACCOUNTS}!A2:C`).then(r => r || []),
+    ]);
+    const currencyMap = {};
+    for (const r of accRows) { if (r[0]) currencyMap[String(r[0])] = (r[2] || '').toUpperCase() || 'CAD'; }
+
     const others = raw.filter(r => r.length >= 2 && String(r[1]) !== String(accountId) && r[0]);
     const otherData = others.map(r => [r[0] || '', r[1] || '', r[2] || '', r[3] || '']);
     const newRows = [];
@@ -496,7 +529,7 @@ const SheetsApi = {
     const withFormulas = merged.map((r, i) => {
       const row = i + 2;
       const [id, accId, sym, shares] = r;
-      return [id, accId, sym, shares, holdingsMarketValueFormula(row)];
+      return [id, accId, sym, shares, holdingsMarketValueFormula(row, currencyMap[accId])];
     });
     while (withFormulas.length < raw.length) {
       withFormulas.push(['', '', '', '', '']);
@@ -512,21 +545,28 @@ const SheetsApi = {
   },
 
   /**
-   * Rewrite column E from A2:D so formulas support $Z$1 as-of (migration + repair).
+   * Rewrite column E so formulas include $Z$1 as-of and FX conversion to account currency.
    */
   async ensureHoldingsMarketFormulas(spreadsheetId) {
     if (isDemoSheet(spreadsheetId)) return;
     await this.ensureTab(spreadsheetId, TABS.HOLDINGS);
-    const raw = (await this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:D2000`)) || [];
+    const [raw, accRows] = await Promise.all([
+      this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:D2000`).then(r => r || []),
+      this.getValues(spreadsheetId, `${TABS.ACCOUNTS}!A2:C`).then(r => r || []),
+    ]);
     if (raw.length === 0) return;
+    const currencyMap = {};
+    for (const r of accRows) { if (r[0]) currencyMap[String(r[0])] = (r[2] || '').toUpperCase() || 'CAD'; }
+
     const formulas = [];
     for (let i = 0; i < raw.length; i++) {
       const row = i + 2;
       const r = raw[i] || [];
       const sym = (r[2] || '').toString().trim();
       const id = (r[0] || '').toString().trim();
+      const accId = (r[1] || '').toString().trim();
       if (id && sym) {
-        formulas.push([holdingsMarketValueFormula(row)]);
+        formulas.push([holdingsMarketValueFormula(row, currencyMap[accId])]);
       } else {
         formulas.push(['']);
       }
@@ -639,12 +679,30 @@ const SheetsApi = {
     };
   },
 
+  /**
+   * Market value for one Holdings row (column E). Google may omit trailing cells, so a row can
+   * have A–D only; CASH lines then fall back to D (same as the sheet formula result).
+   */
+  marketValueFromHoldingsRow(r) {
+    if (!r || r.length < 4) return NaN;
+    const sym = (r[2] || '').toString().trim();
+    if (!sym) return NaN;
+    let v = NaN;
+    if (r.length > 4 && r[4] !== '' && r[4] != null) {
+      v = parseFloat(String(r[4]).replace(/,/g, ''));
+    }
+    if (Number.isNaN(v) && sym.toUpperCase() === 'CASH') {
+      v = parseFloat(String(r[3] ?? '').replace(/,/g, ''));
+    }
+    return v;
+  },
+
   sumHoldingsValuesForAccount(rows, accountId) {
     let sum = 0;
     const id = String(accountId);
     for (const r of rows) {
-      if (r.length < 5 || String(r[1]) !== id) continue;
-      const v = parseFloat(String(r[4]).replace(/,/g, ''));
+      if (r.length < 4 || String(r[1]) !== id) continue;
+      const v = this.marketValueFromHoldingsRow(r);
       if (!Number.isNaN(v)) sum += v;
     }
     return Math.round(sum * 100) / 100;

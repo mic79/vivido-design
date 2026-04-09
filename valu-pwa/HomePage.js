@@ -407,7 +407,7 @@ export default {
                     if ((r[2] || '').toString().trim()) {
                       lineCounts[aid] = (lineCounts[aid] || 0) + 1;
                     }
-                    const v = parseFloat(String(r[4] || '').replace(/,/g, ''));
+                    const v = SheetsApi.marketValueFromHoldingsRow(r);
                     if (!Number.isNaN(v)) sums[aid] = (sums[aid] || 0) + v;
                   }
                   for (const k of Object.keys(sums)) {
