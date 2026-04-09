@@ -110,7 +110,7 @@
         </div>
 
         <div class="sidenav-footer">
-          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v189 — What's new</button>
+          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v190 — What's new</button>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
@@ -202,6 +202,7 @@
           :userProfile="userProfile"
           :groupName="activeGroupName"
           :showUpdateReminder="false"
+          :accountsEntryIntent="accountsEntryIntent"
           :isDemoGroup="!!(activeGroup && activeGroup.id === demoSheetId)"
           :demoCallout="demoHomeCallout"
           @navigate="(page, opts) => navigateTo(page, opts)"
@@ -210,6 +211,7 @@
           @open-shared="onSharedOpened"
           @refresh-groups="refreshGroupsList"
           @accounts-updated="onAccountsUpdated"
+          @accounts-intent-consumed="accountsEntryIntent = null"
           @settings-updated="onSettingsUpdated"
           @refresh="refreshCurrentPage"
           @go-home="navigateTo('home')"
@@ -426,6 +428,7 @@
 
         // ── Navigation ──────────────────────────────────────────────────────
         const currentPage = ref('home');
+        const accountsEntryIntent = ref(null);
         const sideNavOpen = ref(false);
         const showGroupSwitcher = ref(false);
         const dataLoaded = ref(false);
@@ -540,6 +543,7 @@
           const allowedWithoutGroup = page === 'home' || page === 'groups' || page === 'settings';
           if (!activeGroup.value && !allowedWithoutGroup) {
             currentPage.value = 'home';
+            accountsEntryIntent.value = null;
             return;
           }
           if (page === 'groups' && opts && opts.autoOpenConfig) {
@@ -557,6 +561,13 @@
             return;
           }
           currentPage.value = page;
+          if (page !== 'accounts') {
+            accountsEntryIntent.value = null;
+          } else if (opts && opts.accountsIntent) {
+            accountsEntryIntent.value = opts.accountsIntent;
+          } else {
+            accountsEntryIntent.value = null;
+          }
           if (opts && opts.scrollTo) {
             const scrollTarget = opts.scrollTo;
             const tryScroll = (attempts) => {
@@ -1052,7 +1063,7 @@
           demoSheetId: DEMO_SHEET_ID,
           inAppShell, demoMode, landingShowCtas, showSignInFromLanding,
           groups, groupsForSwitcher, activeGroup, groupSettings, groupLoading, dataLoaded, accountsList,
-          currentPage, currentPageComponent,
+          currentPage, accountsEntryIntent, currentPageComponent,
           activeSheetId, activeGroupName, sideNavOpen, showGroupSwitcher,
           demoHomeCallout, demoNoticeDismissed,
           needsReconnect, reconnect, connect, swUpdateReady, applySwUpdate,

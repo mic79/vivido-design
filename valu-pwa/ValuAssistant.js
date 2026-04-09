@@ -1,4 +1,4 @@
-import SheetsApi, { TABS, isDemoSheet } from './sheetsApi.js';
+import SheetsApi, { TABS, isDemoSheet, isInvestmentAccountType } from './sheetsApi.js';
 import { getFaqById, FAQ_ENTRIES } from './faqData.js';
 
 const { ref, computed, watch, inject, onMounted, onBeforeUnmount, nextTick } = Vue;
@@ -328,12 +328,12 @@ export default {
     function cashFlowBalanceForYm(ym) {
       const [y, m] = ym.split('-').map(Number);
       const cashAccounts = (props.accounts || [])
-        .filter(a => a.discontinued !== 'true' && a.type !== 'Investment');
+        .filter(a => a.discontinued !== 'true' && !isInvestmentAccountType(a.type));
       const lastKnown = {};
       const sorted = [...balanceHistory.value].sort((a, b) => (a.year * 100 + a.month) - (b.year * 100 + b.month));
       for (const h of sorted) {
         if (h.year * 100 + h.month > y * 100 + m) break;
-        if (getAccountType(h.accountId) === 'Investment') continue;
+        if (isInvestmentAccountType(getAccountType(h.accountId))) continue;
         lastKnown[h.accountId] = { balance: h.balance, currency: getAccountCurrency(h.accountId) };
       }
       return cashAccounts.reduce((sum, a) => {

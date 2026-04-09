@@ -434,12 +434,13 @@ export default {
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>
-              <div class="activity-feed-title">What's New in v189</div>
+              <div class="activity-feed-title">What's New in v190</div>
               <div class="activity-feed-date">April 2026</div>
             </div>
           </div>
           <div class="activity-feed-body">
             <ul class="activity-feed-list">
+              <li><strong>Investment holdings</strong> — For Investment accounts, add tickers and shares in account details. Valu writes a <code>Holdings</code> tab in your Google Sheet with <code>GOOGLEFINANCE</code> market values. Home and Accounts can prompt you to record month-end balances from those totals.</li>
               <li><strong>Currency auto-conversion</strong> — Log expenses, income, or balances in a foreign-currency account and auto-convert at the official central bank rate for the transaction date. Fallback to manual rates when offline.</li>
               <li><strong>Smarter assistant</strong> — Context-aware follow-ups, year-to-date summaries, income trend charts, budget queries, and FAQ-powered fallback answers.</li>
               <li><strong>FI Calculator</strong> — Financial Independence calculator with auto-populated data from your accounts, income, and expenses.</li>

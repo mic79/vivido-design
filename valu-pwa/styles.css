@@ -1854,8 +1854,14 @@ html[data-theme="light"] .valu-site-intro .s3 { background: #4f4f4f; }
   padding: 0 16px;
 }
 .sheet-swipe-step.expanded .sheet-step-details {
-  max-height: 500px;
-  padding: 0 16px 16px;
+  /* Tall enough for investment holdings + type/currency/discontinued; scroll inside panel */
+  max-height: min(72vh, calc(100vh - 160px));
+  max-height: min(72dvh, calc(100dvh - 160px));
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 16px calc(16px + env(safe-area-inset-bottom));
 }
 /* Let anchored dropdowns escape overflow clipping and sit above step-main chrome */
 .sheet-swipe-step.expanded .sheet-step-details:has(.valu-dropdown--open),
@@ -2711,6 +2717,76 @@ html[data-theme="light"] .sheet-handle::after { background: #999; }
   font-weight: 700;
   color: var(--color-text-hint);
   padding: 16px 0 8px;
+}
+
+.sheet-holdings-section-title {
+  padding-top: 8px;
+}
+
+.sheet-holdings-hint,
+.sheet-holdings-live-hint,
+.sheet-holdings-balance-note {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+  margin: 0 0 10px;
+  padding: 0 4px;
+}
+
+.sheet-holdings-hint code,
+.sheet-holdings-live-hint code {
+  font-size: 11px;
+  background: var(--color-surface-alt, rgba(0,0,0,.06));
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.sheet-holdings-loading {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  padding: 8px 4px 12px;
+}
+
+.sheet-holdings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.sheet-holdings-symbol {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+
+.sheet-holdings-shares {
+  flex: 0 0 28%;
+  min-width: 72px;
+}
+
+.sheet-holdings-remove {
+  flex-shrink: 0;
+  color: var(--color-text-hint);
+}
+
+.sheet-holdings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 4px 16px;
+}
+
+.sheet-holdings-balance-tools {
+  padding: 0 8px 8px;
+}
+
+.sheet-holdings-balance-tools .btn-text {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 6px;
 }
 
 /* Sheet footer CTA */

@@ -1,11 +1,14 @@
-import SheetsApi, { TABS, normalizeDiscontinuedCell, formatAccountDisplayName, CURRENCIES } from './sheetsApi.js';
+import SheetsApi, {
+  TABS, normalizeDiscontinuedCell, formatAccountDisplayName, CURRENCIES,
+  isInvestmentAccountType,
+} from './sheetsApi.js';
 import { useFxConvert } from './useFxConvert.js';
 
 const { ref, computed, onMounted, watch, inject, nextTick } = Vue;
 
 export default {
-  props: ['sheetId', 'settings', 'showUpdateReminder'],
-  emits: ['refresh', 'go-home', 'accounts-updated', 'settings-updated', 'navigate'],
+  props: ['sheetId', 'settings', 'showUpdateReminder', 'accountsEntryIntent', 'isDemoGroup'],
+  emits: ['refresh', 'go-home', 'accounts-updated', 'settings-updated', 'navigate', 'accounts-intent-consumed'],
 
   setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
@@ -30,6 +33,13 @@ export default {
     const updateDate = ref(todayStr());
 
     const balanceEntry = ref({ accountId: '', date: todayStr(), amount: '' });
+
+    /** accountId -> count of holdings rows with a symbol */
+    const holdingsRowCount = ref({});
+    const editHoldingsLines = ref([{ symbol: '', shares: '' }]);
+    const savingHoldings = ref(false);
+    const loadingHoldingsEdit = ref(false);
+    const sheetTotalLoading = ref(false);
 
     const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
     const manualRates = computed(() => {
@@ -78,6 +88,35 @@ export default {
     function parseDateParts(dateStr) {
       const [y, m] = dateStr.split('-').map(Number);
       return { year: y, month: m };
+    }
+
+    function prevMonthLastDayISO() {
+      const d = new Date();
+      const last = new Date(d.getFullYear(), d.getMonth(), 0);
+      return `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, '0')}-${String(last.getDate()).padStart(2, '0')}`;
+    }
+
+    function hasHoldingsRows(accountId) {
+      return (holdingsRowCount.value[accountId] || 0) > 0;
+    }
+
+    async function refreshHoldingsRowCounts() {
+      holdingsRowCount.value = {};
+      const sid = getSheetId();
+      if (!sid) return;
+      try {
+        await SheetsApi.ensureTab(sid, TABS.HOLDINGS);
+        const raw = (await SheetsApi.getValues(sid, `${TABS.HOLDINGS}!A2:E2000`)) || [];
+        const counts = {};
+        for (const r of raw) {
+          if (r.length < 3 || !(String(r[2] || '').trim())) continue;
+          const aid = String(r[1]);
+          counts[aid] = (counts[aid] || 0) + 1;
+        }
+        holdingsRowCount.value = counts;
+      } catch {
+        holdingsRowCount.value = {};
+      }
     }
 
 
@@ -231,6 +270,7 @@ export default {
         }));
 
         emit('accounts-updated', accounts.value);
+        await refreshHoldingsRowCounts();
       } catch (err) {
         if (err.message === 'popup_blocked' || err.message === 'refresh_failed') return;
         console.error('Failed to load accounts:', err);
@@ -262,7 +302,50 @@ export default {
       }
     }
 
-    function startEdit(account) {
+    async function loadEditHoldingsLines(accountId) {
+      loadingHoldingsEdit.value = true;
+      try {
+        const lines = await SheetsApi.getHoldingsLinesForAccount(getSheetId(), accountId);
+        editHoldingsLines.value = lines.length
+          ? lines.map(l => ({ symbol: l.symbol, shares: String(l.shares) }))
+          : [{ symbol: '', shares: '' }];
+      } catch (err) {
+        console.error('Holdings load failed:', err);
+        editHoldingsLines.value = [{ symbol: '', shares: '' }];
+      } finally {
+        loadingHoldingsEdit.value = false;
+      }
+    }
+
+    function addHoldingRow() {
+      editHoldingsLines.value.push({ symbol: '', shares: '' });
+    }
+
+    function removeHoldingRow(idx) {
+      editHoldingsLines.value.splice(idx, 1);
+      if (editHoldingsLines.value.length === 0) editHoldingsLines.value.push({ symbol: '', shares: '' });
+    }
+
+    async function saveHoldings() {
+      if (!editingAccount.value) return;
+      savingHoldings.value = true;
+      try {
+        await SheetsApi.syncHoldingsForAccount(
+          getSheetId(),
+          editingAccount.value.id,
+          editHoldingsLines.value.map(l => ({ symbol: l.symbol, shares: l.shares }))
+        );
+        await refreshHoldingsRowCounts();
+        showAlert('Holdings saved. Market values use GOOGLEFINANCE in your Google Sheet.');
+      } catch (err) {
+        console.error('Failed to save holdings:', err);
+        showAlert('Could not save holdings. Check your connection and try again.');
+      } finally {
+        savingHoldings.value = false;
+      }
+    }
+
+    async function startEdit(account) {
       editingAccount.value = { ...account };
       historyAccount.value = account;
       const lastBal = getCurrentBalance(account.id);
@@ -273,6 +356,11 @@ export default {
       };
       sheetSwipeStep.value = false;
       showEditModal.value = true;
+      if (isInvestmentAccountType(account.type)) {
+        await loadEditHoldingsLines(account.id);
+      } else {
+        editHoldingsLines.value = [{ symbol: '', shares: '' }];
+      }
     }
 
     const sheetSwipeStep = ref(false);
@@ -342,15 +430,49 @@ export default {
       manualRates,
     });
 
-    function openBalanceUpdate(account) {
+    async function fillBalanceFromSheetTotal(accountId) {
+      sheetTotalLoading.value = true;
+      try {
+        const r = await SheetsApi.getHoldingsMarketValueSum(
+          getSheetId(),
+          accountId,
+          balanceEntry.value.date
+        );
+        balanceEntry.value.amount = amountToInput(r.sum);
+        if (r.valuationDate) balanceEntry.value.date = r.valuationDate;
+        if (r.fellBackToLive) {
+          showAlert(
+            'Totals still matched the live quote after trying earlier dates (up to 45 days). Amount reflects live prices; pick another date or enter the balance manually.'
+          );
+        }
+      } catch (err) {
+        console.error('Sheet total failed:', err);
+        showAlert('Could not read totals from the Holdings sheet.');
+      } finally {
+        sheetTotalLoading.value = false;
+      }
+    }
+
+    /**
+     * @param {object} account
+     * @param {{ dateStr?: string, useSheetTotal?: boolean }} [opts] useSheetTotal: fill from GOOGLEFINANCE sum (latest sheet calc)
+     */
+    async function openBalanceUpdate(account, opts = {}) {
       const lastBal = getCurrentBalance(account.id);
+      const dateStr = opts.dateStr || todayStr();
       balanceEntry.value = {
         accountId: account.id,
-        date: todayStr(),
+        date: dateStr,
         amount: lastBal != null ? amountToInput(lastBal) : '',
       };
       balFx.reset();
       showBalanceModal.value = true;
+      const useSheet = opts.useSheetTotal !== false
+        && isInvestmentAccountType(account.type)
+        && hasHoldingsRows(account.id);
+      if (useSheet) {
+        await fillBalanceFromSheetTotal(account.id);
+      }
     }
 
     function getAccountById(id) {
@@ -375,7 +497,7 @@ export default {
       try {
         const { year, month } = parseDateParts(entry.date);
         const dateStr = entry.date;
-        const result = await upsertBalance(entry.accountId, year, month, amt, dateStr);
+        const result = await upsertBalance(entry.accountId, year, month, amt, dateStr, { forceReplaceOlder: true });
         if (result && result.skipped) {
           showAlert(`Balance not updated — a newer entry from ${result.existingDate} already exists for this month.`);
           return;
@@ -411,7 +533,7 @@ export default {
           if (val === '' || val === undefined) continue;
           const amt = parseAmount(val);
           if (isNaN(amt)) continue;
-          const result = await upsertBalance(acc.id, year, month, amt, dateStr);
+          const result = await upsertBalance(acc.id, year, month, amt, dateStr, { forceReplaceOlder: true });
           if (result && result.skipped) skipped.push(acc.name);
         }
         updateMode.value = false;
@@ -427,8 +549,8 @@ export default {
 
     // ── Shared upsert helper ─────────────────────────────────────────────────
 
-    async function upsertBalance(accountId, year, month, amount, dateStr) {
-      return await SheetsApi.upsertBalanceRow(getSheetId(), accountId, year, month, amount, dateStr);
+    async function upsertBalance(accountId, year, month, amount, dateStr, opts) {
+      return await SheetsApi.upsertBalanceRow(getSheetId(), accountId, year, month, amount, dateStr, opts);
     }
 
     function monthName(m) {
@@ -456,6 +578,47 @@ export default {
       }
       return currentTotal - prevTotal;
     });
+
+    const prevMonthForHistory = computed(() => {
+      const now = new Date();
+      const m = now.getMonth();
+      const y = now.getFullYear();
+      return m === 0 ? { year: y - 1, month: 12 } : { year: y, month: m };
+    });
+
+    const investmentAccountsNeedingPrevMonth = computed(() => {
+      const pm = prevMonthForHistory.value;
+      return activeAccounts.value.filter(a => {
+        if (!isInvestmentAccountType(a.type)) return false;
+        if (!hasHoldingsRows(a.id)) return false;
+        const hasRow = balanceHistory.value.some(
+          h => h.accountId === a.id && h.year === pm.year && h.month === pm.month
+        );
+        return !hasRow;
+      });
+    });
+
+    watch(
+      () => ({ intent: props.accountsEntryIntent, ld: loading.value }),
+      async ({ intent, ld }) => {
+        if (!intent || ld) return;
+        if (intent !== 'investment-month-end') return;
+        await nextTick();
+        try {
+          const targets = investmentAccountsNeedingPrevMonth.value;
+          if (targets.length === 0) {
+            showAlert('No investment accounts with saved holdings are missing last month’s balance history.');
+            return;
+          }
+          const acc = targets[0];
+          await startEdit(acc);
+          sheetSwipeStep.value = true;
+          await openBalanceUpdate(acc, { dateStr: prevMonthLastDayISO(), useSheetTotal: true });
+        } finally {
+          emit('accounts-intent-consumed');
+        }
+      }
+    );
 
     watch(() => getSheetId(), (id) => { if (id) fetchData(); }, { immediate: true });
 
@@ -578,6 +741,9 @@ export default {
       reorderMode, moveAccountUp, moveAccountDown, addNameInput, balanceAmountInput,
       disableTool,
       balFx,
+      editHoldingsLines, addHoldingRow, removeHoldingRow, saveHoldings, savingHoldings, loadingHoldingsEdit,
+      isInvestmentAccountType, hasHoldingsRows, fillBalanceFromSheetTotal, sheetTotalLoading,
+      investmentAccountsNeedingPrevMonth, prevMonthForHistory,
     };
   },
 
@@ -744,6 +910,7 @@ export default {
                 <span class="material-icons sheet-hero-edit-icon">edit</span>
               </div>
               <div class="sheet-hero-amount-display" style="cursor:pointer;" @click="openBalanceUpdate(editingAccount)">{{ formatCurrency(getCurrentBalance(editingAccount.id), baseCurrency) }}</div>
+              <p v-if="isInvestmentAccountType(editingAccount.type) && hasHoldingsRows(editingAccount.id)" class="sheet-holdings-live-hint">Balance above is from history. Open <strong>Store new balance</strong> to pull the latest total from your Sheet (GOOGLEFINANCE).</p>
               <div class="sheet-hero-label">Balance</div>
             </div>
 
@@ -788,6 +955,28 @@ export default {
                 <div v-if="filteredCurrencies.length === 0" class="currency-picker-empty">No match</div>
               </valu-currency-picker>
             </div>
+
+            <template v-if="isInvestmentAccountType(editingAccount.type)">
+              <div class="sheet-section-title sheet-holdings-section-title">Stock &amp; ETF holdings</div>
+              <p class="sheet-holdings-hint">Enter tickers as used in Google Sheets <code>GOOGLEFINANCE</code> (e.g. <code>NASDAQ:AAPL</code>, <code>TSE:VFV</code>). Market column is calculated in your Sheet — open the spreadsheet to refresh quotes.</p>
+              <div v-if="loadingHoldingsEdit" class="sheet-holdings-loading">Loading holdings…</div>
+              <template v-else>
+                <div v-for="(line, hi) in editHoldingsLines" :key="'h'+hi" class="sheet-holdings-row">
+                  <input v-model="line.symbol" class="form-input sheet-holdings-symbol" type="text" placeholder="Ticker (e.g. TSE:VFV)" autocomplete="off" />
+                  <input v-model="line.shares" class="form-input sheet-holdings-shares" type="text" inputmode="decimal" placeholder="Shares" autocomplete="off" />
+                  <button type="button" class="btn-icon sheet-holdings-remove" @click="removeHoldingRow(hi)" aria-label="Remove row">
+                    <span class="material-icons">close</span>
+                  </button>
+                </div>
+                <div class="sheet-holdings-actions">
+                  <button type="button" class="btn btn-text btn-sm" @click="addHoldingRow">
+                    <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">add</span>Add line
+                  </button>
+                  <button type="button" class="btn btn-primary btn-sm" :disabled="savingHoldings" @click="saveHoldings">{{ savingHoldings ? 'Saving…' : 'Save holdings' }}</button>
+                </div>
+              </template>
+            </template>
+
             <div class="sheet-list-item sheet-list-item-toggle">
               <label>Discontinued</label>
               <label class="toggle">
@@ -831,6 +1020,13 @@ export default {
             <div class="sheet-list-item">
               <label>Date</label>
               <valu-date-field v-model="balanceEntry.date" />
+            </div>
+            <div v-if="getAccountById(balanceEntry.accountId) && isInvestmentAccountType(getAccountById(balanceEntry.accountId).type) && hasHoldingsRows(balanceEntry.accountId)" class="sheet-holdings-balance-tools">
+              <button type="button" class="btn btn-text btn-sm" :disabled="sheetTotalLoading" @click="fillBalanceFromSheetTotal(balanceEntry.accountId)">
+                <span class="material-icons" style="font-size:16px;vertical-align:middle;margin-right:4px;">cloud_download</span>
+                {{ sheetTotalLoading ? 'Reading sheet…' : 'Use total from Holdings sheet' }}
+              </button>
+              <p class="sheet-holdings-balance-note">Uses <strong>GOOGLEFINANCE</strong> <em>close</em> for the <strong>date above</strong> (via a temporary cell in your Sheet, then cleared). If that total matches the <strong>live quote</strong> (weekends, holidays, or bad dates often do), the app tries <strong>one calendar day earlier</strong> repeatedly until it finds a different total, then sets the date to that day. <strong>Today</strong> is never shifted that way—matching live is normal for the current day.</p>
             </div>
           </div>
           <div class="modal-footer">

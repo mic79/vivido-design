@@ -1,4 +1,4 @@
-import SheetsApi, { TABS, formatAccountDisplayName } from './sheetsApi.js';
+import SheetsApi, { TABS, formatAccountDisplayName, isInvestmentAccountType } from './sheetsApi.js';
 import { getPendingRecurring } from './recurringService.js';
 import { getRate } from './fxService.js';
 
@@ -52,6 +52,8 @@ export default {
     const expenses = ref([]);
     const incomeList = ref([]);
     const balanceHistory = ref([]);
+    /** Holdings tab: lineCounts[accountId], sums[accountId] from column E (sheet-calculated) */
+    const holdingsSnapshot = ref({ lineCounts: {}, sums: {} });
     const selectedBar = ref(null);
     const loading = ref(true);
     const lastUpdateInfo = ref(null);
@@ -198,6 +200,22 @@ export default {
           h => h.accountId === a.id && h.year === pm.year && h.month === pm.month
         )
       );
+    });
+
+    const needsInvestmentBalanceUpdate = computed(() => {
+      if (localStorage.getItem('valu_balance_reminders') === 'false') return false;
+      if (!enabledLists.value.includes('accounts')) return false;
+      const pm = prevMonthInfo.value;
+      const { lineCounts } = holdingsSnapshot.value;
+      return (props.accounts || []).some(a => {
+        if (a.discontinued === 'true') return false;
+        if (!isInvestmentAccountType(a.type)) return false;
+        if ((lineCounts[a.id] || 0) === 0) return false;
+        const has = balanceHistory.value.some(
+          h => h.accountId === a.id && h.year === pm.year && h.month === pm.month
+        );
+        return !has;
+      });
     });
 
     const recentTransactions = computed(() => {
@@ -370,6 +388,40 @@ export default {
           balanceHistory.value = [];
         }
 
+        holdingsSnapshot.value = { lineCounts: {}, sums: {} };
+        if (enabledLists.value.includes('accounts')) {
+          const hasInv = (props.accounts || []).some(
+            a => a.discontinued !== 'true' && isInvestmentAccountType(a.type)
+          );
+          if (hasInv) {
+            promises.push(
+              (async () => {
+                try {
+                  await SheetsApi.ensureTab(sheetId, TABS.HOLDINGS);
+                  const rows = (await SheetsApi.getValues(sheetId, `${TABS.HOLDINGS}!A2:E2000`)) || [];
+                  const lineCounts = {};
+                  const sums = {};
+                  for (const r of rows) {
+                    if (r.length < 2) continue;
+                    const aid = String(r[1]);
+                    if ((r[2] || '').toString().trim()) {
+                      lineCounts[aid] = (lineCounts[aid] || 0) + 1;
+                    }
+                    const v = parseFloat(String(r[4] || '').replace(/,/g, ''));
+                    if (!Number.isNaN(v)) sums[aid] = (sums[aid] || 0) + v;
+                  }
+                  for (const k of Object.keys(sums)) {
+                    sums[k] = Math.round(sums[k] * 100) / 100;
+                  }
+                  holdingsSnapshot.value = { lineCounts, sums };
+                } catch (_) {
+                  holdingsSnapshot.value = { lineCounts: {}, sums: {} };
+                }
+              })()
+            );
+          }
+        }
+
         promises.push(
           SheetsApi.getFileUpdateInfo(sheetId)
             .then(info => { lastUpdateInfo.value = info; })
@@ -455,7 +507,7 @@ export default {
     function cashFlowBalanceForMonth(ym) {
       const [y, m] = ym.split('-').map(Number);
       const cashAccounts = (props.accounts || [])
-        .filter(a => a.discontinued !== 'true' && a.type !== 'Investment');
+        .filter(a => a.discontinued !== 'true' && !isInvestmentAccountType(a.type));
       const lastKnown = {};
 
       const sortedHistory = [...balanceHistory.value].sort((a, b) =>
@@ -464,7 +516,7 @@ export default {
 
       for (const h of sortedHistory) {
         if (h.year * 100 + h.month > y * 100 + m) break;
-        if (getAccountType(h.accountId) === 'Investment') continue;
+        if (isInvestmentAccountType(getAccountType(h.accountId))) continue;
         lastKnown[h.accountId] = { balance: h.balance, currency: getAccountCurrency(h.accountId) };
       }
 
@@ -1072,7 +1124,7 @@ export default {
     return {
       loading, enabledLists, baseCurrency, expenses, incomeList,
       monthlyExpenses, monthlyIncome, netWorth, netWorthHistory,
-      recentTransactions, needsBalanceUpdate,
+      recentTransactions, needsBalanceUpdate, needsInvestmentBalanceUpdate,
       prevMonthInfo, chartMax, selectedBar, selectedPoint, displayedBalance,
       chartWidth, chartHeight, chartPath, chartAreaPath,
       formatCurrency, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon, getAccountCurrency,
@@ -1164,6 +1216,14 @@ export default {
             Update your account balances for {{ monthName(prevMonthInfo.month) }} {{ prevMonthInfo.year }}
           </div>
           <span class="banner-action">Update</span>
+        </div>
+
+        <div v-if="needsInvestmentBalanceUpdate" class="banner banner-info" style="cursor:pointer;" @click="emit('navigate', 'accounts', { accountsIntent: 'investment-month-end' })">
+          <span class="material-icons">stacked_line_chart</span>
+          <div class="banner-content">
+            Investment accounts: record {{ monthName(prevMonthInfo.month) }} {{ prevMonthInfo.year }} using totals from your Sheet holdings (GOOGLEFINANCE).
+          </div>
+          <span class="banner-action">Record</span>
         </div>
 
         <!-- Recurring transactions reminder -->

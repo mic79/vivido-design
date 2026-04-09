@@ -227,6 +227,52 @@ function demoSettingsRows() {
   return Object.entries(o).map(([k, v]) => [k, v]);
 }
 
+/** In-memory holdings per account for demo (symbol + shares). MarketValue in sheet is simulated. */
+const _demoHoldingsByAccount = {
+  demo_acc_tfsa: [{ symbol: 'TSE:VFV', shares: 120 }],
+  demo_acc_rrsp: [
+    { symbol: 'NASDAQ:MSFT', shares: 8 },
+    { symbol: 'NASDAQ:AAPL', shares: 15 },
+  ],
+};
+
+const DEMO_HOLDING_PRICES = {
+  'TSE:VFV': 118.5,
+  'NASDAQ:MSFT': 420,
+  'NASDAQ:AAPL': 195,
+  'NYSE:V': 295,
+};
+
+export function syncDemoHoldingsAccount(accountId, lines) {
+  const cleaned = [];
+  for (const line of lines) {
+    const sym = (line.symbol || '').trim();
+    let sh = line.shares;
+    if (typeof sh === 'string') sh = sh.replace(',', '.');
+    const shares = parseFloat(sh);
+    if (!sym || Number.isNaN(shares) || shares === 0) continue;
+    cleaned.push({ symbol: sym, shares });
+  }
+  if (cleaned.length === 0) {
+    delete _demoHoldingsByAccount[accountId];
+  } else {
+    _demoHoldingsByAccount[accountId] = cleaned;
+  }
+}
+
+export function getDemoHoldingsRows() {
+  const rows = [];
+  let id = 1;
+  for (const [accId, lineList] of Object.entries(_demoHoldingsByAccount)) {
+    for (const l of lineList) {
+      const price = DEMO_HOLDING_PRICES[l.symbol] || 50;
+      const val = (Math.round(l.shares * price * 100) / 100).toFixed(2);
+      rows.push([`demo_hold_${id++}`, accId, l.symbol, String(l.shares), val]);
+    }
+  }
+  return rows;
+}
+
 /**
  * Return cell rows for a Sheets range (used by getValues).
  */
@@ -241,6 +287,8 @@ export function demoValuesForRange(range) {
       return demoAccountsRows();
     case 'BalanceHistory':
       return demoBalanceHistoryRows();
+    case 'Holdings':
+      return getDemoHoldingsRows();
     case 'Expenses':
       return demoExpenseRows();
     case 'Income':

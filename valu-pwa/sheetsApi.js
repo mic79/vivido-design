@@ -6,7 +6,7 @@
  */
 
 import GoogleAuth from './googleAuth.js';
-import { isDemoSheet, demoValuesForRange, demoGroupMeta, setDemoOverride, setDemoOverrides } from './demoData.js';
+import { isDemoSheet, demoValuesForRange, demoGroupMeta, setDemoOverride, setDemoOverrides, syncDemoHoldingsAccount } from './demoData.js';
 
 export { isDemoSheet } from './demoData.js';
 export { DEMO_SHEET_ID } from './demoData.js';
@@ -19,6 +19,7 @@ export const TABS = {
   SETTINGS:       'Settings',
   ACCOUNTS:       'Accounts',
   BALANCE_HISTORY:'BalanceHistory',
+  HOLDINGS:       'Holdings',
   EXPENSES:       'Expenses',
   INCOME:         'Income',
   CHAT_HISTORY:   'ChatHistory',
@@ -29,10 +30,59 @@ const TAB_HEADERS = {
   [TABS.SETTINGS]:        [['Key', 'Value']],
   [TABS.ACCOUNTS]:        [['ID', 'Name', 'Currency', 'Type', 'Discontinued', 'Order']],
   [TABS.BALANCE_HISTORY]: [['AccountID', 'Year', 'Month', 'Balance', 'UpdatedAt']],
+  [TABS.HOLDINGS]:        [['HoldingsID', 'AccountID', 'Symbol', 'Shares', 'MarketValue']],
   [TABS.EXPENSES]:        [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt', 'BalanceAdjusted']],
   [TABS.INCOME]:          [['ID', 'Title', 'Amount', 'AccountID', 'Category', 'Date', 'Notes', 'CreatedAt', 'BalanceAdjusted']],
   [TABS.CHAT_HISTORY]:    [['ChatID', 'Title', 'CreatedAt', 'UpdatedAt', 'Messages']],
 };
+
+/** Holdings!Z1 — as-of date for GOOGLEFINANCE close; blank = use live price */
+const HOLDINGS_AS_OF_Z1 = 'Z1';
+
+function holdingsMarketValueFormula(row) {
+  return `=IF(OR(C${row}="",D${row}=""),0,D${row}*IF(OR(ISBLANK($Z$1),$Z$1=""),IFERROR(N(GOOGLEFINANCE(C${row},"price")),0),IFERROR(N(INDEX(GOOGLEFINANCE(C${row},"close",$Z$1,$Z$1),2,2)),IFERROR(N(GOOGLEFINANCE(C${row},"price")),0))))`;
+}
+
+const HOLDINGS_FM_STORAGE_PREFIX = 'valu_holdings_fm_';
+const HOLDINGS_FM_REV = 'z1';
+
+function holdingsFormulasNeedRefresh(spreadsheetId) {
+  try {
+    return localStorage.getItem(HOLDINGS_FM_STORAGE_PREFIX + spreadsheetId) !== HOLDINGS_FM_REV;
+  } catch {
+    return true;
+  }
+}
+
+function markHoldingsFormulasCurrent(spreadsheetId) {
+  try {
+    localStorage.setItem(HOLDINGS_FM_STORAGE_PREFIX + spreadsheetId, HOLDINGS_FM_REV);
+  } catch (_) {}
+}
+
+/** Local calendar date YYYY-MM-DD (matches date picker / Accounts "today"). */
+function localTodayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** @param {string} iso YYYY-MM-DD @param {number} deltaDays */
+function isoAddCalendarDays(iso, deltaDays) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const x = new Date(y, m - 1, d);
+  if (x.getFullYear() !== y || x.getMonth() !== m - 1 || x.getDate() !== d) return iso;
+  x.setDate(x.getDate() + deltaDays);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+
+/** True if historical total is indistinguishable from live (sheet fell back to price). */
+function holdingsSumMatchesLive(histSum, liveSum) {
+  const h = Math.round(histSum * 100) / 100;
+  const l = Math.round(liveSum * 100) / 100;
+  return Math.abs(h - l) < 0.02;
+}
+
+const HOLDINGS_VALUATION_MAX_DAYS_BACK = 45;
 
 // Default categories for new groups
 const DEFAULT_EXPENSE_CATEGORIES = [
@@ -72,6 +122,11 @@ const DEFAULT_SETTINGS = [
   ['createdAt',          ''],
   ['createdBy',          ''],
 ];
+
+/** Investment account type (Accounts column D) — compare case-insensitively */
+export function isInvestmentAccountType(type) {
+  return String(type || '').toLowerCase() === 'investment';
+}
 
 /** Sheets may return TRUE/FALSE as boolean or string — normalize for filters and toggles */
 export function normalizeDiscontinuedCell(cell) {
@@ -357,9 +412,12 @@ const SheetsApi = {
   /**
    * Upsert a balance history row. If an entry for the same account+year+month
    * exists, it is overwritten in place. Otherwise a new row is appended.
+   * @param {{ forceReplaceOlder?: boolean }} [opts] - If true (manual Accounts save), allow replacing
+   *   even when the new valuation date sorts before the existing UpdatedAt (same month correction).
    */
-  async upsertBalanceRow(spreadsheetId, accountId, year, month, balance, dateStr) {
+  async upsertBalanceRow(spreadsheetId, accountId, year, month, balance, dateStr, opts = {}) {
     if (isDemoSheet(spreadsheetId)) return;
+    const forceReplace = opts.forceReplaceOlder === true;
     balance = Math.round(balance * 100) / 100;
     const allRows = await this.getValues(spreadsheetId, 'BalanceHistory!A2:E');
     let rowIndex = -1;
@@ -371,7 +429,7 @@ const SheetsApi = {
             parseInt(allRows[i][2]) === month) {
           rowIndex = i + 2;
           const existingDate = allRows[i][4] || '';
-          if (existingDate && dateStr && existingDate > dateStr) {
+          if (!forceReplace && existingDate && dateStr && existingDate > dateStr) {
             return { skipped: true, existingDate };
           }
           break;
@@ -409,6 +467,202 @@ const SheetsApi = {
         return b.updatedAt.localeCompare(a.updatedAt);
       });
     return entries.length > 0 ? entries[0].balance : 0;
+  },
+
+  /**
+   * Replace all holdings lines for one account; keeps other accounts' rows.
+   * Column E is a GOOGLEFINANCE-based formula (refreshes when the sheet recalculates).
+   * @param {Array<{symbol: string, shares: number|string}>} lines
+   */
+  async syncHoldingsForAccount(spreadsheetId, accountId, lines) {
+    if (isDemoSheet(spreadsheetId)) {
+      syncDemoHoldingsAccount(accountId, lines);
+      return;
+    }
+    await this.ensureTab(spreadsheetId, TABS.HOLDINGS);
+    const raw = (await this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:E2000`)) || [];
+    const others = raw.filter(r => r.length >= 2 && String(r[1]) !== String(accountId) && r[0]);
+    const otherData = others.map(r => [r[0] || '', r[1] || '', r[2] || '', r[3] || '']);
+    const newRows = [];
+    for (const line of lines) {
+      const sym = (line.symbol || '').trim();
+      let sh = line.shares;
+      if (typeof sh === 'string') sh = sh.replace(',', '.');
+      const shares = parseFloat(sh);
+      if (!sym || Number.isNaN(shares) || shares === 0) continue;
+      newRows.push([this.generateId(), accountId, sym, String(shares)]);
+    }
+    const merged = [...otherData, ...newRows];
+    const withFormulas = merged.map((r, i) => {
+      const row = i + 2;
+      const [id, accId, sym, shares] = r;
+      return [id, accId, sym, shares, holdingsMarketValueFormula(row)];
+    });
+    while (withFormulas.length < raw.length) {
+      withFormulas.push(['', '', '', '', '']);
+    }
+    const endRow = 1 + Math.max(withFormulas.length, 1);
+    const range = encodeURIComponent(`${TABS.HOLDINGS}!A2:E${endRow}`);
+    await fetchWithRetry(
+      `${SHEETS_BASE}/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
+      { method: 'PUT', body: JSON.stringify({ values: withFormulas }) }
+    );
+    invalidateCache(spreadsheetId, TABS.HOLDINGS);
+    markHoldingsFormulasCurrent(spreadsheetId);
+  },
+
+  /**
+   * Rewrite column E from A2:D so formulas support $Z$1 as-of (migration + repair).
+   */
+  async ensureHoldingsMarketFormulas(spreadsheetId) {
+    if (isDemoSheet(spreadsheetId)) return;
+    await this.ensureTab(spreadsheetId, TABS.HOLDINGS);
+    const raw = (await this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:D2000`)) || [];
+    if (raw.length === 0) return;
+    const formulas = [];
+    for (let i = 0; i < raw.length; i++) {
+      const row = i + 2;
+      const r = raw[i] || [];
+      const sym = (r[2] || '').toString().trim();
+      const id = (r[0] || '').toString().trim();
+      if (id && sym) {
+        formulas.push([holdingsMarketValueFormula(row)]);
+      } else {
+        formulas.push(['']);
+      }
+    }
+    const endRow = 1 + raw.length;
+    const range = encodeURIComponent(`${TABS.HOLDINGS}!E2:E${endRow}`);
+    await fetchWithRetry(
+      `${SHEETS_BASE}/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
+      { method: 'PUT', body: JSON.stringify({ values: formulas }) }
+    );
+    invalidateCache(spreadsheetId, TABS.HOLDINGS);
+  },
+
+  /**
+   * Set Holdings!Z1 to a calendar date (historical close) or clear for live price.
+   * @param {string|null|undefined} dateStr - YYYY-MM-DD, or null/empty for live quote
+   */
+  async setHoldingsAsOfDateCell(spreadsheetId, dateStr) {
+    if (isDemoSheet(spreadsheetId)) return;
+    await this.ensureTab(spreadsheetId, TABS.HOLDINGS);
+    const range = encodeURIComponent(`${TABS.HOLDINGS}!${HOLDINGS_AS_OF_Z1}`);
+    let cell;
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr).trim())) {
+      cell = [['']];
+    } else {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      if (!y || !m || !d) cell = [['']];
+      else cell = [[`=DATE(${y},${m},${d})`]];
+    }
+    await fetchWithRetry(
+      `${SHEETS_BASE}/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
+      { method: 'PUT', body: JSON.stringify({ values: cell }) }
+    );
+  },
+
+  /**
+   * Sum column E for an account after optional as-of date is applied to Z1.
+   * With a date: reads live total (Z1 blank), then tries the chosen day and each prior calendar day
+   * until the account total differs from live — indicating a real historical close vs GOOGLEFINANCE
+   * falling back to the live quote. The local **today** is exempt: matching live is expected same-day.
+   * @param {string} [asOfDateStr] - YYYY-MM-DD from balance dialog; omit or empty = live price
+   * @returns {{ sum: number, valuationDate: string|null, fellBackToLive?: boolean }}
+   */
+  async getHoldingsMarketValueSum(spreadsheetId, accountId, asOfDateStr) {
+    const trimmed = asOfDateStr && String(asOfDateStr).trim();
+    const hasDate = trimmed && /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
+
+    if (isDemoSheet(spreadsheetId)) {
+      const rows = demoValuesForRange(`${TABS.HOLDINGS}!A2:E`) || [];
+      const sum = this.sumHoldingsValuesForAccount(rows, accountId);
+      return { sum, valuationDate: hasDate ? trimmed : null, fellBackToLive: false };
+    }
+
+    let sum = 0;
+    let valuationDate = null;
+    let fellBackToLive = false;
+    try {
+      await this.ensureTab(spreadsheetId, TABS.HOLDINGS);
+      if (holdingsFormulasNeedRefresh(spreadsheetId)) {
+        await this.ensureHoldingsMarketFormulas(spreadsheetId);
+        markHoldingsFormulasCurrent(spreadsheetId);
+      }
+
+      await this.setHoldingsAsOfDateCell(spreadsheetId, null);
+      const rawLive = (await this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:E2000`)) || [];
+      const liveSum = this.sumHoldingsValuesForAccount(rawLive, accountId);
+
+      if (!hasDate) {
+        sum = liveSum;
+        valuationDate = null;
+      } else {
+        let found = false;
+        for (let i = 0; i <= HOLDINGS_VALUATION_MAX_DAYS_BACK; i++) {
+          const tryDate = isoAddCalendarDays(trimmed, -i);
+          await this.setHoldingsAsOfDateCell(spreadsheetId, tryDate);
+          const raw = (await this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:E2000`)) || [];
+          const histSum = this.sumHoldingsValuesForAccount(raw, accountId);
+          if (!holdingsSumMatchesLive(histSum, liveSum)) {
+            sum = histSum;
+            valuationDate = tryDate;
+            found = true;
+            break;
+          }
+          if (tryDate === localTodayISO()) {
+            sum = histSum;
+            valuationDate = tryDate;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          sum = liveSum;
+          valuationDate = null;
+          fellBackToLive = true;
+        }
+      }
+    } catch {
+      sum = 0;
+      valuationDate = null;
+      fellBackToLive = false;
+    } finally {
+      try {
+        await this.setHoldingsAsOfDateCell(spreadsheetId, null);
+      } catch (_) {}
+    }
+    return {
+      sum,
+      valuationDate,
+      fellBackToLive: hasDate ? fellBackToLive : false,
+    };
+  },
+
+  sumHoldingsValuesForAccount(rows, accountId) {
+    let sum = 0;
+    const id = String(accountId);
+    for (const r of rows) {
+      if (r.length < 5 || String(r[1]) !== id) continue;
+      const v = parseFloat(String(r[4]).replace(/,/g, ''));
+      if (!Number.isNaN(v)) sum += v;
+    }
+    return Math.round(sum * 100) / 100;
+  },
+
+  /** Read holdings rows (A–D) for an account; E omitted for editing. */
+  async getHoldingsLinesForAccount(spreadsheetId, accountId) {
+    if (isDemoSheet(spreadsheetId)) {
+      const rows = demoValuesForRange(`${TABS.HOLDINGS}!A2:E`) || [];
+      return rows
+        .filter(r => r.length >= 3 && String(r[1]) === String(accountId))
+        .map(r => ({ symbol: (r[2] || '').trim(), shares: r[3] || '' }));
+    }
+    await this.ensureTab(spreadsheetId, TABS.HOLDINGS);
+    const raw = (await this.getValues(spreadsheetId, `${TABS.HOLDINGS}!A2:E2000`)) || [];
+    return raw
+      .filter(r => r.length >= 3 && String(r[1]) === String(accountId) && (r[2] || '').trim())
+      .map(r => ({ symbol: (r[2] || '').trim(), shares: r[3] || '' }));
   },
 
   // ── Structural operations ──────────────────────────────────────────────────
