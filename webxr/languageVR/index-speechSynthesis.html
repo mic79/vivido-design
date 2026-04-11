@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- index-speechSynthesis.html: same as index.html but questions/answers use Web Speech API (speechSynthesis) instead of MP3. -->
+<!-- index-speechSynthesis.html: same as index.html but questions/answers use speechSynthesis (no MP3). Quest Browser often has no TTS — top banner shows probe result. Use index.html for MP3. -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -329,9 +329,38 @@
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
+
+    /* Always-visible TTS diagnostics (speechSynthesis is unreliable on Quest Browser) */
+    #tts-status-banner {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100000;
+      font: 12px/1.35 system-ui, -apple-system, sans-serif;
+      padding: 8px 12px;
+      text-align: center;
+      pointer-events: none;
+      box-sizing: border-box;
+    }
+    #tts-status-banner.tts-warn {
+      background: rgba(40, 35, 10, 0.92);
+      color: #ffe8a6;
+    }
+    #tts-status-banner.tts-ok {
+      background: rgba(0, 50, 28, 0.92);
+      color: #b8ffd4;
+    }
+    #tts-status-banner.tts-bad {
+      background: rgba(55, 15, 15, 0.94);
+      color: #ffc9c9;
+    }
   </style>
 </head>
 <body>
+  <div id="tts-status-banner" class="tts-warn" role="status" aria-live="polite">
+    Browser TTS: …
+  </div>
   <!-- Loading Screen -->
   <div id="loading-screen">
     <div class="spinner"></div>
@@ -1117,10 +1146,14 @@
     
     // ============================================
     // DUTCH TTS (Web Speech API) — replaces MP3 for questions & answers
-    // Voice quality varies by device (test on Quest Browser).
+    // Quest Browser often exposes no usable speechSynthesis; use #tts-status-banner to see state.
+    // No MP3 fallback here — use index.html for pre-recorded audio.
     // ============================================
     const DutchSpeech = {
       nlVoice: null,
+      userGestureProbeRan: false,
+      userGestureProbeResult: null,
+      userGestureProbeDetail: '',
       refreshVoice() {
         if (typeof speechSynthesis === 'undefined') return;
         const voices = speechSynthesis.getVoices();
@@ -1133,7 +1166,45 @@
           return;
         }
         this.refreshVoice();
-        speechSynthesis.addEventListener('voiceschanged', () => this.refreshVoice());
+        speechSynthesis.addEventListener('voiceschanged', () => {
+          this.refreshVoice();
+          updateTtsBanner();
+        });
+      },
+      /** One-shot test from a real user gesture (Start). Detects silent/broken engines (common on Quest). */
+      probeOnUserGesture() {
+        if (this.userGestureProbeRan) return;
+        this.userGestureProbeRan = true;
+        if (typeof speechSynthesis === 'undefined') {
+          this.userGestureProbeResult = 'error';
+          this.userGestureProbeDetail = 'no speechSynthesis';
+          updateTtsBanner();
+          return;
+        }
+        this.refreshVoice();
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance('.');
+        u.volume = 0.06;
+        u.lang = this.nlVoice ? this.nlVoice.lang : 'nl-NL';
+        if (this.nlVoice) u.voice = this.nlVoice;
+        let settled = false;
+        const finish = (result, detail) => {
+          if (settled) return;
+          settled = true;
+          this.userGestureProbeResult = result;
+          this.userGestureProbeDetail = detail || '';
+          updateTtsBanner();
+        };
+        u.onend = () => finish('ok');
+        u.onerror = (e) => finish('error', (e && e.error) || (e && e.message) || 'utterance error');
+        setTimeout(() => {
+          if (!settled) finish('timeout');
+        }, 5000);
+        try {
+          speechSynthesis.speak(u);
+        } catch (err) {
+          finish('error', err && err.message ? String(err.message) : 'speak() threw');
+        }
       },
       speak(dutchText) {
         if (typeof speechSynthesis === 'undefined' || !dutchText || !String(dutchText).trim()) return;
@@ -1153,7 +1224,45 @@
         speechSynthesis.speak(u);
       },
     };
+
+    function updateTtsBanner() {
+      const el = document.getElementById('tts-status-banner');
+      if (!el) return;
+      const D = DutchSpeech;
+      let cls = 'tts-warn';
+      let text = '';
+      if (typeof speechSynthesis === 'undefined') {
+        cls = 'tts-bad';
+        text =
+          'Browser TTS: not supported (no speechSynthesis). This build has no MP3 fallback — use index.html for audio.';
+      } else {
+        const voices = speechSynthesis.getVoices();
+        D.refreshVoice();
+        const nl = D.nlVoice;
+        const vpart = `voices=${voices.length}${nl ? ` · nl: ${nl.name}` : ' · no nl-* voice'}`;
+        if (!D.userGestureProbeRan) {
+          text = `Browser TTS: tap Start to test the engine · ${vpart}`;
+        } else if (D.userGestureProbeResult === 'ok') {
+          cls = 'tts-ok';
+          text = `Browser TTS: engine OK (test utterance finished) · ${vpart}`;
+        } else if (D.userGestureProbeResult === 'error') {
+          cls = 'tts-bad';
+          text = `Browser TTS: FAILED — ${D.userGestureProbeDetail || 'error'} · ${vpart}`;
+        } else if (D.userGestureProbeResult === 'timeout') {
+          cls = 'tts-bad';
+          text = `Browser TTS: no engine response (typical on Quest Browser today) · ${vpart} · No MP3 fallback — use index.html.`;
+        } else if (D.userGestureProbeResult === null) {
+          text = `Browser TTS: testing engine… · ${vpart}`;
+        } else {
+          text = `Browser TTS: ${vpart}`;
+        }
+      }
+      el.className = cls;
+      el.textContent = text;
+    }
+
     DutchSpeech.init();
+    updateTtsBanner();
 
     // ============================================
     // STRING SIMILARITY HELPER (Levenshtein Distance)
@@ -2989,7 +3098,8 @@
 
       startExperience() {
         console.log('[DutchApp] User clicked Start - beginning conversation');
-        
+        DutchSpeech.probeOnUserGesture();
+
         // Auto-start background music only if user hasn't manually set it
         if (!this.musicManuallySet) {
         this.toggleMusic(true);
