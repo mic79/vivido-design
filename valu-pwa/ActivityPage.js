@@ -434,12 +434,13 @@ export default {
           <div class="activity-feed-header">
             <span class="material-icons activity-feed-icon" style="color:#5c8a8a;">new_releases</span>
             <div>
-              <div class="activity-feed-title">What's New in v195</div>
+              <div class="activity-feed-title">What's New in v196</div>
               <div class="activity-feed-date">April 2026</div>
             </div>
           </div>
           <div class="activity-feed-body">
             <ul class="activity-feed-list">
+              <li><strong>Mobile safe areas</strong> — Home and sub-pages respect iOS status bar, notch, and home-indicator insets; bottom tabs no longer clip. Android standalone PWAs get extra bottom inset when the system nav bar overlaps the app (with a refresh-friendly viewport sync).</li>
               <li><strong>Investment holdings</strong> — For Investment accounts, add tickers, shares, and a Cash balance in account details. Market values are automatically converted to the account's currency. Valu writes a <code>Holdings</code> tab in your Google Sheet with <code>GOOGLEFINANCE</code> market values. Home and Accounts can prompt you to record month-end balances from those totals.</li>
               <li><strong>Currency auto-conversion</strong> — Log expenses, income, or balances in a foreign-currency account and auto-convert at the official central bank rate for the transaction date. Fallback to manual rates when offline.</li>
               <li><strong>Smarter assistant</strong> — Context-aware follow-ups, year-to-date summaries, income trend charts, budget queries, and FAQ-powered fallback answers.</li>

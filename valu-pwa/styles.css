@@ -28,6 +28,9 @@
   --shadow-lg: 0 4px 12px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.08);
   --topbar-height: 56px;
   --bottombar-height: 72px;
+  /* Android Chrome: env(safe-area-inset-*) is sometimes 0 while system nav overlaps; JS sets --vv-bottom-overlap */
+  --vv-bottom-overlap: 0px;
+  --bottom-inset: max(env(safe-area-inset-bottom, 0px), var(--vv-bottom-overlap));
   --transition: .2s ease;
   color-scheme: light;
 }
@@ -120,9 +123,14 @@ ul, ol { list-style: none; }
 
 #app {
   height: 100dvh;
+  max-height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--color-background);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  box-sizing: border-box;
 }
 
 /* ── Top Bar ────────────────────────────────────────────────────────────────── */
@@ -168,7 +176,10 @@ ul, ol { list-style: none; }
 /* Modals live inside .subpage; scrolling on .subpage used to clip fixed overlays & dropdowns */
 .subpage {
   position: fixed;
-  inset: 0;
+  top: env(safe-area-inset-top, 0px);
+  right: env(safe-area-inset-right, 0px);
+  bottom: var(--bottom-inset);
+  left: env(safe-area-inset-left, 0px);
   z-index: 30;
   background: var(--color-background);
   display: flex;
@@ -516,7 +527,7 @@ ul, ol { list-style: none; }
   padding: 0 16px;
 }
 .groups-valu-list {
-  padding-bottom: calc(132px + env(safe-area-inset-bottom));
+  padding-bottom: calc(132px + var(--bottom-inset));
 }
 .groups-empty-state {
   padding: 40px 0 120px;
@@ -614,7 +625,7 @@ ul, ol { list-style: none; }
 /* ── Valu list (card-per-row matching original F7 list) ────────────────────── */
 
 .valu-list {
-  padding: 0 16px calc(80px + env(safe-area-inset-bottom));
+  padding: 0 16px calc(80px + var(--bottom-inset));
 }
 
 .valu-list-item {
@@ -782,7 +793,7 @@ button.valu-list-card {
   left: 0;
   right: 0;
   z-index: 5;
-  padding: 32px 16px calc(24px + env(safe-area-inset-bottom));
+  padding: 32px 16px calc(24px + var(--bottom-inset));
   background: linear-gradient(rgba(252,251,250,0) 0%, var(--color-background) 30%);
 }
 @media (prefers-color-scheme: dark) {
@@ -814,11 +825,13 @@ html[data-theme="light"] .subpage-bottom-fixed { background: linear-gradient(rgb
 /* ── Bottom Tabs (card-style like F7 original) ────────────────────────────── */
 
 .bottombar {
-  height: var(--bottombar-height);
+  /* Tab row is 56px + 8px top + 8px bottom; safe-area must add *outside* that row (not inside a fixed height). */
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
+  padding: 8px 16px calc(8px + var(--bottom-inset));
+  min-height: calc(var(--bottombar-height) + var(--bottom-inset));
+  height: auto;
   background: var(--color-background);
   flex-shrink: 0;
   z-index: 20;
@@ -950,7 +963,7 @@ html[data-theme="light"] .sidenav-menu-icon {
 .sidenav.open { transform: translateX(0); }
 
 .sidenav-header {
-  padding: 40px 16px 16px;
+  padding: calc(40px + env(safe-area-inset-top, 0px)) 16px 16px;
 }
 .sidenav-auth-row {
   display: flex;
@@ -1024,7 +1037,7 @@ html[data-theme="light"] .sidenav-menu-icon {
 
 .sidenav-footer {
   border-top: 1px solid var(--color-border);
-  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  padding: 12px 16px calc(12px + var(--bottom-inset));
 }
 .sidenav-version {
   font-size: 12px;
@@ -1861,7 +1874,7 @@ html[data-theme="light"] .valu-site-intro .s3 { background: #4f4f4f; }
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 0 16px calc(16px + env(safe-area-inset-bottom));
+  padding: 0 16px calc(16px + var(--bottom-inset));
 }
 /* Let anchored dropdowns escape overflow clipping and sit above step-main chrome */
 .sheet-swipe-step.expanded .sheet-step-details:has(.valu-dropdown--open),
@@ -2034,7 +2047,7 @@ html[data-theme="light"] .valu-site-intro .s3 { background: #4f4f4f; }
 
 .fab {
   position: fixed;
-  bottom: calc(var(--bottombar-height) + 20px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bottombar-height) + 20px + var(--bottom-inset));
   right: 20px;
   width: 56px;
   height: 56px;
@@ -2583,7 +2596,7 @@ html[data-theme="light"] .sheet-handle::after { background: #999; }
 
 /* Sign-in sheet body: must follow .modal-body — that rule’s padding was overriding .valu-signin-sheet-body */
 .modal.valu-signin-sheet > .modal-body.valu-signin-sheet-body {
-  padding: 40px 24px calc(40px + env(safe-area-inset-bottom));
+  padding: 40px 24px calc(40px + var(--bottom-inset));
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -2795,7 +2808,7 @@ html[data-theme="light"] .sheet-handle::after { background: #999; }
 
 /* Sheet footer CTA */
 .modal-footer {
-  padding: 8px 16px calc(16px + env(safe-area-inset-bottom));
+  padding: 8px 16px calc(16px + var(--bottom-inset));
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -2852,7 +2865,7 @@ html[data-theme="light"] .sheet-handle::after { background: #999; }
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  padding: 12px 16px calc(12px + var(--bottom-inset));
   flex-shrink: 0;
   position: relative;
   z-index: 1;
@@ -3852,7 +3865,7 @@ html[data-theme="light"] .valu-orb-sm .sphere { mix-blend-mode: multiply; }
 
 .reconnect-bar {
   position: fixed;
-  bottom: calc(72px + env(safe-area-inset-bottom));
+  bottom: calc(72px + var(--bottom-inset));
   left: 50%;
   transform: translateX(-50%);
   display: flex;

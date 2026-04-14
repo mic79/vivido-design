@@ -31,6 +31,25 @@
       }
     })();
   </script>
+  <script>
+    (function () {
+      if (!/Android/i.test(navigator.userAgent) || !window.visualViewport) return;
+      function syncBottomOverlap() {
+        var vv = visualViewport;
+        var layoutH = window.innerHeight;
+        var visibleBottom = vv.height + vv.offsetTop;
+        var raw = Math.max(0, Math.round(layoutH - visibleBottom));
+        var overlap = Math.min(56, raw);
+        document.documentElement.style.setProperty('--vv-bottom-overlap', overlap + 'px');
+      }
+      syncBottomOverlap();
+      visualViewport.addEventListener('resize', syncBottomOverlap);
+      visualViewport.addEventListener('scroll', syncBottomOverlap);
+      window.addEventListener('orientationchange', function () { setTimeout(syncBottomOverlap, 250); });
+      window.addEventListener('pageshow', function (e) { if (e.persisted) setTimeout(syncBottomOverlap, 0); });
+      requestAnimationFrame(function () { requestAnimationFrame(syncBottomOverlap); });
+    })();
+  </script>
 
   <!-- Vue 3 -->
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
@@ -110,7 +129,7 @@
         </div>
 
         <div class="sidenav-footer">
-          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v195 — What's new</button>
+          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">v196 — What's new</button>
           <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
         </div>
       </div>
