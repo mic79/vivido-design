@@ -485,6 +485,114 @@ export function updateInput(dt) {
 let lastClickTime = 0;
 let lastClickTargetId = null;
 
+/** Same as mouse left-click on the world: select units (any owner), buildings, resources, clear on empty ground. */
+function performWorldSelectionRay(origin, direction, shiftHeld) {
+  const hitUnit = Renderer.raycastUnits(origin, direction);
+  if (hitUnit) {
+    const now = Date.now();
+    const isDoubleClick = (now - lastClickTime < 400) && (hitUnit.id === lastClickTargetId);
+    lastClickTime = now;
+    lastClickTargetId = hitUnit.id;
+
+    if (isDoubleClick && hitUnit.ownerId === State.gameSession.myPlayerId) {
+      selectNearbyOfType(hitUnit);
+    } else {
+      const isAlreadySelected = State.selectedUnits.has(hitUnit.id);
+
+      if (shiftHeld) {
+        if (isAlreadySelected) {
+          State.deselectUnit(hitUnit.id);
+          UI.showStatus(`Removed ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type} from selection`);
+        } else {
+          State.selectUnit(hitUnit.id);
+          UI.showStatus(`Added ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type} to selection`);
+        }
+      } else {
+        State.deselectAll();
+        State.selectUnit(hitUnit.id);
+        UI.showStatus(`Selected ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
+      }
+
+      UI.hideBuildingPanel();
+      if (hitUnit.ownerId !== State.gameSession.myPlayerId) {
+        UI.showStatus(`Enemy ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
+      }
+    }
+    return;
+  }
+
+  lastClickTime = Date.now();
+  lastClickTargetId = null;
+
+  const hitBuilding = Renderer.raycastBuildings(origin, direction);
+  if (hitBuilding) {
+    State.deselectAll();
+    UI.showBuildingPanel(hitBuilding);
+    if (hitBuilding.ownerId === State.gameSession.myPlayerId) {
+      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+    } else {
+      UI.showStatus(`Enemy ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+    }
+    return;
+  }
+
+  const hitResource = Renderer.raycastResourceFields(origin, direction);
+  if (hitResource) {
+    State.deselectAll();
+    UI.hideBuildingPanel();
+    UI.showResourceFieldPanel(hitResource);
+    const capacityStr = `${Math.floor(hitResource.remaining)} / ${hitResource.maxCapacity}`;
+    UI.showStatus(`Resource Crystal - Remaining: ${capacityStr}`);
+    return;
+  }
+
+  if (State.selectedUnits.size > 0 && !shiftHeld) {
+    State.deselectAll();
+    UI.hideBuildingPanel();
+    UI.showStatus('');
+  }
+}
+
+/** Mouse right-click on the world: move / attack / follow (requires controllable units selected). */
+function performWorldCommandRay(origin, direction) {
+  const myUnits = Array.from(State.selectedUnits).filter(id => {
+    const u = State.units.get(id);
+    return u && u.ownerId === State.gameSession.myPlayerId;
+  });
+  if (myUnits.length === 0) return;
+
+  const hitUnit = Renderer.raycastUnits(origin, direction);
+  if (hitUnit) {
+    const myTeam = State.players[State.gameSession.myPlayerId]?.team;
+    if (hitUnit.ownerId === State.gameSession.myPlayerId) {
+      Network.sendCommand({ action: 'follow', unitIds: myUnits, targetId: hitUnit.id });
+      UI.showStatus('Following...');
+      return;
+    } else if (hitUnit.team !== myTeam) {
+      Network.sendCommand({ action: 'attack', unitIds: myUnits, targetId: hitUnit.id });
+      UI.showStatus('Attacking!');
+      return;
+    }
+  }
+
+  const hitBuilding = Renderer.raycastBuildings(origin, direction);
+  if (hitBuilding) {
+    const myTeam = State.players[State.gameSession.myPlayerId]?.team;
+    const bTeam = State.players[hitBuilding.ownerId]?.team;
+    if (bTeam !== myTeam) {
+      Network.sendCommand({ action: 'attackBuilding', unitIds: myUnits, targetId: hitBuilding.id });
+      UI.showStatus('Attacking building!');
+      return;
+    }
+  }
+
+  const groundHit = raycastGround(origin, direction);
+  if (groundHit) {
+    Network.sendCommand({ action: 'move', unitIds: myUnits, x: groundHit.x, z: groundHit.z });
+    UI.showStatus('Moving...');
+  }
+}
+
 // --- Mouse click handling ---
 function onMouseClick(e) {
   if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
@@ -527,76 +635,8 @@ function onMouseClick(e) {
     return;
   }
 
-  // Try to select a unit
-  const hitUnit = Renderer.raycastUnits(origin, direction);
-  if (hitUnit) {
-    const now = Date.now();
-    const isDoubleClick = (now - lastClickTime < 400) && (hitUnit.id === lastClickTargetId);
-    lastClickTime = now;
-    lastClickTargetId = hitUnit.id;
-
-    if (isDoubleClick && hitUnit.ownerId === State.gameSession.myPlayerId) {
-      selectNearbyOfType(hitUnit);
-    } else {
-      const isShift = e.shiftKey || keys['shift'];
-      const isAlreadySelected = State.selectedUnits.has(hitUnit.id);
-
-      if (isShift) {
-        if (isAlreadySelected) {
-          State.deselectUnit(hitUnit.id);
-          UI.showStatus(`Removed ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type} from selection`);
-        } else {
-          State.selectUnit(hitUnit.id);
-          UI.showStatus(`Added ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type} to selection`);
-        }
-      } else {
-        State.deselectAll();
-        State.selectUnit(hitUnit.id);
-        UI.showStatus(`Selected ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
-      }
-
-      UI.hideBuildingPanel();
-      if (hitUnit.ownerId !== State.gameSession.myPlayerId) {
-        UI.showStatus(`Enemy ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
-      }
-    }
-    return;
-  }
-  
-  lastClickTime = Date.now();
-  lastClickTargetId = null;
-
-  // Try to select a building
-  const hitBuilding = Renderer.raycastBuildings(origin, direction);
-  if (hitBuilding) {
-    State.deselectAll();
-    UI.showBuildingPanel(hitBuilding);
-    if (hitBuilding.ownerId === State.gameSession.myPlayerId) {
-      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
-    } else {
-      UI.showStatus(`Enemy ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
-    }
-    return;
-  }
-
-  // Try to select a resource field
-  const hitResource = Renderer.raycastResourceFields(origin, direction);
-  if (hitResource) {
-    State.deselectAll();
-    UI.hideBuildingPanel();
-    UI.showResourceFieldPanel(hitResource);
-    const capacityStr = `${Math.floor(hitResource.remaining)} / ${hitResource.maxCapacity}`;
-    UI.showStatus(`Resource Crystal - Remaining: ${capacityStr}`);
-    return;
-  }
-
-  // Empty ground: clear selection only without Shift (Shift means "add to selection" — miss should not wipe)
   const shiftHeld = e.shiftKey || keys['shift'];
-  if (State.selectedUnits.size > 0 && !shiftHeld) {
-    State.deselectAll();
-    UI.hideBuildingPanel();
-    UI.showStatus('');
-  }
+  performWorldSelectionRay(origin, direction, shiftHeld);
 }
 
 function onRightClick(e) {
@@ -630,39 +670,7 @@ function onRightClick(e) {
   const origin = _raycaster.ray.origin;
   const direction = _raycaster.ray.direction;
 
-  // Right-click unit
-  const hitUnit = Renderer.raycastUnits(origin, direction);
-  if (hitUnit) {
-    const myTeam = State.players[State.gameSession.myPlayerId]?.team;
-    if (hitUnit.ownerId === State.gameSession.myPlayerId) {
-      Network.sendCommand({ action: 'follow', unitIds: myUnits, targetId: hitUnit.id });
-      UI.showStatus('Following...');
-      return;
-    } else if (hitUnit.team !== myTeam) {
-      Network.sendCommand({ action: 'attack', unitIds: myUnits, targetId: hitUnit.id });
-      UI.showStatus('Attacking!');
-      return;
-    }
-  }
-
-  // Right-click enemy building → attack
-  const hitBuilding = Renderer.raycastBuildings(origin, direction);
-  if (hitBuilding) {
-    const myTeam = State.players[State.gameSession.myPlayerId]?.team;
-    const bTeam = State.players[hitBuilding.ownerId]?.team;
-    if (bTeam !== myTeam) {
-      Network.sendCommand({ action: 'attackBuilding', unitIds: myUnits, targetId: hitBuilding.id });
-      UI.showStatus('Attacking building!');
-      return;
-    }
-  }
-
-  // Right-click ground → move
-  const groundHit = raycastGround(origin, direction);
-  if (groundHit) {
-    Network.sendCommand({ action: 'move', unitIds: myUnits, x: groundHit.x, z: groundHit.z });
-    UI.showStatus('Moving...');
-  }
+  performWorldCommandRay(origin, direction);
 }
 
 export function getIsVR() {
@@ -719,29 +727,38 @@ function onVRTriggerRight(e) {
     const u = State.units.get(id);
     return u && u.ownerId === State.gameSession.myPlayerId;
   });
+  const myTeam = State.players[State.gameSession.myPlayerId]?.team;
 
-  // Raycast units (same team rules as mouse right-click: never attack allies)
+  // VR battlefield: same trigger semantics as before (additive own-unit select + attack/move when applicable).
+  // Only extensions vs older builds: inspect enemy/neutral units & any-owner buildings when not issuing orders,
+  // plus resource crystal hits (same outcomes as desktop left-click info).
+
   const hitUnit = Renderer.raycastUnits(_origin, _direction);
   if (hitUnit) {
-    const myTeam = State.players[State.gameSession.myPlayerId]?.team;
     if (hitUnit.ownerId === State.gameSession.myPlayerId) {
       State.selectUnit(hitUnit.id);
+      UI.hideBuildingPanel();
     } else if (myUnits.length > 0 && hitUnit.team !== myTeam) {
       Network.sendCommand({ action: 'attack', unitIds: myUnits, targetId: hitUnit.id });
       UI.showStatus('Attacking!');
     } else if (myUnits.length > 0 && hitUnit.team === myTeam) {
       UI.showStatus('Allied unit — cannot attack');
+    } else {
+      State.deselectAll();
+      State.selectUnit(hitUnit.id);
+      UI.hideBuildingPanel();
+      const label = hitUnit.team === myTeam ? 'Allied' : 'Enemy';
+      UI.showStatus(`${label} ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
     }
     return;
   }
 
-  // Raycast buildings
   const hitBuilding = Renderer.raycastBuildings(_origin, _direction);
   if (hitBuilding) {
-    const myTeam = State.players[State.gameSession.myPlayerId]?.team;
     if (hitBuilding.ownerId === State.gameSession.myPlayerId) {
       State.deselectAll();
       UI.showBuildingPanel(hitBuilding);
+      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
     } else if (myUnits.length > 0) {
       const bTeam = State.players[hitBuilding.ownerId]?.team;
       if (bTeam !== myTeam) {
@@ -750,14 +767,30 @@ function onVRTriggerRight(e) {
       } else {
         UI.showStatus('Allied building — cannot attack');
       }
+    } else {
+      State.deselectAll();
+      UI.showBuildingPanel(hitBuilding);
+      const bTeam = State.players[hitBuilding.ownerId]?.team;
+      const label = bTeam === myTeam ? 'Allied' : 'Enemy';
+      UI.showStatus(`${label} ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
     }
     return;
   }
 
-  // Ground — move if units selected
+  const hitResource = Renderer.raycastResourceFields(_origin, _direction);
+  if (hitResource) {
+    State.deselectAll();
+    UI.hideBuildingPanel();
+    UI.showResourceFieldPanel(hitResource);
+    const capacityStr = `${Math.floor(hitResource.remaining)} / ${hitResource.maxCapacity}`;
+    UI.showStatus(`Resource Crystal - Remaining: ${capacityStr}`);
+    return;
+  }
+
   const groundHit = raycastGround(_origin, _direction);
   if (groundHit && myUnits.length > 0) {
     Network.sendCommand({ action: 'move', unitIds: myUnits, x: groundHit.x, z: groundHit.z });
+    UI.showStatus('Moving...');
   }
 }
 

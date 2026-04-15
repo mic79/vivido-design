@@ -98,7 +98,7 @@ function createHUD() {
       color: #aaa; font-family: 'Consolas', monospace; font-size: 11px;
       background: rgba(0,0,0,0.5); padding: 6px 10px; border-radius: 4px;
       z-index: 100; pointer-events: none; user-select: none; line-height: 1.6;
-    ">WASD:Pan  Q/E:Rot  Scroll:Zoom  LClick:Select  RClick:Move/Atk<br>Click HQ:Build  Ctrl+S:Stop  1-0:Squads  Space:Desel  Tab:Map  Esc:Menu<br><span style=\"opacity:0.85\">VR: Laser+trigger on menu & map · X menu · Y map · B deselect · A select all · Grip pan</span></div>
+    ">WASD:Pan  Q/E:Rot  Scroll:Zoom  LClick:Select  RClick:Move/Atk<br>Click HQ:Build  Ctrl+S:Stop  1-0:Squads  Space:Desel  Tab:Map  Esc:Menu<br><span style=\"opacity:0.85\">VR: Laser+trigger on menu & map · X menu · Y map · B deselect · A select all · Grips pan</span></div>
     <div id="hud-victory" style="
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
       color: #ff0; font-family: Arial, sans-serif; font-size: 36px; font-weight: bold;
