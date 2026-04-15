@@ -2,6 +2,8 @@
 // RTSVR2 — Game Loop
 // Central fixed-timestep update
 // ========================================
+// Runs on the A-Frame scene tick so logic keeps advancing during immersive WebXR
+// (standalone rAF is often not driven the same way as the XR display loop).
 
 import * as State from './state.js';
 import * as Units from './units.js';
@@ -22,37 +24,37 @@ let accumulator = 0;
 let lastTime = 0;
 let running = false;
 
-export function startLoop() {
-  running = true;
-  lastTime = performance.now();
-  requestAnimationFrame(tick);
+const COMPONENT_NAME = 'rts-engine-loop';
+
+function registerEngineLoopComponentOnce() {
+  if (typeof AFRAME === 'undefined' || AFRAME.components[COMPONENT_NAME]) return;
+
+  AFRAME.registerComponent(COMPONENT_NAME, {
+    init() {
+      lastTime = performance.now();
+    },
+    tick(_t, dtMs) {
+      if (!running) return;
+      const timestamp = performance.now();
+      let rawDt = typeof dtMs === 'number' && dtMs > 0 ? dtMs / 1000 : (timestamp - lastTime) / 1000;
+      lastTime = timestamp;
+      if (rawDt > 1.0) rawDt = 1.0;
+      if (rawDt <= 0) rawDt = FIXED_DT;
+
+      engineStep(timestamp, rawDt);
+    },
+  });
 }
 
-export function stopLoop() {
-  running = false;
-}
-
-function tick(timestamp) {
-  if (!running) return;
-  requestAnimationFrame(tick);
-
-  let rawDt = (timestamp - lastTime) / 1000;
-  lastTime = timestamp;
-
-  // Allow up to 1 second of catch-up (60 logic ticks) per frame if severely throttled
-  if (rawDt > 1.0) rawDt = 1.0;
-
-  // Process input every frame (regardless of game state)
+function engineStep(timestamp, rawDt) {
   Input.updateInput(rawDt);
 
   if (!State.gameSession.gameStarted || State.gameSession.gameOver) {
-    // Still update rendering and UI when paused
     Renderer.updateRendering();
     UI.updateUI();
     return;
   }
 
-  // Fixed timestep accumulator
   accumulator += rawDt;
 
   while (accumulator >= FIXED_DT) {
@@ -60,7 +62,6 @@ function tick(timestamp) {
     accumulator -= FIXED_DT;
   }
 
-  // Apply incoming snapshots before fog/render (multiplayer clients)
   Network.updateNetwork(timestamp);
 
   if (State.gameSession.gameStarted && !State.gameSession.gameOver) {
@@ -70,6 +71,43 @@ function tick(timestamp) {
   Renderer.updateRendering();
   Effects.updateEffects(rawDt);
   UI.updateUI();
+}
+
+/** @param {HTMLElement | null} sceneEl a-scene */
+export function startLoop(sceneEl) {
+  running = true;
+  lastTime = performance.now();
+  accumulator = 0;
+
+  registerEngineLoopComponentOnce();
+
+  const scene = sceneEl || document.querySelector('a-scene');
+  if (scene && scene.setAttribute && typeof AFRAME !== 'undefined' && AFRAME.components[COMPONENT_NAME]) {
+    scene.setAttribute(COMPONENT_NAME, '');
+    return;
+  }
+
+  // Fallback if A-Frame is unavailable (tests / odd embeds)
+  requestAnimationFrame(legacyRafTick);
+}
+
+function legacyRafTick(timestamp) {
+  if (!running) return;
+  requestAnimationFrame(legacyRafTick);
+
+  let rawDt = (timestamp - lastTime) / 1000;
+  lastTime = timestamp;
+  if (rawDt > 1.0) rawDt = 1.0;
+
+  engineStep(timestamp, rawDt);
+}
+
+export function stopLoop() {
+  running = false;
+  const scene = document.querySelector('a-scene');
+  if (scene && scene.hasAttribute && scene.hasAttribute(COMPONENT_NAME)) {
+    scene.removeAttribute(COMPONENT_NAME);
+  }
 }
 
 function gameUpdate(dt, time) {

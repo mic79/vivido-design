@@ -49,7 +49,7 @@ function initializeGame(sceneEl) {
     Network.initNetwork();
 
     UI.setCallbacks(onStartGame, onHostGame, onJoinGame);
-    Loop.startLoop();
+    Loop.startLoop(sceneEl);
 
     console.log('✅ RTSVR2 Ready');
   }, 500);

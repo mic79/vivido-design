@@ -14,8 +14,11 @@ import * as Network from './network.js';
 
 // --- State ---
 let isVR = false;
-/** Set in initInput; used to sync isVR when WebXR is active but enter-vr/exit-vr do not fire (e.g. Quest Meta Browser). */
+/** Set in initInput; used to sync isVR from WebXR session + A-Frame VR mode. */
 let sceneElForVrSync = null;
+/** A-Frame enter-vr / exit-vr (reliable on Quest); combined per-frame with isPresentingWebXR for desktop. */
+let aframeVrHint = false;
+let webxrSessionListenersBound = false;
 const mouse = { x: 0, y: 0, down: false, rightDown: false };
 const keys = {};
 const cameraRig = { x: 0, y: 30, z: 0, rotY: 0 };
@@ -99,22 +102,46 @@ function isPresentingWebXR(scene) {
   return false;
 }
 
-function syncIsVRFromScene() {
+function recomputeIsVR() {
   const scene = sceneElForVrSync;
   if (!scene) return;
-  const next = isPresentingWebXR(scene);
+  const xrActive = isPresentingWebXR(scene);
+  const next = aframeVrHint || xrActive;
   if (next !== isVR) {
     isVR = next;
     UI.updateMenuVisibility();
   }
 }
 
+function syncIsVRFromScene() {
+  recomputeIsVR();
+}
+
+function attachWebXrSessionHints(scene) {
+  const tryBind = () => {
+    const xr = scene.renderer && scene.renderer.xr;
+    if (!xr || webxrSessionListenersBound) return;
+    webxrSessionListenersBound = true;
+    xr.addEventListener('sessionstart', recomputeIsVR);
+    xr.addEventListener('sessionend', recomputeIsVR);
+  };
+  if (scene.hasLoaded) tryBind();
+  else scene.addEventListener('loaded', tryBind);
+}
+
 export function initInput(sceneEl) {
   const scene = sceneEl;
   sceneElForVrSync = sceneEl;
 
-  // VR flag is synced every frame in updateInput (see syncIsVRFromScene) so Quest Meta Browser
-  // works even when enter-vr/exit-vr do not fire reliably for WebXR.
+  scene.addEventListener('enter-vr', () => {
+    aframeVrHint = true;
+    recomputeIsVR();
+  });
+  scene.addEventListener('exit-vr', () => {
+    aframeVrHint = false;
+    recomputeIsVR();
+  });
+  attachWebXrSessionHints(scene);
 
   // --- VR Controller Events ---
   // A-Frame dispatches button events FROM the controller entities, not the scene.
@@ -319,6 +346,8 @@ export function initInput(sceneEl) {
   window.__rtsIsVrGripHeld = function () {
     return !!(vrLeft.grip || vrRight.grip);
   };
+
+  recomputeIsVR();
 }
 
 export function jumpCameraTo(x, z) {

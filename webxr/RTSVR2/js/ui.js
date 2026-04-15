@@ -76,6 +76,9 @@ function createHUD() {
         display: none; margin-top: 5px; padding-top: 5px; border-top: 1px solid #333;
         font-size: 12px; color: #eb8; line-height: 1.45;
       "></div>
+      <div id="hud-version-fps" style="
+        margin-top: 4px; font-size: 11px; color: #8ab0aa; letter-spacing: 0.02em;
+      ">RTSVR2 …</div>
     </div>
     <div id="hud-selection" style="
       position: fixed; bottom: 8px; left: 8px;

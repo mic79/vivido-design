@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>RTS VR II — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
+  <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
+  <meta name="rts-version" content="0.3.2">
 
   <!-- A-Frame -->
   <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
@@ -16,6 +18,7 @@
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
   <link rel="stylesheet" href="css/styles.css">
+  <script src="js/rts-version-fps.js"></script>
   <!-- DodgeVR-style raycaster fix + BoltVR-style VR menu (before game module). -->
   <script src="js/vr-raycaster-patch.js"></script>
   <script src="js/vr-hand-ray-setup.js"></script>
@@ -38,6 +41,7 @@
     vr-mode-ui="enabled: true"
     loading-screen="enabled: false"
     webxr="optionalFeatures: local-floor"
+    rts-version-fps
   >
     <!-- Camera Rig -->
     <a-entity id="cameraRig" position="0 40 0">
@@ -60,6 +64,15 @@
 
         <!-- Wrist: X/Y = plane on forearm facing you; Z = roll fix (opposite of previous -90). -->
         <a-entity id="vr-wrist-panel" position="0.07 -0.015 0.06" rotation="-90 -90 90" scale="0.48 0.48 0.48">
+          <a-text
+            class="no-raycast"
+            id="vr-version-fps"
+            position="0 0.48 0.04"
+            align="center"
+            width="0.95"
+            color="#8ab0aa"
+            value="RTSVR2 …"
+          ></a-text>
           <a-entity id="game-menu" position="0 0 0" visible="false">
             <a-plane width="0.72" height="0.62" color="#000810" material="opacity: 0.92; transparent: true" position="0 0 -0.006"></a-plane>
             <a-text class="no-raycast" value="RTS VR II" position="0 0.36 0" align="center" width="1.15" color="#00ff66"></a-text>
