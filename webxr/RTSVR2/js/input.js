@@ -4,7 +4,7 @@
 // ========================================
 
 import {
-  UNIT_TYPES, BUILDING_TYPES, MAP_HALF,
+  UNIT_TYPES, BUILDING_TYPES, MAP_HALF, SPAWN_POSITIONS,
 } from './config.js';
 import * as State from './state.js';
 import * as Buildings from './buildings.js';
@@ -37,6 +37,15 @@ const vrRight = {
 /** Both grips: pinch height like RTSVR (world hand distance delta). */
 const vrPinch = { active: false, lastDist: 0 };
 let lastTriggerTime = 0;
+
+/** Touch: single-finger long-press / tap (non-VR). */
+let touchLongPressTimer = null;
+let touchOneFinger = null; // { x, y, id, t0, moved }
+let touchLongPressConsumed = false;
+let touchTwin = null; // two-finger camera gesture state
+let touchTapSuppressed = false;
+/** After touch interaction, ignore synthetic mouse clicks (mobile browsers). */
+let suppressDesktopMouseFromTouchMs = 0;
 
 const controlGroups = {};
 let lastSquadPressTime = 0;
@@ -347,12 +356,46 @@ export function initInput(sceneEl) {
     return !!(vrLeft.grip || vrRight.grip);
   };
 
+  const touchOpts = { passive: false };
+  window.addEventListener('touchstart', onTouchStart, touchOpts);
+  window.addEventListener('touchmove', onTouchMove, touchOpts);
+  window.addEventListener('touchend', onTouchEnd, touchOpts);
+  window.addEventListener('touchcancel', onTouchEnd, touchOpts);
+
+  const applyCanvasTouchAction = () => {
+    try {
+      if (scene.canvas) scene.canvas.style.touchAction = 'none';
+    } catch (_) { /* ignore */ }
+  };
+  if (scene.hasLoaded) applyCanvasTouchAction();
+  else scene.addEventListener('loaded', applyCanvasTouchAction);
+
   recomputeIsVR();
 }
 
 export function jumpCameraTo(x, z) {
   cameraRig.x = Math.max(-MAP_HALF, Math.min(MAP_HALF, x));
   cameraRig.z = Math.max(-MAP_HALF, Math.min(MAP_HALF, z));
+}
+
+/** RTS camera above a player's base corner, yaw toward map center (matches W forward = −sin(rotY), −cos(rotY)). */
+export function positionCameraForPlayer(playerId) {
+  const p = State.players[playerId];
+  const spawn = (p && p.spawn) || SPAWN_POSITIONS[playerId];
+  if (!spawn) return;
+  cameraRig.x = spawn.x * 0.8;
+  cameraRig.z = spawn.z * 0.8;
+  cameraRig.y = 45;
+  if (Math.hypot(cameraRig.x, cameraRig.z) > 0.01) {
+    cameraRig.rotY = Math.atan2(cameraRig.x, cameraRig.z);
+  } else {
+    cameraRig.rotY = 0;
+  }
+  const rig = document.getElementById('cameraRig');
+  if (rig) {
+    rig.object3D.position.set(cameraRig.x, cameraRig.y, cameraRig.z);
+    rig.object3D.rotation.y = cameraRig.rotY;
+  }
 }
 
 // --- Per-frame input processing ---
@@ -546,7 +589,10 @@ function performWorldSelectionRay(origin, direction, shiftHeld) {
     return;
   }
 
-  if (State.selectedUnits.size > 0 && !shiftHeld) {
+  if (
+    !shiftHeld
+    && (State.selectedUnits.size > 0 || UI.activeBuildingPanel || UI.activeResourceField)
+  ) {
     State.deselectAll();
     UI.hideBuildingPanel();
     UI.showStatus('');
@@ -596,7 +642,8 @@ function performWorldCommandRay(origin, direction) {
 // --- Mouse click handling ---
 function onMouseClick(e) {
   if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
-  
+  if (performance.now() < suppressDesktopMouseFromTouchMs) return;
+
   // Ignore clicks on UI elements
   if (e.target.closest('#minimap') || e.target.tagName === 'BUTTON' || e.target.closest('.hud')) {
     return;
@@ -641,6 +688,7 @@ function onMouseClick(e) {
 
 function onRightClick(e) {
   if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+  if (performance.now() < suppressDesktopMouseFromTouchMs) return;
 
   // Ignore right-clicks on UI elements
   if (e.target.closest('#minimap')) return;
@@ -673,8 +721,336 @@ function onRightClick(e) {
   performWorldCommandRay(origin, direction);
 }
 
+function screenToWorldRay(clientX, clientY) {
+  const sceneEl = document.querySelector('a-scene');
+  if (!sceneEl || !sceneEl.camera) return null;
+  _mouseNDC.x = (clientX / window.innerWidth) * 2 - 1;
+  _mouseNDC.y = -(clientY / window.innerHeight) * 2 + 1;
+  _raycaster.setFromCamera(_mouseNDC, sceneEl.camera);
+  return { origin: _raycaster.ray.origin, direction: _raycaster.ray.direction };
+}
+
+/** True when point is over DOM we should not treat as battlefield (menus, minimap, panels). */
+function isClientPointBlockedForWorldTouch(clientX, clientY) {
+  const el = document.elementFromPoint(clientX, clientY);
+  if (!el) return false;
+  if (el.closest('#game-menu')) return true;
+  if (el.closest('#build-menu')) return true;
+  if (el.closest('#minimap-container')) return true;
+  if (el.closest('#hud-build-panel')) return true;
+  if (el.closest('#hud-2d-toggle')) return true;
+  if (el.closest('#build-placement-banner')) return true;
+  if (el.closest('#loading-screen')) return true;
+  return false;
+}
+
+/**
+ * VR right trigger and mobile tap: select / inspect, command when units selected,
+ * ground move/attack, build placement, resource panel.
+ */
+function performVrStyleBattlefieldRay(origin, direction) {
+  if (State.gameSession.buildMode) {
+    const groundHit = raycastGround(origin, direction);
+    if (groundHit) {
+      const buildingType = State.gameSession.buildMode;
+      Network.sendCommand(
+        {
+          action: 'build',
+          buildingType,
+          x: groundHit.x,
+          z: groundHit.z,
+        },
+        (ok, code) => {
+          if (ok) {
+            State.gameSession.buildMode = null;
+            clearBuildBanner();
+            UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
+          } else {
+            UI.showStatus(Network.commandFailureMessage(code));
+          }
+        }
+      );
+    }
+    return;
+  }
+
+  const myUnits = Array.from(State.selectedUnits).filter(id => {
+    const u = State.units.get(id);
+    return u && u.ownerId === State.gameSession.myPlayerId;
+  });
+  const myTeam = State.players[State.gameSession.myPlayerId]?.team;
+
+  const hitUnit = Renderer.raycastUnits(origin, direction);
+  if (hitUnit) {
+    if (hitUnit.ownerId === State.gameSession.myPlayerId) {
+      State.selectUnit(hitUnit.id);
+      UI.hideBuildingPanel();
+    } else if (myUnits.length > 0 && hitUnit.team !== myTeam) {
+      Network.sendCommand({ action: 'attack', unitIds: myUnits, targetId: hitUnit.id });
+      UI.showStatus('Attacking!');
+    } else if (myUnits.length > 0 && hitUnit.team === myTeam) {
+      UI.showStatus('Allied unit — cannot attack');
+    } else {
+      State.deselectAll();
+      State.selectUnit(hitUnit.id);
+      UI.hideBuildingPanel();
+      const label = hitUnit.team === myTeam ? 'Allied' : 'Enemy';
+      UI.showStatus(`${label} ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
+    }
+    return;
+  }
+
+  const hitBuilding = Renderer.raycastBuildings(origin, direction);
+  if (hitBuilding) {
+    if (hitBuilding.ownerId === State.gameSession.myPlayerId) {
+      State.deselectAll();
+      UI.showBuildingPanel(hitBuilding);
+      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+    } else if (myUnits.length > 0) {
+      const bTeam = State.players[hitBuilding.ownerId]?.team;
+      if (bTeam !== myTeam) {
+        Network.sendCommand({ action: 'attackBuilding', unitIds: myUnits, targetId: hitBuilding.id });
+        UI.showStatus('Attacking building!');
+      } else {
+        UI.showStatus('Allied building — cannot attack');
+      }
+    } else {
+      State.deselectAll();
+      UI.showBuildingPanel(hitBuilding);
+      const bTeam = State.players[hitBuilding.ownerId]?.team;
+      const label = bTeam === myTeam ? 'Allied' : 'Enemy';
+      UI.showStatus(`${label} ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+    }
+    return;
+  }
+
+  const hitResource = Renderer.raycastResourceFields(origin, direction);
+  if (hitResource) {
+    State.deselectAll();
+    UI.hideBuildingPanel();
+    UI.showResourceFieldPanel(hitResource);
+    const capacityStr = `${Math.floor(hitResource.remaining)} / ${hitResource.maxCapacity}`;
+    UI.showStatus(`Resource Crystal - Remaining: ${capacityStr}`);
+    return;
+  }
+
+  const groundHit = raycastGround(origin, direction);
+  if (groundHit && myUnits.length > 0) {
+    Network.sendCommand({ action: 'move', unitIds: myUnits, x: groundHit.x, z: groundHit.z });
+    UI.showStatus('Moving...');
+  }
+}
+
+function clearTouchLongPress() {
+  if (touchLongPressTimer) {
+    clearTimeout(touchLongPressTimer);
+    touchLongPressTimer = null;
+  }
+  touchOneFinger = null;
+}
+
+function fireTouchLongPress(clientX, clientY) {
+  touchLongPressTimer = null;
+  if (getIsVR()) return;
+  if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+  if (isClientPointBlockedForWorldTouch(clientX, clientY)) return;
+
+  const r = screenToWorldRay(clientX, clientY);
+  if (!r) return;
+  const { origin, direction } = r;
+
+  if (State.gameSession.buildMode) {
+    return;
+  }
+
+  const hitUnit = Renderer.raycastUnits(origin, direction);
+  if (hitUnit) {
+    if (hitUnit.ownerId === State.gameSession.myPlayerId) {
+      State.deselectAll();
+      selectNearbyOfType(hitUnit);
+      UI.hideBuildingPanel();
+      touchLongPressConsumed = true;
+    }
+    return;
+  }
+  if (Renderer.raycastBuildings(origin, direction) || Renderer.raycastResourceFields(origin, direction)) {
+    return;
+  }
+  const groundHit = raycastGround(origin, direction);
+  if (groundHit) {
+    State.deselectAll();
+    UI.hideBuildingPanel();
+    UI.showStatus('Deselected');
+    touchLongPressConsumed = true;
+  }
+}
+
+function centroidAndSpan(t0, t1) {
+  const cx = (t0.clientX + t1.clientX) * 0.5;
+  const cy = (t0.clientY + t1.clientY) * 0.5;
+  const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+  const angle = Math.atan2(t1.clientY - t0.clientY, t1.clientX - t0.clientX);
+  return { cx, cy, dist, angle };
+}
+
+function onTouchStart(e) {
+  if (getIsVR()) return;
+  if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+
+  if (e.touches.length >= 2) {
+    clearTouchLongPress();
+    touchOneFinger = null;
+    touchTapSuppressed = true;
+    const t0 = e.touches[0];
+    const t1 = e.touches[1];
+    const { cx, cy, dist, angle } = centroidAndSpan(t0, t1);
+    if (isClientPointBlockedForWorldTouch(cx, cy)) return;
+    touchTwin = {
+      lastDist: dist,
+      lastAngle: angle,
+      lastCx: cx,
+      lastCy: cy,
+    };
+    e.preventDefault();
+    return;
+  }
+
+  if (e.touches.length === 1) {
+    const t = e.touches[0];
+    if (isClientPointBlockedForWorldTouch(t.clientX, t.clientY)) return;
+
+    touchLongPressConsumed = false;
+    touchTapSuppressed = false;
+    touchOneFinger = {
+      x: t.clientX,
+      y: t.clientY,
+      id: t.identifier,
+      t0: performance.now(),
+      moved: false,
+    };
+    clearTouchLongPress();
+    touchLongPressTimer = setTimeout(() => {
+      if (touchOneFinger && !touchOneFinger.moved) {
+        fireTouchLongPress(touchOneFinger.x, touchOneFinger.y);
+      }
+    }, 520);
+  }
+}
+
+function onTouchMove(e) {
+  if (getIsVR()) return;
+  if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+
+  if (e.touches.length >= 2 && touchTwin) {
+    const t0 = e.touches[0];
+    const t1 = e.touches[1];
+    const { cx, cy, dist, angle } = centroidAndSpan(t0, t1);
+
+    const dDist = dist - touchTwin.lastDist;
+    touchTwin.lastDist = dist;
+    const zoomSens = 0.085;
+    cameraRig.y = Math.max(10, Math.min(80, cameraRig.y - dDist * zoomSens));
+
+    const dcx = cx - touchTwin.lastCx;
+    const dcy = cy - touchTwin.lastCy;
+    touchTwin.lastCx = cx;
+    touchTwin.lastCy = cy;
+    const θ = cameraRig.rotY;
+    const panSens = 0.055 * (cameraRig.y / 35);
+    cameraRig.x -= (Math.cos(θ) * dcx - Math.sin(θ) * dcy) * panSens;
+    cameraRig.z -= (Math.sin(θ) * dcx + Math.cos(θ) * dcy) * panSens;
+
+    let dAng = angle - touchTwin.lastAngle;
+    if (dAng > Math.PI) dAng -= Math.PI * 2;
+    if (dAng < -Math.PI) dAng += Math.PI * 2;
+    touchTwin.lastAngle = angle;
+    cameraRig.rotY -= dAng * 0.85;
+
+    cameraRig.x = Math.max(-MAP_HALF, Math.min(MAP_HALF, cameraRig.x));
+    cameraRig.z = Math.max(-MAP_HALF, Math.min(MAP_HALF, cameraRig.z));
+
+    e.preventDefault();
+    return;
+  }
+
+  if (touchOneFinger && e.touches.length === 1) {
+    const t = e.touches[0];
+    if (t.identifier !== touchOneFinger.id) return;
+    const dx = t.clientX - touchOneFinger.x;
+    const dy = t.clientY - touchOneFinger.y;
+    if (dx * dx + dy * dy > 14 * 14) {
+      touchOneFinger.moved = true;
+      clearTouchLongPress();
+    }
+  }
+}
+
+function onTouchEnd(e) {
+  if (getIsVR()) return;
+  if (!State.gameSession.gameStarted || State.gameSession.menuOpen) {
+    clearTouchLongPress();
+    touchTwin = null;
+    return;
+  }
+
+  if (e.touches.length < 2) {
+    touchTwin = null;
+  }
+
+  if (touchLongPressTimer && e.changedTouches.length) {
+    const ch = e.changedTouches[0];
+    if (touchOneFinger && ch.identifier === touchOneFinger.id) {
+      clearTouchLongPress();
+    }
+  }
+
+  if (e.touches.length === 0) {
+    clearTouchLongPress();
+    const ch = e.changedTouches[0];
+    if (!ch) return;
+
+    if (touchTapSuppressed) {
+      touchTapSuppressed = false;
+      touchLongPressConsumed = false;
+      touchOneFinger = null;
+      return;
+    }
+    if (touchLongPressConsumed) {
+      touchLongPressConsumed = false;
+      touchOneFinger = null;
+      return;
+    }
+
+    if (touchOneFinger && ch.identifier === touchOneFinger.id && !touchOneFinger.moved) {
+      const dt = performance.now() - touchOneFinger.t0;
+      if (dt < 600 && isClientPointBlockedForWorldTouch(ch.clientX, ch.clientY)) {
+        touchOneFinger = null;
+        return;
+      }
+      if (dt < 600) {
+        const r = screenToWorldRay(ch.clientX, ch.clientY);
+        if (r) performVrStyleBattlefieldRay(r.origin, r.direction);
+        e.preventDefault();
+      }
+    }
+    touchOneFinger = null;
+    if (!getIsVR() && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) {
+      suppressDesktopMouseFromTouchMs = performance.now() + 700;
+    }
+  }
+}
+
 export function getIsVR() {
   return isVR;
+}
+
+/** `'vr'` | `'touch'` | `'desktop'` — for HUD hints (not authoritative for XR). */
+export function getInputPlatform() {
+  if (isVR) return 'vr';
+  const coarse =
+    (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) ||
+    (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+  return coarse ? 'touch' : 'desktop';
 }
 
 // --- VR Trigger: RIGHT hand (select / command) ---
@@ -700,98 +1076,7 @@ function onVRTriggerRight(e) {
 
   lastTriggerTime = now;
 
-  // Build mode
-  if (State.gameSession.buildMode) {
-    const groundHit = raycastGround(_origin, _direction);
-    if (groundHit) {
-      const buildingType = State.gameSession.buildMode;
-      Network.sendCommand({
-        action: 'build',
-        buildingType,
-        x: groundHit.x,
-        z: groundHit.z,
-      }, (ok, code) => {
-        if (ok) {
-          State.gameSession.buildMode = null;
-          clearBuildBanner();
-          UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
-        } else {
-          UI.showStatus(Network.commandFailureMessage(code));
-        }
-      });
-    }
-    return;
-  }
-
-  const myUnits = Array.from(State.selectedUnits).filter(id => {
-    const u = State.units.get(id);
-    return u && u.ownerId === State.gameSession.myPlayerId;
-  });
-  const myTeam = State.players[State.gameSession.myPlayerId]?.team;
-
-  // VR battlefield: same trigger semantics as before (additive own-unit select + attack/move when applicable).
-  // Only extensions vs older builds: inspect enemy/neutral units & any-owner buildings when not issuing orders,
-  // plus resource crystal hits (same outcomes as desktop left-click info).
-
-  const hitUnit = Renderer.raycastUnits(_origin, _direction);
-  if (hitUnit) {
-    if (hitUnit.ownerId === State.gameSession.myPlayerId) {
-      State.selectUnit(hitUnit.id);
-      UI.hideBuildingPanel();
-    } else if (myUnits.length > 0 && hitUnit.team !== myTeam) {
-      Network.sendCommand({ action: 'attack', unitIds: myUnits, targetId: hitUnit.id });
-      UI.showStatus('Attacking!');
-    } else if (myUnits.length > 0 && hitUnit.team === myTeam) {
-      UI.showStatus('Allied unit — cannot attack');
-    } else {
-      State.deselectAll();
-      State.selectUnit(hitUnit.id);
-      UI.hideBuildingPanel();
-      const label = hitUnit.team === myTeam ? 'Allied' : 'Enemy';
-      UI.showStatus(`${label} ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
-    }
-    return;
-  }
-
-  const hitBuilding = Renderer.raycastBuildings(_origin, _direction);
-  if (hitBuilding) {
-    if (hitBuilding.ownerId === State.gameSession.myPlayerId) {
-      State.deselectAll();
-      UI.showBuildingPanel(hitBuilding);
-      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
-    } else if (myUnits.length > 0) {
-      const bTeam = State.players[hitBuilding.ownerId]?.team;
-      if (bTeam !== myTeam) {
-        Network.sendCommand({ action: 'attackBuilding', unitIds: myUnits, targetId: hitBuilding.id });
-        UI.showStatus('Attacking building!');
-      } else {
-        UI.showStatus('Allied building — cannot attack');
-      }
-    } else {
-      State.deselectAll();
-      UI.showBuildingPanel(hitBuilding);
-      const bTeam = State.players[hitBuilding.ownerId]?.team;
-      const label = bTeam === myTeam ? 'Allied' : 'Enemy';
-      UI.showStatus(`${label} ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
-    }
-    return;
-  }
-
-  const hitResource = Renderer.raycastResourceFields(_origin, _direction);
-  if (hitResource) {
-    State.deselectAll();
-    UI.hideBuildingPanel();
-    UI.showResourceFieldPanel(hitResource);
-    const capacityStr = `${Math.floor(hitResource.remaining)} / ${hitResource.maxCapacity}`;
-    UI.showStatus(`Resource Crystal - Remaining: ${capacityStr}`);
-    return;
-  }
-
-  const groundHit = raycastGround(_origin, _direction);
-  if (groundHit && myUnits.length > 0) {
-    Network.sendCommand({ action: 'move', unitIds: myUnits, x: groundHit.x, z: groundHit.z });
-    UI.showStatus('Moving...');
-  }
+  performVrStyleBattlefieldRay(_origin, _direction);
 }
 
 // --- VR Trigger: LEFT hand (build / secondary) ---
@@ -891,9 +1176,15 @@ function showBuildBanner(name, cost) {
       document.head.appendChild(style);
     }
   }
+  const placeHint =
+    getInputPlatform() === 'touch'
+      ? 'Tap ground within HQ radius to place · tap HQ again to cancel'
+      : getInputPlatform() === 'vr'
+        ? 'Trigger on ground to place · X to cancel · left trigger: HQ menu'
+        : 'Click ground within HQ build radius · <b>X</b> or right-click to cancel · VR: left trigger opens HQ menu';
   banner.innerHTML = `
     <div style="color: #0f0; font-size: 16px; font-weight: bold;">🏗️ PLACING: ${name} ($${cost})</div>
-    <div style="color: #aaa; font-size: 12px; margin-top: 4px;">Click ground within HQ build radius · <b>X</b> or right-click to cancel · VR: same + left trigger opens HQ menu</div>
+    <div style="color: #aaa; font-size: 12px; margin-top: 4px;">${placeHint}</div>
   `;
   banner.style.display = 'block';
 

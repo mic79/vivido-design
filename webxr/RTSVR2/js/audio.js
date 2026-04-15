@@ -70,6 +70,9 @@ export function playShotSound(unitType) {
     case 'lightTank': playSound('tankShot', 0.3); break;
     case 'heavyTank': playSound('tankShot', 0.4); break;
     case 'artillery': playSound('artilleryShot', 0.35); break;
+    // Non-weapon callers (engineer capture, etc.) must not fall through to rifleShot — that sounded like looping gunfire.
+    case 'impact': playSound('impact', 0.22); break;
+    case 'unitReady': playSound('unitReady', 0.4); break;
     default: playSound('rifleShot', 0.15); break;
   }
 }

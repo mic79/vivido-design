@@ -15,7 +15,7 @@ import * as Network from './network.js';
 import * as Units from './units.js';
 import * as Buildings from './buildings.js';
 import * as Loop from './loop.js';
-import { UNIT_TYPES, SPAWN_POSITIONS, PLAYER_TEAMS } from './config.js';
+import { SPAWN_POSITIONS } from './config.js';
 
 // --- Wait for A-Frame scene to load ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -64,6 +64,8 @@ function onStartGame(mode) {
 
   // Determine which players are active in this mode
   let humanIds, botIds, activeIds, teamAssign;
+  const mpHost = State.gameSession.isMultiplayer && State.gameSession.isHost;
+  const remoteHumans = mpHost ? Network.getConnectedRemotePlayerIds() : [];
 
   switch (mode) {
     case '1v1':
@@ -71,14 +73,23 @@ function onStartGame(mode) {
       botIds = [1];
       activeIds = [0, 1];
       teamAssign = { 0: 0, 1: 1 };
+      // Online human vs human (BattleVR-style): second seat is human, not AI.
+      if (mpHost && remoteHumans.includes(1)) {
+        humanIds = [0, 1];
+        botIds = [];
+      }
       break;
 
     case '2v2':
+      // Co-op vs bots: team 0 = P0+P1 (two humans when client is in slot 1), team 1 = bot P2+P3.
       humanIds = [0];
       botIds = [1, 2, 3];
       activeIds = [0, 1, 2, 3];
-      // Team 0: P0+P1, Team 1: P2+P3
       teamAssign = { 0: 0, 1: 0, 2: 1, 3: 1 };
+      if (mpHost && remoteHumans.includes(1)) {
+        humanIds = [0, 1];
+        botIds = [2, 3];
+      }
       break;
 
     case 'ffa':
@@ -86,6 +97,10 @@ function onStartGame(mode) {
       botIds = [1, 2, 3];
       activeIds = [0, 1, 2, 3];
       teamAssign = { 0: 0, 1: 1, 2: 2, 3: 3 };
+      if (mpHost && remoteHumans.length > 0) {
+        humanIds = [0, ...remoteHumans];
+        botIds = [0, 1, 2, 3].filter(id => !humanIds.includes(id));
+      }
       break;
 
     default:
@@ -160,15 +175,15 @@ function onStartGame(mode) {
   State.gameSession.buildMode = null;
 
   UI.updateMenuVisibility();
-  UI.showStatus('Game started! Click your HQ to open the build menu. (VR: left trigger)');
+  const startHint =
+    Input.getIsVR()
+      ? 'Game started! Point laser at your HQ and use the trigger to open the build menu.'
+      : Input.getInputPlatform() === 'touch'
+        ? 'Game started! Tap your HQ to build. Two-finger drag pans the map; pinch zooms.'
+        : 'Game started! Click your HQ to open the build menu. (VR: left trigger)';
+  UI.showStatus(startHint);
 
-  // Position camera above player's base
-  const mySpawn = SPAWN_POSITIONS[0];
-  const cam = Input.getCameraState();
-  cam.x = mySpawn.x * 0.8;
-  cam.z = mySpawn.z * 0.8;
-  cam.y = 45;
-  cam.rotY = 0;
+  Input.positionCameraForPlayer(State.gameSession.myPlayerId);
 
   if (State.gameSession.isMultiplayer && State.gameSession.isHost) {
     Network.broadcastData({ type: 'game-start' });
@@ -182,6 +197,5 @@ function onHostGame() {
 }
 
 function onJoinGame() {
-  const code = prompt('Enter host lobby code:');
-  if (code) Network.joinGame(code);
+  Network.joinGame();
 }

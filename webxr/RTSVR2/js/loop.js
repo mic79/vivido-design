@@ -50,6 +50,15 @@ function engineStep(timestamp, rawDt) {
   Input.updateInput(rawDt);
 
   if (!State.gameSession.gameStarted || State.gameSession.gameOver) {
+    // Host must keep sending snapshots after gameOver; otherwise the early return
+    // skips updateNetwork and clients never receive winner / gameOver.
+    if (
+      State.gameSession.isMultiplayer &&
+      State.gameSession.isHost &&
+      State.gameSession.gameStarted
+    ) {
+      Network.updateNetwork(timestamp);
+    }
     Renderer.updateRendering();
     UI.updateUI();
     return;

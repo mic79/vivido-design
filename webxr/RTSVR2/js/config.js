@@ -116,7 +116,7 @@ export const UNIT_TYPES = {
     fireRate: 0,
     range: 0,
     speed: 2.5,
-    visionRange: 14,
+    visionRange: 24,
     dmgVsInfantry: 0,
     dmgVsVehicle: 0,
     dmgVsBuilding: 0,
@@ -240,6 +240,11 @@ export const CAPTURE_DURATION_MIN_SEC = 5;
 export const CAPTURE_DURATION_MAX_SEC = 10;
 /** HQ (2000) = longest capture; lowest building HP maps near min duration */
 export const CAPTURE_HP_REF_FOR_DURATION = 2000;
+/**
+ * Min distance from building rim (see units handleAttackState: dist = centerDist − size/2)
+ * at which capture still progresses. Nav-only edge distance was too tight in practice.
+ */
+export const ENGINEER_CAPTURE_EDGE_REACH = 10;
 
 // --- Building Types ---
 export const BUILDING_TYPES = {
@@ -298,7 +303,8 @@ export const FOG_CELL_SIZE = MAP_SIZE / FOG_GRID_SIZE;
 export const SPATIAL_CELL_SIZE = 15;
 
 // --- Rendering ---
-export const MAX_INSTANCES_PER_TYPE = 40; // Max instances of each unit type (InstancedMesh)
+// Harvesters (4 players × refineries × queues) blow past small pools — overflow = invisible mesh but selection rings still draw.
+export const MAX_INSTANCES_PER_TYPE = 200; // Per unit-type InstancedMesh (THREE hard limit is buffer size; keep reasonable for mobile/VR)
 export const MAX_BUILDING_INSTANCES = 16; // Per building type
 export const MAX_PROJECTILES = 60;
 export const MAX_PARTICLES = 200;

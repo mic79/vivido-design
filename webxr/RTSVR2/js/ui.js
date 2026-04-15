@@ -27,6 +27,9 @@ let vrMinimapCanvas = null;
 let vrMinimapCtx = null;
 let vrMinimapTexture = null;
 
+let lastHudHelpPlatform = '';
+let hud2dPanelHidden = false;
+
 function uiMountRoot() {
   return document.getElementById('xr-dom-overlay') || document.body;
 }
@@ -53,10 +56,37 @@ export function initUI() {
 }
 
 // --- HUD ---
+function getHudControlsHelpHtml() {
+  if (Input.getIsVR()) {
+    return `VR: Laser + trigger on menu & map · X menu · Y map · B deselect · A select all · grips pan · pinch height zoom.<br>
+      <span style="opacity:0.85">Flat screen (if you peek at the mirror): WASD pan · Q/E rotate · scroll zoom · left / right click.</span>`;
+  }
+  if (Input.getInputPlatform() === 'touch') {
+    return `Tap: select & orders (same as VR trigger): move, attack, HQ, crystals.<br>
+      Two fingers — drag: pan · pinch: zoom · twist: rotate camera.<br>
+      Long-press ground: deselect · long-press your unit: nearby same type.<br>
+      Minimap: drag finger to scrub view.<br>
+      <span style="opacity:0.85">Esc: menu if you have a keyboard · otherwise use in-game controls.</span>`;
+  }
+  return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left click: Select · Right click: Move/Atk<br>
+    HQ click: Build · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · Esc: Menu<br>
+    <span style="opacity:0.85">VR: Laser + trigger on menu & map · X menu · Y map · B deselect · A select all · grips pan</span>`;
+}
+
 function createHUD() {
   hudContainer = document.createElement('div');
   hudContainer.id = 'game-hud';
+  hud2dPanelHidden = false;
+  lastHudHelpPlatform = '';
   hudContainer.innerHTML = `
+    <button type="button" id="hud-2d-toggle" aria-label="Toggle HUD"
+      style="display: none; position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%);
+      z-index: 125; pointer-events: auto; user-select: none; touch-action: manipulation;
+      font-family: 'Consolas', monospace; font-size: 12px; padding: 8px 14px; border-radius: 8px;
+      border: 1px solid #555; background: rgba(20,25,30,0.92); color: #ccc;">
+      Hide UI
+    </button>
+    <div id="hud-panel-2d-wrap">
     <div id="hud-resources" style="
       position: fixed; top: 8px; left: 8px;
       color: #0f0; font-family: 'Consolas', monospace; font-size: 14px;
@@ -85,20 +115,21 @@ function createHUD() {
       color: #fff; font-family: 'Consolas', monospace; font-size: 13px;
       background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 4px;
       z-index: 100; pointer-events: none; user-select: none;
-      display: none; max-width: 400px;
+      display: none; max-width: min(400px, 92vw);
     "></div>
+    <div id="hud-controls" style="
+      position: fixed; top: 8px; right: 8px; max-width: min(420px, 94vw);
+      color: #aaa; font-family: 'Consolas', monospace; font-size: 11px;
+      background: rgba(0,0,0,0.5); padding: 6px 10px; border-radius: 4px;
+      z-index: 100; pointer-events: none; user-select: none; line-height: 1.6;
+    ">${getHudControlsHelpHtml()}</div>
+    </div>
     <div id="hud-status" style="
       position: fixed; bottom: 8px; right: 8px;
       color: #ff0; font-family: 'Consolas', monospace; font-size: 13px;
       background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 4px;
-      z-index: 100; pointer-events: none; user-select: none;
+      z-index: 100; pointer-events: none; user-select: none; max-width: min(320px, 88vw);
     "></div>
-    <div id="hud-controls" style="
-      position: fixed; top: 8px; right: 8px;
-      color: #aaa; font-family: 'Consolas', monospace; font-size: 11px;
-      background: rgba(0,0,0,0.5); padding: 6px 10px; border-radius: 4px;
-      z-index: 100; pointer-events: none; user-select: none; line-height: 1.6;
-    ">WASD:Pan  Q/E:Rot  Scroll:Zoom  LClick:Select  RClick:Move/Atk<br>Click HQ:Build  Ctrl+S:Stop  1-0:Squads  Space:Desel  Tab:Map  Esc:Menu<br><span style=\"opacity:0.85\">VR: Laser+trigger on menu & map · X menu · Y map · B deselect · A select all · Grips pan</span></div>
     <div id="hud-victory" style="
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
       color: #ff0; font-family: Arial, sans-serif; font-size: 36px; font-weight: bold;
@@ -108,6 +139,16 @@ function createHUD() {
     "></div>
   `;
   uiMountRoot().appendChild(hudContainer);
+
+  const tog = document.getElementById('hud-2d-toggle');
+  if (tog) {
+    tog.addEventListener('click', () => {
+      hud2dPanelHidden = !hud2dPanelHidden;
+      const wrap = document.getElementById('hud-panel-2d-wrap');
+      if (wrap) wrap.style.display = hud2dPanelHidden ? 'none' : 'block';
+      tog.textContent = hud2dPanelHidden ? 'Show UI' : 'Hide UI';
+    });
+  }
 }
 
 // --- Build Menu (building placement) ---
@@ -172,6 +213,49 @@ function createMinimap() {
     e.preventDefault(); // Disable browser right-click menu
   });
 
+  const minimapEventPoint = ev =>
+    ev.touches && ev.touches.length
+      ? ev.touches[0]
+      : ev.changedTouches && ev.changedTouches.length
+        ? ev.changedTouches[0]
+        : ev;
+
+  minimapCanvas.addEventListener(
+    'touchstart',
+    e => {
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+      const p = minimapEventPoint(e);
+      minimapCanvas._isDragging = true;
+      minimapCanvas._touchDragId = e.touches[0] ? e.touches[0].identifier : null;
+      handleMinimapClick(p);
+    },
+    { passive: false }
+  );
+
+  minimapCanvas.addEventListener(
+    'touchmove',
+    e => {
+      if (!minimapCanvas._isDragging || minimapCanvas._touchDragId == null) return;
+      const t = Array.from(e.touches).find(tch => tch.identifier === minimapCanvas._touchDragId);
+      if (!t) return;
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+      handleMinimapClick(t);
+    },
+    { passive: false }
+  );
+
+  minimapCanvas.addEventListener('touchend', e => {
+    minimapCanvas._isDragging = false;
+    minimapCanvas._touchDragId = null;
+    e.stopPropagation();
+  });
+  minimapCanvas.addEventListener('touchcancel', () => {
+    minimapCanvas._isDragging = false;
+    minimapCanvas._touchDragId = null;
+  });
+
   window.addEventListener('mousemove', (e) => {
     if (minimapCanvas._isDragging) handleMinimapClick(e);
   });
@@ -201,15 +285,28 @@ function createMenu() {
     <button id="btn-start-2v2" style="${btnStyle('#06a')}" onclick="window._startGame('2v2')">🤝 2v2 Co-op vs Bots</button>
     <button id="btn-start-ffa" style="${btnStyle('#a60')}" onclick="window._startGame('ffa')">👑 FFA (4 Players)</button>
     <hr style="border-color: #333; margin: 15px 0;">
+    <p style="color:#aaa;font-size:12px;margin:0;">Multiplayer — same lobby # as host (BattleVR-style)</p>
+    <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:8px 0 10px 0;">
+      <button type="button" id="btn-lobby-minus" style="${btnStyle('#333')};padding:6px 14px;">−</button>
+      <span id="menu-lobby-num" style="color:#fff;font-size:20px;font-weight:bold;min-width:1.5em;text-align:center;">1</span>
+      <button type="button" id="btn-lobby-plus" style="${btnStyle('#333')};padding:6px 14px;">+</button>
+    </div>
     <button id="btn-host" style="${btnStyle('#008')}" onclick="window._hostGame()">🌐 Host Multiplayer</button>
     <button id="btn-join" style="${btnStyle('#800')}" onclick="window._joinGame()">🔗 Join Multiplayer</button>
     <p id="menu-status" style="color: #888; font-size: 12px; margin-top: 15px;">Select a game mode</p>
   `;
   uiMountRoot().appendChild(menuEl);
 
+  const minus = menuEl.querySelector('#btn-lobby-minus');
+  const plus = menuEl.querySelector('#btn-lobby-plus');
+  if (minus) minus.addEventListener('click', () => Network.adjustLobby(-1));
+  if (plus) plus.addEventListener('click', () => Network.adjustLobby(1));
+
   window._startGame = startGame;
   window._hostGame = hostGame;
   window._joinGame = joinGame;
+  window._lobbyDelta = d => Network.adjustLobby(d);
+  Network.refreshLobbyDisplay();
 }
 
 /** BoltVR-style: enable .clickable on menu hit targets and refresh hand raycasters. */
@@ -316,6 +413,26 @@ export function updateUI() {
 function updateHUD() {
   const player = State.players[State.gameSession.myPlayerId];
   if (!player) return;
+
+  if (!State.gameSession.gameStarted) {
+    lastHudHelpPlatform = '';
+    if (hud2dPanelHidden) {
+      hud2dPanelHidden = false;
+      const wrap = document.getElementById('hud-panel-2d-wrap');
+      const tog = document.getElementById('hud-2d-toggle');
+      if (wrap) wrap.style.display = 'block';
+      if (tog) tog.textContent = 'Hide UI';
+    }
+  }
+
+  const controlsHelpEl = document.getElementById('hud-controls');
+  if (controlsHelpEl && State.gameSession.gameStarted) {
+    const helpKey = Input.getIsVR() ? 'vr' : Input.getInputPlatform();
+    if (helpKey !== lastHudHelpPlatform) {
+      lastHudHelpPlatform = helpKey;
+      controlsHelpEl.innerHTML = getHudControlsHelpHtml();
+    }
+  }
 
   const creditsEl = document.getElementById('hud-credits');
   const incomeEl = document.getElementById('hud-income');
@@ -450,7 +567,8 @@ function updateHUD() {
   // Victory/defeat
   const victoryEl = document.getElementById('hud-victory');
   if (State.gameSession.gameOver) {
-    if (victoryEl && victoryEl.style.display === 'none') {
+    if (victoryEl && !victoryEl.dataset.rtsVictoryPopulated) {
+      victoryEl.dataset.rtsVictoryPopulated = '1';
       const myTeam = player.team;
       let title = '🏆 VICTORY!';
       let titleColor = '#0f0';
@@ -552,8 +670,11 @@ function updateHUD() {
     }
   } else {
     // RUTHLESS UI CLEANUP: Hide the victory screen if a match is NOT over
-    if (victoryEl && victoryEl.style.display !== 'none') {
-      victoryEl.style.display = 'none';
+    if (victoryEl) {
+      delete victoryEl.dataset.rtsVictoryPopulated;
+      if (victoryEl.style.display !== 'none') {
+        victoryEl.style.display = 'none';
+      }
     }
     const vrRoot = document.getElementById('vr-hud-victory-root');
     if (vrRoot) vrRoot.setAttribute('visible', false);
@@ -646,6 +767,12 @@ function updateMinimap() {
 
 // --- Public API ---
 export function updateMenuVisibility() {
+  const hud2dTog = document.getElementById('hud-2d-toggle');
+  if (hud2dTog) {
+    hud2dTog.style.display =
+      State.gameSession.gameStarted && !Input.getIsVR() ? 'block' : 'none';
+  }
+
   if (menuEl) {
     const showHtml = State.gameSession.menuOpen && !Input.getIsVR();
     menuEl.style.display = showHtml ? 'block' : 'none';

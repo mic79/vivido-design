@@ -225,6 +225,23 @@ export const gameSession = {
   debugFog: false,     // "Spy Mode" for observing AI
 };
 
+/** Batched into multiplayer snapshots so joiners hear/see the same SFX & particles as the host. */
+export const pendingHostFx = [];
+
+/** No-op unless this peer is the multiplayer host (solo clients never queue). */
+export function pushHostFx(ev) {
+  if (!gameSession.isMultiplayer || !gameSession.isHost) return;
+  if (!ev || pendingHostFx.length >= 96) return;
+  pendingHostFx.push(ev);
+}
+
+export function takeHostFxForSnapshot() {
+  if (pendingHostFx.length === 0) return [];
+  const out = pendingHostFx.slice();
+  pendingHostFx.length = 0;
+  return out;
+}
+
 // --- Reset all state ---
 export function resetState() {
   resetIds();
@@ -242,4 +259,5 @@ export function resetState() {
   gameSession.elapsedTime = 0;
   gameSession.menuOpen = true;
   gameSession.buildMode = null;
+  pendingHostFx.length = 0;
 }

@@ -8,6 +8,7 @@ import {
   PLAYER_COLORS,
   CAPTURE_DURATION_MIN_SEC, CAPTURE_DURATION_MAX_SEC,
   CAPTURE_HP_REF_FOR_DURATION,
+  ENGINEER_CAPTURE_EDGE_REACH,
 } from './config.js';
 import * as State from './state.js';
 import * as Pathfinding from './pathfinding.js';
@@ -41,7 +42,7 @@ export function createUnit(type, ownerId, x, z, options = {}) {
     type,
     category: stats.category,
     ownerId,
-    team: player.team,
+    team: options.team != null ? options.team : player.team,
     x, z,
     rotation: player.spawn?.rotation || 0,
     hp: stats.hp,
@@ -299,7 +300,10 @@ function handleAttackState(unit, time, dt) {
   const dist = Math.max(0, centerDist - targetRadius);
   let effectiveRange = unit.range > 0 ? unit.range : 1.5;
   if (unit.type === 'engineer' && !target.category) {
-    effectiveRange = Pathfinding.getEngineerMinEdgeDistanceToBuilding(target);
+    effectiveRange = Math.max(
+      Pathfinding.getEngineerMinEdgeDistanceToBuilding(target),
+      ENGINEER_CAPTURE_EDGE_REACH
+    );
   } else if (unit.type === 'engineer') {
     effectiveRange = 4.0;
   }
@@ -415,7 +419,9 @@ function fireAtTarget(unit, target, time) {
     
     // Impact visual/sound could go here too
     if (unit.aoe > 0) {
-      Effects.spawnExplosion(target.x, 0.5, target.z, unit.aoe / 2);
+      const cnt = Math.max(4, Math.round(unit.aoe / 2));
+      Effects.spawnExplosion(target.x, 0.5, target.z, cnt);
+      State.pushHostFx({ kind: 'aoe_impact', x: target.x, z: target.z, count: cnt });
     }
   };
 
@@ -424,16 +430,30 @@ function fireAtTarget(unit, target, time) {
   const distance = Pathfinding.getDistance(unit.x, unit.z, target.x, target.z);
   const duration = Math.min(500, distance * 30);
 
-  Renderer.spawnProjectile(
-    unit.x, 1.2, unit.z,
-    target.x, targetY, target.z,
-    PLAYER_COLORS[unit.ownerId],
-    duration,
-    onHit // Passed as 9th argument
-  );
+  const isMpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
 
-  // Play sound at fire time
-  Audio.playShotSound(unit.type);
+  if (!isMpClient) {
+    Renderer.spawnProjectile(
+      unit.x, 1.2, unit.z,
+      target.x, targetY, target.z,
+      PLAYER_COLORS[unit.ownerId],
+      duration,
+      onHit // Passed as 9th argument
+    );
+    Audio.playShotSound(unit.type);
+  }
+
+  State.pushHostFx({
+    kind: 'shot',
+    unitType: unit.type,
+    x: unit.x,
+    z: unit.z,
+    tx: target.x,
+    ty: targetY,
+    tz: target.z,
+    color: PLAYER_COLORS[unit.ownerId] ?? 0xffffff,
+    duration,
+  });
 }
 
 function applyDamage(target, damage, attacker = null) {
@@ -489,6 +509,7 @@ function advanceEngineerCapture(building, engineer, dt) {
     building.ownerId = engineer.ownerId;
     building.team = engineer.team;
     Audio.playShotSound('unitReady');
+    State.pushHostFx({ kind: 'capture_complete' });
     console.log(`Engineer captured building ${building.type}!`);
     destroyUnit(engineer);
     checkWinCondition();
@@ -497,6 +518,7 @@ function advanceEngineerCapture(building, engineer, dt) {
 
   if (timeSince(engineer, '_capSoundTime', 0.45, dt)) {
     Audio.playShotSound('impact');
+    State.pushHostFx({ kind: 'capture_tick' });
   }
 }
 
@@ -569,23 +591,31 @@ export function destroyUnit(unit, attacker = null) {
     atkPlayer.stats.kills++;
   }
 
+  const dx = unit.x;
+  const dz = unit.z;
+
   State.removeUnit(unit.id);
   State.selectedUnits.delete(unit.id);
   Audio.playExplosionSound(0.3);
-
-  // TODO: spawn explosion effect via effects.js
+  Effects.spawnExplosion(dx, 0.5, dz, 8);
+  State.pushHostFx({ kind: 'unit_death', x: dx, z: dz, volume: 0.3, particles: 8 });
 
   checkWinCondition();
 }
 
 function destroyBuilding(building) {
   building.hp = 0;
-  
+
+  const bx = building.x;
+  const bz = building.z;
+
   const player = State.players[building.ownerId];
   if (player && player.stats) player.stats.buildingsLost++;
 
   State.removeBuilding(building.id);
   Audio.playExplosionSound(0.5);
+  Effects.spawnExplosion(bx, 0.5, bz, 12);
+  State.pushHostFx({ kind: 'building_death', x: bx, z: bz, volume: 0.5 });
 
   // Rebuild nav mesh since building is gone
   Pathfinding.rebuildNavMesh();

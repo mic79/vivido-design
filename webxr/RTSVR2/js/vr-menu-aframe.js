@@ -26,6 +26,8 @@
       else if (action === 'ffa' && window._startGame) window._startGame('ffa');
       else if (action === 'host' && window._hostGame) window._hostGame();
       else if (action === 'join' && window._joinGame) window._joinGame();
+      else if (action === 'lobby_minus' && window._lobbyDelta) window._lobbyDelta(-1);
+      else if (action === 'lobby_plus' && window._lobbyDelta) window._lobbyDelta(1);
     },
     remove: function () {
       this.el.removeEventListener('click', this.onClick);

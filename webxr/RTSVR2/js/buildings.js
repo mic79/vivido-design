@@ -13,6 +13,7 @@ import * as Audio from './audio.js';
 
 // --- Building creation ---
 // options.id: authoritative id (snapshots); skipNavRebuild: batch apply (rebuild once after)
+// options.team: authoritative team (multiplayer client; host player.team may be lobby-default)
 export function createBuilding(type, ownerId, x, z, options = {}) {
   const stats = BUILDING_TYPES[type];
   if (!stats) {
@@ -28,7 +29,7 @@ export function createBuilding(type, ownerId, x, z, options = {}) {
     id,
     type,
     ownerId,
-    team: player.team,
+    team: options.team != null ? options.team : player.team,
     x, z,
     rotation: 0,
     hp: stats.hp,
@@ -152,6 +153,7 @@ export function updateConstruction(dt) {
       building.isBuilt = true;
       if (player && player.stats) player.stats.buildingsBuilt++;
       Audio.playBuildCompleteSound();
+      State.pushHostFx({ kind: 'build_complete' });
       console.log(`✅ Building ${building.type} complete for P${building.ownerId}`);
 
       // Spawn free unit if applicable (e.g., Refinery comes with free Harvester)
@@ -259,6 +261,7 @@ export function updateProduction(dt) {
           Units.commandMove([unit.id], rally.x, rally.z);
         }
         Audio.playUnitReadySound();
+        State.pushHostFx({ kind: 'unit_ready' });
       }
     }
   });

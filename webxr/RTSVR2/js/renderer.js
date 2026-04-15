@@ -250,102 +250,118 @@ export function updateRendering() {
   updateBuildBoundary();
 }
 
+/** Higher = should win a limited InstancedMesh slot (same-type overflow used to hide harvesters first). */
+function unitInstanceSortKey(unit, myPid) {
+  let k = 0;
+  if (State.selectedUnits.has(unit.id)) k += 4000;
+  if (unit.ownerId === myPid) k += 1000;
+  if (Fog.isUnitVisibleToPlayer(unit, myPid)) k += 100;
+  return k;
+}
+
 function updateUnitInstances() {
-  // Reset instance counts
   const counts = {};
-  const indexMap = {}; // unitId -> { type, instanceIndex }
   for (const type of Object.keys(unitMeshes)) {
     counts[type] = 0;
   }
 
-  const myTeam = State.players[State.gameSession.myPlayerId]?.team ?? 0;
+  const myPid = State.gameSession.myPlayerId;
+
+  const byType = {};
+  for (const type of Object.keys(unitMeshes)) {
+    byType[type] = [];
+  }
 
   State.units.forEach(unit => {
     if (unit.hp <= 0) return;
-    const mesh = unitMeshes[unit.type];
-    if (!mesh) return;
-
-    // Fog of war check
-    const visible = Fog.isUnitVisibleToPlayer(unit, State.gameSession.myPlayerId);
-    const idx = counts[unit.type];
-    if (idx >= MAX_INSTANCES_PER_TYPE) return;
-
-    if (visible) {
-      // Build transform
-      _euler.set(0, unit.rotation || 0, 0);
-      _quat.setFromEuler(_euler);
-      _mat4.compose(
-        _pos.set(unit.x, 0, unit.z),
-        _quat,
-        _scale.set(1, 1, 1)
-      );
-    } else {
-      // Hide
-      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
-    }
-
-    mesh.setMatrixAt(idx, _mat4);
-
-    // Set color — harvester gets state-based tinting
-    if (unit.type === 'harvester') {
-      const baseColor = PLAYER_COLORS[unit.ownerId] || 0xffffff;
-      switch (unit.state) {
-        case 'harvesting': {
-          // Pulsing green glow while mining
-          const pulse = 0.6 + Math.sin(performance.now() * 0.005) * 0.4;
-          _color.setRGB(pulse * 0.2, pulse, pulse * 0.3);
-          break;
-        }
-        case 'movingToRefinery': {
-          // Gold/yellow — carrying resources back
-          _color.setRGB(1.0, 0.85, 0.2);
-          break;
-        }
-        case 'depositing': {
-          // Bright orange pulsing while unloading
-          const pulse2 = 0.7 + Math.sin(performance.now() * 0.008) * 0.3;
-          _color.setRGB(1.0, 0.5 * pulse2, 0.1);
-          break;
-        }
-        case 'movingToField': {
-          // Dim cyan — heading out empty
-          _color.setRGB(0.3, 0.7, 0.7);
-          break;
-        }
-        default:
-          _color.setHex(baseColor);
-      }
-    } else {
-      const baseColor = PLAYER_COLORS[unit.ownerId] || 0xffffff;
-      _color.setHex(baseColor);
-      
-      switch (unit.state) {
-        case 'attacking':
-          // Aggressive red pulse
-          const rPulse = 0.5 + Math.sin(performance.now() * 0.008) * 0.5;
-          _color.lerp(new THREE.Color(0xff2222), rPulse * 0.5);
-          break;
-        case 'moving':
-          // Energetic blueish tint
-          _color.lerp(new THREE.Color(0x4488ff), 0.3);
-          break;
-        case 'following':
-          // Peaceful green tint
-          _color.lerp(new THREE.Color(0x44ff44), 0.4);
-          break;
-        default:
-          // 'idle' or uncommanded -> stays base color
-          break;
-      }
-    }
-    mesh.setColorAt(idx, _color);
-
-    // Store index mapping for health bars
-    unit._renderIndex = idx;
-    unit._renderVisible = visible;
-
-    counts[unit.type]++;
+    if (!unitMeshes[unit.type]) return;
+    byType[unit.type].push(unit);
   });
+
+  for (const type of Object.keys(unitMeshes)) {
+    const mesh = unitMeshes[type];
+    const list = byType[type];
+    list.sort((a, b) => unitInstanceSortKey(b, myPid) - unitInstanceSortKey(a, myPid));
+
+    for (let i = 0; i < list.length; i++) {
+      const unit = list[i];
+      if (i >= MAX_INSTANCES_PER_TYPE) {
+        unit._renderIndex = -1;
+        unit._renderVisible = false;
+        continue;
+      }
+
+      const fogVis = Fog.isUnitVisibleToPlayer(unit, myPid);
+      const visible =
+        fogVis
+        || (State.selectedUnits.has(unit.id) && unit.ownerId === myPid);
+
+      if (visible) {
+        _euler.set(0, unit.rotation || 0, 0);
+        _quat.setFromEuler(_euler);
+        _mat4.compose(
+          _pos.set(unit.x, 0, unit.z),
+          _quat,
+          _scale.set(1, 1, 1)
+        );
+      } else {
+        _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+      }
+
+      mesh.setMatrixAt(i, _mat4);
+
+      if (unit.type === 'harvester') {
+        const baseColor = PLAYER_COLORS[unit.ownerId] || 0xffffff;
+        switch (unit.state) {
+          case 'harvesting': {
+            const pulse = 0.6 + Math.sin(performance.now() * 0.005) * 0.4;
+            _color.setRGB(pulse * 0.2, pulse, pulse * 0.3);
+            break;
+          }
+          case 'movingToRefinery': {
+            _color.setRGB(1.0, 0.85, 0.2);
+            break;
+          }
+          case 'depositing': {
+            const pulse2 = 0.7 + Math.sin(performance.now() * 0.008) * 0.3;
+            _color.setRGB(1.0, 0.5 * pulse2, 0.1);
+            break;
+          }
+          case 'movingToField': {
+            _color.setRGB(0.3, 0.7, 0.7);
+            break;
+          }
+          default:
+            _color.setHex(baseColor);
+        }
+      } else {
+        const baseColor = PLAYER_COLORS[unit.ownerId] || 0xffffff;
+        _color.setHex(baseColor);
+
+        switch (unit.state) {
+          case 'attacking': {
+            const rPulse = 0.5 + Math.sin(performance.now() * 0.008) * 0.5;
+            _color.lerp(new THREE.Color(0xff2222), rPulse * 0.5);
+            break;
+          }
+          case 'moving':
+            _color.lerp(new THREE.Color(0x4488ff), 0.3);
+            break;
+          case 'following':
+            _color.lerp(new THREE.Color(0x44ff44), 0.4);
+            break;
+          default:
+            break;
+        }
+      }
+      mesh.setColorAt(i, _color);
+
+      unit._renderIndex = i;
+      unit._renderVisible = visible;
+    }
+
+    counts[type] = Math.min(list.length, MAX_INSTANCES_PER_TYPE);
+  }
 
   // Update counts and mark dirty
   for (const [type, mesh] of Object.entries(unitMeshes)) {
@@ -366,6 +382,8 @@ function updateBuildingInstances() {
     counts[type] = 0;
   }
 
+  const myTeam = State.players[State.gameSession.myPlayerId]?.team ?? 0;
+
   State.buildings.forEach(building => {
     if (building.hp <= 0) return;
     const mesh = buildingMeshes[building.type];
@@ -374,9 +392,12 @@ function updateBuildingInstances() {
     const idx = counts[building.type];
     if (idx >= MAX_BUILDING_INSTANCES) return;
 
-    // Fog of war check: Only show if it matches my team OR was explored
-    const myTeam = State.players[State.gameSession.myPlayerId]?.team ?? 0;
-    const explored = building.team === myTeam || Fog.wasExploredByTeam(myTeam, building.x, building.z);
+    const ownerPl = State.players[building.ownerId];
+    const onMySide = ownerPl && ownerPl.team === myTeam;
+    const explored =
+      onMySide
+      || building.team === myTeam
+      || Fog.wasExploredByTeam(myTeam, building.x, building.z);
     
     // Visibility check (is it CURRENTLY in vision?)
     const currentlyVisible = Fog.isUnitVisibleToPlayer(building, State.gameSession.myPlayerId);

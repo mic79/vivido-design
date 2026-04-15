@@ -32,6 +32,22 @@ function gridIndex(gx, gz) {
   return gz * FOG_GRID_SIZE + gx;
 }
 
+/**
+ * Local human sees the whole map (minimap + world): match ended, or eliminated
+ * with no living ally on the same team (FFA / solo team — avoids ghosting in 2v2).
+ */
+function localClientHasFullFogVision() {
+  const gs = State.gameSession;
+  if (!gs.gameStarted) return false;
+  if (gs.gameOver) return true;
+  const me = State.players[gs.myPlayerId];
+  if (!me?.isDefeated) return false;
+  const allyAlive = State.players.some(
+    p => p.id !== me.id && p.team === me.team && !p.isDefeated
+  );
+  return !allyAlive;
+}
+
 export function updateFog() {
   // Downgrade currently visible to previously seen
   teamGrids.forEach(grid => {
@@ -86,6 +102,8 @@ export function isVisibleToTeam(team, wx, wz) {
   if (State.gameSession.debugFog && team === State.players[State.gameSession.myPlayerId]?.team) {
     return true;
   }
+  const myTeam = State.players[State.gameSession.myPlayerId]?.team;
+  if (localClientHasFullFogVision() && team === myTeam) return true;
   const grid = teamGrids.get(team);
   if (!grid) return true; // No fog data → visible
   const g = worldToGrid(wx, wz);
@@ -110,12 +128,16 @@ export function isUnitVisibleToPlayer(unitOrBuilding, playerId) {
   if (State.gameSession.debugFog) return true;
   const player = State.players[playerId];
   if (!player) return true;
+  if (playerId === State.gameSession.myPlayerId && localClientHasFullFogVision()) return true;
 
-  // Own team always visible
-  const entityTeam = unitOrBuilding.team !== undefined ? unitOrBuilding.team : State.players[unitOrBuilding.ownerId]?.team;
+  // Allies: use the owner's roster team (authoritative), not only unit.team — that field can lag
+  // snapshots / production for a frame and would wrongly treat your harvesters as "enemy" fog targets.
+  const owner = unitOrBuilding.ownerId != null ? State.players[unitOrBuilding.ownerId] : null;
+  if (owner && owner.team === player.team) return true;
+
+  const entityTeam = unitOrBuilding.team !== undefined ? unitOrBuilding.team : owner?.team;
   if (entityTeam === player.team) return true;
 
-  // Check fog grid
   return isVisibleToTeam(player.team, unitOrBuilding.x, unitOrBuilding.z);
 }
 
