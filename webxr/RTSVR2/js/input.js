@@ -14,6 +14,8 @@ import * as Network from './network.js';
 
 // --- State ---
 let isVR = false;
+/** Set in initInput; used to sync isVR when WebXR is active but enter-vr/exit-vr do not fire (e.g. Quest Meta Browser). */
+let sceneElForVrSync = null;
 const mouse = { x: 0, y: 0, down: false, rightDown: false };
 const keys = {};
 const cameraRig = { x: 0, y: 30, z: 0, rotY: 0 };
@@ -82,18 +84,37 @@ function tryVrUiClickFromChildRay(controllerEl) {
   return false;
 }
 
+/**
+ * True when an immersive XR session is active. Prefer this over enter-vr/exit-vr alone on standalone headsets.
+ */
+function isPresentingWebXR(scene) {
+  if (!scene) return false;
+  try {
+    if (typeof scene.is === 'function' && scene.is('vr-mode')) return true;
+  } catch (_) { /* ignore */ }
+  try {
+    const xr = scene.renderer && scene.renderer.xr;
+    if (xr && typeof xr.getSession === 'function' && xr.getSession()) return true;
+  } catch (_) { /* ignore */ }
+  return false;
+}
+
+function syncIsVRFromScene() {
+  const scene = sceneElForVrSync;
+  if (!scene) return;
+  const next = isPresentingWebXR(scene);
+  if (next !== isVR) {
+    isVR = next;
+    UI.updateMenuVisibility();
+  }
+}
+
 export function initInput(sceneEl) {
   const scene = sceneEl;
+  sceneElForVrSync = sceneEl;
 
-  // --- XR session detection ---
-  scene.addEventListener('enter-vr', () => {
-    isVR = true;
-    UI.updateMenuVisibility();
-  });
-  scene.addEventListener('exit-vr', () => {
-    isVR = false;
-    UI.updateMenuVisibility();
-  });
+  // VR flag is synced every frame in updateInput (see syncIsVRFromScene) so Quest Meta Browser
+  // works even when enter-vr/exit-vr do not fire reliably for WebXR.
 
   // --- VR Controller Events ---
   // A-Frame dispatches button events FROM the controller entities, not the scene.
@@ -307,6 +328,8 @@ export function jumpCameraTo(x, z) {
 
 // --- Per-frame input processing ---
 export function updateInput(dt) {
+  syncIsVRFromScene();
+
   // Always process camera, even when game hasn't started
   const camSpeed = 40 * dt * (cameraRig.y / 30);
 
