@@ -1,0 +1,104 @@
+/* ========================================
+   RTSVR2 — Styles
+   Loading screen and overlay UI
+   ======================================== */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  overflow: hidden;
+  background: #000;
+  font-family: 'Consolas', 'Courier New', monospace;
+}
+
+/* Loading Screen */
+#loading-screen {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: radial-gradient(ellipse at center, #0a1a0a 0%, #000 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  transition: opacity 0.5s ease;
+}
+
+#loading-content {
+  text-align: center;
+}
+
+#loading-content h1 {
+  color: #0f0;
+  font-size: 48px;
+  font-weight: 300;
+  letter-spacing: 0.2em;
+  margin-bottom: 20px;
+  text-shadow: 0 0 30px rgba(0, 255, 0, 0.3);
+}
+
+#loading-content p {
+  color: #888;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+#loading-bar {
+  width: 200px;
+  height: 3px;
+  background: #222;
+  margin: 0 auto;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#loading-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #0a0, #0f0);
+  animation: loadPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes loadPulse {
+  0%, 100% { transform: translateX(-100%); }
+  50% { transform: translateX(0); }
+}
+
+/* Game Menu */
+#game-menu button:hover {
+  filter: brightness(1.3);
+  transform: scale(1.02);
+}
+
+#game-menu button {
+  transition: filter 0.15s, transform 0.15s;
+}
+
+/* Minimap hover */
+#minimap-container {
+  transition: opacity 0.2s;
+}
+
+#minimap-container:hover {
+  opacity: 0.8;
+}
+
+/* Mount for HUD/menu; passes clicks through except on children with pointer-events: auto */
+#xr-dom-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 500;
+}
+
+/* A-Frame VR button override */
+.a-enter-vr-button {
+  background: rgba(0, 170, 0, 0.5) !important;
+  border: 1px solid #0a0 !important;
+}
