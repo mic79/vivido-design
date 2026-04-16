@@ -175,6 +175,9 @@ function onStartGame(mode) {
   State.gameSession.buildMode = null;
 
   UI.updateMenuVisibility();
+  if (Input.getInputPlatform() === 'touch') {
+    UI.setMinimapVisible(true);
+  }
   const startHint =
     Input.getIsVR()
       ? 'Game started! Point laser at your HQ and use the trigger to open the build menu.'

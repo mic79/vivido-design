@@ -366,7 +366,19 @@ function handleHostData(data) {
           }
         })
         .catch(() => {});
-      import('./ui.js').then(m => m.updateMenuVisibility()).catch(() => {});
+      import('./ui.js')
+        .then(async m => {
+          m.updateMenuVisibility();
+          try {
+            const inp = await import('./input.js');
+            if (typeof inp.getInputPlatform === 'function' && inp.getInputPlatform() === 'touch') {
+              m.setMinimapVisible(true);
+            }
+          } catch (_) {
+            /* ignore */
+          }
+        })
+        .catch(() => {});
       break;
 
     case 'player-joined':

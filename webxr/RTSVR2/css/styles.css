@@ -104,3 +104,25 @@ body {
   background: rgba(0, 170, 0, 0.5) !important;
   border: 1px solid #0a0 !important;
 }
+
+/* Flat HUD: stack help below stats area on narrow / touch screens */
+@media (max-width: 840px), (pointer: coarse) {
+  #hud-controls {
+    top: auto !important;
+    right: 8px !important;
+    left: 8px !important;
+    bottom: 198px !important;
+    max-width: none !important;
+    max-height: min(32vh, 240px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #hud-resources {
+    max-width: calc(100vw - 20px);
+  }
+
+  #hud-island-toggles {
+    bottom: 132px !important;
+  }
+}

@@ -738,7 +738,7 @@ function isClientPointBlockedForWorldTouch(clientX, clientY) {
   if (el.closest('#build-menu')) return true;
   if (el.closest('#minimap-container')) return true;
   if (el.closest('#hud-build-panel')) return true;
-  if (el.closest('#hud-2d-toggle')) return true;
+  if (el.closest('#hud-island-toggles') || el.closest('.hud-island-btn')) return true;
   if (el.closest('#build-placement-banner')) return true;
   if (el.closest('#loading-screen')) return true;
   return false;
