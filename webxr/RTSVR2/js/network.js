@@ -11,6 +11,7 @@ import * as Fog from './fog.js';
 import * as Renderer from './renderer.js';
 import * as Audio from './audio.js';
 import * as Effects from './effects.js';
+import * as Resources from './resources.js';
 import { NET_SNAPSHOT_RATE, NET_CLIENT_CMD_TIMEOUT_MS } from './config.js';
 
 /** Multiplayer client: last applied player team row from host (lobby defaults differ from match). */
@@ -123,6 +124,11 @@ export function commandFailureMessage(code) {
     timeout: 'No response from host — try again.',
     network: 'Not connected to host.',
     send_failed: 'Failed to send command.',
+    no_harvesters: 'Select harvesters to assign a crystal.',
+    invalid_field: 'That crystal is gone or empty.',
+    field_not_visible: 'You have not explored that crystal yet.',
+    no_refinery: 'Build a refinery before harvesting.',
+    deployment_blocked: 'Cannot deploy HQ here (overlap, crystal, or map edge).',
   };
   if (!code) return 'Command failed.';
   return M[code] || 'Command failed.';
@@ -451,6 +457,41 @@ function executeCommand(data, actingPlayerId) {
       Units.commandFollow(ids, data.targetId);
       return { ok: true };
     }
+    case 'deployMobileHq': {
+      const ids = filterUnitsOwned(actingPlayerId, data.unitIds).filter(id => {
+        const u = State.units.get(id);
+        return u && u.type === 'mobileHq';
+      });
+      if (ids.length === 0) return { ok: false, code: 'no_units' };
+      let n = 0;
+      for (let i = 0; i < ids.length; i++) {
+        const u = State.units.get(ids[i]);
+        if (u && Buildings.tryDeployMobileHq(u)) n++;
+      }
+      if (n === 0) return { ok: false, code: 'deployment_blocked' };
+      return { ok: true };
+    }
+    case 'harvestField': {
+      const field = State.resourceFields.get(data.fieldId);
+      if (!field || field.depleted) return { ok: false, code: 'invalid_field' };
+      const actor = State.players[actingPlayerId];
+      if (!actor) return { ok: false, code: 'no_player' };
+      if (!Fog.wasExploredByTeam(actor.team, field.x, field.z)) {
+        return { ok: false, code: 'field_not_visible' };
+      }
+      const ids = filterUnitsOwned(actingPlayerId, data.unitIds).filter(id => {
+        const u = State.units.get(id);
+        return u && u.type === 'harvester';
+      });
+      if (ids.length === 0) return { ok: false, code: 'no_harvesters' };
+      let okCount = 0;
+      for (let i = 0; i < ids.length; i++) {
+        const u = State.units.get(ids[i]);
+        if (Resources.assignHarvesterToField(u, field.id)) okCount++;
+      }
+      if (okCount === 0) return { ok: false, code: 'no_refinery' };
+      return { ok: true };
+    }
     case 'stop': {
       const ids = filterUnitsOwned(actingPlayerId, data.unitIds);
       if (ids.length === 0) return { ok: false, code: 'no_units' };
@@ -606,6 +647,7 @@ export function updateNetwork(time) {
       lastFireTime: u.lastFireTime,
       playerCommanded: !!u.playerCommanded,
       targetUnitId: u.targetUnitId ?? null,
+      followLeadId: u.followLeadId ?? null,
       targetBuildingId: u.targetBuildingId ?? null,
       targetPos: u.targetPos ? { x: u.targetPos.x, z: u.targetPos.z } : null,
       guardPos: u.guardPos ? { x: u.guardPos.x, z: u.guardPos.z } : null,
@@ -679,10 +721,10 @@ function applyHostFxEventsForClient(fxList) {
         Audio.playUnitReadySound();
         break;
       case 'capture_tick':
-        Audio.playShotSound('impact');
+        Audio.playCaptureTickSound();
         break;
       case 'capture_complete':
-        Audio.playShotSound('unitReady');
+        Audio.playUnitReadySound();
         break;
       default:
         break;
@@ -763,6 +805,7 @@ function applySnapshot(snapshot) {
       if (uData.lastFireTime !== undefined) unit.lastFireTime = uData.lastFireTime;
       unit.playerCommanded = !!uData.playerCommanded;
       unit.targetUnitId = uData.targetUnitId != null ? uData.targetUnitId : null;
+      unit.followLeadId = uData.followLeadId != null ? uData.followLeadId : null;
       unit.targetBuildingId = uData.targetBuildingId != null ? uData.targetBuildingId : null;
       unit.targetPos = uData.targetPos ? { x: uData.targetPos.x, z: uData.targetPos.z } : null;
       unit.guardPos = uData.guardPos ? { x: uData.guardPos.x, z: uData.guardPos.z } : null;

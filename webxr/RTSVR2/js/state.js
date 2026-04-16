@@ -143,6 +143,15 @@ export function removeBuilding(buildingId) {
   if (playerBldgs) playerBldgs.delete(buildingId);
 }
 
+/** Keep buildingsByPlayer in sync when ownership changes (engineer capture, etc.). */
+export function moveBuildingBetweenPlayers(buildingId, fromPlayerId, toPlayerId) {
+  if (fromPlayerId === toPlayerId) return;
+  const fromSet = buildingsByPlayer.get(fromPlayerId);
+  if (fromSet) fromSet.delete(buildingId);
+  if (!buildingsByPlayer.has(toPlayerId)) buildingsByPlayer.set(toPlayerId, new Set());
+  buildingsByPlayer.get(toPlayerId).add(buildingId);
+}
+
 /** Recalculate unit counts from live units (e.g. after network snapshot). */
 export function syncUnitCountsFromUnits() {
   players.forEach(p => { p.unitCount = 0; });
@@ -159,8 +168,24 @@ export function getPlayerBuildings(playerId) {
   return Array.from(ids).map(id => buildings.get(id)).filter(Boolean);
 }
 
+/** Primary HQ: closest living HQ to this player's spawn (stable with multiple HQs). */
 export function getPlayerHQ(playerId) {
-  return getPlayerBuildings(playerId).find(b => b.type === 'hq');
+  const hqs = getPlayerBuildings(playerId).filter(b => b.type === 'hq' && b.hp > 0);
+  if (hqs.length === 0) return null;
+  const player = players[playerId];
+  const sx = player?.spawn?.x ?? 0;
+  const sz = player?.spawn?.z ?? 0;
+  let best = hqs[0];
+  let bestD = Infinity;
+  for (let i = 0; i < hqs.length; i++) {
+    const b = hqs[i];
+    const d = (b.x - sx) * (b.x - sx) + (b.z - sz) * (b.z - sz);
+    if (d < bestD) {
+      bestD = d;
+      best = b;
+    }
+  }
+  return best;
 }
 
 export function getPlayerBuildingsOfType(playerId, type) {

@@ -109,7 +109,7 @@ function assignHarvesterTask(unit) {
   const player = State.players[unit.ownerId];
   if (!player) return;
 
-  // Find nearest refinery owned by same player
+  // Nearest refinery (including one still building — was excluded by constructionProgress filter before).
   const refinery = findNearestRefinery(unit);
   if (!refinery) return; // No refinery - stay idle
 
@@ -132,7 +132,8 @@ function assignHarvesterTask(unit) {
     field = player.isBot ? findBestResourceFieldForBot(unit) : findNearestResourceField(unit);
   }
   
-  if (!field) return; // No resources - stay idle
+  // No known crystal in fog yet — cannot start a harvest loop (refinery alone does not send them "to" it first).
+  if (!field) return;
 
   unit.assignedRefinery = refinery.id;
   unit.assignedField = field.id;
@@ -220,20 +221,15 @@ function harvest(unit, dt) {
       console.log(`⛏️ Resource field ${field.id} depleted`);
     }
 
-    // Head back to refinery
+    // Head back to nearest refinery from *here* (assignedRefinery was chosen at trip start near old base;
+    // after harvesting at a far field, a closer expansion refinery must win).
     unit.state = 'movingToRefinery';
-    const refinery = State.buildings.get(unit.assignedRefinery);
-    if (refinery && refinery.hp > 0) {
-      unit.targetPos = { x: refinery.x, z: refinery.z };
+    const dropRef = findNearestRefinery(unit);
+    if (dropRef) {
+      unit.assignedRefinery = dropRef.id;
+      unit.targetPos = { x: dropRef.x, z: dropRef.z };
     } else {
-      // Find new refinery
-      const newRef = findNearestRefinery(unit);
-      if (newRef) {
-        unit.assignedRefinery = newRef.id;
-        unit.targetPos = { x: newRef.x, z: newRef.z };
-      } else {
-        unit.state = 'idle';
-      }
+      unit.state = 'idle';
     }
     unit.path = null;
     unit._harvestTimer = 0;
@@ -337,7 +333,10 @@ function moveAlongPathSimple(unit, dt) {
 
 // --- Helpers ---
 function findNearestRefinery(unit) {
-  const playerBuildings = State.getPlayerBuildingsOfType(unit.ownerId, 'refinery');
+  // Any living refinery (under construction counts — getPlayerBuildingsOfType omits progress < 1).
+  const playerBuildings = State.getPlayerBuildings(unit.ownerId).filter(
+    b => b.type === 'refinery' && b.hp > 0
+  );
   if (playerBuildings.length === 0) return null;
 
   let nearest = null;
@@ -375,4 +374,37 @@ function findNearestResourceField(unit) {
   });
 
   return nearest;
+}
+
+/**
+ * Player (or host) orders a harvester to work a specific crystal until it is depleted.
+ * If the unit is already carrying ore to a refinery, only `lastHarvestedField` is updated so the new field is used after deposit.
+ * @returns {boolean} true if the order was stored (including deferred while carrying cargo).
+ */
+export function assignHarvesterToField(unit, fieldId) {
+  if (!unit || unit.type !== 'harvester' || unit.hp <= 0) return false;
+  const field = State.resourceFields.get(fieldId);
+  if (!field || field.depleted) return false;
+  const refinery = findNearestRefinery(unit);
+  if (!refinery) return false;
+
+  unit.lastHarvestedField = field.id;
+
+  const carrying = (unit.cargo || 0) > 0;
+  if (carrying && (unit.state === 'movingToRefinery' || unit.state === 'depositing')) {
+    return true;
+  }
+
+  unit.playerCommanded = false;
+  unit.assignedRefinery = refinery.id;
+  unit.assignedField = field.id;
+  unit.state = 'movingToField';
+  unit.targetPos = { x: field.x, z: field.z };
+  unit.targetUnitId = null;
+  unit.targetBuildingId = null;
+  unit.path = null;
+  unit.pathIndex = 0;
+  unit.guardPos = null;
+  unit._harvestTimer = 0;
+  return true;
 }

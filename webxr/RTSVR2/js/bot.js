@@ -913,7 +913,7 @@ function maybeBotEngineerCapture(player, elapsed) {
   const engineers = State.getPlayerUnits(pid).filter(u =>
     u.type === 'engineer' &&
     u.hp > 0 &&
-    u.state === 'idle' &&
+    (u.state === 'idle' || (u.state === 'moving' && !u.playerCommanded)) &&
     !mem.currentMissions.some(m => m.unitIds.includes(u.id))
   );
   if (engineers.length === 0) return;
@@ -922,8 +922,7 @@ function maybeBotEngineerCapture(player, elapsed) {
     .map(t => (t.type === 'building' ? State.buildings.get(t.id) : null))
     .filter(b => {
       if (!b || b.hp <= 0 || !b.isBuilt) return false;
-      const p = State.players[b.ownerId];
-      if (!p || p.team === team) return false;
+      if (b.team === team) return false;
       return Fog.isVisibleToTeam(team, b.x, b.z);
     });
 

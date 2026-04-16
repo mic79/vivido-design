@@ -11,6 +11,7 @@ import * as Buildings from './buildings.js';
 import * as Renderer from './renderer.js';
 import * as UI from './ui.js';
 import * as Network from './network.js';
+import * as Audio from './audio.js';
 
 // --- State ---
 let isVR = false;
@@ -371,6 +372,97 @@ export function initInput(sceneEl) {
   else scene.addEventListener('loaded', applyCanvasTouchAction);
 
   recomputeIsVR();
+
+  applyImmersiveVrEntryToScene(scene);
+  installImmersiveVrEntryResizeHandling(scene);
+}
+
+// --- Immersive VR entry: hide A-Frame goggles on phones/tablets used as flat RTS;
+// keep on desktop + standalone VR browsers (Quest, Pico, …). ---
+let handheldFlatCache;
+const VR_BROWSER_UA_RE =
+  /oculusbrowser|meta quest|quest([\s_]|browser|pro|3|2)|pico|wolvic|htc vive|openxr|vision ?os/i;
+
+function computeHandheldFlatTouchDevice() {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  if (VR_BROWSER_UA_RE.test(ua)) return false;
+
+  try {
+    const ud = navigator.userAgentData;
+    if (ud && typeof ud.mobile === 'boolean' && ud.mobile) return true;
+  } catch (_) { /* ignore */ }
+
+  const coarse =
+    typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const noHover =
+    typeof window.matchMedia === 'function' && window.matchMedia('(hover: none)').matches;
+  const shortSide = Math.min(window.innerWidth || 0, window.innerHeight || 0);
+  if (coarse && noHover && shortSide <= 1200) return true;
+
+  return false;
+}
+
+/** True for typical phone/tablet 2D play (not Quest / Pico browser, etc.). */
+export function isHandheldFlatTouchDevice() {
+  if (handheldFlatCache === undefined) {
+    handheldFlatCache = computeHandheldFlatTouchDevice();
+  }
+  return handheldFlatCache;
+}
+
+export function invalidateHandheldFlatDeviceCache() {
+  handheldFlatCache = undefined;
+}
+
+export function shouldShowImmersiveVrEntry() {
+  return !isHandheldFlatTouchDevice();
+}
+
+function decorateEnterVrButton() {
+  const btn = document.querySelector('.a-enter-vr-button');
+  if (!btn) return;
+  btn.setAttribute('title', 'Enter immersive VR (headset or desktop)');
+  btn.setAttribute('aria-label', 'Enter immersive VR');
+  if (btn.querySelector('.rts-enter-vr-label')) return;
+  const lab = document.createElement('span');
+  lab.className = 'rts-enter-vr-label';
+  lab.textContent = 'VR';
+  lab.style.cssText =
+    'margin-left:6px;font-size:11px;font-weight:600;letter-spacing:0.06em;vertical-align:middle;opacity:0.95;';
+  btn.appendChild(lab);
+}
+
+let vrEntryResizeTimer;
+let vrEntryResizeInstalled = false;
+
+export function applyImmersiveVrEntryToScene(sceneEl) {
+  if (!sceneEl || typeof sceneEl.setAttribute !== 'function') return;
+  const show = shouldShowImmersiveVrEntry();
+  try {
+    sceneEl.setAttribute('vr-mode-ui', show ? 'enabled: true' : 'enabled: false');
+  } catch (_) { /* ignore */ }
+  document.body.classList.toggle('rts-hide-immersive-vr', !show);
+  if (show) {
+    requestAnimationFrame(() => {
+      decorateEnterVrButton();
+      setTimeout(decorateEnterVrButton, 500);
+      setTimeout(decorateEnterVrButton, 2500);
+    });
+  }
+}
+
+export function installImmersiveVrEntryResizeHandling(sceneEl) {
+  if (vrEntryResizeInstalled) return;
+  vrEntryResizeInstalled = true;
+  const refresh = () => {
+    invalidateHandheldFlatDeviceCache();
+    applyImmersiveVrEntryToScene(sceneEl);
+  };
+  window.addEventListener('orientationchange', refresh);
+  window.addEventListener('resize', () => {
+    clearTimeout(vrEntryResizeTimer);
+    vrEntryResizeTimer = setTimeout(refresh, 200);
+  });
 }
 
 export function jumpCameraTo(x, z) {
@@ -528,9 +620,100 @@ export function updateInput(dt) {
 let lastClickTime = 0;
 let lastClickTargetId = null;
 
+/** Extra sphere radius for unit/building picks when the camera is high (small on-screen silhouettes). */
+function getScreenPickRadiusBoost() {
+  return Math.max(0, Math.min(5.5, (cameraRig.y - 22) * 0.11));
+}
+
+/** NDC pick point — must match `Raycaster.setFromCamera` (see onMouseClick). */
+function clientToPickNdc(clientX, clientY) {
+  return {
+    x: (clientX / window.innerWidth) * 2 - 1,
+    y: -(clientY / window.innerHeight) * 2 + 1,
+  };
+}
+
+/**
+ * When inflated spheres overlap, keep the target whose projected center is closest to the cursor (NDC).
+ * VR / no pickNdc: keep all hits (caller already got at most one meaningful overlap per type).
+ */
+/**
+ * Right-click "follow" uses inflated unit spheres; if the player aimed at open ground,
+ * prefer move. Also never follow a unit that is part of the current command selection.
+ */
+function commandRayPrefersGroundOverFriendlyFollow(origin, direction, hitUnit, pickNdc, commanderUnitIds) {
+  if (!hitUnit) return true;
+  if (commanderUnitIds.includes(hitUnit.id)) return true;
+  const groundHit = raycastGround(origin, direction);
+  if (!groundHit) return false;
+  if (pickNdc) {
+    const gPen = Renderer.pickScreenNdcError(groundHit.x, 0, groundHit.z, pickNdc);
+    const uPen = Renderer.pickScreenNdcErrorForUnit(hitUnit, pickNdc);
+    return gPen < uPen - 0.012;
+  }
+  const dx = hitUnit.x - groundHit.x;
+  const dz = hitUnit.z - groundHit.z;
+  return dx * dx + dz * dz > 36;
+}
+
+function resourceFieldStatusMessage(field) {
+  if (!field) return '';
+  if (field.depleted) {
+    return `Resource crystal — depleted (0 / ${Math.floor(field.maxCapacity || 0)})`;
+  }
+  return `Resource crystal — Remaining: ${Math.floor(field.remaining)} / ${Math.floor(field.maxCapacity || 0)}`;
+}
+
+function resolveOverlapPicks(hitUnit, hitBuilding, hitResource, pickNdc) {
+  if (!pickNdc) {
+    return { u: hitUnit, b: hitBuilding, r: hitResource };
+  }
+  const cands = [];
+  if (hitUnit) {
+    cands.push({
+      k: 'u',
+      pen: Renderer.pickScreenNdcErrorForUnit(hitUnit, pickNdc),
+      u: hitUnit,
+    });
+  }
+  if (hitBuilding) {
+    cands.push({
+      k: 'b',
+      pen: Renderer.pickScreenNdcErrorForBuilding(hitBuilding, pickNdc),
+      b: hitBuilding,
+    });
+  }
+  if (hitResource) {
+    const cap = hitResource.maxCapacity || 1;
+    const cy = hitResource.depleted
+      ? 0.55
+      : Math.max(1, (hitResource.remaining / cap) * 3);
+    cands.push({
+      k: 'r',
+      pen: Renderer.pickScreenNdcError(hitResource.x, cy, hitResource.z, pickNdc),
+      r: hitResource,
+    });
+  }
+  if (cands.length <= 1) {
+    return { u: hitUnit, b: hitBuilding, r: hitResource };
+  }
+  cands.sort((a, b) => a.pen - b.pen);
+  const w = cands[0];
+  return {
+    u: w.k === 'u' ? w.u : null,
+    b: w.k === 'b' ? w.b : null,
+    r: w.k === 'r' ? w.r : null,
+  };
+}
+
 /** Same as mouse left-click on the world: select units (any owner), buildings, resources, clear on empty ground. */
-function performWorldSelectionRay(origin, direction, shiftHeld) {
-  const hitUnit = Renderer.raycastUnits(origin, direction);
+function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
+  const pickBoost = getScreenPickRadiusBoost();
+  let hitUnit = Renderer.raycastUnits(origin, direction, 200, pickBoost, pickNdc);
+  let hitBuilding = Renderer.raycastBuildings(origin, direction, 200, pickBoost, pickNdc);
+  let hitResource = Renderer.raycastResourceFields(origin, direction, 200, pickNdc);
+  ({ u: hitUnit, b: hitBuilding, r: hitResource } = resolveOverlapPicks(hitUnit, hitBuilding, hitResource, pickNdc));
+
   if (hitUnit) {
     const now = Date.now();
     const isDoubleClick = (now - lastClickTime < 400) && (hitUnit.id === lastClickTargetId);
@@ -567,7 +750,6 @@ function performWorldSelectionRay(origin, direction, shiftHeld) {
   lastClickTime = Date.now();
   lastClickTargetId = null;
 
-  const hitBuilding = Renderer.raycastBuildings(origin, direction);
   if (hitBuilding) {
     State.deselectAll();
     UI.showBuildingPanel(hitBuilding);
@@ -579,15 +761,15 @@ function performWorldSelectionRay(origin, direction, shiftHeld) {
     return;
   }
 
-  const hitResource = Renderer.raycastResourceFields(origin, direction);
   if (hitResource) {
     State.deselectAll();
     UI.hideBuildingPanel();
     UI.showResourceFieldPanel(hitResource);
-    const capacityStr = `${Math.floor(hitResource.remaining)} / ${hitResource.maxCapacity}`;
-    UI.showStatus(`Resource Crystal - Remaining: ${capacityStr}`);
+    UI.showStatus(resourceFieldStatusMessage(hitResource));
     return;
   }
+
+  // Open ground: do not issue move here (use right-click). Fall through to deselect below.
 
   if (
     !shiftHeld
@@ -600,20 +782,28 @@ function performWorldSelectionRay(origin, direction, shiftHeld) {
 }
 
 /** Mouse right-click on the world: move / attack / follow (requires controllable units selected). */
-function performWorldCommandRay(origin, direction) {
+function performWorldCommandRay(origin, direction, pickNdc) {
   const myUnits = Array.from(State.selectedUnits).filter(id => {
     const u = State.units.get(id);
     return u && u.ownerId === State.gameSession.myPlayerId;
   });
   if (myUnits.length === 0) return;
 
-  const hitUnit = Renderer.raycastUnits(origin, direction);
+  const pickBoost = getScreenPickRadiusBoost();
+  let hitUnit = Renderer.raycastUnits(origin, direction, 200, pickBoost, pickNdc);
+  let hitBuilding = Renderer.raycastBuildings(origin, direction, 200, pickBoost, pickNdc);
+  let hitResource = Renderer.raycastResourceFields(origin, direction, 200, pickNdc);
+  ({ u: hitUnit, b: hitBuilding, r: hitResource } = resolveOverlapPicks(hitUnit, hitBuilding, hitResource, pickNdc));
+
   if (hitUnit) {
     const myTeam = State.players[State.gameSession.myPlayerId]?.team;
     if (hitUnit.ownerId === State.gameSession.myPlayerId) {
-      Network.sendCommand({ action: 'follow', unitIds: myUnits, targetId: hitUnit.id });
-      UI.showStatus('Following...');
-      return;
+      if (!commandRayPrefersGroundOverFriendlyFollow(origin, direction, hitUnit, pickNdc, myUnits)) {
+        Network.sendCommand({ action: 'follow', unitIds: myUnits, targetId: hitUnit.id });
+        UI.showStatus('Following...');
+        return;
+      }
+      hitUnit = null;
     } else if (hitUnit.team !== myTeam) {
       Network.sendCommand({ action: 'attack', unitIds: myUnits, targetId: hitUnit.id });
       UI.showStatus('Attacking!');
@@ -621,7 +811,6 @@ function performWorldCommandRay(origin, direction) {
     }
   }
 
-  const hitBuilding = Renderer.raycastBuildings(origin, direction);
   if (hitBuilding) {
     const myTeam = State.players[State.gameSession.myPlayerId]?.team;
     const bTeam = State.players[hitBuilding.ownerId]?.team;
@@ -630,6 +819,18 @@ function performWorldCommandRay(origin, direction) {
       UI.showStatus('Attacking building!');
       return;
     }
+  }
+
+  const harvesterIds = myUnits.filter(id => State.units.get(id)?.type === 'harvester');
+  if (hitResource && !hitResource.depleted && harvesterIds.length > 0) {
+    Network.sendCommand(
+      { action: 'harvestField', unitIds: harvesterIds, fieldId: hitResource.id },
+      (ok, code) => {
+        if (ok) UI.showStatus('Harvesters assigned to crystal');
+        else UI.showStatus(Network.commandFailureMessage(code));
+      }
+    );
+    return;
   }
 
   const groundHit = raycastGround(origin, direction);
@@ -683,7 +884,7 @@ function onMouseClick(e) {
   }
 
   const shiftHeld = e.shiftKey || keys['shift'];
-  performWorldSelectionRay(origin, direction, shiftHeld);
+  performWorldSelectionRay(origin, direction, shiftHeld, { x: _mouseNDC.x, y: _mouseNDC.y });
 }
 
 function onRightClick(e) {
@@ -718,7 +919,7 @@ function onRightClick(e) {
   const origin = _raycaster.ray.origin;
   const direction = _raycaster.ray.direction;
 
-  performWorldCommandRay(origin, direction);
+  performWorldCommandRay(origin, direction, { x: _mouseNDC.x, y: _mouseNDC.y });
 }
 
 function screenToWorldRay(clientX, clientY) {
@@ -738,7 +939,8 @@ function isClientPointBlockedForWorldTouch(clientX, clientY) {
   if (el.closest('#build-menu')) return true;
   if (el.closest('#minimap-container')) return true;
   if (el.closest('#hud-build-panel')) return true;
-  if (el.closest('#hud-island-toggles') || el.closest('.hud-island-btn')) return true;
+  if (el.closest('#hud-flat-actions')) return true;
+  if (el.closest('#hud-help-panel')) return true;
   if (el.closest('#build-placement-banner')) return true;
   if (el.closest('#loading-screen')) return true;
   return false;
@@ -748,7 +950,7 @@ function isClientPointBlockedForWorldTouch(clientX, clientY) {
  * VR right trigger and mobile tap: select / inspect, command when units selected,
  * ground move/attack, build placement, resource panel.
  */
-function performVrStyleBattlefieldRay(origin, direction) {
+function performVrStyleBattlefieldRay(origin, direction, pickNdc) {
   if (State.gameSession.buildMode) {
     const groundHit = raycastGround(origin, direction);
     if (groundHit) {
@@ -770,8 +972,9 @@ function performVrStyleBattlefieldRay(origin, direction) {
           }
         }
       );
+      return true;
     }
-    return;
+    return false;
   }
 
   const myUnits = Array.from(State.selectedUnits).filter(id => {
@@ -780,11 +983,25 @@ function performVrStyleBattlefieldRay(origin, direction) {
   });
   const myTeam = State.players[State.gameSession.myPlayerId]?.team;
 
-  const hitUnit = Renderer.raycastUnits(origin, direction);
+  const pickBoost = getScreenPickRadiusBoost();
+  let hitUnit = Renderer.raycastUnits(origin, direction, 200, pickBoost, pickNdc);
+  let hitBuilding = Renderer.raycastBuildings(origin, direction, 200, pickBoost, pickNdc);
+  let hitResource = Renderer.raycastResourceFields(origin, direction, 200, pickNdc);
+  ({ u: hitUnit, b: hitBuilding, r: hitResource } = resolveOverlapPicks(hitUnit, hitBuilding, hitResource, pickNdc));
+
   if (hitUnit) {
     if (hitUnit.ownerId === State.gameSession.myPlayerId) {
-      State.selectUnit(hitUnit.id);
-      UI.hideBuildingPanel();
+      if (State.selectedUnits.has(hitUnit.id)) {
+        State.deselectUnit(hitUnit.id);
+        UI.hideBuildingPanel();
+        UI.showStatus(
+          State.selectedUnits.size === 0 ? 'Deselected' : 'Removed from selection'
+        );
+      } else {
+        State.selectUnit(hitUnit.id);
+        UI.hideBuildingPanel();
+        UI.showStatus(`Selected ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
+      }
     } else if (myUnits.length > 0 && hitUnit.team !== myTeam) {
       Network.sendCommand({ action: 'attack', unitIds: myUnits, targetId: hitUnit.id });
       UI.showStatus('Attacking!');
@@ -797,10 +1014,9 @@ function performVrStyleBattlefieldRay(origin, direction) {
       const label = hitUnit.team === myTeam ? 'Allied' : 'Enemy';
       UI.showStatus(`${label} ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
     }
-    return;
+    return true;
   }
 
-  const hitBuilding = Renderer.raycastBuildings(origin, direction);
   if (hitBuilding) {
     if (hitBuilding.ownerId === State.gameSession.myPlayerId) {
       State.deselectAll();
@@ -821,24 +1037,35 @@ function performVrStyleBattlefieldRay(origin, direction) {
       const label = bTeam === myTeam ? 'Allied' : 'Enemy';
       UI.showStatus(`${label} ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
     }
-    return;
+    return true;
   }
 
-  const hitResource = Renderer.raycastResourceFields(origin, direction);
   if (hitResource) {
+    const harvesterIds = myUnits.filter(id => State.units.get(id)?.type === 'harvester');
+    if (harvesterIds.length > 0 && !hitResource.depleted) {
+      Network.sendCommand(
+        { action: 'harvestField', unitIds: harvesterIds, fieldId: hitResource.id },
+        (ok, code) => {
+          if (ok) UI.showStatus('Harvesters assigned to crystal');
+          else UI.showStatus(Network.commandFailureMessage(code));
+        }
+      );
+      return true;
+    }
     State.deselectAll();
     UI.hideBuildingPanel();
     UI.showResourceFieldPanel(hitResource);
-    const capacityStr = `${Math.floor(hitResource.remaining)} / ${hitResource.maxCapacity}`;
-    UI.showStatus(`Resource Crystal - Remaining: ${capacityStr}`);
-    return;
+    UI.showStatus(resourceFieldStatusMessage(hitResource));
+    return true;
   }
 
   const groundHit = raycastGround(origin, direction);
   if (groundHit && myUnits.length > 0) {
     Network.sendCommand({ action: 'move', unitIds: myUnits, x: groundHit.x, z: groundHit.z });
     UI.showStatus('Moving...');
+    return true;
   }
+  return false;
 }
 
 function clearTouchLongPressTimerOnly() {
@@ -867,17 +1094,24 @@ function fireTouchLongPress(clientX, clientY) {
     return;
   }
 
-  const hitUnit = Renderer.raycastUnits(origin, direction);
+  const pickNdc = clientToPickNdc(clientX, clientY);
+  const boost = getScreenPickRadiusBoost();
+  let hitUnit = Renderer.raycastUnits(origin, direction, 200, boost, pickNdc);
+  let hitBuilding = Renderer.raycastBuildings(origin, direction, 200, boost, pickNdc);
+  let hitRes = Renderer.raycastResourceFields(origin, direction, 200, pickNdc);
+  ({ u: hitUnit, b: hitBuilding, r: hitRes } = resolveOverlapPicks(hitUnit, hitBuilding, hitRes, pickNdc));
+
   if (hitUnit) {
     if (hitUnit.ownerId === State.gameSession.myPlayerId) {
       State.deselectAll();
       selectNearbyOfType(hitUnit);
       UI.hideBuildingPanel();
       touchLongPressConsumed = true;
+      notifyTouchInteraction('long');
     }
     return;
   }
-  if (Renderer.raycastBuildings(origin, direction) || Renderer.raycastResourceFields(origin, direction)) {
+  if (hitBuilding || hitRes) {
     return;
   }
   const groundHit = raycastGround(origin, direction);
@@ -886,6 +1120,7 @@ function fireTouchLongPress(clientX, clientY) {
     UI.hideBuildingPanel();
     UI.showStatus('Deselected');
     touchLongPressConsumed = true;
+    notifyTouchInteraction('long');
   }
 }
 
@@ -1038,7 +1273,14 @@ function onTouchEnd(e) {
       }
       if (dt < 600) {
         const r = screenToWorldRay(ch.clientX, ch.clientY);
-        if (r) performVrStyleBattlefieldRay(r.origin, r.direction);
+        if (r) {
+          const acted = performVrStyleBattlefieldRay(
+            r.origin,
+            r.direction,
+            clientToPickNdc(ch.clientX, ch.clientY)
+          );
+          if (acted) notifyTouchInteraction('tap');
+        }
         if (e.cancelable) e.preventDefault();
       }
     }
@@ -1059,6 +1301,20 @@ export function getInputPlatform() {
     (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) ||
     (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
   return coarse ? 'touch' : 'desktop';
+}
+
+/**
+ * Tactile + soft audio when a touch interaction did something (mirrors BattleVR-style immediate feedback).
+ * No-op on desktop; respects browser/OS vibrate settings.
+ */
+export function notifyTouchInteraction(kind = 'tap') {
+  if (getInputPlatform() !== 'touch') return;
+  if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+    try {
+      navigator.vibrate(kind === 'long' ? 40 : 18);
+    } catch (_) { /* ignored */ }
+  }
+  Audio.playTouchUiSound();
 }
 
 // --- VR Trigger: RIGHT hand (select / command) ---
@@ -1084,7 +1340,7 @@ function onVRTriggerRight(e) {
 
   lastTriggerTime = now;
 
-  performVrStyleBattlefieldRay(_origin, _direction);
+  performVrStyleBattlefieldRay(_origin, _direction, null);
 }
 
 // --- VR Trigger: LEFT hand (build / secondary) ---

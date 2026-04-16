@@ -105,24 +105,66 @@ body {
   border: 1px solid #0a0 !important;
 }
 
-/* Flat HUD: stack help below stats area on narrow / touch screens */
-@media (max-width: 840px), (pointer: coarse) {
-  #hud-controls {
-    top: auto !important;
-    right: 8px !important;
-    left: 8px !important;
-    bottom: 198px !important;
-    max-width: none !important;
-    max-height: min(32vh, 240px);
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
+/* Phones/tablets in flat 2D RTS: hide immersive entry (see input.js shouldShowImmersiveVrEntry). */
+body.rts-hide-immersive-vr .a-enter-vr-button {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 
-  #hud-resources {
-    max-width: calc(100vw - 20px);
-  }
+/* Help panel: desktop = compact card top-right; touch = sheet under stats (opened with Help). */
+#hud-help-panel {
+  position: fixed;
+  z-index: 124;
+  box-sizing: border-box;
+}
 
-  #hud-island-toggles {
-    bottom: 132px !important;
+#game-hud.rts-vr-session #hud-help-panel,
+#game-hud.rts-vr-session #hud-flat-actions {
+  display: none !important;
+}
+
+#game-hud:not(.rts-touch) #hud-help-panel {
+  display: block !important;
+  top: 8px;
+  right: 8px;
+  left: auto;
+  width: min(440px, 94vw);
+  padding: 6px 10px;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 6px;
+}
+
+#game-hud.rts-touch #hud-help-panel {
+  display: none;
+  top: 64px;
+  left: 8px;
+  right: 8px;
+  width: auto;
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 12px;
+  border: 1px solid #444;
+  background: rgba(10, 14, 18, 0.96);
+  border-radius: 8px;
+}
+
+#game-hud.rts-touch.rts-help-open #hud-help-panel {
+  display: block;
+}
+
+#game-hud.rts-touch #hud-resources {
+  max-width: calc(100vw - 72px);
+}
+
+@media (max-width: 520px) {
+  #game-hud.rts-touch #hud-resources {
+    max-width: calc(100vw - 16px);
   }
+}
+
+#minimap-container #hud-minimap-toggle {
+  box-sizing: border-box;
 }

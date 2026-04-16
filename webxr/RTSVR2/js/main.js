@@ -35,6 +35,8 @@ document.addEventListener('DOMContentLoaded', () => {
 function initializeGame(sceneEl) {
   console.log('🎮 RTSVR2 Initializing...');
 
+  Input.applyImmersiveVrEntryToScene(sceneEl);
+
   Audio.initAudio();
   UI.initUI();
   State.initPlayers([0], [1, 2, 3]);

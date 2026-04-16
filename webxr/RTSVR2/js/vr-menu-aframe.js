@@ -4,7 +4,7 @@
  */
 (function () {
   function isGameMenuVisible() {
-    const m = document.getElementById('game-menu');
+    const m = document.getElementById('vr-game-menu');
     if (!m) return false;
     const v = m.getAttribute('visible');
     return v !== false && v !== 'false';

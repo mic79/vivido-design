@@ -159,6 +159,9 @@ function gameUpdate(dt, time) {
   // 9. Combat
   Units.updateCombat(time, dt);
 
+  // 9b. Engineer vehicle repair (host-authoritative; runs after movement + combat)
+  Units.updateEngineerRepair(dt);
+
   // 10. Fog of war (per-frame update runs in tick() so clients see fog after snapshots)
 
   // 11. Check game time limit

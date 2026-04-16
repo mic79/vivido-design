@@ -10,6 +10,27 @@ const POOL_SIZE = 5;
 let listenerReady = false;
 let audioContext = null;
 
+/** Per-key minimum gap between plays (reduces machine-gun stacking on rapid events). */
+const SOUND_MIN_GAP_MS = {
+  rifleShot: 52,
+  rocketShot: 70,
+  sniperShot: 55,
+  tankShot: 85,
+  artilleryShot: 80,
+  explosion: 100,
+  buildComplete: 400,
+  unitReady: 200,
+  captureTick: 400,
+  uiTick: 70,
+  default: 32,
+};
+const lastSoundPlayAt = {};
+let lastTouchUiSoundAt = 0;
+const TOUCH_UI_SOUND_GAP_MS = 95;
+
+/** Below 1 = lower pitch + slightly longer (HTMLAudioElement; preservesPitch off). */
+const BUILD_COMPLETE_PLAYBACK_RATE = 0.78;
+
 export function initAudio() {
   // Audio context will be created on first user interaction
   document.addEventListener('click', resumeAudio, { once: true });
@@ -38,25 +59,51 @@ function resumeAudio() {
   listenerReady = true;
 }
 
-export function playSound(soundKey, volume = 0.3) {
+/**
+ * @param {string} soundKey
+ * @param {number} [volume]
+ * @param {number} [playbackRate=1] 0.25–4; values below 1 lower pitch (and slightly slow playback) when preservesPitch is false.
+ */
+export function playSound(soundKey, volume = 0.3, playbackRate = 1) {
   const pool = pools[soundKey];
   if (!pool) return;
 
-  // Find an available (not playing) audio element
+  const now = performance.now();
+  const minGap = SOUND_MIN_GAP_MS[soundKey] ?? SOUND_MIN_GAP_MS.default;
+  const prev = lastSoundPlayAt[soundKey];
+  if (prev != null && now - prev < minGap) return;
+  lastSoundPlayAt[soundKey] = now;
+
+  const rate = Math.min(4, Math.max(0.25, playbackRate));
+
+  const applyAndPlay = (audio) => {
+    try {
+      audio.preservesPitch = false;
+    } catch (_) { /* ignore */ }
+    audio.playbackRate = rate;
+    audio.volume = Math.min(1, Math.max(0, volume));
+    audio.currentTime = 0;
+    audio.play().catch(() => {}); // Ignore autoplay restrictions
+  };
+
   for (const audio of pool) {
     if (audio.paused || audio.ended) {
-      audio.volume = Math.min(1, Math.max(0, volume));
-      audio.currentTime = 0;
-      audio.play().catch(() => {}); // Ignore autoplay restrictions
+      applyAndPlay(audio);
       return;
     }
   }
 
-  // All busy — force-restart the first one
   const audio = pool[0];
-  audio.volume = Math.min(1, Math.max(0, volume));
-  audio.currentTime = 0;
-  audio.play().catch(() => {});
+  audio.pause();
+  applyAndPlay(audio);
+}
+
+/** Soft tick for touchscreen UI / command confirmation (throttled). */
+export function playTouchUiSound() {
+  const now = performance.now();
+  if (now - lastTouchUiSoundAt < TOUCH_UI_SOUND_GAP_MS) return;
+  lastTouchUiSoundAt = now;
+  playSound('uiTick', 0.06);
 }
 
 // Maps unit category to sound
@@ -70,8 +117,8 @@ export function playShotSound(unitType) {
     case 'lightTank': playSound('tankShot', 0.3); break;
     case 'heavyTank': playSound('tankShot', 0.4); break;
     case 'artillery': playSound('artilleryShot', 0.35); break;
-    // Non-weapon callers (engineer capture, etc.) must not fall through to rifleShot — that sounded like looping gunfire.
-    case 'impact': playSound('impact', 0.22); break;
+    case 'harvester': playSound('rifleShot', 0.07); break;
+    case 'mobileHq': playSound('uiTick', 0.05); break;
     case 'unitReady': playSound('unitReady', 0.4); break;
     default: playSound('rifleShot', 0.15); break;
   }
@@ -82,9 +129,14 @@ export function playExplosionSound(volume = 0.4) {
 }
 
 export function playBuildCompleteSound() {
-  playSound('buildComplete', 0.5);
+  playSound('buildComplete', 0.4, BUILD_COMPLETE_PLAYBACK_RATE);
 }
 
 export function playUnitReadySound() {
   playSound('unitReady', 0.4);
+}
+
+/** Engineer capture progress — not a weapon impact (avoid metal-hit misuse). */
+export function playCaptureTickSound() {
+  playSound('captureTick', 0.1);
 }

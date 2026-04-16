@@ -9,6 +9,7 @@ import {
   CAPTURE_DURATION_MIN_SEC, CAPTURE_DURATION_MAX_SEC,
   CAPTURE_HP_REF_FOR_DURATION,
   ENGINEER_CAPTURE_EDGE_REACH,
+  ENGINEER_REPAIR_RANGE,
 } from './config.js';
 import * as State from './state.js';
 import * as Pathfinding from './pathfinding.js';
@@ -58,10 +59,11 @@ export function createUnit(type, ownerId, x, z, options = {}) {
     aoe: stats.aoe || 0,
 
     // State
-    state: 'idle',       // idle | moving | attacking | harvesting | returning | dead
+    state: 'idle',       // idle | moving | attacking | following | harvesting | returning | dead
     targetPos: null,     // { x, z }
     targetUnitId: null,
     targetBuildingId: null,
+    followLeadId: null,  // ally escorted while following / defending; survives while attacking threats
     path: null,          // Array of { x, z } waypoints
     pathIndex: 0,
     lastFireTime: 0,
@@ -110,11 +112,16 @@ export function updateMovement(dt) {
         unit.state = 'idle';
         unit.targetPos = null;
         unit.path = null;
+        unit.followLeadId = null;
       }
     }
 
-    // Unit separation (push apart overlapping units)
-    applySeparation(unit);
+    // Skip separation while holding fire at range — avoids slow "creep" toward the enemy pack.
+    const stationaryAttacking =
+      unit.state === 'attacking' && !unit.targetPos && (!unit.path || unit.path.length === 0);
+    if (!stationaryAttacking) {
+      applySeparation(unit);
+    }
 
     // After separation, ensure unit isn't inside an obstacle
     if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
@@ -231,6 +238,49 @@ function getCaptureDurationSeconds(maxHp) {
   return Math.min(CAPTURE_DURATION_MAX_SEC, Math.max(CAPTURE_DURATION_MIN_SEC, raw));
 }
 
+/** After auto-defend / chase, walk back to last move-assigned rally (guardPos) if still away and safe. */
+function startMoveToGuardPos(unit) {
+  if (!unit.guardPos) {
+    unit.state = 'idle';
+    unit.targetPos = null;
+    unit.path = null;
+    return;
+  }
+  const d = Pathfinding.getDistance(unit.x, unit.z, unit.guardPos.x, unit.guardPos.z);
+  if (d < 3.2) {
+    unit.state = 'idle';
+    unit.targetPos = null;
+    unit.path = null;
+    unit.playerCommanded = false;
+    return;
+  }
+  unit.state = 'moving';
+  unit.targetPos = { x: unit.guardPos.x, z: unit.guardPos.z };
+  unit.path = null;
+  unit.pathIndex = 0;
+  unit.playerCommanded = false;
+}
+
+/** Idle units drift from separation or post-fight; march home when no threat in acquisition range. */
+function tryReturnToGuardPosition(unit) {
+  if (unit.type === 'engineer') return false;
+  if (unit.state !== 'idle' || !unit.guardPos || unit.playerCommanded || unit.followLeadId) {
+    return false;
+  }
+  const gh = unit.guardPos;
+  const d = Pathfinding.getDistance(unit.x, unit.z, gh.x, gh.z);
+  if (d < 3.6) return false;
+
+  const scanRange = Math.max(unit.range, unit.visionRange || unit.range) * 1.05;
+  const threat = unitGrid.findNearest(unit.x, unit.z, scanRange, e =>
+    e.team !== unit.team && e.hp > 0
+  );
+  if (threat) return false;
+
+  startMoveToGuardPos(unit);
+  return unit.state === 'moving';
+}
+
 // --- Combat ---
 export function updateCombat(time, dt) {
   State.buildings.forEach(b => {
@@ -240,11 +290,17 @@ export function updateCombat(time, dt) {
   State.units.forEach(unit => {
     if (unit.hp <= 0 || unit.type === 'harvester') return;
 
-    if (unit.damage <= 0 && !(unit.type === 'engineer' && unit.state === 'attacking')) return;
+    if (unit.damage <= 0 && unit.type !== 'engineer') return;
 
     if (unit.state === 'attacking') {
       handleAttackState(unit, time, dt);
-    } else if (unit.state === 'idle' || (unit.state === 'moving' && !unit.playerCommanded)) {
+    } else if (unit.state === 'following' && unit.damage > 0) {
+      tryEscortAcquireThreat(unit);
+    } else if (unit.state === 'idle') {
+      if (!tryReturnToGuardPosition(unit)) {
+        autoAcquireTarget(unit);
+      }
+    } else if (unit.state === 'moving' && !unit.playerCommanded) {
       autoAcquireTarget(unit);
     }
   });
@@ -257,6 +313,101 @@ export function updateCombat(time, dt) {
   });
 }
 
+function isVehicleNeedingRepair(u) {
+  return u && u.hp > 0 && u.category === 'vehicle' && u.hp + 1e-4 < u.maxHp;
+}
+
+/** Engineers restore friendly vehicle HP when in range, or when following a damaged friendly vehicle. */
+export function updateEngineerRepair(dt) {
+  const engStats = UNIT_TYPES.engineer;
+  const repairPerSec = engStats.repairRate ?? 15;
+  const heal = repairPerSec * dt;
+  if (heal <= 0) return;
+
+  State.units.forEach(unit => {
+    if (unit.type !== 'engineer' || unit.hp <= 0) return;
+    if (unit.state === 'attacking' && (unit.targetBuildingId || unit.targetUnitId)) return;
+
+    let patient = null;
+
+    if (unit.state === 'following' && unit.targetUnitId) {
+      const lead = State.units.get(unit.targetUnitId);
+      if (lead && lead.team === unit.team && isVehicleNeedingRepair(lead)) {
+        const d = Pathfinding.getDistance(unit.x, unit.z, lead.x, lead.z);
+        if (d <= ENGINEER_REPAIR_RANGE) patient = lead;
+      }
+    }
+
+    if (!patient && (unit.state === 'idle' || (unit.state === 'moving' && !unit.playerCommanded))) {
+      const r = ENGINEER_REPAIR_RANGE;
+      const r2 = r * r;
+      let bestD2 = r2 + 1;
+      State.units.forEach(other => {
+        if (other.id === unit.id || other.team !== unit.team || !isVehicleNeedingRepair(other)) return;
+        const dx = other.x - unit.x;
+        const dz = other.z - unit.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= r2 && d2 < bestD2) {
+          bestD2 = d2;
+          patient = other;
+        }
+      });
+    }
+
+    if (!patient) return;
+
+    const add = Math.min(patient.maxHp - patient.hp, heal);
+    if (add <= 0) return;
+    patient.hp += add;
+    const dx = patient.x - unit.x;
+    const dz = patient.z - unit.z;
+    if (dx * dx + dz * dz > 0.01) {
+      unit.rotation = Math.atan2(dx, dz);
+    }
+  });
+}
+
+function resumeFollowAfterEscort(unit) {
+  const leadId = unit.followLeadId;
+  if (!leadId) return false;
+  const lead = State.units.get(leadId);
+  if (!lead || lead.hp <= 0) {
+    unit.followLeadId = null;
+    return false;
+  }
+  unit.state = 'following';
+  unit.targetUnitId = leadId;
+  unit.targetBuildingId = null;
+  unit.targetPos = { x: lead.x, z: lead.z };
+  unit.path = null;
+  return true;
+}
+
+/** Followers pick up enemies near the escorted unit, then resume follow when the fight ends. */
+function tryEscortAcquireThreat(unit) {
+  const leadId = unit.followLeadId || unit.targetUnitId;
+  if (!leadId) return;
+  const lead = State.units.get(leadId);
+  if (!lead || lead.hp <= 0 || lead.team !== unit.team) {
+    unit.followLeadId = null;
+    return;
+  }
+
+  const scanRange = Math.max(unit.range, unit.visionRange || unit.range);
+  const defendRadius = scanRange + 8;
+
+  const threat = unitGrid.findNearest(lead.x, lead.z, defendRadius, e =>
+    e.team !== unit.team && e.hp > 0 && e.id !== unit.id
+  );
+  if (!threat) return;
+
+  unit.state = 'attacking';
+  unit.targetUnitId = threat.id;
+  unit.targetBuildingId = null;
+  unit.targetPos = { x: threat.x, z: threat.z };
+  unit.path = null;
+}
+
 function handleAttackState(unit, time, dt) {
   let target = null;
 
@@ -266,7 +417,8 @@ function handleAttackState(unit, time, dt) {
     if (!target || target.hp <= 0) {
       unit.targetUnitId = null;
       unit.targetPos = null;
-      unit.state = 'idle';
+      if (resumeFollowAfterEscort(unit)) return;
+      startMoveToGuardPos(unit);
       return;
     }
   } else if (unit.targetBuildingId) {
@@ -274,16 +426,21 @@ function handleAttackState(unit, time, dt) {
     if (!target || target.hp <= 0) {
       unit.targetBuildingId = null;
       unit.targetPos = null;
-      unit.state = 'idle';
+      if (resumeFollowAfterEscort(unit)) return;
+      startMoveToGuardPos(unit);
       return;
     }
   } else {
-    unit.state = 'idle';
-    if (unit.guardPos && !unit.playerCommanded) {
-      unit.targetPos = { x: unit.guardPos.x, z: unit.guardPos.z };
-      unit.state = 'moving';
-      unit.path = null;
-    }
+    startMoveToGuardPos(unit);
+    return;
+  }
+
+  if (target.team === unit.team) {
+    unit.targetUnitId = null;
+    unit.targetBuildingId = null;
+    unit.targetPos = null;
+    if (resumeFollowAfterEscort(unit)) return;
+    startMoveToGuardPos(unit);
     return;
   }
 
@@ -319,11 +476,8 @@ function handleAttackState(unit, time, dt) {
   if (!canSee && (time - (unit._losLastSeen || 0) > 2500)) {
     unit.targetUnitId = null;
     unit.targetBuildingId = null;
-    unit.state = 'idle';
-    if (unit.guardPos) {
-      unit.targetPos = { x: unit.guardPos.x, z: unit.guardPos.z };
-      unit.state = 'moving';
-    }
+    if (resumeFollowAfterEscort(unit)) return;
+    startMoveToGuardPos(unit);
     return;
   }
 
@@ -467,8 +621,8 @@ function applyDamage(target, damage, attacker = null) {
     }
   } else if (attacker && target.category) {
     // Damage reaction for units that survive the hit
-    if (target.type === 'harvester') {
-      // Harvesters under attack should flee to HQ
+    if (target.type === 'harvester' || target.type === 'mobileHq') {
+      // Harvesters / Mobile HQ under attack should flee toward primary HQ
       const hq = State.getPlayerHQ(target.ownerId);
       if (hq && target.state !== 'moving') {
         target.targetPos = { x: hq.x, z: hq.z };
@@ -496,6 +650,18 @@ function applyDamage(target, damage, attacker = null) {
   }
 }
 
+/** Stop shooting / re-acquiring a structure that just flipped to a new owner (capture complete). */
+function clearUnitsTargetingBuilding(buildingId) {
+  State.units.forEach(u => {
+    if (u.hp <= 0 || u.targetBuildingId !== buildingId) return;
+    u.targetBuildingId = null;
+    u.targetPos = null;
+    if (u.state === 'attacking') {
+      startMoveToGuardPos(u);
+    }
+  });
+}
+
 function advanceEngineerCapture(building, engineer, dt) {
   if (!building.isBuilt) return;
   if (building.team === engineer.team) return;
@@ -506,9 +672,12 @@ function advanceEngineerCapture(building, engineer, dt) {
 
   if (building.captureProgress >= 1 - 1e-6) {
     building.captureProgress = 0;
+    const prevOwnerId = building.ownerId;
     building.ownerId = engineer.ownerId;
     building.team = engineer.team;
-    Audio.playShotSound('unitReady');
+    State.moveBuildingBetweenPlayers(building.id, prevOwnerId, engineer.ownerId);
+    clearUnitsTargetingBuilding(building.id);
+    Audio.playUnitReadySound();
     State.pushHostFx({ kind: 'capture_complete' });
     console.log(`Engineer captured building ${building.type}!`);
     destroyUnit(engineer);
@@ -517,7 +686,7 @@ function advanceEngineerCapture(building, engineer, dt) {
   }
 
   if (timeSince(engineer, '_capSoundTime', 0.45, dt)) {
-    Audio.playShotSound('impact');
+    Audio.playCaptureTickSound();
     State.pushHostFx({ kind: 'capture_tick' });
   }
 }
@@ -594,6 +763,19 @@ export function destroyUnit(unit, attacker = null) {
   const dx = unit.x;
   const dz = unit.z;
 
+  const deadId = unit.id;
+  State.units.forEach(u => {
+    if (u.hp <= 0) return;
+    if (u.followLeadId !== deadId) return;
+    u.followLeadId = null;
+    if (u.state === 'following') {
+      u.state = 'idle';
+      u.targetUnitId = null;
+      u.targetPos = null;
+      u.path = null;
+    }
+  });
+
   State.removeUnit(unit.id);
   State.selectedUnits.delete(unit.id);
   Audio.playExplosionSound(0.3);
@@ -627,6 +809,29 @@ function autoAcquireTarget(unit) {
   // Find nearest enemy unit within VISION range (not weapon range)
   // This makes units react to approaching enemies before they're on top of them
   const scanRange = Math.max(unit.range, unit.visionRange || unit.range);
+
+  // Engineers deal no weapon damage — only capture buildings; never chase enemy units here.
+  if (unit.type === 'engineer' && unit.damage <= 0) {
+    let nearestBldgDist = scanRange;
+    let nearestBldg = null;
+    State.buildings.forEach(b => {
+      if (b.hp <= 0 || !b.isBuilt) return;
+      if (b.team === unit.team) return;
+      const dist = Pathfinding.getDistance(unit.x, unit.z, b.x, b.z);
+      if (dist < nearestBldgDist) {
+        nearestBldgDist = dist;
+        nearestBldg = b;
+      }
+    });
+    if (nearestBldg) {
+      unit.state = 'attacking';
+      unit.targetBuildingId = nearestBldg.id;
+      unit.targetUnitId = null;
+      unit.playerCommanded = false;
+    }
+    return;
+  }
+
   const isBot = State.players[unit.ownerId]?.isBot;
   let targetToJoin = null;
 
@@ -668,8 +873,7 @@ function autoAcquireTarget(unit) {
   let nearestBldg = null;
   State.buildings.forEach(b => {
     if (b.hp <= 0) return;
-    const bPlayer = State.players[b.ownerId];
-    if (!bPlayer || bPlayer.team === unit.team) return;
+    if (b.team === unit.team) return;
     const dist = Pathfinding.getDistance(unit.x, unit.z, b.x, b.z);
     if (dist < nearestBldgDist) {
       nearestBldgDist = dist;
@@ -687,12 +891,14 @@ function autoAcquireTarget(unit) {
 function checkWinCondition() {
   if (State.gameSession.gameOver) return;
 
-  // Check each player's HQ
+  // Check each player has at least one living HQ (multiple HQs allowed after Mobile HQ deploy)
   const teamsAlive = new Set();
   State.players.forEach(player => {
     if (player.isDefeated) return;
-    const hq = State.getPlayerHQ(player.id);
-    if (!hq || hq.hp <= 0) {
+    const hasLivingHq = State.getPlayerBuildings(player.id).some(
+      b => b.type === 'hq' && b.hp > 0
+    );
+    if (!hasLivingHq) {
       player.isDefeated = true;
       console.log(`💀 Player ${player.id} (${player.name}) defeated!`);
     } else {
@@ -731,6 +937,7 @@ export function commandMove(unitIds, targetX, targetZ) {
     unit.guardPos = { x: finalTargetX, z: finalTargetZ };
     unit.targetUnitId = null;
     unit.targetBuildingId = null;
+    unit.followLeadId = null;
     unit.path = null;
     unit.pathIndex = 0;
     unit.playerCommanded = true;
@@ -762,6 +969,7 @@ export function commandAttackUnit(unitIds, targetUnitId) {
     unit.state = 'attacking';
     unit.targetUnitId = targetUnitId;
     unit.targetBuildingId = null;
+    unit.followLeadId = null;
     unit.targetPos = { x: target.x, z: target.z };
     unit.path = null;
     unit.playerCommanded = true;
@@ -796,6 +1004,7 @@ export function commandStop(unitIds) {
     unit.targetPos = null;
     unit.targetUnitId = null;
     unit.targetBuildingId = null;
+    unit.followLeadId = null;
     unit.path = null;
     unit.playerCommanded = false;
   });
@@ -810,6 +1019,7 @@ export function commandFollow(unitIds, targetUnitId) {
     if (!unit || unit.hp <= 0 || unit.id === targetUnitId) return;
     unit.state = 'following';
     unit.targetUnitId = targetUnitId;
+    unit.followLeadId = targetUnitId;
     unit.targetBuildingId = null;
     unit.targetPos = { x: target.x, z: target.z };
     unit.path = null;

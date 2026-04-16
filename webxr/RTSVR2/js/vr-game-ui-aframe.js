@@ -64,7 +64,7 @@
       const half = this.data.mapSize / 2;
       const u = uv.x;
       const v = uv.y;
-      const wx = u * this.data.mapSize - half;
+      const wx = (1 - u) * this.data.mapSize - half;
       const wz = (1 - v) * this.data.mapSize - half;
 
       const grip =
@@ -108,6 +108,8 @@
         window._queueUnit(this.data.buildingId, this.data.unitType);
       } else if (k === 'cancel' && window._cancelQueueUnit) {
         window._cancelQueueUnit(this.data.buildingId, this.data.unitType);
+      } else if (k === 'deployMobileHq' && window._deployMobileHq) {
+        window._deployMobileHq();
       }
     },
     remove: function () {

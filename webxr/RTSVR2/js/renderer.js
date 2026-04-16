@@ -52,6 +52,57 @@ export function initRenderer(sceneEl) {
   console.log('✅ Renderer initialized with InstancedMesh');
 }
 
+/** Box combat vehicles: plain box + one barrel cylinder along +Z (same footprint as other box units). */
+const TANK_TYPES_WITH_CANNON = new Set(['lightTank', 'heavyTank', 'artillery']);
+
+/** Flatten geometry into non-indexed triangle corner positions (indexed geos must not use raw vertex order). */
+function appendTrianglePositions(geo, out) {
+  const p = geo.attributes.position;
+  const idx = geo.index;
+  if (idx) {
+    for (let i = 0; i < idx.count; i++) {
+      const vi = idx.getX(i);
+      out.push(p.getX(vi), p.getY(vi), p.getZ(vi));
+    }
+  } else {
+    for (let i = 0; i < p.count; i++) {
+      out.push(p.getX(i), p.getY(i), p.getZ(i));
+    }
+  }
+}
+
+function mergeGeometriesAsNonIndexedTriangles(a, b) {
+  const pos = [];
+  appendTrianglePositions(a, pos);
+  appendTrianglePositions(b, pos);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(pos), 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** Same box as other vehicles; roof barrel along +Z with its rear at hull depth center (z=0). */
+function createBoxWithForwardBarrelGeometry(shape) {
+  const w = shape.width;
+  const h = shape.height;
+  const d = shape.depth;
+
+  const hull = new THREE.BoxGeometry(w, h, d);
+  hull.translate(0, h * 0.5, 0);
+
+  // From z=0 forward; front at z=d/2. (L - d/2) / L >= 1/3 iff L >= 3d/4; use ~0.86d (~40% past nose).
+  const barrelLen = d * 0.86;
+  const barrelR = Math.max(0.14, Math.min(w, h) * 0.16);
+  const barrel = new THREE.CylinderGeometry(barrelR, barrelR, barrelLen, 10);
+  barrel.rotateX(Math.PI / 2);
+  barrel.translate(0, h + barrelR, barrelLen * 0.5);
+
+  const merged = mergeGeometriesAsNonIndexedTriangles(hull, barrel);
+  hull.dispose();
+  barrel.dispose();
+  return merged;
+}
+
 // --- Unit Meshes ---
 function createUnitMeshes() {
   for (const [type, shape] of Object.entries(UNIT_SHAPES)) {
@@ -59,6 +110,8 @@ function createUnitMeshes() {
     if (shape.type === 'cylinder') {
       geometry = new THREE.CylinderGeometry(shape.radiusTop, shape.radiusBottom, shape.height, 8);
       geometry.translate(0, shape.height / 2, 0);
+    } else if (TANK_TYPES_WITH_CANNON.has(type)) {
+      geometry = createBoxWithForwardBarrelGeometry(shape);
     } else {
       geometry = new THREE.BoxGeometry(shape.width, shape.height, shape.depth);
       geometry.translate(0, shape.height / 2, 0);
@@ -334,6 +387,10 @@ function updateUnitInstances() {
           default:
             _color.setHex(baseColor);
         }
+      } else if (unit.type === 'mobileHq') {
+        const baseColor = PLAYER_COLORS[unit.ownerId] || 0xffffff;
+        _color.setHex(baseColor);
+        _color.lerp(new THREE.Color(0xffcc66), 0.35);
       } else {
         const baseColor = PLAYER_COLORS[unit.ownerId] || 0xffffff;
         _color.setHex(baseColor);
@@ -505,6 +562,21 @@ function updateHealthBars() {
   healthBarFgMesh.instanceMatrix.needsUpdate = true;
 }
 
+/** Torus major 1 + tube 0.05 in XZ; scale so ring sits just outside unit footprint (matches larger shapes). */
+function selectionRingScaleForUnitType(unitType) {
+  const shape = UNIT_SHAPES[unitType];
+  if (!shape) return 1;
+  const torusOuter = 1.05;
+  if (shape.type === 'cylinder') {
+    const r = Math.max(shape.radiusBottom, shape.radiusTop) + 0.22;
+    return r / torusOuter;
+  }
+  const half = Math.max(shape.width, shape.depth) * 0.5 + 0.22;
+  let s = half / torusOuter;
+  if (unitType === 'heavyTank') s *= 1.22;
+  return s;
+}
+
 function updateSelectionRings() {
   let ringIndex = 0;
 
@@ -512,10 +584,11 @@ function updateSelectionRings() {
     const unit = State.units.get(unitId);
     if (!unit || unit.hp <= 0 || ringIndex >= 60) return;
 
+    const s = selectionRingScaleForUnitType(unit.type);
     _mat4.compose(
       _pos.set(unit.x, 0.15, unit.z),
       _quat.identity(),
-      _scale.set(1, 1, 1)
+      _scale.set(s, 1, s)
     );
     selectionRingMesh.setMatrixAt(ringIndex, _mat4);
     ringIndex++;
@@ -671,98 +744,144 @@ export function getGroundMesh() {
 const _ray = new THREE.Raycaster();
 const _origin = new THREE.Vector3();
 const _direction = new THREE.Vector3();
+const _rayPickOc = new THREE.Vector3();
+const _rayPickClosest = new THREE.Vector3();
+const _projPick = new THREE.Vector3();
 
-export function raycastUnits(origin, direction, maxDist = 200) {
-  let nearest = null;
-  let nearestDist = maxDist;
+/**
+ * NDC distance from pick point to projected world point (same space as A-Frame setFromCamera).
+ * @param { { x: number, y: number } | null | undefined } pickNdc
+ */
+export function pickScreenNdcError(wx, wy, wz, pickNdc) {
+  if (!pickNdc) return Infinity;
+  const cam = typeof document !== 'undefined' ? document.querySelector('a-scene')?.camera : null;
+  if (!cam) return Infinity;
+  _projPick.set(wx, wy, wz).project(cam);
+  return Math.hypot(_projPick.x - pickNdc.x, _projPick.y - pickNdc.y);
+}
+
+export function pickScreenNdcErrorForUnit(unit, pickNdc) {
+  if (!unit || !pickNdc) return Infinity;
+  const shape = UNIT_SHAPES[unit.type];
+  if (!shape) return Infinity;
+  const centerY = shape.height * 0.5;
+  return pickScreenNdcError(unit.x, centerY, unit.z, pickNdc);
+}
+
+export function pickScreenNdcErrorForBuilding(building, pickNdc) {
+  if (!building || !pickNdc) return Infinity;
+  const shape = BUILDING_SHAPES[building.type];
+  if (!shape) return Infinity;
+  const centerY = shape.height * 0.5;
+  return pickScreenNdcError(building.x, centerY, building.z, pickNdc);
+}
+
+/**
+ * Among sphere hits: with pickNdc, prefer projected screen distance (matches what the user sees);
+ * else use ray–center miss then along-ray distance (VR / legacy).
+ */
+function considerSpherePick(origin, direction, center, radius, maxDist, state, target, pickNdc) {
+  _rayPickOc.subVectors(center, origin);
+  const b = _rayPickOc.dot(direction);
+  const c = _rayPickOc.dot(_rayPickOc) - radius * radius;
+  const discriminant = b * b - c;
+  if (discriminant <= 0) return;
+
+  const sqrtD = Math.sqrt(discriminant);
+  const dist = b - sqrtD;
+  if (dist <= 0 || dist >= maxDist) return;
+
+  const dDotD = direction.dot(direction);
+  const tClosest = dDotD > 1e-20 ? b / dDotD : 0;
+  _rayPickClosest.copy(origin).addScaledVector(direction, tClosest);
+  const miss = _rayPickClosest.distanceTo(center);
+
+  const screenPen = pickNdc ? pickScreenNdcError(center.x, center.y, center.z, pickNdc) : 0;
+
+  const tieEps = pickNdc ? 2e-4 : 1e-3;
+  let better = false;
+  if (pickNdc) {
+    better =
+      screenPen < state.bestScreen - tieEps ||
+      (Math.abs(screenPen - state.bestScreen) <= tieEps && miss < state.bestMiss - tieEps) ||
+      (
+        Math.abs(screenPen - state.bestScreen) <= tieEps &&
+        Math.abs(miss - state.bestMiss) <= tieEps &&
+        dist < state.bestDist - tieEps
+      );
+  } else {
+    better =
+      miss < state.bestMiss - tieEps ||
+      (Math.abs(miss - state.bestMiss) <= tieEps && dist < state.bestDist - tieEps);
+  }
+  if (better) {
+    if (pickNdc) state.bestScreen = screenPen;
+    state.bestMiss = miss;
+    state.bestDist = dist;
+    state.best = target;
+  }
+}
+
+function makePickState(pickNdc) {
+  return pickNdc
+    ? { best: null, bestMiss: Infinity, bestDist: Infinity, bestScreen: Infinity }
+    : { best: null, bestMiss: Infinity, bestDist: Infinity };
+}
+
+export function raycastUnits(origin, direction, maxDist = 200, radiusBoost = 0, pickNdc = null) {
+  const boost = Math.max(0, radiusBoost);
+  const state = makePickState(pickNdc);
 
   State.units.forEach(unit => {
     if (unit.hp <= 0 || !unit._renderVisible) return;
 
-    // Sphere intersection test
     const shape = UNIT_SHAPES[unit.type];
     const radius = shape.type === 'cylinder' ?
-      Math.max(shape.radiusBottom, shape.radiusTop) + 0.3 :
-      Math.max(shape.width, shape.depth) * 0.5 + 0.3;
+      Math.max(shape.radiusBottom, shape.radiusTop) + 0.3 + boost :
+      Math.max(shape.width, shape.depth) * 0.5 + 0.3 + boost;
     const centerY = (shape.type === 'cylinder' ? shape.height : shape.height) * 0.5;
 
     _pos.set(unit.x, centerY, unit.z);
-
-    // Ray-sphere intersection
-    const oc = _pos.clone().sub(origin);
-    const b = oc.dot(direction);
-    const c = oc.dot(oc) - radius * radius;
-    const discriminant = b * b - c;
-
-    if (discriminant > 0) {
-      const dist = b - Math.sqrt(discriminant);
-      if (dist > 0 && dist < nearestDist) {
-        nearestDist = dist;
-        nearest = unit;
-      }
-    }
+    considerSpherePick(origin, direction, _pos, radius, maxDist, state, unit, pickNdc);
   });
 
-  return nearest;
+  return state.best;
 }
 
-export function raycastBuildings(origin, direction, maxDist = 200) {
-  let nearest = null;
-  let nearestDist = maxDist;
+export function raycastBuildings(origin, direction, maxDist = 200, radiusBoost = 0, pickNdc = null) {
+  const boost = Math.max(0, radiusBoost) * 0.55;
+  const state = makePickState(pickNdc);
 
   State.buildings.forEach(building => {
     if (building.hp <= 0 || !building._renderVisible) return;
 
     const shape = BUILDING_SHAPES[building.type];
     if (!shape) return;
-    const radius = Math.max(shape.width, shape.depth) * 0.6;
+    const radius = Math.max(shape.width, shape.depth) * 0.6 + boost;
     const centerY = shape.height * 0.5;
 
     _pos.set(building.x, centerY, building.z);
-    const oc = _pos.clone().sub(origin);
-    const b = oc.dot(direction);
-    const c = oc.dot(oc) - radius * radius;
-    const discriminant = b * b - c;
-
-    if (discriminant > 0) {
-      const dist = b - Math.sqrt(discriminant);
-      if (dist > 0 && dist < nearestDist) {
-        nearestDist = dist;
-        nearest = building;
-      }
-    }
+    considerSpherePick(origin, direction, _pos, radius, maxDist, state, building, pickNdc);
   });
 
-  return nearest;
+  return state.best;
 }
 
-export function raycastResourceFields(origin, direction, maxDist = 200) {
-  let nearest = null;
-  let nearestDist = maxDist;
+export function raycastResourceFields(origin, direction, maxDist = 200, pickNdc = null) {
+  const state = makePickState(pickNdc);
 
   State.resourceFields.forEach(field => {
-    if (field.depleted) return;
-    
-    // Quick sphere approximation for resource crystal
-    const radius = 2.0; 
-    const centerY = Math.max(1, (field.remaining / field.maxCapacity) * 3);
+    // Depleted fields stay pickable (small stub mesh); use a stable sphere for ray hit.
+    const radius = field.depleted ? 2.35 : 2.0;
+    const centerY = field.depleted
+      ? 0.55
+      : Math.max(1, (field.remaining / field.maxCapacity) * 3);
 
     _pos.set(field.x, centerY, field.z);
-    const oc = _pos.clone().sub(origin);
-    const b = oc.dot(direction);
-    const c = oc.dot(oc) - radius * radius;
-    const discriminant = b * b - c;
-
-    if (discriminant > 0) {
-      const dist = b - Math.sqrt(discriminant);
-      if (dist > 0 && dist < nearestDist) {
-        nearestDist = dist;
-        nearest = field;
-      }
-    }
+    considerSpherePick(origin, direction, _pos, radius, maxDist, state, field, pickNdc);
   });
 
-  return nearest;
+  return state.best;
 }
 
 // Cleanup

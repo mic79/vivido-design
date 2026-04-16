@@ -229,11 +229,28 @@ export const UNIT_TYPES = {
     carryCapacity: HARVEST_AMOUNT,
     description: 'Collects resources',
   },
+  mobileHq: {
+    name: 'Mobile HQ',
+    category: 'vehicle',
+    cost: 750,
+    buildTime: 18,
+    hp: 450,
+    damage: 0,
+    fireRate: 0,
+    range: 0,
+    speed: 1.4,
+    visionRange: 20,
+    dmgVsInfantry: 0,
+    dmgVsVehicle: 0,
+    dmgVsBuilding: 0,
+    aoe: 0,
+    description: 'Deploys into a permanent HQ at its location (new build radius)',
+  },
 };
 
-// Types producible at each building
+// Types producible at each building (Harvester: Refinery only; APC removed from War Factory list)
 export const BARRACKS_UNITS = ['rifleman', 'rocketSoldier', 'sniper', 'engineer'];
-export const FACTORY_UNITS = ['scoutBike', 'apc', 'lightTank', 'heavyTank', 'artillery', 'harvester'];
+export const FACTORY_UNITS = ['scoutBike', 'lightTank', 'heavyTank', 'artillery', 'mobileHq'];
 
 // --- Engineer building capture (time-based; does not damage structure HP) ---
 export const CAPTURE_DURATION_MIN_SEC = 5;
@@ -245,6 +262,8 @@ export const CAPTURE_HP_REF_FOR_DURATION = 2000;
  * at which capture still progresses. Nav-only edge distance was too tight in practice.
  */
 export const ENGINEER_CAPTURE_EDGE_REACH = 10;
+/** Friendly vehicles within this range get HP from idle/moving engineers; same band when following a vehicle. */
+export const ENGINEER_REPAIR_RANGE = 5.5;
 
 // --- Building Types ---
 export const BUILDING_TYPES = {
@@ -365,18 +384,26 @@ export const NET_INTERPOLATION_DELAY = 100; // ms delay for smooth interpolation
 export const NET_CLIENT_CMD_TIMEOUT_MS = 8000; // Ack wait for multiplayer client commands
 
 // --- Audio ---
+// - burst-128424 = rockets / energy
+// - ps-084 = artillery shell
+// - impact-cinematic-boom = tank fire + explosions (deaths)
+// - laser = sniper + capture progress (non-metal cues)
+// - submarine sonar = building construction complete + unit production ready
+// - metal-hit-* reserved for future real armor/ricochet hits only (not wired for capture/build)
 export const AUDIO_BASE_PATH = './audio/';
 export const SOUND_EFFECTS = {
   rifleShot:   'blaster-shot-229313.mp3',
   rocketShot:  'burst-128424-shorter.mp3',
   sniperShot:  'laser-45816.mp3',
-  tankShot:    'sound-design-elements-impact-sfx-ps-077-353190.mp3',
+  tankShot:    'impact-cinematic-boom-5-352465.mp3',
   artilleryShot: 'sound-design-elements-impact-sfx-ps-084-353199.mp3',
-  impact:      'metal-hit-92-200420.mp3',
   explosion:   'impact-cinematic-boom-5-352465.mp3',
-  vehicleHit:  'metal-hit-94-200422.mp3',
   buildComplete: 'submarine-sonar-38243-once.mp3',
-  unitReady:   'thud2.mp3',
+  unitReady:   'submarine-sonar-38243-once.mp3',
+  /** Engineer capture pulse (same file as sniper/laser; separate pool + throttle). */
+  captureTick: 'laser-45816.mp3',
+  /** Soft HUD / touch tick — not production sonar (unitReady). */
+  uiTick:      'blaster-shot-229313.mp3',
 };
 
 // --- Unit Geometries (shape definitions for renderer) ---
@@ -388,9 +415,10 @@ export const UNIT_SHAPES = {
   scoutBike:     { type: 'box', width: 0.8, height: 0.6, depth: 1.8 },
   apc:           { type: 'box', width: 1.4, height: 0.9, depth: 2.0 },
   lightTank:     { type: 'box', width: 1.4, height: 1.0, depth: 1.8 },
-  heavyTank:     { type: 'box', width: 1.8, height: 1.2, depth: 2.2 },
-  artillery:     { type: 'box', width: 1.2, height: 0.8, depth: 2.8 },
+  heavyTank:     { type: 'box', width: 2.34, height: 1.56, depth: 2.86 },
+  artillery:     { type: 'box', width: 1.56, height: 1.04, depth: 3.64 },
   harvester:     { type: 'box', width: 1.6, height: 1.0, depth: 2.0 },
+  mobileHq:      { type: 'box', width: 1.8, height: 1.15, depth: 2.4 },
 };
 
 export const BUILDING_SHAPES = {

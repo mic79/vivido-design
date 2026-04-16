@@ -77,21 +77,29 @@ export function placeHQ(ownerId) {
 }
 
 // --- Building placement validation ---
-/** @returns {string|null} failure code, or null if placement is allowed */
-export function getPlaceBuildingFailureCode(type, ownerId, x, z) {
+/**
+ * @param {{ skipCredits?: boolean, skipHqRangeCheck?: boolean }} [opts]
+ * @returns {string|null}
+ */
+function getPlaceBuildingFailureCodeInternal(type, ownerId, x, z, opts = {}) {
   const stats = BUILDING_TYPES[type];
   if (!stats) return 'unknown_building';
 
   const player = State.players[ownerId];
   if (!player) return 'no_player';
 
-  if (player.credits < stats.cost) return 'no_credits';
+  if (!opts.skipCredits && player.credits < stats.cost) return 'no_credits';
 
-  const hq = State.getPlayerHQ(ownerId);
-  if (!hq) return 'no_hq';
-
-  const distToHQ = Pathfinding.getDistance(x, z, hq.x, hq.z);
-  if (distToHQ > BUILD_RADIUS_FROM_HQ) return 'too_far_from_hq';
+  if (!opts.skipHqRangeCheck) {
+    const hqs = State.getPlayerBuildings(ownerId).filter(b => b.type === 'hq' && b.hp > 0);
+    if (hqs.length === 0) return 'no_hq';
+    let minDist = Infinity;
+    for (let i = 0; i < hqs.length; i++) {
+      const d = Pathfinding.getDistance(x, z, hqs[i].x, hqs[i].z);
+      if (d < minDist) minDist = d;
+    }
+    if (minDist > BUILD_RADIUS_FROM_HQ) return 'too_far_from_hq';
+  }
 
   const halfSize = (stats.size || 4) / 2 + 1;
   let blocksBuilding = false;
@@ -116,6 +124,47 @@ export function getPlaceBuildingFailureCode(type, ownerId, x, z) {
   if (Math.abs(x) > mapLimit || Math.abs(z) > mapLimit) return 'out_of_bounds';
 
   return null;
+}
+
+/** @returns {string|null} failure code, or null if placement is allowed */
+export function getPlaceBuildingFailureCode(type, ownerId, x, z) {
+  return getPlaceBuildingFailureCodeInternal(type, ownerId, x, z, {});
+}
+
+/** Mobile HQ deploy: footprint only (no credit check, no distance-from-HQ rule). */
+export function getMobileHqDeployFailureCode(ownerId, x, z) {
+  return getPlaceBuildingFailureCodeInternal('hq', ownerId, x, z, {
+    skipCredits: true,
+    skipHqRangeCheck: true,
+  });
+}
+
+/**
+ * Converts a Mobile HQ unit into a built HQ at its position (host-authoritative).
+ * @returns {boolean}
+ */
+export function tryDeployMobileHq(unit) {
+  if (!unit || unit.type !== 'mobileHq' || unit.hp <= 0) return false;
+  if (getMobileHqDeployFailureCode(unit.ownerId, unit.x, unit.z) !== null) return false;
+
+  const ownerId = unit.ownerId;
+  const x = unit.x;
+  const z = unit.z;
+
+  State.selectedUnits.delete(unit.id);
+  State.removeUnit(unit.id);
+
+  const building = createBuilding('hq', ownerId, x, z);
+  if (!building) return false;
+
+  const player = State.players[ownerId];
+  if (player && player.stats) player.stats.buildingsBuilt++;
+
+  Pathfinding.rebuildNavMesh();
+  Audio.playBuildCompleteSound();
+  State.pushHostFx({ kind: 'build_complete' });
+  console.log(`🏕️ P${ownerId} deployed Mobile HQ → HQ at (${x.toFixed(0)}, ${z.toFixed(0)})`);
+  return true;
 }
 
 export function canPlaceBuilding(type, ownerId, x, z) {

@@ -22,19 +22,15 @@ let buildMenuEl = null;
 let buildPanelEl = null;
 export let activeBuildingPanel = null;
 export let activeResourceField = null;
+/** @type {string[]|null} When set, bottom panel shows Mobile HQ deploy (same shell as building build menu). */
+let activeMobileDeployUnitIds = null;
+let lastMobileDeploySelectionSig = null;
 let lastBuildPanelUpdate = 0;
 let vrMinimapCanvas = null;
 let vrMinimapCtx = null;
 let vrMinimapTexture = null;
 
 let lastHudHelpPlatform = '';
-
-/** Per-island visibility on flat screen (esp. mobile). Minimap uses `minimapVisible`. */
-const hudIslandShown = {
-  resources: true,
-  controls: true,
-  selection: true,
-};
 
 function uiMountRoot() {
   return document.getElementById('xr-dom-overlay') || document.body;
@@ -68,84 +64,49 @@ function getHudControlsHelpHtml() {
       <span style="opacity:0.85">Flat screen (if you peek at the mirror): WASD pan · Q/E rotate · scroll zoom · left / right click.</span>`;
   }
   if (Input.getInputPlatform() === 'touch') {
-    return `Tap: select & orders (same as VR trigger): move, attack, HQ, crystals.<br>
-      Two fingers — drag: pan · pinch: zoom · twist: rotate camera.<br>
-      Long-press ground: deselect · long-press your unit: nearby same type.<br>
-      Minimap: use the Map button — drag on the map to move the camera.<br>
-      <span style="opacity:0.85">Esc: menu if you have a keyboard · otherwise use in-game controls.</span>`;
+    return `<div style="font-weight:bold;color:#8cf;margin-bottom:6px;">Touch</div>
+      <ul style="margin:0;padding-left:1.1em;line-height:1.5;">
+        <li><b>Tap</b> — select, command when army selected, open HQ or crystals (open ground + selection = move)</li>
+        <li><b>Two fingers</b> — drag to pan · pinch zoom · twist to rotate</li>
+        <li><b>Long-press ground</b> — clear selection</li>
+        <li><b>Long-press your unit</b> — grab same type nearby</li>
+        <li><b>Tap own unit again</b> — deselect (or remove from group)</li>
+        <li><b>Map</b> — drag on minimap to jump the camera; <b>Map · show/hide</b> sits under the minimap</li>
+      </ul>
+      <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
   }
-  return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left click: Select · Right click: Move/Atk<br>
-    HQ click: Build · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · Esc: Menu<br>
+  return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; right-click follow a vehicle to stay with it)<br>
+    HQ click: Build · Mobile HQ selected: Deploy panel (new HQ & build zone) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · Esc: Menu<br>
     <span style="opacity:0.85">VR: Laser + trigger on menu & map · X menu · Y map · B deselect · A select all · grips pan</span>`;
 }
 
-function applyHudIslandVisuals() {
+function updateFlatHudButtons() {
   if (Input.getIsVR()) return;
-  const res = document.getElementById('hud-resources');
-  const ctrl = document.getElementById('hud-controls');
-  if (res) res.style.display = hudIslandShown.resources ? 'block' : 'none';
-  if (ctrl) ctrl.style.display = hudIslandShown.controls ? 'block' : 'none';
+  const m = document.getElementById('hud-minimap-toggle');
+  if (m) {
+    m.textContent = minimapVisible ? 'Map · hide' : 'Map · show';
+    const showMapToggle =
+      State.gameSession.gameStarted && !Input.getIsVR() && Input.getInputPlatform() === 'touch';
+    m.style.display = showMapToggle ? '' : 'none';
+  }
 }
 
-function syncHudIslandToggleLabels() {
-  if (Input.getIsVR()) return;
-  const label = (id, shown, hideText, showText) => {
-    const b = document.getElementById(id);
-    if (b) b.textContent = shown ? hideText : showText;
-  };
-  label('hud-toggle-resources', hudIslandShown.resources, 'Stats · hide', 'Stats · show');
-  label('hud-toggle-help', hudIslandShown.controls, 'Help · hide', 'Help · show');
-  label('hud-toggle-selection', hudIslandShown.selection, 'Units · hide', 'Units · show');
-  const mapBtn = document.getElementById('hud-toggle-minimap');
-  if (mapBtn) mapBtn.textContent = minimapVisible ? 'Map · hide' : 'Map · show';
-}
-
-function wireHudIslandToggles() {
-  document.getElementById('hud-toggle-resources')?.addEventListener('click', () => {
-    hudIslandShown.resources = !hudIslandShown.resources;
-    applyHudIslandVisuals();
-    syncHudIslandToggleLabels();
-  });
-  document.getElementById('hud-toggle-help')?.addEventListener('click', () => {
-    hudIslandShown.controls = !hudIslandShown.controls;
-    applyHudIslandVisuals();
-    syncHudIslandToggleLabels();
-  });
-  document.getElementById('hud-toggle-selection')?.addEventListener('click', () => {
-    hudIslandShown.selection = !hudIslandShown.selection;
-    syncHudIslandToggleLabels();
-  });
-  document.getElementById('hud-toggle-minimap')?.addEventListener('click', () => {
-    toggleMinimap();
+function wireFlatHudActions() {
+  const gh = () => document.getElementById('game-hud');
+  document.getElementById('hud-help-toggle')?.addEventListener('click', () => {
+    const root = gh();
+    if (!root) return;
+    const open = root.classList.toggle('rts-help-open');
+    const btn = document.getElementById('hud-help-toggle');
+    if (btn) btn.textContent = open ? 'Close' : 'Help';
   });
 }
 
 function createHUD() {
   hudContainer = document.createElement('div');
   hudContainer.id = 'game-hud';
-  hudIslandShown.resources = true;
-  hudIslandShown.controls = true;
-  hudIslandShown.selection = true;
   lastHudHelpPlatform = '';
   hudContainer.innerHTML = `
-    <div id="hud-island-toggles" class="hud"
-      style="display: none; position: fixed; left: 50%; bottom: 118px; transform: translateX(-50%);
-      z-index: 126; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center;
-      gap: 6px; max-width: 96vw; pointer-events: auto; user-select: none; touch-action: manipulation;
-      font-family: Consolas, monospace;">
-      <button type="button" id="hud-toggle-resources" class="hud-island-btn"
-        style="font-family: Consolas, monospace; font-size: 11px; padding: 7px 10px; border-radius: 8px;
-        border: 1px solid #555; background: rgba(20,25,30,0.94); color: #9cf;">Stats · hide</button>
-      <button type="button" id="hud-toggle-help" class="hud-island-btn"
-        style="font-family: Consolas, monospace; font-size: 11px; padding: 7px 10px; border-radius: 8px;
-        border: 1px solid #555; background: rgba(20,25,30,0.94); color: #9c9;">Help · hide</button>
-      <button type="button" id="hud-toggle-selection" class="hud-island-btn"
-        style="font-family: Consolas, monospace; font-size: 11px; padding: 7px 10px; border-radius: 8px;
-        border: 1px solid #555; background: rgba(20,25,30,0.94); color: #fc9;">Units · hide</button>
-      <button type="button" id="hud-toggle-minimap" class="hud-island-btn"
-        style="font-family: Consolas, monospace; font-size: 11px; padding: 7px 10px; border-radius: 8px;
-        border: 1px solid #555; background: rgba(20,25,30,0.94); color: #9fc;">Map · show</button>
-    </div>
     <div id="hud-resources" style="
       position: fixed; top: 8px; left: 8px;
       color: #0f0; font-family: 'Consolas', monospace; font-size: 14px;
@@ -169,6 +130,21 @@ function createHUD() {
         margin-top: 4px; font-size: 11px; color: #8ab0aa; letter-spacing: 0.02em;
       ">RTSVR2 …</div>
     </div>
+    <div id="hud-flat-actions" class="hud" style="
+      display: none; position: fixed; top: 8px; right: 8px; z-index: 126;
+      flex-direction: row; flex-wrap: wrap; justify-content: flex-end; gap: 6px; align-items: center;
+      pointer-events: auto; user-select: none; touch-action: manipulation;
+      font-family: Consolas, monospace;">
+      <button type="button" id="hud-help-toggle" style="
+        font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #666;
+        background: rgba(22,28,34,0.95); color: #ddd;">Help</button>
+    </div>
+    <div id="hud-help-panel" class="hud">
+      <div id="hud-controls" style="
+        color: #bbb; font-family: 'Consolas', monospace; font-size: 12px;
+        line-height: 1.55; pointer-events: none; user-select: none;
+      ">${getHudControlsHelpHtml()}</div>
+    </div>
     <div id="hud-selection" style="
       position: fixed; bottom: 8px; left: 8px;
       color: #fff; font-family: 'Consolas', monospace; font-size: 13px;
@@ -176,12 +152,6 @@ function createHUD() {
       z-index: 100; pointer-events: none; user-select: none;
       display: none; max-width: min(400px, 92vw);
     "></div>
-    <div id="hud-controls" style="
-      position: fixed; top: 8px; right: 8px; max-width: min(420px, 94vw);
-      color: #aaa; font-family: 'Consolas', monospace; font-size: 11px;
-      background: rgba(0,0,0,0.5); padding: 6px 10px; border-radius: 4px;
-      z-index: 100; pointer-events: none; user-select: none; line-height: 1.6;
-    ">${getHudControlsHelpHtml()}</div>
     <div id="hud-status" style="
       position: fixed; bottom: 8px; right: 8px;
       color: #ff0; font-family: 'Consolas', monospace; font-size: 13px;
@@ -197,7 +167,8 @@ function createHUD() {
     "></div>
   `;
   uiMountRoot().appendChild(hudContainer);
-  wireHudIslandToggles();
+  wireFlatHudActions();
+  updateFlatHudButtons();
 }
 
 // --- Build Menu (building placement) ---
@@ -221,10 +192,17 @@ function createMinimap() {
   container.id = 'minimap-container';
   container.style.cssText = `
     position: fixed; bottom: 60px; right: 8px;
-    width: 180px; height: 180px;
+    width: 180px;
+    display: none; flex-direction: column; align-items: stretch; gap: 4px;
     background: rgba(0,0,0,0.8); border: 1px solid #444; border-radius: 4px;
-    z-index: 100; display: none; pointer-events: auto;
+    padding: 4px; box-sizing: border-box;
+    z-index: 100; pointer-events: auto;
   `;
+
+  const mapWrap = document.createElement('div');
+  mapWrap.id = 'minimap-map-wrap';
+  mapWrap.style.cssText =
+    'width: 180px; height: 180px; flex-shrink: 0; border-radius: 4px; overflow: hidden;';
 
   minimapCanvas = document.createElement('canvas');
   minimapCanvas.id = 'minimap';
@@ -232,14 +210,28 @@ function createMinimap() {
   minimapCanvas.height = 180;
   minimapCanvas.style.cssText = 'width: 100%; height: 100%; border-radius: 4px; cursor: crosshair;';
 
+  const mapToggleBtn = document.createElement('button');
+  mapToggleBtn.type = 'button';
+  mapToggleBtn.id = 'hud-minimap-toggle';
+  mapToggleBtn.textContent = 'Map · show';
+  mapToggleBtn.style.cssText = `
+    display: none; width: 100%; flex-shrink: 0;
+    font-size: 12px; padding: 8px 6px; border-radius: 6px; border: 1px solid #666;
+    background: rgba(22,28,34,0.95); color: #9fc; font-family: Consolas, monospace;
+    touch-action: manipulation;
+  `;
+  mapToggleBtn.addEventListener('click', () => toggleMinimap());
+
   const handleMinimapClick = (e, isMoveOnly = false) => {
     const rect = minimapCanvas.getBoundingClientRect();
     const lx = e.clientX - rect.left;
     const lz = e.clientY - rect.top;
-    
-    // Map pixels (0-180) to world coords (-MAP_HALF to MAP_HALF)
-    const wx = (lx / rect.width) * MAP_SIZE - MAP_SIZE / 2;
-    const wz = (lz / rect.height) * MAP_SIZE - MAP_SIZE / 2;
+
+    // Match drawMinimapToContext mirror (translate + scale -1): corner bases read as lower-right on widget.
+    const lx2 = rect.width - lx;
+    const lz2 = rect.height - lz;
+    const wx = (lx2 / rect.width) * MAP_SIZE - MAP_SIZE / 2;
+    const wz = (lz2 / rect.height) * MAP_SIZE - MAP_SIZE / 2;
     
     if (e.button === 2 || isMoveOnly) {
       const unitIds = Array.from(State.selectedUnits);
@@ -278,6 +270,7 @@ function createMinimap() {
       minimapCanvas._isDragging = true;
       minimapCanvas._touchDragId = e.touches[0] ? e.touches[0].identifier : null;
       handleMinimapClick(p);
+      Input.notifyTouchInteraction('tap');
     },
     { passive: false }
   );
@@ -312,7 +305,9 @@ function createMinimap() {
     minimapCanvas._isDragging = false;
   });
 
-  container.appendChild(minimapCanvas);
+  mapWrap.appendChild(minimapCanvas);
+  container.appendChild(mapWrap);
+  container.appendChild(mapToggleBtn);
   uiMountRoot().appendChild(container);
   minimapCtx = minimapCanvas.getContext('2d');
 }
@@ -360,7 +355,7 @@ function createMenu() {
 
 /** BoltVR-style: enable .clickable on menu hit targets and refresh hand raycasters. */
 function syncVrMenuInteractive(show) {
-  const menu = document.getElementById('game-menu');
+  const menu = document.getElementById('vr-game-menu');
   if (!menu) return;
   menu.querySelectorAll('.js-vr-menu-btn').forEach(btn => {
     if (show) {
@@ -403,10 +398,9 @@ function syncVrGameHudVisibility() {
 
   const buildRoot = document.getElementById('vr-build-panel-root');
   if (buildRoot) {
-    buildRoot.setAttribute(
-      'visible',
-      showHud && activeBuildingPanel ? 'true' : 'false'
-    );
+    const showBuildUi =
+      !!(activeBuildingPanel || (activeMobileDeployUnitIds && activeMobileDeployUnitIds.length > 0));
+    buildRoot.setAttribute('visible', showHud && showBuildUi ? 'true' : 'false');
   }
 }
 
@@ -450,11 +444,13 @@ export function updateUI() {
   updateHUD();
   if (minimapVisible) updateMinimap();
   // Auto-refresh building panel
-  if (activeBuildingPanel) {
+  const showMobileDeploy = activeMobileDeployUnitIds && activeMobileDeployUnitIds.length > 0;
+  if (activeBuildingPanel || showMobileDeploy) {
     const now = performance.now();
     if (now - lastBuildPanelUpdate > 500) {
       lastBuildPanelUpdate = now;
-      refreshBuildingPanel();
+      if (activeBuildingPanel) refreshBuildingPanel();
+      if (showMobileDeploy) refreshMobileHqDeployPanel();
     }
   }
 }
@@ -465,14 +461,26 @@ function updateHUD() {
 
   if (!State.gameSession.gameStarted) {
     lastHudHelpPlatform = '';
-    hudIslandShown.resources = true;
-    hudIslandShown.controls = true;
-    hudIslandShown.selection = true;
     minimapVisible = false;
     const mmc = document.getElementById('minimap-container');
     if (mmc) mmc.style.display = 'none';
-    applyHudIslandVisuals();
-    syncHudIslandToggleLabels();
+    const gh = document.getElementById('game-hud');
+    if (gh) {
+      gh.classList.remove('rts-help-open', 'rts-touch', 'rts-vr-session');
+    }
+    const helpBtn = document.getElementById('hud-help-toggle');
+    if (helpBtn) helpBtn.textContent = 'Help';
+    updateFlatHudButtons();
+  }
+
+  const ghud = document.getElementById('game-hud');
+  if (ghud && State.gameSession.gameStarted) {
+    ghud.classList.toggle('rts-vr-session', Input.getIsVR());
+    if (!Input.getIsVR()) {
+      ghud.classList.toggle('rts-touch', Input.getInputPlatform() === 'touch');
+    } else {
+      ghud.classList.remove('rts-touch');
+    }
   }
 
   const controlsHelpEl = document.getElementById('hud-controls');
@@ -481,7 +489,6 @@ function updateHUD() {
     if (helpKey !== lastHudHelpPlatform) {
       lastHudHelpPlatform = helpKey;
       controlsHelpEl.innerHTML = getHudControlsHelpHtml();
-      applyHudIslandVisuals();
     }
   }
 
@@ -572,7 +579,7 @@ function updateHUD() {
       }
 
       // Show combat unit state
-      const combatUnits = selected.filter(u => u.type !== 'harvester');
+      const combatUnits = selected.filter(u => u.type !== 'harvester' && u.type !== 'mobileHq');
       if (combatUnits.length > 0 && harvesters.length === 0) {
         const states = {};
         combatUnits.forEach(u => { states[u.state] = (states[u.state] || 0) + 1; });
@@ -584,11 +591,7 @@ function updateHUD() {
       }
 
       selEl.innerHTML = `${desc}  |  HP: ${totalHP}/${maxHP}${extra}`;
-      if (Input.getIsVR()) {
-        selEl.style.display = 'none';
-      } else {
-        selEl.style.display = hudIslandShown.selection ? 'block' : 'none';
-      }
+      selEl.style.display = Input.getIsVR() ? 'none' : 'block';
 
       const vrSel = document.getElementById('vr-hud-selection');
       if (vrSel && Input.getIsVR()) {
@@ -599,7 +602,7 @@ function updateHUD() {
           plainExtra += ` | ${getHarvesterStatePlain(h)}`;
           if (h.cargo > 0) plainExtra += ` cargo $${h.cargo}`;
         }
-        const combatP = selected.filter(u => u.type !== 'harvester');
+        const combatP = selected.filter(u => u.type !== 'harvester' && u.type !== 'mobileHq');
         if (combatP.length > 0 && harvestersP.length === 0) {
           const states = {};
           combatP.forEach(u => { states[u.state] = (states[u.state] || 0) + 1; });
@@ -622,6 +625,7 @@ function updateHUD() {
   // Victory/defeat
   const victoryEl = document.getElementById('hud-victory');
   if (State.gameSession.gameOver) {
+    const victoryStatsPlayers = State.players.filter(p => p.isActive);
     if (victoryEl && !victoryEl.dataset.rtsVictoryPopulated) {
       victoryEl.dataset.rtsVictoryPopulated = '1';
       const myTeam = player.team;
@@ -643,18 +647,18 @@ function updateHUD() {
           <thead>
             <tr style="border-bottom: 1px solid #444;">
               <th style="padding: 10px 5px;">Category</th>
-              ${State.players.map(p => `<th style="padding: 10px 5px; color: ${p.colorHex}">${p.name}</th>`).join('')}
+              ${victoryStatsPlayers.map(p => `<th style="padding: 10px 5px; color: ${p.colorHex}">${p.name}</th>`).join('')}
             </tr>
           </thead>
           <tbody>
-            ${renderStatRow('Units Produced', 'unitsProduced')}
-            ${renderStatRow('Units Lost', 'unitsLost')}
-            ${renderStatRow('Combat Kills', 'kills')}
+            ${renderStatRow(victoryStatsPlayers, 'Units Produced', 'unitsProduced')}
+            ${renderStatRow(victoryStatsPlayers, 'Units Lost', 'unitsLost')}
+            ${renderStatRow(victoryStatsPlayers, 'Combat Kills', 'kills')}
             <tr style="height: 10px;"></tr>
-            ${renderStatRow('Buildings Built', 'buildingsBuilt')}
-            ${renderStatRow('Buildings Lost', 'buildingsLost')}
+            ${renderStatRow(victoryStatsPlayers, 'Buildings Built', 'buildingsBuilt')}
+            ${renderStatRow(victoryStatsPlayers, 'Buildings Lost', 'buildingsLost')}
             <tr style="height: 10px;"></tr>
-            ${renderStatRow('Credits Earned', 'creditsEarned', val => `$${Math.floor(val)}`)}
+            ${renderStatRow(victoryStatsPlayers, 'Credits Earned', 'creditsEarned', val => `$${Math.floor(val)}`)}
           </tbody>
         </table>
         <div style="margin-top: 25px; font-size: 14px; color: #888;">Press <span style="color:#eee">Esc</span> to return to command center</div>
@@ -701,7 +705,7 @@ function updateHUD() {
           'Credits',
         ].join('\n')
       );
-      State.players.forEach((p, i) => {
+      victoryStatsPlayers.forEach((p, i) => {
         const el = vrCols[i];
         if (!el) return;
         const lines = [
@@ -718,7 +722,7 @@ function updateHUD() {
         el.setAttribute('color', p.colorHex);
         el.setAttribute('visible', true);
       });
-      for (let i = State.players.length; i < 4; i++) {
+      for (let i = victoryStatsPlayers.length; i < 4; i++) {
         if (vrCols[i]) vrCols[i].setAttribute('visible', false);
       }
       vrRoot.setAttribute('visible', true);
@@ -734,13 +738,29 @@ function updateHUD() {
     const vrRoot = document.getElementById('vr-hud-victory-root');
     if (vrRoot) vrRoot.setAttribute('visible', false);
   }
+
+  // Mobile HQ deploy panel (same bottom shell as HQ build menu)
+  if (State.gameSession.gameStarted && !State.gameSession.menuOpen) {
+    const myId = State.gameSession.myPlayerId;
+    const selected = State.getSelectedUnits();
+    const mobile = selected.filter(
+      u => u.ownerId === myId && u.type === 'mobileHq' && u.hp > 0
+    );
+    const onlyMobile = mobile.length > 0 && mobile.length === selected.length;
+    const sig = onlyMobile ? mobile.map(u => u.id).sort().join(',') : '';
+    if (sig !== lastMobileDeploySelectionSig) {
+      lastMobileDeploySelectionSig = sig;
+      if (sig) showMobileHqDeployPanel(mobile.map(u => u.id));
+      else hideMobileHqDeployPanel();
+    }
+  }
 }
 
-function renderStatRow(label, statKey, formatter = val => val) {
+function renderStatRow(players, label, statKey, formatter = val => val) {
   return `
     <tr style="border-bottom: 1px solid #222;">
       <td style="padding: 8px 5px; color: #aaa;">${label}</td>
-      ${State.players.map(p => `<td style="padding: 8px 5px; font-weight: bold;">${formatter(p.stats[statKey])}</td>`).join('')}
+      ${players.map(p => `<td style="padding: 8px 5px; font-weight: bold;">${formatter(p.stats[statKey])}</td>`).join('')}
     </tr>
   `;
 }
@@ -748,6 +768,10 @@ function renderStatRow(label, statKey, formatter = val => val) {
 function drawMinimapToContext(ctx, w, h) {
   const scale = w / MAP_SIZE;
   const isSpyMode = State.gameSession.debugFog;
+
+  ctx.save();
+  ctx.translate(w, h);
+  ctx.scale(-1, -1);
 
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, w, h);
@@ -807,6 +831,8 @@ function drawMinimapToContext(ctx, w, h) {
   ctx.strokeStyle = '#fff';
   ctx.lineWidth = 1;
   ctx.strokeRect(cx - 12, cz - 8, 24, 16);
+
+  ctx.restore();
 }
 
 function updateMinimap() {
@@ -822,27 +848,25 @@ function updateMinimap() {
 
 // --- Public API ---
 export function updateMenuVisibility() {
-  const islandBar = document.getElementById('hud-island-toggles');
-  if (islandBar) {
-    if (State.gameSession.gameStarted && !Input.getIsVR()) {
-      islandBar.style.display = 'flex';
-    } else {
-      islandBar.style.display = 'none';
-    }
+  const flatBar = document.getElementById('hud-flat-actions');
+  if (flatBar) {
+    flatBar.style.display =
+      State.gameSession.gameStarted && !Input.getIsVR() && Input.getInputPlatform() === 'touch'
+        ? 'flex'
+        : 'none';
   }
   if (State.gameSession.gameStarted && !Input.getIsVR()) {
-    applyHudIslandVisuals();
-    syncHudIslandToggleLabels();
+    updateFlatHudButtons();
   }
 
   if (menuEl) {
     const showHtml = State.gameSession.menuOpen && !Input.getIsVR();
     menuEl.style.display = showHtml ? 'block' : 'none';
   }
-  const gameMenu = document.getElementById('game-menu');
-  if (gameMenu) {
+  const vrGameMenu = document.getElementById('vr-game-menu');
+  if (vrGameMenu) {
     const showVr = State.gameSession.menuOpen && Input.getIsVR();
-    gameMenu.setAttribute('visible', showVr ? 'true' : 'false');
+    vrGameMenu.setAttribute('visible', showVr ? 'true' : 'false');
     syncVrMenuInteractive(showVr);
   }
   syncVrGameHudVisibility();
@@ -852,12 +876,23 @@ export function updateMenuVisibility() {
 export function setMinimapVisible(on) {
   minimapVisible = !!on;
   const container = document.getElementById('minimap-container');
+  const mapWrap = document.getElementById('minimap-map-wrap');
+  const touchGame =
+    State.gameSession.gameStarted && !Input.getIsVR() && Input.getInputPlatform() === 'touch';
   if (container) {
-    container.style.display = minimapVisible && !Input.getIsVR() ? 'block' : 'none';
+    if (Input.getIsVR()) {
+      container.style.display = 'none';
+    } else if (touchGame) {
+      container.style.display = 'flex';
+      if (mapWrap) mapWrap.style.display = minimapVisible ? 'block' : 'none';
+    } else {
+      container.style.display = minimapVisible ? 'flex' : 'none';
+      if (mapWrap) mapWrap.style.display = '';
+    }
   }
   syncVrGameHudVisibility();
   refreshHandRaycasters();
-  syncHudIslandToggleLabels();
+  updateFlatHudButtons();
 }
 
 export function toggleMinimap() {
@@ -874,23 +909,133 @@ export function hideBuildMenu() {
   if (buildMenuEl) buildMenuEl.style.display = 'none';
 }
 
-export function showBuildingPanel(building) {
-  activeBuildingPanel = building;
-  lastBuildPanelUpdate = 0; // Force immediate refresh
-
-  if (!buildPanelEl) {
-    buildPanelEl = document.createElement('div');
-    buildPanelEl.id = 'hud-build-panel';
-    buildPanelEl.className = 'hud';
-    buildPanelEl.style.cssText = `
+function ensureHudBuildPanel() {
+  if (buildPanelEl) return;
+  buildPanelEl = document.createElement('div');
+  buildPanelEl.id = 'hud-build-panel';
+  buildPanelEl.className = 'hud';
+  buildPanelEl.style.cssText = `
       position: fixed; bottom: 60px; left: 8px;
       background: rgba(0,10,0,0.9); padding: 12px;
       border: 1px solid #0a0; border-radius: 8px;
       z-index: 110; min-width: 280px;
       font-family: 'Consolas', monospace; pointer-events: auto;
     `;
-    uiMountRoot().appendChild(buildPanelEl);
+  uiMountRoot().appendChild(buildPanelEl);
+}
+
+function refreshMobileHqDeployPanel() {
+  if (!buildPanelEl || !activeMobileDeployUnitIds || activeMobileDeployUnitIds.length === 0) return;
+
+  const alive = activeMobileDeployUnitIds
+    .map(id => State.units.get(id))
+    .filter(u => u && u.type === 'mobileHq' && u.hp > 0 && u.ownerId === State.gameSession.myPlayerId);
+  if (alive.length === 0) {
+    hideMobileHqDeployPanel();
+    return;
   }
+
+  const names = UNIT_TYPES.mobileHq?.name || 'Mobile HQ';
+  const totalHp = alive.reduce((s, u) => s + u.hp, 0);
+  const maxHp = alive.reduce((s, u) => s + u.maxHp, 0);
+  const deployLabel = alive.length > 1 ? `Deploy ${alive.length} (${names})` : 'Deploy as HQ';
+
+  let html = `<div style="color: #0f0; font-size: 14px; font-weight: bold; margin-bottom: 4px;">
+    ${names}
+    <span style="color: #888; font-size: 11px; float: right;">HP: ${Math.floor(totalHp)}/${maxHp}</span>
+  </div>`;
+  html += `<div style="color:#8ac;font-size:11px;margin:4px 0;">Opens a new build radius here (clear of structures & crystals).</div>`;
+  html += `<div><button type="button" style="
+      display: inline-block; padding: 8px 14px; margin: 4px 0 0 0;
+      background: #1a3a1a; color: #fff; border: 1px solid #0a0; border-radius: 4px;
+      cursor: pointer; font-family: Consolas, monospace; font-size: 13px;
+    " onclick="window._deployMobileHq && window._deployMobileHq()">${deployLabel}</button></div>`;
+  html += '<div style="color: #555; font-size: 10px; margin-top: 4px;">Space to close panel · Deselect to cancel</div>';
+  buildPanelEl.innerHTML = html;
+  refreshVrMobileDeployPanel();
+}
+
+function refreshVrMobileDeployPanel() {
+  const root = document.getElementById('vr-build-buttons');
+  const titleEl = document.getElementById('vr-build-title');
+  const queueEl = document.getElementById('vr-build-queue');
+  if (!root || !Input.getIsVR()) return;
+  if (!activeMobileDeployUnitIds || activeMobileDeployUnitIds.length === 0) return;
+
+  while (root.firstChild) root.removeChild(root.firstChild);
+  if (queueEl) queueEl.setAttribute('visible', false);
+
+  const alive = activeMobileDeployUnitIds
+    .map(id => State.units.get(id))
+    .filter(u => u && u.type === 'mobileHq' && u.hp > 0 && u.ownerId === State.gameSession.myPlayerId);
+  if (alive.length === 0) return;
+
+  if (titleEl) {
+    titleEl.setAttribute(
+      'value',
+      `${UNIT_TYPES.mobileHq?.name || 'Mobile HQ'}  HP ${Math.floor(alive.reduce((s, u) => s + u.hp, 0))}/${alive.reduce((s, u) => s + u.maxHp, 0)}`
+    );
+  }
+
+  const rowH = 0.088;
+  const btnW = 0.64;
+  vrAddBuildRow(root, 0, 0.08, btnW, rowH, 'Deploy as HQ', 'confirm', true, { kind: 'deployMobileHq' });
+  refreshHandRaycasters();
+}
+
+function showMobileHqDeployPanel(unitIds) {
+  activeBuildingPanel = null;
+  activeResourceField = null;
+  activeMobileDeployUnitIds = unitIds.filter(id => {
+    const u = State.units.get(id);
+    return u && u.type === 'mobileHq' && u.hp > 0 && u.ownerId === State.gameSession.myPlayerId;
+  });
+  if (activeMobileDeployUnitIds.length === 0) return;
+
+  lastBuildPanelUpdate = 0;
+  ensureHudBuildPanel();
+
+  window._deployMobileHq = () => {
+    Network.sendCommand(
+      { action: 'deployMobileHq', unitIds: activeMobileDeployUnitIds.slice() },
+      (ok, code) => {
+        if (ok) showStatus('HQ deployed');
+        else showStatus(Network.commandFailureMessage(code));
+        refreshMobileHqDeployPanel();
+      }
+    );
+  };
+
+  refreshMobileHqDeployPanel();
+  buildPanelEl.style.display = 'block';
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+}
+
+/** @public Deselect / spacebar should clear the Mobile HQ deploy panel. */
+export function hideMobileHqDeployPanel() {
+  activeMobileDeployUnitIds = null;
+  window._deployMobileHq = undefined;
+  if (buildPanelEl && !activeBuildingPanel) {
+    buildPanelEl.style.display = 'none';
+    buildPanelEl.innerHTML = '';
+  }
+  const vrBtns = document.getElementById('vr-build-buttons');
+  if (vrBtns && !activeBuildingPanel) {
+    while (vrBtns.firstChild) vrBtns.removeChild(vrBtns.firstChild);
+  }
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+}
+
+export function showBuildingPanel(building) {
+  activeMobileDeployUnitIds = null;
+  lastMobileDeploySelectionSig = null;
+  window._deployMobileHq = undefined;
+  activeBuildingPanel = building;
+  lastBuildPanelUpdate = 0; // Force immediate refresh
+
+  ensureHudBuildPanel();
 
   refreshBuildingPanel();
   buildPanelEl.style.display = 'block';
@@ -1137,6 +1282,9 @@ function refreshVrBuildingPanel() {
 }
 
 export function hideBuildingPanel() {
+  activeMobileDeployUnitIds = null;
+  lastMobileDeploySelectionSig = null;
+  window._deployMobileHq = undefined;
   if (buildPanelEl) buildPanelEl.style.display = 'none';
   activeBuildingPanel = null;
   activeResourceField = null;

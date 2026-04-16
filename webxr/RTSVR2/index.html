@@ -6,7 +6,7 @@
   <title>RTS VR II — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.3.8">
+  <meta name="rts-version" content="0.3.41">
 
   <!-- A-Frame -->
   <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
@@ -75,7 +75,7 @@
             color="#8ab0aa"
             value="RTSVR2 …"
           ></a-text>
-          <a-entity id="game-menu" position="0 0 0" visible="false">
+          <a-entity id="vr-game-menu" position="0 0 0" visible="false">
             <a-plane width="0.72" height="0.62" color="#000810" material="opacity: 0.92; transparent: true" position="0 0 -0.006"></a-plane>
             <a-text class="no-raycast" value="RTS VR II" position="0 0.36 0" align="center" width="1.15" color="#00ff66"></a-text>
             <a-text class="no-raycast" id="menu-status-vr" value="Laser + trigger" position="0 -0.36 0" align="center" width="0.72" color="#888888"></a-text>
@@ -256,7 +256,8 @@
         const loadingScreen = document.getElementById('loading-screen');
         if (loadingScreen) {
           loadingScreen.style.opacity = '0';
-          setTimeout(() => loadingScreen.style.display = 'none', 500);
+          loadingScreen.style.pointerEvents = 'none';
+          setTimeout(() => { loadingScreen.style.display = 'none'; }, 500);
         }
       }, 1500);
     });
