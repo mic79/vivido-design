@@ -17,6 +17,22 @@ import { sampleMoonTerrainWorldY } from './moon-environment.js';
 let scene3D = null;  // THREE.Scene reference
 const unitMeshes = {};     // unitType -> InstancedMesh
 const buildingMeshes = {}; // buildingType -> InstancedMesh
+
+/** Bundled with the game under RTSVR2/ (copied from BattleVR lunar lander). */
+const HQ_GLB_URL = 'assets/lunar-lander/lunar_lander.glb';
+
+/** Visual scale vs gameplay HQ footprint (`BUILDING_SHAPES.hq.width`); does not change pathing/build logic. */
+const HQ_GLB_VISUAL_SCALE = 4;
+
+/** After HQ GLB loads: HUD / picking use model bounds instead of BUILDING_SHAPES.hq box. */
+let hqModelVisualHeight = null;
+let hqModelPickHalfHeight = null;
+let hqModelPickRadius = null;
+
+/** Full glTF clone per HQ (textures/materials); `buildingMeshes.hq` stays hidden as fallback. */
+let hqTexturedTemplate = null;
+const hqTexturedByBuildingId = new Map();
+let hqTexturedMode = false;
 let healthBarBgMesh = null;
 let healthBarFgMesh = null;
 let selectionRingMesh = null;
@@ -53,6 +69,8 @@ export function initRenderer(sceneEl) {
   configureBattlefieldShadows(sceneEl);
 
   console.log('✅ Renderer initialized with InstancedMesh');
+
+  void tryReplaceHqWithGltfModel(sceneEl);
 }
 
 /**
@@ -205,6 +223,243 @@ function createBuildingMeshes() {
     scene3D.add(mesh);
     buildingMeshes[type] = mesh;
   }
+}
+
+function buildingHudHeight(buildingType) {
+  if (buildingType === 'hq' && hqModelVisualHeight != null) return hqModelVisualHeight;
+  return BUILDING_SHAPES[buildingType]?.height ?? 3;
+}
+
+function buildingPickVerticalAndRadius(buildingType) {
+  if (buildingType === 'hq' && hqModelPickHalfHeight != null && hqModelPickRadius != null) {
+    return { centerY: hqModelPickHalfHeight, radius: hqModelPickRadius };
+  }
+  const shape = BUILDING_SHAPES[buildingType];
+  if (!shape) return { centerY: 2, radius: 3 };
+  return {
+    centerY: shape.height * 0.5,
+    radius: Math.max(shape.width, shape.depth) * 0.6,
+  };
+}
+
+/**
+ * Read-only: bottom-footprint center (XZ) + uniform scale for target horizontal size.
+ * Matches `pivotBottomCenterUniformFootprint` without mutating `geometry`.
+ */
+function computeBottomFootprintPivotAndScaleFactors(geometry, targetFootprint) {
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+  const y0 = box.min.y;
+  const ySpan = Math.max(1e-6, box.max.y - y0);
+  const pos = geometry.attributes.position;
+
+  let sx = 0;
+  let sz = 0;
+  let nBottom = 0;
+  for (const frac of [0.04, 0.12, 0.35]) {
+    const bottomBand = y0 + ySpan * frac;
+    sx = 0;
+    sz = 0;
+    nBottom = 0;
+    for (let i = 0; i < pos.count; i++) {
+      const py = pos.getY(i);
+      if (py <= bottomBand) {
+        sx += pos.getX(i);
+        sz += pos.getZ(i);
+        nBottom++;
+      }
+    }
+    if (nBottom >= 12) break;
+  }
+
+  const cx = nBottom > 0 ? sx / nBottom : (box.min.x + box.max.x) * 0.5;
+  const cz = nBottom > 0 ? sz / nBottom : (box.min.z + box.max.z) * 0.5;
+  const by = y0;
+  const tx = -cx;
+  const ty = -by;
+  const tz = -cz;
+
+  const w = box.max.x - box.min.x;
+  const d = box.max.z - box.min.z;
+  const horiz = Math.max(w, d);
+  const scale = horiz > 1e-6 ? targetFootprint / horiz : 1;
+
+  return { tx, ty, tz, scale };
+}
+
+/**
+ * Ground at y=0, origin on footprint center (XZ). Uses mean XZ of vertices in the lowest
+ * vertical band so asymmetric meshes (e.g. lander) sit over `building.x`/`building.z` like
+ * the old box HQ (bottom-face center), not the 3D AABB center which can sit off to one side.
+ */
+function pivotBottomCenterUniformFootprint(geometry, targetFootprint) {
+  const r = computeBottomFootprintPivotAndScaleFactors(geometry, targetFootprint);
+  geometry.translate(r.tx, r.ty, r.tz);
+  geometry.computeBoundingBox();
+  geometry.scale(r.scale, r.scale, r.scale);
+  geometry.computeBoundingBox();
+  geometry.computeVertexNormals();
+}
+
+/**
+ * Load GLB with A-Frame's gltf-model (same THREE as the scene — avoids a second Three.js bundle).
+ * Merge mesh triangles into one non-indexed position-only BufferGeometry so mixed UV/tangent
+ * attributes across parts cannot break BufferGeometryUtils.mergeGeometries().
+ */
+function mergeWorldMeshesToPositionsGeometry(root, THREE_w) {
+  const positions = [];
+  root.updateMatrixWorld(true);
+  root.traverse((child) => {
+    if (!child.isMesh && !child.isSkinnedMesh) return;
+    if (!child.geometry || !child.geometry.attributes.position) return;
+    const g = child.geometry.clone();
+    g.applyMatrix4(child.matrixWorld);
+    appendTrianglePositions(g, positions);
+    g.dispose();
+  });
+  if (positions.length < 9) {
+    throw new Error('HQ GLB: no triangle mesh data extracted');
+  }
+  const merged = new THREE_w.BufferGeometry();
+  merged.setAttribute('position', new THREE_w.Float32BufferAttribute(new Float32Array(positions), 3));
+  merged.computeVertexNormals();
+  return merged;
+}
+
+function loadHqGltfRootCloneViaAframe(sceneEl, glbUrl) {
+  return new Promise((resolve, reject) => {
+    const holder = document.createElement('a-entity');
+    holder.setAttribute('position', '0 0 0');
+    holder.setAttribute('visible', 'false');
+    holder.setAttribute('gltf-model', `url(${glbUrl})`);
+
+    const fail = (err) => {
+      holder.removeEventListener('model-error', onErr);
+      holder.removeEventListener('model-loaded', onOk);
+      if (holder.parentNode) holder.parentNode.removeChild(holder);
+      reject(err instanceof Error ? err : new Error(String(err && (err.message || err))));
+    };
+
+    const onErr = (e) => {
+      const d = e && e.detail;
+      fail(d && (d.message || d.srcError) ? new Error(String(d.message || d.srcError)) : new Error('gltf-model load error'));
+    };
+
+    const onOk = (e) => {
+      try {
+        const model = e.detail && e.detail.model;
+        if (!model) throw new Error('model-loaded missing detail.model');
+        const clone = model.clone(true);
+        holder.removeEventListener('model-error', onErr);
+        holder.removeEventListener('model-loaded', onOk);
+        if (holder.parentNode) holder.parentNode.removeChild(holder);
+        resolve(clone);
+      } catch (err) {
+        fail(err);
+      }
+    };
+
+    holder.addEventListener('model-error', onErr, { once: true });
+    holder.addEventListener('model-loaded', onOk, { once: true });
+    sceneEl.appendChild(holder);
+  });
+}
+
+function disposeHqTexturedObject3D(root, THREE_w) {
+  if (!root || !THREE_w) return;
+  root.traverse((node) => {
+    if (node.isMesh || node.isSkinnedMesh) {
+      if (node.geometry) node.geometry.dispose();
+      const mats = Array.isArray(node.material) ? node.material : [node.material];
+      mats.forEach((m) => {
+        if (!m) return;
+        const maps = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap'];
+        maps.forEach((k) => {
+          const t = m[k];
+          if (t && t.dispose) t.dispose();
+        });
+        m.dispose();
+      });
+    }
+  });
+}
+
+function applyHqPlayerTintToObject3D(root, ownerId, THREE_w) {
+  const tint = new THREE_w.Color(PLAYER_COLORS[ownerId] || 0xffffff);
+  tint.lerp(new THREE_w.Color(1, 1, 1), 0.55);
+  root.traverse((node) => {
+    if (!node.isMesh && !node.isSkinnedMesh) return;
+    const mats = Array.isArray(node.material) ? node.material : [node.material];
+    mats.forEach((m) => {
+      if (!m || !m.color) return;
+      if (!m.userData._hqTintBase) {
+        m.userData._hqTintBase = m.color.clone();
+      }
+      m.color.copy(m.userData._hqTintBase).multiply(tint);
+    });
+  });
+}
+
+function syncHqTexturedOne(building, worldMat4, drawVisible, THREE_w) {
+  let root = hqTexturedByBuildingId.get(building.id);
+  if (!root) {
+    root = hqTexturedTemplate.clone(true);
+    root.name = `hq_lander_${building.id}`;
+    applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
+    scene3D.add(root);
+    hqTexturedByBuildingId.set(building.id, root);
+  }
+  root.matrixAutoUpdate = false;
+  root.matrix.copy(worldMat4);
+  root.matrixWorldNeedsUpdate = true;
+  root.visible = drawVisible;
+}
+
+async function tryReplaceHqWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !buildingMeshes.hq || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, HQ_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] HQ lunar lander GLB load failed (keeping box).', err);
+    return;
+  }
+
+  const mergedMeasure = mergeWorldMeshesToPositionsGeometry(loadedRoot.clone(true), THREE_w);
+  const p = computeBottomFootprintPivotAndScaleFactors(
+    mergedMeasure,
+    BUILDING_SHAPES.hq.width * HQ_GLB_VISUAL_SCALE
+  );
+  mergedMeasure.dispose();
+
+  const inner = loadedRoot.clone(true);
+  inner.position.set(p.tx * p.scale, p.ty * p.scale, p.tz * p.scale);
+  inner.scale.setScalar(p.scale);
+  inner.traverse((node) => {
+    if (node.isMesh || node.isSkinnedMesh) {
+      node.castShadow = true;
+      node.receiveShadow = false;
+    }
+  });
+
+  disposeHqTexturedObject3D(loadedRoot, THREE_w);
+
+  const wrap = new THREE_w.Group();
+  wrap.name = 'hq_lander_template';
+  wrap.add(inner);
+  wrap.updateMatrixWorld(true);
+  const bb = new THREE_w.Box3().setFromObject(wrap);
+  hqModelVisualHeight = bb.max.y - bb.min.y;
+  hqModelPickHalfHeight = Math.abs(bb.min.y) < 0.08 ? bb.max.y * 0.5 : (bb.max.y + bb.min.y) * 0.5;
+  hqModelPickRadius = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.6;
+
+  hqTexturedTemplate = wrap;
+  hqTexturedMode = true;
+  buildingMeshes.hq.visible = false;
+
+  configureBattlefieldShadows(sceneEl);
 }
 
 // --- Health Bars ---
@@ -476,6 +731,8 @@ function updateBuildingInstances() {
   }
 
   const myTeam = State.players[State.gameSession.myPlayerId]?.team ?? 0;
+  const THREE_w = window.THREE;
+  const hqSeenIds = new Set();
 
   State.buildings.forEach(building => {
     if (building.hp <= 0) return;
@@ -512,6 +769,12 @@ function updateBuildingInstances() {
       _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
     }
 
+    if (hqTexturedMode && building.type === 'hq' && hqTexturedTemplate && THREE_w) {
+      hqSeenIds.add(building.id);
+      syncHqTexturedOne(building, _mat4, DRAW_AS_VISIBLE, THREE_w);
+      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    }
+
     mesh.setMatrixAt(idx, _mat4);
 
     // Player color tint
@@ -522,6 +785,16 @@ function updateBuildingInstances() {
     building._renderVisible = currentlyVisible;
     counts[building.type]++;
   });
+
+  if (hqTexturedMode) {
+    for (const [id, root] of [...hqTexturedByBuildingId]) {
+      if (!hqSeenIds.has(id)) {
+        scene3D.remove(root);
+        disposeHqTexturedObject3D(root, window.THREE);
+        hqTexturedByBuildingId.delete(id);
+      }
+    }
+  }
 
   for (const [type, mesh] of Object.entries(buildingMeshes)) {
     for (let i = counts[type]; i < mesh.count; i++) {
@@ -581,11 +854,10 @@ function updateHealthBars() {
   // Buildings
   State.buildings.forEach(building => {
     if (building.hp <= 0) return;
-    const shape = BUILDING_SHAPES[building.type];
     const hpPct = building.hp / building.maxHp;
     if (hpPct >= 1) return;
     const bGY = sampleMoonTerrainWorldY(building.x, building.z);
-    addBar(building.x, bGY + (shape?.height || 3) + 0.5, building.z, hpPct, building._renderVisible);
+    addBar(building.x, bGY + buildingHudHeight(building.type) + 0.5, building.z, hpPct, building._renderVisible);
   });
 
   // Hide unused bars
@@ -814,9 +1086,7 @@ export function pickScreenNdcErrorForUnit(unit, pickNdc) {
 
 export function pickScreenNdcErrorForBuilding(building, pickNdc) {
   if (!building || !pickNdc) return Infinity;
-  const shape = BUILDING_SHAPES[building.type];
-  if (!shape) return Infinity;
-  const centerY = shape.height * 0.5;
+  const { centerY } = buildingPickVerticalAndRadius(building.type);
   const gY = sampleMoonTerrainWorldY(building.x, building.z);
   return pickScreenNdcError(building.x, gY + centerY, building.z, pickNdc);
 }
@@ -915,10 +1185,8 @@ export function raycastBuildings(origin, direction, maxDist = 200, radiusBoost =
   State.buildings.forEach(building => {
     if (building.hp <= 0 || !building._renderVisible) return;
 
-    const shape = BUILDING_SHAPES[building.type];
-    if (!shape) return;
-    const radius = Math.max(shape.width, shape.depth) * 0.6 + boost;
-    const centerY = shape.height * 0.5;
+    const { centerY, radius: baseRadius } = buildingPickVerticalAndRadius(building.type);
+    const radius = baseRadius + boost;
     const gY = sampleMoonTerrainWorldY(building.x, building.z);
 
     _pos.set(building.x, gY + centerY, building.z);
@@ -948,6 +1216,25 @@ export function raycastResourceFields(origin, direction, maxDist = 200, pickNdc 
 
 // Cleanup
 export function disposeRenderer() {
+  hqModelVisualHeight = null;
+  hqModelPickHalfHeight = null;
+  hqModelPickRadius = null;
+
+  if (hqTexturedMode) {
+    const THREE_w = window.THREE;
+    for (const root of hqTexturedByBuildingId.values()) {
+      scene3D.remove(root);
+      disposeHqTexturedObject3D(root, THREE_w);
+    }
+    hqTexturedByBuildingId.clear();
+    if (hqTexturedTemplate) {
+      disposeHqTexturedObject3D(hqTexturedTemplate, THREE_w);
+      hqTexturedTemplate = null;
+    }
+    hqTexturedMode = false;
+    if (buildingMeshes.hq) buildingMeshes.hq.visible = true;
+  }
+
   Object.values(unitMeshes).forEach(m => { scene3D.remove(m); m.dispose(); });
   Object.values(buildingMeshes).forEach(m => { scene3D.remove(m); m.dispose(); });
   if (healthBarBgMesh) { scene3D.remove(healthBarBgMesh); healthBarBgMesh.dispose(); }
