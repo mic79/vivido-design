@@ -841,11 +841,15 @@ function performVrStyleBattlefieldRay(origin, direction) {
   }
 }
 
-function clearTouchLongPress() {
+function clearTouchLongPressTimerOnly() {
   if (touchLongPressTimer) {
     clearTimeout(touchLongPressTimer);
     touchLongPressTimer = null;
   }
+}
+
+function clearTouchLongPress() {
+  clearTouchLongPressTimerOnly();
   touchOneFinger = null;
 }
 
@@ -921,6 +925,7 @@ function onTouchStart(e) {
 
     touchLongPressConsumed = false;
     touchTapSuppressed = false;
+    clearTouchLongPressTimerOnly();
     touchOneFinger = {
       x: t.clientX,
       y: t.clientY,
@@ -928,7 +933,6 @@ function onTouchStart(e) {
       t0: performance.now(),
       moved: false,
     };
-    clearTouchLongPress();
     touchLongPressTimer = setTimeout(() => {
       if (touchOneFinger && !touchOneFinger.moved) {
         fireTouchLongPress(touchOneFinger.x, touchOneFinger.y);
@@ -964,7 +968,7 @@ function onTouchMove(e) {
     if (dAng > Math.PI) dAng -= Math.PI * 2;
     if (dAng < -Math.PI) dAng += Math.PI * 2;
     touchTwin.lastAngle = angle;
-    cameraRig.rotY -= dAng * 0.85;
+    cameraRig.rotY += dAng * 0.85;
 
     cameraRig.x = Math.max(-MAP_HALF, Math.min(MAP_HALF, cameraRig.x));
     cameraRig.z = Math.max(-MAP_HALF, Math.min(MAP_HALF, cameraRig.z));
@@ -980,7 +984,7 @@ function onTouchMove(e) {
     const dy = t.clientY - touchOneFinger.y;
     if (dx * dx + dy * dy > 14 * 14) {
       touchOneFinger.moved = true;
-      clearTouchLongPress();
+      clearTouchLongPressTimerOnly();
     }
   }
 }
@@ -999,41 +1003,45 @@ function onTouchEnd(e) {
 
   if (touchLongPressTimer && e.changedTouches.length) {
     const ch = e.changedTouches[0];
-    if (touchOneFinger && ch.identifier === touchOneFinger.id) {
+    if (touchOneFinger && ch.identifier === touchOneFinger.id && e.touches.length > 0) {
       clearTouchLongPress();
     }
   }
 
   if (e.touches.length === 0) {
-    clearTouchLongPress();
     const ch = e.changedTouches[0];
-    if (!ch) return;
+    if (!ch) {
+      clearTouchLongPress();
+      return;
+    }
 
-    if (touchTapSuppressed) {
+    const fingerSnapshot = touchOneFinger;
+    const suppressed = touchTapSuppressed;
+    const longConsumed = touchLongPressConsumed;
+
+    clearTouchLongPress();
+
+    if (suppressed) {
       touchTapSuppressed = false;
       touchLongPressConsumed = false;
-      touchOneFinger = null;
       return;
     }
-    if (touchLongPressConsumed) {
+    if (longConsumed) {
       touchLongPressConsumed = false;
-      touchOneFinger = null;
       return;
     }
 
-    if (touchOneFinger && ch.identifier === touchOneFinger.id && !touchOneFinger.moved) {
-      const dt = performance.now() - touchOneFinger.t0;
+    if (fingerSnapshot && ch.identifier === fingerSnapshot.id && !fingerSnapshot.moved) {
+      const dt = performance.now() - fingerSnapshot.t0;
       if (dt < 600 && isClientPointBlockedForWorldTouch(ch.clientX, ch.clientY)) {
-        touchOneFinger = null;
         return;
       }
       if (dt < 600) {
         const r = screenToWorldRay(ch.clientX, ch.clientY);
         if (r) performVrStyleBattlefieldRay(r.origin, r.direction);
-        e.preventDefault();
+        if (e.cancelable) e.preventDefault();
       }
     }
-    touchOneFinger = null;
     if (!getIsVR() && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) {
       suppressDesktopMouseFromTouchMs = performance.now() + 700;
     }
