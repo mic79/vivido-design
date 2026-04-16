@@ -12,6 +12,7 @@ import * as Renderer from './renderer.js';
 import * as UI from './ui.js';
 import * as Network from './network.js';
 import * as Audio from './audio.js';
+import { toggleTerrainGrid } from './moon-environment.js';
 
 // --- State ---
 let isVR = false;
@@ -38,6 +39,29 @@ const vrRight = {
 /** Both grips: pinch height like RTSVR (world hand distance delta). */
 const vrPinch = { active: false, lastDist: 0 };
 let lastTriggerTime = 0;
+/** While exactly one controller trigger is held, hide the other hand's aim line so only the active laser is visible. */
+let vrLeftTriggerHeld = false;
+let vrRightTriggerHeld = false;
+
+function refreshVrHandAimLineVisibility() {
+  const lh = document.getElementById('leftHand');
+  const rh = document.getElementById('rightHand');
+  const leftRay = lh && lh.querySelector('[data-vr-aim-ray]');
+  const rightRay = rh && rh.querySelector('[data-vr-aim-ray]');
+  if (!leftRay || !rightRay) return;
+  const onlyRight = vrRightTriggerHeld && !vrLeftTriggerHeld;
+  const onlyLeft = vrLeftTriggerHeld && !vrRightTriggerHeld;
+  if (onlyRight) {
+    leftRay.setAttribute('raycaster', 'showLine', false);
+    rightRay.setAttribute('raycaster', 'showLine', true);
+  } else if (onlyLeft) {
+    rightRay.setAttribute('raycaster', 'showLine', false);
+    leftRay.setAttribute('raycaster', 'showLine', true);
+  } else {
+    leftRay.setAttribute('raycaster', 'showLine', true);
+    rightRay.setAttribute('raycaster', 'showLine', true);
+  }
+}
 
 /** Touch: single-finger long-press / tap (non-VR). */
 let touchLongPressTimer = null;
@@ -64,6 +88,47 @@ const _pinchR = new THREE.Vector3();
 const _localDelta = new THREE.Vector3();
 const _worldDelta = new THREE.Vector3();
 const _handLocal = new THREE.Vector3();
+const _vrPickOnRay = new THREE.Vector3();
+const _vrCamPos = new THREE.Vector3();
+const _vrCamDir = new THREE.Vector3();
+const _vrRayDirN = new THREE.Vector3();
+const _vrW0 = new THREE.Vector3();
+
+/**
+ * NDC "cursor" for VR laser so overlap picks use the same screen-space tie-break as mouse.
+ * Uses the point on the aim ray closest to the camera view axis (skew-line closest approach),
+ * clamped forward along the laser, then projected with the active scene camera.
+ */
+function computeVrBattlefieldPickNdc(sceneEl, rayOrigin, rayDirection) {
+  const THREE = window.THREE;
+  const cam = sceneEl && sceneEl.camera;
+  if (!THREE || !cam || !cam.isCamera) return null;
+  _vrRayDirN.copy(rayDirection);
+  const dLen = _vrRayDirN.length();
+  if (dLen < 1e-6) return null;
+  _vrRayDirN.multiplyScalar(1 / dLen);
+
+  cam.getWorldPosition(_vrCamPos);
+  cam.getWorldDirection(_vrCamDir);
+
+  _vrW0.subVectors(rayOrigin, _vrCamPos);
+  const a = _vrRayDirN.dot(_vrRayDirN);
+  const b = _vrRayDirN.dot(_vrCamDir);
+  const c = _vrCamDir.dot(_vrCamDir);
+  const d = _vrRayDirN.dot(_vrW0);
+  const e = _vrCamDir.dot(_vrW0);
+  const denom = a * c - b * b;
+  let t = 5;
+  if (Math.abs(denom) > 1e-10) {
+    t = (b * e - c * d) / denom;
+  } else {
+    t = Math.max(0.05, -d / Math.max(a, 1e-10));
+  }
+  t = Math.max(0.05, Math.min(200, t));
+  _vrPickOnRay.copy(rayOrigin).addScaledVector(_vrRayDirN, t);
+  _vrPickOnRay.project(cam);
+  return { x: _vrPickOnRay.x, y: _vrPickOnRay.y };
+}
 
 /** Child [data-vr-aim-ray] uses RTSVR-style -90° X so local -Z is forward from the grip. */
 function setVrAimRayFromController(controllerEl, origin, direction) {
@@ -159,7 +224,15 @@ export function initInput(sceneEl) {
   const rightHand = document.getElementById('rightHand');
 
   if (rightHand) {
-    rightHand.addEventListener('triggerdown', onVRTriggerRight);
+    rightHand.addEventListener('triggerdown', (e) => {
+      vrRightTriggerHeld = true;
+      refreshVrHandAimLineVisibility();
+      onVRTriggerRight(e);
+    });
+    rightHand.addEventListener('triggerup', () => {
+      vrRightTriggerHeld = false;
+      refreshVrHandAimLineVisibility();
+    });
     rightHand.addEventListener('gripdown', () => {
       vrRight.grip = true;
       vrRight.gripPanInited = false;
@@ -176,14 +249,27 @@ export function initInput(sceneEl) {
     // A and B buttons are on the right controller
     rightHand.addEventListener('abuttondown', () => selectAllOfType());
     rightHand.addEventListener('bbuttondown', () => {
+      const hadBuild = !!State.gameSession.buildMode;
+      if (hadBuild) {
+        State.clearBuildPlacementFlags();
+        clearBuildBanner();
+      }
       State.deselectAll();
       UI.hideBuildingPanel();
-      UI.showStatus('Deselected all');
+      UI.showStatus(hadBuild ? 'Build cancelled · deselected' : 'Deselected all');
     });
   }
 
   if (leftHand) {
-    leftHand.addEventListener('triggerdown', onVRTriggerLeft);
+    leftHand.addEventListener('triggerdown', (e) => {
+      vrLeftTriggerHeld = true;
+      refreshVrHandAimLineVisibility();
+      onVRTriggerLeft(e);
+    });
+    leftHand.addEventListener('triggerup', () => {
+      vrLeftTriggerHeld = false;
+      refreshVrHandAimLineVisibility();
+    });
     leftHand.addEventListener('gripdown', () => {
       vrLeft.grip = true;
       vrLeft.gripPanInited = false;
@@ -197,8 +283,16 @@ export function initInput(sceneEl) {
       vrLeft.thumbX = e.detail.x || 0;
       vrLeft.thumbY = e.detail.y || 0;
     });
-    // X and Y buttons are on the left controller
-    leftHand.addEventListener('xbuttondown', () => toggleMenu());
+    // X and Y buttons are on the left controller (X matches desktop: cancel build before menu)
+    leftHand.addEventListener('xbuttondown', () => {
+      if (State.gameSession.buildMode) {
+        State.clearBuildPlacementFlags();
+        clearBuildBanner();
+        UI.showStatus('Build cancelled');
+        return;
+      }
+      toggleMenu();
+    });
     leftHand.addEventListener('ybuttondown', () => UI.toggleMinimap());
   }
 
@@ -212,7 +306,7 @@ export function initInput(sceneEl) {
     // X key: cancel build mode
     if (e.key === 'x' || e.key === 'X') {
       if (State.gameSession.buildMode) {
-        State.gameSession.buildMode = null;
+        State.clearBuildPlacementFlags();
         clearBuildBanner();
         UI.showStatus('Build cancelled');
       }
@@ -228,6 +322,13 @@ export function initInput(sceneEl) {
     if (e.key.toLowerCase() === 'k' && State.gameSession.gameStarted) {
       State.gameSession.debugFog = !State.gameSession.debugFog;
       UI.showStatus(State.gameSession.debugFog ? 'Spy Mode: FOG DISABLED' : 'Spy Mode: FOG ENABLED');
+    }
+
+    // G key: terrain grid (not used elsewhere)
+    if ((e.key === 'g' || e.key === 'G') && State.gameSession.gameStarted && !State.gameSession.menuOpen) {
+      e.preventDefault();
+      const on = toggleTerrainGrid();
+      UI.showStatus(on ? 'Terrain grid on' : 'Terrain grid off');
     }
 
     // Squad Control Groups (Number keys)
@@ -634,10 +735,6 @@ function clientToPickNdc(clientX, clientY) {
 }
 
 /**
- * When inflated spheres overlap, keep the target whose projected center is closest to the cursor (NDC).
- * VR / no pickNdc: keep all hits (caller already got at most one meaningful overlap per type).
- */
-/**
  * Right-click "follow" uses inflated unit spheres; if the player aimed at open ground,
  * prefer move. Also never follow a unit that is part of the current command selection.
  */
@@ -647,7 +744,7 @@ function commandRayPrefersGroundOverFriendlyFollow(origin, direction, hitUnit, p
   const groundHit = raycastGround(origin, direction);
   if (!groundHit) return false;
   if (pickNdc) {
-    const gPen = Renderer.pickScreenNdcError(groundHit.x, 0, groundHit.z, pickNdc);
+    const gPen = Renderer.pickScreenNdcErrorForGroundPoint(groundHit.x, groundHit.z, pickNdc);
     const uPen = Renderer.pickScreenNdcErrorForUnit(hitUnit, pickNdc);
     return gPen < uPen - 0.012;
   }
@@ -684,13 +781,9 @@ function resolveOverlapPicks(hitUnit, hitBuilding, hitResource, pickNdc) {
     });
   }
   if (hitResource) {
-    const cap = hitResource.maxCapacity || 1;
-    const cy = hitResource.depleted
-      ? 0.55
-      : Math.max(1, (hitResource.remaining / cap) * 3);
     cands.push({
       k: 'r',
-      pen: Renderer.pickScreenNdcError(hitResource.x, cy, hitResource.z, pickNdc),
+      pen: Renderer.pickScreenNdcErrorForResourceField(hitResource, pickNdc),
       r: hitResource,
     });
   }
@@ -873,7 +966,7 @@ function onMouseClick(e) {
       }, (ok, code) => {
         if (ok) {
           UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
-          State.gameSession.buildMode = null;
+          State.clearBuildPlacementFlags();
           clearBuildBanner();
         } else {
           UI.showStatus(Network.commandFailureMessage(code));
@@ -895,7 +988,7 @@ function onRightClick(e) {
   if (e.target.closest('#minimap')) return;
   
   if (State.gameSession.buildMode) {
-    State.gameSession.buildMode = null;
+    State.clearBuildPlacementFlags();
     clearBuildBanner();
     UI.showStatus('Build cancelled');
     return;
@@ -949,8 +1042,11 @@ function isClientPointBlockedForWorldTouch(clientX, clientY) {
 /**
  * VR right trigger and mobile tap: select / inspect, command when units selected,
  * ground move/attack, build placement, resource panel.
+ * @param {{ vrFollowChord?: boolean }} [opts] — VR only: when true, same-hand grip+trigger issues follow on friendly units
+ *   (otherwise trigger alone adds/removes from selection like Shift+click on desktop).
  */
-function performVrStyleBattlefieldRay(origin, direction, pickNdc) {
+function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
+  const vrFollowChord = !!opts.vrFollowChord;
   if (State.gameSession.buildMode) {
     const groundHit = raycastGround(origin, direction);
     if (groundHit) {
@@ -964,7 +1060,7 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc) {
         },
         (ok, code) => {
           if (ok) {
-            State.gameSession.buildMode = null;
+            State.clearBuildPlacementFlags();
             clearBuildBanner();
             UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
           } else {
@@ -991,6 +1087,34 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc) {
 
   if (hitUnit) {
     if (hitUnit.ownerId === State.gameSession.myPlayerId) {
+      if (myUnits.length > 0) {
+        if (vrFollowChord) {
+          if (!commandRayPrefersGroundOverFriendlyFollow(origin, direction, hitUnit, pickNdc, myUnits)) {
+            Network.sendCommand({ action: 'follow', unitIds: myUnits, targetId: hitUnit.id });
+            UI.showStatus('Following — engineers repair damaged vehicles when in range');
+            return true;
+          }
+          const groundHitCmd = raycastGround(origin, direction);
+          if (groundHitCmd) {
+            Network.sendCommand({ action: 'move', unitIds: myUnits, x: groundHitCmd.x, z: groundHitCmd.z });
+            UI.showStatus('Moving...');
+            return true;
+          }
+          return true;
+        }
+        if (State.selectedUnits.has(hitUnit.id)) {
+          State.deselectUnit(hitUnit.id);
+          UI.hideBuildingPanel();
+          UI.showStatus(
+            State.selectedUnits.size === 0 ? 'Deselected' : 'Removed from selection'
+          );
+        } else {
+          State.selectUnit(hitUnit.id);
+          UI.hideBuildingPanel();
+          UI.showStatus(`Added ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type} to selection`);
+        }
+        return true;
+      }
       if (State.selectedUnits.has(hitUnit.id)) {
         State.deselectUnit(hitUnit.id);
         UI.hideBuildingPanel();
@@ -1340,7 +1464,9 @@ function onVRTriggerRight(e) {
 
   lastTriggerTime = now;
 
-  performVrStyleBattlefieldRay(_origin, _direction, null);
+  const scene = document.querySelector('a-scene');
+  const vrPickNdc = scene ? computeVrBattlefieldPickNdc(scene, _origin, _direction) : null;
+  performVrStyleBattlefieldRay(_origin, _direction, vrPickNdc, { vrFollowChord: vrRight.grip });
 }
 
 // --- VR Trigger: LEFT hand (build / secondary) ---
@@ -1365,7 +1491,7 @@ function onVRTriggerLeft(e) {
         z: groundHit.z,
       }, (ok, code) => {
         if (ok) {
-          State.gameSession.buildMode = null;
+          State.clearBuildPlacementFlags();
           clearBuildBanner();
           UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
         } else {
@@ -1398,12 +1524,12 @@ function toggleMenu() {
 
 export function toggleBuildMode(buildingType) {
   if (!buildingType) {
-    State.gameSession.buildMode = null;
+    State.clearBuildPlacementFlags();
     clearBuildBanner();
     return;
   }
   if (State.gameSession.buildMode === buildingType) {
-    State.gameSession.buildMode = null;
+    State.clearBuildPlacementFlags();
     clearBuildBanner();
   } else {
     State.gameSession.buildMode = buildingType;
@@ -1444,8 +1570,8 @@ function showBuildBanner(name, cost) {
     getInputPlatform() === 'touch'
       ? 'Tap ground within HQ radius to place · tap HQ again to cancel'
       : getInputPlatform() === 'vr'
-        ? 'Trigger on ground to place · X to cancel · left trigger: HQ menu'
-        : 'Click ground within HQ build radius · <b>X</b> or right-click to cancel · VR: left trigger opens HQ menu';
+        ? 'Right or left trigger on ground to place · <b>Left X</b> to cancel · <b>B</b> also cancels · left trigger (no build): HQ tip'
+        : 'Click ground within HQ build radius · <b>X</b> or right-click to cancel · VR: left X cancels build';
   banner.innerHTML = `
     <div style="color: #0f0; font-size: 16px; font-weight: bold;">🏗️ PLACING: ${name} ($${cost})</div>
     <div style="color: #aaa; font-size: 12px; margin-top: 4px;">${placeHint}</div>

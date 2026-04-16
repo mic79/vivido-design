@@ -12,6 +12,7 @@ import {
 import * as State from './state.js';
 import * as Fog from './fog.js';
 import * as UI from './ui.js';
+import { sampleMoonTerrainWorldY } from './moon-environment.js';
 
 let scene3D = null;  // THREE.Scene reference
 const unitMeshes = {};     // unitType -> InstancedMesh
@@ -49,7 +50,38 @@ export function initRenderer(sceneEl) {
   createProjectileMesh();
   createFogPlane();
 
+  configureBattlefieldShadows(sceneEl);
+
   console.log('✅ Renderer initialized with InstancedMesh');
+}
+
+/**
+ * One directional shadow map onto the moon (cheap: moderate map size, single caster).
+ * Call after scene lights and game meshes exist.
+ */
+export function configureBattlefieldShadows(sceneEl) {
+  const THREE = window.THREE;
+  const renderer = sceneEl && sceneEl.renderer;
+  if (!renderer || !THREE) return;
+
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  sceneEl.object3D.traverse((obj) => {
+    if (!obj.isDirectionalLight) return;
+    obj.castShadow = true;
+    obj.shadow.mapSize.set(512, 512);
+    obj.shadow.camera.near = 2;
+    obj.shadow.camera.far = 220;
+    const ext = 115;
+    obj.shadow.camera.left = -ext;
+    obj.shadow.camera.right = ext;
+    obj.shadow.camera.top = ext;
+    obj.shadow.camera.bottom = -ext;
+    obj.shadow.bias = -0.0006;
+    obj.shadow.normalBias = 0.035;
+    obj.shadow.camera.updateProjectionMatrix();
+  });
 }
 
 /** Box combat vehicles: plain box + one barrel cylinder along +Z (same footprint as other box units). */
@@ -128,7 +160,7 @@ function createUnitMeshes() {
       new Float32Array(MAX_INSTANCES_PER_TYPE * 3), 3
     );
     mesh.frustumCulled = false;
-    mesh.castShadow = false;
+    mesh.castShadow = true;
     mesh.receiveShadow = false;
     mesh.name = `units_${type}`;
 
@@ -160,7 +192,7 @@ function createBuildingMeshes() {
       new Float32Array(MAX_BUILDING_INSTANCES * 3), 3
     );
     mesh.frustumCulled = false;
-    mesh.castShadow = false;
+    mesh.castShadow = true;
     mesh.receiveShadow = false;
     mesh.name = `buildings_${type}`;
 
@@ -249,14 +281,17 @@ function createResourceFieldMeshes() {
   resourceFieldMesh.frustumCulled = false;
 
   RESOURCE_FIELD_POSITIONS.forEach((pos, i) => {
+    const gY = sampleMoonTerrainWorldY(pos.x, pos.z);
     _mat4.compose(
-      _pos.set(pos.x, 2.5, pos.z),
+      _pos.set(pos.x, gY + 2.5, pos.z),
       _quat.identity(),
       _scale.set(1, 1, 1)
     );
     resourceFieldMesh.setMatrixAt(i, _mat4);
   });
   resourceFieldMesh.instanceMatrix.needsUpdate = true;
+  resourceFieldMesh.castShadow = true;
+  resourceFieldMesh.receiveShadow = false;
   scene3D.add(resourceFieldMesh);
 }
 
@@ -352,8 +387,9 @@ function updateUnitInstances() {
       if (visible) {
         _euler.set(0, unit.rotation || 0, 0);
         _quat.setFromEuler(_euler);
+        const gY = sampleMoonTerrainWorldY(unit.x, unit.z);
         _mat4.compose(
-          _pos.set(unit.x, 0, unit.z),
+          _pos.set(unit.x, gY, unit.z),
           _quat,
           _scale.set(1, 1, 1)
         );
@@ -466,8 +502,9 @@ function updateBuildingInstances() {
       const scaleY = Math.max(0.1, building.constructionProgress || 1);
       _euler.set(0, building.rotation || 0, 0);
       _quat.setFromEuler(_euler);
+      const gY = sampleMoonTerrainWorldY(building.x, building.z);
       _mat4.compose(
-        _pos.set(building.x, 0, building.z),
+        _pos.set(building.x, gY, building.z),
         _quat,
         _scale.set(1, scaleY, 1)
       );
@@ -537,7 +574,8 @@ function updateHealthBars() {
     if (unit.hp <= 0) return;
     const hpPct = unit.hp / unit.maxHp;
     if (hpPct >= 1) return; // Don't show bar when full HP
-    addBar(unit.x, HEALTH_BAR_Y_OFFSET, unit.z, hpPct, unit._renderVisible);
+    const uGY = sampleMoonTerrainWorldY(unit.x, unit.z);
+    addBar(unit.x, uGY + HEALTH_BAR_Y_OFFSET, unit.z, hpPct, unit._renderVisible);
   });
 
   // Buildings
@@ -546,7 +584,8 @@ function updateHealthBars() {
     const shape = BUILDING_SHAPES[building.type];
     const hpPct = building.hp / building.maxHp;
     if (hpPct >= 1) return;
-    addBar(building.x, (shape?.height || 3) + 0.5, building.z, hpPct, building._renderVisible);
+    const bGY = sampleMoonTerrainWorldY(building.x, building.z);
+    addBar(building.x, bGY + (shape?.height || 3) + 0.5, building.z, hpPct, building._renderVisible);
   });
 
   // Hide unused bars
@@ -585,8 +624,9 @@ function updateSelectionRings() {
     if (!unit || unit.hp <= 0 || ringIndex >= 60) return;
 
     const s = selectionRingScaleForUnitType(unit.type);
+    const uGY = sampleMoonTerrainWorldY(unit.x, unit.z);
     _mat4.compose(
-      _pos.set(unit.x, 0.15, unit.z),
+      _pos.set(unit.x, uGY + 0.15, unit.z),
       _quat.identity(),
       _scale.set(s, 1, s)
     );
@@ -599,8 +639,9 @@ function updateSelectionRings() {
     const building = UI.activeBuildingPanel;
     if (building && building.hp > 0 && Fog.isUnitVisibleToPlayer(building, State.gameSession.myPlayerId)) {
       const bSize = (building.size || 4) / 2 + 1.25;
+      const bGY = sampleMoonTerrainWorldY(building.x, building.z);
       _mat4.compose(
-        _pos.set(building.x, 0.15, building.z),
+        _pos.set(building.x, bGY + 0.15, building.z),
         _quat.identity(),
         _scale.set(bSize, 1, bSize)
       );
@@ -613,8 +654,9 @@ function updateSelectionRings() {
   if (UI.activeResourceField && ringIndex < selectionRingMesh.count) {
     const resource = UI.activeResourceField;
     const rSize = 3;
+    const rGY = sampleMoonTerrainWorldY(resource.x, resource.z);
     _mat4.compose(
-      _pos.set(resource.x, 0.15, resource.z),
+      _pos.set(resource.x, rGY + 0.15, resource.z),
       _quat.identity(),
       _scale.set(rSize, 1, rSize)
     );
@@ -645,8 +687,9 @@ function updateResourceFields() {
     const explored = Fog.wasExploredByTeam(myTeam, field.x, field.z);
 
     if (explored) {
+      const fGY = sampleMoonTerrainWorldY(field.x, field.z);
       _mat4.compose(
-        _pos.set(field.x, 2.5 * scale, field.z),
+        _pos.set(field.x, fGY + 2.5 * scale, field.z),
         _quat.identity(),
         _scale.set(scale, scale, scale)
       );
@@ -765,7 +808,8 @@ export function pickScreenNdcErrorForUnit(unit, pickNdc) {
   const shape = UNIT_SHAPES[unit.type];
   if (!shape) return Infinity;
   const centerY = shape.height * 0.5;
-  return pickScreenNdcError(unit.x, centerY, unit.z, pickNdc);
+  const gY = sampleMoonTerrainWorldY(unit.x, unit.z);
+  return pickScreenNdcError(unit.x, gY + centerY, unit.z, pickNdc);
 }
 
 export function pickScreenNdcErrorForBuilding(building, pickNdc) {
@@ -773,7 +817,22 @@ export function pickScreenNdcErrorForBuilding(building, pickNdc) {
   const shape = BUILDING_SHAPES[building.type];
   if (!shape) return Infinity;
   const centerY = shape.height * 0.5;
-  return pickScreenNdcError(building.x, centerY, building.z, pickNdc);
+  const gY = sampleMoonTerrainWorldY(building.x, building.z);
+  return pickScreenNdcError(building.x, gY + centerY, building.z, pickNdc);
+}
+
+export function pickScreenNdcErrorForGroundPoint(x, z, pickNdc) {
+  if (!pickNdc || !Number.isFinite(x) || !Number.isFinite(z)) return Infinity;
+  const y = sampleMoonTerrainWorldY(x, z);
+  return pickScreenNdcError(x, y, z, pickNdc);
+}
+
+export function pickScreenNdcErrorForResourceField(field, pickNdc) {
+  if (!field || !pickNdc) return Infinity;
+  const cap = field.maxCapacity || 1;
+  const cy = field.depleted ? 0.55 : Math.max(1, (field.remaining / cap) * 3);
+  const gY = sampleMoonTerrainWorldY(field.x, field.z);
+  return pickScreenNdcError(field.x, gY + cy, field.z, pickNdc);
 }
 
 /**
@@ -840,8 +899,9 @@ export function raycastUnits(origin, direction, maxDist = 200, radiusBoost = 0, 
       Math.max(shape.radiusBottom, shape.radiusTop) + 0.3 + boost :
       Math.max(shape.width, shape.depth) * 0.5 + 0.3 + boost;
     const centerY = (shape.type === 'cylinder' ? shape.height : shape.height) * 0.5;
+    const gY = sampleMoonTerrainWorldY(unit.x, unit.z);
 
-    _pos.set(unit.x, centerY, unit.z);
+    _pos.set(unit.x, gY + centerY, unit.z);
     considerSpherePick(origin, direction, _pos, radius, maxDist, state, unit, pickNdc);
   });
 
@@ -859,8 +919,9 @@ export function raycastBuildings(origin, direction, maxDist = 200, radiusBoost =
     if (!shape) return;
     const radius = Math.max(shape.width, shape.depth) * 0.6 + boost;
     const centerY = shape.height * 0.5;
+    const gY = sampleMoonTerrainWorldY(building.x, building.z);
 
-    _pos.set(building.x, centerY, building.z);
+    _pos.set(building.x, gY + centerY, building.z);
     considerSpherePick(origin, direction, _pos, radius, maxDist, state, building, pickNdc);
   });
 
@@ -876,8 +937,9 @@ export function raycastResourceFields(origin, direction, maxDist = 200, pickNdc 
     const centerY = field.depleted
       ? 0.55
       : Math.max(1, (field.remaining / field.maxCapacity) * 3);
+    const gY = sampleMoonTerrainWorldY(field.x, field.z);
 
-    _pos.set(field.x, centerY, field.z);
+    _pos.set(field.x, gY + centerY, field.z);
     considerSpherePick(origin, direction, _pos, radius, maxDist, state, field, pickNdc);
   });
 
@@ -899,9 +961,16 @@ function updateBuildBoundary() {
   if (!buildRadiusMesh) return;
 
   if (State.gameSession.buildMode) {
-    const hq = State.getPlayerHQ(State.gameSession.myPlayerId);
+    let hq = null;
+    const sid = State.gameSession.buildModeHQId;
+    if (sid && State.buildings.has(sid)) {
+      const b = State.buildings.get(sid);
+      if (b && b.type === 'hq' && b.hp > 0) hq = b;
+    }
+    if (!hq) hq = State.getPlayerHQ(State.gameSession.myPlayerId);
     if (hq) {
-      buildRadiusMesh.position.set(hq.x, 0.2, hq.z);
+      const hGY = sampleMoonTerrainWorldY(hq.x, hq.z);
+      buildRadiusMesh.position.set(hq.x, hGY + 0.2, hq.z);
       buildRadiusMesh.visible = true;
       return;
     }

@@ -64,8 +64,9 @@
       const half = this.data.mapSize / 2;
       const u = uv.x;
       const v = uv.y;
+      // Match flat minimap (ui.js handleMinimapClick): wx mirrors U; WZ uses V upward (Three UV v=0 bottom)
       const wx = (1 - u) * this.data.mapSize - half;
-      const wz = (1 - v) * this.data.mapSize - half;
+      const wz = v * this.data.mapSize - half;
 
       const grip =
         typeof window.__rtsIsVrGripHeld === 'function'

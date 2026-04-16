@@ -60,7 +60,7 @@ export function initUI() {
 // --- HUD ---
 function getHudControlsHelpHtml() {
   if (Input.getIsVR()) {
-    return `VR: Laser + trigger on menu & map · X menu · Y map · B deselect · A select all · grips pan · pinch height zoom.<br>
+    return `VR: <b>Right trigger</b> — select / move / attack (only that controller's laser is shown while the trigger is held). With units selected, tap another friendly to <b>add to selection</b>; hold <b>grip + trigger on the same hand</b> and aim at a friendly to <b>follow</b> (engineers repair nearby damaged vehicles). <b>Left X</b> — cancel build placement or open menu. <b>Y</b> map · <b>B</b> deselect & cancel build · <b>A</b> select all · grips pan.<br>
       <span style="opacity:0.85">Flat screen (if you peek at the mirror): WASD pan · Q/E rotate · scroll zoom · left / right click.</span>`;
   }
   if (Input.getInputPlatform() === 'touch') {
@@ -76,8 +76,8 @@ function getHudControlsHelpHtml() {
       <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
   }
   return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; right-click follow a vehicle to stay with it)<br>
-    HQ click: Build · Mobile HQ selected: Deploy panel (new HQ & build zone) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · Esc: Menu<br>
-    <span style="opacity:0.85">VR: Laser + trigger on menu & map · X menu · Y map · B deselect · A select all · grips pan</span>`;
+    HQ click: Build · Mobile HQ selected: Deploy panel (new HQ & build zone) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · Esc: Menu<br>
+    <span style="opacity:0.85">VR: Laser + trigger on menu & map · grip+trigger on one hand for follow · X menu · Y map · B deselect · A select all · grips pan</span>`;
 }
 
 function updateFlatHudButtons() {
@@ -564,8 +564,10 @@ function updateHUD() {
       const desc = Object.entries(types).map(([t, c]) =>
         `${UNIT_TYPES[t]?.name || t}×${c}`
       ).join('  ');
-      const totalHP = selected.reduce((s, u) => s + u.hp, 0);
-      const maxHP = selected.reduce((s, u) => s + u.maxHp, 0);
+      const totalHPRaw = selected.reduce((s, u) => s + u.hp, 0);
+      const maxHPRaw = selected.reduce((s, u) => s + u.maxHp, 0);
+      const totalHP = Math.round(totalHPRaw);
+      const maxHP = Math.round(maxHPRaw);
 
       let extra = '';
 
@@ -773,7 +775,7 @@ function drawMinimapToContext(ctx, w, h) {
   ctx.translate(w, h);
   ctx.scale(-1, -1);
 
-  ctx.fillStyle = '#111';
+  ctx.fillStyle = '#141418';
   ctx.fillRect(0, 0, w, h);
 
   const myTeam = State.players[State.gameSession.myPlayerId]?.team ?? 0;
@@ -785,16 +787,16 @@ function drawMinimapToContext(ctx, w, h) {
       for (let gx = 0; gx < FOG_GRID_SIZE; gx++) {
         const val = fogGrid[gz * FOG_GRID_SIZE + gx];
         if (val === 2) {
-          ctx.fillStyle = '#1a1a2a';
+          ctx.fillStyle = '#2a2a32';
           ctx.fillRect(gx * cellW, gz * cellH, cellW + 1, cellH + 1);
         } else if (val === 1) {
-          ctx.fillStyle = '#0d0d15';
+          ctx.fillStyle = '#1a1a20';
           ctx.fillRect(gx * cellW, gz * cellH, cellW + 1, cellH + 1);
         }
       }
     }
   } else if (isSpyMode) {
-    ctx.fillStyle = '#1a1a2a';
+    ctx.fillStyle = '#2a2a32';
     ctx.fillRect(0, 0, w, h);
   }
 
@@ -1058,7 +1060,15 @@ export function showBuildingPanel(building) {
   };
 
   window._startBuildMode = (type) => {
+    const hqId =
+      activeBuildingPanel &&
+      activeBuildingPanel.type === 'hq' &&
+      State.buildings.has(activeBuildingPanel.id)
+        ? activeBuildingPanel.id
+        : null;
     Input.toggleBuildMode(type);
+    State.gameSession.buildModeHQId =
+      State.gameSession.buildMode && hqId ? hqId : null;
     hideBuildingPanel();
   };
 }

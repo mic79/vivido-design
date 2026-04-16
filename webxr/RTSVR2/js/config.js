@@ -23,12 +23,12 @@ export const PLAYER_COLORS = [
 
 export const PLAYER_COLOR_HEX = ['#ff3333', '#ff8800', '#3366ff', '#00cccc'];
 
-// Spawn positions (corners, facing center)
+// Spawn positions (corners, facing center). **180° vs earlier builds:** P0 starts NE (+,+), opposite SW (−,−).
 export const SPAWN_POSITIONS = [
-  { x: -70, z: -70, rotation: Math.PI * 0.25 },   // P1 bottom-left
-  { x:  70, z: -70, rotation: Math.PI * 0.75 },   // P2 bottom-right
-  { x: -70, z:  70, rotation: -Math.PI * 0.25 },  // P3 top-left
-  { x:  70, z:  70, rotation: -Math.PI * 0.75 },  // P4 top-right
+  { x: 70, z: 70, rotation: -Math.PI * 0.75 }, // P1 — NE (default human / slot 0)
+  { x: -70, z: 70, rotation: -Math.PI * 0.25 }, // P2 — NW
+  { x: 70, z: -70, rotation: Math.PI * 0.75 }, // P3 — SE
+  { x: -70, z: -70, rotation: Math.PI * 0.25 }, // P4 — SW
 ];
 
 // Teams: P1+P2 = team 0,  P3+P4 = team 1
@@ -41,16 +41,16 @@ export const HARVEST_TIME = 3.0;        // Seconds to fill harvester at field
 export const DEPOSIT_TIME = 1.5;        // Seconds to unload at refinery
 
 export const RESOURCE_FIELD_POSITIONS = [
-  // Inner ring (closer to bases, safer)
-  { x: -45, z: -45 },  // Near P1
-  { x:  45, z: -45 },  // Near P2
-  { x: -45, z:  45 },  // Near P3
-  { x:  45, z:  45 },  // Near P4
+  // Inner ring (closer to bases, safer) — mirrored with spawn flip
+  { x: 45, z: 45 }, // Near P1 (NE)
+  { x: -45, z: 45 }, // Near P2 (NW)
+  { x: 45, z: -45 }, // Near P3 (SE)
+  { x: -45, z: -45 }, // Near P4 (SW)
   // Outer contested ring (center of map, risky)
-  { x:   0, z: -30 },  // South center
-  { x:   0, z:  30 },  // North center
-  { x: -30, z:   0 },  // West center
-  { x:  30, z:   0 },  // East center
+  { x: 0, z: 30 }, // North center
+  { x: 0, z: -30 }, // South center
+  { x: 30, z: 0 }, // East center
+  { x: -30, z: 0 }, // West center
 ];
 
 // --- Unit Types ---

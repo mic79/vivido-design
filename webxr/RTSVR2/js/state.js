@@ -245,6 +245,8 @@ export const gameSession = {
   isHost: true,
   menuOpen: true,
   buildMode: null,     // null or building type string
+  /** When set, build-radius ring is centered on this HQ (second / Mobile HQ); cleared with buildMode. */
+  buildModeHQId: null,
   buildGhostValid: false,
   buildGhostPos: { x: 0, z: 0 },
   debugFog: false,     // "Spy Mode" for observing AI
@@ -267,6 +269,12 @@ export function takeHostFxForSnapshot() {
   return out;
 }
 
+/** Clears placement mode and which HQ owns the build ring (call whenever buildMode is cleared). */
+export function clearBuildPlacementFlags() {
+  gameSession.buildMode = null;
+  gameSession.buildModeHQId = null;
+}
+
 // --- Reset all state ---
 export function resetState() {
   resetIds();
@@ -283,6 +291,6 @@ export function resetState() {
   gameSession.winner = -1;
   gameSession.elapsedTime = 0;
   gameSession.menuOpen = true;
-  gameSession.buildMode = null;
+  clearBuildPlacementFlags();
   pendingHostFx.length = 0;
 }

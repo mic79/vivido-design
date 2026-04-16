@@ -359,7 +359,7 @@ function handleHostData(data) {
       State.gameSession.gameStarted = true;
       State.gameSession.menuOpen = false;
       State.deselectAll();
-      State.gameSession.buildMode = null;
+      State.clearBuildPlacementFlags();
       {
         const b = document.getElementById('build-placement-banner');
         if (b) b.style.display = 'none';

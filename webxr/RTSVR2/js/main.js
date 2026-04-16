@@ -16,6 +16,8 @@ import * as Units from './units.js';
 import * as Buildings from './buildings.js';
 import * as Loop from './loop.js';
 import { SPAWN_POSITIONS } from './config.js';
+import { applyMoonBattlefieldVisuals } from './moon-environment.js';
+import { applyHdrSkyEnvironment } from './sky-hdr-environment.js';
 
 // --- Wait for A-Frame scene to load ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -44,6 +46,8 @@ function initializeGame(sceneEl) {
   Fog.initFog();
 
   setTimeout(() => {
+    void applyHdrSkyEnvironment(sceneEl);
+    applyMoonBattlefieldVisuals(sceneEl);
     Renderer.initRenderer(sceneEl);
     Effects.initEffects(sceneEl);
     Pathfinding.initPathfinding();
@@ -121,10 +125,10 @@ function onStartGame(mode) {
     }
   });
 
-  // For 1v1: give the bot the opposite corner spawn
+  // For 1v1: diagonal corners (NE human vs SW bot after global spawn flip in config).
   if (mode === '1v1') {
-    State.players[0].spawn = SPAWN_POSITIONS[0]; // Top-left
-    State.players[1].spawn = SPAWN_POSITIONS[2]; // Bottom-right
+    State.players[0].spawn = SPAWN_POSITIONS[0];
+    State.players[1].spawn = SPAWN_POSITIONS[3];
   }
 
   // Mark inactive players as defeated
@@ -174,7 +178,7 @@ function onStartGame(mode) {
   State.gameSession.gameOver = false;
   State.gameSession.elapsedTime = 0;
   State.gameSession.myPlayerId = 0;
-  State.gameSession.buildMode = null;
+  State.clearBuildPlacementFlags();
 
   UI.updateMenuVisibility();
   if (Input.getInputPlatform() === 'touch') {

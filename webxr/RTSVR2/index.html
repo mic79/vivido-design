@@ -6,7 +6,7 @@
   <title>RTS VR II — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.3.41">
+  <meta name="rts-version" content="0.3.48">
 
   <!-- A-Frame -->
   <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
@@ -38,7 +38,7 @@
 
   <a-scene
     id="game-scene"
-    renderer="antialias: false; colorManagement: true; physicallyCorrectLights: false; sortObjects: false"
+    renderer="antialias: false; colorManagement: true; physicallyCorrectLights: true; sortObjects: false"
     vr-mode-ui="enabled: true"
     loading-screen="enabled: false"
     webxr="optionalFeatures: local-floor"
@@ -49,7 +49,7 @@
     <a-entity id="cameraRig" position="0 40 0">
       <a-entity
         id="camera"
-        camera
+        camera="near: 0.05; far: 12000"
         look-controls="enabled: false"
         position="0 0 0"
         rotation="-75 0 0"
@@ -78,7 +78,7 @@
           <a-entity id="vr-game-menu" position="0 0 0" visible="false">
             <a-plane width="0.72" height="0.62" color="#000810" material="opacity: 0.92; transparent: true" position="0 0 -0.006"></a-plane>
             <a-text class="no-raycast" value="RTS VR II" position="0 0.36 0" align="center" width="1.15" color="#00ff66"></a-text>
-            <a-text class="no-raycast" id="menu-status-vr" value="Laser + trigger" position="0 -0.36 0" align="center" width="0.72" color="#888888"></a-text>
+            <a-text class="no-raycast" id="menu-status-vr" value="Laser + trigger · grip+trigger: follow" position="0 -0.36 0" align="center" width="0.72" color="#888888"></a-text>
 
             <a-entity class="js-vr-menu-btn" rts-vr-menu-btn="action: 1v1" vr-button-hover="hoverColor: #2a7a2a" position="-0.24 0.22 0"
                       geometry="primitive: plane; width: 0.44; height: 0.09"
@@ -131,7 +131,7 @@
                 width="0.44"
                 height="0.44"
                 class="clickable"
-                material="shader: flat; color: #111111"
+                material="shader: flat; color: #16161a"
                 position="0 0 0"
                 rts-vr-minimap="mapSize: 200"
               ></a-plane>
@@ -204,22 +204,15 @@
       </a-entity>
     </a-entity>
 
-    <!-- Lighting -->
-    <a-entity light="type: ambient; color: #668; intensity: 0.5"></a-entity>
-    <a-entity light="type: directional; color: #ffe8c0; intensity: 1.2" position="30 50 20"></a-entity>
-    <a-entity light="type: directional; color: #aaccff; intensity: 0.3" position="-20 30 -30"></a-entity>
+    <!-- Neutral fill + white sun — warm ambient was killing lunar gray / albedo separation. -->
+    <a-entity light="type: ambient; color: #c8d0dc; intensity: 0.28"></a-entity>
+    <a-entity light="type: directional; color: #ffffff; intensity: 1.95" position="40 55 28"></a-entity>
 
-    <!-- Sky -->
-    <a-sky color="#0a0a1a"></a-sky>
+    <!-- Fallback sky if `earthlike_planet.hdr` fails to load; hidden when PMREM background is applied. -->
+    <a-sky color="#050508"></a-sky>
 
-    <!-- Ground Plane -->
-    <a-entity
-      id="ground"
-      geometry="primitive: plane; width: 200; height: 200"
-      material="color: #1a2a1a; roughness: 1; metalness: 0; shader: flat"
-      rotation="-90 0 0"
-      position="0 0 0"
-    ></a-entity>
+    <!-- Ground mesh + material created in moon-environment.js (BattleVR-style subdivided plane + textures) -->
+    <a-entity id="ground" position="0 0 0" rotation="0 0 0"></a-entity>
 
     <!-- Grid lines (subtle) -->
     <a-entity id="gridHelper"></a-entity>
@@ -240,15 +233,24 @@
     document.querySelector('a-scene').addEventListener('loaded', function() {
       const scene = this.object3D;
 
-      const gridHelper = new THREE.GridHelper(200, 40, 0x1a3a1a, 0x1a3a1a);
+      const gridHelper = new THREE.GridHelper(200, 28, 0x4a4a52, 0x35353c);
       gridHelper.position.y = 0.02;
-      gridHelper.material.transparent = true;
-      gridHelper.material.opacity = 0.3;
+      if (Array.isArray(gridHelper.material)) {
+        gridHelper.material.forEach((m) => {
+          m.transparent = true;
+          m.opacity = 0.2;
+        });
+      } else {
+        gridHelper.material.transparent = true;
+        gridHelper.material.opacity = 0.2;
+      }
       const gridMount = document.getElementById('gridHelper');
       if (gridMount && gridMount.object3D) {
         gridMount.object3D.add(gridHelper);
+        gridHelper.visible = false;
       } else {
         scene.add(gridHelper);
+        gridHelper.visible = false;
       }
 
       // Hide loading screen
