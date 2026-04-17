@@ -5,14 +5,15 @@
 // permanently broke when units were near obstacles
 // ========================================
 
-import { MAP_SIZE, MAP_HALF, OBSTACLE_BUFFER } from './config.js';
+import { MAP_UNIT_PLAYABLE_RADIUS, OBSTACLE_BUFFER } from './config.js';
 import * as State from './state.js';
 
 // --- Grid config ---
-const CELL = 2;                          // 2 world-units per cell
-const COLS = Math.ceil(MAP_SIZE / CELL); // 100
+const CELL = 2; // 2 world-units per cell
+/** Axis-aligned bounds for the **unit** walk disk (`MAP_UNIT_PLAYABLE_RADIUS`). */
+const NAV_GRID_HALF = MAP_UNIT_PLAYABLE_RADIUS;
+const COLS = Math.ceil((2 * NAV_GRID_HALF) / CELL);
 const ROWS = COLS;
-const HALF_CELLS = COLS / 2;             // 50
 
 // 0 = walkable, 1 = blocked
 const grid = new Uint8Array(COLS * ROWS);
@@ -54,6 +55,18 @@ export function rebuildNavMesh() {
     }
   }
 
+  const R = MAP_UNIT_PLAYABLE_RADIUS;
+  const R2 = R * R + 1e-2;
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      const wx = colToWorld(c);
+      const wz = rowToWorld(r);
+      if (wx * wx + wz * wz > R2) {
+        grid[r * COLS + c] = 1;
+      }
+    }
+  }
+
   console.log('✅ Pathfinding grid rebuilt');
 }
 
@@ -72,10 +85,10 @@ function markRect(wx, wz, halfW, halfD) {
 }
 
 // --- Coordinate conversion ---
-function worldToCol(wx) { return Math.floor((wx + MAP_HALF) / CELL); }
-function worldToRow(wz) { return Math.floor((wz + MAP_HALF) / CELL); }
-function colToWorld(c)  { return c * CELL - MAP_HALF + CELL * 0.5; }
-function rowToWorld(r)  { return r * CELL - MAP_HALF + CELL * 0.5; }
+function worldToCol(wx) { return Math.floor((wx + NAV_GRID_HALF) / CELL); }
+function worldToRow(wz) { return Math.floor((wz + NAV_GRID_HALF) / CELL); }
+function colToWorld(c)  { return c * CELL - NAV_GRID_HALF + CELL * 0.5; }
+function rowToWorld(r)  { return r * CELL - NAV_GRID_HALF + CELL * 0.5; }
 
 function clampCol(c) { return Math.max(0, Math.min(COLS - 1, c)); }
 function clampRow(r) { return Math.max(0, Math.min(ROWS - 1, r)); }

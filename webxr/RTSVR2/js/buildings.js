@@ -5,6 +5,7 @@
 
 import {
   BUILDING_TYPES, UNIT_TYPES, BUILD_RADIUS_FROM_HQ, BUILDING_SHAPES,
+  isWorldInsidePlayableDisk,
 } from './config.js';
 import * as State from './state.js';
 import * as Pathfinding from './pathfinding.js';
@@ -120,8 +121,7 @@ function getPlaceBuildingFailureCodeInternal(type, ownerId, x, z, opts = {}) {
   });
   if (onResource) return 'on_resource';
 
-  const mapLimit = 95;
-  if (Math.abs(x) > mapLimit || Math.abs(z) > mapLimit) return 'out_of_bounds';
+  if (!isWorldInsidePlayableDisk(x, z, 8)) return 'out_of_bounds';
 
   return null;
 }

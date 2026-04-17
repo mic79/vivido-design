@@ -36,6 +36,8 @@ let hqTexturedMode = false;
 let healthBarBgMesh = null;
 let healthBarFgMesh = null;
 let selectionRingMesh = null;
+/** Cyan ring on squad leader when a follower is selected (not a command target). */
+let squadLeaderRefRingMesh = null;
 let resourceFieldMesh = null;
 let projectileMesh = null;
 let groundMesh = null;
@@ -55,7 +57,7 @@ const _zeroScale = new THREE.Vector3(0, 0, 0);
 const activeProjectiles = [];
 let projectileIndex = 0;
 
-export function initRenderer(sceneEl) {
+export async function initRenderer(sceneEl) {
   scene3D = sceneEl.object3D;
 
   createUnitMeshes();
@@ -70,7 +72,20 @@ export function initRenderer(sceneEl) {
 
   console.log('✅ Renderer initialized with InstancedMesh');
 
-  void tryReplaceHqWithGltfModel(sceneEl);
+  await tryReplaceHqWithGltfModel(sceneEl);
+}
+
+/** Upload / compile draw paths so the first visible frame after fade is not still warming shaders. */
+export function warmRendererPrograms(sceneEl) {
+  const r = sceneEl && sceneEl.renderer;
+  const scene = sceneEl && sceneEl.object3D;
+  const cam = sceneEl && sceneEl.camera;
+  if (!r || !scene || !cam || typeof r.compile !== 'function') return;
+  try {
+    r.compile(scene, cam);
+  } catch (_) {
+    /* WebGL / state quirks on some drivers */
+  }
 }
 
 /**
@@ -510,6 +525,19 @@ function createSelectionRingMesh() {
   selectionRingMesh.instanceMatrix.needsUpdate = true;
   scene3D.add(selectionRingMesh);
 
+  const refGeometry = geometry.clone();
+  const refMat = new THREE.MeshBasicMaterial({ color: 0x44ccff, transparent: true, opacity: 0.88 });
+  squadLeaderRefRingMesh = new THREE.InstancedMesh(refGeometry, refMat, 32);
+  squadLeaderRefRingMesh.count = 0;
+  squadLeaderRefRingMesh.frustumCulled = false;
+  squadLeaderRefRingMesh.renderOrder = 997;
+  for (let i = 0; i < 32; i++) {
+    _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    squadLeaderRefRingMesh.setMatrixAt(i, _mat4);
+  }
+  squadLeaderRefRingMesh.instanceMatrix.needsUpdate = true;
+  scene3D.add(squadLeaderRefRingMesh);
+
   // --- Build Radius Ring ---
   const brGeometry = new THREE.TorusGeometry(BUILD_RADIUS_FROM_HQ, 0.4, 8, 128);
   brGeometry.rotateX(Math.PI / 2);
@@ -609,6 +637,15 @@ function updateUnitInstances() {
   }
 
   const myPid = State.gameSession.myPlayerId;
+  /** Living followers (my units) per leader id — for squad leader tint when unselected. */
+  const myFollowerCountByLeaderId = new Map();
+  State.units.forEach(u => {
+    if (u.hp <= 0 || u.ownerId !== myPid || !u.followLeadId) return;
+    const lead = State.units.get(u.followLeadId);
+    if (!lead || lead.hp <= 0 || lead.ownerId !== myPid) return;
+    const lid = u.followLeadId;
+    myFollowerCountByLeaderId.set(lid, (myFollowerCountByLeaderId.get(lid) || 0) + 1);
+  });
 
   const byType = {};
   for (const type of Object.keys(unitMeshes)) {
@@ -700,6 +737,23 @@ function updateUnitInstances() {
             break;
           default:
             break;
+        }
+        if (unit.ownerId === myPid) {
+          if (unit.followLeadId) {
+            _color.lerp(new THREE.Color(0x3aa899), 0.38);
+          } else if ((myFollowerCountByLeaderId.get(unit.id) || 0) > 0) {
+            _color.lerp(new THREE.Color(0xeec066), 0.34);
+          }
+        }
+      }
+      if ((unit.type === 'harvester' || unit.type === 'mobileHq') && unit.ownerId === myPid) {
+        if (unit.followLeadId) {
+          const lead = State.units.get(unit.followLeadId);
+          if (lead && lead.hp > 0 && lead.ownerId === myPid) {
+            _color.lerp(new THREE.Color(0x3aa899), 0.32);
+          }
+        } else if ((myFollowerCountByLeaderId.get(unit.id) || 0) > 0) {
+          _color.lerp(new THREE.Color(0xeec066), 0.3);
         }
       }
       mesh.setColorAt(i, _color);
@@ -888,14 +942,27 @@ function selectionRingScaleForUnitType(unitType) {
   return s;
 }
 
+function countSquadFollowersForRing(leaderId) {
+  let n = 0;
+  State.units.forEach(u => {
+    if (u.hp > 0 && u.followLeadId === leaderId) n++;
+  });
+  return n;
+}
+
 function updateSelectionRings() {
   let ringIndex = 0;
+  let refRingIndex = 0;
+  const rungUnitIds = new Set();
 
   State.selectedUnits.forEach(unitId => {
     const unit = State.units.get(unitId);
     if (!unit || unit.hp <= 0 || ringIndex >= 60) return;
 
-    const s = selectionRingScaleForUnitType(unit.type);
+    let s = selectionRingScaleForUnitType(unit.type);
+    if (!unit.followLeadId && countSquadFollowersForRing(unit.id) > 0) {
+      s *= 1.12;
+    }
     const uGY = sampleMoonTerrainWorldY(unit.x, unit.z);
     _mat4.compose(
       _pos.set(unit.x, uGY + 0.15, unit.z),
@@ -904,7 +971,31 @@ function updateSelectionRings() {
     );
     selectionRingMesh.setMatrixAt(ringIndex, _mat4);
     ringIndex++;
+    rungUnitIds.add(unitId);
   });
+
+  const myPid = State.gameSession.myPlayerId;
+  if (squadLeaderRefRingMesh) {
+    State.selectedUnits.forEach(unitId => {
+      const u = State.units.get(unitId);
+      if (!u || u.hp <= 0 || u.ownerId !== myPid || !u.followLeadId || refRingIndex >= 32) return;
+      const leadId = u.followLeadId;
+      if (rungUnitIds.has(leadId)) return;
+      const lead = State.units.get(leadId);
+      if (!lead || lead.hp <= 0 || lead.ownerId !== myPid) return;
+      if (countSquadFollowersForRing(leadId) === 0) return;
+      const s = selectionRingScaleForUnitType(lead.type) * 1.12;
+      const uGY = sampleMoonTerrainWorldY(lead.x, lead.z);
+      _mat4.compose(
+        _pos.set(lead.x, uGY + 0.15, lead.z),
+        _quat.identity(),
+        _scale.set(s, 1, s)
+      );
+      squadLeaderRefRingMesh.setMatrixAt(refRingIndex, _mat4);
+      refRingIndex++;
+      rungUnitIds.add(leadId);
+    });
+  }
 
   // Selected Building
   if (UI.activeBuildingPanel && ringIndex < selectionRingMesh.count) {
@@ -943,6 +1034,15 @@ function updateSelectionRings() {
   }
   selectionRingMesh.count = Math.max(ringIndex, selectionRingMesh.count);
   selectionRingMesh.instanceMatrix.needsUpdate = true;
+
+  if (squadLeaderRefRingMesh) {
+    for (let i = refRingIndex; i < squadLeaderRefRingMesh.count; i++) {
+      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+      squadLeaderRefRingMesh.setMatrixAt(i, _mat4);
+    }
+    squadLeaderRefRingMesh.count = Math.max(refRingIndex, squadLeaderRefRingMesh.count);
+    squadLeaderRefRingMesh.instanceMatrix.needsUpdate = true;
+  }
 }
 
 function updateResourceFields() {
@@ -1106,8 +1206,63 @@ export function pickScreenNdcErrorForResourceField(field, pickNdc) {
 }
 
 /**
- * Among sphere hits: with pickNdc, prefer projected screen distance (matches what the user sees);
- * else use ray–center miss then along-ray distance (VR / legacy).
+ * Along-ray distance to the **near** sphere intersection (same convention as `considerSpherePick`).
+ * @returns {number|null}
+ */
+export function raySphereNearEntryT(origin, direction, center, radius, maxDist = 200) {
+  _rayPickOc.subVectors(center, origin);
+  const b = _rayPickOc.dot(direction);
+  const c = _rayPickOc.dot(_rayPickOc) - radius * radius;
+  const discriminant = b * b - c;
+  if (discriminant <= 0) return null;
+  const sqrtD = Math.sqrt(discriminant);
+  const dist = b - sqrtD;
+  if (dist <= 0 || dist >= maxDist) return null;
+  return dist;
+}
+
+/**
+ * Entry distance along `origin`+`direction` for a hit returned by `raycastUnits` / `raycastBuildings` /
+ * `raycastResourceFields` (same sphere centers and radii). Used when resolving overlaps without NDC.
+ * @param {'unit'|'building'|'resource'} kind
+ */
+export function battlefieldPickEntryT(origin, direction, kind, obj, maxDist = 200, radiusBoost = 0) {
+  if (!obj) return null;
+  const boost = Math.max(0, radiusBoost);
+  if (kind === 'unit') {
+    const shape = UNIT_SHAPES[obj.type];
+    if (!shape) return null;
+    const radius =
+      shape.type === 'cylinder'
+        ? Math.max(shape.radiusBottom, shape.radiusTop) + 0.3 + boost
+        : Math.max(shape.width, shape.depth) * 0.5 + 0.3 + boost;
+    const centerY = shape.height * 0.5;
+    const gY = sampleMoonTerrainWorldY(obj.x, obj.z);
+    _pos.set(obj.x, gY + centerY, obj.z);
+    return raySphereNearEntryT(origin, direction, _pos, radius, maxDist);
+  }
+  if (kind === 'building') {
+    const { centerY, radius: baseRadius } = buildingPickVerticalAndRadius(obj.type);
+    const rBoost = boost * 0.55; // matches `raycastBuildings` (`max(0,radiusBoost)*0.55` added to base radius)
+    const radius = baseRadius + rBoost;
+    const gY = sampleMoonTerrainWorldY(obj.x, obj.z);
+    _pos.set(obj.x, gY + centerY, obj.z);
+    return raySphereNearEntryT(origin, direction, _pos, radius, maxDist);
+  }
+  if (kind === 'resource') {
+    const radius = obj.depleted ? 2.35 : 2.0;
+    const cap = obj.maxCapacity || 1;
+    const centerY = obj.depleted ? 0.55 : Math.max(1, (obj.remaining / cap) * 3);
+    const gY = sampleMoonTerrainWorldY(obj.x, obj.z);
+    _pos.set(obj.x, gY + centerY, obj.z);
+    return raySphereNearEntryT(origin, direction, _pos, radius, maxDist);
+  }
+  return null;
+}
+
+/**
+ * Among sphere hits: with pickNdc, prefer projected screen distance (matches flat mouse / touch);
+ * else prefer **along-ray entry distance** (first hit along the laser), then perpendicular miss — matches VR controller rays.
  */
 function considerSpherePick(origin, direction, center, radius, maxDist, state, target, pickNdc) {
   _rayPickOc.subVectors(center, origin);
@@ -1140,8 +1295,8 @@ function considerSpherePick(origin, direction, center, radius, maxDist, state, t
       );
   } else {
     better =
-      miss < state.bestMiss - tieEps ||
-      (Math.abs(miss - state.bestMiss) <= tieEps && dist < state.bestDist - tieEps);
+      dist < state.bestDist - tieEps ||
+      (Math.abs(dist - state.bestDist) <= tieEps && miss < state.bestMiss - tieEps);
   }
   if (better) {
     if (pickNdc) state.bestScreen = screenPen;
@@ -1240,6 +1395,7 @@ export function disposeRenderer() {
   if (healthBarBgMesh) { scene3D.remove(healthBarBgMesh); healthBarBgMesh.dispose(); }
   if (healthBarFgMesh) { scene3D.remove(healthBarFgMesh); healthBarFgMesh.dispose(); }
   if (selectionRingMesh) { scene3D.remove(selectionRingMesh); selectionRingMesh.dispose(); }
+  if (squadLeaderRefRingMesh) { scene3D.remove(squadLeaderRefRingMesh); squadLeaderRefRingMesh.dispose(); squadLeaderRefRingMesh = null; }
   if (resourceFieldMesh) { scene3D.remove(resourceFieldMesh); resourceFieldMesh.dispose(); }
   if (projectileMesh) { scene3D.remove(projectileMesh); projectileMesh.dispose(); }
 }

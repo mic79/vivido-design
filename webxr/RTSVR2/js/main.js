@@ -15,9 +15,10 @@ import * as Network from './network.js';
 import * as Units from './units.js';
 import * as Buildings from './buildings.js';
 import * as Loop from './loop.js';
-import { SPAWN_POSITIONS } from './config.js';
+import { SPAWN_POSITIONS, clampWorldToPlayableDisk } from './config.js';
 import { applyMoonBattlefieldVisuals } from './moon-environment.js';
 import { applyHdrSkyEnvironment } from './sky-hdr-environment.js';
+import { primeSceneRevealBlack, runSceneRevealFromBlack } from './scene-reveal.js';
 
 // --- Wait for A-Frame scene to load ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -45,17 +46,40 @@ function initializeGame(sceneEl) {
   State.initResourceFields();
   Fog.initFog();
 
-  setTimeout(() => {
-    void applyHdrSkyEnvironment(sceneEl);
-    applyMoonBattlefieldVisuals(sceneEl);
-    Renderer.initRenderer(sceneEl);
+  setTimeout(async () => {
+    primeSceneRevealBlack(sceneEl);
+    await applyHdrSkyEnvironment(sceneEl);
+    await applyMoonBattlefieldVisuals(sceneEl);
+    primeSceneRevealBlack(sceneEl);
+
+    await Renderer.initRenderer(sceneEl);
     Effects.initEffects(sceneEl);
     Pathfinding.initPathfinding();
+
     Input.initInput(sceneEl);
+    // Lobby / pre-match: one HQ ~50 m ahead of default camera yaw (VR rig forward = −sin(rotY), −cos(rotY) on XZ).
+    const rig = Input.getCameraState();
+    const lobbyAheadM = 50;
+    const hx = -Math.sin(rig.rotY) * lobbyAheadM;
+    const hz = -Math.cos(rig.rotY) * lobbyAheadM;
+    const hqPos = clampWorldToPlayableDisk(hx, hz, 14);
+    Buildings.createBuilding('hq', 0, hqPos.x, hqPos.z, {});
+    Input.beginLobbyIntroOrbitAroundHq(hqPos.x, hqPos.z);
+    Pathfinding.rebuildNavMesh();
     Network.initNetwork();
 
     UI.setCallbacks(onStartGame, onHostGame, onJoinGame);
     Loop.startLoop(sceneEl);
+
+    Renderer.warmRendererPrograms(sceneEl);
+    // GPU + scene graph settle (terrain maps, HQ GLB, first instancing tick) before lifting the black hold.
+    await new Promise((r) =>
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => requestAnimationFrame(r))
+      )
+    );
+
+    await runSceneRevealFromBlack(sceneEl);
 
     console.log('✅ RTSVR2 Ready');
   }, 500);
@@ -188,7 +212,7 @@ function onStartGame(mode) {
     Input.getIsVR()
       ? 'Game started! Point laser at your HQ and use the trigger to open the build menu.'
       : Input.getInputPlatform() === 'touch'
-        ? 'Game started! Tap your HQ to build. Two-finger drag pans the map; pinch zooms.'
+        ? 'Game started! Tap your HQ to build. Army: tap friendlies to add; tap ground to move; long-press a friendly to follow (engineers repair nearby vehicles). Two-finger drag pans; pinch zooms.'
         : 'Game started! Click your HQ to open the build menu. (VR: left trigger)';
   UI.showStatus(startHint);
 

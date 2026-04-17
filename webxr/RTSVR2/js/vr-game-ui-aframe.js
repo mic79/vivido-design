@@ -27,6 +27,21 @@
       this.baseColor = '#' + mesh.material.color.getHexString();
       this.baseOpacity =
         mesh.material.opacity !== undefined ? mesh.material.opacity : 1;
+      this._meshBaseCaptured = true;
+    },
+    /** Called from `rts-vr-aim-ray-ui-hover` — A-Frame `emit('mouseenter')` does not always reach here in XR. */
+    applyFromVrUiRay: function (isOver) {
+      if (isOver) {
+        if (!this.el.classList.contains('clickable')) return;
+        if (!this._meshBaseCaptured) {
+          this.onLoaded();
+        }
+        this.el.setAttribute('material', 'color', this.data.hoverColor);
+        this.el.setAttribute('material', 'opacity', this.data.hoverOpacity);
+      } else {
+        this.el.setAttribute('material', 'color', this.baseColor);
+        this.el.setAttribute('material', 'opacity', this.baseOpacity);
+      }
     },
     onEnter: function () {
       if (!this.el.classList.contains('clickable')) return;
@@ -62,11 +77,18 @@
       if (!uv) return;
 
       const half = this.data.mapSize / 2;
+      // Meters inside terrain circumradius; keep equal to `MAP_UNIT_PLAYABLE_INSET` in config.js for this mapSize.
+      const playR = half * Math.SQRT2 - 15;
       const u = uv.x;
       const v = uv.y;
       // Match flat minimap (ui.js handleMinimapClick): wx mirrors U; WZ uses V upward (Three UV v=0 bottom)
-      const wx = (1 - u) * this.data.mapSize - half;
-      const wz = v * this.data.mapSize - half;
+      let wx = (1 - u) * this.data.mapSize - half;
+      let wz = v * this.data.mapSize - half;
+      const d = Math.hypot(wx, wz);
+      if (d > playR && d > 1e-6) {
+        wx *= playR / d;
+        wz *= playR / d;
+      }
 
       const grip =
         typeof window.__rtsIsVrGripHeld === 'function'

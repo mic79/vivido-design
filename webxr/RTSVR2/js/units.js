@@ -4,7 +4,8 @@
 // ========================================
 
 import {
-  UNIT_TYPES, FORMATION_SPACING, UNIT_SEPARATION_RADIUS, MAP_HALF,
+  UNIT_TYPES, FORMATION_SPACING, UNIT_SEPARATION_RADIUS,
+  clampWorldToPlayableDisk,
   PLAYER_COLORS,
   CAPTURE_DURATION_MIN_SEC, CAPTURE_DURATION_MAX_SEC,
   CAPTURE_HP_REF_FOR_DURATION,
@@ -75,6 +76,11 @@ export function createUnit(type, ownerId, x, z, options = {}) {
     assignedRefinery: null,
     assignedField: null,
 
+    /** World-space offset from squad leader while mirroring orders (`followLeadId`). */
+    squadOffsetX: 0,
+    squadOffsetZ: 0,
+    _squadSyncSig: null,
+
     // Rendering (set by renderer)
     _renderIndex: -1,
     _renderVisible: false,
@@ -85,6 +91,144 @@ export function createUnit(type, ownerId, x, z, options = {}) {
   return unit;
 }
 
+/** @param {string[]} unitIds */
+function extendUnitIdsWithSquadFollowers(unitIds) {
+  const seen = new Set(unitIds);
+  const out = [...unitIds];
+  unitIds.forEach(leaderId => {
+    State.units.forEach(u => {
+      if (u.hp <= 0 || u.followLeadId !== leaderId || seen.has(u.id)) return;
+      seen.add(u.id);
+      out.push(u.id);
+    });
+  });
+  return out;
+}
+
+export function countSquadFollowers(leaderId) {
+  let n = 0;
+  State.units.forEach(u => {
+    if (u.hp > 0 && u.followLeadId === leaderId) n++;
+  });
+  return n;
+}
+
+function clearSquadFollowerLink(unit) {
+  unit.followLeadId = null;
+  unit.squadOffsetX = 0;
+  unit.squadOffsetZ = 0;
+  unit._squadSyncSig = null;
+}
+
+/**
+ * Each frame before movement: followers mirror the leader's orders (move/attack/idle),
+ * using a fixed world offset captured at follow time — no per-frame chase toward the leader.
+ */
+export function syncSquadFollowersFromLeaders() {
+  State.units.forEach(f => {
+    if (!f.followLeadId || f.hp <= 0) return;
+    const L = State.units.get(f.followLeadId);
+    if (!L || L.hp <= 0) {
+      clearSquadFollowerLink(f);
+      f.state = 'idle';
+      f.targetPos = null;
+      f.path = null;
+      f.targetUnitId = null;
+      f.targetBuildingId = null;
+      return;
+    }
+
+    const ox = f.squadOffsetX ?? 0;
+    const oz = f.squadOffsetZ ?? 0;
+
+    const sig = [
+      L.state,
+      L.targetUnitId ?? '',
+      L.targetBuildingId ?? '',
+      L.targetPos ? `${L.targetPos.x},${L.targetPos.z}` : '',
+      L.playerCommanded ? 1 : 0,
+    ].join('|');
+
+    if (f._squadSyncSig === sig) return;
+    f._squadSyncSig = sig;
+
+    f.playerCommanded = L.playerCommanded;
+
+    if (L.state === 'attacking') {
+      f.state = 'attacking';
+      f.targetUnitId = L.targetUnitId;
+      f.targetBuildingId = L.targetBuildingId;
+      if (L.targetPos) {
+        const c = clampWorldToPlayableDisk(L.targetPos.x + ox, L.targetPos.z + oz, 0);
+        f.targetPos = { x: c.x, z: c.z };
+      } else {
+        f.targetPos = null;
+      }
+      f.path = null;
+      f.pathIndex = 0;
+      return;
+    }
+
+    if (L.state === 'moving') {
+      f.state = 'moving';
+      if (L.targetPos) {
+        const c = clampWorldToPlayableDisk(L.targetPos.x + ox, L.targetPos.z + oz, 0);
+        f.targetPos = { x: c.x, z: c.z };
+      } else {
+        f.targetPos = null;
+      }
+      f.targetUnitId = null;
+      f.targetBuildingId = null;
+      f.path = null;
+      f.pathIndex = 0;
+      return;
+    }
+
+    f.state = 'idle';
+    f.targetUnitId = null;
+    f.targetBuildingId = null;
+    f.targetPos = null;
+    f.path = null;
+    f.pathIndex = 0;
+  });
+}
+
+/**
+ * Squad mirroring keeps a fixed XZ offset while the leader is idle, so an engineer ordered to
+ * follow a damaged vehicle can sit outside {@link ENGINEER_REPAIR_RANGE} forever. Chase the
+ * lead's **current** position until close enough to repair (overrides mirrored idle for this case).
+ */
+export function syncEngineerRepairApproach() {
+  State.units.forEach(f => {
+    if (f.type !== 'engineer' || f.hp <= 0 || !f.followLeadId) return;
+    if (f.state === 'attacking' && (f.targetBuildingId || f.targetUnitId)) return;
+    const lead = State.units.get(f.followLeadId);
+    if (!lead || lead.hp <= 0 || lead.team !== f.team) return;
+    if (lead.category !== 'vehicle' || !isVehicleNeedingRepair(lead)) return;
+
+    const d = Pathfinding.getDistance(f.x, f.z, lead.x, lead.z);
+    if (d <= ENGINEER_REPAIR_RANGE - 0.45) return;
+
+    f.playerCommanded = true;
+    f.state = 'moving';
+    const c = clampWorldToPlayableDisk(lead.x, lead.z, 0);
+    const gx = c.x;
+    const gz = c.z;
+    const repath =
+      !f.targetPos ||
+      Math.hypot(f.targetPos.x - gx, f.targetPos.z - gz) > 1.25 ||
+      !f.path ||
+      f.path.length === 0;
+    f.targetPos = { x: gx, z: gz };
+    f.targetUnitId = null;
+    f.targetBuildingId = null;
+    if (repath) {
+      f.path = null;
+      f.pathIndex = 0;
+    }
+  });
+}
+
 // --- Movement ---
 export function updateMovement(dt) {
   State.units.forEach(unit => {
@@ -92,28 +236,6 @@ export function updateMovement(dt) {
 
     if (unit.state === 'moving' || (unit.state === 'attacking' && unit.targetPos)) {
       moveAlongPath(unit, dt);
-    } else if (unit.state === 'following' && unit.targetUnitId) {
-      const target = State.units.get(unit.targetUnitId);
-      if (target && target.hp > 0) {
-        if (!unit.targetPos || Pathfinding.getDistanceSq(unit.targetPos.x, unit.targetPos.z, target.x, target.z) > 16) {
-          unit.targetPos = { x: target.x, z: target.z };
-          unit.path = null;
-        }
-        const distToTarget = Pathfinding.getDistanceSq(unit.x, unit.z, target.x, target.z);
-        if (distToTarget > 25) { // distance 5
-          moveAlongPath(unit, dt);
-        } else {
-          // Keep looking at target
-          const dx = target.x - unit.x;
-          const dz = target.z - unit.z;
-          unit.rotation = Math.atan2(dx, dz);
-        }
-      } else {
-        unit.state = 'idle';
-        unit.targetPos = null;
-        unit.path = null;
-        unit.followLeadId = null;
-      }
     }
 
     // Skip separation while holding fire at range — avoids slow "creep" toward the enemy pack.
@@ -201,9 +323,9 @@ function moveAlongPath(unit, dt) {
     }
   }
 
-  // Clamp to map bounds
-  unit.x = Math.max(-MAP_HALF + 2, Math.min(MAP_HALF - 2, unit.x));
-  unit.z = Math.max(-MAP_HALF + 2, Math.min(MAP_HALF - 2, unit.z));
+  const clamped = clampWorldToPlayableDisk(unit.x, unit.z, 0);
+  unit.x = clamped.x;
+  unit.z = clamped.z;
 
   // Face movement direction
   if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
@@ -294,8 +416,6 @@ export function updateCombat(time, dt) {
 
     if (unit.state === 'attacking') {
       handleAttackState(unit, time, dt);
-    } else if (unit.state === 'following' && unit.damage > 0) {
-      tryEscortAcquireThreat(unit);
     } else if (unit.state === 'idle') {
       if (!tryReturnToGuardPosition(unit)) {
         autoAcquireTarget(unit);
@@ -330,8 +450,8 @@ export function updateEngineerRepair(dt) {
 
     let patient = null;
 
-    if (unit.state === 'following' && unit.targetUnitId) {
-      const lead = State.units.get(unit.targetUnitId);
+    if (unit.followLeadId) {
+      const lead = State.units.get(unit.followLeadId);
       if (lead && lead.team === unit.team && isVehicleNeedingRepair(lead)) {
         const d = Pathfinding.getDistance(unit.x, unit.z, lead.x, lead.z);
         if (d <= ENGINEER_REPAIR_RANGE) patient = lead;
@@ -375,37 +495,13 @@ function resumeFollowAfterEscort(unit) {
     unit.followLeadId = null;
     return false;
   }
-  unit.state = 'following';
-  unit.targetUnitId = leadId;
+  unit.state = 'idle';
+  unit.targetUnitId = null;
   unit.targetBuildingId = null;
-  unit.targetPos = { x: lead.x, z: lead.z };
+  unit.targetPos = null;
   unit.path = null;
+  unit._squadSyncSig = null;
   return true;
-}
-
-/** Followers pick up enemies near the escorted unit, then resume follow when the fight ends. */
-function tryEscortAcquireThreat(unit) {
-  const leadId = unit.followLeadId || unit.targetUnitId;
-  if (!leadId) return;
-  const lead = State.units.get(leadId);
-  if (!lead || lead.hp <= 0 || lead.team !== unit.team) {
-    unit.followLeadId = null;
-    return;
-  }
-
-  const scanRange = Math.max(unit.range, unit.visionRange || unit.range);
-  const defendRadius = scanRange + 8;
-
-  const threat = unitGrid.findNearest(lead.x, lead.z, defendRadius, e =>
-    e.team !== unit.team && e.hp > 0 && e.id !== unit.id
-  );
-  if (!threat) return;
-
-  unit.state = 'attacking';
-  unit.targetUnitId = threat.id;
-  unit.targetBuildingId = null;
-  unit.targetPos = { x: threat.x, z: threat.z };
-  unit.path = null;
 }
 
 function handleAttackState(unit, time, dt) {
@@ -767,13 +863,12 @@ export function destroyUnit(unit, attacker = null) {
   State.units.forEach(u => {
     if (u.hp <= 0) return;
     if (u.followLeadId !== deadId) return;
-    u.followLeadId = null;
-    if (u.state === 'following') {
-      u.state = 'idle';
-      u.targetUnitId = null;
-      u.targetPos = null;
-      u.path = null;
-    }
+    clearSquadFollowerLink(u);
+    u.state = 'idle';
+    u.targetUnitId = null;
+    u.targetBuildingId = null;
+    u.targetPos = null;
+    u.path = null;
   });
 
   State.removeUnit(unit.id);
@@ -915,7 +1010,9 @@ function checkWinCondition() {
 
 // --- Player commands ---
 export function commandMove(unitIds, targetX, targetZ) {
-  const unitsArray = unitIds.map(id => State.units.get(id)).filter(u => u && u.hp > 0);
+  const original = new Set(unitIds);
+  const allIds = extendUnitIdsWithSquadFollowers(unitIds);
+  const unitsArray = allIds.map(id => State.units.get(id)).filter(u => u && u.hp > 0);
   const numUnits = unitsArray.length;
   if (numUnits === 0) return;
 
@@ -929,15 +1026,21 @@ export function commandMove(unitIds, targetX, targetZ) {
 
     // RUTHLESS ANTI-SNIPE: Add jitter to formation positions to break up straight lines
     const jitterAmount = 1.5;
-    const finalTargetX = targetX + offsetX + (Math.random() - 0.5) * jitterAmount;
-    const finalTargetZ = targetZ + offsetZ + (Math.random() - 0.5) * jitterAmount;
+    const rawX = targetX + offsetX + (Math.random() - 0.5) * jitterAmount;
+    const rawZ = targetZ + offsetZ + (Math.random() - 0.5) * jitterAmount;
+    const t = clampWorldToPlayableDisk(rawX, rawZ, 0);
 
     unit.state = 'moving';
-    unit.targetPos = { x: finalTargetX, z: finalTargetZ };
-    unit.guardPos = { x: finalTargetX, z: finalTargetZ };
+    unit.targetPos = { x: t.x, z: t.z };
+    unit.guardPos = { x: t.x, z: t.z };
     unit.targetUnitId = null;
     unit.targetBuildingId = null;
-    unit.followLeadId = null;
+    if (original.has(unit.id)) {
+      unit.followLeadId = null;
+      unit.squadOffsetX = 0;
+      unit.squadOffsetZ = 0;
+      unit._squadSyncSig = null;
+    }
     unit.path = null;
     unit.pathIndex = 0;
     unit.playerCommanded = true;
@@ -958,18 +1061,25 @@ export function commandAttackMove(unitIds, targetX, targetZ) {
 export function commandAttackUnit(unitIds, targetUnitId) {
   const target = State.units.get(targetUnitId);
   if (!target || target.hp <= 0) return;
-  for (let i = 0; i < unitIds.length; i++) {
-    const u = State.units.get(unitIds[i]);
+  const original = new Set(unitIds);
+  const allIds = extendUnitIdsWithSquadFollowers(unitIds);
+  for (let i = 0; i < allIds.length; i++) {
+    const u = State.units.get(allIds[i]);
     if (u && u.team === target.team) return;
   }
 
-  unitIds.forEach(id => {
+  allIds.forEach(id => {
     const unit = State.units.get(id);
     if (!unit || unit.hp <= 0) return;
     unit.state = 'attacking';
     unit.targetUnitId = targetUnitId;
     unit.targetBuildingId = null;
-    unit.followLeadId = null;
+    if (original.has(unit.id)) {
+      unit.followLeadId = null;
+      unit.squadOffsetX = 0;
+      unit.squadOffsetZ = 0;
+      unit._squadSyncSig = null;
+    }
     unit.targetPos = { x: target.x, z: target.z };
     unit.path = null;
     unit.playerCommanded = true;
@@ -979,17 +1089,25 @@ export function commandAttackUnit(unitIds, targetUnitId) {
 export function commandAttackBuilding(unitIds, targetBuildingId) {
   const target = State.buildings.get(targetBuildingId);
   if (!target || target.hp <= 0) return;
-  for (let i = 0; i < unitIds.length; i++) {
-    const u = State.units.get(unitIds[i]);
+  const original = new Set(unitIds);
+  const allIds = extendUnitIdsWithSquadFollowers(unitIds);
+  for (let i = 0; i < allIds.length; i++) {
+    const u = State.units.get(allIds[i]);
     if (u && u.team === target.team) return;
   }
 
-  unitIds.forEach(id => {
+  allIds.forEach(id => {
     const unit = State.units.get(id);
     if (!unit || unit.hp <= 0) return;
     unit.state = 'attacking';
     unit.targetUnitId = null;
     unit.targetBuildingId = targetBuildingId;
+    if (original.has(unit.id)) {
+      unit.followLeadId = null;
+      unit.squadOffsetX = 0;
+      unit.squadOffsetZ = 0;
+      unit._squadSyncSig = null;
+    }
     unit.targetPos = { x: target.x, z: target.z };
     unit.path = null;
     unit.playerCommanded = true;
@@ -997,7 +1115,8 @@ export function commandAttackBuilding(unitIds, targetBuildingId) {
 }
 
 export function commandStop(unitIds) {
-  unitIds.forEach(id => {
+  const allIds = extendUnitIdsWithSquadFollowers(unitIds);
+  allIds.forEach(id => {
     const unit = State.units.get(id);
     if (!unit || unit.hp <= 0) return;
     unit.state = 'idle';
@@ -1005,6 +1124,9 @@ export function commandStop(unitIds) {
     unit.targetUnitId = null;
     unit.targetBuildingId = null;
     unit.followLeadId = null;
+    unit.squadOffsetX = 0;
+    unit.squadOffsetZ = 0;
+    unit._squadSyncSig = null;
     unit.path = null;
     unit.playerCommanded = false;
   });
@@ -1017,12 +1139,16 @@ export function commandFollow(unitIds, targetUnitId) {
   unitIds.forEach(id => {
     const unit = State.units.get(id);
     if (!unit || unit.hp <= 0 || unit.id === targetUnitId) return;
-    unit.state = 'following';
-    unit.targetUnitId = targetUnitId;
     unit.followLeadId = targetUnitId;
+    unit.squadOffsetX = unit.x - target.x;
+    unit.squadOffsetZ = unit.z - target.z;
+    unit._squadSyncSig = null;
     unit.targetBuildingId = null;
-    unit.targetPos = { x: target.x, z: target.z };
+    unit.targetUnitId = null;
+    unit.targetPos = null;
     unit.path = null;
+    unit.pathIndex = 0;
+    unit.state = 'idle';
     unit.playerCommanded = true;
   });
 }

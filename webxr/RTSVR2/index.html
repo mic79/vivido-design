@@ -8,26 +8,23 @@
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
   <meta name="rts-version" content="0.3.48">
 
-  <!-- A-Frame -->
-  <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.2.0/dist/aframe-extras.min.js"></script>
-
-  <!-- Pathfinding: now grid-based A* in pathfinding.js, no external lib -->
-
-  <!-- PeerJS (multiplayer) -->
-  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/super-three@0.173.4/build/three.module.js"
+    }
+  }
+  </script>
+  <!-- A-Frame + extras + PeerJS + VR UI scripts (see js/rts-aframe-bootstrap.js). -->
+  <script type="module" src="js/rts-aframe-bootstrap.js"></script>
 
   <link rel="stylesheet" href="css/styles.css">
-  <script src="js/high-refresh-rate.js"></script>
-  <script src="js/rts-version-fps.js"></script>
-  <!-- DodgeVR-style raycaster fix + BoltVR-style VR menu (before game module). -->
-  <script src="js/vr-raycaster-patch.js"></script>
-  <script src="js/vr-hand-ray-setup.js"></script>
-  <script src="js/vr-menu-aframe.js"></script>
-  <script src="js/vr-game-ui-aframe.js"></script>
 </head>
 <body>
   <!-- Loading Screen -->
+  <!-- Black hold between loading UI fade and scene reveal (see scene-reveal.js). -->
+  <div id="scene-reveal-overlay" aria-hidden="true"></div>
+
   <div id="loading-screen">
     <div id="loading-content">
       <h1>RTS VR II</h1>
@@ -46,23 +43,20 @@
     rts-version-fps
   >
     <!-- Camera Rig -->
-    <a-entity id="cameraRig" position="0 40 0">
+    <a-entity id="cameraRig" position="0 32 0">
       <a-entity
         id="camera"
         camera="near: 0.05; far: 12000"
         look-controls="enabled: false"
         position="0 0 0"
-        rotation="-75 0 0"
+        rotation="-33 0 0"
       ></a-entity>
 
       <!-- Left hand: RTSVR-style forward ray (child -90° X) + wrist-mounted menu + match HUD -->
-      <a-entity id="leftHand" laser-controls="hand: left; model: false" rts-vr-hand-ray>
-        <a-entity
-          id="leftHandRay"
-          data-vr-aim-ray
-          rotation="-90 0 0"
-          raycaster="objects: .clickable, #ground; far: 200; showLine: true; lineColor: #66cc66; lineOpacity: 0.25"
-        ></a-entity>
+      <!-- tracked-controls only: laser-controls draws a parent white laser + raycaster that fights our UI ray. -->
+      <a-entity id="leftHand" tracked-controls="hand: left" rts-vr-hand-ray>
+        <!-- Aim offset only (build / world ray); no laser line — UI + ground use right hand. -->
+        <a-entity id="leftHandRay" data-vr-aim-ray rotation="-90 0 0"></a-entity>
 
         <!-- Wrist: X/Y = plane on forearm facing you; Z = roll fix (opposite of previous -90). -->
         <a-entity id="vr-wrist-panel" position="0.07 -0.015 0.06" rotation="-90 -90 90" scale="0.48 0.48 0.48">
@@ -75,45 +69,63 @@
             color="#8ab0aa"
             value="RTSVR2 …"
           ></a-text>
-          <a-entity id="vr-game-menu" position="0 0 0" visible="false">
-            <a-plane width="0.72" height="0.62" color="#000810" material="opacity: 0.92; transparent: true" position="0 0 -0.006"></a-plane>
-            <a-text class="no-raycast" value="RTS VR II" position="0 0.36 0" align="center" width="1.15" color="#00ff66"></a-text>
-            <a-text class="no-raycast" id="menu-status-vr" value="Laser + trigger · grip+trigger: follow" position="0 -0.36 0" align="center" width="0.72" color="#888888"></a-text>
 
-            <a-entity class="js-vr-menu-btn" rts-vr-menu-btn="action: 1v1" vr-button-hover="hoverColor: #2a7a2a" position="-0.24 0.22 0"
+          <!-- First-run gate only: laser + trigger on Start (same raycaster as menu). -->
+          <a-entity id="vr-app-start" position="0 0.02 0" visible="false">
+            <a-plane class="no-raycast" width="0.52" height="0.30" color="#000810" material="opacity: 0.94; transparent: true" position="0 0 -0.004"></a-plane>
+            <a-text class="no-raycast" value="RTS VR II" position="0 0.10 0" align="center" width="0.95" color="#00ff66"></a-text>
+            <a-entity
+              id="vr-btn-app-start"
+              class="clickable"
+              rts-vr-menu-btn="action: app_start"
+              vr-button-hover="hoverColor: #2a7a2a"
+              position="0 -0.05 0"
+              geometry="primitive: plane; width: 0.40; height: 0.11"
+              material="color: #0a5020; transparent: true; opacity: 0.95; side: double"
+            >
+              <a-text class="no-raycast" value="Start" position="0 0 0.012" align="center" width="2.2" color="#ffffff"></a-text>
+            </a-entity>
+          </a-entity>
+
+          <a-entity id="vr-game-menu" position="0 0 0" visible="false">
+            <a-plane class="no-raycast" width="0.72" height="0.62" color="#000810" material="opacity: 0.92; transparent: true" position="0 0 -0.006"></a-plane>
+            <a-text class="no-raycast" value="RTS VR II" position="0 0.36 0" align="center" width="1.15" color="#00ff66"></a-text>
+            <a-text class="no-raycast" id="menu-status-vr" value="Right: laser + trigger · grip+trigger: follow" position="0 -0.36 0" align="center" width="0.72" color="#888888"></a-text>
+
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: 1v1" vr-button-hover="hoverColor: #2a7a2a" position="-0.24 0.22 0"
                       geometry="primitive: plane; width: 0.44; height: 0.09"
-                      material="color: #004400; transparent: true; opacity: 0.9">
+                      material="color: #004400; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="1v1 vs Bot" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
             </a-entity>
-            <a-entity class="js-vr-menu-btn" rts-vr-menu-btn="action: 2v2" vr-button-hover="hoverColor: #2a5a9a" position="0.24 0.22 0"
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: 2v2" vr-button-hover="hoverColor: #2a5a9a" position="0.24 0.22 0"
                       geometry="primitive: plane; width: 0.44; height: 0.09"
-                      material="color: #003366; transparent: true; opacity: 0.9">
+                      material="color: #003366; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="2v2 Co-op" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
             </a-entity>
-            <a-entity class="js-vr-menu-btn" rts-vr-menu-btn="action: ffa" vr-button-hover="hoverColor: #8a6a2a" position="0 0.14 0"
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: ffa" vr-button-hover="hoverColor: #8a6a2a" position="0 0.14 0"
                       geometry="primitive: plane; width: 0.44; height: 0.09"
-                      material="color: #553300; transparent: true; opacity: 0.9">
+                      material="color: #553300; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="FFA (4P)" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
             </a-entity>
-            <a-entity class="js-vr-menu-btn" rts-vr-menu-btn="action: lobby_minus" vr-button-hover="hoverColor: #444444" position="-0.28 0.04 0"
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: lobby_minus" vr-button-hover="hoverColor: #444444" position="-0.28 0.04 0"
                       geometry="primitive: plane; width: 0.14; height: 0.07"
-                      material="color: #222222; transparent: true; opacity: 0.95">
+                      material="color: #222222; transparent: true; opacity: 0.95; side: double">
               <a-text class="no-raycast" value="−" position="0 0 0.01" align="center" width="1.4" color="#ffffff"></a-text>
             </a-entity>
             <a-text class="no-raycast" id="menu-lobby-vr" position="0 0.04 0" align="center" width="0.55" color="#cccccc" value="Lobby 1"></a-text>
-            <a-entity class="js-vr-menu-btn" rts-vr-menu-btn="action: lobby_plus" vr-button-hover="hoverColor: #444444" position="0.28 0.04 0"
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: lobby_plus" vr-button-hover="hoverColor: #444444" position="0.28 0.04 0"
                       geometry="primitive: plane; width: 0.14; height: 0.07"
-                      material="color: #222222; transparent: true; opacity: 0.95">
+                      material="color: #222222; transparent: true; opacity: 0.95; side: double">
               <a-text class="no-raycast" value="+" position="0 0 0.01" align="center" width="1.4" color="#ffffff"></a-text>
             </a-entity>
-            <a-entity class="js-vr-menu-btn" rts-vr-menu-btn="action: host" vr-button-hover="hoverColor: #2a2a8a" position="-0.24 -0.08 0"
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: host" vr-button-hover="hoverColor: #2a2a8a" position="-0.24 -0.08 0"
                       geometry="primitive: plane; width: 0.44; height: 0.09"
-                      material="color: #000055; transparent: true; opacity: 0.9">
+                      material="color: #000055; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="Host" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
             </a-entity>
-            <a-entity class="js-vr-menu-btn" rts-vr-menu-btn="action: join" vr-button-hover="hoverColor: #8a2a2a" position="0.24 -0.08 0"
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: join" vr-button-hover="hoverColor: #8a2a2a" position="0.24 -0.08 0"
                       geometry="primitive: plane; width: 0.44; height: 0.09"
-                      material="color: #550000; transparent: true; opacity: 0.9">
+                      material="color: #550000; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="Join" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
             </a-entity>
             <a-text class="no-raycast" value="X: close menu" position="0 -0.26 0" align="center" width="0.55" color="#666666"></a-text>
@@ -131,7 +143,7 @@
                 width="0.44"
                 height="0.44"
                 class="clickable"
-                material="shader: flat; color: #16161a"
+                material="shader: flat; color: #ffffff; transparent: true; alphaTest: 0.06"
                 position="0 0 0"
                 rts-vr-minimap="mapSize: 200"
               ></a-plane>
@@ -200,13 +212,14 @@
           data-vr-aim-ray
           rotation="-90 0 0"
           raycaster="objects: .clickable, #ground; far: 200; showLine: true; lineColor: #0f0; lineOpacity: 0.4"
+          rts-vr-aim-ray-ui-hover
         ></a-entity>
       </a-entity>
     </a-entity>
 
     <!-- Neutral fill + white sun — warm ambient was killing lunar gray / albedo separation. -->
     <a-entity light="type: ambient; color: #c8d0dc; intensity: 0.28"></a-entity>
-    <a-entity light="type: directional; color: #ffffff; intensity: 1.95" position="40 55 28"></a-entity>
+    <a-entity light="type: directional; color: #ffffff; intensity: 1.95" position="-0.005 55 -48.83"></a-entity>
 
     <!-- Fallback sky if `earthlike_planet.hdr` fails to load; hidden when PMREM background is applied. -->
     <a-sky color="#050508"></a-sky>

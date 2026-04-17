@@ -19,7 +19,7 @@ import {
   BOT_SECOND_WARFACTORY_CREDITS, BOT_RETALIATION_ENEMY_MULT,
   BOT_HARASS_COOLDOWN_SEC, BOT_SCOUT_MISSION_MAX_SEC,
   BOT_MIN_HARVESTERS_BEFORE_SACRIFICE, BOT_HARVESTER_PER_REFINERY_TARGET,
-  UNIT_TYPES, MAP_SIZE,
+  UNIT_TYPES, MAP_SIZE, clampWorldToPlayableDisk,
 } from './config.js';
 import * as State from './state.js';
 import * as Units from './units.js';
@@ -1273,18 +1273,17 @@ function getScoutTarget(player, hq, elapsed, excludePrev, harvesters = []) {
     const t = 0.35 + Math.random() * 0.65;
     const wx = hq.x + Math.cos(angle) * (25 + t * 75);
     const wz = hq.z + Math.sin(angle) * (25 + t * 75);
-    const x = Math.max(-MAP_SIZE / 2 + 8, Math.min(MAP_SIZE / 2 - 8, wx));
-    const z = Math.max(-MAP_SIZE / 2 + 8, Math.min(MAP_SIZE / 2 - 8, wz));
+    const c = clampWorldToPlayableDisk(wx, wz, 8);
+    const x = c.x;
+    const z = c.z;
     if (!Fog.wasExploredByTeam(team, x, z)) {
       const danger = scoutWaypointDanger(mem, elapsed, x, z);
       if (danger < 5.5) return { x, z };
     }
   }
 
-  return {
-    x: Math.max(-MAP_SIZE / 2 + 10, Math.min(MAP_SIZE / 2 - 10, -hq.x * 0.4)),
-    z: Math.max(-MAP_SIZE / 2 + 10, Math.min(MAP_SIZE / 2 - 10, -hq.z * 0.4)),
-  };
+  const fallback = clampWorldToPlayableDisk(-hq.x * 0.4, -hq.z * 0.4, 10);
+  return { x: fallback.x, z: fallback.z };
 }
 
 function analyzeEnemyComposition(player) {

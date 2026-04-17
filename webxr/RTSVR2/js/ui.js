@@ -5,7 +5,8 @@
 
 import {
   UNIT_TYPES, BUILDING_TYPES, PLAYER_COLOR_HEX,
-  MAP_SIZE, FOG_GRID_SIZE,
+  MAP_SIZE, MAP_UNIT_PLAYABLE_RADIUS, FOG_GRID_SIZE,
+  clampWorldToPlayableDisk,
 } from './config.js';
 import * as State from './state.js';
 import * as Buildings from './buildings.js';
@@ -36,24 +37,57 @@ function uiMountRoot() {
   return document.getElementById('xr-dom-overlay') || document.body;
 }
 
+function createAppStartOverlay() {
+  const el = document.createElement('div');
+  el.id = 'app-start-overlay';
+  /* No dimming layer — full screen is transparent so the WebXR / canvas scene stays visible. */
+  el.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:250',
+    'display:none',
+    'flex-direction:column',
+    'width:100%',
+    'height:100%',
+    'box-sizing:border-box',
+    'background:transparent',
+    'pointer-events:none',
+    "font-family:'Consolas',monospace",
+  ].join(';');
+  el.innerHTML = `
+    <div style="flex:2 0 0;min-height:0" aria-hidden="true"></div>
+    <div style="flex:1 0 0;display:flex;align-items:center;justify-content:center;width:100%;min-height:0;pointer-events:none">
+      <button type="button" id="btn-app-start" style="padding:18px 48px;font-size:22px;border-radius:10px;border:2px solid #0f0;background:rgba(4,24,8,0.92);color:#cfc;cursor:pointer;font-weight:bold;letter-spacing:0.12em;pointer-events:auto;box-shadow:0 4px 24px rgba(0,0,0,0.45)">Start</button>
+    </div>
+  `;
+  const btn = el.querySelector('#btn-app-start');
+  if (btn) btn.addEventListener('click', () => dismissAppStartGate());
+  uiMountRoot().appendChild(el);
+}
+
 export function initUI() {
   window.__rtsVrMinimapClick = (wx, wz, moveMode) => {
     if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+    const c = clampWorldToPlayableDisk(wx, wz, 0);
+    const px = c.x;
+    const pz = c.z;
     if (moveMode) {
       const unitIds = Array.from(State.selectedUnits);
       if (unitIds.length > 0) {
-        Network.sendCommand({ action: 'move', unitIds, x: wx, z: wz });
+        Network.sendCommand({ action: 'move', unitIds, x: px, z: pz });
         showStatus('Moving...');
       }
     } else {
-      Input.jumpCameraTo(wx, wz);
+      Input.jumpCameraTo(px, pz);
     }
   };
 
+  createAppStartOverlay();
   createHUD();
   createMinimap();
   createMenu();
   createBuildMenu();
+  window._dismissAppStartGate = dismissAppStartGate;
   updateMenuVisibility();
 }
 
@@ -66,11 +100,10 @@ function getHudControlsHelpHtml() {
   if (Input.getInputPlatform() === 'touch') {
     return `<div style="font-weight:bold;color:#8cf;margin-bottom:6px;">Touch</div>
       <ul style="margin:0;padding-left:1.1em;line-height:1.5;">
-        <li><b>Tap</b> — select, command when army selected, open HQ or crystals (open ground + selection = move)</li>
+        <li><b>Tap</b> — select, open HQ or crystals; with your army selected, <b>tap another of your units</b> to add it to the group · <b>tap open ground</b> to move</li>
         <li><b>Two fingers</b> — drag to pan · pinch zoom · twist to rotate</li>
-        <li><b>Long-press ground</b> — clear selection</li>
-        <li><b>Long-press your unit</b> — grab same type nearby</li>
-        <li><b>Tap own unit again</b> — deselect (or remove from group)</li>
+        <li><b>Long-press open ground</b> — clear selection</li>
+        <li><b>Long-press your unit</b> — with <b>no</b> army selected, selects nearby same type; with <b>units already selected</b>, <b>hold (~0.5s) on a friendly</b> to <b>follow</b> it (or move if your aim favors ground — engineers repair nearby vehicles when escorting)</li>
         <li><b>Map</b> — drag on minimap to jump the camera; <b>Map · show/hide</b> sits under the minimap</li>
       </ul>
       <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
@@ -193,22 +226,22 @@ function createMinimap() {
   container.style.cssText = `
     position: fixed; bottom: 60px; right: 8px;
     width: 180px;
-    display: none; flex-direction: column; align-items: stretch; gap: 4px;
-    background: rgba(0,0,0,0.8); border: 1px solid #444; border-radius: 4px;
-    padding: 4px; box-sizing: border-box;
+    display: none; flex-direction: column; align-items: center; gap: 6px;
+    background: rgba(0,0,0,0.8); border: 1px solid #444; border-radius: 12px;
+    padding: 6px 6px 8px; box-sizing: border-box;
     z-index: 100; pointer-events: auto;
   `;
 
   const mapWrap = document.createElement('div');
   mapWrap.id = 'minimap-map-wrap';
   mapWrap.style.cssText =
-    'width: 180px; height: 180px; flex-shrink: 0; border-radius: 4px; overflow: hidden;';
+    'width: 180px; height: 180px; flex-shrink: 0; border-radius: 50%; overflow: hidden; box-shadow: 0 0 0 1px rgba(255,255,255,0.14);';
 
   minimapCanvas = document.createElement('canvas');
   minimapCanvas.id = 'minimap';
   minimapCanvas.width = 180;
   minimapCanvas.height = 180;
-  minimapCanvas.style.cssText = 'width: 100%; height: 100%; border-radius: 4px; cursor: crosshair;';
+  minimapCanvas.style.cssText = 'width: 100%; height: 100%; border-radius: 50%; cursor: crosshair; display: block;';
 
   const mapToggleBtn = document.createElement('button');
   mapToggleBtn.type = 'button';
@@ -230,9 +263,12 @@ function createMinimap() {
     // Match drawMinimapToContext mirror (translate + scale -1): corner bases read as lower-right on widget.
     const lx2 = rect.width - lx;
     const lz2 = rect.height - lz;
-    const wx = (lx2 / rect.width) * MAP_SIZE - MAP_SIZE / 2;
-    const wz = (lz2 / rect.height) * MAP_SIZE - MAP_SIZE / 2;
-    
+    let wx = (lx2 / rect.width) * MAP_SIZE - MAP_SIZE / 2;
+    let wz = (lz2 / rect.height) * MAP_SIZE - MAP_SIZE / 2;
+    const disk = clampWorldToPlayableDisk(wx, wz, 0);
+    wx = disk.x;
+    wz = disk.z;
+
     if (e.button === 2 || isMoveOnly) {
       const unitIds = Array.from(State.selectedUnits);
       if (unitIds.length > 0) {
@@ -768,12 +804,28 @@ function renderStatRow(players, label, statKey, formatter = val => val) {
 }
 
 function drawMinimapToContext(ctx, w, h) {
-  const scale = w / MAP_SIZE;
+  const scaleX = w / MAP_SIZE;
+  const scaleZ = h / MAP_SIZE;
   const isSpyMode = State.gameSession.debugFog;
 
   ctx.save();
   ctx.translate(w, h);
   ctx.scale(-1, -1);
+  ctx.beginPath();
+  if (typeof ctx.ellipse === 'function') {
+    ctx.ellipse(
+      MAP_SIZE * 0.5 * scaleX,
+      MAP_SIZE * 0.5 * scaleZ,
+      MAP_UNIT_PLAYABLE_RADIUS * scaleX,
+      MAP_UNIT_PLAYABLE_RADIUS * scaleZ,
+      0,
+      0,
+      Math.PI * 2
+    );
+  } else {
+    ctx.arc(MAP_SIZE * 0.5 * scaleX, MAP_SIZE * 0.5 * scaleZ, MAP_UNIT_PLAYABLE_RADIUS * scaleX, 0, Math.PI * 2);
+  }
+  ctx.clip();
 
   ctx.fillStyle = '#141418';
   ctx.fillRect(0, 0, w, h);
@@ -803,8 +855,8 @@ function drawMinimapToContext(ctx, w, h) {
   ctx.fillStyle = '#4f8';
   State.resourceFields.forEach(field => {
     if (!field.depleted && Fog.wasExploredByTeam(myTeam, field.x, field.z)) {
-      const mx = (field.x + MAP_SIZE / 2) * scale;
-      const mz = (field.z + MAP_SIZE / 2) * scale;
+      const mx = (field.x + MAP_SIZE / 2) * scaleX;
+      const mz = (field.z + MAP_SIZE / 2) * scaleZ;
       ctx.fillRect(mx - 3, mz - 3, 6, 6);
     }
   });
@@ -812,8 +864,8 @@ function drawMinimapToContext(ctx, w, h) {
   State.buildings.forEach(b => {
     if (b.hp <= 0) return;
     if (!Fog.wasExploredByTeam(myTeam, b.x, b.z)) return;
-    const mx = (b.x + MAP_SIZE / 2) * scale;
-    const mz = (b.z + MAP_SIZE / 2) * scale;
+    const mx = (b.x + MAP_SIZE / 2) * scaleX;
+    const mz = (b.z + MAP_SIZE / 2) * scaleZ;
     ctx.fillStyle = PLAYER_COLOR_HEX[b.ownerId] || '#888';
     ctx.fillRect(mx - 3, mz - 3, 6, 6);
   });
@@ -821,18 +873,36 @@ function drawMinimapToContext(ctx, w, h) {
   State.units.forEach(unit => {
     if (unit.hp <= 0) return;
     if (unit.team !== myTeam && !Fog.isUnitVisibleToPlayer(unit, State.gameSession.myPlayerId)) return;
-    const mx = (unit.x + MAP_SIZE / 2) * scale;
-    const mz = (unit.z + MAP_SIZE / 2) * scale;
+    const mx = (unit.x + MAP_SIZE / 2) * scaleX;
+    const mz = (unit.z + MAP_SIZE / 2) * scaleZ;
     ctx.fillStyle = PLAYER_COLOR_HEX[unit.ownerId] || '#888';
     ctx.fillRect(mx - 1, mz - 1, 3, 3);
   });
 
   const cam = Input.getCameraState();
-  const cx = (cam.x + MAP_SIZE / 2) * scale;
-  const cz = (cam.z + MAP_SIZE / 2) * scale;
+  const cx = (cam.x + MAP_SIZE / 2) * scaleX;
+  const cz = (cam.z + MAP_SIZE / 2) * scaleZ;
   ctx.strokeStyle = '#fff';
   ctx.lineWidth = 1;
   ctx.strokeRect(cx - 12, cz - 8, 24, 16);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  if (typeof ctx.ellipse === 'function') {
+    ctx.ellipse(
+      MAP_SIZE * 0.5 * scaleX,
+      MAP_SIZE * 0.5 * scaleZ,
+      MAP_UNIT_PLAYABLE_RADIUS * scaleX,
+      MAP_UNIT_PLAYABLE_RADIUS * scaleZ,
+      0,
+      0,
+      Math.PI * 2
+    );
+  } else {
+    ctx.arc(MAP_SIZE * 0.5 * scaleX, MAP_SIZE * 0.5 * scaleZ, MAP_UNIT_PLAYABLE_RADIUS * scaleX, 0, Math.PI * 2);
+  }
+  ctx.stroke();
 
   ctx.restore();
 }
@@ -849,6 +919,16 @@ function updateMinimap() {
 }
 
 // --- Public API ---
+export function dismissAppStartGate() {
+  if (!State.gameSession.awaitingAppStart) return;
+  State.gameSession.awaitingAppStart = false;
+  /** VR lobby uses `#vr-game-menu`; if the menu was toggled closed before Start, show would stay false and lobby buttons never got `.clickable`. */
+  if (Input.getIsVR()) {
+    State.gameSession.menuOpen = true;
+  }
+  updateMenuVisibility();
+}
+
 export function updateMenuVisibility() {
   const flatBar = document.getElementById('hud-flat-actions');
   if (flatBar) {
@@ -861,16 +941,54 @@ export function updateMenuVisibility() {
     updateFlatHudButtons();
   }
 
+  const gate = document.getElementById('app-start-overlay');
+  if (gate) {
+    gate.style.display =
+      State.gameSession.awaitingAppStart && !Input.getIsVR() ? 'flex' : 'none';
+  }
+
+  const ghAll = document.getElementById('game-hud');
+  if (ghAll) {
+    if (State.gameSession.awaitingAppStart) {
+      ghAll.style.display = 'none';
+      ghAll.classList.remove('rts-pre-match');
+    } else {
+      ghAll.style.display = '';
+      /** Lobby / mode picker (after Start gate): hide match HUD; see `.rts-pre-match` in styles.css. */
+      ghAll.classList.toggle('rts-pre-match', !State.gameSession.gameStarted);
+    }
+  }
+
+  const vrVer = document.getElementById('vr-version-fps');
+  if (vrVer) {
+    vrVer.setAttribute('visible', State.gameSession.awaitingAppStart ? 'false' : 'true');
+  }
+  const vrStart = document.getElementById('vr-app-start');
+  if (vrStart) {
+    const showVrStart = !!(State.gameSession.awaitingAppStart && Input.getIsVR());
+    vrStart.setAttribute('visible', showVrStart ? 'true' : 'false');
+    const vrb = document.getElementById('vr-btn-app-start');
+    if (vrb) {
+      if (showVrStart) vrb.classList.add('clickable');
+      else vrb.classList.remove('clickable');
+    }
+  }
+
   if (menuEl) {
-    const showHtml = State.gameSession.menuOpen && !Input.getIsVR();
+    const showHtml =
+      !State.gameSession.awaitingAppStart && State.gameSession.menuOpen && !Input.getIsVR();
     menuEl.style.display = showHtml ? 'block' : 'none';
   }
   const vrGameMenu = document.getElementById('vr-game-menu');
+  let showVrGameMenu = false;
   if (vrGameMenu) {
-    const showVr = State.gameSession.menuOpen && Input.getIsVR();
-    vrGameMenu.setAttribute('visible', showVr ? 'true' : 'false');
-    syncVrMenuInteractive(showVr);
+    showVrGameMenu =
+      !State.gameSession.awaitingAppStart && State.gameSession.menuOpen && Input.getIsVR();
+    vrGameMenu.setAttribute('visible', showVrGameMenu ? 'true' : 'false');
+    syncVrMenuInteractive(showVrGameMenu);
   }
+  /** Same predicate as `#vr-game-menu` visibility — used by `rts-vr-menu-btn` (attribute alone can lag XR). */
+  globalThis.__rtsVrShowGameMenu = !!showVrGameMenu;
   syncVrGameHudVisibility();
   refreshHandRaycasters();
 }

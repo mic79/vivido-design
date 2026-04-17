@@ -272,6 +272,31 @@ function parseRGBEToFloatRgba(buffer) {
 }
 
 /**
+ * Gently compress only extreme RGBE→float pixels so the sun is not a sub-pixel spike in the HDR buffer.
+ * Keeps bright HDR regions from clipping harshly under tone mapping / environment sampling.
+ * @param {Float32Array} rgba
+ * @param {number} pixelCount
+ * @param {number} knee — luminance above which compression starts (linear HDR units).
+ * @param {number} shoulder — scales how quickly very large peaks are pulled down.
+ */
+function compressHdrHotspotsLinear(rgba, pixelCount, knee, shoulder) {
+  for (let i = 0; i < pixelCount; i++) {
+    const o = i * 4;
+    const r = rgba[o];
+    const g = rgba[o + 1];
+    const b = rgba[o + 2];
+    const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    if (L <= knee) continue;
+    const over = L - knee;
+    const Lnew = knee + (shoulder * over) / (shoulder + over);
+    const s = Lnew / L;
+    rgba[o] = r * s;
+    rgba[o + 1] = g * s;
+    rgba[o + 2] = b * s;
+  }
+}
+
+/**
  * @param {HTMLElement} sceneEl — `<a-scene>`
  * @param {string} [relativePath] — project-relative, e.g. `assets/earthlike_planet.hdr`
  * @returns {Promise<void>}
@@ -299,6 +324,15 @@ export async function applyHdrSkyEnvironment(sceneEl, relativePath = DEFAULT_HDR
   } catch (e) {
     console.warn('RTSVR2: HDR parse failed', e);
     return;
+  }
+
+  const px = parsed.width * parsed.height;
+  /** Set `globalThis.RTS_HDR_HOTSPOT_COMPRESS = false` before boot to skip (rare). Legacy: `RTS_HDR_BLOOM_HOTSPOT_COMPRESS`. */
+  const skipHotspotCompress =
+    globalThis.RTS_HDR_HOTSPOT_COMPRESS === false ||
+    globalThis.RTS_HDR_BLOOM_HOTSPOT_COMPRESS === false;
+  if (px > 0 && !skipHotspotCompress) {
+    compressHdrHotspotsLinear(parsed.data, px, 14, 220);
   }
 
   const eq = new THREE.DataTexture(

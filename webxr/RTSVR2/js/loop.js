@@ -153,7 +153,12 @@ function gameUpdate(dt, time) {
   // 7. Harvester logic
   Resources.updateHarvesters(dt);
 
-  // 8. Unit movement
+  // 8. Squad followers mirror leader orders (then pathing runs on everyone)
+  Units.syncSquadFollowersFromLeaders();
+  // 8a. Engineers following damaged friendly vehicles must close into repair range (squad idle mirror alone does not).
+  Units.syncEngineerRepairApproach();
+
+  // 8b. Unit movement
   Units.updateMovement(dt);
 
   // 9. Combat

@@ -6,7 +6,36 @@
 // --- Map ---
 export const MAP_SIZE = 200;
 export const MAP_HALF = MAP_SIZE / 2;
+/**
+ * Gameplay / walkable region is a disk centered on the map with this radius (m).
+ * `MAP_HALF * √2` is the circumradius of the MAP_SIZE×MAP_SIZE world square (so the disk fully contains every point that was inside the original square, including corners).
+ */
+export const MAP_PLAYABLE_RADIUS = MAP_HALF * Math.SQRT2;
+/**
+ * Units, buildings (placement), pathfinding, camera clamp, and orders use this **smaller** disk so
+ * armies stay off the outer **crater rim** band (see `MAP_PLAYABLE_RADIUS` for terrain / UV rim).
+ */
+export const MAP_UNIT_PLAYABLE_INSET = 15;
+export const MAP_UNIT_PLAYABLE_RADIUS = MAP_PLAYABLE_RADIUS - MAP_UNIT_PLAYABLE_INSET;
 export const GROUND_Y = 0;
+
+/** Clamp world XZ to the closed disk of radius `MAP_UNIT_PLAYABLE_RADIUS - margin`. */
+export function clampWorldToPlayableDisk(x, z, margin = 0) {
+  const R = MAP_UNIT_PLAYABLE_RADIUS - margin;
+  if (R <= 0) return { x, z };
+  const d2 = x * x + z * z;
+  if (d2 <= R * R) return { x, z };
+  const d = Math.sqrt(d2);
+  const s = R / d;
+  return { x: x * s, z: z * s };
+}
+
+/** True if (x,z) lies inside the unit-playable disk (optional inset `margin` from the rim). */
+export function isWorldInsidePlayableDisk(x, z, margin = 0) {
+  const R = MAP_UNIT_PLAYABLE_RADIUS - margin;
+  if (R <= 0) return false;
+  return x * x + z * z <= R * R;
+}
 
 // --- Players ---
 export const MAX_PLAYERS = 4;

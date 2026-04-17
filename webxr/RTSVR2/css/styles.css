@@ -17,6 +17,18 @@ body {
   overscroll-behavior: none;
 }
 
+/* Full-screen black until runSceneRevealFromBlack; under #loading-screen, above WebGL canvas */
+#scene-reveal-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 1;
+}
+
 /* Loading Screen */
 #loading-screen {
   position: fixed;
@@ -157,6 +169,26 @@ body.rts-hide-immersive-vr .a-enter-vr-button {
 
 #game-hud.rts-touch #hud-resources {
   max-width: calc(100vw - 72px);
+}
+
+/* After first-run Start: main menu only — match HUD (stats, help, actions) appears once `gameStarted`. */
+#game-hud.rts-pre-match #hud-resources > div:first-child {
+  display: none !important;
+}
+#game-hud.rts-pre-match #hud-bot-debug {
+  display: none !important;
+}
+#game-hud.rts-pre-match #hud-version-fps {
+  margin-top: 0;
+}
+#game-hud.rts-pre-match #hud-help-panel,
+#game-hud.rts-pre-match #hud-flat-actions {
+  display: none !important;
+}
+#game-hud.rts-pre-match #hud-selection,
+#game-hud.rts-pre-match #hud-status,
+#game-hud.rts-pre-match #hud-victory {
+  display: none !important;
 }
 
 @media (max-width: 520px) {

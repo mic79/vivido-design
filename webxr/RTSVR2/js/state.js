@@ -243,6 +243,8 @@ export const gameSession = {
   maxGameTime: 999 * 60, // 999 minutes (effective infinity)
   isMultiplayer: false,
   isHost: true,
+  /** Until the player dismisses the first-run gate, only “Start” is shown (not the full lobby). */
+  awaitingAppStart: true,
   menuOpen: true,
   buildMode: null,     // null or building type string
   /** When set, build-radius ring is centered on this HQ (second / Mobile HQ); cleared with buildMode. */

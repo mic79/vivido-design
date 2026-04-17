@@ -3,6 +3,8 @@
  * from Poly Haven `moon_01` **JPG** normal / rough / AO shipped under `assets/textures/moon_01_2k/` (CC0).
  */
 
+import { MAP_PLAYABLE_RADIUS } from './config.js';
+
 const MAP = 200;
 
 const BATTLE_MOON = {
@@ -16,16 +18,16 @@ const BATTLE_MOON = {
 const MOON_UV_REPEAT = 3.35;
 
 /**
- * World-XZ UV skew that **ramps in past the playable square** so the 200×200 m area stays
- * axis-aligned while skirts break tiling. Chebyshev distance from the MAP AABB; long **ramp** + mild,
- * **low-frequency** skew avoids harsh “diamond” lighting / streaky normal-map seams at the boundary.
+ * World-XZ UV skew that **ramps in past the playable disk** so the 200×200 m patch stays
+ * readable while skirts break tiling. Radial distance past `MAP_PLAYABLE_RADIUS`; long **ramp** + mild,
+ * **low-frequency** skew avoids harsh lighting seams at the boundary.
  */
 function warpMoonTerrainUv(wx, wz) {
   const half = MAP * 0.5;
   let u = (wx + half) / MAP;
   let v = (-wz + half) / MAP;
-  const cheb = Math.max(Math.abs(wx), Math.abs(wz));
-  const outside = cheb - half;
+  const dist = Math.hypot(wx, wz);
+  const outside = dist - MAP_PLAYABLE_RADIUS;
   const rampM = 98;
   const t = outside <= 0 ? 0 : smoothstep01(outside / rampM);
   const blend = t * t;
@@ -121,6 +123,13 @@ const BATTLE_TERRAIN = {
   amp: 2.2,
 };
 
+/**
+ * Vertex heights of the central battle plate (same layout as `THREE.PlaneGeometry` buffer:
+ * `iy` outer 0..segmentsDepth, `ix` inner 0..segmentsWidth). Used so units sit on the **rendered**
+ * piecewise-linear mesh, not the smooth analytic continuation of the same noise.
+ */
+let centralTerrainHeightGrid = null;
+
 function battleTerrainHash(px, py, pz) {
   let x = Math.abs(px);
   let y = Math.abs(py);
@@ -171,34 +180,260 @@ function battleTerrainFbm(x, y, z) {
   return value;
 }
 
+/** Raised ring at the playable disk edge (crater rim). Meters of extra world Y. */
+function craterRimLift(wx, wz) {
+  const R = MAP_PLAYABLE_RADIUS;
+  const inner = R - 14;
+  const outer = R + 44;
+  const PEAK = 5.4;
+  const d = Math.hypot(wx, wz);
+  if (d <= inner || d >= outer) return 0;
+  if (d <= R) {
+    const t = (d - inner) / Math.max(1e-3, R - inner);
+    const s = Math.max(0, Math.min(1, t));
+    return PEAK * (s * s * (3 - 2 * s));
+  }
+  const t = (d - R) / Math.max(1e-3, outer - R);
+  const s = Math.max(0, Math.min(1, t));
+  return PEAK * (1 - s * s * (3 - 2 * s));
+}
+
 /**
- * World-space ground Y at (wx, wz). Matches `PlaneGeometry` displacement + mesh `rotation.x = -π/2`
- * (plane x → world x, plane y → world -z, displaced plane z → world y).
+ * Small bowls **just outside** the gameplay disk (`d > R`), within ~50 m past the outer edge of
+ * `craterRimLift` (`outer + 50`).
+ *
+ * **Why this is easy to miss:** `R` circumscribes the 200×200 map square, so most horizon-skirt
+ * vertices (outside the square but still “near” the map) still satisfy `d ≤ R`. This lift is
+ * therefore **zero on most of the inner skirt**; see `skirtOutsideSquareCratersLift` for that band.
+ */
+function rimSatelliteDecorLift(wx, wz) {
+  const R = MAP_PLAYABLE_RADIUS;
+  const outer = R + 44;
+  const bandM = 50;
+  const dMax = outer + bandM;
+  const d2 = wx * wx + wz * wz;
+  if (d2 <= R * R || d2 > dMax * dMax) return 0;
+  const d = Math.sqrt(d2);
+  const edgeFade = smoothstep01((d - R) / 10) * smoothstep01((dMax - d) / 18);
+  if (edgeFade <= 1e-4) return 0;
+
+  const anchors = 52;
+  let sum = 0;
+  for (let k = 0; k < anchors; k++) {
+    const base = (k / anchors) * Math.PI * 2;
+    const a = base + (hash01(k, 0, 801) - 0.5) * 0.42;
+    const r0 = R + 10 + hash01(k, 1, 802) * (dMax - R - 20);
+    const cx = Math.cos(a) * r0;
+    const cz = Math.sin(a) * r0;
+    const radM = 4.2 + hash01(k, 2, 803) * 8.5;
+    const depthM = 0.95 + hash01(k, 3, 804) * 2.85;
+    const jx = (hash01(k, 4, 805) - 0.5) * 5.5;
+    const jz = (hash01(k, 5, 806) - 0.5) * 5.5;
+    const dx = wx - cx - jx;
+    const dz = wz - cz - jz;
+    const dd = Math.hypot(dx, dz);
+    if (dd >= radM) continue;
+    const u = dd / radM;
+    const t = 1 - u;
+    sum -= depthM * t * t;
+    const rimU = (u - 0.58) / 0.42;
+    if (rimU > 0 && rimU < 1) {
+      sum += depthM * 0.24 * Math.sin(rimU * Math.PI);
+    }
+  }
+  return sum * edgeFade;
+}
+
+/**
+ * Larger, denser bowls on **skirt meshes only** (`max(|x|,|z|) > map half-edge`), including where
+ * `d ≤ MAP_PLAYABLE_RADIUS` (most inner skirt — where `rimSatelliteDecorLift` is always zero).
+ * Does **not** touch the central 200×200 plate.
+ * `window.RTS_SKIRT_OUTSIDE_SQ_CRATER_DENSITY` — 0..0.65 (default ~0.42).
+ */
+function skirtOutsideSquareCratersLift(wx, wz) {
+  const half = MAP * 0.5;
+  const maxAbs = Math.max(Math.abs(wx), Math.abs(wz));
+  if (maxAbs <= half + 1e-6) return 0;
+
+  const edgeW = smoothstep01((maxAbs - half) / 36) * smoothstep01((2600 - maxAbs) / 2600);
+  if (edgeW <= 1e-4) return 0;
+
+  let density = 0.42;
+  if (typeof window !== 'undefined' && Number.isFinite(window.RTS_SKIRT_OUTSIDE_SQ_CRATER_DENSITY)) {
+    density = Math.max(0, Math.min(0.65, window.RTS_SKIRT_OUTSIDE_SQ_CRATER_DENSITY));
+  }
+  const thresh = 1 - density;
+
+  const CELL = 38;
+  const ci = Math.floor(wx / CELL);
+  const cj = Math.floor(wz / CELL);
+  let sum = 0;
+  for (let dj = -1; dj <= 1; dj++) {
+    for (let di = -1; di <= 1; di++) {
+      const i = ci + di;
+      const j = cj + dj;
+      if (hash01(i, j, 920) < thresh) continue;
+      const radM = 6 + hash01(i, j, 921) * 16;
+      const depthM = 1.15 + hash01(i, j, 922) * 4.4;
+      const jx = (hash01(i, j, 923) - 0.5) * CELL * 0.62;
+      const jz = (hash01(i, j, 924) - 0.5) * CELL * 0.62;
+      const cx = (i + 0.5) * CELL + jx;
+      const cz = (j + 0.5) * CELL + jz;
+      if (Math.max(Math.abs(cx), Math.abs(cz)) <= half + 0.5) continue;
+      const dd = Math.hypot(wx - cx, wz - cz);
+      if (dd >= radM) continue;
+      const u = dd / radM;
+      const t = 1 - u;
+      sum -= depthM * t * t;
+      const rimU = (u - 0.55) / 0.45;
+      if (rimU > 0 && rimU < 1) {
+        sum += depthM * 0.26 * Math.sin(rimU * Math.PI);
+      }
+    }
+  }
+  return sum * edgeW;
+}
+
+/**
+ * Extra bowls on the **horizon skirt only** (outside the MAP_SIZE square): sparse deterministic craters,
+ * each at most ~half the vertical/horizontal scale of `craterRimLift` (rim peak ~5.4 m, span tens of m).
+ */
+function skirtDecorCratersLift(wx, wz) {
+  const half = MAP * 0.5;
+  if (Math.max(Math.abs(wx), Math.abs(wz)) <= half + 1e-6) return 0;
+
+  let density = 0.2;
+  if (typeof window !== 'undefined' && Number.isFinite(window.RTS_SKIRT_CRATER_DENSITY)) {
+    density = Math.max(0, Math.min(0.35, window.RTS_SKIRT_CRATER_DENSITY));
+  }
+  const thresh = 1 - density;
+
+  const CELL = 56;
+  const MAX_R = 16;
+  const MAX_DEPTH = 3.4;
+  const ci = Math.floor(wx / CELL);
+  const cj = Math.floor(wz / CELL);
+  let sum = 0;
+  for (let dj = -1; dj <= 1; dj++) {
+    for (let di = -1; di <= 1; di++) {
+      const i = ci + di;
+      const j = cj + dj;
+      if (hash01(i, j, 710) < thresh) continue;
+      const radM = 4.5 + hash01(i, j, 711) * (MAX_R - 4.5);
+      const depthM = 0.55 + hash01(i, j, 712) * (MAX_DEPTH - 0.55);
+      const jx = (hash01(i, j, 713) - 0.5) * CELL * 0.58;
+      const jz = (hash01(i, j, 714) - 0.5) * CELL * 0.58;
+      const cx = (i + 0.5) * CELL + jx;
+      const cz = (j + 0.5) * CELL + jz;
+      if (Math.max(Math.abs(cx), Math.abs(cz)) <= half + 0.5) continue;
+      const d = Math.hypot(wx - cx, wz - cz);
+      if (d >= radM) continue;
+      const u = d / radM;
+      const t = 1 - u;
+      sum -= depthM * t * t;
+      const rimU = (u - 0.62) / 0.38;
+      if (rimU > 0 && rimU < 1) {
+        sum += depthM * 0.28 * Math.sin(rimU * Math.PI);
+      }
+    }
+  }
+  return sum;
+}
+
+/**
+ * Barycentric height on the **same two-triangle split** as `THREE.PlaneGeometry` (triangles a,b,c
+ * then b,d,c). Returns null if `(wx,wz)` is outside the 200×200 m plate or grid is missing.
+ */
+function sampleCentralPlateMeshSurfaceY(wx, wz) {
+  const g = centralTerrainHeightGrid;
+  if (!g) return null;
+  const half = MAP * 0.5;
+  if (Math.abs(wx) > half + 1e-4 || Math.abs(wz) > half + 1e-4) return null;
+
+  const segW = BATTLE_TERRAIN.segmentsWidth;
+  const segD = BATTLE_TERRAIN.segmentsDepth;
+  const row = segW + 1;
+
+  let fx = ((wx + half) / MAP) * segW;
+  let fz = ((half - wz) / MAP) * segD;
+  fx = Math.min(Math.max(fx, 0), segW - 1e-9);
+  fz = Math.min(Math.max(fz, 0), segD - 1e-9);
+
+  const ix = Math.min(Math.floor(fx), segW - 1);
+  const iy = Math.min(Math.floor(fz), segD - 1);
+  const u = fx - ix;
+  const v = fz - iy;
+
+  const h00 = g[iy * row + ix];
+  const h10 = g[iy * row + ix + 1];
+  const h01 = g[(iy + 1) * row + ix];
+  const h11 = g[(iy + 1) * row + ix + 1];
+
+  if (u + v <= 1) {
+    return (1 - u - v) * h00 + v * h01 + u * h10;
+  }
+  return (1 - u) * h01 + (1 - v) * h10 + (u + v - 1) * h11;
+}
+
+/**
+ * World-space ground Y at (wx, wz). On the central 200×200 m plate, matches the **displaced
+ * `PlaneGeometry` mesh** (triangle interpolation). Elsewhere uses the analytic field (skirts /
+ * decorations). Units/buildings use this so feet align with what you see.
  */
 export function sampleMoonTerrainWorldY(wx, wz) {
   if (!Number.isFinite(wx) || !Number.isFinite(wz)) return 0;
+
   const half = MAP * 0.5;
-  const cx = Math.max(-half, Math.min(half, wx));
-  const cz = Math.max(-half, Math.min(half, wz));
-  const planeX = cx;
-  const planeY = -cz;
+  if (Math.abs(wx) <= half + 1e-4 && Math.abs(wz) <= half + 1e-4) {
+    const hTri = sampleCentralPlateMeshSurfaceY(wx, wz);
+    if (hTri != null) return hTri;
+  }
+
+  const R = MAP_PLAYABLE_RADIUS;
+  let nx = wx;
+  let nz = wz;
+  const d2 = nx * nx + nz * nz;
+  if (d2 > R * R) {
+    const d = Math.sqrt(d2);
+    const s = R / d;
+    nx *= s;
+    nz *= s;
+  }
+  const planeX = nx;
+  const planeY = -nz;
   const noiseVal = battleTerrainFbm(planeX / BATTLE_TERRAIN.scale, 0, planeY / BATTLE_TERRAIN.scale) - 0.5;
-  return noiseVal * BATTLE_TERRAIN.amp + moonHorizonSagY(wx, wz);
+  return (
+    noiseVal * BATTLE_TERRAIN.amp +
+    moonHorizonSagY(wx, wz) +
+    craterRimLift(wx, wz) +
+    rimSatelliteDecorLift(wx, wz) +
+    skirtOutsideSquareCratersLift(wx, wz) +
+    skirtDecorCratersLift(wx, wz)
+  );
 }
 
-/** Same noise + sag as the mesh, but **uncapped** world XZ so skirts continue FBM past the playable square. */
+/** Same noise + sag as the mesh, but **uncapped** world XZ so skirts continue FBM past the playable disk. */
 function sampleMoonTerrainWorldYVisual(wx, wz) {
   if (!Number.isFinite(wx) || !Number.isFinite(wz)) return 0;
   const planeX = wx;
   const planeY = -wz;
   const noiseVal = battleTerrainFbm(planeX / BATTLE_TERRAIN.scale, 0, planeY / BATTLE_TERRAIN.scale) - 0.5;
-  const half = MAP * 0.5;
-  const edge = Math.max(Math.abs(wx), Math.abs(wz));
+  const R = MAP_PLAYABLE_RADIUS;
+  const halfPl = MAP * 0.5;
+  const dist = Math.hypot(wx, wz);
   let damp = 1;
-  if (edge > half * 0.9) {
-    damp = 1 - 0.28 * smoothstep01((edge - half * 0.9) / Math.max(half * 0.35, horizonSkirtDepthM() * 0.12));
+  // Rim darken on the **central plateau only** (outside that band the skirt stays full FBM contrast).
+  if (Math.max(Math.abs(wx), Math.abs(wz)) <= halfPl && dist > R * 0.9) {
+    damp = 1 - 0.28 * smoothstep01((dist - R * 0.9) / Math.max(R * 0.35, horizonSkirtDepthM() * 0.12));
   }
-  return noiseVal * BATTLE_TERRAIN.amp * damp + moonHorizonSagY(wx, wz);
+  return (
+    noiseVal * BATTLE_TERRAIN.amp * damp +
+    moonHorizonSagY(wx, wz) +
+    craterRimLift(wx, wz) +
+    rimSatelliteDecorLift(wx, wz) +
+    skirtOutsideSquareCratersLift(wx, wz) +
+    skirtDecorCratersLift(wx, wz)
+  );
 }
 
 /**
@@ -253,15 +488,28 @@ function buildTerrainSkirtPatchGeometry(THREE, wx0, wx1, wz0, wz1, segX, segZ) {
 }
 
 function disposeHorizonSkirtUnder(mesh) {
-  const g = mesh.getObjectByName('rts-horizon-skirt');
-  if (!g) return;
-  g.traverse((o) => {
-    if (o.geometry) o.geometry.dispose();
-  });
-  mesh.remove(g);
+  const skirt = mesh.getObjectByName('rts-horizon-skirt');
+  if (skirt) {
+    skirt.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+    });
+    mesh.remove(skirt);
+  }
+  const overlay = mesh.getObjectByName('rts-outside-overlay');
+  if (overlay) {
+    let disposedMat = false;
+    overlay.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material && !disposedMat) {
+        disposeMaterial(o.material);
+        disposedMat = true;
+      }
+    });
+    mesh.remove(overlay);
+  }
 }
 
-function tryAttachHorizonSkirt(THREE, mesh) {
+function tryAttachHorizonSkirt(THREE, mesh, sceneEl) {
   if (!mesh || !mesh.material || horizonSkirtAttached) return;
   horizonSkirtAttached = true;
   disposeHorizonSkirtUnder(mesh);
@@ -307,12 +555,22 @@ function buildBattleTerrainGeometry(THREE) {
   const vertices = geometry.attributes.position.array;
   const Rcurv = moonHorizonCurvatureRadiusM();
   const inv2R = Number.isFinite(Rcurv) && Rcurv < 1e9 ? 1 / (2 * Rcurv) : 0;
+  const segW = BATTLE_TERRAIN.segmentsWidth;
+  const segD = BATTLE_TERRAIN.segmentsDepth;
+  const nVerts = (segW + 1) * (segD + 1);
+  centralTerrainHeightGrid = new Float32Array(nVerts);
+
   for (let i = 0; i < vertices.length; i += 3) {
     const x = vertices[i];
     const z = vertices[i + 1];
+    const wx = x;
+    const wz = -z;
     const noiseVal = battleTerrainFbm(x / BATTLE_TERRAIN.scale, 0, z / BATTLE_TERRAIN.scale) - 0.5;
     const r2 = x * x + z * z;
-    vertices[i + 2] = noiseVal * BATTLE_TERRAIN.amp - r2 * inv2R;
+    const base = noiseVal * BATTLE_TERRAIN.amp - r2 * inv2R;
+    const y = base + craterRimLift(wx, wz);
+    vertices[i + 2] = y;
+    centralTerrainHeightGrid[i / 3] = y;
   }
   geometry.computeVertexNormals();
   geometry.attributes.position.needsUpdate = true;
@@ -506,58 +764,8 @@ function collectMoonAoJpgUrls() {
   return assetUrlCandidates('assets/textures/moon_01_2k/moon_01_ao_2k.jpg');
 }
 
-/**
- * Loads `nor_gl` / `rough` / `AO` JPGs with the same `THREE.TextureLoader` as the scene (fixes “no pop”
- * when CDN EXRLoader used a different Three module and never attached).
- */
-function attachMoonSurfaceTextureMaps(THREE, sceneEl, material) {
-  const loader = new THREE.TextureLoader();
-  loader.setCrossOrigin('anonymous');
-
-  const norUrls = collectMoonNorJpgUrls();
-  loadTextureChain(
-    loader,
-    norUrls,
-    0,
-    (norTex) => {
-      configureMoonDataTexture(norTex, THREE, sceneEl);
-      material.normalMap = norTex;
-      material.normalScale.set(MOON_NORMAL_SCALE, MOON_NORMAL_SCALE);
-      material.bumpMap = null;
-      material.bumpScale = 0;
-      material.needsUpdate = true;
-
-      const roughUrls = collectMoonRoughJpgUrls();
-      loadTextureChain(
-        loader,
-        roughUrls,
-        0,
-        (roughTex) => {
-          configureMoonDataTexture(roughTex, THREE, sceneEl);
-          material.roughnessMap = roughTex;
-          material.roughness = 1;
-          material.needsUpdate = true;
-        },
-        () => {}
-      );
-
-      const aoUrls = collectMoonAoJpgUrls();
-      loadTextureChain(
-        loader,
-        aoUrls,
-        0,
-        (aoTex) => {
-          configureMoonDataTexture(aoTex, THREE, sceneEl);
-          material.aoMap = aoTex;
-          material.aoMapIntensity = 1;
-          material.needsUpdate = true;
-        },
-        () => {}
-      );
-    },
-    () => {}
-  );
-}
+/** Keep in sync with `scene-reveal.js` settle target. */
+export const MOON_TONE_MAPPING_EXPOSURE = 1.06;
 
 /** Slightly lift exposure so Poly Haven albedo + AO read closer to reference. */
 export function configureTerrainPresentation(sceneEl) {
@@ -565,7 +773,7 @@ export function configureTerrainPresentation(sceneEl) {
   const r = sceneEl && sceneEl.renderer;
   if (!r || !THREE) return;
   r.toneMapping = THREE.ACESFilmicToneMapping;
-  r.toneMappingExposure = 1.06;
+  r.toneMappingExposure = MOON_TONE_MAPPING_EXPOSURE;
 }
 
 function disposeMaterial(mat) {
@@ -607,41 +815,53 @@ function collectFallbackDiffuseUrls() {
   return paths;
 }
 
+/**
+ * @returns {Promise<void>} Resolves when a diffuse map is on `mesh` (file, procedural, or give up).
+ */
 function loadFallbackDiffuseChain(THREE, sceneEl, mesh, urls, index) {
-  if (index >= urls.length) {
-    const map = buildProceduralMoonTexture(THREE, sceneEl);
-    if (!map) return;
-    disposeMaterial(mesh.material);
-    mesh.material = new THREE.MeshLambertMaterial({ map, color: 0xffffff });
-    mesh.receiveShadow = true;
-    mesh.castShadow = false;
-    tryAttachHorizonSkirt(THREE, mesh);
-    return;
-  }
-  const loader = new THREE.TextureLoader();
-  loader.setCrossOrigin('anonymous');
-  loader.load(
-    urls[index],
-    (tex) => {
-      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.repeat.set(1, 1);
-      const renderer = sceneEl && sceneEl.renderer;
-      if (renderer && renderer.capabilities && renderer.capabilities.getMaxAnisotropy) {
-        tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return new Promise((resolve) => {
+    if (index >= urls.length) {
+      const map = buildProceduralMoonTexture(THREE, sceneEl);
+      if (!map) {
+        resolve();
+        return;
       }
-      tex.generateMipmaps = true;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
       disposeMaterial(mesh.material);
-      mesh.material = new THREE.MeshLambertMaterial({ map: tex, color: 0xffffff });
+      mesh.material = new THREE.MeshLambertMaterial({ map, color: 0xffffff });
       mesh.receiveShadow = true;
       mesh.castShadow = false;
-      tryAttachHorizonSkirt(THREE, mesh);
-    },
-    undefined,
-    () => loadFallbackDiffuseChain(THREE, sceneEl, mesh, urls, index + 1)
-  );
+      tryAttachHorizonSkirt(THREE, mesh, sceneEl);
+      resolve();
+      return;
+    }
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    loader.load(
+      urls[index],
+      (tex) => {
+        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.repeat.set(1, 1);
+        const renderer = sceneEl && sceneEl.renderer;
+        if (renderer && renderer.capabilities && renderer.capabilities.getMaxAnisotropy) {
+          tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+        }
+        tex.generateMipmaps = true;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+        disposeMaterial(mesh.material);
+        mesh.material = new THREE.MeshLambertMaterial({ map: tex, color: 0xffffff });
+        mesh.receiveShadow = true;
+        mesh.castShadow = false;
+        tryAttachHorizonSkirt(THREE, mesh, sceneEl);
+        resolve();
+      },
+      undefined,
+      () => {
+        loadFallbackDiffuseChain(THREE, sceneEl, mesh, urls, index + 1).then(resolve);
+      }
+    );
+  });
 }
 
 function loadTextureChain(loader, urls, index, onTex, onFail) {
@@ -657,39 +877,123 @@ function loadTextureChain(loader, urls, index, onTex, onFail) {
   );
 }
 
-function applyBattleMoon(THREE, sceneEl, mesh) {
+/** First successful URL wins; all failures → `null`. */
+function loadFirstTextureFromUrls(loader, urls) {
+  return new Promise((resolve) => {
+    let index = 0;
+    function tryNext() {
+      if (index >= urls.length) {
+        resolve(null);
+        return;
+      }
+      const url = urls[index];
+      index += 1;
+      loader.load(
+        url,
+        (tex) => resolve(tex),
+        undefined,
+        tryNext
+      );
+    }
+    tryNext();
+  });
+}
+
+function tryRendererInitTexture(renderer, tex) {
+  if (!tex || !renderer || typeof renderer.initTexture !== 'function') return;
+  try {
+    renderer.initTexture(tex);
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/**
+ * Normal / rough / AO for the battle moon (await before scene reveal).
+ * @returns {Promise<void>}
+ */
+async function attachMoonSurfaceTextureMapsAsync(THREE, sceneEl, material) {
   const loader = new THREE.TextureLoader();
   loader.setCrossOrigin('anonymous');
-  const diffUrls = assetUrlCandidates(BATTLE_MOON.diff);
+  const renderer = sceneEl && sceneEl.renderer;
 
-  loadTextureChain(
-    loader,
-    diffUrls,
-    0,
-    (colorTexture) => {
-      configureMoonDiffuseTexture(colorTexture, THREE, sceneEl);
-      disposeMaterial(mesh.material);
-      const material = new THREE.MeshStandardMaterial({
-        map: colorTexture,
-        bumpMap: colorTexture,
-        bumpScale: MOON_BUMP_SCALE,
-        /** Full albedo range — gray multiply was crushing crater contrast (muddy look). */
-        color: 0xffffff,
-        roughness: 0.88,
-        metalness: 0,
-        flatShading: false,
-        fog: false,
-      });
-      mesh.material = material;
-      mesh.receiveShadow = true;
-      mesh.castShadow = false;
-      attachMoonSurfaceTextureMaps(THREE, sceneEl, material);
-      setTimeout(() => tryAttachHorizonSkirt(THREE, mesh), 700);
-    },
-    () => {
-      loadFallbackDiffuseChain(THREE, sceneEl, mesh, collectFallbackDiffuseUrls(), 0);
-    }
-  );
+  const norTex = await loadFirstTextureFromUrls(loader, collectMoonNorJpgUrls());
+  if (norTex) {
+    configureMoonDataTexture(norTex, THREE, sceneEl);
+    material.normalMap = norTex;
+    material.normalScale.set(MOON_NORMAL_SCALE, MOON_NORMAL_SCALE);
+    material.bumpMap = null;
+    material.bumpScale = 0;
+    material.needsUpdate = true;
+    tryRendererInitTexture(renderer, norTex);
+  }
+
+  const roughTex = await loadFirstTextureFromUrls(loader, collectMoonRoughJpgUrls());
+  if (roughTex) {
+    configureMoonDataTexture(roughTex, THREE, sceneEl);
+    material.roughnessMap = roughTex;
+    material.roughness = 1;
+    material.needsUpdate = true;
+    tryRendererInitTexture(renderer, roughTex);
+  }
+
+  const aoTex = await loadFirstTextureFromUrls(loader, collectMoonAoJpgUrls());
+  if (aoTex) {
+    configureMoonDataTexture(aoTex, THREE, sceneEl);
+    material.aoMap = aoTex;
+    material.aoMapIntensity = 1;
+    material.needsUpdate = true;
+    tryRendererInitTexture(renderer, aoTex);
+  }
+}
+
+/**
+ * @returns {Promise<void>} Resolves when diffuse + detail maps + horizon skirt are in place (or fallback diffuse only).
+ */
+function applyBattleMoon(THREE, sceneEl, mesh) {
+  return new Promise((resolve) => {
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    const diffUrls = assetUrlCandidates(BATTLE_MOON.diff);
+
+    loadTextureChain(
+      loader,
+      diffUrls,
+      0,
+      (colorTexture) => {
+        const finish = async () => {
+          try {
+            configureMoonDiffuseTexture(colorTexture, THREE, sceneEl);
+            disposeMaterial(mesh.material);
+            const material = new THREE.MeshStandardMaterial({
+              map: colorTexture,
+              bumpMap: colorTexture,
+              bumpScale: MOON_BUMP_SCALE,
+              /** Full albedo range — gray multiply was crushing crater contrast (muddy look). */
+              color: 0xffffff,
+              roughness: 0.88,
+              metalness: 0,
+              flatShading: false,
+              fog: false,
+            });
+            mesh.material = material;
+            mesh.receiveShadow = true;
+            mesh.castShadow = false;
+            const r = sceneEl && sceneEl.renderer;
+            tryRendererInitTexture(r, colorTexture);
+            await attachMoonSurfaceTextureMapsAsync(THREE, sceneEl, material);
+            tryAttachHorizonSkirt(THREE, mesh, sceneEl);
+          } finally {
+            resolve();
+          }
+        };
+        void finish();
+      },
+      () => {
+        loadFallbackDiffuseChain(THREE, sceneEl, mesh, collectFallbackDiffuseUrls(), 0).then(resolve);
+      }
+    );
+  });
 }
 
 /** @param {HTMLElement} sceneEl — `<a-scene>` */
@@ -706,7 +1010,7 @@ export function toggleTerrainGrid() {
   return terrainGridVisible;
 }
 
-export function applyMoonBattlefieldVisuals(sceneEl) {
+export async function applyMoonBattlefieldVisuals(sceneEl) {
   const THREE = window.THREE;
   if (!THREE || !sceneEl) return;
 
@@ -726,7 +1030,7 @@ export function applyMoonBattlefieldVisuals(sceneEl) {
   mesh.castShadow = false;
   groundEl.setObject3D('mesh', mesh);
 
-  applyBattleMoon(THREE, sceneEl, mesh);
+  await applyBattleMoon(THREE, sceneEl, mesh);
   configureTerrainPresentation(sceneEl);
   styleMoonGrid();
   const gridMount = document.getElementById('gridHelper');

@@ -648,6 +648,8 @@ export function updateNetwork(time) {
       playerCommanded: !!u.playerCommanded,
       targetUnitId: u.targetUnitId ?? null,
       followLeadId: u.followLeadId ?? null,
+      squadOffsetX: u.squadOffsetX ?? 0,
+      squadOffsetZ: u.squadOffsetZ ?? 0,
       targetBuildingId: u.targetBuildingId ?? null,
       targetPos: u.targetPos ? { x: u.targetPos.x, z: u.targetPos.z } : null,
       guardPos: u.guardPos ? { x: u.guardPos.x, z: u.guardPos.z } : null,
@@ -806,6 +808,8 @@ function applySnapshot(snapshot) {
       unit.playerCommanded = !!uData.playerCommanded;
       unit.targetUnitId = uData.targetUnitId != null ? uData.targetUnitId : null;
       unit.followLeadId = uData.followLeadId != null ? uData.followLeadId : null;
+      unit.squadOffsetX = uData.squadOffsetX != null ? uData.squadOffsetX : 0;
+      unit.squadOffsetZ = uData.squadOffsetZ != null ? uData.squadOffsetZ : 0;
       unit.targetBuildingId = uData.targetBuildingId != null ? uData.targetBuildingId : null;
       unit.targetPos = uData.targetPos ? { x: uData.targetPos.x, z: uData.targetPos.z } : null;
       unit.guardPos = uData.guardPos ? { x: uData.guardPos.x, z: uData.guardPos.z } : null;
