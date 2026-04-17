@@ -16,15 +16,19 @@ import {
   MAX_PLAYERS,
   NET_SNAPSHOT_RATE,
   NET_CLIENT_CMD_TIMEOUT_MS,
-  NET_CLIENT_POS_CATCHUP_TAU_SEC,
   NET_KEEPALIVE_INTERVAL_MS,
   NET_HOST_BG_SIM_INTERVAL_MS,
   NET_CLIENT_AUTO_REJOIN_DELAY_MS,
   NET_CLIENT_AUTO_REJOIN_MAX,
+  NET_HOST_PAUSE_AUTO_RESUME_MS,
 } from './config.js';
 
 /** Multiplayer client: last applied player team row from host (lobby defaults differ from match). */
 let lastClientPlayerTeamSig = '';
+
+/** Wall-clock gap between snapshots (ms) — drives client interpolation segment length. */
+let lastClientSnapWallMs = 0;
+let clientSnapshotInterpGapMs = 1000 / NET_SNAPSHOT_RATE;
 
 /** Same TURN/STUN path as DodgeVR / index-zerog: worker returns full iceServers JSON (Metered-backed). */
 async function getPeerIceServers() {
@@ -47,6 +51,7 @@ let keepaliveTimerId = null;
 let hostBgSimTimerId = null;
 let clientRejoinTimerId = null;
 let clientAutoRejoinAttempts = 0;
+let hostPauseAutoResumeTimerId = null;
 
 /** BattleVR-style: host id is `rtsvr2-host-{N}` so joiners only pick lobby 1–4 (no pasted PeerJS id). */
 export const MAX_LOBBIES = 4;
@@ -57,11 +62,55 @@ function hostSessionId() {
   return `rtsvr2-host-${selectedLobby}`;
 }
 
+function clearHostPauseAutoResumeTimer() {
+  if (hostPauseAutoResumeTimerId != null) {
+    clearTimeout(hostPauseAutoResumeTimerId);
+    hostPauseAutoResumeTimerId = null;
+  }
+}
+
+function clearMpPauseState() {
+  clearHostPauseAutoResumeTimer();
+  State.gameSession.mpSessionPaused = false;
+  State.gameSession.mpPauseReason = '';
+  State.gameSession.mpPauseTitle = '';
+  State.gameSession.mpPauseDetail = '';
+  State.gameSession.mpPauseSubline = '';
+  State.gameSession.mpPendingHumanDropSeatIds = [];
+  State.gameSession.mpPauseAutoResumeAt = 0;
+}
+
+/** Host only: (re)arm auto-resume after `remote_left` pause; resets the countdown on each new drop. */
+function scheduleHostPauseAutoResume() {
+  if (!State.gameSession.isMultiplayer || !State.gameSession.isHost) return;
+  clearHostPauseAutoResumeTimer();
+  const delay = Math.max(1000, NET_HOST_PAUSE_AUTO_RESUME_MS);
+  State.gameSession.mpPauseAutoResumeAt = Date.now() + delay;
+  hostPauseAutoResumeTimerId = setTimeout(() => {
+    hostPauseAutoResumeTimerId = null;
+    if (
+      State.gameSession.isMultiplayer &&
+      State.gameSession.isHost &&
+      State.gameSession.mpSessionPaused &&
+      State.gameSession.mpPauseReason === 'remote_left'
+    ) {
+      hostResumeFromPause();
+    }
+  }, delay);
+}
+
+function syncMpPauseUi() {
+  import('./ui.js')
+    .then(m => m.syncMpPauseOverlay())
+    .catch(() => {});
+}
+
 function teardownPeerOnly() {
   if (clientRejoinTimerId) {
     clearTimeout(clientRejoinTimerId);
     clientRejoinTimerId = null;
   }
+  clearMpPauseState();
   clearAllPendingClientAcks(true, 'disconnected');
   connections.forEach(c => {
     try {
@@ -152,6 +201,7 @@ export function commandFailureMessage(code) {
     placement_failed: 'Could not place building.',
     unknown_action: 'Unknown command.',
     disconnected: 'Disconnected from host.',
+    session_paused: 'Match is paused (network). Wait for the host or reconnect.',
     lobby_full: 'Lobby is full.',
     timeout: 'No response from host — try again.',
     network: 'Not connected to host.',
@@ -249,6 +299,15 @@ function setLobbyMenuStatus(text) {
   const vr = document.getElementById('menu-status-vr');
   if (vr && typeof vr.setAttribute === 'function') {
     vr.setAttribute('value', text);
+    // A-Frame `a-text`: some builds only refresh when `text` component is updated.
+    try {
+      const t = vr.getAttribute('text');
+      if (t && typeof t === 'object') {
+        vr.setAttribute('text', { ...t, value: text });
+      } else {
+        vr.setAttribute('text', { value: text, align: 'center', width: 0.72, color: '#cccccc' });
+      }
+    } catch (_) { /* ignore */ }
   }
 }
 
@@ -263,7 +322,9 @@ function refreshHostLobbyConnectionUi() {
   const r = n - 1;
   const L = selectedLobby;
   const tail = State.gameSession.gameStarted
-    ? 'Match running — snapshots to remotes.'
+    ? State.gameSession.mpSessionPaused
+      ? 'Match PAUSED — resume from the pause banner when ready (dropped seats → AI).'
+      : 'Match running — snapshots to remotes.'
     : 'Pick a mode, then Start when ready.';
   setLobbyMenuStatus(
     `Host · lobby ${L} — ${n}/${MAX_PLAYERS} players (${r} remote). ${tail}`
@@ -275,6 +336,7 @@ export async function startHosting() {
   if (State.gameSession.isMultiplayer) return;
 
   teardownPeerOnly();
+  syncMpPauseUi();
 
   const sessionID = hostSessionId();
 
@@ -296,7 +358,15 @@ export async function startHosting() {
     });
 
     peer.on('connection', conn => {
-      conn.on('open', () => {
+      /**
+       * PeerJS: for the callee, `open` can fire before `conn.on('open', …)` runs.
+       * If we only listen for `open`, the handler never runs → no roster, no UI, no assignment.
+       */
+      let hostConnReadyDone = false;
+      const onHostIncomingConnectionReady = () => {
+        if (hostConnReadyDone) return;
+        hostConnReadyDone = true;
+
         let assignedId = null;
         for (let i = 1; i < 4; i++) {
           if (!connections.has(i)) {
@@ -339,29 +409,55 @@ export async function startHosting() {
 
         conn.on('close', () => {
           connections.delete(assignedId);
-          State.players[assignedId].isHuman = false;
-          State.players[assignedId].isBot = true;
-          const n = hostLobbyHumanCount();
-          broadcastData({
-            type: 'player-left',
-            playerId: assignedId,
-            lobby: selectedLobby,
-            humanCount: n,
-            maxHumans: MAX_PLAYERS,
-          });
-          refreshHostLobbyConnectionUi();
-          if (State.gameSession.gameStarted) {
-            import('./ui.js')
-              .then(m =>
-                m.showStatus(
-                  `Player ${assignedId + 1} left · ${n}/${MAX_PLAYERS} humans in session.`
-                )
-              )
-              .catch(() => {});
+          if (State.gameSession.gameStarted && !State.gameSession.gameOver) {
+            if (!Array.isArray(State.gameSession.mpPendingHumanDropSeatIds)) {
+              State.gameSession.mpPendingHumanDropSeatIds = [];
+            }
+            if (!State.gameSession.mpPendingHumanDropSeatIds.includes(assignedId)) {
+              State.gameSession.mpPendingHumanDropSeatIds.push(assignedId);
+            }
+            State.gameSession.mpSessionPaused = true;
+            State.gameSession.mpPauseReason = 'remote_left';
+            const cnt = State.gameSession.mpPendingHumanDropSeatIds.length;
+            State.gameSession.mpPauseTitle =
+              cnt > 1 ? `${cnt} players disconnected` : `Player ${assignedId + 1} disconnected`;
+            const arSec = Math.round(NET_HOST_PAUSE_AUTO_RESUME_MS / 1000);
+            State.gameSession.mpPauseDetail =
+              `The match is paused — simulation is frozen. The host can resume now, or the match auto-resumes in ${arSec}s (dropped seats → AI). Each new disconnect resets that timer.`;
+            const seats = State.gameSession.mpPendingHumanDropSeatIds.map(i => `P${i + 1}`).join(', ');
+            State.gameSession.mpPauseSubline = `Pending seats: ${seats} → AI when the host resumes or after ${arSec}s.`;
+            scheduleHostPauseAutoResume();
+            broadcastData({
+              type: 'session-pause',
+              reason: 'remote_left',
+              seats: [...State.gameSession.mpPendingHumanDropSeatIds],
+              title: State.gameSession.mpPauseTitle,
+              detail: State.gameSession.mpPauseDetail,
+              subline: State.gameSession.mpPauseSubline,
+              autoResumeAt: State.gameSession.mpPauseAutoResumeAt,
+            });
+            syncMpPauseUi();
+          } else {
+            State.players[assignedId].isHuman = false;
+            State.players[assignedId].isBot = true;
+            const n = hostLobbyHumanCount();
+            broadcastData({
+              type: 'player-left',
+              playerId: assignedId,
+              lobby: selectedLobby,
+              humanCount: n,
+              maxHumans: MAX_PLAYERS,
+            });
           }
-          console.log(`❌ Player ${assignedId} disconnected (${n}/${MAX_PLAYERS} humans)`);
+          refreshHostLobbyConnectionUi();
+          console.log(`❌ Player ${assignedId} disconnected`);
         });
-      });
+      };
+
+      conn.on('open', onHostIncomingConnectionReady);
+      if (conn.open) {
+        queueMicrotask(onHostIncomingConnectionReady);
+      }
     });
 
     peer.on('error', err => {
@@ -377,6 +473,7 @@ export async function startHosting() {
       teardownPeerOnly();
       State.gameSession.isMultiplayer = false;
       State.gameSession.isHost = false;
+      syncMpPauseUi();
     });
   } catch (err) {
     console.error('Failed to host:', err);
@@ -395,6 +492,7 @@ export async function joinGame() {
   }
 
   teardownPeerOnly();
+  syncMpPauseUi();
 
   const hostId = hostSessionId();
   const clientId = `rtsvr2-client-${Date.now().toString(36)}`;
@@ -422,6 +520,7 @@ export async function joinGame() {
         teardownPeerOnly();
         State.gameSession.isMultiplayer = false;
         State.gameSession.isHost = false;
+        syncMpPauseUi();
       };
 
       openTimer = setTimeout(() => {
@@ -443,6 +542,7 @@ export async function joinGame() {
         setLobbyMenuStatus(
           `Connected — lobby ${selectedLobby} · waiting for roster from host…`
         );
+        syncMpPauseUi();
 
         conn.on('data', data => handleHostData(data));
 
@@ -450,21 +550,41 @@ export async function joinGame() {
           console.log('❌ Disconnected from host');
           lastClientPlayerTeamSig = '';
           clearAllPendingClientAcks(true, 'disconnected');
+          const inLobby = !State.gameSession.gameStarted;
+          const inMatch =
+            State.gameSession.gameStarted && !State.gameSession.gameOver;
+          const lobbyNum = selectedLobby;
+
+          if (inMatch) {
+            State.gameSession.mpSessionPaused = true;
+            State.gameSession.mpPauseReason = 'lost_host';
+            State.gameSession.mpPauseTitle = 'Lost connection to host';
+            State.gameSession.mpPauseDetail =
+              'Your link to the host dropped. The simulation on your device is frozen until you reconnect. The host may have paused the match if another seat disconnected.';
+            State.gameSession.mpPauseSubline = '';
+          } else if (inLobby) {
+            State.gameSession.mpSessionPaused = true;
+            State.gameSession.mpPauseReason = 'lobby_drop';
+            State.gameSession.mpPauseTitle = 'Disconnected from host (lobby)';
+            State.gameSession.mpPauseDetail =
+              'The lobby connection closed. If automatic retries remain, the client will reconnect; otherwise use Join again with the same lobby number as the host.';
+            State.gameSession.mpPauseSubline = '';
+          }
+
           State.gameSession.isMultiplayer = false;
           State.gameSession.isHost = false;
           connections.delete('host');
+
           const hud = document.getElementById('hud-status');
           if (hud) hud.textContent = 'Disconnected from host.';
-          const inLobby = !State.gameSession.gameStarted;
-          const lobbyNum = selectedLobby;
-          if (
-            inLobby &&
-            clientAutoRejoinAttempts < NET_CLIENT_AUTO_REJOIN_MAX
-          ) {
+
+          if (inLobby && clientAutoRejoinAttempts < NET_CLIENT_AUTO_REJOIN_MAX) {
             clientAutoRejoinAttempts += 1;
             setLobbyMenuStatus(
               `Disconnected — reconnecting to lobby ${lobbyNum} (${clientAutoRejoinAttempts}/${NET_CLIENT_AUTO_REJOIN_MAX})…`
             );
+            State.gameSession.mpPauseSubline = `Automatic reconnect attempt ${clientAutoRejoinAttempts} of ${NET_CLIENT_AUTO_REJOIN_MAX} in ${Math.round(NET_CLIENT_AUTO_REJOIN_DELAY_MS / 1000)}s…`;
+            syncMpPauseUi();
             clientRejoinTimerId = setTimeout(() => {
               clientRejoinTimerId = null;
               joinGame().catch(() => {});
@@ -474,15 +594,21 @@ export async function joinGame() {
             setLobbyMenuStatus(
               `Disconnected from host. Use Join again (lobby ${lobbyNum}, same # as host).`
             );
-            if (State.gameSession.gameStarted) {
+            if (inMatch) {
+              State.gameSession.mpPauseSubline =
+                'No automatic in-match reconnect — open the menu and Join the same lobby when the host is online.';
               import('./ui.js')
                 .then(m =>
                   m.showStatus(
-                    'Lost connection to host. Re-open the menu and Join the same lobby when the host is back.'
+                    'Lost connection to host. Join the same lobby again when the host is back.'
                   )
                 )
                 .catch(() => {});
+            } else {
+              State.gameSession.mpPauseSubline =
+                'Automatic lobby reconnect gave up — tap Join again with the same lobby # as the host.';
             }
+            syncMpPauseUi();
           }
         });
       });
@@ -499,6 +625,7 @@ export async function joinGame() {
       teardownPeerOnly();
       State.gameSession.isMultiplayer = false;
       State.gameSession.isHost = false;
+      syncMpPauseUi();
     });
   } catch (err) {
     console.error('Failed to join:', err);
@@ -561,6 +688,8 @@ function handleHostData(data) {
       break;
 
     case 'game-start':
+      clearMpPauseState();
+      syncMpPauseUi();
       lastClientPlayerTeamSig = '';
       State.gameSession.gameStarted = true;
       State.gameSession.menuOpen = false;
@@ -638,8 +767,44 @@ function handleHostData(data) {
       State.gameSession.isMultiplayer = false;
       State.gameSession.isHost = false;
       connections.delete('host');
+      clearMpPauseState();
       setLobbyMenuStatus('Lobby is full. Try another host or start your own.');
+      syncMpPauseUi();
       console.warn('Could not join: lobby full');
+      break;
+    }
+
+    case 'session-pause': {
+      State.gameSession.mpSessionPaused = true;
+      State.gameSession.mpPauseReason = data.reason || 'unknown';
+      const seats = Array.isArray(data.seats) ? data.seats : [];
+      State.gameSession.mpPendingHumanDropSeatIds = seats.slice();
+      if (data.title) {
+        State.gameSession.mpPauseTitle = data.title;
+      } else if (seats.length > 1) {
+        State.gameSession.mpPauseTitle = `${seats.length} players disconnected`;
+      } else if (seats.length === 1) {
+        State.gameSession.mpPauseTitle = `Player ${seats[0] + 1} disconnected`;
+      } else {
+        State.gameSession.mpPauseTitle = 'Match paused';
+      }
+      State.gameSession.mpPauseDetail =
+        data.detail ||
+        'The host has paused the match because of a network disconnect.';
+      State.gameSession.mpPauseSubline =
+        data.subline ||
+        (State.gameSession.isHost
+          ? 'When you are ready, tap Resume — listed seats become AI and everyone continues.'
+          : 'Orders are disabled while paused. Wait for the host to resume.');
+      State.gameSession.mpPauseAutoResumeAt =
+        typeof data.autoResumeAt === 'number' && data.autoResumeAt > 0 ? data.autoResumeAt : 0;
+      syncMpPauseUi();
+      break;
+    }
+
+    case 'session-resume': {
+      clearMpPauseState();
+      syncMpPauseUi();
       break;
     }
 
@@ -659,6 +824,9 @@ function filterUnitsOwned(playerId, unitIds) {
 
 /** Host-authoritative execution; returns { ok, code? }. */
 function executeCommand(data, actingPlayerId) {
+  if (State.gameSession.isMultiplayer && State.gameSession.isHost && State.gameSession.mpSessionPaused) {
+    return { ok: false, code: 'session_paused' };
+  }
   switch (data.action) {
     case 'move': {
       const ids = filterUnitsOwned(actingPlayerId, data.unitIds);
@@ -788,10 +956,21 @@ export function sendCommand(command, onResult) {
   };
 
   if (!State.gameSession.isMultiplayer) {
+    if (State.gameSession.mpSessionPaused) {
+      const cb = typeof onResult === 'function' ? onResult : () => {};
+      cb(false, 'session_paused');
+      return false;
+    }
     return runLocal();
   }
   if (State.gameSession.isHost) {
     return runLocal();
+  }
+
+  if (State.gameSession.mpSessionPaused) {
+    const cb = typeof onResult === 'function' ? onResult : () => {};
+    cb(false, 'session_paused');
+    return false;
   }
 
   const conn = connections.get('host');
@@ -800,48 +979,78 @@ export function sendCommand(command, onResult) {
     return false;
   }
 
-  if (typeof onResult === 'function') {
-    const cmdId = ++clientCmdSeq;
-    const timerId = setTimeout(() => fulfillClientAck(cmdId, false, 'timeout'), NET_CLIENT_CMD_TIMEOUT_MS);
-    pendingClientAcks.set(cmdId, { onResult, timerId });
-    try {
-      conn.send({ type: 'command', ...command, cmdId });
-    } catch (err) {
-      clearTimeout(timerId);
-      pendingClientAcks.delete(cmdId);
-      onResult(false, 'send_failed');
-      return false;
-    }
-    return true;
-  }
-
+  /** Always use cmdId + ack so the host always returns `command-result` — fire-and-forget was starving UI. */
+  const cmdId = ++clientCmdSeq;
+  const cb = typeof onResult === 'function' ? onResult : () => {};
+  const timerId = setTimeout(() => fulfillClientAck(cmdId, false, 'timeout'), NET_CLIENT_CMD_TIMEOUT_MS);
+  pendingClientAcks.set(cmdId, { onResult: cb, timerId });
   try {
-    conn.send({ type: 'command', ...command });
-    return true;
-  } catch (_) {
+    conn.send({ type: 'command', ...command, cmdId });
+  } catch (err) {
+    clearTimeout(timerId);
+    pendingClientAcks.delete(cmdId);
+    cb(false, 'send_failed');
     return false;
   }
+  return true;
 }
 
-/** MP client: blend displayed XZ toward latest snapshot every render tick (host sim is frozen here). */
+/** Smoothstep 0..1 */
+function stp01(t) {
+  const u = Math.max(0, Math.min(1, t));
+  return u * u * (3 - 2 * u);
+}
+
+function reseedClientUnitInterpolation(unit, uData) {
+  const now = performance.now();
+  let dur = clientSnapshotInterpGapMs;
+  if (!Number.isFinite(dur) || dur < 20) dur = 1000 / NET_SNAPSHOT_RATE;
+  dur = Math.max(28, Math.min(170, dur));
+
+  const dx = uData.x - unit.x;
+  const dz = uData.z - unit.z;
+  if (dx * dx + dz * dz > 55 * 55) {
+    unit.x = uData.x;
+    unit.z = uData.z;
+    unit.rotation = typeof uData.rotation === 'number' ? uData.rotation : unit.rotation;
+    unit._ix0 = unit._ix1 = unit.x;
+    unit._iz0 = unit._iz1 = unit.z;
+    unit._ir0 = unit._ir1 = unit.rotation;
+    unit._iT0 = now;
+    unit._iDur = dur;
+    return;
+  }
+
+  unit._ix0 = unit.x;
+  unit._iz0 = unit.z;
+  unit._ix1 = uData.x;
+  unit._iz1 = uData.z;
+  unit._ir0 = unit.rotation;
+  unit._ir1 = typeof uData.rotation === 'number' ? uData.rotation : unit.rotation;
+  unit._iT0 = now;
+  unit._iDur = dur;
+}
+
+/** MP client: interpolate each unit along the last snapshot segment (smooth motion between host samples). */
 export function smoothNetClientUnitPositions(dt) {
-  if (!dt || dt <= 0) return;
-  const tau = NET_CLIENT_POS_CATCHUP_TAU_SEC;
-  if (tau <= 1e-6) return;
-  const alpha = 1 - Math.exp(-dt / tau);
-  const snapDistSq = 45 * 45; // instant catch-up if desynced (lobby / teleport)
+  const now = performance.now();
   State.units.forEach(unit => {
     if (!unit || unit.hp <= 0) return;
-    if (unit.netGoalX == null || unit.netGoalZ == null) return;
-    const dx = unit.netGoalX - unit.x;
-    const dz = unit.netGoalZ - unit.z;
-    if (dx * dx + dz * dz > snapDistSq) {
-      unit.x = unit.netGoalX;
-      unit.z = unit.netGoalZ;
+    if (unit._iT0 == null || unit._iDur == null || unit._ix1 == null) return;
+    let u = (now - unit._iT0) / unit._iDur;
+    if (u >= 1) {
+      unit.x = unit._ix1;
+      unit.z = unit._iz1;
+      unit.rotation = unit._ir1;
       return;
     }
-    unit.x += dx * alpha;
-    unit.z += dz * alpha;
+    const s = stp01(u);
+    unit.x = unit._ix0 + (unit._ix1 - unit._ix0) * s;
+    unit.z = unit._iz0 + (unit._iz1 - unit._iz0) * s;
+    let dr = unit._ir1 - unit._ir0;
+    while (dr > Math.PI) dr -= Math.PI * 2;
+    while (dr < -Math.PI) dr += Math.PI * 2;
+    unit.rotation = unit._ir0 + dr * s;
   });
 }
 
@@ -1004,6 +1213,16 @@ function applyHostFxEventsForClient(fxList) {
 
 // --- Apply snapshot (client-side) ---
 function applySnapshot(snapshot) {
+  const wall = performance.now();
+  if (lastClientSnapWallMs > 0) {
+    const gap = wall - lastClientSnapWallMs;
+    if (gap > 5 && gap < 3000) {
+      clientSnapshotInterpGapMs = clientSnapshotInterpGapMs * 0.62 + gap * 0.38;
+      clientSnapshotInterpGapMs = Math.max(40, Math.min(220, clientSnapshotInterpGapMs));
+    }
+  }
+  lastClientSnapWallMs = wall;
+
   const isNetClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
 
   let teamSig = '';
@@ -1054,6 +1273,9 @@ function applySnapshot(snapshot) {
         skipProducedStat: true,
         team: uData.team,
       });
+      if (unit && typeof uData.rotation === 'number') {
+        unit.rotation = uData.rotation;
+      }
     }
     if (unit) {
       if (uData.team !== undefined && unit.team !== uData.team) {
@@ -1066,13 +1288,10 @@ function applySnapshot(snapshot) {
       } else if (uData.team !== undefined) {
         unit.team = uData.team;
       }
-      // Authoritative goal for this tick; display x,z are smoothed each frame in smoothNetClientUnitPositions.
-      unit.netGoalX = uData.x;
-      unit.netGoalZ = uData.z;
+      reseedClientUnitInterpolation(unit, uData);
       unit.hp = uData.hp;
       if (uData.maxHp !== undefined) unit.maxHp = uData.maxHp;
       unit.state = uData.state;
-      unit.rotation = uData.rotation;
       if (uData.lastFireTime !== undefined) unit.lastFireTime = uData.lastFireTime;
       unit.playerCommanded = !!uData.playerCommanded;
       unit.targetUnitId = uData.targetUnitId != null ? uData.targetUnitId : null;
@@ -1164,4 +1383,39 @@ function applySnapshot(snapshot) {
   if (snapshot.winner !== undefined) {
     State.gameSession.winner = snapshot.winner;
   }
+}
+
+/** Host only: end session pause after remote disconnect — turn pending seats into AI and notify everyone. */
+export function hostResumeFromPause() {
+  if (!State.gameSession.isMultiplayer || !State.gameSession.isHost) return;
+  if (!State.gameSession.mpSessionPaused) return;
+  clearHostPauseAutoResumeTimer();
+  const seats = [...(State.gameSession.mpPendingHumanDropSeatIds || [])];
+  for (let si = 0; si < seats.length; si++) {
+    const assignedId = seats[si];
+    if (assignedId >= 1 && assignedId <= 3 && State.players[assignedId]) {
+      State.players[assignedId].isHuman = false;
+      State.players[assignedId].isBot = true;
+    }
+    const n = hostLobbyHumanCount();
+    broadcastData({
+      type: 'player-left',
+      playerId: assignedId,
+      lobby: selectedLobby,
+      humanCount: n,
+      maxHumans: MAX_PLAYERS,
+    });
+  }
+  broadcastData({ type: 'session-resume' });
+  clearMpPauseState();
+  import('./ui.js')
+    .then(m => {
+      m.syncMpPauseOverlay();
+      const label = seats.length
+        ? `${seats.map(i => `P${i + 1}`).join(', ')} → AI`
+        : 'continuing';
+      m.showStatus(`Match resumed — ${label}.`);
+    })
+    .catch(() => {});
+  refreshHostLobbyConnectionUi();
 }

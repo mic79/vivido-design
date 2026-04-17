@@ -32,6 +32,7 @@ let vrMinimapCtx = null;
 let vrMinimapTexture = null;
 
 let lastHudHelpPlatform = '';
+let mpPauseCountdownIntervalId = null;
 
 function uiMountRoot() {
   return document.getElementById('xr-dom-overlay') || document.body;
@@ -65,9 +66,150 @@ function createAppStartOverlay() {
   uiMountRoot().appendChild(el);
 }
 
+function createMpPauseOverlay() {
+  if (document.getElementById('mp-pause-overlay')) return;
+  const el = document.createElement('div');
+  el.id = 'mp-pause-overlay';
+  el.setAttribute('role', 'alertdialog');
+  el.setAttribute('aria-modal', 'true');
+  el.setAttribute('aria-live', 'assertive');
+  el.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:420',
+    'display:none',
+    'align-items:center',
+    'justify-content:center',
+    'box-sizing:border-box',
+    'padding:24px',
+    'background:rgba(2,6,10,0.72)',
+    'pointer-events:auto',
+    "font-family:'Consolas',monospace",
+    'color:#e8f4ff',
+  ].join(';');
+  el.innerHTML = `
+    <div style="max-width:min(520px,92vw);background:rgba(8,20,32,0.96);border:2px solid #4a9eff;border-radius:12px;padding:22px 24px;box-shadow:0 8px 40px rgba(0,0,0,0.55)">
+      <div id="mp-pause-title" style="font-size:20px;font-weight:bold;margin:0 0 10px 0;color:#9df">Paused</div>
+      <div id="mp-pause-detail" style="font-size:14px;line-height:1.55;margin:0 0 12px 0;opacity:0.95"></div>
+      <div id="mp-pause-subline" style="font-size:12px;line-height:1.45;margin:0 0 16px 0;opacity:0.88;color:#bde"></div>
+      <button type="button" id="mp-pause-resume" style="display:none;padding:10px 22px;font-size:15px;border-radius:8px;border:2px solid #6c6;background:#143214;color:#cfc;cursor:pointer;font-weight:bold">
+        Resume now (AI takes dropped seats)
+      </button>
+    </div>
+  `;
+  const btn = el.querySelector('#mp-pause-resume');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      Network.hostResumeFromPause();
+    });
+  }
+  uiMountRoot().appendChild(el);
+}
+
+function clearMpPauseCountdownInterval() {
+  if (mpPauseCountdownIntervalId != null) {
+    clearInterval(mpPauseCountdownIntervalId);
+    mpPauseCountdownIntervalId = null;
+  }
+}
+
+function mpPauseFormattedSubline() {
+  const base = State.gameSession.mpPauseSubline || '';
+  const until = State.gameSession.mpPauseAutoResumeAt;
+  if (!until || State.gameSession.mpPauseReason !== 'remote_left') return base;
+  const rem = Math.ceil((until - Date.now()) / 1000);
+  if (rem > 0) {
+    const tail = ` Live countdown: ${rem}s.`;
+    return base ? `${base}${tail}` : tail.trim();
+  }
+  return base ? `${base} Auto-resume starting…` : 'Auto-resume starting…';
+}
+
+/** Show or hide the multiplayer disconnect / session pause banner (host + clients). */
+export function syncMpPauseOverlay() {
+  createMpPauseOverlay();
+  const root = document.getElementById('mp-pause-overlay');
+  if (!root) return;
+  if (!State.gameSession.mpSessionPaused) {
+    clearMpPauseCountdownInterval();
+    root.style.display = 'none';
+    const flat = document.getElementById('menu-status');
+    const vr = document.getElementById('menu-status-vr');
+    if (vr && flat && flat.textContent) {
+      const text = flat.textContent.slice(0, 240);
+      vr.setAttribute('value', text);
+      try {
+        const comp = vr.getAttribute('text');
+        if (comp && typeof comp === 'object') {
+          vr.setAttribute('text', { ...comp, value: text });
+        } else {
+          vr.setAttribute('text', { value: text, align: 'center', width: 0.72, color: '#cccccc' });
+        }
+      } catch (_) { /* ignore */ }
+    }
+    return;
+  }
+  root.style.display = 'flex';
+  const t = document.getElementById('mp-pause-title');
+  const d = document.getElementById('mp-pause-detail');
+  const s = document.getElementById('mp-pause-subline');
+  const btn = document.getElementById('mp-pause-resume');
+  if (t) t.textContent = State.gameSession.mpPauseTitle || 'Paused';
+  if (d) d.textContent = State.gameSession.mpPauseDetail || '';
+  const subFull = mpPauseFormattedSubline();
+  if (s) s.textContent = subFull;
+  if (btn) {
+    const showResume =
+      State.gameSession.isHost &&
+      State.gameSession.isMultiplayer &&
+      State.gameSession.mpPauseReason === 'remote_left';
+    btn.style.display = showResume ? 'inline-block' : 'none';
+  }
+  const vr = document.getElementById('menu-status-vr');
+  if (vr && typeof vr.setAttribute === 'function') {
+    const line = `${State.gameSession.mpPauseTitle || 'Paused'} — ${subFull}`.trim();
+    vr.setAttribute('value', line.slice(0, 240));
+    try {
+      const comp = vr.getAttribute('text');
+      if (comp && typeof comp === 'object') {
+        vr.setAttribute('text', { ...comp, value: line.slice(0, 240) });
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  clearMpPauseCountdownInterval();
+  const until = State.gameSession.mpPauseAutoResumeAt;
+  if (
+    until > Date.now() &&
+    State.gameSession.mpPauseReason === 'remote_left'
+  ) {
+    mpPauseCountdownIntervalId = setInterval(() => {
+      if (!State.gameSession.mpSessionPaused) {
+        clearMpPauseCountdownInterval();
+        return;
+      }
+      const el = document.getElementById('mp-pause-subline');
+      const line = mpPauseFormattedSubline();
+      if (el) el.textContent = line;
+      const vr2 = document.getElementById('menu-status-vr');
+      if (vr2 && typeof vr2.setAttribute === 'function') {
+        const vline = `${State.gameSession.mpPauseTitle || 'Paused'} — ${line}`.trim();
+        vr2.setAttribute('value', vline.slice(0, 240));
+        try {
+          const comp2 = vr2.getAttribute('text');
+          if (comp2 && typeof comp2 === 'object') {
+            vr2.setAttribute('text', { ...comp2, value: vline.slice(0, 240) });
+          }
+        } catch (_) { /* ignore */ }
+      }
+    }, 500);
+  }
+}
+
 export function initUI() {
   window.__rtsVrMinimapClick = (wx, wz, moveMode) => {
     if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+    if (State.gameSession.mpSessionPaused) return;
     const c = clampWorldToPlayableDisk(wx, wz, 0);
     const px = c.x;
     const pz = c.z;
@@ -87,6 +229,7 @@ export function initUI() {
   createMinimap();
   createMenu();
   createBuildMenu();
+  createMpPauseOverlay();
   window._dismissAppStartGate = dismissAppStartGate;
   updateMenuVisibility();
 }
@@ -281,6 +424,7 @@ function createMinimap() {
     wz = disk.z;
 
     if (e.button === 2 || isMoveOnly) {
+      if (State.gameSession.mpSessionPaused) return;
       const unitIds = Array.from(State.selectedUnits);
       if (unitIds.length > 0) {
         Network.sendCommand({ action: 'move', unitIds, x: wx, z: wz });
@@ -495,7 +639,10 @@ export function updateUI() {
   const showMobileDeploy = activeMobileDeployUnitIds && activeMobileDeployUnitIds.length > 0;
   if (activeBuildingPanel || showMobileDeploy) {
     const now = performance.now();
-    if (now - lastBuildPanelUpdate > 500) {
+    const mpClient =
+      State.gameSession.isMultiplayer && !State.gameSession.isHost && State.gameSession.gameStarted;
+    const throttleMs = mpClient ? 72 : 500;
+    if (now - lastBuildPanelUpdate > throttleMs) {
       lastBuildPanelUpdate = now;
       if (activeBuildingPanel) refreshBuildingPanel();
       if (showMobileDeploy) refreshMobileHqDeployPanel();

@@ -252,6 +252,17 @@ export const gameSession = {
   buildGhostValid: false,
   buildGhostPos: { x: 0, z: 0 },
   debugFog: false,     // "Spy Mode" for observing AI
+
+  /** Multiplayer: host froze sim after a mid-match disconnect; cleared on session-resume. */
+  mpSessionPaused: false,
+  mpPauseReason: '',
+  mpPauseTitle: '',
+  mpPauseDetail: '',
+  mpPauseSubline: '',
+  /** Host: seat ids (1–3) waiting to be turned into AI on resume. */
+  mpPendingHumanDropSeatIds: [],
+  /** Wall-clock ms (`Date.now()`): when host auto-resumes after `remote_left` pause; 0 if none. */
+  mpPauseAutoResumeAt: 0,
 };
 
 /** Batched into multiplayer snapshots so joiners hear/see the same SFX & particles as the host. */
@@ -295,4 +306,11 @@ export function resetState() {
   gameSession.menuOpen = true;
   clearBuildPlacementFlags();
   pendingHostFx.length = 0;
+  gameSession.mpSessionPaused = false;
+  gameSession.mpPauseReason = '';
+  gameSession.mpPauseTitle = '';
+  gameSession.mpPauseDetail = '';
+  gameSession.mpPauseSubline = '';
+  gameSession.mpPendingHumanDropSeatIds = [];
+  gameSession.mpPauseAutoResumeAt = 0;
 }

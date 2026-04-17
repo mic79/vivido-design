@@ -408,9 +408,8 @@ export const BOT_MIN_HARVESTERS_BEFORE_SACRIFICE = 2;
 export const BOT_HARVESTER_PER_REFINERY_TARGET = 7;
 
 // --- Networking ---
-export const NET_SNAPSHOT_RATE = 10;     // Snapshots per second (10Hz)
-/** MP client: exponential smoothing time constant (s) toward last snapshot xyz — avoids 10Hz stair-stepping. */
-export const NET_CLIENT_POS_CATCHUP_TAU_SEC = 0.09;
+/** Host → client world state cadence (Hz). Higher = smoother clients; more bandwidth. */
+export const NET_SNAPSHOT_RATE = 22;
 export const NET_INTERPOLATION_DELAY = 100; // ms — reserved for future buffered interpolation
 export const NET_CLIENT_CMD_TIMEOUT_MS = 8000; // Ack wait for multiplayer client commands
 /** Bidirectional WebRTC data-channel keepalive (ms). */
@@ -420,6 +419,8 @@ export const NET_HOST_BG_SIM_INTERVAL_MS = 280;
 /** After an unexpected lobby disconnect, client auto-rejoin attempts (same lobby #). */
 export const NET_CLIENT_AUTO_REJOIN_DELAY_MS = 2600;
 export const NET_CLIENT_AUTO_REJOIN_MAX = 2;
+/** Host: after a mid-match remote disconnect pause, auto-call resume (AI takes pending seats) if the host does not. */
+export const NET_HOST_PAUSE_AUTO_RESUME_MS = 30000;
 
 // --- Audio ---
 // - burst-128424 = rockets / energy

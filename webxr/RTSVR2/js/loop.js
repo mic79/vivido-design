@@ -168,6 +168,10 @@ function gameUpdate(dt, time) {
     return;
   }
 
+  if (State.gameSession.isMultiplayer && State.gameSession.isHost && State.gameSession.mpSessionPaused) {
+    return;
+  }
+
   // 1. Update elapsed time
   State.gameSession.elapsedTime += dt;
 
