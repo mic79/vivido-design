@@ -171,8 +171,16 @@ body.rts-hide-immersive-vr .a-enter-vr-button {
   max-width: calc(100vw - 72px);
 }
 
+#hud-main-menu-toggle {
+  display: none;
+}
+
+#game-hud.rts-touch #hud-main-menu-toggle {
+  display: flex;
+}
+
 /* After first-run Start: main menu only — match HUD (stats, help, actions) appears once `gameStarted`. */
-#game-hud.rts-pre-match #hud-resources > div:first-child {
+#game-hud.rts-pre-match #hud-resources-stats {
   display: none !important;
 }
 #game-hud.rts-pre-match #hud-bot-debug {

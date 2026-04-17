@@ -17,6 +17,19 @@ import { NET_SNAPSHOT_RATE, NET_CLIENT_CMD_TIMEOUT_MS } from './config.js';
 /** Multiplayer client: last applied player team row from host (lobby defaults differ from match). */
 let lastClientPlayerTeamSig = '';
 
+/** Same TURN/STUN path as DodgeVR / index-zerog: worker returns full iceServers JSON (Metered-backed). */
+async function getPeerIceServers() {
+  let iceServersConfig = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+  ];
+  try {
+    const response = await fetch('https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev');
+    if (response.ok) iceServersConfig = await response.json();
+  } catch (_) { /* keep STUN fallback */ }
+  return iceServersConfig;
+}
+
 let peer = null;
 const connections = new Map(); // playerId -> connection
 
@@ -156,10 +169,12 @@ export async function startHosting() {
   const sessionID = hostSessionId();
 
   try {
+    const iceServers = await getPeerIceServers();
     peer = new Peer(sessionID, {
       host: '0.peerjs.com',
       port: 443,
       secure: true,
+      config: { iceServers },
     });
 
     peer.on('open', () => {
@@ -249,10 +264,12 @@ export async function joinGame() {
   const clientId = `rtsvr2-client-${Date.now().toString(36)}`;
 
   try {
+    const iceServers = await getPeerIceServers();
     peer = new Peer(clientId, {
       host: '0.peerjs.com',
       port: 443,
       secure: true,
+      config: { iceServers },
     });
 
     peer.on('open', () => {

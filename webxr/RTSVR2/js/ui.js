@@ -133,6 +133,10 @@ function wireFlatHudActions() {
     const btn = document.getElementById('hud-help-toggle');
     if (btn) btn.textContent = open ? 'Close' : 'Help';
   });
+  document.getElementById('hud-main-menu-toggle')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    Input.toggleMenu();
+  });
 }
 
 function createHUD() {
@@ -146,14 +150,21 @@ function createHUD() {
       background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 4px;
       z-index: 100; pointer-events: none; user-select: none;
     ">
-      <div>
-        <span id="hud-credits">$1000</span>
-        <span style="color: #555; margin: 0 6px;">|</span>
-        <span id="hud-income" style="color: #4f4;">+2/s</span>
-        <span style="color: #555; margin: 0 6px;">|</span>
-        <span id="hud-units" style="color: #aaf;">0/30</span>
-        <span style="color: #555; margin: 0 6px;">|</span>
-        <span id="hud-time" style="color: #ff8;">0:00</span>
+      <div style="display: flex; flex-direction: row; align-items: flex-start; gap: 6px; flex-wrap: wrap;">
+        <button type="button" id="hud-main-menu-toggle" class="hud" aria-label="Main menu"
+          style="pointer-events: auto; flex: 0 0 auto; touch-action: manipulation;
+          box-sizing: border-box; min-width: 44px; min-height: 44px; padding: 0 10px;
+          border-radius: 6px; border: 1px solid #666; background: rgba(22,28,34,0.95); color: #ddd;
+          font-family: Consolas, monospace; font-size: 20px; line-height: 1; align-items: center; justify-content: center;">☰</button>
+        <div id="hud-resources-stats" style="flex: 1; min-width: 0;">
+          <span id="hud-credits">$1000</span>
+          <span style="color: #555; margin: 0 6px;">|</span>
+          <span id="hud-income" style="color: #4f4;">+2/s</span>
+          <span style="color: #555; margin: 0 6px;">|</span>
+          <span id="hud-units" style="color: #aaf;">0/30</span>
+          <span style="color: #555; margin: 0 6px;">|</span>
+          <span id="hud-time" style="color: #ff8;">0:00</span>
+        </div>
       </div>
       <div id="hud-bot-debug" style="
         display: none; margin-top: 5px; padding-top: 5px; border-top: 1px solid #333;

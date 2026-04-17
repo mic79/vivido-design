@@ -1642,6 +1642,7 @@ function isClientPointBlockedForWorldTouch(clientX, clientY) {
   if (el.closest('#minimap-container')) return true;
   if (el.closest('#hud-build-panel')) return true;
   if (el.closest('#hud-flat-actions')) return true;
+  if (el.closest('#hud-main-menu-toggle')) return true;
   if (el.closest('#hud-help-panel')) return true;
   if (el.closest('#build-placement-banner')) return true;
   if (el.closest('#loading-screen')) return true;
@@ -2270,7 +2271,7 @@ function computeVrLaserPickNdc(sceneEl, origin, direction) {
 }
 
 // --- Menu ---
-function toggleMenu() {
+export function toggleMenu() {
   if (State.gameSession.awaitingAppStart) return;
   State.gameSession.menuOpen = !State.gameSession.menuOpen;
   UI.updateMenuVisibility();
