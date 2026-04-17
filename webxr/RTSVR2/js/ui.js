@@ -1472,6 +1472,24 @@ export function showBuildingPanel(building) {
 }
 
 /**
+ * MP client: production bar uses host `startedAtElapsed` + match `elapsedTime` so the UI still
+ * drains if `remainingTime` in snapshots is briefly stale (send/mutation races on the host).
+ */
+function queueHeadRemainingForUi(building) {
+  const q = building.productionQueue || [];
+  if (!q.length) return null;
+  const cur = q[0];
+  const tot = cur.totalTime > 0 ? cur.totalTime : 1;
+  const mpClient =
+    State.gameSession.isMultiplayer && !State.gameSession.isHost && State.gameSession.gameStarted;
+  if (!mpClient) return cur.remainingTime;
+  const st = Number(cur.startedAtElapsed);
+  if (!Number.isFinite(st)) return cur.remainingTime;
+  const synced = st + tot - State.gameSession.elapsedTime;
+  return Math.max(0, Math.min(cur.remainingTime, synced));
+}
+
+/**
  * Full panel layout signature (no per-frame queue *timer* — `remainingTime` is patched via
  * `patchFlatBuildPanelLiveReadouts` every UI tick so MP clients see host-accurate progress).
  */
@@ -1508,7 +1526,8 @@ function patchFlatBuildPanelLiveReadouts(building, player) {
       qBlock.style.display = 'block';
       const current = queue[0];
       const tot = current.totalTime > 0 ? current.totalTime : 1;
-      const pct = Math.max(0, Math.min(100, Math.floor((1 - current.remainingTime / tot) * 100)));
+      const remUi = queueHeadRemainingForUi(building) ?? current.remainingTime;
+      const pct = Math.max(0, Math.min(100, Math.floor((1 - remUi / tot) * 100)));
       const qt = document.getElementById('hud-build-queue-text');
       const qb = document.getElementById('hud-build-queue-bar');
       if (qt) {
@@ -1604,7 +1623,8 @@ function syncVrBuildPanelHeaderFromBuilding(building) {
     if (queue.length > 0) {
       const current = queue[0];
       const tot = current.totalTime > 0 ? current.totalTime : 1;
-      const pct = Math.max(0, Math.min(100, Math.floor((1 - current.remainingTime / tot) * 100)));
+      const remUi = queueHeadRemainingForUi(building) ?? current.remainingTime;
+      const pct = Math.max(0, Math.min(100, Math.floor((1 - remUi / tot) * 100)));
       queueEl.setAttribute(
         'value',
         `Queue: ${UNIT_TYPES[current.unitType]?.name || current.unitType} ${pct}% (${queue.length})`
@@ -1653,7 +1673,8 @@ function refreshBuildingPanel(force = false) {
   if (queue.length > 0) {
     const current = queue[0];
     const tot = current.totalTime > 0 ? current.totalTime : 1;
-    const pct = Math.max(0, Math.min(100, Math.floor((1 - current.remainingTime / tot) * 100)));
+    const remUi = queueHeadRemainingForUi(building) ?? current.remainingTime;
+    const pct = Math.max(0, Math.min(100, Math.floor((1 - remUi / tot) * 100)));
     html += `<div id="hud-build-queue-block" style="margin-bottom: 8px;">
       <div id="hud-build-queue-text" style="color: #ff0; font-size: 12px; margin: 4px 0;"></div>
       <div style="background: #333; height: 4px; border-radius: 2px;">

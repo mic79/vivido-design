@@ -721,7 +721,12 @@ function handleHostData(data) {
 
     case 'snapshot': {
       try {
-        applySnapshot(data.snapshot);
+        const snap = data.snapshot;
+        applySnapshot(
+          typeof structuredClone === 'function'
+            ? structuredClone(snap)
+            : JSON.parse(JSON.stringify(snap))
+        );
       } catch (err) {
         console.error('[RTSVR2] applySnapshot failed', err);
       }
@@ -1103,10 +1108,16 @@ export function smoothNetClientUnitPositions(dt) {
 // --- Broadcast (host only) ---
 export function broadcastData(data) {
   if (!State.gameSession.isHost) return;
+  const payload =
+    data && data.type === 'snapshot'
+      ? typeof structuredClone === 'function'
+        ? structuredClone(data)
+        : JSON.parse(JSON.stringify(data))
+      : data;
   connections.forEach(conn => {
     if (conn && conn.open) {
       try {
-        conn.send(data);
+        conn.send(payload);
       } catch (_) { /* ignore */ }
     }
   });
@@ -1203,6 +1214,10 @@ export function updateNetwork(time) {
         unitType: q.unitType,
         remainingTime: q.remainingTime,
         totalTime: q.totalTime,
+        startedAtElapsed:
+          typeof q.startedAtElapsed === 'number' && Number.isFinite(q.startedAtElapsed)
+            ? q.startedAtElapsed
+            : undefined,
       })),
     });
   });
@@ -1281,10 +1296,13 @@ function sanitizeProductionQueueFromSnapshot(raw) {
       const remainingTime = Number.isFinite(rt) ? Math.max(0, rt) : 0;
       const totalTime =
         Number.isFinite(tt) && tt > 0 ? tt : remainingTime > 0 ? remainingTime : 1;
+      const st = Number(q.startedAtElapsed);
+      const startedAtElapsed = Number.isFinite(st) ? st : undefined;
       return {
         unitType: String(q.unitType),
         remainingTime,
         totalTime,
+        startedAtElapsed,
       };
     });
 }

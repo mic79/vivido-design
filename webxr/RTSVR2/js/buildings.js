@@ -250,6 +250,8 @@ export function queueUnit(buildingId, unitType) {
     unitType,
     remainingTime: uStats.buildTime,
     totalTime: uStats.buildTime,
+    /** Host sim time when this row was queued — MP clients can derive progress from `elapsedTime`. */
+    startedAtElapsed: State.gameSession.elapsedTime,
   });
 
   return true;
