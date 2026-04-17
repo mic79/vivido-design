@@ -97,6 +97,13 @@ function initializeGame(sceneEl) {
 
 // --- Start game with selected mode ---
 function onStartGame(mode) {
+  /** Only the host may run a full local match bootstrap — clients mirror the host via `game-start` + snapshots. */
+  if (State.gameSession.isMultiplayer && !State.gameSession.isHost) {
+    console.warn('[RTSVR2] Ignoring startGame on multiplayer client (host starts the match).');
+    UI.showStatus('Only the host can start a match from this device.');
+    return;
+  }
+
   console.log(`🎮 Starting game in ${mode} mode`);
 
   State.resetState();
@@ -211,7 +218,10 @@ function onStartGame(mode) {
   State.gameSession.menuOpen = false;
   State.gameSession.gameOver = false;
   State.gameSession.elapsedTime = 0;
-  State.gameSession.myPlayerId = 0;
+  // Solo / host seat 0 — never overwrite a multiplayer client's lobby assignment (P1–P3).
+  if (!State.gameSession.isMultiplayer || State.gameSession.isHost) {
+    State.gameSession.myPlayerId = 0;
+  }
   State.clearBuildPlacementFlags();
 
   UI.updateMenuVisibility();

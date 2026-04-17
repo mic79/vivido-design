@@ -603,9 +603,19 @@ function createMenu() {
 function syncVrMenuInteractive(show) {
   const menu = document.getElementById('vr-game-menu');
   if (!menu) return;
+  const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
   menu.querySelectorAll('.js-vr-menu-btn').forEach(btn => {
-    if (show) {
+    const schema = btn.getAttribute('rts-vr-menu-btn') || '';
+    const hostOnlyStart =
+      mpClient &&
+      (/action:\s*1v1\b/.test(schema) ||
+        /action:\s*2v2\b/.test(schema) ||
+        /action:\s*ffa\b/.test(schema));
+    if (show && !hostOnlyStart) {
       btn.classList.add('clickable');
+      if (btn.object3D) btn.object3D.visible = true;
+    } else if (show && hostOnlyStart) {
+      btn.classList.remove('clickable');
       if (btn.object3D) btn.object3D.visible = true;
     } else {
       btn.classList.remove('clickable');
@@ -1213,6 +1223,14 @@ export function updateMenuVisibility() {
     const showHtml =
       !State.gameSession.awaitingAppStart && State.gameSession.menuOpen && !Input.getIsVR();
     menuEl.style.display = showHtml ? 'block' : 'none';
+    const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+    ['btn-start-1v1', 'btn-start-2v2', 'btn-start-ffa'].forEach(id => {
+      const btn = menuEl.querySelector(`#${id}`);
+      if (!btn) return;
+      btn.disabled = !!mpClient;
+      btn.style.opacity = mpClient ? '0.35' : '1';
+      btn.style.pointerEvents = mpClient ? 'none' : 'auto';
+    });
   }
   const vrGameMenu = document.getElementById('vr-game-menu');
   let showVrGameMenu = false;
@@ -1914,7 +1932,13 @@ export function setCallbacks(onStart, onHost, onJoin) {
   onJoinCallback = onJoin;
 }
 
-function startGame(mode) { if (onStartCallback) onStartCallback(mode); }
+function startGame(mode) {
+  if (State.gameSession.isMultiplayer && !State.gameSession.isHost) {
+    showStatus('Only the host can start a match from this device.');
+    return;
+  }
+  if (onStartCallback) onStartCallback(mode);
+}
 function hostGame() { if (onHostCallback) onHostCallback(); }
 function joinGame() { if (onJoinCallback) onJoinCallback(); }
 
