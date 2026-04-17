@@ -266,15 +266,7 @@
         gridHelper.visible = false;
       }
 
-      // Hide loading screen
-      setTimeout(() => {
-        const loadingScreen = document.getElementById('loading-screen');
-        if (loadingScreen) {
-          loadingScreen.style.opacity = '0';
-          loadingScreen.style.pointerEvents = 'none';
-          setTimeout(() => { loadingScreen.style.display = 'none'; }, 500);
-        }
-      }, 1500);
+      // Loading screen stays until `main.js` finishes assets + scene reveal (`UI.hideBootLoadingScreen`).
     });
   </script>
 </body>

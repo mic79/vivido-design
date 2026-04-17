@@ -47,11 +47,15 @@ function initializeGame(sceneEl) {
   Fog.initFog();
 
   setTimeout(async () => {
+    State.gameSession.sceneContentReady = false;
+    UI.setBootLoadingMessage('Loading sky & lighting…');
     primeSceneRevealBlack(sceneEl);
     await applyHdrSkyEnvironment(sceneEl);
+    UI.setBootLoadingMessage('Building terrain…');
     await applyMoonBattlefieldVisuals(sceneEl);
     primeSceneRevealBlack(sceneEl);
 
+    UI.setBootLoadingMessage('Initializing renderer…');
     await Renderer.initRenderer(sceneEl);
     Effects.initEffects(sceneEl);
     Pathfinding.initPathfinding();
@@ -72,6 +76,7 @@ function initializeGame(sceneEl) {
     Loop.startLoop(sceneEl);
 
     Renderer.warmRendererPrograms(sceneEl);
+    UI.setBootLoadingMessage('Warming up GPU…');
     // GPU + scene graph settle (terrain maps, HQ GLB, first instancing tick) before lifting the black hold.
     await new Promise((r) =>
       requestAnimationFrame(() =>
@@ -79,7 +84,12 @@ function initializeGame(sceneEl) {
       )
     );
 
+    UI.setBootLoadingMessage('Opening view…');
     await runSceneRevealFromBlack(sceneEl);
+
+    State.gameSession.sceneContentReady = true;
+    UI.updateMenuVisibility();
+    UI.hideBootLoadingScreen();
 
     console.log('✅ RTSVR2 Ready');
   }, 500);

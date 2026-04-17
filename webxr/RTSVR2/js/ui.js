@@ -239,6 +239,27 @@ export function syncMpPauseOverlay() {
   }
 }
 
+/** Boot: update the line under the title on `#loading-screen`. */
+export function setBootLoadingMessage(text) {
+  const p = document.querySelector('#loading-content p');
+  if (p) p.textContent = text;
+}
+
+let bootLoadingDismissed = false;
+
+/** Call once after sky, terrain, renderer, and scene reveal are done (`main.js`). */
+export function hideBootLoadingScreen() {
+  if (bootLoadingDismissed) return;
+  bootLoadingDismissed = true;
+  const loadingScreen = document.getElementById('loading-screen');
+  if (!loadingScreen) return;
+  loadingScreen.style.opacity = '0';
+  loadingScreen.style.pointerEvents = 'none';
+  setTimeout(() => {
+    loadingScreen.style.display = 'none';
+  }, 500);
+}
+
 export function initUI() {
   window.__rtsVrMinimapClick = (wx, wz, moveMode) => {
     if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
@@ -1150,8 +1171,11 @@ export function updateMenuVisibility() {
 
   const gate = document.getElementById('app-start-overlay');
   if (gate) {
-    gate.style.display =
-      State.gameSession.awaitingAppStart && !Input.getIsVR() ? 'flex' : 'none';
+    const showStart =
+      State.gameSession.awaitingAppStart &&
+      State.gameSession.sceneContentReady &&
+      !Input.getIsVR();
+    gate.style.display = showStart ? 'flex' : 'none';
   }
 
   const ghAll = document.getElementById('game-hud');
@@ -1172,7 +1196,11 @@ export function updateMenuVisibility() {
   }
   const vrStart = document.getElementById('vr-app-start');
   if (vrStart) {
-    const showVrStart = !!(State.gameSession.awaitingAppStart && Input.getIsVR());
+    const showVrStart = !!(
+      State.gameSession.awaitingAppStart &&
+      State.gameSession.sceneContentReady &&
+      Input.getIsVR()
+    );
     vrStart.setAttribute('visible', showVrStart ? 'true' : 'false');
     const vrb = document.getElementById('vr-btn-app-start');
     if (vrb) {
@@ -1251,6 +1279,9 @@ function ensureHudBuildPanel() {
   uiMountRoot().appendChild(buildPanelEl);
   if (!buildPanelPointerListenersWired) {
     buildPanelPointerListenersWired = true;
+    const clearBuildPanelPointer = () => {
+      buildPanelPointerActive = false;
+    };
     buildPanelEl.addEventListener(
       'pointerdown',
       () => {
@@ -1258,13 +1289,8 @@ function ensureHudBuildPanel() {
       },
       true
     );
-    window.addEventListener(
-      'pointerup',
-      () => {
-        buildPanelPointerActive = false;
-      },
-      true
-    );
+    window.addEventListener('pointerup', clearBuildPanelPointer, true);
+    window.addEventListener('pointercancel', clearBuildPanelPointer, true);
     buildPanelEl.addEventListener(
       'touchstart',
       () => {
@@ -1272,13 +1298,8 @@ function ensureHudBuildPanel() {
       },
       { capture: true, passive: true }
     );
-    window.addEventListener(
-      'touchend',
-      () => {
-        buildPanelPointerActive = false;
-      },
-      true
-    );
+    window.addEventListener('touchend', clearBuildPanelPointer, true);
+    window.addEventListener('touchcancel', clearBuildPanelPointer, true);
   }
 }
 

@@ -245,6 +245,8 @@ export const gameSession = {
   isHost: true,
   /** Until the player dismisses the first-run gate, only “Start” is shown (not the full lobby). */
   awaitingAppStart: true,
+  /** False until HDR, terrain, renderer warm-up, and scene reveal finish — Start / lobby must not appear before this. */
+  sceneContentReady: false,
   menuOpen: true,
   buildMode: null,     // null or building type string
   /** When set, build-radius ring is centered on this HQ (second / Mobile HQ); cleared with buildMode. */

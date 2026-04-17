@@ -1259,12 +1259,43 @@ function applyHostFxEventsForClient(fxList) {
   }
 }
 
+/** Normalize host queue rows after JSON — missing numbers or odd shapes must not block MP clients. */
+function sanitizeProductionQueueFromSnapshot(raw) {
+  if (raw == null) return [];
+  let list;
+  if (Array.isArray(raw)) {
+    list = raw;
+  } else if (typeof raw === 'object') {
+    list = Object.keys(raw)
+      .filter(k => /^\d+$/.test(k))
+      .sort((a, b) => Number(a) - Number(b))
+      .map(k => raw[k]);
+  } else {
+    list = [];
+  }
+  return list
+    .filter(q => q && q.unitType)
+    .map(q => {
+      const rt = Number(q.remainingTime);
+      const tt = Number(q.totalTime);
+      const remainingTime = Number.isFinite(rt) ? Math.max(0, rt) : 0;
+      const totalTime =
+        Number.isFinite(tt) && tt > 0 ? tt : remainingTime > 0 ? remainingTime : 1;
+      return {
+        unitType: String(q.unitType),
+        remainingTime,
+        totalTime,
+      };
+    });
+}
+
 // --- Apply snapshot (client-side) ---
 function applySnapshot(snapshot) {
   if (!snapshot) return;
   const isNetClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
-  if (isNetClient && snapshot.seq != null && typeof snapshot.seq === 'number') {
-    if (snapshot.seq <= lastClientSnapshotSeq) {
+  const snapSeq = snapshot.seq != null ? Number(snapshot.seq) : NaN;
+  if (isNetClient && Number.isFinite(snapSeq)) {
+    if (snapSeq <= lastClientSnapshotSeq) {
       return;
     }
   }
@@ -1416,13 +1447,8 @@ function applySnapshot(snapshot) {
       }
       if (bData.isBuilt !== undefined) building.isBuilt = bData.isBuilt;
       building.captureProgress = bData.captureProgress ?? 0;
-      if (Array.isArray(bData.productionQueue)) {
-        building.productionQueue = bData.productionQueue.map(q => ({
-          unitType: q.unitType,
-          remainingTime: q.remainingTime,
-          totalTime: q.totalTime,
-        }));
-      }
+      // Full host sync each snapshot — never keep a stale queue if JSON shape is odd or a field was missing once.
+      building.productionQueue = sanitizeProductionQueueFromSnapshot(bData.productionQueue);
     }
   });
 
@@ -1438,8 +1464,8 @@ function applySnapshot(snapshot) {
     State.gameSession.winner = snapshot.winner;
   }
 
-  if (isNetClient && snapshot.seq != null && typeof snapshot.seq === 'number') {
-    lastClientSnapshotSeq = snapshot.seq;
+  if (isNetClient && Number.isFinite(snapSeq)) {
+    lastClientSnapshotSeq = snapSeq;
   }
 }
 
