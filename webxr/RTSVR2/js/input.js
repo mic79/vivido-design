@@ -1567,20 +1567,27 @@ function onMouseClick(e) {
     const groundHit = raycastGround(origin, direction);
     if (groundHit) {
       const buildingType = State.gameSession.buildMode;
-      Network.sendCommand({
-        action: 'build',
-        buildingType,
-        x: groundHit.x,
-        z: groundHit.z,
-      }, (ok, code) => {
-        if (ok) {
-          UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
-          State.clearBuildPlacementFlags();
-          clearBuildBanner();
-        } else {
-          UI.showStatus(Network.commandFailureMessage(code));
+      const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+      const sent = Network.sendCommand(
+        {
+          action: 'build',
+          buildingType,
+          x: groundHit.x,
+          z: groundHit.z,
+        },
+        (ok, code) => {
+          if (ok) {
+            UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
+            State.clearBuildPlacementFlags();
+            clearBuildBanner();
+          } else {
+            UI.showStatus(Network.commandFailureMessage(code));
+          }
         }
-      });
+      );
+      if (mpClient && sent) {
+        UI.showStatus(`Build order sent (${BUILDING_TYPES[buildingType]?.name || buildingType})…`);
+      }
     }
     return;
   }
@@ -1661,7 +1668,8 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
     const groundHit = raycastGround(origin, direction);
     if (groundHit) {
       const buildingType = State.gameSession.buildMode;
-      Network.sendCommand(
+      const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+      const sent = Network.sendCommand(
         {
           action: 'build',
           buildingType,
@@ -1678,6 +1686,9 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
           }
         }
       );
+      if (mpClient && sent) {
+        UI.showStatus(`Build order sent (${BUILDING_TYPES[buildingType]?.name || buildingType})…`);
+      }
       return true;
     }
     return false;
@@ -2167,20 +2178,27 @@ function onVRTriggerLeft(e) {
     if (groundHit) {
       tryVrControllerPulse('left', 0.48, 38);
       const buildingType = State.gameSession.buildMode;
-      Network.sendCommand({
-        action: 'build',
-        buildingType,
-        x: groundHit.x,
-        z: groundHit.z,
-      }, (ok, code) => {
-        if (ok) {
-          State.clearBuildPlacementFlags();
-          clearBuildBanner();
-          UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
-        } else {
-          UI.showStatus(Network.commandFailureMessage(code));
+      const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+      const sent = Network.sendCommand(
+        {
+          action: 'build',
+          buildingType,
+          x: groundHit.x,
+          z: groundHit.z,
+        },
+        (ok, code) => {
+          if (ok) {
+            State.clearBuildPlacementFlags();
+            clearBuildBanner();
+            UI.showStatus(`Placed ${BUILDING_TYPES[buildingType]?.name || buildingType}`);
+          } else {
+            UI.showStatus(Network.commandFailureMessage(code));
+          }
         }
-      });
+      );
+      if (mpClient && sent) {
+        UI.showStatus(`Build order sent (${BUILDING_TYPES[buildingType]?.name || buildingType})…`);
+      }
     }
   } else {
     UI.showStatus('Select your HQ to choose buildings to place');

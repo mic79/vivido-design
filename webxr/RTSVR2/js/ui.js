@@ -27,6 +27,13 @@ export let activeResourceField = null;
 let activeMobileDeployUnitIds = null;
 let lastMobileDeploySelectionSig = null;
 let lastBuildPanelUpdate = 0;
+/** Last `buildPanelRefreshSig` passed to `innerHTML` rebuild — avoids nuking DOM every tick (MP clients were unclickable at 72ms). */
+let lastBuildPanelRenderedSig = '';
+/** True while a pointer is down on #hud-build-panel (capture) until global up — skip throttled rebuilds during clicks. */
+let buildPanelPointerActive = false;
+let buildPanelPointerListenersWired = false;
+/** VR: rebuild production rows only when affordability / queue head / type changes. */
+let lastVrBuildButtonsSig = '';
 let vrMinimapCanvas = null;
 let vrMinimapCtx = null;
 let vrMinimapTexture = null;
@@ -641,10 +648,15 @@ export function updateUI() {
     const now = performance.now();
     const mpClient =
       State.gameSession.isMultiplayer && !State.gameSession.isHost && State.gameSession.gameStarted;
-    const throttleMs = mpClient ? 72 : 500;
-    if (now - lastBuildPanelUpdate > throttleMs) {
+    /** MP clients: do not rebuild faster than snapshots (~22/s) — full innerHTML was stealing clicks. */
+    const throttleMs = mpClient ? 280 : 500;
+    const panelHover =
+      !!buildPanelEl &&
+      (buildPanelEl.matches(':hover') ||
+        (typeof document !== 'undefined' && buildPanelEl.contains(document.activeElement)));
+    if (!buildPanelPointerActive && !panelHover && now - lastBuildPanelUpdate > throttleMs) {
       lastBuildPanelUpdate = now;
-      if (activeBuildingPanel) refreshBuildingPanel();
+      if (activeBuildingPanel) refreshBuildingPanel(false);
       if (showMobileDeploy) refreshMobileHqDeployPanel();
     }
   }
@@ -1201,6 +1213,37 @@ function ensureHudBuildPanel() {
       font-family: 'Consolas', monospace; pointer-events: auto;
     `;
   uiMountRoot().appendChild(buildPanelEl);
+  if (!buildPanelPointerListenersWired) {
+    buildPanelPointerListenersWired = true;
+    buildPanelEl.addEventListener(
+      'pointerdown',
+      () => {
+        buildPanelPointerActive = true;
+      },
+      true
+    );
+    window.addEventListener(
+      'pointerup',
+      () => {
+        buildPanelPointerActive = false;
+      },
+      true
+    );
+    buildPanelEl.addEventListener(
+      'touchstart',
+      () => {
+        buildPanelPointerActive = true;
+      },
+      { capture: true, passive: true }
+    );
+    window.addEventListener(
+      'touchend',
+      () => {
+        buildPanelPointerActive = false;
+      },
+      true
+    );
+  }
 }
 
 function refreshMobileHqDeployPanel() {
@@ -1275,7 +1318,8 @@ function showMobileHqDeployPanel(unitIds) {
   ensureHudBuildPanel();
 
   window._deployMobileHq = () => {
-    Network.sendCommand(
+    const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+    const sent = Network.sendCommand(
       { action: 'deployMobileHq', unitIds: activeMobileDeployUnitIds.slice() },
       (ok, code) => {
         if (ok) showStatus('HQ deployed');
@@ -1283,6 +1327,9 @@ function showMobileHqDeployPanel(unitIds) {
         refreshMobileHqDeployPanel();
       }
     );
+    if (mpClient && sent) {
+      showStatus('Deploy order sent…');
+    }
   };
 
   refreshMobileHqDeployPanel();
@@ -1313,27 +1360,44 @@ export function showBuildingPanel(building) {
   window._deployMobileHq = undefined;
   activeBuildingPanel = building;
   lastBuildPanelUpdate = 0; // Force immediate refresh
+  lastBuildPanelRenderedSig = '';
+  lastVrBuildButtonsSig = '';
 
   ensureHudBuildPanel();
 
-  refreshBuildingPanel();
+  refreshBuildingPanel(true);
   buildPanelEl.style.display = 'block';
-  refreshVrBuildingPanel();
 
   window._queueUnit = (bId, uType) => {
-    Network.sendCommand({ action: 'produce', buildingId: bId, unitType: uType }, (ok, code) => {
-      if (ok) showStatus(`Training ${UNIT_TYPES[uType]?.name}`);
-      else showStatus(Network.commandFailureMessage(code));
-      refreshBuildingPanel();
-    });
+    const label = UNIT_TYPES[uType]?.name || uType;
+    const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+    const sent = Network.sendCommand(
+      { action: 'produce', buildingId: bId, unitType: uType },
+      (ok, code) => {
+        if (ok) showStatus(`Training ${label}`);
+        else showStatus(Network.commandFailureMessage(code));
+        refreshBuildingPanel(true);
+      }
+    );
+    if (mpClient && sent) {
+      showStatus(`Order sent: ${label}…`);
+    }
   };
 
   window._cancelQueueUnit = (bId, uType) => {
-    Network.sendCommand({ action: 'cancelProduce', buildingId: bId, unitType: uType }, (ok, code) => {
-      if (ok) showStatus(`Cancelled ${UNIT_TYPES[uType]?.name}`);
-      else showStatus(Network.commandFailureMessage(code));
-      refreshBuildingPanel();
-    });
+    const label = UNIT_TYPES[uType]?.name || uType;
+    const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+    const sent = Network.sendCommand(
+      { action: 'cancelProduce', buildingId: bId, unitType: uType },
+      (ok, code) => {
+        if (ok) showStatus(`Cancelled ${label}`);
+        else showStatus(Network.commandFailureMessage(code));
+        refreshBuildingPanel(true);
+      }
+    );
+    if (mpClient && sent) {
+      showStatus(`Cancel sent: ${label}…`);
+    }
   };
 
   window._startBuildMode = (type) => {
@@ -1350,18 +1414,100 @@ export function showBuildingPanel(building) {
   };
 }
 
-function refreshBuildingPanel() {
+/** Coarse signature so we only replace `innerHTML` when affordability / queue / HP meaningfully change. */
+function buildPanelRefreshSig(building, player) {
+  const q = building.productionQueue || [];
+  let qKey = 'e';
+  if (q.length > 0) {
+    const h = q[0];
+    const pctB =
+      h.totalTime > 0 ? Math.floor((1 - h.remainingTime / h.totalTime) * 20) : 0;
+    qKey = `${q.length}|${h.unitType}|${pctB}`;
+  }
+  const cr = player ? Math.floor(player.credits) : 0;
+  const uc = player ? player.unitCount : 0;
+  return [
+    building.id,
+    building.type,
+    building.ownerId,
+    building.isBuilt ? '1' : '0',
+    Math.floor(building.hp),
+    cr,
+    uc,
+    qKey,
+  ].join('|');
+}
+
+/** VR: update title + queue readout without destroying clickable rows (MP snapshot spam). */
+function vrBuildButtonsSig(building, player) {
+  const q = building.productionQueue || [];
+  const qh = q.length > 0 ? q[0].unitType : '-';
+  const cr = player ? Math.floor(player.credits) : 0;
+  const uc = player ? player.unitCount : 0;
+  return [
+    building.id,
+    building.type,
+    building.isBuilt ? '1' : '0',
+    Math.floor(building.hp),
+    cr,
+    uc,
+    q.length,
+    qh,
+  ].join('|');
+}
+
+function syncVrBuildPanelHeaderFromBuilding(building) {
+  if (!Input.getIsVR()) return;
+  const titleEl = document.getElementById('vr-build-title');
+  const queueEl = document.getElementById('vr-build-queue');
+  const bStats = BUILDING_TYPES[building.type];
+  if (titleEl) {
+    titleEl.setAttribute(
+      'value',
+      `${bStats?.name || building.type}  HP ${building.hp}/${building.maxHp}`
+    );
+  }
+  const queue = building.productionQueue || [];
+  if (queueEl) {
+    if (queue.length > 0) {
+      const current = queue[0];
+      const pct = Math.floor((1 - current.remainingTime / current.totalTime) * 100);
+      queueEl.setAttribute(
+        'value',
+        `Queue: ${UNIT_TYPES[current.unitType]?.name || current.unitType} ${pct}% (${queue.length})`
+      );
+      queueEl.setAttribute('visible', true);
+    } else {
+      queueEl.setAttribute('visible', false);
+    }
+  }
+}
+
+function refreshBuildingPanel(force = false) {
   if (!buildPanelEl || !activeBuildingPanel) return;
 
-  const building = activeBuildingPanel;
-  if (!State.buildings.has(building.id)) {
+  const live = State.buildings.get(activeBuildingPanel.id);
+  if (!live) {
     hideBuildingPanel();
     return;
   }
+  activeBuildingPanel = live;
 
+  const player = State.players[State.gameSession.myPlayerId];
+  if (!force) {
+    const sig = buildPanelRefreshSig(live, player);
+    if (sig === lastBuildPanelRenderedSig) {
+      syncVrBuildPanelHeaderFromBuilding(live);
+      return;
+    }
+    lastBuildPanelRenderedSig = sig;
+  } else {
+    lastBuildPanelRenderedSig = buildPanelRefreshSig(live, player);
+  }
+
+  const building = live;
   const bStats = BUILDING_TYPES[building.type];
   const options = Buildings.getProductionOptions(building.id);
-  const player = State.players[State.gameSession.myPlayerId];
   const queue = building.productionQueue;
 
   let html = `<div style="color: #0f0; font-size: 14px; font-weight: bold; margin-bottom: 4px;">
@@ -1385,6 +1531,7 @@ function refreshBuildingPanel() {
   // Options (only if owned by player)
   if (building.ownerId !== State.gameSession.myPlayerId) {
     buildPanelEl.innerHTML = html;
+    if (force) lastVrBuildButtonsSig = '';
     refreshVrBuildingPanel();
     return;
   }
@@ -1438,6 +1585,7 @@ function refreshBuildingPanel() {
   html += '<div style="color: #555; font-size: 10px; margin-top: 4px;">Click to build | Space to close</div>';
 
   buildPanelEl.innerHTML = html;
+  if (force) lastVrBuildButtonsSig = '';
   refreshVrBuildingPanel();
 }
 
@@ -1474,42 +1622,20 @@ function vrAddBuildRow(parent, cx, y, w, h, line1, line2, enabled, buildSchema) 
 
 function refreshVrBuildingPanel() {
   const root = document.getElementById('vr-build-buttons');
-  const titleEl = document.getElementById('vr-build-title');
-  const queueEl = document.getElementById('vr-build-queue');
   if (!root || !activeBuildingPanel || !Input.getIsVR()) return;
-  if (!State.buildings.has(activeBuildingPanel.id)) {
+  const live = State.buildings.get(activeBuildingPanel.id);
+  if (!live) {
     hideBuildingPanel();
     return;
   }
+  activeBuildingPanel = live;
 
-  while (root.firstChild) root.removeChild(root.firstChild);
-
-  const building = activeBuildingPanel;
-  const bStats = BUILDING_TYPES[building.type];
+  const building = live;
   const options = Buildings.getProductionOptions(building.id);
   const player = State.players[State.gameSession.myPlayerId];
   const queue = building.productionQueue;
 
-  if (titleEl) {
-    titleEl.setAttribute(
-      'value',
-      `${bStats?.name || building.type}  HP ${building.hp}/${building.maxHp}`
-    );
-  }
-
-  if (queueEl) {
-    if (queue.length > 0) {
-      const current = queue[0];
-      const pct = Math.floor((1 - current.remainingTime / current.totalTime) * 100);
-      queueEl.setAttribute(
-        'value',
-        `Queue: ${UNIT_TYPES[current.unitType]?.name || current.unitType} ${pct}% (${queue.length})`
-      );
-      queueEl.setAttribute('visible', true);
-    } else {
-      queueEl.setAttribute('visible', false);
-    }
-  }
+  syncVrBuildPanelHeaderFromBuilding(building);
 
   let y = 0.08;
   const rowH = 0.088;
@@ -1517,9 +1643,20 @@ function refreshVrBuildingPanel() {
   const cx = 0;
 
   if (building.ownerId !== State.gameSession.myPlayerId) {
+    while (root.firstChild) root.removeChild(root.firstChild);
+    lastVrBuildButtonsSig = '';
     refreshHandRaycasters();
     return;
   }
+
+  const btnSig = vrBuildButtonsSig(building, player);
+  if (btnSig === lastVrBuildButtonsSig) {
+    refreshHandRaycasters();
+    return;
+  }
+  lastVrBuildButtonsSig = btnSig;
+
+  while (root.firstChild) root.removeChild(root.firstChild);
 
   if (building.type === 'hq') {
     const buildableTypes = ['barracks', 'warFactory', 'refinery'];
@@ -1572,6 +1709,8 @@ export function hideBuildingPanel() {
   activeMobileDeployUnitIds = null;
   lastMobileDeploySelectionSig = null;
   window._deployMobileHq = undefined;
+  lastBuildPanelRenderedSig = '';
+  lastVrBuildButtonsSig = '';
   if (buildPanelEl) buildPanelEl.style.display = 'none';
   activeBuildingPanel = null;
   activeResourceField = null;
