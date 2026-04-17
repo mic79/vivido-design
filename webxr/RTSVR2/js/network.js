@@ -57,6 +57,9 @@ let hostPauseAutoResumeTimerId = null;
 export const MAX_LOBBIES = 4;
 let selectedLobby = 1;
 let lastSnapshotTime = 0;
+/** Monotonic host snapshot id — clients drop stale/out-of-order packets (PeerJS can reorder under load). */
+let hostSnapshotSeq = 0;
+let lastClientSnapshotSeq = -1;
 
 function hostSessionId() {
   return `rtsvr2-host-${selectedLobby}`;
@@ -110,6 +113,8 @@ function teardownPeerOnly() {
     clearTimeout(clientRejoinTimerId);
     clientRejoinTimerId = null;
   }
+  hostSnapshotSeq = 0;
+  lastClientSnapshotSeq = -1;
   clearMpPauseState();
   clearAllPendingClientAcks(true, 'disconnected');
   connections.forEach(c => {
@@ -357,6 +362,18 @@ export async function startHosting() {
       refreshHostLobbyConnectionUi();
     });
 
+    peer.on('disconnected', () => {
+      console.warn('[RTSVR2] PeerJS server disconnected (host)');
+      setLobbyMenuStatus(
+        'Signalling link dropped — if remotes freeze, stop Hosting and Host again (same lobby #).'
+      );
+      import('./ui.js')
+        .then(m =>
+          m.showStatus('Signalling disconnected. Remotes may recover; if not, re-Host the same lobby.')
+        )
+        .catch(() => {});
+    });
+
     peer.on('connection', conn => {
       /**
        * PeerJS: for the callee, `open` can fire before `conn.on('open', …)` runs.
@@ -423,9 +440,9 @@ export async function startHosting() {
               cnt > 1 ? `${cnt} players disconnected` : `Player ${assignedId + 1} disconnected`;
             const arSec = Math.round(NET_HOST_PAUSE_AUTO_RESUME_MS / 1000);
             State.gameSession.mpPauseDetail =
-              `The match is paused — simulation is frozen. The host can resume now, or the match auto-resumes in ${arSec}s (dropped seats → AI). Each new disconnect resets that timer.`;
+              `The match is paused — simulation is frozen. The host can resume now, or play continues automatically on a timer (dropped seats → AI, up to ${arSec}s unless reset). Each new disconnect resets the countdown.`;
             const seats = State.gameSession.mpPendingHumanDropSeatIds.map(i => `P${i + 1}`).join(', ');
-            State.gameSession.mpPauseSubline = `Pending seats: ${seats} → AI when the host resumes or after ${arSec}s.`;
+            State.gameSession.mpPauseSubline = `Pending seats: ${seats} → AI on Resume or when the countdown reaches 0.`;
             scheduleHostPauseAutoResume();
             broadcastData({
               type: 'session-pause',
@@ -508,7 +525,10 @@ export async function joinGame() {
 
     peer.on('open', () => {
       setLobbyMenuStatus(`Connecting to lobby ${selectedLobby}…`);
-      const conn = peer.connect(hostId);
+      const conn = peer.connect(hostId, {
+        reliable: true,
+        serialization: 'json',
+      });
       let settled = false;
       let openTimer = null;
 
@@ -619,6 +639,16 @@ export async function joinGame() {
       });
     });
 
+    peer.on('disconnected', () => {
+      console.warn('[RTSVR2] PeerJS server disconnected (client)');
+      setLobbyMenuStatus(
+        `Signalling link dropped — lobby ${selectedLobby}. Try Join again if the match does not recover.`
+      );
+      import('./ui.js')
+        .then(m => m.showStatus('Signalling disconnected from PeerJS cloud — reconnect with Join if needed.'))
+        .catch(() => {});
+    });
+
     peer.on('error', err => {
       console.error('Join error:', err);
       setLobbyMenuStatus(`Could not connect: ${err?.message || err || 'unknown'}`);
@@ -646,7 +676,13 @@ function handleClientData(data, fromPlayerId) {
   }
   if (data?.type === 'pong') return;
   if (data?.type === 'command') {
-    const result = executeCommand(data, fromPlayerId);
+    let result;
+    try {
+      result = executeCommand(data, fromPlayerId);
+    } catch (err) {
+      console.error('[RTSVR2] Host command execution error', err);
+      result = { ok: false, code: 'unknown_action' };
+    }
     const cmdId = data.cmdId;
     if (cmdId != null) {
       const conn = connections.get(fromPlayerId);
@@ -683,11 +719,17 @@ function handleHostData(data) {
       console.log(`Assigned player ${data.playerId}`);
       break;
 
-    case 'snapshot':
-      applySnapshot(data.snapshot);
+    case 'snapshot': {
+      try {
+        applySnapshot(data.snapshot);
+      } catch (err) {
+        console.error('[RTSVR2] applySnapshot failed', err);
+      }
       break;
+    }
 
     case 'game-start':
+      lastClientSnapshotSeq = -1;
       clearMpPauseState();
       syncMpPauseUi();
       lastClientPlayerTeamSig = '';
@@ -810,6 +852,10 @@ function handleHostData(data) {
 
     case 'command-result':
       if (data.cmdId != null) fulfillClientAck(data.cmdId, data.ok, data.code);
+      break;
+
+    default:
+      if (data.type) console.warn('[RTSVR2] Unknown message from host:', data.type);
       break;
   }
 }
@@ -1075,7 +1121,9 @@ export function updateNetwork(time) {
   if (time - lastSnapshotTime < (1000 / NET_SNAPSHOT_RATE)) return;
   lastSnapshotTime = time;
 
+  hostSnapshotSeq += 1;
   const snapshot = {
+    seq: hostSnapshotSeq,
     time: State.gameSession.elapsedTime,
     gameOver: State.gameSession.gameOver,
     winner: State.gameSession.winner,
@@ -1213,6 +1261,14 @@ function applyHostFxEventsForClient(fxList) {
 
 // --- Apply snapshot (client-side) ---
 function applySnapshot(snapshot) {
+  if (!snapshot) return;
+  const isNetClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+  if (isNetClient && snapshot.seq != null && typeof snapshot.seq === 'number') {
+    if (snapshot.seq <= lastClientSnapshotSeq) {
+      return;
+    }
+  }
+
   const wall = performance.now();
   if (lastClientSnapWallMs > 0) {
     const gap = wall - lastClientSnapWallMs;
@@ -1222,8 +1278,6 @@ function applySnapshot(snapshot) {
     }
   }
   lastClientSnapWallMs = wall;
-
-  const isNetClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
 
   let teamSig = '';
   snapshot.players.forEach((pData, i) => {
@@ -1382,6 +1436,10 @@ function applySnapshot(snapshot) {
   }
   if (snapshot.winner !== undefined) {
     State.gameSession.winner = snapshot.winner;
+  }
+
+  if (isNetClient && snapshot.seq != null && typeof snapshot.seq === 'number') {
+    lastClientSnapshotSeq = snapshot.seq;
   }
 }
 

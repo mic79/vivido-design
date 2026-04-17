@@ -412,8 +412,8 @@ export const BOT_HARVESTER_PER_REFINERY_TARGET = 7;
 export const NET_SNAPSHOT_RATE = 22;
 export const NET_INTERPOLATION_DELAY = 100; // ms — reserved for future buffered interpolation
 export const NET_CLIENT_CMD_TIMEOUT_MS = 8000; // Ack wait for multiplayer client commands
-/** Bidirectional WebRTC data-channel keepalive (ms). */
-export const NET_KEEPALIVE_INTERVAL_MS = 4000;
+/** Bidirectional WebRTC data-channel keepalive (ms). Slightly aggressive vs BattleVR-style idle to reduce “silent dead” links. */
+export const NET_KEEPALIVE_INTERVAL_MS = 2800;
 /** When the host tab is hidden, rAF is throttled — this interval still drives catch-up sim + snapshots (ms). */
 export const NET_HOST_BG_SIM_INTERVAL_MS = 280;
 /** After an unexpected lobby disconnect, client auto-rejoin attempts (same lobby #). */

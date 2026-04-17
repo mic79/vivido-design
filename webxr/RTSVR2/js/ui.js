@@ -7,6 +7,7 @@ import {
   UNIT_TYPES, BUILDING_TYPES, PLAYER_COLOR_HEX,
   MAP_SIZE, MAP_UNIT_PLAYABLE_RADIUS, FOG_GRID_SIZE,
   clampWorldToPlayableDisk,
+  NET_HOST_PAUSE_AUTO_RESUME_MS,
 } from './config.js';
 import * as State from './state.js';
 import * as Buildings from './buildings.js';
@@ -27,7 +28,7 @@ export let activeResourceField = null;
 let activeMobileDeployUnitIds = null;
 let lastMobileDeploySelectionSig = null;
 let lastBuildPanelUpdate = 0;
-/** Last `buildPanelRefreshSig` passed to `innerHTML` rebuild — avoids nuking DOM every tick (MP clients were unclickable at 72ms). */
+/** Last `buildPanelLayoutSig` used for a full `innerHTML` rebuild (queue *timer* excluded — patched separately). */
 let lastBuildPanelRenderedSig = '';
 /** True while a pointer is down on #hud-build-panel (capture) until global up — skip throttled rebuilds during clicks. */
 let buildPanelPointerActive = false;
@@ -98,6 +99,7 @@ function createMpPauseOverlay() {
     <div style="max-width:min(520px,92vw);background:rgba(8,20,32,0.96);border:2px solid #4a9eff;border-radius:12px;padding:22px 24px;box-shadow:0 8px 40px rgba(0,0,0,0.55)">
       <div id="mp-pause-title" style="font-size:20px;font-weight:bold;margin:0 0 10px 0;color:#9df">Paused</div>
       <div id="mp-pause-detail" style="font-size:14px;line-height:1.55;margin:0 0 12px 0;opacity:0.95"></div>
+      <div id="mp-pause-countdown" aria-live="polite" style="display:none;font-size:22px;font-weight:bold;color:#fc6;margin:0 0 14px 0;letter-spacing:0.04em"></div>
       <div id="mp-pause-subline" style="font-size:12px;line-height:1.45;margin:0 0 16px 0;opacity:0.88;color:#bde"></div>
       <button type="button" id="mp-pause-resume" style="display:none;padding:10px 22px;font-size:15px;border-radius:8px;border:2px solid #6c6;background:#143214;color:#cfc;cursor:pointer;font-weight:bold">
         Resume now (AI takes dropped seats)
@@ -121,15 +123,32 @@ function clearMpPauseCountdownInterval() {
 }
 
 function mpPauseFormattedSubline() {
-  const base = State.gameSession.mpPauseSubline || '';
+  return State.gameSession.mpPauseSubline || '';
+}
+
+/** Large “Auto-resume in Ns” line; timer resets are reflected via `mpPauseAutoResumeAt`. */
+function updateMpPauseCountdownDom() {
+  const el = document.getElementById('mp-pause-countdown');
+  if (!el) return;
   const until = State.gameSession.mpPauseAutoResumeAt;
-  if (!until || State.gameSession.mpPauseReason !== 'remote_left') return base;
-  const rem = Math.ceil((until - Date.now()) / 1000);
-  if (rem > 0) {
-    const tail = ` Live countdown: ${rem}s.`;
-    return base ? `${base}${tail}` : tail.trim();
+  const show =
+    State.gameSession.mpSessionPaused &&
+    State.gameSession.mpPauseReason === 'remote_left' &&
+    typeof until === 'number' &&
+    until > 0;
+  if (!show) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
   }
-  return base ? `${base} Auto-resume starting…` : 'Auto-resume starting…';
+  const remSec = Math.ceil((until - Date.now()) / 1000);
+  const maxSec = Math.max(1, Math.round(NET_HOST_PAUSE_AUTO_RESUME_MS / 1000));
+  el.style.display = 'block';
+  if (remSec > 0) {
+    el.textContent = `Auto-resume in ${remSec}s (max ${maxSec}s per reset)`;
+  } else {
+    el.textContent = 'Auto-resume in progress…';
+  }
 }
 
 /** Show or hide the multiplayer disconnect / session pause banner (host + clients). */
@@ -139,6 +158,7 @@ export function syncMpPauseOverlay() {
   if (!root) return;
   if (!State.gameSession.mpSessionPaused) {
     clearMpPauseCountdownInterval();
+    updateMpPauseCountdownDom();
     root.style.display = 'none';
     const flat = document.getElementById('menu-status');
     const vr = document.getElementById('menu-status-vr');
@@ -165,6 +185,7 @@ export function syncMpPauseOverlay() {
   if (d) d.textContent = State.gameSession.mpPauseDetail || '';
   const subFull = mpPauseFormattedSubline();
   if (s) s.textContent = subFull;
+  updateMpPauseCountdownDom();
   if (btn) {
     const showResume =
       State.gameSession.isHost &&
@@ -174,7 +195,9 @@ export function syncMpPauseOverlay() {
   }
   const vr = document.getElementById('menu-status-vr');
   if (vr && typeof vr.setAttribute === 'function') {
-    const line = `${State.gameSession.mpPauseTitle || 'Paused'} — ${subFull}`.trim();
+    const cd = document.getElementById('mp-pause-countdown');
+    const cdPart = cd && cd.style.display !== 'none' && cd.textContent ? cd.textContent : '';
+    const line = [State.gameSession.mpPauseTitle || 'Paused', cdPart, subFull].filter(Boolean).join(' — ').trim();
     vr.setAttribute('value', line.slice(0, 240));
     try {
       const comp = vr.getAttribute('text');
@@ -195,12 +218,15 @@ export function syncMpPauseOverlay() {
         clearMpPauseCountdownInterval();
         return;
       }
+      updateMpPauseCountdownDom();
       const el = document.getElementById('mp-pause-subline');
       const line = mpPauseFormattedSubline();
       if (el) el.textContent = line;
       const vr2 = document.getElementById('menu-status-vr');
       if (vr2 && typeof vr2.setAttribute === 'function') {
-        const vline = `${State.gameSession.mpPauseTitle || 'Paused'} — ${line}`.trim();
+        const cd = document.getElementById('mp-pause-countdown');
+        const cdPart = cd && cd.style.display !== 'none' && cd.textContent ? cd.textContent : '';
+        const vline = [State.gameSession.mpPauseTitle || 'Paused', cdPart, line].filter(Boolean).join(' — ').trim();
         vr2.setAttribute('value', vline.slice(0, 240));
         try {
           const comp2 = vr2.getAttribute('text');
@@ -650,14 +676,24 @@ export function updateUI() {
       State.gameSession.isMultiplayer && !State.gameSession.isHost && State.gameSession.gameStarted;
     /** MP clients: do not rebuild faster than snapshots (~22/s) — full innerHTML was stealing clicks. */
     const throttleMs = mpClient ? 280 : 500;
-    const panelHover =
-      !!buildPanelEl &&
-      (buildPanelEl.matches(':hover') ||
-        (typeof document !== 'undefined' && buildPanelEl.contains(document.activeElement)));
-    if (!buildPanelPointerActive && !panelHover && now - lastBuildPanelUpdate > throttleMs) {
+    /** Do not skip updates while hovering — that froze queue % / afford state on desktop (cursor over panel). */
+    if (!buildPanelPointerActive && now - lastBuildPanelUpdate > throttleMs) {
       lastBuildPanelUpdate = now;
       if (activeBuildingPanel) refreshBuildingPanel(false);
       if (showMobileDeploy) refreshMobileHqDeployPanel();
+    }
+  }
+  if (
+    activeBuildingPanel &&
+    buildPanelEl &&
+    buildPanelEl.style.display !== 'none' &&
+    State.gameSession.gameStarted
+  ) {
+    const live = State.buildings.get(activeBuildingPanel.id);
+    if (live) {
+      activeBuildingPanel = live;
+      patchFlatBuildPanelLiveReadouts(live, State.players[State.gameSession.myPlayerId]);
+      if (Input.getIsVR()) syncVrBuildPanelHeaderFromBuilding(live);
     }
   }
 }
@@ -1414,17 +1450,14 @@ export function showBuildingPanel(building) {
   };
 }
 
-/** Coarse signature so we only replace `innerHTML` when affordability / queue / HP meaningfully change. */
-function buildPanelRefreshSig(building, player) {
+/**
+ * Full panel layout signature (no per-frame queue *timer* — `remainingTime` is patched via
+ * `patchFlatBuildPanelLiveReadouts` every UI tick so MP clients see host-accurate progress).
+ */
+function buildPanelLayoutSig(building, player) {
   const q = building.productionQueue || [];
-  let qKey = 'e';
-  if (q.length > 0) {
-    const h = q[0];
-    const pctB =
-      h.totalTime > 0 ? Math.floor((1 - h.remainingTime / h.totalTime) * 20) : 0;
-    qKey = `${q.length}|${h.unitType}|${pctB}`;
-  }
-  const cr = player ? Math.floor(player.credits) : 0;
+  const qKey = q.length === 0 ? 'e' : `${q.length}:${q.map(x => x.unitType).join('|')}`;
+  const credB = player ? Math.floor(player.credits / 5) * 5 : 0;
   const uc = player ? player.unitCount : 0;
   return [
     building.id,
@@ -1432,10 +1465,88 @@ function buildPanelRefreshSig(building, player) {
     building.ownerId,
     building.isBuilt ? '1' : '0',
     Math.floor(building.hp),
-    cr,
+    credB,
     uc,
     qKey,
   ].join('|');
+}
+
+/** Update queue bar / HP line without replacing buttons (keeps clicks stable). */
+function patchFlatBuildPanelLiveReadouts(building, player) {
+  if (!buildPanelEl) return;
+  const hpEl = document.getElementById('hud-build-title-hp');
+  if (hpEl) {
+    hpEl.textContent = `HP: ${Math.floor(building.hp)}/${Math.floor(building.maxHp ?? building.hp)}`;
+  }
+  const qBlock = document.getElementById('hud-build-queue-block');
+  const queue = building.productionQueue || [];
+  if (qBlock) {
+    if (queue.length === 0) {
+      qBlock.style.display = 'none';
+    } else {
+      qBlock.style.display = 'block';
+      const current = queue[0];
+      const tot = current.totalTime > 0 ? current.totalTime : 1;
+      const pct = Math.max(0, Math.min(100, Math.floor((1 - current.remainingTime / tot) * 100)));
+      const qt = document.getElementById('hud-build-queue-text');
+      const qb = document.getElementById('hud-build-queue-bar');
+      if (qt) {
+        qt.innerHTML = `Building: ${UNIT_TYPES[current.unitType]?.name || current.unitType} <span style="color:#ff0">${pct}%</span> <span style="color: #666;">(${queue.length} in queue)</span>`;
+      }
+      if (qb) qb.style.width = `${pct}%`;
+    }
+  }
+
+  if (!player || building.ownerId !== State.gameSession.myPlayerId) return;
+  const opts = document.getElementById('hud-build-options');
+  if (!opts) return;
+  if (building.type === 'hq') {
+    const types = ['barracks', 'warFactory', 'refinery'];
+    types.forEach(type => {
+      const btn = opts.querySelector(`[data-rts-hq-build="${type}"]`);
+      if (!btn) return;
+      const stats = BUILDING_TYPES[type];
+      const affordable = player.credits >= stats.cost;
+      btn.style.background = affordable ? '#1a3a1a' : '#2a1a1a';
+      btn.style.color = affordable ? '#fff' : '#666';
+      btn.style.borderColor = affordable ? '#0a0' : '#400';
+      btn.style.cursor = affordable ? 'pointer' : 'not-allowed';
+      if (affordable) {
+        btn.setAttribute('onclick', `window._startBuildMode('${type}')`);
+        btn.setAttribute('onmouseover', "this.style.background='#2a5a2a'");
+        btn.setAttribute('onmouseout', "this.style.background='#1a3a1a'");
+      } else {
+        btn.removeAttribute('onclick');
+        btn.removeAttribute('onmouseover');
+        btn.removeAttribute('onmouseout');
+      }
+      const price = btn.querySelector('.rts-btn-price');
+      if (price) price.style.color = affordable ? '#0f0' : '#f44';
+    });
+  } else {
+    Buildings.getProductionOptions(building.id).forEach(opt => {
+      const btn = opts.querySelector(`[data-rts-produce="${opt.type}"]`);
+      if (!btn) return;
+      const affordable = player.credits >= opt.cost;
+      const atCap = player.unitCount >= player.unitCap;
+      const canBuild = affordable && !atCap;
+      btn.style.background = canBuild ? '#1a3a1a' : '#2a1a1a';
+      btn.style.color = canBuild ? '#fff' : '#666';
+      btn.style.borderColor = canBuild ? '#0a0' : '#400';
+      btn.style.cursor = canBuild ? 'pointer' : 'not-allowed';
+      if (canBuild) {
+        btn.setAttribute('onclick', `window._queueUnit('${building.id}', '${opt.type}')`);
+        btn.setAttribute('onmouseover', "this.style.background='#2a5a2a'");
+        btn.setAttribute('onmouseout', "this.style.background='#1a3a1a'");
+      } else {
+        btn.removeAttribute('onclick');
+        btn.removeAttribute('onmouseover');
+        btn.removeAttribute('onmouseout');
+      }
+      const price = btn.querySelector('.rts-btn-price');
+      if (price) price.style.color = affordable ? '#0f0' : '#f44';
+    });
+  }
 }
 
 /** VR: update title + queue readout without destroying clickable rows (MP snapshot spam). */
@@ -1471,7 +1582,8 @@ function syncVrBuildPanelHeaderFromBuilding(building) {
   if (queueEl) {
     if (queue.length > 0) {
       const current = queue[0];
-      const pct = Math.floor((1 - current.remainingTime / current.totalTime) * 100);
+      const tot = current.totalTime > 0 ? current.totalTime : 1;
+      const pct = Math.max(0, Math.min(100, Math.floor((1 - current.remainingTime / tot) * 100)));
       queueEl.setAttribute(
         'value',
         `Queue: ${UNIT_TYPES[current.unitType]?.name || current.unitType} ${pct}% (${queue.length})`
@@ -1495,14 +1607,15 @@ function refreshBuildingPanel(force = false) {
 
   const player = State.players[State.gameSession.myPlayerId];
   if (!force) {
-    const sig = buildPanelRefreshSig(live, player);
+    const sig = buildPanelLayoutSig(live, player);
     if (sig === lastBuildPanelRenderedSig) {
+      patchFlatBuildPanelLiveReadouts(live, player);
       syncVrBuildPanelHeaderFromBuilding(live);
       return;
     }
     lastBuildPanelRenderedSig = sig;
   } else {
-    lastBuildPanelRenderedSig = buildPanelRefreshSig(live, player);
+    lastBuildPanelRenderedSig = buildPanelLayoutSig(live, player);
   }
 
   const building = live;
@@ -1512,19 +1625,19 @@ function refreshBuildingPanel(force = false) {
 
   let html = `<div style="color: #0f0; font-size: 14px; font-weight: bold; margin-bottom: 4px;">
     ${bStats?.name || building.type}
-    <span style="color: #888; font-size: 11px; float: right;">HP: ${building.hp}/${building.maxHp}</span>
+    <span id="hud-build-title-hp" style="color: #888; font-size: 11px; float: right;">HP: ${Math.floor(building.hp)}/${Math.floor(building.maxHp ?? building.hp)}</span>
   </div>`;
 
-  // Queue display
+  // Queue display (ids: patched every frame without innerHTML)
   if (queue.length > 0) {
     const current = queue[0];
-    const pct = Math.floor((1 - current.remainingTime / current.totalTime) * 100);
-    html += `<div style="color: #ff0; font-size: 12px; margin: 4px 0;">
-      Building: ${UNIT_TYPES[current.unitType]?.name} ${pct}%
-      <span style="color: #666;">(${queue.length} in queue)</span>
-    </div>`;
-    html += `<div style="background: #333; height: 4px; border-radius: 2px; margin-bottom: 8px;">
-      <div style="background: #0f0; height: 100%; width: ${pct}%; border-radius: 2px;"></div>
+    const tot = current.totalTime > 0 ? current.totalTime : 1;
+    const pct = Math.max(0, Math.min(100, Math.floor((1 - current.remainingTime / tot) * 100)));
+    html += `<div id="hud-build-queue-block" style="margin-bottom: 8px;">
+      <div id="hud-build-queue-text" style="color: #ff0; font-size: 12px; margin: 4px 0;"></div>
+      <div style="background: #333; height: 4px; border-radius: 2px;">
+        <div id="hud-build-queue-bar" style="background: #0f0; height: 100%; width: ${pct}%; border-radius: 2px;"></div>
+      </div>
     </div>`;
   }
 
@@ -1536,14 +1649,14 @@ function refreshBuildingPanel(force = false) {
     return;
   }
 
-  html += '<div>';
+  html += '<div id="hud-build-options">';
   if (building.type === 'hq') {
     const buildableTypes = ['barracks', 'warFactory', 'refinery'];
     buildableTypes.forEach(type => {
       const stats = BUILDING_TYPES[type];
       const affordable = player && player.credits >= stats.cost;
       html += `
-        <button style="
+        <button type="button" data-rts-hq-build="${type}" style="
           display: inline-block; padding: 6px 10px; margin: 3px;
           background: ${affordable ? '#1a3a1a' : '#2a1a1a'};
           color: ${affordable ? '#fff' : '#666'};
@@ -1554,7 +1667,7 @@ function refreshBuildingPanel(force = false) {
         " ${affordable ? `onclick="window._startBuildMode('${type}')"` : ''}
            ${affordable ? `onmouseover="this.style.background='#2a5a2a'" onmouseout="this.style.background='#1a3a1a'"` : ''}
            title="Build ${stats.name}&#10;Cost: $${stats.cost} | Build Time: ${stats.buildTime}s">
-          ${stats.name}<br><span style="font-size: 10px; color: ${affordable ? '#0f0' : '#f44'};">$${stats.cost}</span>
+          ${stats.name}<br><span class="rts-btn-price" style="font-size: 10px; color: ${affordable ? '#0f0' : '#f44'};">$${stats.cost}</span>
         </button>
       `;
     });
@@ -1564,7 +1677,7 @@ function refreshBuildingPanel(force = false) {
       const atCap = player && player.unitCount >= player.unitCap;
       const canBuild = affordable && !atCap;
       html += `
-        <button style="
+        <button type="button" data-rts-produce="${opt.type}" style="
           display: inline-block; padding: 6px 10px; margin: 3px;
           background: ${canBuild ? '#1a3a1a' : '#2a1a1a'};
           color: ${canBuild ? '#fff' : '#666'};
@@ -1576,7 +1689,7 @@ function refreshBuildingPanel(force = false) {
            oncontextmenu="window._cancelQueueUnit('${building.id}', '${opt.type}'); return false;"
            ${canBuild ? `onmouseover="this.style.background='#2a5a2a'" onmouseout="this.style.background='#1a3a1a'"` : ''}
            title="${opt.description}&#10;DMG: ${opt.damage} | HP: ${opt.hp} | Range: ${opt.range} | Speed: ${opt.speed}&#10;[Right-Click] to cancel 1">
-          ${opt.name}<br><span style="font-size: 10px; color: ${affordable ? '#0f0' : '#f44'};">$${opt.cost}</span>
+          ${opt.name}<br><span class="rts-btn-price" style="font-size: 10px; color: ${affordable ? '#0f0' : '#f44'};">$${opt.cost}</span>
         </button>
       `;
     });
