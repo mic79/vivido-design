@@ -18,11 +18,13 @@ import * as UI from './ui.js';
 import * as Network from './network.js';
 import { unitGrid, buildingGrid } from './spatial.js';
 
-const FIXED_DT = 1 / 60;  // 60Hz logic timestep
+export const FIXED_DT = 1 / 60;  // 60Hz logic timestep
 const MAX_DT = 0.1;        // Cap to prevent spiral of death
 let accumulator = 0;
 let lastTime = 0;
 let running = false;
+/** Wall clock for host background catch-up (tab hidden / rAF throttled). */
+let lastHostBgBurstWallMs = 0;
 
 const COMPONENT_NAME = 'rts-engine-loop';
 
@@ -64,14 +66,35 @@ function engineStep(timestamp, rawDt) {
     return;
   }
 
-  accumulator += rawDt;
+  const mpHostHidden =
+    State.gameSession.isMultiplayer &&
+    State.gameSession.isHost &&
+    typeof document !== 'undefined' &&
+    document.hidden &&
+    State.gameSession.gameStarted &&
+    !State.gameSession.gameOver;
 
-  while (accumulator >= FIXED_DT) {
-    gameUpdate(FIXED_DT, timestamp);
-    accumulator -= FIXED_DT;
+  if (mpHostHidden) {
+    // Background tab: dedicated timer in network.js runs sim bursts; avoid stacking rAF dt here.
+    accumulator = 0;
+  } else {
+    accumulator += rawDt;
+    while (accumulator >= FIXED_DT) {
+      gameUpdate(FIXED_DT, timestamp);
+      accumulator -= FIXED_DT;
+    }
   }
 
   Network.updateNetwork(timestamp);
+
+  if (
+    State.gameSession.isMultiplayer &&
+    !State.gameSession.isHost &&
+    State.gameSession.gameStarted &&
+    !State.gameSession.gameOver
+  ) {
+    Network.smoothNetClientUnitPositions(rawDt);
+  }
 
   if (State.gameSession.gameStarted && !State.gameSession.gameOver) {
     Fog.updateFog();
@@ -117,6 +140,26 @@ export function stopLoop() {
   if (scene && scene.hasAttribute && scene.hasAttribute(COMPONENT_NAME)) {
     scene.removeAttribute(COMPONENT_NAME);
   }
+}
+
+/** Host only: advance sim by wall-clock gap when the tab is hidden (rAF throttled). Called from network timer. */
+export function runHostedSimBackgroundBurst() {
+  if (!State.gameSession.isMultiplayer || !State.gameSession.isHost) return;
+  if (typeof document === 'undefined' || !document.hidden) return;
+  if (!State.gameSession.gameStarted || State.gameSession.gameOver) return;
+  const now = performance.now();
+  if (!lastHostBgBurstWallMs) lastHostBgBurstWallMs = now;
+  const wallDt = Math.min(1.35, (now - lastHostBgBurstWallMs) / 1000);
+  lastHostBgBurstWallMs = now;
+  const steps = Math.min(120, Math.max(1, Math.floor(wallDt / FIXED_DT)));
+  for (let i = 0; i < steps; i++) {
+    gameUpdate(FIXED_DT, now);
+  }
+  Network.updateNetwork(now);
+}
+
+export function resetHostBackgroundBurstClock() {
+  lastHostBgBurstWallMs = 0;
 }
 
 function gameUpdate(dt, time) {

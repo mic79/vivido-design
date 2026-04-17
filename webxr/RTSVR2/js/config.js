@@ -409,8 +409,17 @@ export const BOT_HARVESTER_PER_REFINERY_TARGET = 7;
 
 // --- Networking ---
 export const NET_SNAPSHOT_RATE = 10;     // Snapshots per second (10Hz)
-export const NET_INTERPOLATION_DELAY = 100; // ms delay for smooth interpolation
+/** MP client: exponential smoothing time constant (s) toward last snapshot xyz — avoids 10Hz stair-stepping. */
+export const NET_CLIENT_POS_CATCHUP_TAU_SEC = 0.09;
+export const NET_INTERPOLATION_DELAY = 100; // ms — reserved for future buffered interpolation
 export const NET_CLIENT_CMD_TIMEOUT_MS = 8000; // Ack wait for multiplayer client commands
+/** Bidirectional WebRTC data-channel keepalive (ms). */
+export const NET_KEEPALIVE_INTERVAL_MS = 4000;
+/** When the host tab is hidden, rAF is throttled — this interval still drives catch-up sim + snapshots (ms). */
+export const NET_HOST_BG_SIM_INTERVAL_MS = 280;
+/** After an unexpected lobby disconnect, client auto-rejoin attempts (same lobby #). */
+export const NET_CLIENT_AUTO_REJOIN_DELAY_MS = 2600;
+export const NET_CLIENT_AUTO_REJOIN_MAX = 2;
 
 // --- Audio ---
 // - burst-128424 = rockets / energy

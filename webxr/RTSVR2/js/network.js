@@ -12,7 +12,16 @@ import * as Renderer from './renderer.js';
 import * as Audio from './audio.js';
 import * as Effects from './effects.js';
 import * as Resources from './resources.js';
-import { NET_SNAPSHOT_RATE, NET_CLIENT_CMD_TIMEOUT_MS } from './config.js';
+import {
+  MAX_PLAYERS,
+  NET_SNAPSHOT_RATE,
+  NET_CLIENT_CMD_TIMEOUT_MS,
+  NET_CLIENT_POS_CATCHUP_TAU_SEC,
+  NET_KEEPALIVE_INTERVAL_MS,
+  NET_HOST_BG_SIM_INTERVAL_MS,
+  NET_CLIENT_AUTO_REJOIN_DELAY_MS,
+  NET_CLIENT_AUTO_REJOIN_MAX,
+} from './config.js';
 
 /** Multiplayer client: last applied player team row from host (lobby defaults differ from match). */
 let lastClientPlayerTeamSig = '';
@@ -33,6 +42,12 @@ async function getPeerIceServers() {
 let peer = null;
 const connections = new Map(); // playerId -> connection
 
+let mpLifecycleBound = false;
+let keepaliveTimerId = null;
+let hostBgSimTimerId = null;
+let clientRejoinTimerId = null;
+let clientAutoRejoinAttempts = 0;
+
 /** BattleVR-style: host id is `rtsvr2-host-{N}` so joiners only pick lobby 1–4 (no pasted PeerJS id). */
 export const MAX_LOBBIES = 4;
 let selectedLobby = 1;
@@ -43,6 +58,10 @@ function hostSessionId() {
 }
 
 function teardownPeerOnly() {
+  if (clientRejoinTimerId) {
+    clearTimeout(clientRejoinTimerId);
+    clientRejoinTimerId = null;
+  }
   clearAllPendingClientAcks(true, 'disconnected');
   connections.forEach(c => {
     try {
@@ -149,6 +168,79 @@ export function commandFailureMessage(code) {
 
 export function initNetwork() {
   refreshLobbyDisplay();
+  setupMultiplayerLifecycle();
+}
+
+function setupMultiplayerLifecycle() {
+  if (mpLifecycleBound || typeof document === 'undefined') return;
+  mpLifecycleBound = true;
+  keepaliveTimerId = setInterval(tickMultiplayerKeepalive, NET_KEEPALIVE_INTERVAL_MS);
+  hostBgSimTimerId = setInterval(tickHostBackgroundSim, NET_HOST_BG_SIM_INTERVAL_MS);
+  document.addEventListener('visibilitychange', onMpDocumentVisibilityChange);
+}
+
+function tickMultiplayerKeepalive() {
+  if (!State.gameSession.isMultiplayer) return;
+  try {
+    if (State.gameSession.isHost) {
+      if (getConnectedRemotePlayerIds().length === 0) return;
+      broadcastData({ type: 'ping', t: Date.now() });
+    } else {
+      const c = connections.get('host');
+      if (c?.open) c.send({ type: 'ping', t: Date.now() });
+    }
+  } catch (_) { /* ignore */ }
+}
+
+function tickHostBackgroundSim() {
+  if (typeof document === 'undefined' || !document.hidden) return;
+  import('./loop.js')
+    .then(m => {
+      if (typeof m.runHostedSimBackgroundBurst === 'function') {
+        m.runHostedSimBackgroundBurst();
+      }
+    })
+    .catch(() => {});
+}
+
+function onMpDocumentVisibilityChange() {
+  if (State.gameSession.isHost) {
+    import('./loop.js')
+      .then(m => {
+        if (typeof m.resetHostBackgroundBurstClock === 'function') {
+          m.resetHostBackgroundBurstClock();
+        }
+      })
+      .catch(() => {});
+  }
+  if (!State.gameSession.isMultiplayer) return;
+  if (State.gameSession.isHost) {
+    if (document.hidden) {
+      setLobbyMenuStatus(
+        'Host tab in background — backup timer keeps sim & snapshots (slower than focused). Refocus for best results.'
+      );
+      import('./ui.js')
+        .then(m => m.showStatus('Host tab in background — refocus when possible.'))
+        .catch(() => {});
+    } else {
+      refreshHostLobbyConnectionUi();
+      import('./ui.js')
+        .then(m => m.showStatus('Host tab active — full frame rate.'))
+        .catch(() => {});
+    }
+  } else if (document.hidden) {
+    if (!State.gameSession.gameStarted && State.gameSession.menuOpen) {
+      setLobbyMenuStatus(
+        'Client tab in background — updates may lag. Refocus if the menu looks stale.'
+      );
+    } else if (State.gameSession.gameStarted) {
+      import('./ui.js')
+        .then(m =>
+          m.showStatus('Client tab in background — match may stutter until you refocus.')
+        )
+        .catch(() => {});
+    }
+  }
 }
 
 function setLobbyMenuStatus(text) {
@@ -158,6 +250,24 @@ function setLobbyMenuStatus(text) {
   if (vr && typeof vr.setAttribute === 'function') {
     vr.setAttribute('value', text);
   }
+}
+
+/** Host: human count = you + open data connections in seats 1–3 (BattleVR-style lobby readout). */
+function hostLobbyHumanCount() {
+  return 1 + getConnectedRemotePlayerIds().length;
+}
+
+function refreshHostLobbyConnectionUi() {
+  if (!State.gameSession.isMultiplayer || !State.gameSession.isHost) return;
+  const n = hostLobbyHumanCount();
+  const r = n - 1;
+  const L = selectedLobby;
+  const tail = State.gameSession.gameStarted
+    ? 'Match running — snapshots to remotes.'
+    : 'Pick a mode, then Start when ready.';
+  setLobbyMenuStatus(
+    `Host · lobby ${L} — ${n}/${MAX_PLAYERS} players (${r} remote). ${tail}`
+  );
 }
 
 // --- HOST ---
@@ -182,9 +292,7 @@ export async function startHosting() {
       State.gameSession.isHost = true;
       console.log(`✅ Hosting as ${sessionID}`);
 
-      setLobbyMenuStatus(
-        `Hosting lobby ${selectedLobby} — friends: same lobby number, then Join`
-      );
+      refreshHostLobbyConnectionUi();
     });
 
     peer.on('connection', conn => {
@@ -215,12 +323,17 @@ export async function startHosting() {
           playerId: assignedId,
         });
 
+        const humanCount = hostLobbyHumanCount();
         broadcastData({
           type: 'player-joined',
           playerId: assignedId,
+          lobby: selectedLobby,
+          humanCount,
+          maxHumans: MAX_PLAYERS,
         });
 
-        console.log(`✅ Player ${assignedId} connected`);
+        refreshHostLobbyConnectionUi();
+        console.log(`✅ Player ${assignedId} connected (${humanCount}/${MAX_PLAYERS} humans)`);
 
         conn.on('data', data => handleClientData(data, assignedId));
 
@@ -228,7 +341,25 @@ export async function startHosting() {
           connections.delete(assignedId);
           State.players[assignedId].isHuman = false;
           State.players[assignedId].isBot = true;
-          console.log(`❌ Player ${assignedId} disconnected`);
+          const n = hostLobbyHumanCount();
+          broadcastData({
+            type: 'player-left',
+            playerId: assignedId,
+            lobby: selectedLobby,
+            humanCount: n,
+            maxHumans: MAX_PLAYERS,
+          });
+          refreshHostLobbyConnectionUi();
+          if (State.gameSession.gameStarted) {
+            import('./ui.js')
+              .then(m =>
+                m.showStatus(
+                  `Player ${assignedId + 1} left · ${n}/${MAX_PLAYERS} humans in session.`
+                )
+              )
+              .catch(() => {});
+          }
+          console.log(`❌ Player ${assignedId} disconnected (${n}/${MAX_PLAYERS} humans)`);
         });
       });
     });
@@ -257,6 +388,11 @@ const JOIN_OPEN_MS = 14000;
 
 export async function joinGame() {
   if (State.gameSession.isMultiplayer) return;
+
+  if (clientRejoinTimerId) {
+    clearTimeout(clientRejoinTimerId);
+    clientRejoinTimerId = null;
+  }
 
   teardownPeerOnly();
 
@@ -298,12 +434,15 @@ export async function joinGame() {
         if (settled) return;
         settled = true;
         clearTimeout(openTimer);
+        clientAutoRejoinAttempts = 0;
         State.gameSession.isMultiplayer = true;
         State.gameSession.isHost = false;
         connections.set('host', conn);
         console.log(`✅ Connected to host: ${hostId}`);
 
-        setLobbyMenuStatus(`Connected — lobby ${selectedLobby}`);
+        setLobbyMenuStatus(
+          `Connected — lobby ${selectedLobby} · waiting for roster from host…`
+        );
 
         conn.on('data', data => handleHostData(data));
 
@@ -316,6 +455,35 @@ export async function joinGame() {
           connections.delete('host');
           const hud = document.getElementById('hud-status');
           if (hud) hud.textContent = 'Disconnected from host.';
+          const inLobby = !State.gameSession.gameStarted;
+          const lobbyNum = selectedLobby;
+          if (
+            inLobby &&
+            clientAutoRejoinAttempts < NET_CLIENT_AUTO_REJOIN_MAX
+          ) {
+            clientAutoRejoinAttempts += 1;
+            setLobbyMenuStatus(
+              `Disconnected — reconnecting to lobby ${lobbyNum} (${clientAutoRejoinAttempts}/${NET_CLIENT_AUTO_REJOIN_MAX})…`
+            );
+            clientRejoinTimerId = setTimeout(() => {
+              clientRejoinTimerId = null;
+              joinGame().catch(() => {});
+            }, NET_CLIENT_AUTO_REJOIN_DELAY_MS);
+          } else {
+            clientAutoRejoinAttempts = 0;
+            setLobbyMenuStatus(
+              `Disconnected from host. Use Join again (lobby ${lobbyNum}, same # as host).`
+            );
+            if (State.gameSession.gameStarted) {
+              import('./ui.js')
+                .then(m =>
+                  m.showStatus(
+                    'Lost connection to host. Re-open the menu and Join the same lobby when the host is back.'
+                  )
+                )
+                .catch(() => {});
+            }
+          }
         });
       });
 
@@ -340,6 +508,16 @@ export async function joinGame() {
 // --- HOST: Handle client commands ---
 function handleClientData(data, fromPlayerId) {
   if (fromPlayerId == null) return;
+  if (data?.type === 'ping') {
+    const conn = connections.get(fromPlayerId);
+    if (conn?.open) {
+      try {
+        conn.send({ type: 'pong', t: data.t });
+      } catch (_) { /* ignore */ }
+    }
+    return;
+  }
+  if (data?.type === 'pong') return;
   if (data?.type === 'command') {
     const result = executeCommand(data, fromPlayerId);
     const cmdId = data.cmdId;
@@ -361,6 +539,17 @@ function handleClientData(data, fromPlayerId) {
 
 // --- CLIENT: Handle server snapshots ---
 function handleHostData(data) {
+  if (!data || !data.type) return;
+  if (data.type === 'ping') {
+    const c = connections.get('host');
+    if (c?.open) {
+      try {
+        c.send({ type: 'pong', t: data.t });
+      } catch (_) { /* ignore */ }
+    }
+    return;
+  }
+  if (data.type === 'pong') return;
   switch (data.type) {
     case 'player-assignment':
       State.gameSession.myPlayerId = data.playerId;
@@ -404,11 +593,47 @@ function handleHostData(data) {
         .catch(() => {});
       break;
 
-    case 'player-joined':
-      console.log(`Player ${data.playerId} joined`);
+    case 'player-joined': {
+      const L = data.lobby != null ? data.lobby : selectedLobby;
+      const maxH = data.maxHumans != null ? data.maxHumans : MAX_PLAYERS;
+      const n = data.humanCount;
+      const my = State.gameSession.myPlayerId;
+      const seat = typeof my === 'number' ? `You: P${my + 1}` : 'You: (assigning…)';
+      if (typeof n === 'number') {
+        const who =
+          data.playerId === my
+            ? 'You joined'
+            : `P${(data.playerId ?? 0) + 1} joined`;
+        setLobbyMenuStatus(
+          `Lobby ${L} — ${n}/${maxH} players · ${who}. ${seat}. Host starts the match.`
+        );
+      } else {
+        setLobbyMenuStatus(`Lobby ${L} — player ${data.playerId} joined. ${seat}.`);
+      }
+      console.log(`Player ${data.playerId} joined (${n}/${maxH} humans)`);
       break;
+    }
+
+    case 'player-left': {
+      const L = data.lobby != null ? data.lobby : selectedLobby;
+      const maxH = data.maxHumans != null ? data.maxHumans : MAX_PLAYERS;
+      const n = data.humanCount;
+      const left = data.playerId != null ? `P${data.playerId + 1} left` : 'A player left';
+      if (typeof n === 'number') {
+        setLobbyMenuStatus(`Lobby ${L} — ${n}/${maxH} players · ${left}.`);
+      } else {
+        setLobbyMenuStatus(`Lobby ${L} — ${left}.`);
+      }
+      console.log(`Player ${data.playerId} left (${n}/${maxH} humans)`);
+      break;
+    }
 
     case 'lobby-full': {
+      if (clientRejoinTimerId) {
+        clearTimeout(clientRejoinTimerId);
+        clientRejoinTimerId = null;
+      }
+      clientAutoRejoinAttempts = 0;
       clearAllPendingClientAcks(true, 'lobby_full');
       State.gameSession.isMultiplayer = false;
       State.gameSession.isHost = false;
@@ -598,11 +823,37 @@ export function sendCommand(command, onResult) {
   }
 }
 
+/** MP client: blend displayed XZ toward latest snapshot every render tick (host sim is frozen here). */
+export function smoothNetClientUnitPositions(dt) {
+  if (!dt || dt <= 0) return;
+  const tau = NET_CLIENT_POS_CATCHUP_TAU_SEC;
+  if (tau <= 1e-6) return;
+  const alpha = 1 - Math.exp(-dt / tau);
+  const snapDistSq = 45 * 45; // instant catch-up if desynced (lobby / teleport)
+  State.units.forEach(unit => {
+    if (!unit || unit.hp <= 0) return;
+    if (unit.netGoalX == null || unit.netGoalZ == null) return;
+    const dx = unit.netGoalX - unit.x;
+    const dz = unit.netGoalZ - unit.z;
+    if (dx * dx + dz * dz > snapDistSq) {
+      unit.x = unit.netGoalX;
+      unit.z = unit.netGoalZ;
+      return;
+    }
+    unit.x += dx * alpha;
+    unit.z += dz * alpha;
+  });
+}
+
 // --- Broadcast (host only) ---
 export function broadcastData(data) {
   if (!State.gameSession.isHost) return;
   connections.forEach(conn => {
-    if (conn.open) conn.send(data);
+    if (conn && conn.open) {
+      try {
+        conn.send(data);
+      } catch (_) { /* ignore */ }
+    }
   });
 }
 
@@ -815,8 +1066,9 @@ function applySnapshot(snapshot) {
       } else if (uData.team !== undefined) {
         unit.team = uData.team;
       }
-      unit.x += (uData.x - unit.x) * 0.3;
-      unit.z += (uData.z - unit.z) * 0.3;
+      // Authoritative goal for this tick; display x,z are smoothed each frame in smoothNetClientUnitPositions.
+      unit.netGoalX = uData.x;
+      unit.netGoalZ = uData.z;
       unit.hp = uData.hp;
       if (uData.maxHp !== undefined) unit.maxHp = uData.maxHp;
       unit.state = uData.state;
@@ -860,6 +1112,15 @@ function applySnapshot(snapshot) {
       building = State.buildings.get(bData.id);
     }
     if (building) {
+      // Always sync world position: client may still hold pre-match lobby HQ (`bldg_0` etc.) at wrong x,z
+      // while snapshot ids match the host — units were created fresh from snap so only buildings looked wrong.
+      if (bData.x !== undefined && bData.z !== undefined) {
+        if (building.x !== bData.x || building.z !== bData.z) {
+          if (building.type === 'hq') navDirty = true;
+          building.x = bData.x;
+          building.z = bData.z;
+        }
+      }
       if (bData.ownerId !== undefined && building.ownerId !== bData.ownerId) {
         const oldSet = State.buildingsByPlayer.get(building.ownerId);
         if (oldSet) oldSet.delete(building.id);

@@ -377,6 +377,7 @@ function createMenu() {
     <button id="btn-start-ffa" style="${btnStyle('#a60')}" onclick="window._startGame('ffa')">👑 FFA (4 Players)</button>
     <hr style="border-color: #333; margin: 15px 0;">
     <p style="color:#aaa;font-size:12px;margin:0;">Multiplayer — same lobby # as host (BattleVR-style)</p>
+    <p style="color:#8ac;font-size:11px;margin:6px 0 0 0;line-height:1.45;">1–4 humans: FFA uses every connected seat; host should keep this tab focused (background mode uses a slower backup timer + keepalive). Clients auto-rejoin the lobby briefly if the link drops before Start.</p>
     <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:8px 0 10px 0;">
       <button type="button" id="btn-lobby-minus" style="${btnStyle('#333')};padding:6px 14px;">−</button>
       <span id="menu-lobby-num" style="color:#fff;font-size:20px;font-weight:bold;min-width:1.5em;text-align:center;">1</span>
