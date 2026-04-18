@@ -152,6 +152,12 @@
       if (now - (this._lastToggle || 0) < 400) return;
       this._lastToggle = now;
 
+      var vlg = this.el.components && this.el.components['vrleague-game'];
+      if (vlg && typeof vlg._pulseHand === 'function') {
+        var lhX = vlResolveHand('left');
+        if (lhX) vlg._pulseHand(lhX, 0.46, 58);
+      }
+
       this.ensureRefs();
       this.menuVisible = !this.menuVisible;
       console.log('VR Menu toggled:', this.menuVisible, 'menu ref:', !!this.menu);

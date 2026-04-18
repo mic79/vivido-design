@@ -372,15 +372,6 @@
                 value="Blue 0 — Orange 0   |   --:--"
               ></a-text>
             </a-entity>
-            <a-entity id="vl-menu-hint" position="0 -0.34 -0.78">
-              <a-text
-                id="vl-menu-hint-text"
-                value="Press X for menu"
-                align="center"
-                width="0.4"
-                color="#9eb8d8"
-              ></a-text>
-            </a-entity>
           </a-camera>
 
           <a-entity
@@ -389,7 +380,53 @@
             oculus-touch-controls="hand: left"
             laser-controls="hand: left"
             raycaster="objects: .clickable; far: 10; enabled: false; lineColor: #ffffff; lineOpacity: 0"
-          ></a-entity>
+          >
+            <!-- Mirror A hint on X: −X grip offset + label on −X; same rotations as right (left hand tracking is already mirrored). -->
+            <a-entity id="vl-x-menu-hint" visible="false">
+              <a-entity position="-0.002 0.012 -0.062">
+                <a-entity rotation="68 170 180">
+                  <a-entity rotation="180 0 0">
+                    <a-entity
+                      animation="property: scale; from: 1 1 1; to: 1.2 1.2 1.2; dur: 800; dir: alternate; loop: true; easing: easeInOutSine"
+                    >
+                      <a-ring
+                        radius-inner="0.0086"
+                        radius-outer="0.0099"
+                        segments-theta="40"
+                        material="shader: flat; color: #ffffff; opacity: 0.96; transparent: true; side: double"
+                      ></a-ring>
+                      <a-text
+                        position="0 0 0"
+                        value="X"
+                        align="center"
+                        anchor="center"
+                        baseline="center"
+                        width="0.34"
+                        color="#ffffff"
+                        shader="msdf"
+                        transparent="true"
+                        alpha-test="0.08"
+                        side="double"
+                      ></a-text>
+                    </a-entity>
+                    <a-text
+                      position="-0.0125 0 0"
+                      value="Toggle menu"
+                      align="right"
+                      anchor="right"
+                      baseline="center"
+                      width="0.34"
+                      color="#ffffff"
+                      shader="msdf"
+                      transparent="true"
+                      alpha-test="0.08"
+                      side="double"
+                    ></a-text>
+                  </a-entity>
+                </a-entity>
+              </a-entity>
+            </a-entity>
+          </a-entity>
           <a-entity
             id="rightHand"
             hand-controls="hand: right"
@@ -397,17 +434,52 @@
             laser-controls="hand: right"
             raycaster="objects: .clickable; far: 10; enabled: false; lineColor: #ffffff; lineOpacity: 0"
           >
-            <a-cone
-              class="vl-thruster-vfx"
-              position="0 0 0.1"
-              rotation="0 180 0"
-              radius-bottom="0.02"
-              radius-top="0.01"
-              height="0.1"
-              color="#66eeff"
-              material="shader: standard; emissive: #44ccff; emissiveIntensity: 1; transparent: true; opacity: 0.75"
-              visible="false"
-            ></a-cone>
+            <!-- Grip-local hint; shared rotation so ring + texts lie in one plane (decorative, not device-accurate). -->
+            <a-entity id="vl-reset-hint" visible="false">
+              <a-entity position="0.002 0.012 -0.062">
+                <!-- Y in middle Euler slot = yaw: -10 → 170 is +180° in hand space (nested 0 180 0 was wrong local axis). -->
+                <a-entity rotation="68 170 180">
+                  <a-entity rotation="180 0 0">
+                    <a-entity
+                      animation="property: scale; from: 1 1 1; to: 1.2 1.2 1.2; dur: 800; dir: alternate; loop: true; easing: easeInOutSine"
+                    >
+                      <a-ring
+                        radius-inner="0.0086"
+                        radius-outer="0.0099"
+                        segments-theta="40"
+                        material="shader: flat; color: #ffffff; opacity: 0.96; transparent: true; side: double"
+                      ></a-ring>
+                      <a-text
+                        position="0 0 0"
+                        value="A"
+                        align="center"
+                        anchor="center"
+                        baseline="center"
+                        width="0.34"
+                        color="#ffffff"
+                        shader="msdf"
+                        transparent="true"
+                        alpha-test="0.08"
+                        side="double"
+                      ></a-text>
+                    </a-entity>
+                    <a-text
+                      position="0.0125 0 0"
+                      value="Reset Cube"
+                      align="left"
+                      anchor="left"
+                      baseline="center"
+                      width="0.34"
+                      color="#ffffff"
+                      shader="msdf"
+                      transparent="true"
+                      alpha-test="0.08"
+                      side="double"
+                    ></a-text>
+                  </a-entity>
+                </a-entity>
+              </a-entity>
+            </a-entity>
           </a-entity>
         </a-entity>
       </a-entity>
