@@ -22,8 +22,15 @@
     };
   }
 
+  /** VRLeague uses the same controls as Dodge but may name hands `vl-hand-left` / `vl-hand-right`. */
+  function vlResolveHand(side) {
+    var id = side === 'left' ? 'leftHand' : 'rightHand';
+    var alt = side === 'left' ? 'vl-hand-left' : 'vl-hand-right';
+    return document.getElementById(id) || document.getElementById(alt);
+  }
+
   function refreshRaycasters() {
-    var hands = [document.getElementById('leftHand'), document.getElementById('rightHand')];
+    var hands = [vlResolveHand('left'), vlResolveHand('right')];
     for (var i = 0; i < hands.length; i++) {
       if (hands[i] && hands[i].components && hands[i].components.raycaster) {
         hands[i].components.raycaster.refreshObjects();
@@ -78,7 +85,7 @@
       });
       // Also attach directly to the left hand entity once available
       function attachXButton() {
-        var leftHand = document.getElementById('leftHand');
+        var leftHand = vlResolveHand('left');
         if (leftHand) {
           leftHand.addEventListener('xbuttondown', function () {
             self.toggleMenu();
@@ -91,8 +98,8 @@
 
       // Single-laser-pointer: switch active hand on trigger press
       function attachLaserSwitch() {
-        var lh = document.getElementById('leftHand');
-        var rh = document.getElementById('rightHand');
+        var lh = vlResolveHand('left');
+        var rh = vlResolveHand('right');
         if (lh && rh) {
           lh.addEventListener('triggerdown', function () {
             if (self.menuVisible && self._activeHand !== 'left') {
@@ -115,17 +122,22 @@
       this.el.sceneEl.addEventListener('enter-vr', function () {
         var overlay = document.getElementById('pre-vr-overlay');
         if (overlay) overlay.style.display = 'none';
+        var legacy = document.getElementById('vl-pre-vr-overlay');
+        if (legacy) legacy.style.display = 'none';
       });
 
       this.el.sceneEl.addEventListener('lobby-state-updated', function () {
         self.updateMenuDisplay();
       });
+      this.el.sceneEl.addEventListener('vl-hud-update', function () {
+        if (self.menuVisible) self.updateMenuDisplay();
+      });
     },
 
     cacheRefs: function () {
       this.menu = document.getElementById('game-menu');
-      this.leftHand = document.getElementById('leftHand');
-      this.rightHand = document.getElementById('rightHand');
+      this.leftHand = vlResolveHand('left');
+      this.rightHand = vlResolveHand('right');
       this.lobbySection = document.getElementById('menu-lobby-section');
       this.queueButtons = document.getElementById('menu-queue-buttons');
       this._refsReady = !!(this.menu && this.leftHand && this.rightHand);
@@ -837,6 +849,14 @@
           if (gm.matchState === 'ENDED') gm.resetMatch();
           gm.startCountdown();
         }
+      } else {
+        var vlRoot = document.querySelector('a-scene[vrleague-game]') || document.querySelector('[vrleague-game]');
+        var vlc = vlRoot && vlRoot.components && vlRoot.components['vrleague-game'];
+        if (vlc && typeof vlc.vlToggleMatchFromMenu === 'function') {
+          vlc.vlToggleMatchFromMenu();
+        } else if (vlc && typeof vlc.startOffline === 'function') {
+          vlc.startOffline();
+        }
       }
       this.menuVisible = false;
       if (this.menu) this.menu.setAttribute('visible', false);
@@ -844,11 +864,11 @@
     },
 
     movePlayerToPosition: function (pos) {
-      var player = document.getElementById('player');
+      var player = document.getElementById('player') || document.getElementById('vr-rig');
       if (player) {
         player.setAttribute('position', pos.x + ' ' + pos.y + ' ' + pos.z);
         if (pos.ry !== undefined) {
-          var rig = document.getElementById('rig');
+          var rig = document.getElementById('rig') || document.getElementById('vl-spect-yaw');
           if (rig) rig.setAttribute('rotation', '0 ' + pos.ry + ' 0');
         }
         var pc = player.components['player-collision'];
@@ -869,7 +889,7 @@
 
     moveToMatchPosition: function () {
       this.movePlayerToPosition(PLAYER_POSITION_BLUE);
-      var rig = document.getElementById('rig');
+      var rig = document.getElementById('rig') || document.getElementById('vl-spect-yaw');
       if (rig) rig.setAttribute('rotation', '0 0 0');
       window.isSpectator = false;
       this.disableBallInteraction(false);
@@ -957,6 +977,14 @@
           }
           qtext += 'Match: ' + blueName + ' vs ' + redName + '\n';
         }
+        if (ls.matchState === 'PLAYING' && ls.matchScore) {
+          qtext +=
+            'Score Blue ' +
+            (ls.matchScore.blue != null ? ls.matchScore.blue : 0) +
+            ' — Orange ' +
+            (ls.matchScore.red != null ? ls.matchScore.red : 0) +
+            '\n';
+        }
         if (ls.queue.length > 0) {
           var names = [];
           for (var k = 0; k < ls.queue.length; k++) {
@@ -988,9 +1016,17 @@
 
       var startMatchBtn2 = document.getElementById('menu-start-match');
       var startMatchText = document.getElementById('menu-start-match-text');
+      var vlSceneBtn = document.querySelector('a-scene[vrleague-game]');
+      var vlGameBtn = vlSceneBtn && vlSceneBtn.components['vrleague-game'];
       if (startMatchBtn2 && startMatchText) {
         if (this.menuMode === 'stats') {
           startMatchBtn2.setAttribute('visible', false);
+        } else if (vlGameBtn) {
+          var hbtn = window.__vlHud;
+          var vlPlaying = !!(hbtn && hbtn.matchActive);
+          startMatchBtn2.setAttribute('visible', true);
+          startMatchText.setAttribute('text', 'value', vlPlaying ? 'END MATCH' : 'START MATCH');
+          setButtonColor(startMatchBtn2, vlPlaying ? '#cc3333' : '#ff8800');
         } else {
           var bothSlotsFilled = ls.matchPlayers.blue && ls.matchPlayers.red;
           var canStartBotMatch = isMatchPlayer && ls.matchPlayers.blue && !ls.matchPlayers.red;

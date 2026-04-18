@@ -4,8 +4,290 @@
 (function () {
   'use strict';
 
-  var PEER_CONFIG = { host: '0.peerjs.com', port: 443, secure: true };
+  window.lobbyState = window.lobbyState || null;
+  window.isMultiplayer = !!window.isMultiplayer;
+  window.connectionState = window.connectionState || 'disconnected';
+  window.myPlayerId = window.myPlayerId || null;
+
+  window.createLobbyState =
+    window.createLobbyState ||
+    function () {
+      return {
+        players: [],
+        queue: [],
+        matchPlayers: { blue: null, red: null },
+        matchState: 'WAITING',
+        matchStartTime: 0,
+        matchScore: { blue: 0, red: 0 },
+        matchGameState: null,
+        spectatorSlots: [null, null, null, null],
+        mobileSpectatorCount: 0
+      };
+    };
+
   var HOST_ID_PREFIX = 'vrleague-host-';
+  /** Countdown match length (host clock), same feel as DodgeVR's 3:00. */
+  var VL_MATCH_DURATION_MS = 3 * 60 * 1000;
+  /** Same Metered-backed TURN/STUN JSON as DodgeVR / RTSVR2 (Cloudflare worker). */
+  var VL_TURN_ENDPOINT = 'https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev';
+
+  function vlDefaultIceServers() {
+    return [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
+    ];
+  }
+
+  function vlGetIceServers() {
+    return fetch(VL_TURN_ENDPOINT)
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .catch(function () {
+        return null;
+      })
+      .then(function (json) {
+        if (json && Array.isArray(json) && json.length) return json;
+        return vlDefaultIceServers();
+      });
+  }
+
+  function vlPeerOptions(iceServers) {
+    return {
+      host: '0.peerjs.com',
+      port: 443,
+      secure: true,
+      config: { iceServers: iceServers }
+    };
+  }
+
+  /** True if host id is free (you may create the lobby). Same idea as DodgeVR checkPeerAvailability. */
+  function vlCheckHostPeerIdAvailable(hostId) {
+    return new Promise(function (resolve) {
+      var finished = false;
+      function done(ok) {
+        if (finished) return;
+        finished = true;
+        resolve(ok);
+      }
+      var temp = new Peer(hostId, { host: '0.peerjs.com', port: 443, secure: true });
+      var t = setTimeout(function () {
+        try {
+          temp.destroy();
+        } catch (e) {}
+        done(false);
+      }, 2000);
+      temp.on('open', function () {
+        clearTimeout(t);
+        try {
+          temp.destroy();
+        } catch (e2) {}
+        done(true);
+      });
+      temp.on('error', function (err) {
+        clearTimeout(t);
+        try {
+          temp.destroy();
+        } catch (e3) {}
+        if (err && err.type === 'unavailable-id') done(false);
+        else done(true);
+      });
+    });
+  }
+
+  window.__vlGetIceServers = vlGetIceServers;
+  window.__vlCheckHostPeerIdAvailable = vlCheckHostPeerIdAvailable;
+
+  function vlHandEl(primaryId, fallbackId) {
+    return document.getElementById(primaryId) || document.getElementById(fallbackId);
+  }
+
+  /** 16-wide LED bitmaps: each string is one row, '1' = on. Idle is 16 rows; tongue 19 (canvas uses 19 rows, idle padded with blank rows). */
+  var VL_LED_IDLE_ROWS = [
+    '0011000000001100',
+    '0011000000001100',
+    '1100110000110011',
+    '1100110000110011',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '1100000000000011',
+    '1100000000000011',
+    '0011111111111100',
+    '0011111111111100'
+  ];
+  var VL_LED_TONGUE_ROWS = [
+    '0000000000001100',
+    '0000000000001100',
+    '1111110000110011',
+    '1111110000110011',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '1100000000000011',
+    '1100000000000011',
+    '0011111111111100',
+    '0011111111111100',
+    '0000000011011000',
+    '0000000011011000',
+    '0000000001110000'
+  ];
+  /** Same 16×19 grid as face; shown after non-ball impacts for VL_HIT_FACE_MS. */
+  var VL_LED_IMPACT_ROWS = [
+    '0000000000000000',
+    '0000000000000000',
+    '1111110000111111',
+    '1111110000111111',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000',
+    '0000001111000000',
+    '0000110000110000',
+    '0000110000110000',
+    '0000001111000000',
+    '0000000000000000'
+  ];
+  /** Bitmap size (idle padded to match tongue height). */
+  var VL_LED_FACE_COLS = 16;
+  var VL_LED_FACE_ROWS = 19;
+  var VL_LED_IDLE_ROWS_PADDED = VL_LED_IDLE_ROWS.concat([
+    '0000000000000000',
+    '0000000000000000',
+    '0000000000000000'
+  ]);
+
+  /** Full LED canvas: wider grid; 16×VL_LED_FACE_ROWS face centered (same cell margin L/R as T/B). */
+  var VL_LED_GRID_COLS = 24;
+  var VL_LED_GRID_ROWS = VL_LED_FACE_ROWS + (VL_LED_GRID_COLS - VL_LED_FACE_COLS);
+  var VL_LED_FACE_OX = (VL_LED_GRID_COLS - VL_LED_FACE_COLS) >> 1;
+  var VL_LED_FACE_OY = (VL_LED_GRID_ROWS - VL_LED_FACE_ROWS) >> 1;
+
+  /**
+   * LED matrix: **24 cells wide**, gutters. Off cells = white; on cells = `onColor` (cube body).
+   * @param {'neutral'|'tongue'|'hit'} mode
+   * @param {string} onColor CSS hex for lit cells (e.g. SPEC slot color)
+   */
+  function vlDrawLedFace(ctx, w, h, mode, onColor) {
+    ctx.imageSmoothingEnabled = false;
+    var cols = VL_LED_GRID_COLS;
+    var rows = VL_LED_GRID_ROWS;
+    var cell = Math.min(w / cols, h / rows);
+    var ox = (w - cell * cols) * 0.5;
+    var oy = (h - cell * rows) * 0.5;
+    var gutter = Math.max(1, Math.round(cell * 0.12));
+    var pxw = Math.max(1, Math.floor(cell - gutter));
+
+    var OFF = '#ffffff';
+    var ON = onColor || '#888888';
+    var DIM = '#ffffff';
+
+    var bitmap =
+      mode === 'hit'
+        ? VL_LED_IMPACT_ROWS
+        : mode === 'tongue'
+          ? VL_LED_TONGUE_ROWS
+          : VL_LED_IDLE_ROWS_PADDED;
+    var gx, gy;
+    var fgx, fgy;
+    var rowStr;
+
+    ctx.fillStyle = OFF;
+    ctx.fillRect(0, 0, w, h);
+    for (gy = 0; gy < rows; gy++) {
+      for (gx = 0; gx < cols; gx++) {
+        fgx = gx - VL_LED_FACE_OX;
+        fgy = gy - VL_LED_FACE_OY;
+        if (fgx >= 0 && fgx < VL_LED_FACE_COLS && fgy >= 0 && fgy < VL_LED_FACE_ROWS) {
+          rowStr = bitmap[fgy] || '';
+          ctx.fillStyle = rowStr.charAt(fgx) === '1' ? ON : DIM;
+        } else {
+          ctx.fillStyle = DIM;
+        }
+        ctx.fillRect(Math.floor(ox + gx * cell), Math.floor(oy + gy * cell), pxw, pxw);
+      }
+    }
+  }
+
+  /** World-space head position for LED proximity (A-Frame camera API differs by version). */
+  function vlGetCameraWorldPosition(sceneEl, out) {
+    if (!sceneEl) return false;
+    var c = sceneEl.camera;
+    if (c) {
+      if (c.el && c.el.object3D) {
+        c.el.object3D.getWorldPosition(out);
+        return true;
+      }
+      if (c.object3D) {
+        c.object3D.getWorldPosition(out);
+        return true;
+      }
+    }
+    var el = document.getElementById('cam') || sceneEl.querySelector('[camera]') || sceneEl.querySelector('a-camera');
+    if (el && el.object3D) {
+      el.object3D.getWorldPosition(out);
+      return true;
+    }
+    return false;
+  }
+
+  function vlCreateCarLedFace(THREE, half, bodyColorHex) {
+    var W = VL_LED_GRID_COLS * 4;
+    var H = VL_LED_GRID_ROWS * 4;
+    var canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    var ctx = canvas.getContext('2d');
+    var onHex = bodyColorHex || '#888888';
+    vlDrawLedFace(ctx, W, H, 'neutral', onHex);
+    var tex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    var face = half * 2 - 0.006;
+    var geo = new THREE.PlaneGeometry(face, face);
+    /* Lit / unlit colors live in the canvas map only (white off-cells would pick up uniform emissive). */
+    var mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: true,
+      side: THREE.FrontSide,
+      roughness: 0.42,
+      metalness: 0.08
+    });
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(0, 0, half + 0.0032);
+    mesh.renderOrder = 1;
+    var pivot = new THREE.Group();
+    pivot.name = 'vlLedPivot';
+    pivot.add(mesh);
+    return {
+      pivot: pivot,
+      texture: tex,
+      canvas: canvas,
+      ctx: ctx,
+      mesh: mesh,
+      material: mat,
+      geometry: geo
+    };
+  }
 
   var ARENA = {
     cx: 0,
@@ -29,6 +311,11 @@
   ];
 
   var CAR_HALF = 0.04;
+  /** Local head ~this close to a cube → face turns to camera + tongue (see _vlGetCameraWorld). */
+  var VL_LED_FACE_PROX_M = 0.42;
+  var VL_LED_TONGUE_MS = 4000;
+  /** Cube hits wall / another cube (not ball): LED “impact” face duration. */
+  var VL_HIT_FACE_MS = 2000;
   var BALL_R = 0.1664;
   var THRUST_FORWARD = 0.625;
   /** HeliVR torque formula uses one scale; tuned down for ~0.02 mass cubes vs HeliVR heli. */
@@ -199,8 +486,10 @@
       this.world.addContactMaterial(new CANNON.ContactMaterial(this.carMat, this.carMat, { friction: 0.05, restitution: 0.55 }));
 
       this._onBallCollide = this._onBallCollide.bind(this);
+      this._onCarCollide = this._onCarCollide.bind(this);
       this._vlAudioNextBounce = 0;
       this._vlAudioNextCarHit = 0;
+      this._vlAudioNextCarObstacle = 0;
       this._vlThrusterPlaying = false;
 
       this.isHost = false;
@@ -213,16 +502,25 @@
       this.frame = 0;
       this.score = [0, 0];
       this.goalCd = 0;
+      this.vlMatchActive = false;
+      this.vlMatchStartMs = 0;
+      this.vlMatchRemainSec = null;
+      this._vlLastHudEmit = 0;
+      this._vlHudDirty = true;
       this.statusEl = document.getElementById('vl-status');
       this.scoreEl = document.getElementById('vl-score');
 
       this.tmpVec = new THREE.Vector3();
       this.tmpVec2 = new THREE.Vector3();
+      this._vlCarLed = [];
+      this._vlLedScratch = null;
       this.arenaWorldPos = new THREE.Vector3();
       this.camYaw = 0;
 
       this.ballBody = null;
       this.carBodies = [];
+      /** World pose + quaternion for each car at arena build (goal / _resetBall restores these). */
+      this._carSpawn = [];
       this.ballEl = null;
       this.carEls = [];
       this.wallBodies = [];
@@ -281,31 +579,161 @@
       if (this.scoreEl) {
         this.scoreEl.textContent = 'Blue ' + this.score[0] + '  —  Orange ' + this.score[1];
       }
+      this._vlMarkHudDirty();
     },
 
-    _bindUi: function () {
-      var self = this;
-      var h = document.getElementById('vl-host');
-      var j = document.getElementById('vl-join');
-      var s = document.getElementById('vl-single');
-      var lobby = document.getElementById('vl-lobby');
-      if (h) {
-        h.addEventListener('click', function () {
-          var n = lobby ? parseInt(lobby.value, 10) || 1 : 1;
-          self.startHost(n);
+    _vlMarkHudDirty: function () {
+      this._vlHudDirty = true;
+    },
+
+    _vlFormatClock: function (totalSec) {
+      if (totalSec == null || !isFinite(totalSec)) return '--:--';
+      var s = Math.max(0, Math.floor(totalSec));
+      var m = Math.floor(s / 60);
+      var r = s % 60;
+      return m + ':' + (r < 10 ? '0' : '') + r;
+    },
+
+    _vlPumpHud: function (now) {
+      if (!this._vlHudDirty && now - this._vlLastHudEmit < 200) return;
+      this._vlLastHudEmit = now;
+      this._vlHudDirty = false;
+
+      var remSec = null;
+      if (this.vlMatchActive) {
+        if (this.isHost && this.vlMatchStartMs) {
+          remSec = Math.max(0, Math.ceil((VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000));
+        } else if (typeof this.vlMatchRemainSec === 'number' && isFinite(this.vlMatchRemainSec)) {
+          remSec = Math.max(0, Math.floor(this.vlMatchRemainSec));
+        }
+      }
+
+      window.__vlHud = {
+        matchActive: !!this.vlMatchActive,
+        matchRemainSec: remSec,
+        blue: this.score[0],
+        orange: this.score[1]
+      };
+
+      var line =
+        'Blue ' +
+        this.score[0] +
+        ' — Orange ' +
+        this.score[1] +
+        '   |   ' +
+        (this.vlMatchActive ? this._vlFormatClock(remSec) : '--:--');
+      var menuLine = document.getElementById('menu-vl-scoreboard');
+      if (menuLine) menuLine.setAttribute('text', 'value', line);
+      var hudLine = document.getElementById('vl-hud-scoreboard');
+      if (hudLine) hudLine.setAttribute('text', 'value', line);
+
+      var scene = this.el.sceneEl;
+      if (scene) scene.emit('vl-hud-update');
+    },
+
+    _vlBroadcastMatchSync: function () {
+      if (!this.isHost || !this.peer || !this.peer.open) return;
+      var now = performance.now();
+      var remSec = null;
+      if (this.vlMatchActive && this.vlMatchStartMs) {
+        remSec = Math.max(0, Math.ceil((VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000));
+      }
+      var pack = {
+        type: 'vl-match-sync',
+        active: !!this.vlMatchActive,
+        score0: this.score[0],
+        score1: this.score[1],
+        remSec: remSec
+      };
+      for (var i = 0; i < this.clientConns.length; i++) {
+        var c = this.clientConns[i];
+        if (c && c.open) c.send(pack);
+      }
+    },
+
+    vlStartMatch: function () {
+      if (!this.isHost) return;
+      if (this.vlMatchActive) return;
+      this.score[0] = 0;
+      this.score[1] = 0;
+      this._setScoreText();
+      this._resetBall();
+      this.vlMatchActive = true;
+      this.vlMatchStartMs = performance.now();
+      this._setStatus('Match on — ' + this._vlFormatClock(VL_MATCH_DURATION_MS / 1000) + ' countdown. Goals count toward Blue / Orange.');
+      this._vlBroadcastLobbyToClients();
+      this._vlBroadcastMatchSync();
+      this._vlMarkHudDirty();
+    },
+
+    vlEndMatch: function (reason) {
+      if (!this.isHost) return;
+      if (!this.vlMatchActive) return;
+      this.vlMatchActive = false;
+      this.vlMatchStartMs = 0;
+      this.vlMatchRemainSec = null;
+      this._setStatus(reason ? String(reason) : 'Match ended. Open the menu to start again or keep practicing.');
+      this._vlBroadcastLobbyToClients();
+      this._vlBroadcastMatchSync();
+      this._vlMarkHudDirty();
+    },
+
+    /** Offline menu START / END MATCH (host-only physics). */
+    vlToggleMatchFromMenu: function () {
+      if (!this.isHost) return;
+      if (this.vlMatchActive) this.vlEndMatch();
+      else this.vlStartMatch();
+    },
+
+    _bindUi: function () {},
+
+    _vlEmitLobbyUpdated: function () {
+      var scene = this.el && this.el.sceneEl;
+      if (scene) scene.emit('lobby-state-updated');
+    },
+
+    _vlClearWindowMultiplayer: function () {
+      window.lobbyState = null;
+      window.isMultiplayer = false;
+      window.connectionState = 'disconnected';
+      window.myPlayerId = null;
+      this._vlEmitLobbyUpdated();
+    },
+
+    _vlRebuildLobbyState: function () {
+      if (!this.isHost || !this.peer || !this.peer.open) return;
+      var st = window.createLobbyState();
+      var hostNick =
+        typeof window.playerNickname === 'string' && window.playerNickname.trim()
+          ? window.playerNickname.trim().slice(0, 20)
+          : 'Host';
+      st.players.push({ id: this.peer.id, nickname: hostNick });
+      for (var i = 0; i < this.clientConns.length; i++) {
+        var c = this.clientConns[i];
+        if (!c || !c.open) continue;
+        st.players.push({
+          id: c.peer || 'peer',
+          nickname: c.vlNick || 'Player'
         });
       }
-      if (j) {
-        j.addEventListener('click', function () {
-          var n = lobby ? parseInt(lobby.value, 10) || 1 : 1;
-          self.joinClient(n);
-        });
+      st.matchState = this.vlMatchActive ? 'PLAYING' : 'WAITING';
+      st.matchStartTime = this.vlMatchActive ? Date.now() : 0;
+      st.matchScore.blue = this.score[0];
+      st.matchScore.red = this.score[1];
+      window.lobbyState = st;
+    },
+
+    _vlBroadcastLobbyToClients: function () {
+      if (!this.isHost || !this.peer || !this.peer.open) return;
+      this._vlRebuildLobbyState();
+      var st = window.lobbyState;
+      if (!st) return;
+      var payload = { type: 'vl-lobby-state', state: JSON.parse(JSON.stringify(st)) };
+      for (var j = 0; j < this.clientConns.length; j++) {
+        var c = this.clientConns[j];
+        if (c && c.open) c.send(payload);
       }
-      if (s) {
-        s.addEventListener('click', function () {
-          self.startOffline();
-        });
-      }
+      this._vlEmitLobbyUpdated();
     },
 
     _buildArena: function () {
@@ -541,6 +969,12 @@
       addWall(netHx, netHy, netHz, netBackX, wallCy, 0);
       addWall(A.halfW, A.wallT, A.halfD, 0, 0.02 + ch + A.wallT, 0);
 
+      this._vlLedScratch = {
+        camW: new THREE.Vector3(),
+        carW: new THREE.Vector3(),
+        dirW: new THREE.Vector3()
+      };
+
       var soccerTex = vlMakeSoccerBallTexture(THREE);
       var ballMat = new THREE.MeshStandardMaterial({
         map: soccerTex,
@@ -573,6 +1007,7 @@
         { x: westX, z: -dz },
         { x: eastX, z: -dz }
       ];
+      this._carSpawn = [];
       var ballWx = A.cx;
       var ballWy = A.cy + ch * 0.32;
       var ballWz = A.cz;
@@ -592,18 +1027,23 @@
         root.appendChild(el);
         this.carEls.push(el);
 
-        var nose = document.createElement('a-box');
-        nose.setAttribute('class', 'vl-car-nose');
-        nose.setAttribute('width', (CAR_HALF * 2 - 0.006).toString());
-        nose.setAttribute('height', (CAR_HALF * 2 - 0.006).toString());
-        nose.setAttribute('depth', '0.012');
-        /* +Z is “forward” after Object3D.lookAt (non-camera): Matrix4 uses eye=look point, target=self. */
-        nose.setAttribute('position', '0 0 ' + (CAR_HALF + 0.006));
-        nose.setAttribute(
-          'material',
-          'shader: flat; color: #fff6a8; metalness: 0.15; roughness: 0.35; emissive: #ffee88; emissiveIntensity: 0.55'
-        );
-        el.appendChild(nose);
+        var led = vlCreateCarLedFace(THREE, CAR_HALF, c.color);
+        el.object3D.add(led.pivot);
+        this._vlCarLed.push({
+          pivot: led.pivot,
+          texture: led.texture,
+          ctx: led.ctx,
+          canvasW: led.canvas.width,
+          canvasH: led.canvas.height,
+          geometry: led.geometry,
+          material: led.material,
+          mesh: led.mesh,
+          ledBodyColor: c.color,
+          tongueUntil: 0,
+          hitFaceUntil: 0,
+          nearLatch: false,
+          lastDrawnMode: 'neutral'
+        });
 
         var topCap = document.createElement('a-box');
         topCap.setAttribute('class', 'vl-car-top');
@@ -630,8 +1070,19 @@
         /* THREE.Object3D.lookAt (non-camera): matrix eye=target, target=self → body +Z points toward ball. */
         tmpLook.lookAt(ballWx, ballWy, ballWz);
         body.quaternion.set(tmpLook.quaternion.x, tmpLook.quaternion.y, tmpLook.quaternion.z, tmpLook.quaternion.w);
+        body.vlCarSlot = i;
+        body.addEventListener('collide', this._onCarCollide);
         this.world.addBody(body);
         this.carBodies.push(body);
+        this._carSpawn.push({
+          x: body.position.x,
+          y: body.position.y,
+          z: body.position.z,
+          qx: body.quaternion.x,
+          qy: body.quaternion.y,
+          qz: body.quaternion.z,
+          qw: body.quaternion.w
+        });
       }
 
       this._arenaRoot = root;
@@ -720,8 +1171,8 @@
     },
 
     _pulseBothHands: function (intensity, durationMs) {
-      this._pulseHand(document.getElementById('vl-hand-left'), intensity, durationMs);
-      this._pulseHand(document.getElementById('vl-hand-right'), intensity, durationMs);
+      this._pulseHand(vlHandEl('leftHand', 'vl-hand-left'), intensity, durationMs);
+      this._pulseHand(vlHandEl('rightHand', 'vl-hand-right'), intensity, durationMs);
     },
 
     /** Cannon 0.6.2: use Body "collide" (World "beginContact" does not exist in this build). */
@@ -785,8 +1236,92 @@
       }
     },
 
+    /** Car vs wall / car vs car (ball handled on ball’s collide only). */
+    _onCarCollide: function (evt) {
+      if (!this.isHost || !this.ballBody) return;
+      var carBody = evt.target;
+      var other = evt.body;
+      if (!carBody || !other || other === this.ballBody) return;
+
+      var carIdx = typeof carBody.vlCarSlot === 'number' ? carBody.vlCarSlot : this._carBodyIndex(carBody);
+      if (carIdx < 0) return;
+
+      var impactN = 0;
+      if (evt.contact && typeof evt.contact.getImpactVelocityAlongNormal === 'function') {
+        try {
+          impactN = Math.abs(evt.contact.getImpactVelocityAlongNormal());
+        } catch (eN) {}
+      }
+
+      var otherCarIdx = this._carBodyIndex(other);
+      var relSp;
+      var midX, midY, midZ;
+      var slots;
+      var syncAudio;
+
+      if (otherCarIdx >= 0) {
+        var rel = carBody.velocity.vsub(other.velocity);
+        relSp = Math.max(rel.length(), impactN, 0.15);
+        if (relSp < 0.2) return;
+        midX = (carBody.position.x + other.position.x) * 0.5;
+        midY = (carBody.position.y + other.position.y) * 0.5;
+        midZ = (carBody.position.z + other.position.z) * 0.5;
+        slots = [carIdx, otherCarIdx];
+        syncAudio = carIdx < otherCarIdx;
+      } else if (this._isWallBody(other)) {
+        relSp = Math.max(carBody.velocity.length(), impactN, 0.12);
+        if (relSp < 0.14) return;
+        midX = carBody.position.x;
+        midY = carBody.position.y;
+        midZ = carBody.position.z;
+        slots = [carIdx];
+        syncAudio = true;
+      } else {
+        return;
+      }
+
+      this._vlApplyCarImpact(slots, midX, midY, midZ, relSp, syncAudio);
+    },
+
+    /**
+     * @param {number[]} slots car indices
+     * @param {boolean} syncAudioAndNet play bounce + broadcast once (car–car: lower slot index only)
+     */
+    _vlApplyCarImpact: function (slots, midX, midY, midZ, relSp, syncAudioAndNet) {
+      var now = performance.now();
+      var si, s, L;
+      for (si = 0; si < slots.length; si++) {
+        s = slots[si];
+        if (typeof s !== 'number' || s < 0 || s > 3) continue;
+        L = this._vlCarLed[s];
+        if (!L) continue;
+        L.hitFaceUntil = now + VL_HIT_FACE_MS;
+        vlDrawLedFace(L.ctx, L.canvasW, L.canvasH, 'hit', L.ledBodyColor);
+        L.texture.needsUpdate = true;
+        L.lastDrawnMode = 'hit';
+      }
+      if (!syncAudioAndNet) return;
+      this._broadcastFx({
+        type: 'vl-carimpact',
+        slots: slots,
+        x: midX,
+        y: midY,
+        z: midZ,
+        sp: relSp
+      });
+      if (now < this._vlAudioNextCarObstacle) return;
+      this._vlAudioNextCarObstacle = now + 55;
+      this._playBounceWorld(midX, midY, midZ, relSp);
+      for (si = 0; si < slots.length; si++) {
+        if (slots[si] === this.mySlot) {
+          this._pulseBothHands(0.55, 75);
+          break;
+        }
+      }
+    },
+
     _updateThrusterSound: function (inp) {
-      var rh = document.getElementById('vl-hand-right');
+      var rh = vlHandEl('rightHand', 'vl-hand-right');
       if (!rh) return;
       var el = rh.querySelector('.vl-thruster-sound');
       var vfx = rh.querySelector('.vl-thruster-vfx');
@@ -858,6 +1393,9 @@
      */
     _gatherLocalInput: function () {
       var out = zeroInput();
+      var scn = this.el.sceneEl || this.el;
+      var vm = scn.components && scn.components['vr-menu'];
+      if (vm && vm.menuVisible) return out;
       var kb = this.keys || {};
 
       var pitch = (kb['ArrowUp'] ? 1 : 0) + (kb['ArrowDown'] ? -1 : 0);
@@ -995,29 +1533,114 @@
       var crossedWest = lx + r < -A.halfW;
       var crossedEast = lx - r > A.halfW;
       if (crossedWest) {
-        this.score[1]++;
+        if (this.vlMatchActive) {
+          this.score[1]++;
+          this._setScoreText();
+          this._vlBroadcastLobbyToClients();
+        }
         this._playGoalSound();
         this._broadcastFx({ type: 'vl-goal' });
         this._resetBall();
         this.goalCd = 2;
-        this._setScoreText();
         return;
       }
       if (crossedEast) {
-        this.score[0]++;
+        if (this.vlMatchActive) {
+          this.score[0]++;
+          this._setScoreText();
+          this._vlBroadcastLobbyToClients();
+        }
         this._playGoalSound();
         this._broadcastFx({ type: 'vl-goal' });
         this._resetBall();
         this.goalCd = 2;
-        this._setScoreText();
       }
     },
 
     _resetBall: function () {
       var A = ARENA;
-      this.ballBody.velocity.set(0, 0, 0);
-      this.ballBody.angularVelocity.set(0, 0, 0);
-      this.ballBody.position.set(A.cx, A.cy + A.cageH * 0.32, A.cz);
+      if (this.ballBody) {
+        this.ballBody.velocity.set(0, 0, 0);
+        this.ballBody.angularVelocity.set(0, 0, 0);
+        this.ballBody.position.set(A.cx, A.cy + A.cageH * 0.32, A.cz);
+      }
+      this._resetCarsToSpawn();
+    },
+
+    /** Restore all cars to arena spawn pose and zero motion (host physics + offline). */
+    _resetCarsToSpawn: function () {
+      if (!this.carBodies || !this.carBodies.length || !this._carSpawn || this._carSpawn.length < 4) return;
+      var i, body, s;
+      for (i = 0; i < 4; i++) {
+        body = this.carBodies[i];
+        s = this._carSpawn[i];
+        if (!body || !s) continue;
+        body.velocity.set(0, 0, 0);
+        body.angularVelocity.set(0, 0, 0);
+        body.position.set(s.x, s.y, s.z);
+        body.quaternion.set(s.qx, s.qy, s.qz, s.qw);
+        if (typeof body.wakeUp === 'function') body.wakeUp();
+      }
+      if (this._vlCarLed) {
+        for (i = 0; i < this._vlCarLed.length; i++) {
+          var L = this._vlCarLed[i];
+          if (!L) continue;
+          L.hitFaceUntil = 0;
+          L.tongueUntil = 0;
+          L.nearLatch = false;
+          L.lastDrawnMode = 'neutral';
+          vlDrawLedFace(L.ctx, L.canvasW, L.canvasH, 'neutral', L.ledBodyColor);
+          L.texture.needsUpdate = true;
+        }
+      }
+    },
+
+    _vlUpdateCarLedFaces: function (nowMs) {
+      if (!this._vlCarLed || !this._vlCarLed.length || !this._vlLedScratch) return;
+      var scene = this.el.sceneEl || this.el;
+      var THREE = AFRAME.THREE;
+      var S = this._vlLedScratch;
+      if (!vlGetCameraWorldPosition(scene, S.camW)) return;
+      if (this._arenaRoot) this._arenaRoot.object3D.updateMatrixWorld(true);
+
+      var proxM = VL_LED_FACE_PROX_M;
+      var proxM2 = proxM * proxM;
+      /* Solo / practice: your own cube can react too (otherwise only slots 1–3 ever trigger). */
+      var skipOwnCube = !!window.isMultiplayer;
+
+      for (var i = 0; i < 4; i++) {
+        var L = this._vlCarLed[i];
+        var carEl = this.carEls[i];
+        var body = this.carBodies[i];
+        if (!L || !carEl || !body) continue;
+
+        S.carW.set(body.position.x, body.position.y, body.position.z);
+        S.dirW.subVectors(S.camW, S.carW);
+        var d2 = S.dirW.lengthSq();
+        var near =
+          d2 < proxM2 && d2 > 1e-10 && (!skipOwnCube || i !== this.mySlot);
+
+        if (near) {
+          if (!L.nearLatch) {
+            L.nearLatch = true;
+            L.tongueUntil = nowMs + VL_LED_TONGUE_MS;
+          }
+        } else {
+          L.nearLatch = false;
+        }
+
+        var hit = nowMs < L.hitFaceUntil;
+        var tongue = nowMs < L.tongueUntil;
+        var mode = hit ? 'hit' : tongue ? 'tongue' : 'neutral';
+        if (mode !== L.lastDrawnMode) {
+          vlDrawLedFace(L.ctx, L.canvasW, L.canvasH, mode, L.ledBodyColor);
+          L.texture.needsUpdate = true;
+          L.lastDrawnMode = mode;
+        }
+
+        /* LED stays flush on the cube (+Z face); no billboard / camera tracking. */
+        if (L.pivot) L.pivot.quaternion.identity();
+      }
     },
 
     _syncMeshesFromPhysics: function () {
@@ -1070,14 +1693,32 @@
         this.score[1] = snap.score1;
         this._setScoreText();
       }
+      if (typeof snap.vlMatchActive === 'boolean') {
+        this.vlMatchActive = snap.vlMatchActive;
+        if (!snap.vlMatchActive) this.vlMatchRemainSec = null;
+      }
+      if (
+        this.vlMatchActive &&
+        typeof snap.vlMatchRemainSec === 'number' &&
+        isFinite(snap.vlMatchRemainSec)
+      ) {
+        this.vlMatchRemainSec = snap.vlMatchRemainSec;
+      }
     },
 
     _serializeSnap: function () {
       var b = this.ballBody;
+      var now = performance.now();
+      var rem = null;
+      if (this.vlMatchActive && this.vlMatchStartMs) {
+        rem = Math.max(0, (VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000);
+      }
       var snap = {
-        t: performance.now(),
+        t: now,
         score0: this.score[0],
         score1: this.score[1],
+        vlMatchActive: !!this.vlMatchActive,
+        vlMatchRemainSec: rem,
         ball: {
           p: [b.position.x, b.position.y, b.position.z],
           q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w],
@@ -1103,9 +1744,13 @@
       this.isHost = true;
       this.mySlot = 0;
       this.clientConns = [];
+      this.vlMatchActive = false;
+      this.vlMatchStartMs = 0;
+      this.vlMatchRemainSec = null;
+      this._vlMarkHudDirty();
       this._applySpectatorTransform(0);
       this._setStatus(
-        'Offline — zero-G arena (2×). Left stick: yaw. Right stick: pitch (up/down) + roll. Trigger: forward thrust (nose). Ball is heavy. Keyboard: JL yaw, IK pitch, U/O roll, Space = thrust.'
+        'Practice (offline) — zero-G arena. Multiplayer: use Play online / Host / Join with the same lobby number. TURN/STUN: same relay as DodgeVR.'
       );
       this._resetBall();
       this._refreshCubeHighlights();
@@ -1113,20 +1758,45 @@
 
     startHost: function (lobbyNum) {
       var self = this;
+      window.connectionState = 'connecting';
+      this._vlEmitLobbyUpdated();
       this._teardownNet();
+      this._setStatus('Fetching TURN/STUN…');
+      vlGetIceServers().then(function (ice) {
+        self._openHostPeer(lobbyNum, ice);
+      });
+    },
+
+    _openHostPeer: function (lobbyNum, iceServers) {
+      var self = this;
       var hostId = HOST_ID_PREFIX + lobbyNum;
       this._setStatus('Creating host ' + hostId + '…');
 
       this.isHost = true;
       this.mySlot = 0;
       this.clientConns = [];
+      this.vlMatchActive = false;
+      this.vlMatchStartMs = 0;
+      this.vlMatchRemainSec = null;
       this._applySpectatorTransform(0);
 
-      this.peer = new Peer(hostId, PEER_CONFIG);
+      this.peer = new Peer(hostId, vlPeerOptions(iceServers));
       this.peer.on('open', function () {
-        self._setStatus('Hosting lobby ' + lobbyNum + '. Friends: Join same number.');
+        window.isMultiplayer = true;
+        window.connectionState = 'connected';
+        window.myPlayerId = self.peer.id;
+        self.vlMatchActive = false;
+        self.vlMatchStartMs = 0;
+        self.vlMatchRemainSec = null;
+        self.score[0] = 0;
+        self.score[1] = 0;
+        self._setScoreText();
+        self._vlRebuildLobbyState();
+        self._vlEmitLobbyUpdated();
+        self._setStatus('Hosting lobby ' + lobbyNum + ' — share this number. TURN: Metered (via relay).');
         self._resetBall();
         self._refreshCubeHighlights();
+        self._vlBroadcastMatchSync();
       });
       this.peer.on('connection', function (conn) {
         conn.on('data', function (raw) {
@@ -1140,18 +1810,33 @@
             return;
           }
           conn.vlSlot = slot;
+          conn.vlNick = 'Player';
           self.clientConns.push(conn);
           conn.send({ type: 'welcome', slot: slot, youHost: false });
           conn.send({ type: 'snap', data: self._serializeSnap() });
+          self._vlBroadcastLobbyToClients();
         });
         conn.on('close', function () {
           if (conn.vlSlot != null) self.inputs[conn.vlSlot] = zeroInput();
           self.clientConns = self.clientConns.filter(function (x) { return x !== conn; });
+          self._vlBroadcastLobbyToClients();
         });
       });
       this.peer.on('error', function (e) {
         self._setStatus('Host error: ' + (e && e.type ? e.type : String(e)));
-        self._teardownNet();
+        self._vlClearWindowMultiplayer();
+        self.startOffline();
+      });
+    },
+
+    /** If lobby host id is free → host; else join (Dodge-style one-click). */
+    connectLobbySmart: function (lobbyNum) {
+      var self = this;
+      var hostId = HOST_ID_PREFIX + lobbyNum;
+      this._setStatus('Checking lobby ' + lobbyNum + '…');
+      vlCheckHostPeerIdAvailable(hostId).then(function (idFree) {
+        if (idFree) self.startHost(lobbyNum);
+        else self.joinClient(lobbyNum);
       });
     },
 
@@ -1172,6 +1857,17 @@
         try { return JSON.parse(raw); } catch (e) { return null; }
       })() : raw;
       if (!msg || !msg.type) return;
+      if (msg.type === 'vl-nick') {
+        var nk = typeof msg.nick === 'string' ? msg.nick.trim().slice(0, 20) : '';
+        conn.vlNick = nk || 'Player';
+        this._vlBroadcastLobbyToClients();
+        return;
+      }
+      if (msg.type === 'vl-match-cmd') {
+        if (msg.action === 'start') this.vlStartMatch();
+        else if (msg.action === 'end') this.vlEndMatch();
+        return;
+      }
       if (msg.type === 'inp' && conn.vlSlot != null) {
         this.inputs[conn.vlSlot] = {
           lx: typeof msg.lx === 'number' && isFinite(msg.lx) ? msg.lx : 0,
@@ -1185,30 +1881,54 @@
 
     joinClient: function (lobbyNum) {
       var self = this;
+      window.connectionState = 'connecting';
+      this._vlEmitLobbyUpdated();
       this._teardownNet();
+      this._setStatus('Fetching TURN/STUN…');
+      vlGetIceServers().then(function (ice) {
+        self._openJoinPeer(lobbyNum, ice);
+      });
+    },
+
+    _openJoinPeer: function (lobbyNum, iceServers) {
+      var self = this;
       this.isHost = false;
       var hostId = HOST_ID_PREFIX + lobbyNum;
       var pid = 'vl-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       this._setStatus('Connecting…');
-      this.peer = new Peer(pid, PEER_CONFIG);
+      this.peer = new Peer(pid, vlPeerOptions(iceServers));
       this.peer.on('open', function () {
         self.hostConn = self.peer.connect(hostId, { serialization: 'json' });
         self.hostConn.on('open', function () {
-          self._setStatus('Connected to lobby ' + lobbyNum);
+          window.isMultiplayer = true;
+          window.connectionState = 'connected';
+          window.myPlayerId = self.peer.id;
+          self._vlEmitLobbyUpdated();
+          var nick =
+            typeof window.playerNickname === 'string' && window.playerNickname.trim()
+              ? window.playerNickname.trim().slice(0, 20)
+              : 'Player';
+          self.hostConn.send({ type: 'vl-nick', nick: nick });
+          self._setStatus('Connected to lobby ' + lobbyNum + ' as ' + nick);
         });
         self.hostConn.on('data', function (data) {
           self._onClientData(data);
         });
         self.hostConn.on('close', function () {
           self._setStatus('Disconnected from host.');
+          self._vlClearWindowMultiplayer();
+          self.startOffline();
         });
         self.hostConn.on('error', function () {
           self._setStatus('Connection error.');
+          self._vlClearWindowMultiplayer();
+          self.startOffline();
         });
       });
       this.peer.on('error', function (e) {
         self._setStatus('Peer error: ' + (e && e.type ? e.type : String(e)));
-        self._teardownNet();
+        self._vlClearWindowMultiplayer();
+        self.startOffline();
       });
     },
 
@@ -1221,6 +1941,11 @@
         }
       }
       if (!data || !data.type) return;
+      if (data.type === 'vl-lobby-state' && data.state) {
+        window.lobbyState = data.state;
+        this._vlEmitLobbyUpdated();
+        return;
+      }
       if (data.type === 'welcome') {
         this.mySlot = data.slot;
         this._applySpectatorTransform(this.mySlot);
@@ -1230,6 +1955,20 @@
             (this.mySlot + 1) +
             ' — brightest cube is yours. Sticks = attitude; trigger = forward only. Zeppelin-slow.'
         );
+        return;
+      }
+      if (data.type === 'vl-match-sync') {
+        this.vlMatchActive = !!data.active;
+        if (typeof data.score0 === 'number') this.score[0] = data.score0;
+        if (typeof data.score1 === 'number') this.score[1] = data.score1;
+        if (typeof data.remSec === 'number' && isFinite(data.remSec)) {
+          this.vlMatchRemainSec = data.remSec;
+        } else {
+          this.vlMatchRemainSec = null;
+        }
+        if (!data.active) this.vlMatchRemainSec = null;
+        this._setScoreText();
+        this._vlMarkHudDirty();
         return;
       }
       if (data.type === 'snap') {
@@ -1252,6 +1991,38 @@
         this._playBounceWorld(data.x, data.y, data.z, data.sp || 0);
         if (typeof data.slot === 'number' && data.slot === this.mySlot) {
           this._pulseBothHands(0.72, 95);
+        }
+        return;
+      }
+      if (data.type === 'vl-carimpact') {
+        var slots = data.slots;
+        if (!slots || !slots.length) {
+          if (typeof data.slot === 'number') slots = [data.slot];
+        }
+        if (!slots || !slots.length) return;
+        var nowCi = performance.now();
+        var ci, sci, Lc;
+        for (ci = 0; ci < slots.length; ci++) {
+          sci = slots[ci];
+          if (typeof sci !== 'number' || sci < 0 || sci > 3) continue;
+          Lc = this._vlCarLed[sci];
+          if (!Lc) continue;
+          Lc.hitFaceUntil = nowCi + VL_HIT_FACE_MS;
+          vlDrawLedFace(Lc.ctx, Lc.canvasW, Lc.canvasH, 'hit', Lc.ledBodyColor);
+          Lc.texture.needsUpdate = true;
+          Lc.lastDrawnMode = 'hit';
+        }
+        if (typeof data.x === 'number') {
+          if (nowCi >= this._vlAudioNextCarObstacle) {
+            this._vlAudioNextCarObstacle = nowCi + 55;
+            this._playBounceWorld(data.x, data.y, data.z, data.sp || 0.2);
+          }
+        }
+        for (ci = 0; ci < slots.length; ci++) {
+          if (slots[ci] === this.mySlot) {
+            this._pulseBothHands(0.55, 75);
+            break;
+          }
         }
         return;
       }
@@ -1323,14 +2094,27 @@
             if (this.clientConns[j].open) this.clientConns[j].send({ type: 'snap', data: snap });
           }
         }
+        if (this.vlMatchActive && this.vlMatchStartMs) {
+          if (performance.now() - this.vlMatchStartMs >= VL_MATCH_DURATION_MS) {
+            this.vlEndMatch("Time's up.");
+          }
+        }
       } else {
         this._syncMeshesFromPhysics();
       }
+      this._vlPumpHud(t);
+      this._vlUpdateCarLedFaces(t);
     },
 
     remove: function () {
       if (this.ballBody && this._onBallCollide) {
         this.ballBody.removeEventListener('collide', this._onBallCollide);
+      }
+      if (this._onCarCollide && this.carBodies) {
+        for (var cbi = 0; cbi < this.carBodies.length; cbi++) {
+          var cb = this.carBodies[cbi];
+          if (cb) cb.removeEventListener('collide', this._onCarCollide);
+        }
       }
       var sceneEl = this.el && (this.el.sceneEl || this.el);
       if (sceneEl && this._vlReseatSpectator) {
@@ -1353,6 +2137,71 @@
           this.ballEl.removeObject3D('mesh');
         }
       }
+      if (this._vlCarLed) {
+        for (var li = 0; li < this._vlCarLed.length; li++) {
+          var L = this._vlCarLed[li];
+          if (!L) continue;
+          if (L.pivot && L.pivot.parent) L.pivot.parent.remove(L.pivot);
+          if (L.geometry) L.geometry.dispose();
+          if (L.material) L.material.dispose();
+          if (L.texture) L.texture.dispose();
+        }
+        this._vlCarLed = [];
+      }
+      this._vlLedScratch = null;
     }
   });
+
+  function vlGetVrleagueGame() {
+    var el = document.querySelector('[vrleague-game]');
+    return el && el.components && el.components['vrleague-game'];
+  }
+
+  window.connectToLobby = function (lobbyNum) {
+    if (window.isMultiplayer) return;
+    if (window.connectionState === 'connecting') return;
+    lobbyNum = Math.max(1, Math.min(10, parseInt(lobbyNum, 10) || 1));
+    window.connectionState = 'connecting';
+    var scene = document.querySelector('a-scene');
+    if (scene) scene.emit('lobby-state-updated');
+    var hostId = HOST_ID_PREFIX + lobbyNum;
+    window.__vlCheckHostPeerIdAvailable(hostId).then(function (idFree) {
+      var g = vlGetVrleagueGame();
+      if (!g) {
+        window.connectionState = 'disconnected';
+        if (scene) scene.emit('lobby-state-updated');
+        return;
+      }
+      if (idFree) g.startHost(lobbyNum);
+      else g.joinClient(lobbyNum);
+    });
+  };
+
+  window.endMultiplayer = function () {
+    var g = vlGetVrleagueGame();
+    if (g) g.startOffline();
+    window.lobbyState = null;
+    window.isMultiplayer = false;
+    window.connectionState = 'disconnected';
+    window.myPlayerId = null;
+    var scene = document.querySelector('a-scene');
+    if (scene) scene.emit('lobby-state-updated');
+  };
+
+  window.sendQueueAction = function () {};
+
+  window.sendMatchAction = function (action) {
+    var g = vlGetVrleagueGame();
+    if (!g) return;
+    var hid = g.peer && g.peer.id ? String(g.peer.id) : '';
+    var isLobbyHost = g.isHost && hid.indexOf('vrleague-host-') === 0;
+    if (isLobbyHost) {
+      if (action === 'start') g.vlStartMatch();
+      else if (action === 'end') g.vlEndMatch();
+      return;
+    }
+    if (g.hostConn && g.hostConn.open) {
+      g.hostConn.send({ type: 'vl-match-cmd', action: action });
+    }
+  };
 })();
