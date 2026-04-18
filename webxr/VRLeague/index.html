@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VRLeague</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Tabletop ball and cubes — WebXR + PeerJS" />
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="vrleague.js"></script>
+    <style>
+      #vl-ui {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        position: fixed;
+        left: 12px;
+        top: 12px;
+        z-index: 10000;
+        background: rgba(0, 0, 0, 0.85);
+        color: #eee;
+        padding: 14px 16px;
+        border-radius: 10px;
+        max-width: 340px;
+        font-size: 14px;
+        pointer-events: auto;
+      }
+      #vl-ui h1 {
+        margin: 0 0 10px;
+        font-size: 18px;
+        color: #6cf;
+        font-weight: 600;
+      }
+      #vl-ui button {
+        margin: 4px 8px 4px 0;
+        padding: 8px 14px;
+        cursor: pointer;
+        border-radius: 6px;
+        border: 1px solid #444;
+        background: #333;
+        color: #fff;
+      }
+      #vl-ui button:hover {
+        background: #444;
+      }
+      #vl-ui input#vl-lobby {
+        width: 3.2em;
+        margin-left: 8px;
+        padding: 4px 6px;
+        border-radius: 4px;
+        border: 1px solid #555;
+        background: #222;
+        color: #fff;
+      }
+      #vl-status {
+        margin-top: 10px;
+        color: #fc8;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      #vl-score {
+        margin-top: 8px;
+        font-weight: 600;
+        color: #9ef;
+      }
+      #vl-hint {
+        margin-top: 10px;
+        font-size: 11px;
+        color: #888;
+        line-height: 1.45;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="vl-ui">
+      <h1>VRLeague</h1>
+      <div>
+        Lobby #
+        <input id="vl-lobby" type="number" min="1" max="99" value="1" />
+      </div>
+      <div style="margin-top: 10px">
+        <button type="button" id="vl-single">Practice (offline)</button>
+      </div>
+      <div style="margin-top: 6px">
+        <button type="button" id="vl-host">Host</button>
+        <button type="button" id="vl-join">Join</button>
+      </div>
+      <div id="vl-score">Blue 0 — Orange 0</div>
+      <div id="vl-status">Practice solo, or Host then others Join with the same lobby number.</div>
+      <div id="vl-hint">
+        <strong>Quest:</strong> brightest cube = yours. <strong>Left stick</strong> left/right = yaw (room up-axis). <strong>Right stick</strong> up/down = pitch, left/right = roll. Pale face = nose / thrust direction.
+        <strong>Trigger(s)</strong> = forward thrust along the cube nose only (zeppelin-like). Arena &amp; ball are 2×; ball is much heavier than cubes.
+        Zero-G cage, two goals. Desktop: I/K pitch, J/L yaw, U/O roll, Space thrust (N/M also pitch). <strong>Enter AR / VR</strong> as supported.
+      </div>
+    </div>
+
+    <a-scene
+      vrleague-game
+      xr-mode-ui="XRMode: xr; enterVREnabled: true; enterAREnabled: true"
+      renderer="antialias: true; colorManagement: true; alpha: true"
+      webxr="optionalFeatures: local-floor, bounded-floor, hit-test, dom-overlay; referenceSpaceType: local-floor"
+    >
+      <a-sky id="vl-sky" color="#050510" hide-on-enter-ar></a-sky>
+      <a-entity id="vr-rig" position="0 0 0" rotation="0 0 0">
+        <a-entity id="vl-spect-yaw" rotation="0 0 0">
+          <a-camera id="cam" position="0 1.55 0" look-controls="pointerLockEnabled: false"></a-camera>
+          <a-entity
+            id="vl-hand-left"
+            oculus-touch-controls="hand: left"
+            laser-controls="hand: left"
+            raycaster="objects: .clickable; far: 5; lineColor: #4af; lineOpacity: 0.45"
+          ></a-entity>
+          <a-entity
+            id="vl-hand-right"
+            oculus-touch-controls="hand: right"
+            laser-controls="hand: right"
+            raycaster="objects: .clickable; far: 5; lineColor: #8cf; lineOpacity: 0.45"
+          >
+            <a-cone
+              class="vl-thruster-vfx"
+              position="0 0 0.1"
+              rotation="0 180 0"
+              radius-bottom="0.02"
+              radius-top="0.01"
+              height="0.1"
+              color="#66eeff"
+              material="shader: standard; emissive: #44ccff; emissiveIntensity: 1; transparent: true; opacity: 0.75"
+              visible="false"
+            ></a-cone>
+            <a-entity
+              class="vl-thruster-sound"
+              sound="src: url(audio/thrusters_loopwav-14699.mp3); autoplay: false; loop: true; volume: 0.65; playbackRate: 1.35; positional: true; distanceModel: inverse; refDistance: 0.45; maxDistance: 8; rolloffFactor: 2; poolSize: 1"
+            ></a-entity>
+          </a-entity>
+        </a-entity>
+      </a-entity>
+      <a-entity
+        id="vl-bounce-sound"
+        sound="src: url(audio/impact-cinematic-boom-5-352465.mp3); autoplay: false; loop: false; volume: 0.72; positional: false; poolSize: 6; rate: 1.5"
+      ></a-entity>
+      <a-entity
+        id="vl-goal-sound"
+        sound="src: url(audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); autoplay: false; loop: false; volume: 0.95; positional: false; poolSize: 2"
+      ></a-entity>
+      <a-entity light="type: ambient; color: #ccd; intensity: 0.7"></a-entity>
+      <a-entity light="type: directional; color: #fff; intensity: 0.45" position="-0.4 2.2 0.6"></a-entity>
+    </a-scene>
+  </body>
+</html>
