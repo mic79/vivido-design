@@ -60,6 +60,8 @@ let lastSnapshotTime = 0;
 /** Monotonic host snapshot id — clients drop stale/out-of-order packets (PeerJS can reorder under load). */
 let hostSnapshotSeq = 0;
 let lastClientSnapshotSeq = -1;
+/** MP client: last `snapshot.mp` pause signature — avoid hammering `syncMpPauseOverlay` at snapshot rate. */
+let lastClientPauseSigFromSnap = '';
 
 function hostSessionId() {
   return `rtsvr2-host-${selectedLobby}`;
@@ -115,6 +117,7 @@ function teardownPeerOnly() {
   }
   hostSnapshotSeq = 0;
   lastClientSnapshotSeq = -1;
+  lastClientPauseSigFromSnap = '';
   clearMpPauseState();
   clearAllPendingClientAcks(true, 'disconnected');
   connections.forEach(c => {
@@ -700,6 +703,40 @@ function handleClientData(data, fromPlayerId) {
   }
 }
 
+/**
+ * MP client: match pause is normally sent via `session-pause` / `session-resume`, but those can be
+ * dropped while snapshots keep arriving — then the clock freezes and the overlay never appears.
+ * Host attaches `snapshot.mp` every tick so pause state stays authoritative.
+ */
+function syncMultiplayerPauseFromHostSnapshot(snap) {
+  if (!snap || !snap.mp || typeof snap.mp !== 'object') return;
+  const mp = snap.mp;
+  if (!mp.paused) {
+    if (State.gameSession.mpSessionPaused) {
+      lastClientPauseSigFromSnap = '';
+      clearMpPauseState();
+      syncMpPauseUi();
+    }
+    return;
+  }
+  State.gameSession.mpSessionPaused = true;
+  if (typeof mp.reason === 'string') State.gameSession.mpPauseReason = mp.reason;
+  if (typeof mp.title === 'string') State.gameSession.mpPauseTitle = mp.title;
+  if (typeof mp.detail === 'string') State.gameSession.mpPauseDetail = mp.detail;
+  if (typeof mp.subline === 'string') State.gameSession.mpPauseSubline = mp.subline;
+  const ar = mp.autoResumeAt;
+  State.gameSession.mpPauseAutoResumeAt =
+    typeof ar === 'number' && Number.isFinite(ar) && ar > 0 ? ar : 0;
+  if (Array.isArray(mp.seats)) {
+    State.gameSession.mpPendingHumanDropSeatIds = mp.seats.slice();
+  }
+  const sig = `${mp.title}|${mp.detail}|${State.gameSession.mpPauseAutoResumeAt}|${(mp.seats || []).join(',')}`;
+  if (sig !== lastClientPauseSigFromSnap) {
+    lastClientPauseSigFromSnap = sig;
+    syncMpPauseUi();
+  }
+}
+
 // --- CLIENT: Handle server snapshots ---
 function handleHostData(data) {
   if (!data || !data.type) return;
@@ -722,6 +759,7 @@ function handleHostData(data) {
     case 'snapshot': {
       try {
         const snap = data.snapshot;
+        if (snap) syncMultiplayerPauseFromHostSnapshot(snap);
         applySnapshot(
           typeof structuredClone === 'function'
             ? structuredClone(snap)
@@ -735,6 +773,7 @@ function handleHostData(data) {
 
     case 'game-start':
       lastClientSnapshotSeq = -1;
+      lastClientPauseSigFromSnap = '';
       clearMpPauseState();
       syncMpPauseUi();
       lastClientPlayerTeamSig = '';
@@ -1136,6 +1175,17 @@ export function updateNetwork(time) {
   const snapshot = {
     seq: hostSnapshotSeq,
     time: State.gameSession.elapsedTime,
+    mp: State.gameSession.mpSessionPaused
+      ? {
+          paused: true,
+          reason: State.gameSession.mpPauseReason || 'unknown',
+          title: State.gameSession.mpPauseTitle || 'Match paused',
+          detail: State.gameSession.mpPauseDetail || '',
+          subline: State.gameSession.mpPauseSubline || '',
+          autoResumeAt: State.gameSession.mpPauseAutoResumeAt || 0,
+          seats: [...(State.gameSession.mpPendingHumanDropSeatIds || [])],
+        }
+      : { paused: false },
     gameOver: State.gameSession.gameOver,
     winner: State.gameSession.winner,
     fx: State.takeHostFxForSnapshot(),
@@ -1310,6 +1360,14 @@ function sanitizeProductionQueueFromSnapshot(raw) {
 // --- Apply snapshot (client-side) ---
 function applySnapshot(snapshot) {
   if (!snapshot) return;
+  if (
+    !Array.isArray(snapshot.players) ||
+    !Array.isArray(snapshot.units) ||
+    !Array.isArray(snapshot.buildings)
+  ) {
+    console.warn('[RTSVR2] applySnapshot: invalid snapshot shape (expected players/units/buildings arrays)');
+    return;
+  }
   const isNetClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
   const snapSeq = snapshot.seq != null ? Number(snapshot.seq) : NaN;
   if (isNetClient && Number.isFinite(snapSeq)) {
@@ -1470,7 +1528,8 @@ function applySnapshot(snapshot) {
     }
   });
 
-  if (navDirty) Pathfinding.rebuildNavMesh();
+  // MP clients never run host pathfinding; rebuilding here every ~22 Hz hitches the main thread.
+  if (navDirty && !isNetClient) Pathfinding.rebuildNavMesh();
 
   State.syncUnitCountsFromUnits();
 
