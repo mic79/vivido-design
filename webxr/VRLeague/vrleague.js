@@ -416,10 +416,14 @@
   var VL_RESET_OUT_MS = 500;
   var VL_RESET_IN_MS = 500;
   /**
-   * Host bots (defense-only): aim for this fraction along the segment goal→ball (0 = goal mouth, 1 = ball).
-   * Keeps the cube between its net and the ball instead of ramming from the attack side.
+   * Host bots: stand on the ray opposing-goal → ball, past the ball toward own goal (m), so the line
+   * through opp goal and ball places the cube on the correct “back” side to shove toward opp goal.
    */
-  var VL_BOT_DEFEND_SEG = 0.56;
+  var VL_BOT_LINE_STANDOFF = 0.28;
+  /** Within this distance of the ideal slot (m), blend steering toward shove axis (opp goal − ball). */
+  var VL_BOT_ENGAGE_DIST = 0.36;
+  /** Opposing goal mouth anchor inset from ±halfW (m). */
+  var VL_BOT_OPP_GOAL_INSET = 0.08;
   /** Softer physics than humans — fewer boundary hits; defense uses low thrust too. */
   var VL_BOT_THRUST_SCALE = 0.32;
   var VL_BOT_TORQUE_SCALE = 0.52;
@@ -432,9 +436,6 @@
   var VL_BOT_WALL_CLEAR_RANGE = 0.55;
   /** Post-physics: strip inward speed into walls below this (m/s) = “self” hit; keep more if faster (pushed). */
   var VL_BOT_WALL_PUSH_TRUST_MS = 0.48;
-  /** Ball X-velocity toward net triggers save blend; offset predicted ball target field-ward (m). */
-  var VL_BOT_SAVE_BASE = 0.1;
-  var VL_BOT_SAVE_CLEAR_X = 0.2;
   /** Teleport bot cube to spawn if center escapes cage (goal pockets allowed on ±X). */
   var VL_BOT_ARENA_RECOVER_COOLDOWN_MS = 900;
   var VL_BOT_OUT_PAD_X = 0.52;
@@ -2520,7 +2521,11 @@
       }
     },
 
-    /** Host: one slot — defense, wall-escape blend, ball-on-net save target, no drift. */
+    /**
+     * Host: geometry from user spec — ray opposing-goal center → ball; cube sits past the ball on that ray
+     * (toward own goal) at VL_BOT_LINE_STANDOFF. Near the slot, blend steering so body +Z aligns with
+     * (opp goal − ball) to shove toward the opponent net. Wall escape + own-goal leak unchanged.
+     */
     _vlSteerSlotBot: function (slot, nowMs) {
       var A = ARENA;
       var b = this.ballBody;
@@ -2565,38 +2570,52 @@
       var dwyHi = yHi + band * 0.35 - ly;
       var wallClear = Math.min(dwx, dwz, dwyLo, dwyHi);
       var pen = clamp(1 - (wallClear - VL_BOT_WALL_CLEAR_SAFE) / VL_BOT_WALL_CLEAR_RANGE, 0, 1);
-      var gpx = defWest ? A.cx - A.halfW + 0.19 : A.cx + A.halfW - 0.19;
-      var gzSpan = A.goalW * 0.88;
-      var gpz = clamp(bz, A.cz - gzSpan, A.cz + gzSpan);
-      var yLoA = 0.02 + CAR_HALF + 0.07;
-      var yHiA = 0.02 + A.cageH - CAR_HALF - 0.1;
-      var gpy = clamp(by, A.cy + yLoA, A.cy + yHiA);
-      var vTowardOwn = defWest ? Math.max(0, -vxa - 0.03) : Math.max(0, vxa - 0.03);
-      vTowardOwn = Math.min(vTowardOwn * 2.8, 1.4);
-      var tSeg = clamp(VL_BOT_DEFEND_SEG + vTowardOwn * 0.085, 0.38, 0.76);
-      var idfx0 = gpx + (bx - gpx) * tSeg;
-      var idfy0 = gpy + (by - gpy) * 0.68;
-      var idfz0 = gpz + (bz - gpz) * tSeg;
-      var threatXVel = defWest ? Math.max(0, -vxa) : Math.max(0, vxa);
-      var ballRelX = b.position.x - A.cx;
-      var dangerHalf = defWest ? ballRelX < 0.48 : ballRelX > -0.48;
-      var wSave = 0;
-      if (threatXVel > 0.05 && dangerHalf) {
-        wSave = clamp((threatXVel - 0.05) / 0.34, 0, 1);
-        if (Math.abs(b.position.z - A.cz) < A.goalW * 1.35) {
-          wSave = Math.min(1, wSave * 1.22);
-        }
+      var ch = A.cageH;
+      var wallCy = 0.02 + ch * 0.5;
+      var goalOppX = defWest ? A.cx + A.halfW - VL_BOT_OPP_GOAL_INSET : A.cx - A.halfW + VL_BOT_OPP_GOAL_INSET;
+      var goalOppY = A.cy + wallCy;
+      var goalOppZ = A.cz;
+      var dx = bx - goalOppX;
+      var dy = by - goalOppY;
+      var dz = bz - goalOppZ;
+      var dlen = Math.sqrt(dx * dx + dy * dy + dz * dz) + 1e-5;
+      if (dlen < 0.085) {
+        dx = defWest ? -1 : 1;
+        dy = 0;
+        dz = 0;
+        dlen = 1;
+      } else {
+        dx /= dlen;
+        dy /= dlen;
+        dz /= dlen;
       }
-      var clearSign = defWest ? 1 : -1;
-      var saveX = bx + clearSign * (VL_BOT_SAVE_BASE + wSave * VL_BOT_SAVE_CLEAR_X);
-      var saveZ = bz + clamp(vza * 0.17, -0.15, 0.15);
-      var saveY = by + clamp(vya * 0.09, -0.07, 0.07);
-      var idfx = idfx0 * (1 - wSave * 0.9) + saveX * (wSave * 0.9);
-      var idfy = idfy0 * (1 - wSave * 0.55) + saveY * (wSave * 0.55);
-      var idfz = idfz0 * (1 - wSave * 0.68) + saveZ * (wSave * 0.68);
-      var rx = idfx - cx;
-      var ry = idfy - cy;
-      var rz = idfz - cz;
+      var vTowardOwn = defWest ? Math.max(0, -vxa - 0.02) : Math.max(0, vxa - 0.02);
+      vTowardOwn = Math.min(vTowardOwn * 2.6, 1.35);
+      var standoff = clamp(VL_BOT_LINE_STANDOFF - Math.min(vTowardOwn * 0.052, 0.085), 0.17, 0.38);
+      var Px = bx + dx * standoff;
+      var Py = by + dy * standoff;
+      var Pz = bz + dz * standoff;
+      var mxSlot = Px - cx;
+      var mySlot = Py - cy;
+      var mzSlot = Pz - cz;
+      var slotLen = Math.sqrt(mxSlot * mxSlot + mySlot * mySlot + mzSlot * mzSlot) + 1e-6;
+      var sx = mxSlot / slotLen;
+      var sy = mySlot / slotLen;
+      var sz = mzSlot / slotLen;
+      var shx = goalOppX - bx;
+      var shy = goalOppY - by;
+      var shz = goalOppZ - bz;
+      var shLen = Math.sqrt(shx * shx + shy * shy + shz * shz) + 1e-6;
+      shx /= shLen;
+      shy /= shLen;
+      shz /= shLen;
+      var wEngage = clamp(1 - slotLen / VL_BOT_ENGAGE_DIST, 0, 1);
+      if (vTowardOwn > 0.12) {
+        wEngage = Math.max(wEngage, Math.min(0.55, vTowardOwn * 0.42));
+      }
+      var rx = sx * (1 - wEngage) + shx * wEngage;
+      var ry = sy * (1 - wEngage) + shy * wEngage;
+      var rz = sz * (1 - wEngage) + shz * wEngage;
       var ml = Math.sqrt(rx * rx + ry * ry + rz * rz) + 1e-6;
       rx /= ml;
       ry /= ml;
@@ -2641,23 +2660,20 @@
         st.smx = tx;
         st.smz = tz;
       } else {
-        var al = pen > 0.55 ? 0.38 : 0.2;
+        var al = pen > 0.55 ? 0.38 : 0.22 + wEngage * 0.14;
         st.smx += (tx - st.smx) * al;
         st.smz += (tz - st.smz) * al;
         var nh = Math.sqrt(st.smx * st.smx + st.smz * st.smz) + 1e-6;
         st.smx /= nh;
         st.smz /= nh;
       }
-      var diry = clamp(b.position.y - cy, -0.55, 0.55) * 0.12 + my * 0.22;
+      var diry = clamp(b.position.y - cy, -0.55, 0.55) * 0.1 + shy * 0.18 * wEngage + my * 0.18;
       var z = zeroInput();
       this._vlBotFlatSteer(body, st.smx, diry, st.smz, z);
-      z.trig *= 0.72 + (1 - pen) * 0.2;
+      z.trig *= 0.68 + (1 - pen) * 0.22 + wEngage * 0.14;
       wallClear = Math.min(dwx, dwz, dwyLo, dwyHi);
       var wallTrigMul = clamp((wallClear - 0.03) / 0.34, 0.04, 1);
       z.trig *= wallTrigMul;
-      if (wSave > 0.35) {
-        z.trig = Math.min(z.trig, 0.36 + wSave * 0.08);
-      }
       var bx0 = b.position.x;
       var vxb = b.velocity.x;
       var ownLeak = 1;
@@ -2671,7 +2687,7 @@
         }
       }
       z.trig *= ownLeak;
-      z.trig = clamp(z.trig, 0, 0.38);
+      z.trig = clamp(z.trig, 0, 0.4 + wEngage * 0.04);
       st.driftUntil = 0;
       this.inputs[slot] = z;
     },
