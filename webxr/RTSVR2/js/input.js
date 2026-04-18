@@ -1773,7 +1773,22 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
   if (hitBuilding) {
     const ownBuilding = hitBuilding.ownerId === State.gameSession.myPlayerId;
     if (ownBuilding && myUnits.length > 0) {
-      /* HQ / barracks pick spheres are huge; do not swallow move/attack — fall through to ground / other picks. */
+      /** Loose pick spheres: if the tap is visually on open ground, keep move/attack fall-through. */
+      let fallThroughForMove = false;
+      if (pickNdc) {
+        const gh = raycastGround(origin, direction);
+        if (gh) {
+          const gPen = Renderer.pickScreenNdcErrorForGroundPoint(gh.x, gh.z, pickNdc);
+          const bPen = Renderer.pickScreenNdcErrorForBuilding(hitBuilding, pickNdc);
+          if (gPen < bPen - 0.022) fallThroughForMove = true;
+        }
+      }
+      if (!fallThroughForMove) {
+        State.deselectAll();
+        UI.showBuildingPanel(hitBuilding);
+        UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+        return true;
+      }
     } else if (ownBuilding) {
       State.deselectAll();
       UI.showBuildingPanel(hitBuilding);
@@ -1906,10 +1921,21 @@ function fireTouchLongPress(clientX, clientY) {
     }
     return;
   }
-  if (hitBuilding || hitRes) {
-    return;
-  }
   const groundHit = raycastGround(origin, direction);
+  if (hitBuilding || hitRes) {
+    if (!groundHit || !pickNdc) return;
+    let obstPen = Infinity;
+    if (hitBuilding) {
+      obstPen = Math.min(obstPen, Renderer.pickScreenNdcErrorForBuilding(hitBuilding, pickNdc));
+    }
+    if (hitRes) {
+      obstPen = Math.min(obstPen, Renderer.pickScreenNdcErrorForResourceField(hitRes, pickNdc));
+    }
+    const gPen = Renderer.pickScreenNdcErrorForGroundPoint(groundHit.x, groundHit.z, pickNdc);
+    /** Same idea as HQ tap fall-through: huge proxy spheres must not block deselect on visible terrain. */
+    if (gPen >= obstPen - 0.028) return;
+  }
+
   if (groundHit) {
     State.deselectAll();
     UI.hideBuildingPanel();
@@ -1927,6 +1953,18 @@ function centroidAndSpan(t0, t1) {
   return { cx, cy, dist, angle };
 }
 
+/** Same touch pair every frame: `TouchList` order is not stable across `touchmove` on many browsers. */
+function touchesByStableOrder(touches, idA, idB) {
+  let ta;
+  let tb;
+  for (let i = 0; i < touches.length; i++) {
+    const t = touches[i];
+    if (t.identifier === idA) ta = t;
+    else if (t.identifier === idB) tb = t;
+  }
+  return ta && tb ? { ta, tb } : null;
+}
+
 function onTouchStart(e) {
   if (getIsVR()) return;
   if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
@@ -1937,13 +1975,19 @@ function onTouchStart(e) {
     touchTapSuppressed = true;
     const t0 = e.touches[0];
     const t1 = e.touches[1];
-    const { cx, cy, dist, angle } = centroidAndSpan(t0, t1);
+    const idA = Math.min(t0.identifier, t1.identifier);
+    const idB = Math.max(t0.identifier, t1.identifier);
+    const ta = t0.identifier === idA ? t0 : t1;
+    const tb = t0.identifier === idB ? t0 : t1;
+    const { cx, cy, dist, angle } = centroidAndSpan(ta, tb);
     if (isClientPointBlockedForWorldTouch(cx, cy)) return;
     touchTwin = {
       lastDist: dist,
       lastAngle: angle,
       lastCx: cx,
       lastCy: cy,
+      idA,
+      idB,
     };
     e.preventDefault();
     return;
@@ -1967,7 +2011,7 @@ function onTouchStart(e) {
       if (touchOneFinger && !touchOneFinger.moved) {
         fireTouchLongPress(touchOneFinger.x, touchOneFinger.y);
       }
-    }, 520);
+    }, 560);
   }
 }
 
@@ -1975,10 +2019,13 @@ function onTouchMove(e) {
   if (getIsVR()) return;
   if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
 
-  if (e.touches.length >= 2 && touchTwin) {
-    const t0 = e.touches[0];
-    const t1 = e.touches[1];
-    const { cx, cy, dist, angle } = centroidAndSpan(t0, t1);
+  if (e.touches.length >= 2 && touchTwin && touchTwin.idA != null && touchTwin.idB != null) {
+    const pair = touchesByStableOrder(e.touches, touchTwin.idA, touchTwin.idB);
+    if (!pair) {
+      e.preventDefault();
+      return;
+    }
+    const { cx, cy, dist, angle } = centroidAndSpan(pair.ta, pair.tb);
 
     const dDist = dist - touchTwin.lastDist;
     touchTwin.lastDist = dist;
@@ -1994,11 +2041,17 @@ function onTouchMove(e) {
     cameraRig.x -= (Math.cos(θ) * dcx - Math.sin(θ) * dcy) * panSens;
     cameraRig.z -= (Math.sin(θ) * dcx + Math.cos(θ) * dcy) * panSens;
 
-    let dAng = angle - touchTwin.lastAngle;
-    if (dAng > Math.PI) dAng -= Math.PI * 2;
-    if (dAng < -Math.PI) dAng += Math.PI * 2;
-    touchTwin.lastAngle = angle;
-    cameraRig.rotY += dAng * 0.85;
+    /** Below ~this span (px), `atan2` angle is noisy; skip twist so pinch-pan does not spin the map. */
+    const minSpanPxForTwist = 28;
+    if (dist >= minSpanPxForTwist) {
+      let dAng = angle - touchTwin.lastAngle;
+      if (dAng > Math.PI) dAng -= Math.PI * 2;
+      if (dAng < -Math.PI) dAng += Math.PI * 2;
+      touchTwin.lastAngle = angle;
+      cameraRig.rotY += dAng * 0.85;
+    } else {
+      touchTwin.lastAngle = angle;
+    }
 
     const c0 = clampWorldToPlayableDisk(cameraRig.x, cameraRig.z, 0);
     cameraRig.x = c0.x;
@@ -2013,7 +2066,7 @@ function onTouchMove(e) {
     if (t.identifier !== touchOneFinger.id) return;
     const dx = t.clientX - touchOneFinger.x;
     const dy = t.clientY - touchOneFinger.y;
-    if (dx * dx + dy * dy > 14 * 14) {
+    if (dx * dx + dy * dy > 24 * 24) {
       touchOneFinger.moved = true;
       clearTouchLongPressTimerOnly();
     }
