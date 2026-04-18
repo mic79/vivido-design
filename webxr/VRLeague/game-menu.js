@@ -157,6 +157,7 @@
       console.log('VR Menu toggled:', this.menuVisible, 'menu ref:', !!this.menu);
       if (this.menu) this.menu.setAttribute('visible', this.menuVisible);
       this.setRaycasters(this.menuVisible);
+      vlSetMenuHintVisible(!this.menuVisible);
       if (this.menuVisible) {
         this.updateMenuDisplay();
       } else {
@@ -536,6 +537,7 @@
         self.menuVisible = false;
         if (self.menu) self.menu.setAttribute('visible', false);
         self.setRaycasters(false);
+        vlSetMenuHintVisible(true);
       }
     },
 
@@ -833,6 +835,7 @@
       this.menuVisible = false;
       if (this.menu) this.menu.setAttribute('visible', false);
       this.setRaycasters(false);
+      vlSetMenuHintVisible(true);
     },
 
     startSingleplayerMatch: function () {
@@ -861,6 +864,7 @@
       this.menuVisible = false;
       if (this.menu) this.menu.setAttribute('visible', false);
       this.setRaycasters(false);
+      vlSetMenuHintVisible(true);
     },
 
     movePlayerToPosition: function (pos) {
@@ -1081,6 +1085,11 @@
     } else {
       el.setAttribute('material', 'color', color);
     }
+  }
+
+  function vlSetMenuHintVisible(visible) {
+    var hint = document.getElementById('vl-menu-hint');
+    if (hint) hint.setAttribute('visible', !!visible);
   }
 
   AFRAME.registerComponent('menu-click', {

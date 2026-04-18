@@ -316,6 +316,8 @@
   var VL_LED_TONGUE_MS = 4000;
   /** Cube hits wall / another cube (not ball): LED “impact” face duration. */
   var VL_HIT_FACE_MS = 2000;
+  /** Bump emote: same sonar clip, lower playbackRate than tongue (1). */
+  var VL_LED_SONAR_BUMP_RATE = 0.72;
   var BALL_R = 0.1664;
   var THRUST_FORWARD = 0.625;
   /** HeliVR torque formula uses one scale; tuned down for ~0.02 mass cubes vs HeliVR heli. */
@@ -546,6 +548,10 @@
       };
       var sceneEl = this.el.sceneEl || this.el;
       sceneEl.addEventListener('enter-vr', this._vlReseatSpectator);
+      this._vlEnterVrStartBgm = function vlEnterVrStartBgm() {
+        self._vlTryStartBackgroundMusic();
+      };
+      sceneEl.addEventListener('enter-vr', this._vlEnterVrStartBgm);
       function bindVlXrSessionReseat() {
         var xr = sceneEl.renderer && sceneEl.renderer.xr;
         if (xr && !self._vlXrSessionBound) {
@@ -1095,6 +1101,48 @@
       }
     },
 
+    /** Start lobby BGM on first immersive session if Music wasn’t turned off (same path as menu toggle). */
+    _vlTryStartBackgroundMusic: function () {
+      if (window._musicEnabled === false) return;
+      this._resumeAudioIfNeeded();
+      var sceneEl = this.el.sceneEl || this.el;
+      var sm = sceneEl.components && sceneEl.components['sound-manager'];
+      var bgm = document.querySelector('#bg-music');
+      if (!bgm || !bgm.components || !bgm.components.sound) return;
+      var sc = bgm.components.sound;
+      var playing = false;
+      try {
+        if (sc.pool && sc.pool.children) {
+          var ii;
+          for (ii = 0; ii < sc.pool.children.length; ii++) {
+            if (sc.pool.children[ii].isPlaying) {
+              playing = true;
+              break;
+            }
+          }
+        }
+      } catch (eP) {}
+      if (playing) return;
+      if (sm) {
+        sm._setVolume(bgm, 0);
+        sc.playSound();
+        sm._fadeSound(bgm, 0, sm.bgMusicVolume, 900);
+      } else {
+        sc.playSound();
+      }
+      window._musicEnabled = true;
+      window._bgMusicStarted = true;
+      var btn = document.getElementById('menu-music-toggle');
+      if (btn) {
+        var vmc = btn.components && btn.components['menu-click'];
+        if (vmc && typeof vmc.setColor === 'function') {
+          vmc.setColor('#44aa44');
+        } else {
+          btn.setAttribute('material', 'color', '#44aa44');
+        }
+      }
+    },
+
     _isWallBody: function (b) {
       if (!b || !this.wallBodies) return false;
       for (var i = 0; i < this.wallBodies.length; i++) {
@@ -1126,6 +1174,7 @@
       var sc = el.components && el.components.sound;
       if (!sc) return;
       el.object3D.position.set(wx, wy, wz);
+      el.object3D.updateMatrixWorld(true);
       var normSpeed = Math.min((speed || 0) / 12, 1);
       var rate = 1.12 + normSpeed * 0.42;
       var vol = 0.55 + normSpeed * 0.38;
@@ -1144,14 +1193,75 @@
       sc.playSound();
     },
 
-    _playGoalSound: function () {
+    /**
+     * One-shot sonar at a cube (slot 0–3); each slot has its own entity so two cubes can overlap.
+     * @param {number} slot
+     * @param {number} playbackRate 1 = tongue, lower = bump emote
+     */
+    _playLedSonarSlot: function (slot, playbackRate) {
+      if (typeof slot !== 'number' || slot < 0 || slot > 3) return;
       this._resumeAudioIfNeeded();
-      var el = document.getElementById('vl-goal-sound');
+      var el = document.getElementById('vl-led-sonar-' + slot);
       if (!el) return;
       var sc = el.components && el.components.sound;
       if (!sc) return;
+      var body = this.carBodies && this.carBodies[slot];
+      if (body) {
+        el.object3D.position.set(body.position.x, body.position.y, body.position.z);
+        el.object3D.updateMatrixWorld(true);
+      }
+      var rate = typeof playbackRate === 'number' && isFinite(playbackRate) ? playbackRate : 1;
+      rate = Math.max(0.35, Math.min(2.2, rate));
+      /* Tongue (rate ~1) louder; bump emote (lower rate) a bit quieter so it doesn’t overpower. */
+      var vol = rate >= 0.92 ? 0.98 : 0.62;
+      try {
+        if (sc.pool && sc.pool.children) {
+          var pi;
+          for (pi = 0; pi < sc.pool.children.length; pi++) {
+            var aud = sc.pool.children[pi];
+            if (aud && aud.setPlaybackRate) aud.setPlaybackRate(rate);
+            if (aud && aud.setVolume) aud.setVolume(vol);
+          }
+        }
+      } catch (eS) {}
       sc.stopSound();
       sc.playSound();
+    },
+
+    /**
+     * Goal / score: global stinger (`vl-goal-sound`) + spatial hit at the goal mouth (`vl-goal-impact-sound`).
+     * @param {number} [ix] world X at goal (omit on clients if host sent no coords)
+     * @param {number} [iy]
+     * @param {number} [iz]
+     */
+    _playGoalFxWorld: function (ix, iy, iz) {
+      this._resumeAudioIfNeeded();
+      var st = document.getElementById('vl-goal-sound');
+      if (st) {
+        var sc0 = st.components && st.components.sound;
+        if (sc0) {
+          sc0.stopSound();
+          sc0.playSound();
+        }
+      }
+      if (
+        typeof ix !== 'number' ||
+        typeof iy !== 'number' ||
+        typeof iz !== 'number' ||
+        !isFinite(ix) ||
+        !isFinite(iy) ||
+        !isFinite(iz)
+      ) {
+        return;
+      }
+      var im = document.getElementById('vl-goal-impact-sound');
+      if (!im) return;
+      var sc1 = im.components && im.components.sound;
+      if (!sc1) return;
+      im.object3D.position.set(ix, iy, iz);
+      im.object3D.updateMatrixWorld(true);
+      sc1.stopSound();
+      sc1.playSound();
     },
 
     _hapticActuator: function (handEl) {
@@ -1290,6 +1400,8 @@
     _vlApplyCarImpact: function (slots, midX, midY, midZ, relSp, syncAudioAndNet) {
       var now = performance.now();
       var si, s, L;
+      /* Car–car fires twice; play bump sonar only on the first callback (sync false) so we don’t double. */
+      var playBumpSonar = slots.length === 1 ? true : !syncAudioAndNet;
       for (si = 0; si < slots.length; si++) {
         s = slots[si];
         if (typeof s !== 'number' || s < 0 || s > 3) continue;
@@ -1299,6 +1411,7 @@
         vlDrawLedFace(L.ctx, L.canvasW, L.canvasH, 'hit', L.ledBodyColor);
         L.texture.needsUpdate = true;
         L.lastDrawnMode = 'hit';
+        if (playBumpSonar) this._playLedSonarSlot(s, VL_LED_SONAR_BUMP_RATE);
       }
       if (!syncAudioAndNet) return;
       this._broadcastFx({
@@ -1322,14 +1435,25 @@
 
     _updateThrusterSound: function (inp) {
       var rh = vlHandEl('rightHand', 'vl-hand-right');
-      if (!rh) return;
-      var el = rh.querySelector('.vl-thruster-sound');
-      var vfx = rh.querySelector('.vl-thruster-vfx');
+      var vfx = rh && rh.querySelector('.vl-thruster-vfx');
+      var el = document.getElementById('vl-thruster-sound');
       if (!el || !el.components || !el.components.sound) return;
       var sc = el.components.sound;
       var on = inp && inp.trig > 0.04;
+      var slot = this.mySlot;
       if (on) {
         this._resumeAudioIfNeeded();
+        if (
+          typeof slot === 'number' &&
+          slot >= 0 &&
+          slot < 4 &&
+          this.carBodies &&
+          this.carBodies[slot]
+        ) {
+          var bp = this.carBodies[slot].position;
+          el.object3D.position.set(bp.x, bp.y, bp.z);
+          el.object3D.updateMatrixWorld(true);
+        }
         if (vfx) vfx.setAttribute('visible', true);
         if (!this._vlThrusterPlaying) {
           this._vlThrusterPlaying = true;
@@ -1538,8 +1662,11 @@
           this._setScoreText();
           this._vlBroadcastLobbyToClients();
         }
-        this._playGoalSound();
-        this._broadcastFx({ type: 'vl-goal' });
+        var gixW = A.cx - A.halfW + 0.06;
+        var giyW = b.position.y;
+        var gizW = b.position.z;
+        this._playGoalFxWorld(gixW, giyW, gizW);
+        this._broadcastFx({ type: 'vl-goal', ix: gixW, iy: giyW, iz: gizW });
         this._resetBall();
         this.goalCd = 2;
         return;
@@ -1550,8 +1677,11 @@
           this._setScoreText();
           this._vlBroadcastLobbyToClients();
         }
-        this._playGoalSound();
-        this._broadcastFx({ type: 'vl-goal' });
+        var gixE = A.cx + A.halfW - 0.06;
+        var giyE = b.position.y;
+        var gizE = b.position.z;
+        this._playGoalFxWorld(gixE, giyE, gizE);
+        this._broadcastFx({ type: 'vl-goal', ix: gixE, iy: giyE, iz: gizE });
         this._resetBall();
         this.goalCd = 2;
       }
@@ -1624,6 +1754,7 @@
           if (!L.nearLatch) {
             L.nearLatch = true;
             L.tongueUntil = nowMs + VL_LED_TONGUE_MS;
+            this._playLedSonarSlot(i, 1);
           }
         } else {
           L.nearLatch = false;
@@ -1750,7 +1881,7 @@
       this._vlMarkHudDirty();
       this._applySpectatorTransform(0);
       this._setStatus(
-        'Practice (offline) — zero-G arena. Multiplayer: use Play online / Host / Join with the same lobby number. TURN/STUN: same relay as DodgeVR.'
+        'Practice (offline) — zero-G arena. Multiplayer: VR menu → Play online → Host or Join with a lobby number.'
       );
       this._resetBall();
       this._refreshCubeHighlights();
@@ -1980,7 +2111,7 @@
         return;
       }
       if (data.type === 'vl-goal') {
-        this._playGoalSound();
+        this._playGoalFxWorld(data.ix, data.iy, data.iz);
         return;
       }
       if (data.type === 'vl-bounce' && typeof data.x === 'number') {
@@ -2011,6 +2142,7 @@
           vlDrawLedFace(Lc.ctx, Lc.canvasW, Lc.canvasH, 'hit', Lc.ledBodyColor);
           Lc.texture.needsUpdate = true;
           Lc.lastDrawnMode = 'hit';
+          this._playLedSonarSlot(sci, VL_LED_SONAR_BUMP_RATE);
         }
         if (typeof data.x === 'number') {
           if (nowCi >= this._vlAudioNextCarObstacle) {
@@ -2055,7 +2187,6 @@
       if (dtSec <= 0 || dtSec > 0.08) dtSec = 1 / 60;
 
       var inp = this._gatherLocalInput();
-      this._updateThrusterSound(inp);
       if (this.isHost) {
         this.inputs[this.mySlot] = inp;
       } else if (this.hostConn && this.hostConn.open) {
@@ -2102,6 +2233,7 @@
       } else {
         this._syncMeshesFromPhysics();
       }
+      this._updateThrusterSound(inp);
       this._vlPumpHud(t);
       this._vlUpdateCarLedFaces(t);
     },
@@ -2119,6 +2251,10 @@
       var sceneEl = this.el && (this.el.sceneEl || this.el);
       if (sceneEl && this._vlReseatSpectator) {
         sceneEl.removeEventListener('enter-vr', this._vlReseatSpectator);
+      }
+      if (sceneEl && this._vlEnterVrStartBgm) {
+        sceneEl.removeEventListener('enter-vr', this._vlEnterVrStartBgm);
+        this._vlEnterVrStartBgm = null;
       }
       var xr = this.el && this.el.renderer && this.el.renderer.xr;
       if (xr && this._vlReseatSpectator) {
@@ -2204,4 +2340,48 @@
       g.hostConn.send({ type: 'vl-match-cmd', action: action });
     }
   };
+
+  /** Lets vr-menu `toggleMusic` fade #bg-music / #match-music (same contract as DodgeVR). */
+  if (typeof AFRAME !== 'undefined' && !AFRAME.components['sound-manager']) {
+    AFRAME.registerComponent('sound-manager', {
+      init: function () {
+        this._fadeTickers = {};
+        this.bgMusic = this.el.sceneEl.querySelector('#bg-music');
+        this.matchMusic = this.el.sceneEl.querySelector('#match-music');
+        this.bgMusicVolume = 0.3;
+        this.matchMusicVolume = 0.28;
+      },
+      _setVolume: function (el, vol) {
+        var sc = el && el.components && el.components.sound;
+        if (!sc || !sc.pool || !sc.pool.children) return;
+        var i;
+        for (i = 0; i < sc.pool.children.length; i++) {
+          var ch = sc.pool.children[i];
+          if (ch && ch.setVolume) ch.setVolume(vol);
+        }
+      },
+      _fadeSound: function (el, fromVol, toVol, durationMs, onDone) {
+        if (!el || !el.id) return;
+        var id = el.id;
+        if (this._fadeTickers[id]) clearInterval(this._fadeTickers[id]);
+        var self = this;
+        var steps = 30;
+        var stepMs = Math.max(16, durationMs / steps);
+        var current = fromVol;
+        var delta = (toVol - fromVol) / steps;
+        var count = 0;
+        this._fadeTickers[id] = setInterval(function () {
+          count++;
+          current += delta;
+          if (count >= steps) {
+            current = toVol;
+            clearInterval(self._fadeTickers[id]);
+            delete self._fadeTickers[id];
+            if (onDone) onDone();
+          }
+          self._setVolume(el, Math.max(0, current));
+        }, stepMs);
+      }
+    });
+  }
 })();

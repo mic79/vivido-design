@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <title>VRLeague</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Tabletop ball and cubes — WebXR + PeerJS (DodgeVR-style VR menu)" />
+    <meta name="description" content="Zero-gravity RC Soccer in mixed reality. Practice solo or join up to four players online." />
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
@@ -12,7 +12,7 @@
     <script src="vrleague.js"></script>
   </head>
   <body>
-    <!-- Pre-VR nickname overlay (same structure as DodgeVR/index.html) -->
+    <!-- Pre-VR nickname overlay -->
     <div
       id="pre-vr-overlay"
       style="
@@ -29,7 +29,9 @@
     >
       <div style="text-align: center">
         <h1 style="font-size: 2.5em; margin-bottom: 0.2em; letter-spacing: 0.1em">VR LEAGUE</h1>
-        <p style="color: #888; margin-bottom: 1.5em">Zero-G arena — same VR menu flow as DodgeVR</p>
+        <p style="color: #888; margin-bottom: 1.5em; max-width: 28em; margin-left: auto; margin-right: auto; line-height: 1.45">
+          Zero-gravity RC Soccer in mixed reality. Practice solo or join up to four players online.
+        </p>
         <label for="nickname-input" style="display: block; margin-bottom: 0.4em; font-size: 1.1em">Nickname</label>
         <input
           id="nickname-input"
@@ -100,6 +102,7 @@
     <a-scene
       vr-menu
       vrleague-game
+      sound-manager
       xr-mode-ui="XRMode: xr; enterVREnabled: true; enterAREnabled: true"
       renderer="antialias: true; colorManagement: true; alpha: true"
       webxr="optionalFeatures: local-floor, bounded-floor, hit-test, dom-overlay; referenceSpaceType: local-floor"
@@ -369,6 +372,15 @@
                 value="Blue 0 — Orange 0   |   --:--"
               ></a-text>
             </a-entity>
+            <a-entity id="vl-menu-hint" position="0 -0.34 -0.78">
+              <a-text
+                id="vl-menu-hint-text"
+                value="Press X for menu"
+                align="center"
+                width="0.4"
+                color="#9eb8d8"
+              ></a-text>
+            </a-entity>
           </a-camera>
 
           <a-entity
@@ -396,21 +408,49 @@
               material="shader: standard; emissive: #44ccff; emissiveIntensity: 1; transparent: true; opacity: 0.75"
               visible="false"
             ></a-cone>
-            <a-entity
-              class="vl-thruster-sound"
-              sound="src: url(audio/thrusters_loopwav-14699.mp3); autoplay: false; loop: true; volume: 0.65; playbackRate: 1.35; positional: true; distanceModel: inverse; refDistance: 0.45; maxDistance: 8; rolloffFactor: 2; poolSize: 1"
-            ></a-entity>
           </a-entity>
         </a-entity>
       </a-entity>
 
       <a-entity
         id="vl-bounce-sound"
-        sound="src: url(audio/impact-cinematic-boom-5-352465.mp3); autoplay: false; loop: false; volume: 0.72; positional: false; poolSize: 6; rate: 1.5"
+        sound="src: url(audio/impact-cinematic-boom-5-352465.mp3); autoplay: false; loop: false; volume: 0.7; positional: true; distanceModel: linear; refDistance: 1; maxDistance: 20; poolSize: 8; rate: 1.5"
       ></a-entity>
       <a-entity
         id="vl-goal-sound"
-        sound="src: url(audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); autoplay: false; loop: false; volume: 0.95; positional: false; poolSize: 2"
+        sound="src: url(audio/bryansantosbreton-biodynamic-impact-braam-tonal-dark-176441.mp3); autoplay: false; loop: false; volume: 0.95; positional: false; poolSize: 2"
+      ></a-entity>
+      <a-entity
+        id="vl-goal-impact-sound"
+        sound="src: url(audio/bryansantosbreton-biodynamic-impact-braam-tonal-dark-176441.mp3); autoplay: false; loop: false; volume: 0.65; positional: true; distanceModel: linear; refDistance: 1; maxDistance: 20; poolSize: 2"
+      ></a-entity>
+      <a-entity
+        id="vl-thruster-sound"
+        sound="src: url(audio/thrusters_loopwav-14699.mp3); autoplay: false; loop: true; volume: 0.9; playbackRate: 1.35; positional: true; distanceModel: inverse; refDistance: 0.55; maxDistance: 26; rolloffFactor: 1.45; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="vl-led-sonar-0"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 1; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 10; rolloffFactor: 1.65; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="vl-led-sonar-1"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 1; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 10; rolloffFactor: 1.65; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="vl-led-sonar-2"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 1; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 10; rolloffFactor: 1.65; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="vl-led-sonar-3"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 1; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 10; rolloffFactor: 1.65; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="bg-music"
+        sound="src: url(audio/amaksi-reflections-fashion-minimal-house-146299.mp3); autoplay: false; loop: true; volume: 0.3; positional: false"
+      ></a-entity>
+      <a-entity
+        id="match-music"
+        sound="src: url(audio/amaksi-reflections-fashion-minimal-house-146299.mp3); autoplay: false; loop: true; volume: 0; positional: false"
       ></a-entity>
       <a-entity light="type: ambient; color: #ccd; intensity: 0.7"></a-entity>
       <a-entity light="type: directional; color: #fff; intensity: 0.45" position="-0.4 2.2 0.6"></a-entity>
