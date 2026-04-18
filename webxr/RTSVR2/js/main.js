@@ -15,10 +15,60 @@ import * as Network from './network.js';
 import * as Units from './units.js';
 import * as Buildings from './buildings.js';
 import * as Loop from './loop.js';
-import { SPAWN_POSITIONS, clampWorldToPlayableDisk } from './config.js';
+import {
+  SPAWN_POSITIONS,
+  clampWorldToPlayableDisk,
+  BARRACKS_UNITS,
+  FACTORY_UNITS,
+} from './config.js';
 import { applyMoonBattlefieldVisuals } from './moon-environment.js';
 import { applyHdrSkyEnvironment } from './sky-hdr-environment.js';
 import { primeSceneRevealBlack, runSceneRevealFromBlack } from './scene-reveal.js';
+
+/** Units players can actually produce (barracks + war factory + refinery harvester). Excludes e.g. APC. */
+const LOBBY_SHOWCASE_UNIT_TYPES = ['harvester', ...BARRACKS_UNITS, ...FACTORY_UNITS];
+
+/**
+ * Pre-match lobby: every non-HQ building type and every **buildable** unit type around the HQ
+ * (lunar settlement preview). Cleared when `State.resetState()` runs at match start.
+ */
+function placeLobbyLunarSettlementShowcase(hqPos) {
+  const ownerId = 0;
+  const inwardD = Math.hypot(hqPos.x, hqPos.z) || 1;
+  const ix = -hqPos.x / inwardD;
+  const iz = -hqPos.z / inwardD;
+  const rx = -iz;
+  const rz = ix;
+
+  const at = (forward, right) =>
+    clampWorldToPlayableDisk(hqPos.x + ix * forward + rx * right, hqPos.z + iz * forward + rz * right, 10);
+
+  const buildingPlan = [
+    { type: 'barracks', forward: 6, right: 15 },
+    { type: 'refinery', forward: 14, right: 0 },
+    { type: 'warFactory', forward: 6, right: -15 },
+  ];
+  for (const b of buildingPlan) {
+    const p = at(b.forward, b.right);
+    Buildings.createBuilding(b.type, ownerId, p.x, p.z, { skipNavRebuild: true, spawnComplete: true });
+  }
+
+  const unitTypes = LOBBY_SHOWCASE_UNIT_TYPES;
+  const n = unitTypes.length;
+  const ringR = 26;
+  for (let i = 0; i < n; i++) {
+    const ang = (i / n) * Math.PI * 2 + 0.45;
+    const ux = hqPos.x + Math.cos(ang) * ringR;
+    const uz = hqPos.z + Math.sin(ang) * ringR;
+    const c = clampWorldToPlayableDisk(ux, uz, 8);
+    const u = Units.createUnit(unitTypes[i], ownerId, c.x, c.z, { skipCapCheck: true, skipProducedStat: true });
+    if (u) {
+      const dx = -c.x;
+      const dz = -c.z;
+      u.rotation = Math.atan2(dx, dz);
+    }
+  }
+}
 
 // --- Wait for A-Frame scene to load ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -68,6 +118,7 @@ function initializeGame(sceneEl) {
     const hz = -Math.cos(rig.rotY) * lobbyAheadM;
     const hqPos = clampWorldToPlayableDisk(hx, hz, 14);
     Buildings.createBuilding('hq', 0, hqPos.x, hqPos.z, {});
+    placeLobbyLunarSettlementShowcase(hqPos);
     Input.beginLobbyIntroOrbitAroundHq(hqPos.x, hqPos.z);
     Pathfinding.rebuildNavMesh();
     Network.initNetwork();

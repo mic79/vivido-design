@@ -7,7 +7,7 @@ import {
   UNIT_TYPES, UNIT_SHAPES, BUILDING_TYPES, BUILDING_SHAPES, BUILDING_BASE_COLORS,
   PLAYER_COLORS, MAX_INSTANCES_PER_TYPE, MAX_BUILDING_INSTANCES,
   MAX_PROJECTILES, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT, HEALTH_BAR_Y_OFFSET,
-  RESOURCE_FIELD_POSITIONS, BUILD_RADIUS_FROM_HQ,
+  RESOURCE_FIELD_POSITIONS, BUILD_RADIUS_FROM_HQ, BARRACKS_UNITS,
 } from './config.js';
 import * as State from './state.js';
 import * as Fog from './fog.js';
@@ -21,8 +21,57 @@ const buildingMeshes = {}; // buildingType -> InstancedMesh
 /** Bundled with the game under RTSVR2/ (copied from BattleVR lunar lander). */
 const HQ_GLB_URL = 'assets/lunar-lander/lunar_lander.glb';
 
+/** Infantry visual (place file under RTSVR2/assets/). */
+const INFANTRY_GLB_URL = 'assets/Meshy_AI_Apollo_astronaut_with_0416105251_texture.glb';
+
+/** Barracks roster = all infantry unit types in this build. */
+const INFANTRY_TYPES = BARRACKS_UNITS;
+const INFANTRY_TYPES_SET = new Set(INFANTRY_TYPES);
+
+const HARVESTER_GLB_URL = 'assets/Meshy_AI_A_lunar_harvester_of_0417212738_texture.glb';
+/** Uniform visual scale vs `UNIT_SHAPES.harvester` box; gameplay footprint unchanged. */
+const HARVESTER_GLB_VISUAL_SCALE = 2;
+let harvesterGltfActive = false;
+
+const LIGHT_TANK_GLB_URL = 'assets/Meshy_AI_A_lunar_light_tank_r_0417231220_texture.glb';
+/** Uniform visual scale vs `UNIT_SHAPES.lightTank` box; gameplay footprint unchanged. */
+const LIGHT_TANK_GLB_VISUAL_SCALE = 2;
+let lightTankGltfActive = false;
+
+const HEAVY_TANK_GLB_URL = 'assets/Meshy_AI_A_lunar_heavy_tank_r_0417233308_texture.glb';
+/** Uniform visual scale vs `UNIT_SHAPES.heavyTank` box; gameplay footprint unchanged. */
+const HEAVY_TANK_GLB_VISUAL_SCALE = 2;
+let heavyTankGltfActive = false;
+
+const MOBILE_HQ_GLB_URL = 'assets/Meshy_AI_A_lunar_mobile_HQ_wh_0417234643_texture.glb';
+/** Uniform visual scale vs `UNIT_SHAPES.mobileHq` box; gameplay footprint unchanged. */
+const MOBILE_HQ_GLB_VISUAL_SCALE = 4;
+let mobileHqGltfActive = false;
+
+const SCOUT_BIKE_GLB_URL = 'assets/Meshy_AI_A_lunar_rover_realis_0417235006_texture.glb';
+/** Uniform visual scale vs `UNIT_SHAPES.scoutBike` box; gameplay footprint unchanged. */
+const SCOUT_BIKE_GLB_VISUAL_SCALE = 4;
+let scoutBikeGltfActive = false;
+
+const ARTILLERY_GLB_URL = 'assets/Meshy_AI_A_lunar_artillery_tan_0418000218_texture.glb';
+/** Uniform visual scale vs `UNIT_SHAPES.artillery` box; gameplay footprint unchanged. */
+const ARTILLERY_GLB_VISUAL_SCALE = 3;
+let artilleryGltfActive = false;
+
 /** Visual scale vs gameplay HQ footprint (`BUILDING_SHAPES.hq.width`); does not change pathing/build logic. */
 const HQ_GLB_VISUAL_SCALE = 4;
+
+const REFINERY_GLB_URL = 'assets/Meshy_AI_A_lunar_temporary_ref_0417211214_texture.glb';
+/** Horizontal size vs `max(refinery width, depth)`; gameplay footprint unchanged. */
+const REFINERY_GLB_VISUAL_SCALE = 1.5;
+
+const BARRACKS_GLB_URL = 'assets/Meshy_AI_A_lunar_temporary_bar_0417224422_texture.glb';
+/** Horizontal size vs `max(barracks width, depth)`; gameplay footprint unchanged. */
+const BARRACKS_GLB_VISUAL_SCALE = 2;
+
+const WAR_FACTORY_GLB_URL = 'assets/Meshy_AI_A_lunar_temporary_gar_0417231334_texture.glb';
+/** Horizontal size vs `max(warFactory width, depth)`; gameplay footprint unchanged. */
+const WAR_FACTORY_GLB_VISUAL_SCALE = 2;
 
 /** After HQ GLB loads: HUD / picking use model bounds instead of BUILDING_SHAPES.hq box. */
 let hqModelVisualHeight = null;
@@ -33,6 +82,28 @@ let hqModelPickRadius = null;
 let hqTexturedTemplate = null;
 const hqTexturedByBuildingId = new Map();
 let hqTexturedMode = false;
+
+/** Same pattern as HQ for textured refineries; `buildingMeshes.refinery` hidden when active. */
+let refineryTexturedTemplate = null;
+const refineryTexturedByBuildingId = new Map();
+let refineryTexturedMode = false;
+let refineryModelVisualHeight = null;
+let refineryModelPickHalfHeight = null;
+let refineryModelPickRadius = null;
+
+let barracksTexturedTemplate = null;
+const barracksTexturedByBuildingId = new Map();
+let barracksTexturedMode = false;
+let barracksModelVisualHeight = null;
+let barracksModelPickHalfHeight = null;
+let barracksModelPickRadius = null;
+
+let warFactoryTexturedTemplate = null;
+const warFactoryTexturedByBuildingId = new Map();
+let warFactoryTexturedMode = false;
+let warFactoryModelVisualHeight = null;
+let warFactoryModelPickHalfHeight = null;
+let warFactoryModelPickRadius = null;
 let healthBarBgMesh = null;
 let healthBarFgMesh = null;
 let selectionRingMesh = null;
@@ -73,6 +144,16 @@ export async function initRenderer(sceneEl) {
   console.log('✅ Renderer initialized with InstancedMesh');
 
   await tryReplaceHqWithGltfModel(sceneEl);
+  await tryReplaceRefineryWithGltfModel(sceneEl);
+  await tryReplaceBarracksWithGltfModel(sceneEl);
+  await tryReplaceWarFactoryWithGltfModel(sceneEl);
+  await tryReplaceInfantryWithGltfModel(sceneEl);
+  await tryReplaceHarvesterWithGltfModel(sceneEl);
+  await tryReplaceLightTankWithGltfModel(sceneEl);
+  await tryReplaceHeavyTankWithGltfModel(sceneEl);
+  await tryReplaceMobileHqWithGltfModel(sceneEl);
+  await tryReplaceScoutBikeWithGltfModel(sceneEl);
+  await tryReplaceArtilleryWithGltfModel(sceneEl);
 }
 
 /** Upload / compile draw paths so the first visible frame after fade is not still warming shaders. */
@@ -242,12 +323,36 @@ function createBuildingMeshes() {
 
 function buildingHudHeight(buildingType) {
   if (buildingType === 'hq' && hqModelVisualHeight != null) return hqModelVisualHeight;
+  if (buildingType === 'refinery' && refineryModelVisualHeight != null) return refineryModelVisualHeight;
+  if (buildingType === 'barracks' && barracksModelVisualHeight != null) return barracksModelVisualHeight;
+  if (buildingType === 'warFactory' && warFactoryModelVisualHeight != null) return warFactoryModelVisualHeight;
   return BUILDING_SHAPES[buildingType]?.height ?? 3;
 }
 
 function buildingPickVerticalAndRadius(buildingType) {
   if (buildingType === 'hq' && hqModelPickHalfHeight != null && hqModelPickRadius != null) {
     return { centerY: hqModelPickHalfHeight, radius: hqModelPickRadius };
+  }
+  if (
+    buildingType === 'refinery'
+    && refineryModelPickHalfHeight != null
+    && refineryModelPickRadius != null
+  ) {
+    return { centerY: refineryModelPickHalfHeight, radius: refineryModelPickRadius };
+  }
+  if (
+    buildingType === 'barracks'
+    && barracksModelPickHalfHeight != null
+    && barracksModelPickRadius != null
+  ) {
+    return { centerY: barracksModelPickHalfHeight, radius: barracksModelPickRadius };
+  }
+  if (
+    buildingType === 'warFactory'
+    && warFactoryModelPickHalfHeight != null
+    && warFactoryModelPickRadius != null
+  ) {
+    return { centerY: warFactoryModelPickHalfHeight, radius: warFactoryModelPickRadius };
   }
   const shape = BUILDING_SHAPES[buildingType];
   if (!shape) return { centerY: 2, radius: 3 };
@@ -430,6 +535,51 @@ function syncHqTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   root.visible = drawVisible;
 }
 
+function syncRefineryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
+  let root = refineryTexturedByBuildingId.get(building.id);
+  if (!root) {
+    root = refineryTexturedTemplate.clone(true);
+    root.name = `refinery_gltf_${building.id}`;
+    applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
+    scene3D.add(root);
+    refineryTexturedByBuildingId.set(building.id, root);
+  }
+  root.matrixAutoUpdate = false;
+  root.matrix.copy(worldMat4);
+  root.matrixWorldNeedsUpdate = true;
+  root.visible = drawVisible;
+}
+
+function syncBarracksTexturedOne(building, worldMat4, drawVisible, THREE_w) {
+  let root = barracksTexturedByBuildingId.get(building.id);
+  if (!root) {
+    root = barracksTexturedTemplate.clone(true);
+    root.name = `barracks_gltf_${building.id}`;
+    applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
+    scene3D.add(root);
+    barracksTexturedByBuildingId.set(building.id, root);
+  }
+  root.matrixAutoUpdate = false;
+  root.matrix.copy(worldMat4);
+  root.matrixWorldNeedsUpdate = true;
+  root.visible = drawVisible;
+}
+
+function syncWarFactoryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
+  let root = warFactoryTexturedByBuildingId.get(building.id);
+  if (!root) {
+    root = warFactoryTexturedTemplate.clone(true);
+    root.name = `war_factory_gltf_${building.id}`;
+    applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
+    scene3D.add(root);
+    warFactoryTexturedByBuildingId.set(building.id, root);
+  }
+  root.matrixAutoUpdate = false;
+  root.matrix.copy(worldMat4);
+  root.matrixWorldNeedsUpdate = true;
+  root.visible = drawVisible;
+}
+
 async function tryReplaceHqWithGltfModel(sceneEl) {
   const THREE_w = window.THREE;
   if (!THREE_w || !scene3D || !buildingMeshes.hq || !sceneEl) return;
@@ -473,6 +623,568 @@ async function tryReplaceHqWithGltfModel(sceneEl) {
   hqTexturedTemplate = wrap;
   hqTexturedMode = true;
   buildingMeshes.hq.visible = false;
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceRefineryWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !buildingMeshes.refinery || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, REFINERY_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Refinery GLB load failed (keeping box).', err);
+    return;
+  }
+
+  const refShape = BUILDING_SHAPES.refinery;
+  const targetFootprint = Math.max(refShape.width, refShape.depth) * REFINERY_GLB_VISUAL_SCALE;
+
+  const mergedMeasure = mergeWorldMeshesToPositionsGeometry(loadedRoot.clone(true), THREE_w);
+  const p = computeBottomFootprintPivotAndScaleFactors(mergedMeasure, targetFootprint);
+  mergedMeasure.dispose();
+
+  const inner = loadedRoot.clone(true);
+  inner.position.set(p.tx * p.scale, p.ty * p.scale, p.tz * p.scale);
+  inner.scale.setScalar(p.scale);
+  inner.traverse((node) => {
+    if (node.isMesh || node.isSkinnedMesh) {
+      node.castShadow = true;
+      node.receiveShadow = false;
+    }
+  });
+
+  disposeHqTexturedObject3D(loadedRoot, THREE_w);
+
+  const wrap = new THREE_w.Group();
+  wrap.name = 'refinery_gltf_template';
+  wrap.add(inner);
+  wrap.updateMatrixWorld(true);
+  const bb = new THREE_w.Box3().setFromObject(wrap);
+  refineryModelVisualHeight = bb.max.y - bb.min.y;
+  refineryModelPickHalfHeight = Math.abs(bb.min.y) < 0.08 ? bb.max.y * 0.5 : (bb.max.y + bb.min.y) * 0.5;
+  refineryModelPickRadius = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.6;
+
+  refineryTexturedTemplate = wrap;
+  refineryTexturedMode = true;
+  buildingMeshes.refinery.visible = false;
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceBarracksWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !buildingMeshes.barracks || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, BARRACKS_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Barracks GLB load failed (keeping box).', err);
+    return;
+  }
+
+  const barShape = BUILDING_SHAPES.barracks;
+  const targetFootprint = Math.max(barShape.width, barShape.depth) * BARRACKS_GLB_VISUAL_SCALE;
+
+  const mergedMeasure = mergeWorldMeshesToPositionsGeometry(loadedRoot.clone(true), THREE_w);
+  const p = computeBottomFootprintPivotAndScaleFactors(mergedMeasure, targetFootprint);
+  mergedMeasure.dispose();
+
+  const inner = loadedRoot.clone(true);
+  inner.position.set(p.tx * p.scale, p.ty * p.scale, p.tz * p.scale);
+  inner.scale.setScalar(p.scale);
+  inner.traverse((node) => {
+    if (node.isMesh || node.isSkinnedMesh) {
+      node.castShadow = true;
+      node.receiveShadow = false;
+    }
+  });
+
+  disposeHqTexturedObject3D(loadedRoot, THREE_w);
+
+  const wrap = new THREE_w.Group();
+  wrap.name = 'barracks_gltf_template';
+  wrap.add(inner);
+  wrap.updateMatrixWorld(true);
+  const bb = new THREE_w.Box3().setFromObject(wrap);
+  barracksModelVisualHeight = bb.max.y - bb.min.y;
+  barracksModelPickHalfHeight = Math.abs(bb.min.y) < 0.08 ? bb.max.y * 0.5 : (bb.max.y + bb.min.y) * 0.5;
+  barracksModelPickRadius = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.6;
+
+  barracksTexturedTemplate = wrap;
+  barracksTexturedMode = true;
+  buildingMeshes.barracks.visible = false;
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceWarFactoryWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !buildingMeshes.warFactory || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, WAR_FACTORY_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] War factory GLB load failed (keeping box).', err);
+    return;
+  }
+
+  const wfShape = BUILDING_SHAPES.warFactory;
+  const targetFootprint = Math.max(wfShape.width, wfShape.depth) * WAR_FACTORY_GLB_VISUAL_SCALE;
+
+  const mergedMeasure = mergeWorldMeshesToPositionsGeometry(loadedRoot.clone(true), THREE_w);
+  const p = computeBottomFootprintPivotAndScaleFactors(mergedMeasure, targetFootprint);
+  mergedMeasure.dispose();
+
+  const inner = loadedRoot.clone(true);
+  inner.position.set(p.tx * p.scale, p.ty * p.scale, p.tz * p.scale);
+  inner.scale.setScalar(p.scale);
+  inner.traverse((node) => {
+    if (node.isMesh || node.isSkinnedMesh) {
+      node.castShadow = true;
+      node.receiveShadow = false;
+    }
+  });
+
+  disposeHqTexturedObject3D(loadedRoot, THREE_w);
+
+  const wrap = new THREE_w.Group();
+  wrap.name = 'war_factory_gltf_template';
+  wrap.add(inner);
+  wrap.updateMatrixWorld(true);
+  const bb = new THREE_w.Box3().setFromObject(wrap);
+  warFactoryModelVisualHeight = bb.max.y - bb.min.y;
+  warFactoryModelPickHalfHeight = Math.abs(bb.min.y) < 0.08 ? bb.max.y * 0.5 : (bb.max.y + bb.min.y) * 0.5;
+  warFactoryModelPickRadius = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.6;
+
+  warFactoryTexturedTemplate = wrap;
+  warFactoryTexturedMode = true;
+  buildingMeshes.warFactory.visible = false;
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+function disposeObject3DGeometryOnly(root) {
+  if (!root) return;
+  root.traverse((node) => {
+    if ((node.isMesh || node.isSkinnedMesh) && node.geometry) {
+      node.geometry.dispose();
+    }
+  });
+}
+
+/** Largest triangle mesh in the glTF (by index or position count) for a textured instanced body. */
+function findDominantDrawMesh(root) {
+  root.updateMatrixWorld(true);
+  let best = null;
+  let bestCount = -1;
+  root.traverse((child) => {
+    if (!child.isMesh && !child.isSkinnedMesh) return;
+    const g = child.geometry;
+    if (!g || !g.attributes || !g.attributes.position) return;
+    const idx = g.index;
+    const n = idx ? idx.count : g.attributes.position.count;
+    if (n > bestCount) {
+      best = child;
+      bestCount = n;
+    }
+  });
+  return best;
+}
+
+function infantryCylinderFootprint(shape) {
+  if (!shape || shape.type !== 'cylinder') return 0.8;
+  return 2 * Math.max(shape.radiusTop, shape.radiusBottom);
+}
+
+/**
+ * Clone dominant mesh geometry into world space, pivot to ground + uniform footprint scale,
+ * then stretch Y to match gameplay cylinder height (XZ footprint unchanged).
+ */
+function bakeInfantryGeometryFromGltfRoot(gltfRoot, shape) {
+  const dominant = findDominantDrawMesh(gltfRoot);
+  if (!dominant) throw new Error('Infantry GLB: no drawable mesh');
+
+  const geo = dominant.geometry.clone();
+  geo.applyMatrix4(dominant.matrixWorld);
+
+  const footprint = infantryCylinderFootprint(shape);
+  pivotBottomCenterUniformFootprint(geo, footprint);
+
+  geo.computeBoundingBox();
+  const ySpan = Math.max(1e-6, geo.boundingBox.max.y - geo.boundingBox.min.y);
+  const targetH = shape.height;
+  if (Math.abs(ySpan - targetH) > 1e-4) {
+    geo.scale(1, targetH / ySpan, 1);
+    geo.computeBoundingBox();
+    const y0 = geo.boundingBox.min.y;
+    if (Math.abs(y0) > 1e-5) geo.translate(0, -y0, 0);
+  }
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  geo.computeVertexNormals();
+
+  const srcMat = Array.isArray(dominant.material) ? dominant.material[0] : dominant.material;
+  if (!srcMat) throw new Error('Infantry GLB: mesh has no material');
+  const material = srcMat.clone();
+  material.fog = true;
+  if (material.color) material.color.setRGB(1, 1, 1);
+
+  return { geometry: geo, material };
+}
+
+/**
+ * Box-shaped unit (e.g. harvester): optional Y rotation, bottom-center pivot, then **uniform** scale
+ * so the mesh fits inside `width × height × depth` without stretching (aspect preserved).
+ * @param {{ yawY?: number }} [opts] — `yawY`: radians around +Y; −π/2 = 90° clockwise from above, +π/2 = counter-clockwise.
+ */
+function bakeBoxUnitGeometryFromGltfRoot(gltfRoot, shape, opts = {}) {
+  const dominant = findDominantDrawMesh(gltfRoot);
+  if (!dominant) throw new Error('Box unit GLB: no drawable mesh');
+
+  const geo = dominant.geometry.clone();
+  geo.applyMatrix4(dominant.matrixWorld);
+
+  const yawY = opts.yawY ?? 0;
+  if (Math.abs(yawY) > 1e-8) geo.rotateY(yawY);
+
+  const r = computeBottomFootprintPivotAndScaleFactors(geo, 1);
+  geo.translate(r.tx, r.ty, r.tz);
+
+  geo.computeBoundingBox();
+  const b = geo.boundingBox;
+  const dx = Math.max(1e-6, b.max.x - b.min.x);
+  const dy = Math.max(1e-6, b.max.y - b.min.y);
+  const dz = Math.max(1e-6, b.max.z - b.min.z);
+  const sx = shape.width / dx;
+  const sy = shape.height / dy;
+  const sz = shape.depth / dz;
+  const u = Math.min(sx, sy, sz);
+  geo.scale(u, u, u);
+
+  geo.computeBoundingBox();
+  const y0 = geo.boundingBox.min.y;
+  if (Math.abs(y0) > 1e-5) geo.translate(0, -y0, 0);
+
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  geo.computeVertexNormals();
+
+  const srcMat = Array.isArray(dominant.material) ? dominant.material[0] : dominant.material;
+  if (!srcMat) throw new Error('Box unit GLB: mesh has no material');
+  const material = srcMat.clone();
+  material.fog = true;
+  if (material.color) material.color.setRGB(1, 1, 1);
+
+  return { geometry: geo, material };
+}
+
+function replaceUnitInstancedMesh(unitType, geometry, material, THREE_w) {
+  const existing = unitMeshes[unitType];
+  if (!existing || !scene3D) return;
+
+  scene3D.remove(existing);
+  existing.dispose();
+
+  const mesh = new THREE_w.InstancedMesh(geometry, material, MAX_INSTANCES_PER_TYPE);
+  mesh.count = 0;
+  mesh.instanceColor = new THREE_w.InstancedBufferAttribute(
+    new Float32Array(MAX_INSTANCES_PER_TYPE * 3), 3
+  );
+  mesh.frustumCulled = false;
+  mesh.castShadow = true;
+  mesh.receiveShadow = false;
+  mesh.name = `units_${unitType}`;
+
+  for (let i = 0; i < MAX_INSTANCES_PER_TYPE; i++) {
+    _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    mesh.setMatrixAt(i, _mat4);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+
+  scene3D.add(mesh);
+  unitMeshes[unitType] = mesh;
+}
+
+async function tryReplaceInfantryWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, INFANTRY_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Infantry GLB load failed (keeping cylinders).', err);
+    return;
+  }
+
+  try {
+    for (const type of INFANTRY_TYPES) {
+      const shape = UNIT_SHAPES[type];
+      if (!shape || shape.type !== 'cylinder') continue;
+
+      const perTypeRoot = loadedRoot.clone(true);
+      const { geometry, material } = bakeInfantryGeometryFromGltfRoot(perTypeRoot, shape);
+      disposeObject3DGeometryOnly(perTypeRoot);
+      replaceUnitInstancedMesh(type, geometry, material, THREE_w);
+    }
+  } catch (err) {
+    console.warn('[RTSVR2] Infantry GLB apply failed (keeping cylinders).', err);
+  }
+
+  disposeObject3DGeometryOnly(loadedRoot);
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceHarvesterWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !unitMeshes.harvester || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, HARVESTER_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Harvester GLB load failed (keeping box).', err);
+    return;
+  }
+
+  try {
+    const shape = UNIT_SHAPES.harvester;
+    if (!shape || shape.type !== 'box') throw new Error('harvester shape must be box');
+
+    const v = HARVESTER_GLB_VISUAL_SCALE;
+    const visualShape = {
+      type: 'box',
+      width: shape.width * v,
+      height: shape.height * v,
+      depth: shape.depth * v,
+    };
+
+    const perTypeRoot = loadedRoot.clone(true);
+    /** 90° clockwise when viewed from above (+Y): right-hand +Y is CCW, so use −π/2. */
+    const { geometry, material } = bakeBoxUnitGeometryFromGltfRoot(perTypeRoot, visualShape, {
+      yawY: -Math.PI / 2,
+    });
+    disposeObject3DGeometryOnly(perTypeRoot);
+    replaceUnitInstancedMesh('harvester', geometry, material, THREE_w);
+    harvesterGltfActive = true;
+  } catch (err) {
+    console.warn('[RTSVR2] Harvester GLB apply failed (keeping box).', err);
+    harvesterGltfActive = false;
+  }
+
+  disposeObject3DGeometryOnly(loadedRoot);
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceLightTankWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !unitMeshes.lightTank || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, LIGHT_TANK_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Light tank GLB load failed (keeping hull+barrel mesh).', err);
+    return;
+  }
+
+  try {
+    const shape = UNIT_SHAPES.lightTank;
+    if (!shape || shape.type !== 'box') throw new Error('lightTank shape must be box');
+
+    const v = LIGHT_TANK_GLB_VISUAL_SCALE;
+    const visualShape = {
+      type: 'box',
+      width: shape.width * v,
+      height: shape.height * v,
+      depth: shape.depth * v,
+    };
+
+    const perTypeRoot = loadedRoot.clone(true);
+    /** 90° counter-clockwise when viewed from above (+Y): +π/2 around +Y. */
+    const { geometry, material } = bakeBoxUnitGeometryFromGltfRoot(perTypeRoot, visualShape, {
+      yawY: Math.PI / 2,
+    });
+    disposeObject3DGeometryOnly(perTypeRoot);
+    replaceUnitInstancedMesh('lightTank', geometry, material, THREE_w);
+    lightTankGltfActive = true;
+  } catch (err) {
+    console.warn('[RTSVR2] Light tank GLB apply failed (keeping hull+barrel mesh).', err);
+    lightTankGltfActive = false;
+  }
+
+  disposeObject3DGeometryOnly(loadedRoot);
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceHeavyTankWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !unitMeshes.heavyTank || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, HEAVY_TANK_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Heavy tank GLB load failed (keeping hull+barrel mesh).', err);
+    return;
+  }
+
+  try {
+    const shape = UNIT_SHAPES.heavyTank;
+    if (!shape || shape.type !== 'box') throw new Error('heavyTank shape must be box');
+
+    const v = HEAVY_TANK_GLB_VISUAL_SCALE;
+    const visualShape = {
+      type: 'box',
+      width: shape.width * v,
+      height: shape.height * v,
+      depth: shape.depth * v,
+    };
+
+    const perTypeRoot = loadedRoot.clone(true);
+    const { geometry, material } = bakeBoxUnitGeometryFromGltfRoot(perTypeRoot, visualShape, {
+      yawY: Math.PI / 2,
+    });
+    disposeObject3DGeometryOnly(perTypeRoot);
+    replaceUnitInstancedMesh('heavyTank', geometry, material, THREE_w);
+    heavyTankGltfActive = true;
+  } catch (err) {
+    console.warn('[RTSVR2] Heavy tank GLB apply failed (keeping hull+barrel mesh).', err);
+    heavyTankGltfActive = false;
+  }
+
+  disposeObject3DGeometryOnly(loadedRoot);
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceMobileHqWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !unitMeshes.mobileHq || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, MOBILE_HQ_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Mobile HQ GLB load failed (keeping box).', err);
+    return;
+  }
+
+  try {
+    const shape = UNIT_SHAPES.mobileHq;
+    if (!shape || shape.type !== 'box') throw new Error('mobileHq shape must be box');
+
+    const v = MOBILE_HQ_GLB_VISUAL_SCALE;
+    const visualShape = {
+      type: 'box',
+      width: shape.width * v,
+      height: shape.height * v,
+      depth: shape.depth * v,
+    };
+
+    const perTypeRoot = loadedRoot.clone(true);
+    const { geometry, material } = bakeBoxUnitGeometryFromGltfRoot(perTypeRoot, visualShape, {
+      yawY: Math.PI / 2,
+    });
+    disposeObject3DGeometryOnly(perTypeRoot);
+    replaceUnitInstancedMesh('mobileHq', geometry, material, THREE_w);
+    mobileHqGltfActive = true;
+  } catch (err) {
+    console.warn('[RTSVR2] Mobile HQ GLB apply failed (keeping box).', err);
+    mobileHqGltfActive = false;
+  }
+
+  disposeObject3DGeometryOnly(loadedRoot);
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceScoutBikeWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !unitMeshes.scoutBike || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, SCOUT_BIKE_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Scout buggy GLB load failed (keeping box).', err);
+    return;
+  }
+
+  try {
+    const shape = UNIT_SHAPES.scoutBike;
+    if (!shape || shape.type !== 'box') throw new Error('scoutBike shape must be box');
+
+    const v = SCOUT_BIKE_GLB_VISUAL_SCALE;
+    const visualShape = {
+      type: 'box',
+      width: shape.width * v,
+      height: shape.height * v,
+      depth: shape.depth * v,
+    };
+
+    const perTypeRoot = loadedRoot.clone(true);
+    const { geometry, material } = bakeBoxUnitGeometryFromGltfRoot(perTypeRoot, visualShape, {
+      yawY: Math.PI / 2,
+    });
+    disposeObject3DGeometryOnly(perTypeRoot);
+    replaceUnitInstancedMesh('scoutBike', geometry, material, THREE_w);
+    scoutBikeGltfActive = true;
+  } catch (err) {
+    console.warn('[RTSVR2] Scout buggy GLB apply failed (keeping box).', err);
+    scoutBikeGltfActive = false;
+  }
+
+  disposeObject3DGeometryOnly(loadedRoot);
+
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceArtilleryWithGltfModel(sceneEl) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !unitMeshes.artillery || !sceneEl) return;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, ARTILLERY_GLB_URL);
+  } catch (err) {
+    console.warn('[RTSVR2] Artillery GLB load failed (keeping hull+barrel mesh).', err);
+    return;
+  }
+
+  try {
+    const shape = UNIT_SHAPES.artillery;
+    if (!shape || shape.type !== 'box') throw new Error('artillery shape must be box');
+
+    const v = ARTILLERY_GLB_VISUAL_SCALE;
+    const visualShape = {
+      type: 'box',
+      width: shape.width * v,
+      height: shape.height * v,
+      depth: shape.depth * v,
+    };
+
+    const perTypeRoot = loadedRoot.clone(true);
+    const { geometry, material } = bakeBoxUnitGeometryFromGltfRoot(perTypeRoot, visualShape, {
+      yawY: Math.PI / 2,
+    });
+    disposeObject3DGeometryOnly(perTypeRoot);
+    replaceUnitInstancedMesh('artillery', geometry, material, THREE_w);
+    artilleryGltfActive = true;
+  } catch (err) {
+    console.warn('[RTSVR2] Artillery GLB apply failed (keeping hull+barrel mesh).', err);
+    artilleryGltfActive = false;
+  }
+
+  disposeObject3DGeometryOnly(loadedRoot);
 
   configureBattlefieldShadows(sceneEl);
 }
@@ -756,6 +1468,27 @@ function updateUnitInstances() {
           _color.lerp(new THREE.Color(0xeec066), 0.3);
         }
       }
+      if (INFANTRY_TYPES_SET.has(unit.type)) {
+        _color.lerp(new THREE.Color(1, 1, 1), 0.58);
+      }
+      if (harvesterGltfActive && unit.type === 'harvester') {
+        _color.lerp(new THREE.Color(1, 1, 1), 0.42);
+      }
+      if (lightTankGltfActive && unit.type === 'lightTank') {
+        _color.lerp(new THREE.Color(1, 1, 1), 0.4);
+      }
+      if (heavyTankGltfActive && unit.type === 'heavyTank') {
+        _color.lerp(new THREE.Color(1, 1, 1), 0.4);
+      }
+      if (mobileHqGltfActive && unit.type === 'mobileHq') {
+        _color.lerp(new THREE.Color(1, 1, 1), 0.38);
+      }
+      if (scoutBikeGltfActive && unit.type === 'scoutBike') {
+        _color.lerp(new THREE.Color(1, 1, 1), 0.4);
+      }
+      if (artilleryGltfActive && unit.type === 'artillery') {
+        _color.lerp(new THREE.Color(1, 1, 1), 0.4);
+      }
       mesh.setColorAt(i, _color);
 
       unit._renderIndex = i;
@@ -787,6 +1520,9 @@ function updateBuildingInstances() {
   const myTeam = State.players[State.gameSession.myPlayerId]?.team ?? 0;
   const THREE_w = window.THREE;
   const hqSeenIds = new Set();
+  const refinerySeenIds = new Set();
+  const barracksSeenIds = new Set();
+  const warFactorySeenIds = new Set();
 
   State.buildings.forEach(building => {
     if (building.hp <= 0) return;
@@ -829,6 +1565,24 @@ function updateBuildingInstances() {
       _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
     }
 
+    if (refineryTexturedMode && building.type === 'refinery' && refineryTexturedTemplate && THREE_w) {
+      refinerySeenIds.add(building.id);
+      syncRefineryTexturedOne(building, _mat4, DRAW_AS_VISIBLE, THREE_w);
+      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    }
+
+    if (barracksTexturedMode && building.type === 'barracks' && barracksTexturedTemplate && THREE_w) {
+      barracksSeenIds.add(building.id);
+      syncBarracksTexturedOne(building, _mat4, DRAW_AS_VISIBLE, THREE_w);
+      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    }
+
+    if (warFactoryTexturedMode && building.type === 'warFactory' && warFactoryTexturedTemplate && THREE_w) {
+      warFactorySeenIds.add(building.id);
+      syncWarFactoryTexturedOne(building, _mat4, DRAW_AS_VISIBLE, THREE_w);
+      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    }
+
     mesh.setMatrixAt(idx, _mat4);
 
     // Player color tint
@@ -846,6 +1600,36 @@ function updateBuildingInstances() {
         scene3D.remove(root);
         disposeHqTexturedObject3D(root, window.THREE);
         hqTexturedByBuildingId.delete(id);
+      }
+    }
+  }
+
+  if (refineryTexturedMode) {
+    for (const [id, root] of [...refineryTexturedByBuildingId]) {
+      if (!refinerySeenIds.has(id)) {
+        scene3D.remove(root);
+        disposeHqTexturedObject3D(root, window.THREE);
+        refineryTexturedByBuildingId.delete(id);
+      }
+    }
+  }
+
+  if (barracksTexturedMode) {
+    for (const [id, root] of [...barracksTexturedByBuildingId]) {
+      if (!barracksSeenIds.has(id)) {
+        scene3D.remove(root);
+        disposeHqTexturedObject3D(root, window.THREE);
+        barracksTexturedByBuildingId.delete(id);
+      }
+    }
+  }
+
+  if (warFactoryTexturedMode) {
+    for (const [id, root] of [...warFactoryTexturedByBuildingId]) {
+      if (!warFactorySeenIds.has(id)) {
+        scene3D.remove(root);
+        disposeHqTexturedObject3D(root, window.THREE);
+        warFactoryTexturedByBuildingId.delete(id);
       }
     }
   }
@@ -939,6 +1723,12 @@ function selectionRingScaleForUnitType(unitType) {
   const half = Math.max(shape.width, shape.depth) * 0.5 + 0.22;
   let s = half / torusOuter;
   if (unitType === 'heavyTank') s *= 1.22;
+  if (unitType === 'heavyTank' && heavyTankGltfActive) s *= HEAVY_TANK_GLB_VISUAL_SCALE;
+  if (unitType === 'mobileHq' && mobileHqGltfActive) s *= MOBILE_HQ_GLB_VISUAL_SCALE;
+  /** Ring smaller than full visual scale (buggy model is large; tighter selection ring). */
+  if (unitType === 'scoutBike' && scoutBikeGltfActive) s *= SCOUT_BIKE_GLB_VISUAL_SCALE * 0.5;
+  if (unitType === 'artillery' && artilleryGltfActive) s *= ARTILLERY_GLB_VISUAL_SCALE;
+  if (unitType === 'lightTank' && lightTankGltfActive) s *= 2;
   return s;
 }
 
@@ -1001,7 +1791,13 @@ function updateSelectionRings() {
   if (UI.activeBuildingPanel && ringIndex < selectionRingMesh.count) {
     const building = UI.activeBuildingPanel;
     if (building && building.hp > 0 && Fog.isUnitVisibleToPlayer(building, State.gameSession.myPlayerId)) {
-      const bSize = (building.size || 4) / 2 + 1.25;
+      let bSize = (building.size || 4) / 2 + 1.25;
+      if (building.type === 'barracks' && barracksTexturedMode) {
+        bSize *= 1.5;
+      }
+      if (building.type === 'warFactory' && warFactoryTexturedMode) {
+        bSize *= WAR_FACTORY_GLB_VISUAL_SCALE;
+      }
       const bGY = sampleMoonTerrainWorldY(building.x, building.z);
       _mat4.compose(
         _pos.set(building.x, bGY + 0.15, building.z),
@@ -1374,6 +2170,15 @@ export function disposeRenderer() {
   hqModelVisualHeight = null;
   hqModelPickHalfHeight = null;
   hqModelPickRadius = null;
+  refineryModelVisualHeight = null;
+  refineryModelPickHalfHeight = null;
+  refineryModelPickRadius = null;
+  barracksModelVisualHeight = null;
+  barracksModelPickHalfHeight = null;
+  barracksModelPickRadius = null;
+  warFactoryModelVisualHeight = null;
+  warFactoryModelPickHalfHeight = null;
+  warFactoryModelPickRadius = null;
 
   if (hqTexturedMode) {
     const THREE_w = window.THREE;
@@ -1389,6 +2194,58 @@ export function disposeRenderer() {
     hqTexturedMode = false;
     if (buildingMeshes.hq) buildingMeshes.hq.visible = true;
   }
+
+  if (refineryTexturedMode) {
+    const THREE_w = window.THREE;
+    for (const root of refineryTexturedByBuildingId.values()) {
+      scene3D.remove(root);
+      disposeHqTexturedObject3D(root, THREE_w);
+    }
+    refineryTexturedByBuildingId.clear();
+    if (refineryTexturedTemplate) {
+      disposeHqTexturedObject3D(refineryTexturedTemplate, THREE_w);
+      refineryTexturedTemplate = null;
+    }
+    refineryTexturedMode = false;
+    if (buildingMeshes.refinery) buildingMeshes.refinery.visible = true;
+  }
+
+  if (barracksTexturedMode) {
+    const THREE_w = window.THREE;
+    for (const root of barracksTexturedByBuildingId.values()) {
+      scene3D.remove(root);
+      disposeHqTexturedObject3D(root, THREE_w);
+    }
+    barracksTexturedByBuildingId.clear();
+    if (barracksTexturedTemplate) {
+      disposeHqTexturedObject3D(barracksTexturedTemplate, THREE_w);
+      barracksTexturedTemplate = null;
+    }
+    barracksTexturedMode = false;
+    if (buildingMeshes.barracks) buildingMeshes.barracks.visible = true;
+  }
+
+  if (warFactoryTexturedMode) {
+    const THREE_w = window.THREE;
+    for (const root of warFactoryTexturedByBuildingId.values()) {
+      scene3D.remove(root);
+      disposeHqTexturedObject3D(root, THREE_w);
+    }
+    warFactoryTexturedByBuildingId.clear();
+    if (warFactoryTexturedTemplate) {
+      disposeHqTexturedObject3D(warFactoryTexturedTemplate, THREE_w);
+      warFactoryTexturedTemplate = null;
+    }
+    warFactoryTexturedMode = false;
+    if (buildingMeshes.warFactory) buildingMeshes.warFactory.visible = true;
+  }
+
+  harvesterGltfActive = false;
+  lightTankGltfActive = false;
+  heavyTankGltfActive = false;
+  mobileHqGltfActive = false;
+  scoutBikeGltfActive = false;
+  artilleryGltfActive = false;
 
   Object.values(unitMeshes).forEach(m => { scene3D.remove(m); m.dispose(); });
   Object.values(buildingMeshes).forEach(m => { scene3D.remove(m); m.dispose(); });

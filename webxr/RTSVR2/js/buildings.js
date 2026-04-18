@@ -15,6 +15,7 @@ import * as Audio from './audio.js';
 // --- Building creation ---
 // options.id: authoritative id (snapshots); skipNavRebuild: batch apply (rebuild once after)
 // options.team: authoritative team (multiplayer client; host player.team may be lobby-default)
+// options.spawnComplete: lobby / showcase — start fully built (no construction tick, no free-unit onComplete).
 export function createBuilding(type, ownerId, x, z, options = {}) {
   const stats = BUILDING_TYPES[type];
   if (!stats) {
@@ -37,9 +38,9 @@ export function createBuilding(type, ownerId, x, z, options = {}) {
     maxHp: stats.hp,
     size: stats.size || 4,
     visionRange: stats.visionRange || 12,
-    constructionProgress: type === 'hq' ? 1 : 0, // HQ starts built
+    constructionProgress: type === 'hq' || options.spawnComplete ? 1 : 0,
     constructionTime: stats.buildTime,
-    isBuilt: type === 'hq',
+    isBuilt: type === 'hq' || !!options.spawnComplete,
 
     // Production queue
     productionQueue: [],  // Array of { unitType, remainingTime, totalTime }

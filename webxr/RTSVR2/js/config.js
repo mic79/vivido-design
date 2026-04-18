@@ -156,7 +156,7 @@ export const UNIT_TYPES = {
     description: 'Captures enemy buildings (time-based); repair planned',
   },
   scoutBike: {
-    name: 'Scout Bike',
+    name: 'Scout buggy',
     category: 'vehicle',
     cost: 125,
     buildTime: 4,
@@ -170,7 +170,7 @@ export const UNIT_TYPES = {
     dmgVsVehicle: 0.3,
     dmgVsBuilding: 0.3,
     aoe: 0,
-    description: 'Fast recon unit',
+    description: 'Fast lunar rover for recon',
   },
   apc: {
     name: 'APC',
