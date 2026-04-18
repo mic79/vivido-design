@@ -191,9 +191,10 @@
       this.ballMat = new CANNON.Material('ball');
       this.floorMat = new CANNON.Material('floor');
       this.carMat = new CANNON.Material('car');
-      this.world.addContactMaterial(new CANNON.ContactMaterial(this.ballMat, this.floorMat, { friction: 0.04, restitution: 0.9 }));
-      this.world.addContactMaterial(new CANNON.ContactMaterial(this.ballMat, this.defaultMat, { friction: 0.02, restitution: 0.94 }));
-      this.world.addContactMaterial(new CANNON.ContactMaterial(this.ballMat, this.carMat, { friction: 0.015, restitution: 0.86 }));
+      /* Higher ball friction so tangential slip couples into spin (was ~0.02 — ice-like, almost no torque). */
+      this.world.addContactMaterial(new CANNON.ContactMaterial(this.ballMat, this.floorMat, { friction: 0.16, restitution: 0.88 }));
+      this.world.addContactMaterial(new CANNON.ContactMaterial(this.ballMat, this.defaultMat, { friction: 0.32, restitution: 0.9 }));
+      this.world.addContactMaterial(new CANNON.ContactMaterial(this.ballMat, this.carMat, { friction: 0.38, restitution: 0.82 }));
       this.world.addContactMaterial(new CANNON.ContactMaterial(this.carMat, this.floorMat, { friction: 0.12, restitution: 0.82 }));
       this.world.addContactMaterial(new CANNON.ContactMaterial(this.carMat, this.carMat, { friction: 0.05, restitution: 0.55 }));
 
@@ -557,7 +558,7 @@
       this._vlSoccerTex = soccerTex;
 
       var ballShape = new CANNON.Sphere(BALL_R);
-      this.ballBody = new CANNON.Body({ mass: 0.22, material: this.ballMat, linearDamping: 0.018, angularDamping: 0.028 });
+      this.ballBody = new CANNON.Body({ mass: 0.22, material: this.ballMat, linearDamping: 0.018, angularDamping: 0.012 });
       this.ballBody.addShape(ballShape);
       this.ballBody.position.set(A.cx, A.cy + ch * 0.32, A.cz);
       this.world.addBody(this.ballBody);
@@ -749,6 +750,25 @@
         var rel = new CANNON.Vec3();
         ball.velocity.vsub(carB.velocity, rel);
         var hitSpeed = Math.max(rel.length(), impactN, 0.15);
+        /* Cannon slip is weak on fast glances; add ω ∝ r×v so cube hits visibly spin the ball. */
+        var rx = p.x - carB.position.x;
+        var ry = p.y - carB.position.y;
+        var rz = p.z - carB.position.z;
+        var ax = ry * rel.z - rz * rel.y;
+        var ay = rz * rel.x - rx * rel.z;
+        var az = rx * rel.y - ry * rel.x;
+        var spinGain = 5.5;
+        ball.angularVelocity.x += ax * spinGain;
+        ball.angularVelocity.y += ay * spinGain;
+        ball.angularVelocity.z += az * spinGain;
+        var w = ball.angularVelocity;
+        var wm = Math.sqrt(w.x * w.x + w.y * w.y + w.z * w.z);
+        if (wm > 42) {
+          var k = 42 / wm;
+          w.x *= k;
+          w.y *= k;
+          w.z *= k;
+        }
         this._playBounceWorld(midX, midY, midZ, hitSpeed);
         if (carIdx === this.mySlot) {
           this._pulseBothHands(0.72, 95);
