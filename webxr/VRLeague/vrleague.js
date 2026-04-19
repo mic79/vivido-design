@@ -8,6 +8,7 @@
   window.isMultiplayer = !!window.isMultiplayer;
   window.connectionState = window.connectionState || 'disconnected';
   window.myPlayerId = window.myPlayerId || null;
+  window.vlBotUnbeatableMode = !!window.vlBotUnbeatableMode;
 
   window.createLobbyState =
     window.createLobbyState ||
@@ -30,6 +31,8 @@
   var VL_MATCH_DURATION_MS = 3 * 60 * 1000;
   /** Same Metered-backed TURN/STUN JSON as DodgeVR / RTSVR2 (Cloudflare worker). */
   var VL_TURN_ENDPOINT = 'https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev';
+  /** Cockpit / first-person camera follow — off by default (set `true` to re-enable B / KeyB). */
+  var VL_FPV_ENABLED = false;
 
   function vlDefaultIceServers() {
     return [
@@ -396,6 +399,14 @@
   var VL_LED_SM_RESET_DIGIT_BASE = 30;
   var BALL_R = 0.1664;
   var THRUST_FORWARD = 0.625;
+  /** Left trigger reverse uses same order of magnitude as forward (tweak feel 0.7–1). */
+  var THRUST_REVERSE_SCALE = 0.88;
+  /** Auto-roll: wing-level only — body +Y → proj(worldUp) onto plane ⊥ thrust (+Z); corrects bank, not pitch. */
+  var VL_AUTO_ROLL_UP_KP = 0.036;
+  var VL_AUTO_ROLL_UP_KD = 0.014;
+  var VL_AUTO_ROLL_UP_MAX = 0.028;
+  /** Skip bank PD when thrust axis nearly parallel to world up (gimbal). */
+  var VL_AUTO_ROLL_LEVEL_MIN_LEN_SQ = 0.00012;
   /** HeliVR torque formula uses one scale; tuned down for ~0.02 mass cubes vs HeliVR heli. */
   var HELI_TORQUE_SCALE = 0.006;
   var MAX_LIN_SPEED = 0.36;
@@ -442,6 +453,7 @@
   var VL_BOT_OUT_PAD_Z = 0.38;
   var VL_BOT_OUT_PAD_Y_LOW = 0.42;
   var VL_BOT_OUT_PAD_Y_HIGH = 0.38;
+  var VL_BOT_DIFFICULTY_UNBEATABLE = 3;
 
   function zeroInput() {
     return {
@@ -450,6 +462,8 @@
       rx: 0,
       ry: 0,
       trig: 0,
+      trigRev: 0,
+      autoRoll: 1,
       grip: 0,
       gripL: 0,
       gripR: 0,
@@ -481,7 +495,7 @@
 
   /**
    * Equirectangular map: 12 pentagon regions (icosahedron vertices) + 20 hex (face centroids).
-   * Dark hex / white pent — reads like a soccer ball on a smooth sphere.
+   * Line-forward style: bright opaque edges where Voronoi cells meet; interior texels are alpha 0 (see-through).
    */
   function vlMakeSoccerBallTexture(THREE) {
     function vlNorm(x, y, z) {
@@ -547,7 +561,8 @@
     var d = img.data;
     var ci;
     var cj;
-    var seamDot = 0.022;
+    /* Larger = thicker seam lines on the equirectangular map (tune 0.028–0.045). */
+    var seamDot = 0.038;
     for (cj = 0; cj < h; cj++) {
       for (ci = 0; ci < w; ci++) {
         var u = (ci + 0.5) / w;
@@ -561,7 +576,6 @@
 
         var best = -2;
         var second = -2;
-        var winPent = false;
         var ck;
         for (ck = 0; ck < centers.length; ck++) {
           var c = centers[ck];
@@ -569,7 +583,6 @@
           if (dot > best) {
             second = best;
             best = dot;
-            winPent = c.pent;
           } else if (dot > second) {
             second = dot;
           }
@@ -578,22 +591,17 @@
         var off = (cj * w + ci) * 4;
         var seam = best - second < seamDot;
         if (seam) {
-          d[off] = 10;
-          d[off + 1] = 11;
-          d[off + 2] = 18;
-          d[off + 3] = 255;
-        } else if (winPent) {
-          var hiw = Math.min(255, 235 + Math.floor(best * 28));
-          d[off] = hiw;
-          d[off + 1] = hiw;
-          d[off + 2] = Math.min(255, hiw + 6);
+          /* Panel boundary (pent/hex Voronoi edges) — opaque so lines stay visible. */
+          d[off] = 218;
+          d[off + 1] = 224;
+          d[off + 2] = 236;
           d[off + 3] = 255;
         } else {
-          var shade = 0.55 + best * 0.35;
-          d[off] = Math.floor(6 * shade);
-          d[off + 1] = Math.floor(8 * shade);
-          d[off + 2] = Math.floor(22 * shade);
-          d[off + 3] = 255;
+          /* Transparent “body”: only seam lines occlude; map alpha drives blending on the material. */
+          d[off] = 0;
+          d[off + 1] = 0;
+          d[off + 2] = 0;
+          d[off + 3] = 0;
         }
       }
     }
@@ -645,6 +653,21 @@
       this.mySlot = 0;
       this.inputs = [zeroInput(), zeroInput(), zeroInput(), zeroInput()];
       this.lastInputSend = 0;
+      /** Client: A-button cube-reset edge is one frame; input is sent at INPUT_HZ — latch until included in a packet. */
+      this._vlPendingAEdge = 0;
+      /** Local: cockpit view — scene-root `vr-rig` follows the car mesh each tick; camera eye offset applied on toggle only. */
+      this._vlFpvActive = false;
+      this._vlFpvLookControlsWereDisabled = false;
+      this._vlPrevBKey = false;
+      /** Debounce FPV toggle when both `bbuttondown` and gamepad edge fire same physical press (RTSVR2-style + raw pad). */
+      this._vlLastFpvToggleMs = 0;
+      /** XR right gamepad B — on Quest, index 4 is often the A (primary) button in raw WebXR; use only [5] for B here. */
+      this._vlPrevBGamepadXR = false;
+      this._vlRightBHandlersBound = false;
+      this._vlRightHandBHook = null;
+      this._vlOnBbuttondown = null;
+      this._vlExitVrFpv = null;
+      this._vlFpvHeadOffset = new THREE.Vector3();
       this.frame = 0;
       this.score = [0, 0];
       this.goalCd = 0;
@@ -752,7 +775,7 @@
       this._vlReseatSpectator = function reseatSpectatorAfterImmersion() {
         requestAnimationFrame(function () {
           requestAnimationFrame(function () {
-            self._applySpectatorTransform(self.mySlot);
+            if (!self._vlFpvActive) self._applySpectatorTransform(self.mySlot);
           });
         });
       };
@@ -764,8 +787,14 @@
       sceneEl.addEventListener('enter-vr', this._vlEnterVrStartBgm);
       this._vlEnterVrBindA = function () {
         self._vlBindRightAButton();
+        self._vlBindRightBButton();
       };
       sceneEl.addEventListener('enter-vr', this._vlEnterVrBindA);
+      this._vlExitVrFpv = function () {
+        self._vlExitFpvIfActive();
+        self._vlPrevBGamepadXR = false;
+      };
+      sceneEl.addEventListener('exit-vr', this._vlExitVrFpv);
       function bindVlXrSessionReseat() {
         var xr = sceneEl.renderer && sceneEl.renderer.xr;
         if (xr && !self._vlXrSessionBound) {
@@ -776,11 +805,13 @@
       if (sceneEl.hasLoaded) {
         bindVlXrSessionReseat();
         self._vlBindRightAButton();
+        self._vlBindRightBButton();
       } else {
         sceneEl.addEventListener('loaded', function vlOnSceneLoaded() {
           sceneEl.removeEventListener('loaded', vlOnSceneLoaded);
           bindVlXrSessionReseat();
           self._vlBindRightAButton();
+          self._vlBindRightBButton();
         });
       }
       window.addEventListener('keydown', function (e) {
@@ -1200,10 +1231,14 @@
       var soccerTex = vlMakeSoccerBallTexture(THREE);
       var ballMat = new THREE.MeshStandardMaterial({
         map: soccerTex,
-        roughness: 0.32,
-        metalness: 0.06,
-        emissive: new THREE.Color(0x080a12),
-        emissiveIntensity: 0.06
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+        roughness: 0.35,
+        metalness: 0.04,
+        emissive: new THREE.Color(0x000000),
+        emissiveIntensity: 0,
+        side: THREE.DoubleSide
       });
       var ballMesh = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 64, 64), ballMat);
       var ballEl = document.createElement('a-entity');
@@ -1966,7 +2001,7 @@
       var el = document.getElementById('vl-thruster-sound');
       if (!el || !el.components || !el.components.sound) return;
       var sc = el.components.sound;
-      var on = inp && inp.trig > 0.04;
+      var on = inp && (inp.trig > 0.04 || (inp.trigRev || 0) > 0.04);
       var slot = this.mySlot;
       if (on) {
         this._resumeAudioIfNeeded();
@@ -1995,6 +2030,7 @@
 
     _applySpectatorTransform: function (slot) {
       if (!this._rig) return;
+      if (this._vlFpvActive) return;
       var yawEl = this._rigYaw || this._rig;
       var s = SPEC[slot] || SPEC[0];
       var A = ARENA;
@@ -2082,6 +2118,245 @@
       rh.addEventListener('abuttonup', this._vlOnAbuttonup);
     },
 
+    /**
+     * RTSVR2-style: `bbuttondown` on `#rightHand` only. Do not use generic `buttondown` with id 4 — on Quest/WebXR
+     * that index is often the A (primary) button, so it was toggling FPV together with cube reset.
+     * Raw gamepad B uses only `buttons[5]` in _gatherLocalInput (see comment there).
+     */
+    /** Pause A-Frame `position` / `rotation` so they do not overwrite `object3D` each tick (FPV jitter / camera Y). */
+    _vlFpvPauseTransformComponents: function (el) {
+      if (!el || typeof el.pauseComponent !== 'function') return;
+      try {
+        el.pauseComponent('position');
+        el.pauseComponent('rotation');
+      } catch (eP) {}
+    },
+
+    _vlFpvPlayTransformComponents: function (el) {
+      if (!el || typeof el.playComponent !== 'function') return;
+      try {
+        el.playComponent('position');
+        el.playComponent('rotation');
+      } catch (ePl) {}
+    },
+
+    _vlBindRightBButton: function () {
+      if (!VL_FPV_ENABLED) return;
+      var self = this;
+      if (this._vlRightBHandlersBound) return;
+      var rh = vlHandEl('rightHand', 'vl-hand-right');
+      if (!rh) return;
+      this._vlRightBHandlersBound = true;
+      this._vlRightHandBHook = rh;
+      this._vlOnBbuttondown = function () {
+        self._vlTryToggleFpv();
+      };
+      rh.addEventListener('bbuttondown', this._vlOnBbuttondown);
+    },
+
+    /**
+     * Cockpit vs standing eye height on `#cam`. Do **not** call every frame in WebXR — resetting `rotation` here
+     * would wipe head tracking. In immersive WebXR, Three’s `WebXRManager.updateUserCamera` writes `#cam`’s local
+     * matrix from the viewer pose and **parent** `matrixWorld`; that requires `matrixAutoUpdate: false` on the
+     * camera (same as look-controls `onEnterVR`). Leaving it `true` lets A-Frame rebuild the matrix from attrs and
+     * fight WebXR → unstable stereo / drift / “FPV never works”.
+     */
+    _vlApplyFpvEyePose: function (cockpit) {
+      var cam = document.getElementById('cam');
+      if (!cam || !cam.object3D) return;
+      var scene = cam.sceneEl || this.el.sceneEl || this.el;
+      var hmd =
+        scene &&
+        typeof scene.checkHeadsetConnected === 'function' &&
+        scene.checkHeadsetConnected() &&
+        (scene.is('vr-mode') || scene.is('ar-mode'));
+      var webxr = !!(hmd && scene.hasWebXR);
+
+      if (cockpit) {
+        cam.object3D.position.set(0, 0, 0);
+      } else {
+        cam.object3D.position.set(0, 1.55, 0);
+      }
+      cam.object3D.rotation.set(0, 0, 0);
+      cam.object3D.quaternion.identity();
+      cam.object3D.scale.set(1, 1, 1);
+      cam.object3D.updateMatrix();
+
+      /* FPV + WebXR: Keep matrixAutoUpdate to TRUE. This allows Three.js's XR manager
+       * to manage eye synchronization properly, avoiding "seeing double." 
+       * We rely on pausing the 'position'/'rotation' components to stop A-Frame 
+       * attributes from overwriting our manual object3D state. */
+      cam.object3D.matrixAutoUpdate = true;
+      if (!webxr) {
+        cam.setAttribute(
+          'position',
+          cockpit ? { x: 0, y: 0, z: 0 } : { x: 0, y: 1.55, z: 0 }
+        );
+        cam.setAttribute('rotation', { x: 0, y: 0, z: 0 });
+      }
+
+      var lc = cam.components && cam.components['look-controls'];
+      if (lc && lc.pitchObject && lc.yawObject) {
+        lc.pitchObject.rotation.set(0, 0, 0);
+        lc.yawObject.rotation.set(0, 0, 0);
+      }
+      cam.object3D.updateMatrixWorld(true);
+    },
+
+    _vlSyncYawGroupIdentity: function (yawEl) {
+      if (!yawEl || !yawEl.object3D) return;
+      yawEl.object3D.matrixAutoUpdate = true;
+      yawEl.object3D.position.set(0, 0, 0);
+      yawEl.object3D.rotation.set(0, 0, 0);
+      yawEl.object3D.quaternion.identity();
+      yawEl.object3D.scale.set(1, 1, 1);
+      yawEl.object3D.updateMatrix();
+      yawEl.setAttribute('position', { x: 0, y: 0, z: 0 });
+      yawEl.setAttribute('rotation', { x: 0, y: 0, z: 0 });
+    },
+
+    _vlExitFpvIfActive: function () {
+      if (!this._vlFpvActive) return;
+      this._vlFpvActive = false;
+      var cam = document.getElementById('cam');
+      if (cam && cam.setAttribute && this._vlFpvLookControlsWereDisabled) {
+        cam.setAttribute('look-controls', 'enabled: true; pointerLockEnabled: false');
+      }
+      this._vlFpvLookControlsWereDisabled = false;
+      var yawEl = this._rigYaw;
+      var self = this;
+      var slot = this.mySlot;
+      function applyOut() {
+        var rigE = self._rig;
+        var camE = document.getElementById('cam');
+        if (rigE) self._vlFpvPlayTransformComponents(rigE);
+        if (camE) self._vlFpvPlayTransformComponents(camE);
+        if (yawEl) self._vlFpvPlayTransformComponents(yawEl);
+        self._vlSyncYawGroupIdentity(yawEl);
+        self._vlApplyFpvEyePose(false);
+        if (self._rig && self._rig.object3D) {
+          self._rig.object3D.matrixAutoUpdate = true;
+        }
+        if (typeof slot === 'number') self._applySpectatorTransform(slot);
+      }
+      applyOut();
+      if (typeof window !== 'undefined' && window.requestAnimationFrame) {
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(applyOut);
+        });
+      }
+    },
+
+    /**
+     * FPV: keep `#vr-rig` under the scene (WebXR expects a stable rig chain). Each frame copy the **visual**
+     * car mesh world pose so the rig matches what you see; apply π yaw in body space so camera −Z aligns
+     * with cube +Z (thrust). Do not call `_vlApplyFpvEyePose` here — resetting camera rotation every tick
+     * would destroy head tracking.
+     */
+    _vlTickFpvRigFollowCarMesh: function () {
+      if (!this._vlFpvActive || !this._rig || !this.carEls) return;
+      var slot = this.mySlot;
+      var carEl = this.carEls[slot];
+      if (!carEl || !carEl.object3D) return;
+      var rig = this._rig;
+      var yawEl = this._rigYaw;
+      var o = rig.object3D;
+      var cam = document.getElementById('cam');
+
+      carEl.object3D.updateMatrixWorld(true);
+      carEl.object3D.getWorldPosition(this.tmpVec);
+      carEl.object3D.getWorldQuaternion(this._tmpQHand);
+
+      /* Flip yaw so camera −Z coincides with car +Z. */
+      this._tmpQDelta.setFromAxisAngle(this.tmpVec2.set(0, 1, 0), Math.PI);
+      this._tmpQHand.multiply(this._tmpQDelta);
+
+      /* Fix Jitter / Feedback Loop: Use STATIC Head Offset captured at toggle start.
+       * If we subtracted cam.object3D.position every frame, we would create a jittery 
+       * feedback loop between tracked head position and rig movement. */
+      if (this._vlFpvHeadOffset) {
+        this.tmpVec2.copy(this._vlFpvHeadOffset);
+        this.tmpVec2.applyQuaternion(this._tmpQHand);
+        this.tmpVec.sub(this.tmpVec2);
+      }
+
+      var parent = o.parent;
+      if (parent) {
+        parent.updateMatrixWorld(true);
+        parent.worldToLocal(this.tmpVec);
+      }
+
+      o.position.copy(this.tmpVec);
+      o.quaternion.copy(this._tmpQHand);
+      o.scale.set(1, 1, 1);
+      o.updateMatrix();
+      
+      if (yawEl && yawEl.object3D) {
+        yawEl.object3D.rotation.set(0, 0, 0);
+        yawEl.object3D.quaternion.identity();
+        yawEl.object3D.updateMatrix();
+      }
+      
+      /* Essential update order for WebXR eye poses. */
+      o.updateMatrixWorld(true);
+      if (cam && cam.object3D) {
+        cam.object3D.updateMatrixWorld(true);
+      }
+    },
+
+    /** Toggle first-person view: scene-root rig follows car mesh; cockpit eye offset applied once. */
+    _vlTryToggleFpv: function () {
+      if (!VL_FPV_ENABLED) return;
+      var scn = this.el.sceneEl || this.el;
+      var vm = scn.components && scn.components['vr-menu'];
+      if (vm && vm.menuVisible) return;
+      var nowMs = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      if (nowMs - (this._vlLastFpvToggleMs || 0) < 220) return;
+      this._vlLastFpvToggleMs = nowMs;
+      if (this._vlFpvActive) {
+        this._vlExitFpvIfActive();
+        return;
+      }
+      var body = this.carBodies && this.carBodies[this.mySlot];
+      var cam = document.getElementById('cam');
+      var rig = this._rig;
+      var yawEl = this._rigYaw;
+      if (!body || !cam || !rig) return;
+      this._vlFpvActive = true;
+      var xrOn = !!(scn && scn.renderer && scn.renderer.xr && scn.renderer.xr.isPresenting);
+      this._vlFpvLookControlsWereDisabled = xrOn;
+      if (xrOn && cam.setAttribute) {
+        cam.setAttribute('look-controls', 'enabled: false; pointerLockEnabled: false');
+      }
+      /* Stop `position` / `rotation` components from fighting `object3D` (floating camera + rig judder). */
+      this._vlFpvPauseTransformComponents(rig);
+      if (xrOn) {
+        this._vlFpvPauseTransformComponents(cam);
+      }
+      this._vlSyncYawGroupIdentity(yawEl);
+      if (yawEl) {
+        this._vlFpvPauseTransformComponents(yawEl);
+      }
+      /* Capture initial head position for static offset (prevents jitter feedback loop). */
+      if (cam && cam.object3D) {
+        this._vlFpvHeadOffset = this._vlFpvHeadOffset || new THREE.Vector3();
+        this._vlFpvHeadOffset.copy(cam.object3D.position);
+      }
+      this._vlApplyFpvEyePose(true);
+      this._vlTickFpvRigFollowCarMesh();
+      var self = this;
+      function applyIn() {
+        /* Yaw/rig/cam transform components stay paused — do not setAttribute here (would not apply). */
+        self._vlApplyFpvEyePose(true);
+        self._vlTickFpvRigFollowCarMesh();
+      }
+      if (typeof window !== 'undefined' && window.requestAnimationFrame) {
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(applyIn);
+        });
+      }
+    },
+
     _vlFakeDesktopHand: function (scene, outPos, outQuat) {
       outQuat.set(0, 0, 0, 1);
       if (!vlGetCameraWorldPosition(scene, outPos)) return false;
@@ -2097,7 +2372,7 @@
 
     /**
      * Local input: HeliVR/main.js updateHeliPhysics lines 188–216 (keyboard + Quest XR), verbatim
-     * mapping. Wire format: lx=yaw, rx=roll, ry=pitch, trig=thrust (unchanged for PeerJS).
+     * mapping. Wire format: lx=yaw, rx=roll, ry=pitch, trig=right trigger forward, trigRev=left reverse.
      * Adds grip (squeeze), aEdge (Quest A / right primary), and hand world poses for grab sync.
      */
     _gatherLocalInput: function () {
@@ -2130,6 +2405,7 @@
       var gripL = 0;
       var gripR = 0;
       var aNow = false;
+      var bNowXR = false;
 
       if (renderer && renderer.xr && renderer.xr.isPresenting) {
         var session = renderer.xr.getSession();
@@ -2146,23 +2422,29 @@
                   out.trig = Math.max(out.trig, buttons[0].pressed ? 1 : buttons[0].value || 0);
                 }
                 if (buttons[1]) gripR = Math.max(gripR, buttons[1].value || (buttons[1].pressed ? 1 : 0));
-                /* A: index 3 on Touch; some runtimes expose an extra face button at 5 — never use 4 (B). */
-                var ai;
-                var aIdx = [3, 5];
-                for (ai = 0; ai < aIdx.length; ai++) {
-                  var ab = buttons[aIdx[ai]];
-                  if (ab) {
-                    aNow = aNow || !!(ab.pressed || (ab.value || 0) > 0.35);
-                  }
+                /* A = primary face button only (index 3). Never scan index 5: on Quest/WebXR it is often B — that falsely set aNow → aEdge → cube reset. */
+                var abA = buttons[3];
+                if (abA) {
+                  aNow = aNow || !!(abA.pressed || (abA.value || 0) > 0.35);
+                }
+                /* B: only index 5 — index 4 is the A/primary button on many Quest WebXR gamepad mappings. */
+                var abB = buttons[5];
+                if (abB) {
+                  bNowXR = bNowXR || !!(abB.pressed || (abB.value || 0) > 0.35);
                 }
               } else if (source.handedness === 'left') {
                 yaw -= axes[2] || 0;
                 if (buttons[0]) {
-                  out.trig = Math.max(out.trig, (buttons[0].value || 0) * 0.9);
+                  out.trigRev = Math.max(out.trigRev, (buttons[0].value || 0) * 0.95);
                 }
                 if (buttons[1]) gripL = Math.max(gripL, buttons[1].value || (buttons[1].pressed ? 1 : 0));
               }
             }
+          }
+          var bEdgeXR = bNowXR && !this._vlPrevBGamepadXR;
+          this._vlPrevBGamepadXR = !!bNowXR;
+          if (VL_FPV_ENABLED && bEdgeXR) {
+            this._vlTryToggleFpv();
           }
         }
         var lh = vlHandEl('leftHand', 'vl-hand-left');
@@ -2223,11 +2505,13 @@
       out.rx = roll;
       out.ry = pitch;
       if (kb['Space']) out.trig = Math.max(out.trig, 1);
+      if (kb['KeyC']) out.trigRev = Math.max(out.trigRev, 1);
       out.lx = clamp(out.lx, -1, 1);
       out.ly = 0;
       out.rx = clamp(out.rx, -1, 1);
       out.ry = clamp(out.ry, -1, 1);
       out.trig = clamp(out.trig, 0, 1);
+      out.trigRev = clamp(out.trigRev, 0, 1);
       if (vlGetCameraWorldPosition(scn, this.tmpVec)) {
         out.camOk = 1;
         out.camx = this.tmpVec.x;
@@ -2236,6 +2520,7 @@
       } else {
         out.camOk = 0;
       }
+      out.autoRoll = window._vlAutoRollEnabled ? 1 : 0;
       return out;
     },
 
@@ -2243,14 +2528,21 @@
       var body = this.carBodies[slot];
       if (!body || !inp) return;
       var botSlot = this.isHost && !this._vlIsHumanOccupyingSlot(slot);
-      var tScale = botSlot ? HELI_TORQUE_SCALE * VL_BOT_TORQUE_SCALE : HELI_TORQUE_SCALE;
-      var fThrust = botSlot ? THRUST_FORWARD * VL_BOT_THRUST_SCALE : THRUST_FORWARD;
+      var unbeatable = botSlot && !!window.vlBotUnbeatableMode;
+      var tScale = unbeatable ? HELI_TORQUE_SCALE * 3.0 : (botSlot ? HELI_TORQUE_SCALE * VL_BOT_TORQUE_SCALE : HELI_TORQUE_SCALE);
+      var fThrust = unbeatable ? THRUST_FORWARD : (botSlot ? THRUST_FORWARD * VL_BOT_THRUST_SCALE : THRUST_FORWARD);
+      var autoRollHuman =
+        (inp.autoRoll === undefined || inp.autoRoll === 1 || inp.autoRoll === true) &&
+        this._vlIsHumanOccupyingSlot(slot);
 
       if (!noStickTorque) {
         /* HeliVR/main.js lines 226–231: local torque (pitch, yaw*1.5, roll) then applyQuaternion(mesh). */
         var pitch = inp.ry;
         var roll = inp.rx;
         var yaw = inp.lx;
+        if (autoRollHuman) {
+          roll = 0;
+        }
         this.tmpVec2.set(pitch * tScale, yaw * tScale * 1.5, roll * tScale);
         var q = new THREE.Quaternion(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
         this.tmpVec2.applyQuaternion(q);
@@ -2260,12 +2552,93 @@
       }
 
       var trig = inp.trig || 0;
+      var trigRev = inp.trigRev || 0;
       if (trig > 0) {
         var fWorld = this._bodyDirWorld(body, 0, 0, 1);
         body.force.x += fWorld.x * trig * fThrust;
         body.force.y += fWorld.y * trig * fThrust;
         body.force.z += fWorld.z * trig * fThrust;
       }
+      if (trigRev > 0) {
+        var fBack = this._bodyDirWorld(body, 0, 0, 1);
+        var rScale = fThrust * THRUST_REVERSE_SCALE;
+        body.force.x -= fBack.x * trigRev * rScale;
+        body.force.y -= fBack.y * trigRev * rScale;
+        body.force.z -= fBack.z * trigRev * rScale;
+      }
+      /* Wing-level roll only: target roof axis = level dir for current pitch (proj of world up ⊥ thrust). */
+      if (autoRollHuman && !noStickTorque) {
+        var fW = this._bodyDirWorld(body, 0, 0, 1);
+        var fy = fW.y;
+        var px = -fy * fW.x;
+        var py = 1 - fy * fy;
+        var pz = -fy * fW.z;
+        var lenSq = px * px + py * py + pz * pz;
+        if (lenSq >= VL_AUTO_ROLL_LEVEL_MIN_LEN_SQ) {
+          var invL = 1 / Math.sqrt(lenSq);
+          var tLx = px * invL;
+          var tLy = py * invL;
+          var tLz = pz * invL;
+          var uB = this._bodyDirWorld(body, 0, 1, 0);
+          var ex = uB.y * tLz - uB.z * tLy;
+          var ey = uB.z * tLx - uB.x * tLz;
+          var ez = uB.x * tLy - uB.y * tLx;
+          var tqx = ex * VL_AUTO_ROLL_UP_KP;
+          var tqy = ey * VL_AUTO_ROLL_UP_KP;
+          var tqz = ez * VL_AUTO_ROLL_UP_KP;
+          var tH = Math.sqrt(tqx * tqx + tqy * tqy + tqz * tqz);
+          if (tH > VL_AUTO_ROLL_UP_MAX) {
+            var tS = VL_AUTO_ROLL_UP_MAX / tH;
+            tqx *= tS;
+            tqy *= tS;
+            tqz *= tS;
+          }
+          body.torque.x += tqx;
+          body.torque.y += tqy;
+          body.torque.z += tqz;
+          var wx = body.angularVelocity.x;
+          var wy = body.angularVelocity.y;
+          var wz = body.angularVelocity.z;
+          var wRoll = wx * fW.x + wy * fW.y + wz * fW.z;
+          var kdR = VL_AUTO_ROLL_UP_KD * wRoll;
+          body.torque.x -= kdR * fW.x;
+          body.torque.y -= kdR * fW.y;
+          body.torque.z -= kdR * fW.z;
+        }
+      }
+    },
+
+    /**
+     * Host: auto-roll for **human** cubes — strip ω along body +Z (barrel spin). Wing-level bank is handled
+     * in `_applyCarControls`. Skipped for bots, grab, reset cd/out.
+     */
+    _vlApplyRollLockIfEnabled: function (slot) {
+      var inp = this.inputs[slot];
+      var body = this.carBodies[slot];
+      if (!body || !inp) return;
+      var autoRollOn = inp.autoRoll === undefined || inp.autoRoll === 1 || inp.autoRoll === true;
+      if (!autoRollOn) return;
+      if (!this._vlIsHumanOccupyingSlot(slot)) return;
+      var G = this._vlGrabState[slot];
+      var R = this._vlSlotReset[slot];
+      if (G && G.active) return;
+      if (R && (R.phase === 'cd' || R.phase === 'out')) return;
+
+      var fwd = this._bodyDirWorld(body, 0, 0, 1);
+      var fx = fwd.x;
+      var fy = fwd.y;
+      var fz = fwd.z;
+      var fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1e-6;
+      fx /= fl;
+      fy /= fl;
+      fz /= fl;
+      var wx = body.angularVelocity.x;
+      var wy = body.angularVelocity.y;
+      var wz = body.angularVelocity.z;
+      var spin = wx * fx + wy * fy + wz * fz;
+      body.angularVelocity.x -= fx * spin;
+      body.angularVelocity.y -= fy * spin;
+      body.angularVelocity.z -= fz * spin;
     },
 
     _clampCarMotion: function (body, slot) {
@@ -2692,6 +3065,157 @@
       this.inputs[slot] = z;
     },
 
+    /**
+     * Unbeatable bot v4: The Absolute Shield.
+     * Snaps to the vector between the ball and its own net.
+     */
+    _vlSteerUnbeatableBot: function (slot, nowMs) {
+      if (!this.isHost || !this.ballBody || !this.carBodies) return;
+      var A = ARENA;
+      var b = this.ballBody;
+      var body = this.carBodies[slot];
+      if (!b || !body) return;
+
+      var defWest = this._vlBotDefendsWest(slot);
+      var cx = body.position.x;
+      var cy = body.position.y;
+      var cz = body.position.z;
+      var vx = body.velocity.x;
+      var vy = body.velocity.y;
+      var vz = body.velocity.z;
+
+      var ownGoalX = defWest ? A.cx - A.halfW : A.cx + A.halfW;
+      var ownGoalY = A.cy + (0.02 + A.cageH * 0.5);
+      var ownGoalZ = A.cz;
+
+      // 1. Predicted Ball Position (short lookahead for snappy response)
+      var targetB = this._vlPredictBallTrajectory(0.12);
+      var bx = targetB.x;
+      var by = targetB.y;
+      var bz = targetB.z;
+
+      // 2. The Shield Vector: Own Goal -> Ball
+      var gtx = bx - ownGoalX;
+      var gty = by - ownGoalY;
+      var gtz = bz - ownGoalZ;
+      var gtLen = Math.sqrt(gtx * gtx + gty * gty + gtz * gtz) + 1e-6;
+      var ugtx = gtx / gtLen;
+      var ugty = gty / gtLen;
+      var ugtz = gtz / gtLen;
+
+      // Target position: on the goal-ball line, offset 0.38m from the ball's center
+      var Px = bx - ugtx * 0.38;
+      var Py = by - ugty * 0.38;
+      var Pz = bz - ugtz * 0.38;
+
+      // 3. Absolute Snapping (Torque-boosted in _applyCarControls)
+      var z = zeroInput();
+      
+      // Face the ball directly
+      var targetFaceX = bx - cx;
+      var targetFaceY = by - cy;
+      var targetFaceZ = bz - cz;
+      var fLen = Math.sqrt(targetFaceX * targetFaceX + targetFaceY * targetFaceY + targetFaceZ * targetFaceZ) + 1e-6;
+      targetFaceX /= fLen; targetFaceY /= fLen; targetFaceZ /= fLen;
+
+      var upB = this._bodyDirWorld(body, 0, 1, 0);
+      var rightB = this._bodyDirWorld(body, 1, 0, 0);
+      
+      // Scalar projection onto local axes
+      var yawErr = -(targetFaceX * rightB.x + targetFaceY * rightB.y + targetFaceZ * rightB.z);
+      var pitchErr = -(targetFaceX * upB.x + targetFaceY * upB.y + targetFaceZ * upB.z);
+
+      // High response factor for snappy turning
+      z.lx = clamp(yawErr * 5.2, -1, 1); 
+      z.ry = clamp(pitchErr * 5.2, -1, 1);
+
+      // 4. Snappy Movement to Line
+      var mx = Px - cx;
+      var my = Py - cy;
+      var mz = Pz - cz;
+      var mlen = Math.sqrt(mx * mx + my * my + mz * mz) + 1e-6;
+      mx /= mlen; my /= mlen; mz /= mlen;
+
+      var fxw = this._bodyDirWorld(body, 0, 0, 1);
+      var dotMove = clamp(fxw.x * mx + fxw.y * my + fxw.z * mz, -1, 1);
+      var distToP = mlen;
+      var speedActual = vx * mx + vy * my + vz * mz;
+
+      if (distToP > 0.04) {
+        // Broad alignment tolerance (45 degrees) for immediate action
+        if (dotMove > 0.7) {
+          z.trig = 1.0;
+          if (speedActual > 1.8 && distToP < 0.25) z.trig = 0; // Braking
+        } else if (dotMove < -0.5) {
+          z.trigRev = 1.0;
+        } else {
+          // Pointing sideways? Force a nudge to get moving
+          z.trig = 0.32;
+        }
+      }
+
+      // 5. Strike / Clear
+      // Only strike if we are securely between the ball and our goal (dotSide > 0)
+      var botToBallX = bx - cx;
+      var botToBallY = by - cy;
+      var botToBallZ = bz - cz;
+      var dotSide = (botToBallX * ugtx + botToBallY * ugty + botToBallZ * ugtz); 
+      var distToBall = Math.sqrt(botToBallX * botToBallX + botToBallY * botToBallY + botToBallZ * botToBallZ);
+
+      if (distToBall < 0.26 && dotSide > 0.05) {
+        z.trig = 1.0;
+      }
+
+      this.inputs[slot] = z;
+    },
+
+    /**
+     * Physics-based prediction of ball position with wall reflection.
+     */
+    _vlPredictBallTrajectory: function (dt) {
+      var A = ARENA;
+      var b = this.ballBody;
+      if (!b) return { x: 0, y: 0, z: 0 };
+
+      var px = b.position.x;
+      var py = b.position.y;
+      var pz = b.position.z;
+      var vx = b.velocity.x;
+      var vy = b.velocity.y;
+      var vz = b.velocity.z;
+
+      var r = BALL_R;
+      var minX = A.cx - A.halfW + r + A.wallT;
+      var maxX = A.cx + A.halfW - r - A.wallT;
+      var minZ = A.cz - A.halfD + r + A.wallT;
+      var maxZ = A.cz + A.halfD - r - A.wallT;
+      var minY = A.cy + 0.02 + r;
+      var maxY = A.cy + 0.02 + A.cageH - r;
+
+      // Simulate a few steps for simple wall bounces
+      var steps = 3;
+      var stepDt = dt / steps;
+      for (var i = 0; i < steps; i++) {
+        px += vx * stepDt;
+        py += vy * stepDt;
+        pz += vz * stepDt;
+
+        // Bounce X
+        if (px < minX) { px = minX + (minX - px); vx *= -0.9; }
+        else if (px > maxX) { px = maxX - (px - maxX); vx *= -0.9; }
+        
+        // Bounce Z 
+        if (pz < minZ) { pz = minZ + (minZ - pz); vz *= -0.9; }
+        else if (pz > maxZ) { pz = maxZ - (pz - maxZ); vz *= -0.9; }
+
+        // Bounce Y
+        if (py < minY) { py = minY + (minY - py); vy *= -0.9; }
+        else if (py > maxY) { py = maxY - (py - maxY); vy *= -0.9; }
+      }
+
+      return { x: px, y: py, z: pz };
+    },
+
     /** Host: fill `inputs` for any slot not controlled by a human (offline or MP). */
     _vlApplyBotInputs: function (nowMs) {
       if (!this.isHost || !this.ballBody || !this.carBodies) return;
@@ -2701,7 +3225,11 @@
       var s;
       for (s = 0; s < 4; s++) {
         if (this._vlIsHumanOccupyingSlot(s)) continue;
-        this._vlSteerSlotBot(s, nowMs);
+        if (window.vlBotUnbeatableMode) {
+          this._vlSteerUnbeatableBot(s, nowMs);
+        } else {
+          this._vlSteerSlotBot(s, nowMs);
+        }
       }
     },
 
@@ -3096,7 +3624,7 @@
       this._vlMarkHudDirty();
       this._applySpectatorTransform(0);
       this._setStatus(
-        'Practice (offline) — zero-G arena. Multiplayer: VR menu → Play online → Host or Join with a lobby number.'
+        'Practice (offline) — zero-G arena. Quest B (or B key on desktop) toggles cockpit view inside your cube. Multiplayer: VR menu → Play online → Host or Join with a lobby number.'
       );
       this._resetBall();
       this._refreshCubeHighlights();
@@ -3223,6 +3751,12 @@
           rx: typeof msg.rx === 'number' && isFinite(msg.rx) ? msg.rx : 0,
           ry: typeof msg.ry === 'number' && isFinite(msg.ry) ? msg.ry : 0,
           trig: typeof msg.trig === 'number' && isFinite(msg.trig) ? msg.trig : 0,
+          trigRev: typeof msg.trigRev === 'number' && isFinite(msg.trigRev) ? msg.trigRev : 0,
+          autoRoll: (function () {
+            var ar = msg.autoRoll;
+            if (ar === undefined || ar === null) ar = msg.autoYaw;
+            return ar === 0 || ar === false ? 0 : 1;
+          })(),
           grip: typeof msg.grip === 'number' && isFinite(msg.grip) ? msg.grip : 0,
           gripL: typeof msg.gripL === 'number' && isFinite(msg.gripL) ? msg.gripL : 0,
           gripR: typeof msg.gripR === 'number' && isFinite(msg.gripR) ? msg.gripR : 0,
@@ -3322,12 +3856,13 @@
       }
       if (data.type === 'welcome') {
         this.mySlot = data.slot;
+        this._vlExitFpvIfActive();
         this._applySpectatorTransform(this.mySlot);
         this._refreshCubeHighlights();
         this._setStatus(
           'Player ' +
             (this.mySlot + 1) +
-            ' — brightest cube is yours. Sticks = attitude; trigger = forward only. Zeppelin-slow.'
+            ' — brightest cube is yours. Sticks = attitude; right trigger = forward, left = reverse. Quest B = cockpit view inside your cube. Zeppelin-slow.'
         );
         return;
       }
@@ -3402,6 +3937,7 @@
         } catch (e) {}
       });
       this.clientConns = [];
+      this._vlPendingAEdge = 0;
       if (this.peer) {
         try {
           this.peer.destroy();
@@ -3416,15 +3952,25 @@
       if (dtSec <= 0 || dtSec > 0.08) dtSec = 1 / 60;
 
       var inp = this._gatherLocalInput();
+      var kb = this.keys || {};
+      if (VL_FPV_ENABLED && kb['KeyB']) {
+        if (!this._vlPrevBKey) this._vlTryToggleFpv();
+        this._vlPrevBKey = true;
+      } else {
+        this._vlPrevBKey = false;
+      }
       if (inp.aEdge) {
         this._pulseHand(vlHandEl('rightHand', 'vl-hand-right'), 0.45, 58);
       }
       if (this.isHost) {
         this.inputs[this.mySlot] = inp;
       } else if (this.hostConn && this.hostConn.open) {
+        if (inp.aEdge) this._vlPendingAEdge = 1;
         var now = performance.now();
         if (now - this.lastInputSend > 1000 / INPUT_HZ) {
           this.lastInputSend = now;
+          var aEdgeSend = this._vlPendingAEdge ? 1 : 0;
+          if (this._vlPendingAEdge) this._vlPendingAEdge = 0;
           this.hostConn.send({
             type: 'inp',
             lx: inp.lx,
@@ -3432,10 +3978,12 @@
             rx: inp.rx,
             ry: inp.ry,
             trig: inp.trig,
+            trigRev: inp.trigRev,
+            autoRoll: inp.autoRoll,
             grip: inp.grip,
             gripL: inp.gripL,
             gripR: inp.gripR,
-            aEdge: inp.aEdge,
+            aEdge: aEdgeSend,
             lwx: inp.lwx,
             lwy: inp.lwy,
             lwz: inp.lwz,
@@ -3496,6 +4044,9 @@
         for (var cr = 0; cr < 4; cr++) {
           this._vlApplyResetSpin(cr, nowHost);
         }
+        for (var yl = 0; yl < 4; yl++) {
+          this._vlApplyRollLockIfEnabled(yl);
+        }
         this._checkGoals(dtSec);
         this._syncMeshesFromPhysics();
         this._vlRecomputeLedModesHost(nowHost);
@@ -3521,10 +4072,14 @@
       this._updateThrusterSound(inp);
       this._vlPumpHud(t);
       this._vlUpdateCarLedFaces(t);
+      if (this._vlFpvActive) {
+        this._vlTickFpvRigFollowCarMesh();
+      }
       this._vlUpdateResetHintVisibility();
     },
 
     remove: function () {
+      this._vlExitFpvIfActive();
       if (this.ballBody && this._onBallCollide) {
         this.ballBody.removeEventListener('collide', this._onBallCollide);
       }
@@ -3546,12 +4101,23 @@
         sceneEl.removeEventListener('enter-vr', this._vlEnterVrBindA);
         this._vlEnterVrBindA = null;
       }
+      if (sceneEl && this._vlExitVrFpv) {
+        sceneEl.removeEventListener('exit-vr', this._vlExitVrFpv);
+        this._vlExitVrFpv = null;
+      }
       var rhA = this._vlRightHandAHook;
       if (rhA && this._vlOnAbuttondown) {
         rhA.removeEventListener('abuttondown', this._vlOnAbuttondown);
         rhA.removeEventListener('abuttonup', this._vlOnAbuttonup);
       }
       this._vlRightAHandlersBound = false;
+      var rhB = this._vlRightHandBHook;
+      if (rhB && this._vlOnBbuttondown) {
+        rhB.removeEventListener('bbuttondown', this._vlOnBbuttondown);
+      }
+      this._vlRightBHandlersBound = false;
+      this._vlRightHandBHook = null;
+      this._vlOnBbuttondown = null;
       var xr = this.el && this.el.renderer && this.el.renderer.xr;
       if (xr && this._vlReseatSpectator) {
         xr.removeEventListener('sessionstart', this._vlReseatSpectator);

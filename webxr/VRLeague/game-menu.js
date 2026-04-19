@@ -230,6 +230,7 @@
         case 'menu-delete-last': this.deleteLastClip(); break;
         case 'menu-clear-clips': this.clearAllClips(); break;
         case 'menu-music-toggle': this.toggleMusic(); break;
+        case 'menu-auto-roll-toggle': this.toggleAutoRoll(); break;
         case 'menu-start-match': this.toggleMatch(); break;
         case 'menu-stats-sp': this.setStatsSubTab('single'); break;
         case 'menu-stats-mp': this.setStatsSubTab('multi'); break;
@@ -291,7 +292,9 @@
     },
 
     toggleMirrorMode: function () {
-      if (!window.botMirrorMode && !window.botRecordedMode) {
+      if (!window.botMirrorMode && !window.botRecordedMode && !window.vlBotUnbeatableMode) {
+        this.setBotMode('unbeatable');
+      } else if (window.vlBotUnbeatableMode) {
         this.setBotMode('mirror');
       } else if (window.botMirrorMode) {
         this.setBotMode('recorded');
@@ -313,12 +316,13 @@
 
       window.botMirrorMode = (mode === 'mirror');
       window.botRecordedMode = (mode === 'recorded');
+      window.vlBotUnbeatableMode = (mode === 'unbeatable');
       if (mode !== 'recorded') window.botRecordedSubMode = 'random';
 
       var mirrorText = document.getElementById('menu-mirror-text');
       var mirrorBtn = document.getElementById('menu-mirror-toggle');
-      var labels = { normal: 'NORMAL', mirror: 'MIRRORED', recorded: 'RECORDED' };
-      var colors = { normal: '#555555', mirror: '#4488ff', recorded: '#44aa44' };
+      var labels = { normal: 'NORMAL', unbeatable: 'UNBEATABLE', mirror: 'MIRRORED', recorded: 'RECORDED' };
+      var colors = { normal: '#555555', unbeatable: '#ff8800', mirror: '#4488ff', recorded: '#44aa44' };
       if (mirrorText) mirrorText.setAttribute('text', 'value', labels[mode] || 'NORMAL');
       if (mirrorBtn) setButtonColor(mirrorBtn, colors[mode] || '#555555');
 
@@ -780,6 +784,21 @@
       }
     },
 
+    toggleAutoRoll: function () {
+      window._vlAutoRollEnabled = !window._vlAutoRollEnabled;
+      try {
+        localStorage.setItem('vrleague-auto-roll', window._vlAutoRollEnabled ? '1' : '0');
+      } catch (e) {}
+      var btn = document.getElementById('menu-auto-roll-toggle');
+      var txt = document.getElementById('menu-auto-roll-text');
+      if (btn) {
+        setButtonColor(btn, window._vlAutoRollEnabled ? '#44aa88' : '#555555');
+      }
+      if (txt) {
+        txt.setAttribute('text', 'value', window._vlAutoRollEnabled ? 'Auto roll ON' : 'Auto roll OFF');
+      }
+    },
+
     toggleMusic: function () {
       window._musicEnabled = window._musicEnabled !== false;
       window._musicEnabled = !window._musicEnabled;
@@ -914,6 +933,27 @@
 
     updateMenuDisplay: function () {
       this.ensureRefs();
+      var arBtn = document.getElementById('menu-auto-roll-toggle');
+      var arTxt = document.getElementById('menu-auto-roll-text');
+      if (typeof window._vlAutoRollEnabled === 'undefined') {
+        try {
+          var r0 = localStorage.getItem('vrleague-auto-roll');
+          if (r0 === null || r0 === '') {
+            window._vlAutoRollEnabled = localStorage.getItem('vrleague-auto-yaw') !== '0';
+          } else {
+            window._vlAutoRollEnabled = r0 !== '0';
+          }
+        } catch (e) {
+          window._vlAutoRollEnabled = true;
+        }
+      }
+      if (arBtn) {
+        setButtonColor(arBtn, window._vlAutoRollEnabled ? '#44aa88' : '#555555');
+      }
+      if (arTxt) {
+        arTxt.setAttribute('text', 'value', window._vlAutoRollEnabled ? 'Auto roll ON' : 'Auto roll OFF');
+      }
+
       var ls = window.lobbyState;
 
       var joinBtn = document.getElementById('menu-join');
