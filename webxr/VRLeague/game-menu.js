@@ -1031,7 +1031,7 @@
           qtext +=
             'Score Blue ' +
             (ls.matchScore.blue != null ? ls.matchScore.blue : 0) +
-            ' — Orange ' +
+            ' — Red ' +
             (ls.matchScore.red != null ? ls.matchScore.red : 0) +
             '\n';
         }

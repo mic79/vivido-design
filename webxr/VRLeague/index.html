@@ -93,7 +93,7 @@
         text-shadow: 0 0 6px #000;
       "
     >
-      Blue 0 — Orange 0
+      Blue 0 — Red 0
     </div>
     <div
       id="vl-status"
@@ -150,7 +150,7 @@
                 align="center"
                 width="0.68"
                 color="#ccddee"
-                value="Blue 0 — Orange 0   |   --:--"
+                value="Blue 0 — Red 0   |   --:--"
               ></a-text>
               <a-entity
                 id="menu-auto-roll-toggle"
@@ -403,7 +403,7 @@
                 align="center"
                 width="0.62"
                 color="#ddeeff"
-                value="Blue 0 — Orange 0   |   --:--"
+                value="Blue 0 — Red 0   |   --:--"
               ></a-text>
             </a-entity>
           </a-camera>
@@ -514,13 +514,67 @@
                 </a-entity>
               </a-entity>
             </a-entity>
+            <!-- Above A-hint: B = deploy power-up (mine / missile). -->
+            <a-entity id="vl-pu-deploy-hint" visible="false">
+              <a-entity position="0.002 0.034 -0.062">
+                <a-entity rotation="68 170 180">
+                  <a-entity rotation="180 0 0">
+                    <a-entity
+                      animation="property: scale; from: 1 1 1; to: 1.15 1.15 1.15; dur: 700; dir: alternate; loop: true; easing: easeInOutSine"
+                    >
+                      <a-ring
+                        radius-inner="0.0084"
+                        radius-outer="0.0096"
+                        segments-theta="40"
+                        material="shader: flat; color: #aaccff; opacity: 0.95; transparent: true; side: double"
+                      ></a-ring>
+                      <a-text
+                        position="0 0 0"
+                        value="B"
+                        align="center"
+                        anchor="center"
+                        baseline="center"
+                        width="0.34"
+                        color="#cce8ff"
+                        shader="msdf"
+                        transparent="true"
+                        alpha-test="0.08"
+                        side="double"
+                      ></a-text>
+                    </a-entity>
+                    <a-text
+                      id="vl-pu-deploy-hint-label"
+                      position="0.0125 0 0"
+                      value="Deploy Mine"
+                      align="left"
+                      anchor="left"
+                      baseline="center"
+                      width="0.48"
+                      color="#ddeeff"
+                      shader="msdf"
+                      transparent="true"
+                      alpha-test="0.08"
+                      side="double"
+                    ></a-text>
+                  </a-entity>
+                </a-entity>
+              </a-entity>
+            </a-entity>
           </a-entity>
         </a-entity>
       </a-entity>
 
       <a-entity
         id="vl-bounce-sound"
-        sound="src: url(audio/impact-cinematic-boom-5-352465.mp3); autoplay: false; loop: false; volume: 0.7; positional: true; distanceModel: linear; refDistance: 1; maxDistance: 20; poolSize: 8; rate: 1.5"
+        sound="src: url(audio/impact-cinematic-boom-5-352465.mp3); autoplay: false; loop: false; volume: 0.92; positional: false; poolSize: 16"
+      ></a-entity>
+      <a-entity
+        id="vl-pu-sonar-sound"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 0.88; positional: false; poolSize: 3"
+      ></a-entity>
+      <a-entity
+        id="vl-pu-hit-sound"
+        sound="src: url(audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); autoplay: false; loop: false; volume: 0.9; positional: false; poolSize: 4"
       ></a-entity>
       <a-entity
         id="vl-goal-sound"

@@ -29,6 +29,19 @@
   var HOST_ID_PREFIX = 'vrleague-host-';
   /** Countdown match length (host clock), same feel as DodgeVR's 3:00. */
   var VL_MATCH_DURATION_MS = 3 * 60 * 1000;
+  /** Pre-start 3…2…1 before the match clock runs (host). */
+  var VL_MATCH_START_COUNTDOWN_MS = 3000;
+  /** Arena center “GO!” 3D text duration (ms). */
+  var VL_GO_LETTER_MS = 1100;
+  /** Goal celebration: “GOAL!” text then confetti only (ms). */
+  var VL_GOAL_CELEB_TEXT_MS = 2400;
+  var VL_GOAL_CELEB_FULL_MS = 3000;
+  /** End-party: hide winner text (ms); confetti continues after that. */
+  var VL_END_PARTY_TEXT_MS = 7800;
+  /** End-party: full cleanup (ms). */
+  var VL_END_PARTY_FULL_MS = 8800;
+  /** After a throw, suppress auto-roll (wing-level + spin strip) for this long (ms). */
+  var VL_AUTO_ROLL_AFTER_THROW_MS = 3000;
   /** Same Metered-backed TURN/STUN JSON as DodgeVR / RTSVR2 (Cloudflare worker). */
   var VL_TURN_ENDPOINT = 'https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev';
   /** Cockpit / first-person camera follow — off by default (set `true` to re-enable B / KeyB). */
@@ -62,6 +75,129 @@
       secure: true,
       config: { iceServers: iceServers }
     };
+  }
+
+  /** `elapsed` = ms into pre-start [0, VL_MATCH_START_COUNTDOWN_MS). */
+  function vlCdDigitFromElapsed(elapsed) {
+    if (elapsed == null || !isFinite(elapsed)) return null;
+    var idx = Math.min(2, Math.max(0, Math.floor(elapsed / 1000)));
+    return { label: String(3 - idx), tIn: (elapsed % 1000) / 1000 };
+  }
+
+  function vlCdPopScale(tIn) {
+    if (tIn < 0.2) {
+      var u = tIn / 0.2;
+      var s = u * u * (3 - 2 * u);
+      return s * 1.22;
+    }
+    if (tIn < 0.68) {
+      var u2 = (tIn - 0.2) / 0.48;
+      return 1.05 + 0.08 * Math.sin(u2 * Math.PI);
+    }
+    var u3 = (tIn - 0.68) / 0.32;
+    return Math.max(0, (1 - u3) * 1.08);
+  }
+
+  function vlCdSpinDeg(tIn) {
+    return tIn * 420;
+  }
+
+  /** Darken `#rrggbb` for stacked “3D” text layers behind the front plane. */
+  /** Confetti hue center for team-colored goal bursts (HSL). */
+  function vlGoalTeamHue(team) {
+    var t = String(team || '').toLowerCase();
+    if (t === 'blue') return 218;
+    return 8;
+  }
+
+  /**
+   * A-Frame 1.7 `sound.stopSound()` does `if (!sound.source || !sound.buffer) { return; }` inside the
+   * pool loop, so one unloaded slot aborts the whole stop — other slots keep `isPlaying`, then
+   * `playSound()` finds no free THREE.Audio and drops the one-shot (silent or “cut off”).
+   */
+  function vlSoundPoolStopEvery(sc) {
+    if (!sc || !sc.pool || !sc.pool.children) return;
+    var k;
+    var snd;
+    for (k = 0; k < sc.pool.children.length; k++) {
+      snd = sc.pool.children[k];
+      if (!snd) continue;
+      try {
+        if (typeof snd.stop === 'function') snd.stop();
+      } catch (eSt) {}
+    }
+    sc.isPlaying = false;
+  }
+
+  /** Play one buffer-backed pool slot; reuses A-Frame pool but bypasses broken `stopSound`/`playSound` pairing. */
+  function vlSoundPoolPlayOneShot(sc, rate, vol) {
+    if (!sc || !sc.pool || !sc.pool.children || !sc.loaded) return;
+    var i;
+    var snd;
+    for (i = 0; i < sc.pool.children.length; i++) {
+      snd = sc.pool.children[i];
+      if (snd && snd.buffer && !snd.isPlaying) {
+        if (snd.setPlaybackRate) snd.setPlaybackRate(rate);
+        if (snd.setVolume) snd.setVolume(vol);
+        snd.play();
+        sc.isPlaying = true;
+        return;
+      }
+    }
+    snd = sc.pool.children[0];
+    if (snd && snd.buffer) {
+      try {
+        snd.stop();
+      } catch (eF) {}
+      if (snd.setPlaybackRate) snd.setPlaybackRate(rate);
+      if (snd.setVolume) snd.setVolume(vol);
+      snd.play();
+      sc.isPlaying = true;
+    }
+  }
+
+  /** Spawn orb scale 0→1 with slight overshoot (“100” with bounce). */
+  function vlPuEaseSpawn(u) {
+    if (u <= 0) return 0;
+    if (u >= 1) return 1;
+    var t = u - 1;
+    var c = 1.58;
+    return 1 + c * t * t * t + c * t * t;
+  }
+
+  function vlPlaySoundEntityId(id, rate, vol) {
+    var el = document.getElementById(id);
+    var sc = el && el.components && el.components.sound;
+    if (!sc) return;
+    vlSoundPoolStopEvery(sc);
+    vlSoundPoolPlayOneShot(sc, rate != null ? rate : 1, typeof vol === 'number' ? vol : 0.84);
+  }
+
+  function vlDepthLayerColors(hex, layers) {
+    var m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+    if (!m) {
+      var d = [];
+      for (var z = 0; z < layers; z++) d.push('#222222');
+      return d;
+    }
+    var n = parseInt(m[1], 16);
+    var r0 = (n >> 16) & 255;
+    var g0 = (n >> 8) & 255;
+    var b0 = n & 255;
+    var out = [];
+    var i;
+    var f;
+    var r;
+    var g;
+    var b;
+    for (i = 0; i < layers; i++) {
+      f = 0.22 + (0.55 * (i + 1)) / Math.max(1, layers);
+      r = Math.max(0, Math.min(255, Math.round(r0 * f)));
+      g = Math.max(0, Math.min(255, Math.round(g0 * f)));
+      b = Math.max(0, Math.min(255, Math.round(b0 * f)));
+      out.push('#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1));
+    }
+    return out;
   }
 
   /** True if host id is free (you may create the lobby). Same idea as DodgeVR checkPeerAvailability. */
@@ -377,10 +513,49 @@
   /* Rig offset from arena center (world XZ). Goals on ±X; rigs sit in front of each goal facing ball. */
   var SPEC = [
     { ox: -1.42, oz: 0.22, color: '#3388ff' },
-    { ox: 1.42, oz: 0.22, color: '#ff8833' },
+    { ox: 1.42, oz: 0.22, color: '#ee3333' },
     { ox: -1.42, oz: -0.22, color: '#33ddcc' },
     { ox: 1.42, oz: -0.22, color: '#dd55cc' }
   ];
+
+  /** West spawns (0,2) vs east (1,3) — matches `_vlBotDefendsWest` / goal sides. */
+  function vlPuSameTeam(slotA, slotB) {
+    if (slotA < 0 || slotA > 3 || slotB < 0 || slotB > 3) return false;
+    var wA = slotA === 0 || slotA === 2;
+    var wB = slotB === 0 || slotB === 2;
+    return wA === wB;
+  }
+
+  function vlPuNorm3(x, y, z) {
+    var L = Math.sqrt(x * x + y * y + z * z) || 1;
+    return [x / L, y / L, z / L];
+  }
+
+  /** Unit directions for naval-mine bumps (axes + cube corners). */
+  var VL_PU_MINE_SPIKE_DIRS = (function () {
+    var raw = [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+      [1, 1, 1],
+      [1, 1, -1],
+      [1, -1, 1],
+      [1, -1, -1],
+      [-1, 1, 1],
+      [-1, 1, -1],
+      [-1, -1, 1],
+      [-1, -1, -1]
+    ];
+    var out = [];
+    var i;
+    for (i = 0; i < raw.length; i++) {
+      out.push(vlPuNorm3(raw[i][0], raw[i][1], raw[i][2]));
+    }
+    return out;
+  })();
 
   var CAR_HALF = 0.04;
   /** Local head ~this close to a cube → face turns to camera + tongue (see _vlGetCameraWorld). */
@@ -419,6 +594,17 @@
   /** Throw speed cap (m/s) after release. */
   var VL_THROW_LIN_CAP = 3.6;
   var VL_THROW_ANG_CAP = 16;
+  /** Bounce SFX: ignore grazing / sliding contacts below this closing speed along the normal (m/s). */
+  var VL_BOUNCE_MIN_NORMAL = 0.2;
+  /** Ball vs arena wall: Cannon often under-reports normal impulse; use a slightly lower floor than cubes. */
+  var VL_BOUNCE_MIN_BALL_WALL = 0.14;
+  /** How much total speed blends into “effective” hit for ball vs wall (parallel slides stay quiet). */
+  var VL_BOUNCE_BALL_SPEED_BLEND = 0.11;
+  /** Car vs wall: cap tangential contribution so long wall-slides do not read as hard hits (m/s). */
+  var VL_BOUNCE_CAR_TANGENT_CAP = 0.42;
+  /** Min ms between bounce samples at hardest hits; soft hits wait toward max (see `_vlBounceCooldownMs`). */
+  var VL_BOUNCE_CD_HARD_MS = 50;
+  var VL_BOUNCE_CD_SOFT_MS = 240;
   var VL_CUBE_RESET_CD_SEC = 5;
   /** Ungrabbed cube reset: tumble (body X/Y/Z mix), rad/s at countdown start / end; `out` phase holds at W1 until teleport. */
   var VL_RESET_CD_SPIN_W0 = 0.75;
@@ -455,6 +641,25 @@
   var VL_BOT_OUT_PAD_Y_HIGH = 0.38;
   var VL_BOT_DIFFICULTY_UNBEATABLE = 3;
 
+  /** Arena pickups / deployables (host sim; replicated in `snap.vlPu`). */
+  var VL_PU_SPAWN_MS = 10000;
+  var VL_PU_ORB_GROW_MS = 1000;
+  var VL_PU_ORB_COLLECT_MS = 520;
+  var VL_PU_MINE_ARM_MS = 2600;
+  /** Slow homing missile (~2–4 s across arena) so targets can evade. */
+  var VL_PU_MISSILE_SPEED = 1.05;
+  var VL_PU_MISSILE_TURN = 2.05;
+  var VL_PU_MISSILE_MAX_AGE = 14;
+  /** Seconds: fly straight along deployer body +Z before homing on `tgt`. */
+  var VL_PU_MISSILE_SEEK_DELAY_SEC = 1;
+  /** Spawn slightly in front of cube center along body +Z (m). */
+  var VL_PU_MISSILE_SPAWN_FORWARD = CAR_HALF * 1.32;
+  /** Ignore hits vs deployer’s cube for this long so the missile clears the launcher (s). */
+  var VL_PU_MISSILE_IGNORE_OWNER_SEC = 0.22;
+  var VL_PU_BLAST_LIN = 5.5;
+  var VL_PU_BLAST_SPIN = 26;
+  var VL_PU_BOT_DEPLOY_DELAY_MS = 1400;
+
   function zeroInput() {
     return {
       lx: 0,
@@ -468,6 +673,7 @@
       gripL: 0,
       gripR: 0,
       aEdge: 0,
+      puD: 0,
       camOk: 0,
       camx: 0,
       camy: 0,
@@ -644,6 +850,8 @@
       this._vlAudioNextBounce = 0;
       this._vlAudioNextCarHit = 0;
       this._vlAudioNextCarObstacle = 0;
+      /** Client: coalesce rapid `vl-bounce` / car impact FX from the host. */
+      this._vlClientBounceNext = 0;
       this._vlThrusterPlaying = false;
 
       this.isHost = false;
@@ -655,6 +863,17 @@
       this.lastInputSend = 0;
       /** Client: A-button cube-reset edge is one frame; input is sent at INPUT_HZ — latch until included in a packet. */
       this._vlPendingAEdge = 0;
+      this._vlPendingPuD = 0;
+      /** Power-ups: host-owned `vlPu` replicated in snap; `i` = per-slot inventory 0 none / 1 mine / 2 missile. */
+      this._vlPuState = { i: [0, 0, 0, 0], o: null, d: [] };
+      this._vlPuNextSpawn = 0;
+      this._vlBotPuDeployAt = [0, 0, 0, 0];
+      this._vlPuOrbEl = null;
+      this._vlPuOrbMesh = null;
+      this._vlPuOrbIconEl = null;
+      this._vlPuDeployRoot = null;
+      this._vlPuDeployVis = null;
+      this._vlPuRoot = null;
       /** Local: cockpit view — scene-root `vr-rig` follows the car mesh each tick; camera eye offset applied on toggle only. */
       this._vlFpvActive = false;
       this._vlFpvLookControlsWereDisabled = false;
@@ -663,11 +882,30 @@
       this._vlLastFpvToggleMs = 0;
       /** XR right gamepad B — on Quest, index 4 is often the A (primary) button in raw WebXR; use only [5] for B here. */
       this._vlPrevBGamepadXR = false;
+      this._vlPrevPuBKey = false;
       this._vlRightBHandlersBound = false;
       this._vlRightHandBHook = null;
       this._vlOnBbuttondown = null;
       this._vlExitVrFpv = null;
       this._vlFpvHeadOffset = new THREE.Vector3();
+      /** Host: wall-clock for match only starts after pre-countdown; clients mirror via snap `vlPreStart`. */
+      this._vlMatchCountdownT0 = 0;
+      this._vlLastMatchCountdownShown = -1;
+      this._vlClientMatchPreStart = false;
+      /** Client: last pre-start countdown digit from snap (for tick SFX). */
+      this._vlLastClientSnapCd = -1;
+      /** Arena center FX: countdown WAV once per match start (host + clients). */
+      this._vlMatchFxCountdownSoundDone = false;
+      /** Client: previous snap `vlPreStart` (GO anim + stinger edge). */
+      this._vlPrevSnapPreStart = false;
+      /** Client: local perf time when GO phase began (3D “GO!”). */
+      this._vlGoAnimT0 = 0;
+      /** Debounce GO score stinger if both snap and vl-match-sync fire. */
+      this._vlLastGoStingerMs = 0;
+      /** End-of-match arena celebration `{ t0, spin, particles[] }` or null. */
+      this._vlEndParty = null;
+      /** Goal scored: `{ t0, spin }` for center “GOAL!” + confetti. */
+      this._vlGoalParty = null;
       this.frame = 0;
       this.score = [0, 0];
       this.goalCd = 0;
@@ -721,6 +959,8 @@
           prevT: 0
         });
       }
+      /** Host: `performance.now()` until which auto-roll stays off after a throw (per slot). */
+      this._vlAutoRollResumeMs = [0, 0, 0, 0];
       this._vlNoGrabUntil = [0, 0, 0, 0];
       this._vlCdHapticNext = [0, 0, 0, 0];
       this._vlSlotReset = [
@@ -740,6 +980,9 @@
       this._vlOnAbuttonup = null;
       this._vlResetHintEl = null;
       this._vlXMenuHintEl = null;
+      this._vlPuDeployHintEl = null;
+      this._vlPuDeployHintLabelEl = null;
+      this._vlPuDeployHapticAt = 0;
       this._vlBotState = [
         { driftUntil: 0, smx: null, smz: null },
         { driftUntil: 0, smx: null, smz: null },
@@ -830,7 +1073,7 @@
 
     _setScoreText: function () {
       if (this.scoreEl) {
-        this.scoreEl.textContent = 'Blue ' + this.score[0] + '  —  Orange ' + this.score[1];
+        this.scoreEl.textContent = 'Blue ' + this.score[0] + '  —  Red ' + this.score[1];
       }
       this._vlMarkHudDirty();
     },
@@ -853,28 +1096,36 @@
       this._vlHudDirty = false;
 
       var remSec = null;
+      var preStart = false;
       if (this.vlMatchActive) {
-        if (this.isHost && this.vlMatchStartMs) {
-          remSec = Math.max(0, Math.ceil((VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000));
+        if (this.isHost) {
+          if (this.vlMatchStartMs) {
+            remSec = Math.max(0, Math.ceil((VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000));
+          } else {
+            preStart = true;
+            remSec = Math.max(0, Math.ceil((VL_MATCH_START_COUNTDOWN_MS - (now - this._vlMatchCountdownT0)) / 1000));
+          }
         } else if (typeof this.vlMatchRemainSec === 'number' && isFinite(this.vlMatchRemainSec)) {
           remSec = Math.max(0, Math.floor(this.vlMatchRemainSec));
+          preStart = !!this._vlClientMatchPreStart;
         }
       }
 
       window.__vlHud = {
         matchActive: !!this.vlMatchActive,
         matchRemainSec: remSec,
+        matchPreStart: preStart,
         blue: this.score[0],
-        orange: this.score[1]
+        red: this.score[1]
       };
 
-      var line =
-        'Blue ' +
-        this.score[0] +
-        ' — Orange ' +
-        this.score[1] +
-        '   |   ' +
-        (this.vlMatchActive ? this._vlFormatClock(remSec) : '--:--');
+      var tail =
+        !this.vlMatchActive || remSec == null
+          ? '--:--'
+          : preStart
+            ? 'Start ' + remSec + '…'
+            : this._vlFormatClock(remSec);
+      var line = 'Blue ' + this.score[0] + ' — Red ' + this.score[1] + '   |   ' + tail;
       var menuLine = document.getElementById('menu-vl-scoreboard');
       if (menuLine) menuLine.setAttribute('text', 'value', line);
       var hudLine = document.getElementById('vl-hud-scoreboard');
@@ -884,20 +1135,34 @@
       if (scene) scene.emit('vl-hud-update');
     },
 
-    _vlBroadcastMatchSync: function () {
+    _vlBroadcastMatchSync: function (opts) {
       if (!this.isHost || !this.peer || !this.peer.open) return;
+      opts = opts || {};
       var now = performance.now();
       var remSec = null;
-      if (this.vlMatchActive && this.vlMatchStartMs) {
-        remSec = Math.max(0, Math.ceil((VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000));
+      var preStart = false;
+      if (this.vlMatchActive) {
+        if (this.vlMatchStartMs) {
+          remSec = Math.max(0, Math.ceil((VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000));
+        } else {
+          preStart = true;
+          remSec = Math.max(0, Math.ceil((VL_MATCH_START_COUNTDOWN_MS - (now - this._vlMatchCountdownT0)) / 1000));
+        }
       }
       var pack = {
         type: 'vl-match-sync',
         active: !!this.vlMatchActive,
         score0: this.score[0],
         score1: this.score[1],
-        remSec: remSec
+        remSec: remSec,
+        vlPreStart: preStart
       };
+      if (opts.endBanner) {
+        pack.endBanner = opts.endBanner;
+      }
+      if (opts.endWinner) {
+        pack.endWinner = opts.endWinner;
+      }
       for (var i = 0; i < this.clientConns.length; i++) {
         var c = this.clientConns[i];
         if (c && c.open) c.send(pack);
@@ -907,34 +1172,436 @@
     vlStartMatch: function () {
       if (!this.isHost) return;
       if (this.vlMatchActive) return;
+      this._vlStopArenaEndParty();
+      this._vlPuClear();
       this.score[0] = 0;
       this.score[1] = 0;
       this._setScoreText();
       this._resetBall();
       this.vlMatchActive = true;
-      this.vlMatchStartMs = performance.now();
-      this._setStatus('Match on — ' + this._vlFormatClock(VL_MATCH_DURATION_MS / 1000) + ' countdown. Goals count toward Blue / Orange.');
+      this.vlMatchStartMs = 0;
+      this._vlMatchCountdownT0 = performance.now();
+      this._vlLastMatchCountdownShown = -1;
+      this._vlMatchFxCountdownSoundDone = false;
+      this._vlPrevSnapPreStart = false;
+      this._vlGoAnimT0 = 0;
+      this._vlFireMatchCountdownSignal();
+      this._setStatus('Match starting — watch the arena center.');
       this._vlBroadcastLobbyToClients();
       this._vlBroadcastMatchSync();
       this._vlMarkHudDirty();
     },
 
+    /** Human-readable end banner + optional stinger (host + clients hear via local call on host only for MP… broadcast). */
+    _vlFormatMatchEndMessage: function (reason) {
+      var b = this.score[0];
+      var o = this.score[1];
+      var r = reason ? String(reason).trim() : '';
+      var win;
+      if (b > o) {
+        win = 'Blue wins ' + b + ' to ' + o;
+      } else if (o > b) {
+        win = 'Red wins ' + o + ' to ' + b;
+      } else {
+        win = 'Draw — ' + b + ' to ' + o;
+      }
+      if (r) return win + '. ' + r;
+      return win + '.';
+    },
+
+    _vlFireMatchCountdownSignal: function () {
+      this._resumeAudioIfNeeded();
+      var el = this._vlCountdownSignalEl;
+      var sc = el && el.components && el.components.sound;
+      if (sc) {
+        try {
+          sc.stopSound();
+          sc.playSound();
+        } catch (eC) {}
+      }
+    },
+
+    _vlPlayMatchStartGoSound: function () {
+      var now = performance.now();
+      if (now - this._vlLastGoStingerMs < 700) return;
+      this._vlLastGoStingerMs = now;
+      this._resumeAudioIfNeeded();
+      var el = document.getElementById('vl-goal-sound');
+      var sc = el && el.components && el.components.sound;
+      if (sc) {
+        try {
+          sc.stopSound();
+          sc.playSound();
+        } catch (eG) {}
+      }
+    },
+
+    _vlPlayMatchEndStinger: function () {
+      this._resumeAudioIfNeeded();
+      var st = document.getElementById('vl-goal-sound');
+      var sc0 = st && st.components && st.components.sound;
+      if (sc0) {
+        try {
+          sc0.stopSound();
+          sc0.playSound();
+        } catch (eE) {}
+      }
+    },
+
+    _vlGetPreStartElapsedMs: function (now) {
+      if (!this.vlMatchActive || this.vlMatchStartMs) return null;
+      if (this.isHost && this._vlMatchCountdownT0) {
+        return Math.max(0, now - this._vlMatchCountdownT0);
+      }
+      if (
+        !this.isHost &&
+        this._vlClientMatchPreStart &&
+        typeof this.vlMatchRemainSec === 'number' &&
+        isFinite(this.vlMatchRemainSec)
+      ) {
+        return Math.max(0, VL_MATCH_START_COUNTDOWN_MS - this.vlMatchRemainSec * 1000);
+      }
+      return null;
+    },
+
+    _vlEnsureConfettiPool: function () {
+      if (this._vlConfettiPool || !this._vlConfettiRoot) return;
+      this._vlConfettiPool = [];
+      var i;
+      var el;
+      for (i = 0; i < 56; i++) {
+        el = document.createElement('a-sphere');
+        el.setAttribute('radius', '0.024');
+        el.setAttribute('visible', 'false');
+        this._vlConfettiRoot.appendChild(el);
+        this._vlConfettiPool.push({
+          el: el,
+          active: false,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          px: 0,
+          py: 0,
+          pz: 0,
+          life: 0
+        });
+      }
+    },
+
+    /** Stacked copies behind front `a-text` for a simple extruded / 3D look. */
+    _vlSyncArenaTextDepth: function (depthEls, value, widthStr, mainHex) {
+      if (!depthEls || !depthEls.length) return;
+      var cols = vlDepthLayerColors(mainHex, depthEls.length);
+      var j;
+      for (j = 0; j < depthEls.length; j++) {
+        depthEls[j].setAttribute('text', 'value', value);
+        depthEls[j].setAttribute('text', 'width', String(widthStr));
+        depthEls[j].setAttribute('text', 'color', cols[j]);
+      }
+    },
+
+    _vlTickConfettiParticles: function (dtSec) {
+      if (!this._vlConfettiPool) return;
+      var g = 1.35;
+      var d = 0.988;
+      var k;
+      var q;
+      for (k = 0; k < this._vlConfettiPool.length; k++) {
+        q = this._vlConfettiPool[k];
+        if (!q.active) continue;
+        q.vy -= g * dtSec;
+        q.px += q.vx * dtSec;
+        q.py += q.vy * dtSec;
+        q.pz += q.vz * dtSec;
+        q.vx *= d;
+        q.vy *= d;
+        q.vz *= d;
+        q.life -= dtSec * 0.22;
+        if (q.life <= 0) {
+          q.active = false;
+          q.el.setAttribute('visible', 'false');
+        } else {
+          q.el.setAttribute('position', q.px + ' ' + q.py + ' ' + q.pz);
+        }
+      }
+    },
+
+    _vlStopGoalCelebration: function () {
+      var zz;
+      var pp;
+      if (this._vlGoalWrap) {
+        this._vlGoalWrap.setAttribute('visible', 'false');
+        this._vlGoalWrap.setAttribute('scale', '1 1 1');
+      }
+      this._vlGoalParty = null;
+      if (this._vlConfettiPool) {
+        for (zz = 0; zz < this._vlConfettiPool.length; zz++) {
+          pp = this._vlConfettiPool[zz];
+          pp.active = false;
+          if (pp.el) pp.el.setAttribute('visible', 'false');
+        }
+      }
+    },
+
+    _vlStartGoalCelebration: function (team) {
+      if (!this._vlGoalWrap || !this._vlGoalTextEl) return;
+      this._vlStopGoalCelebration();
+      var tm = String(team || '').toLowerCase() === 'blue' ? 'blue' : 'red';
+      var colG = tm === 'blue' ? '#4488ff' : '#ff4422';
+      var lineG = 'GOAL!';
+      this._vlGoalTextEl.setAttribute('text', 'value', lineG);
+      this._vlGoalTextEl.setAttribute('text', 'color', colG);
+      this._vlSyncArenaTextDepth(this._vlGoalDepthEls, lineG, '13', colG);
+      this._vlGoalWrap.setAttribute('visible', 'true');
+      this._vlGoalWrap.setAttribute('scale', '0.02 0.02 0.02');
+      this._vlGoalWrap.setAttribute('rotation', '0 0 0');
+      this._vlGoalParty = { t0: performance.now(), spin: 0, team: tm };
+      if (this._vlCountdownWrap) this._vlCountdownWrap.setAttribute('visible', 'false');
+      this._vlEnsureConfettiPool();
+      var poolG = this._vlConfettiPool;
+      if (!poolG) return;
+      var hueBase = vlGoalTeamHue(tm);
+      var nG = Math.min(poolG.length, 52);
+      var jg;
+      for (jg = 0; jg < nG; jg++) {
+        var cpg = poolG[jg];
+        cpg.active = true;
+        cpg.vx = (Math.random() - 0.5) * 2.85;
+        cpg.vy = Math.random() * 2.05 + 1.05;
+        cpg.vz = (Math.random() - 0.5) * 2.85;
+        cpg.px = (Math.random() - 0.5) * 0.08;
+        cpg.py = (Math.random() - 0.5) * 0.05;
+        cpg.pz = (Math.random() - 0.5) * 0.08;
+        cpg.life = 1;
+        var hueG = hueBase + Math.floor((Math.random() - 0.5) * 50);
+        if (hueG < 0) hueG += 360;
+        if (hueG >= 360) hueG -= 360;
+        cpg.el.setAttribute('visible', 'true');
+        cpg.el.setAttribute('position', cpg.px + ' ' + cpg.py + ' ' + cpg.pz);
+        cpg.el.setAttribute('radius', (0.02 + Math.random() * 0.03).toFixed(3));
+        cpg.el.setAttribute(
+          'material',
+          'shader: flat; color: hsl(' + hueG + ', 88%, 58%); opacity: 0.96; transparent: true; side: double'
+        );
+      }
+    },
+
+    _vlStopArenaEndParty: function () {
+      this._vlStopGoalCelebration();
+      var i;
+      var p;
+      if (this._vlEndWrap) {
+        this._vlEndWrap.setAttribute('visible', 'false');
+        this._vlEndWrap.setAttribute('scale', '1 1 1');
+      }
+      if (this._vlConfettiPool) {
+        for (i = 0; i < this._vlConfettiPool.length; i++) {
+          p = this._vlConfettiPool[i];
+          p.active = false;
+          if (p.el) p.el.setAttribute('visible', 'false');
+        }
+      }
+      this._vlEndParty = null;
+    },
+
+    _vlStartArenaEndParty: function (winner) {
+      if (!this._vlEndWrap || !this._vlEndTextEl) return;
+      this._vlStopGoalCelebration();
+      var w = String(winner || 'draw').toLowerCase();
+      var line = 'DRAW';
+      var col = '#ffffff';
+      if (w === 'blue') {
+        line = 'BLUE WON';
+        col = '#4488ff';
+      } else if (w === 'red' || w === 'orange') {
+        line = 'RED WON';
+        col = '#ff4422';
+      }
+      this._vlEndTextEl.setAttribute('text', 'value', line);
+      this._vlEndTextEl.setAttribute('text', 'color', col);
+      this._vlSyncArenaTextDepth(this._vlEndDepthEls, line, '11', col);
+      this._vlEndWrap.setAttribute('visible', 'true');
+      this._vlEndWrap.setAttribute('scale', '0.02 0.02 0.02');
+      this._vlEndWrap.setAttribute('rotation', '0 0 0');
+      this._vlEndParty = { t0: performance.now(), spin: 0 };
+      if (this._vlCountdownWrap) this._vlCountdownWrap.setAttribute('visible', 'false');
+      this._vlEnsureConfettiPool();
+      var pool = this._vlConfettiPool;
+      if (!pool) return;
+      var n = Math.min(pool.length, 48);
+      var j;
+      var hue;
+      for (j = 0; j < n; j++) {
+        var cp = pool[j];
+        cp.active = true;
+        cp.vx = (Math.random() - 0.5) * 2.4;
+        cp.vy = Math.random() * 1.5 + 0.95;
+        cp.vz = (Math.random() - 0.5) * 2.4;
+        cp.px = (Math.random() - 0.5) * 0.06;
+        cp.py = (Math.random() - 0.5) * 0.04;
+        cp.pz = (Math.random() - 0.5) * 0.06;
+        cp.life = 1;
+        hue = Math.floor(Math.random() * 360);
+        cp.el.setAttribute('visible', 'true');
+        cp.el.setAttribute('position', cp.px + ' ' + cp.py + ' ' + cp.pz);
+        cp.el.setAttribute('radius', (0.018 + Math.random() * 0.026).toFixed(3));
+        cp.el.setAttribute(
+          'material',
+          'shader: flat; color: hsl(' + hue + ', 92%, 62%); opacity: 0.96; transparent: true; side: double'
+        );
+      }
+    },
+
+    _vlTickArenaMatchFx: function (now, dtSec) {
+      var wrap = this._vlCountdownWrap;
+      var txt = this._vlCountdownTextEl;
+      if (!wrap || !txt) return;
+
+      var runConfetti = false;
+
+      if (this._vlGoalParty && this._vlGoalWrap) {
+        var ageG = now - this._vlGoalParty.t0;
+        if (ageG >= VL_GOAL_CELEB_FULL_MS) {
+          this._vlStopGoalCelebration();
+        } else {
+          this._vlGoalParty.spin += dtSec * 96;
+          if (ageG >= VL_GOAL_CELEB_TEXT_MS) {
+            this._vlGoalWrap.setAttribute('visible', 'false');
+          } else {
+            this._vlGoalWrap.setAttribute('rotation', '0 ' + this._vlGoalParty.spin + ' 0');
+            var uGg = Math.min(1, ageG / 340);
+            var escG = 0.02 + (1 - Math.pow(1 - uGg, 2.15)) * 0.98;
+            this._vlGoalWrap.setAttribute('scale', escG + ' ' + escG + ' ' + escG);
+          }
+          if (ageG < VL_GOAL_CELEB_FULL_MS) runConfetti = true;
+        }
+      }
+
+      if (this._vlEndParty) {
+        var ep = this._vlEndParty;
+        var ageE = now - ep.t0;
+        if (ageE >= VL_END_PARTY_FULL_MS) {
+          this._vlStopArenaEndParty();
+        } else {
+          ep.spin += dtSec * 88;
+          if (this._vlEndWrap) {
+            if (ageE >= VL_END_PARTY_TEXT_MS) {
+              this._vlEndWrap.setAttribute('visible', 'false');
+            } else {
+              this._vlEndWrap.setAttribute('rotation', '0 ' + ep.spin + ' 0');
+              var uGrow = Math.min(1, ageE / 420);
+              var esc = 0.02 + (1 - Math.pow(1 - uGrow, 2.4)) * 0.98;
+              this._vlEndWrap.setAttribute('scale', esc + ' ' + esc + ' ' + esc);
+            }
+          }
+          if (ageE < VL_END_PARTY_FULL_MS) runConfetti = true;
+        }
+      }
+
+      if (runConfetti) {
+        this._vlTickConfettiParticles(dtSec);
+      }
+
+      var preMs = this._vlGetPreStartElapsedMs(now);
+      var goAge = 0;
+      var showGo = false;
+      if (this.vlMatchActive && this.vlMatchStartMs && this.isHost) {
+        goAge = now - this.vlMatchStartMs;
+        showGo = goAge >= 0 && goAge < VL_GO_LETTER_MS;
+      } else if (this.vlMatchActive && !this._vlClientMatchPreStart && !this.isHost) {
+        if (this._vlGoAnimT0) {
+          goAge = now - this._vlGoAnimT0;
+          showGo = goAge >= 0 && goAge < VL_GO_LETTER_MS;
+        }
+      }
+
+      if (preMs != null && preMs < VL_MATCH_START_COUNTDOWN_MS) {
+        var d = vlCdDigitFromElapsed(preMs);
+        if (d) {
+          wrap.setAttribute('visible', 'true');
+          txt.setAttribute('text', 'value', d.label);
+          var colCd = '#ffffff';
+          txt.setAttribute('text', 'color', colCd);
+          txt.setAttribute('text', 'width', '14');
+          this._vlSyncArenaTextDepth(this._vlCountdownDepthEls, d.label, '14', colCd);
+          var scD = vlCdPopScale(d.tIn);
+          var ry = vlCdSpinDeg(d.tIn);
+          wrap.setAttribute('scale', scD + ' ' + scD + ' ' + scD);
+          wrap.setAttribute('rotation', '0 ' + ry + ' 0');
+        }
+        return;
+      }
+
+      if (showGo) {
+        wrap.setAttribute('visible', 'true');
+        txt.setAttribute('text', 'value', 'GO!');
+        var colGo = '#ffffff';
+        txt.setAttribute('text', 'color', colGo);
+        txt.setAttribute('text', 'width', '16');
+        this._vlSyncArenaTextDepth(this._vlCountdownDepthEls, 'GO!', '16', colGo);
+        var uG = Math.min(1, goAge / VL_GO_LETTER_MS);
+        var scG = vlCdPopScale(uG * 0.92);
+        wrap.setAttribute('scale', scG + ' ' + scG + ' ' + scG);
+        wrap.setAttribute('rotation', '0 ' + vlCdSpinDeg(uG * 0.95) + ' 0');
+        return;
+      }
+
+      if (!this._vlEndParty && !this._vlGoalParty) wrap.setAttribute('visible', 'false');
+    },
+
+    /** Host: advance 3…2…1 then start `vlMatchStartMs` and GO. */
+    _vlTickMatchCountdownHost: function (now) {
+      if (!this.vlMatchActive || this.vlMatchStartMs) return;
+      var elapsed = now - this._vlMatchCountdownT0;
+      if (elapsed >= VL_MATCH_START_COUNTDOWN_MS) {
+        this.vlMatchStartMs = now;
+        this._vlPuArmSpawnTimer(now);
+        this._vlLastMatchCountdownShown = -1;
+        this._setStatus(
+          'GO! — ' +
+            this._vlFormatClock(VL_MATCH_DURATION_MS / 1000) +
+            ' on the clock. Goals: Blue / Red.'
+        );
+        this._vlPlayMatchStartGoSound();
+        this._vlMarkHudDirty();
+        this._vlBroadcastMatchSync();
+        return;
+      }
+      var show = Math.max(1, Math.ceil((VL_MATCH_START_COUNTDOWN_MS - elapsed) / 1000));
+      if (show !== this._vlLastMatchCountdownShown) {
+        this._vlLastMatchCountdownShown = show;
+        this._vlMarkHudDirty();
+        this._vlBroadcastMatchSync();
+      }
+    },
+
     vlEndMatch: function (reason) {
       if (!this.isHost) return;
       if (!this.vlMatchActive) return;
+      this._vlPuClear();
+      var b = this.score[0];
+      var o = this.score[1];
+      var endWinner = 'draw';
+      if (b > o) endWinner = 'blue';
+      else if (o > b) endWinner = 'red';
+      var banner = this._vlFormatMatchEndMessage(reason || '');
       this.vlMatchActive = false;
       this.vlMatchStartMs = 0;
       this.vlMatchRemainSec = null;
-      this._setStatus(reason ? String(reason) : 'Match ended. Open the menu to start again or keep practicing.');
+      this._vlMatchCountdownT0 = 0;
+      this._vlLastMatchCountdownShown = -1;
+      this._vlStartArenaEndParty(endWinner);
+      this._setStatus(banner);
+      this._vlPlayMatchEndStinger();
       this._vlBroadcastLobbyToClients();
-      this._vlBroadcastMatchSync();
+      this._vlBroadcastMatchSync({ endBanner: banner, endWinner: endWinner });
       this._vlMarkHudDirty();
     },
 
     /** Offline menu START / END MATCH (host-only physics). */
     vlToggleMatchFromMenu: function () {
       if (!this.isHost) return;
-      if (this.vlMatchActive) this.vlEndMatch();
+      if (this.vlMatchActive) this.vlEndMatch('Match ended from menu.');
       else this.vlStartMatch();
     },
 
@@ -1041,9 +1708,9 @@
       wireBox(A.halfW, A.wallT, A.halfD, '#66ffff', '0 ' + (0.02 + ch + A.wallT) + ' 0', 0.85);
 
       glassPane(0.006, ch * 0.48, A.halfD - A.wallT * 2, (-A.halfW + A.wallT * 1.6) + ' ' + wallCy + ' 0', '#00ccff');
-      glassPane(0.006, ch * 0.48, A.halfD - A.wallT * 2, (A.halfW - A.wallT * 1.6) + ' ' + wallCy + ' 0', '#ff9944');
+      glassPane(0.006, ch * 0.48, A.halfD - A.wallT * 2, (A.halfW - A.wallT * 1.6) + ' ' + wallCy + ' 0', '#ee5555');
       glassPane(A.halfW - A.wallT * 2, ch * 0.48, 0.006, '0 ' + wallCy + ' ' + (-A.halfD + A.wallT * 1.6), '#00ddff');
-      glassPane(A.halfW - A.wallT * 2, ch * 0.48, 0.006, '0 ' + wallCy + ' ' + (A.halfD - A.wallT * 1.6), '#ff9944');
+      glassPane(A.halfW - A.wallT * 2, ch * 0.48, 0.006, '0 ' + wallCy + ' ' + (A.halfD - A.wallT * 1.6), '#ee5555');
 
       var halfFieldL = document.createElement('a-plane');
       halfFieldL.setAttribute('width', A.halfW);
@@ -1063,7 +1730,7 @@
       halfFieldR.setAttribute('rotation', '-90 0 0');
       halfFieldR.setAttribute(
         'material',
-        'shader: flat; color: #aa4400; opacity: 0.52; transparent: true; side: double; depthWrite: false; emissive: #ee6622; emissiveIntensity: 0.4'
+        'shader: flat; color: #881820; opacity: 0.52; transparent: true; side: double; depthWrite: false; emissive: #cc3333; emissiveIntensity: 0.4'
       );
       root.appendChild(halfFieldR);
 
@@ -1105,7 +1772,7 @@
       floorR.setAttribute('position', (A.halfW * 0.5) + ' 0.018 0');
       floorR.setAttribute(
         'material',
-        'shader: flat; color: #8a3010; opacity: 0.45; transparent: true; side: double; depthWrite: false; emissive: #cc5520; emissiveIntensity: 0.2'
+        'shader: flat; color: #551010; opacity: 0.45; transparent: true; side: double; depthWrite: false; emissive: #992222; emissiveIntensity: 0.2'
       );
       root.appendChild(floorR);
 
@@ -1136,7 +1803,7 @@
       g2w.setAttribute('position', g2x + ' ' + wallCy + ' 0');
       g2w.setAttribute(
         'material',
-        'shader: flat; color: #ff8833; wireframe: true; opacity: 0.95; transparent: true; side: double; depthWrite: false; emissive: #ffaa66; emissiveIntensity: 1.15'
+        'shader: flat; color: #ff4444; wireframe: true; opacity: 0.95; transparent: true; side: double; depthWrite: false; emissive: #ff8888; emissiveIntensity: 1.12'
       );
       root.appendChild(g2w);
 
@@ -1151,6 +1818,82 @@
       );
       root.appendChild(centerRing);
 
+      var fxRoot = document.createElement('a-entity');
+      fxRoot.setAttribute('id', 'vl-arena-fx');
+      fxRoot.setAttribute('position', '0 ' + (wallCy * 0.38).toFixed(3) + ' 0');
+      root.appendChild(fxRoot);
+      w._vlArenaFxRoot = fxRoot;
+
+      var cdWrap = document.createElement('a-entity');
+      cdWrap.setAttribute('id', 'vl-arena-countdown-wrap');
+      cdWrap.setAttribute('visible', 'false');
+      function vlMakeMsdfText(posZ, width, color, initialVal) {
+        var te = document.createElement('a-text');
+        te.setAttribute('align', 'center');
+        te.setAttribute('anchor', 'center');
+        te.setAttribute('baseline', 'center');
+        te.setAttribute('position', '0 0 ' + posZ);
+        te.setAttribute('shader', 'msdf');
+        te.setAttribute('side', 'double');
+        te.setAttribute('transparent', 'true');
+        te.setAttribute('text', 'value', initialVal != null ? initialVal : '');
+        te.setAttribute('text', 'width', String(width));
+        te.setAttribute('text', 'color', color);
+        return te;
+      }
+      var cdD2 = vlMakeMsdfText('0.042', '14', '#222222', '3');
+      var cdD1 = vlMakeMsdfText('0.021', '14', '#444444', '3');
+      var cdTxt = vlMakeMsdfText('0', '14', '#ffffff', '3');
+      cdWrap.appendChild(cdD2);
+      cdWrap.appendChild(cdD1);
+      cdWrap.appendChild(cdTxt);
+      fxRoot.appendChild(cdWrap);
+      w._vlCountdownWrap = cdWrap;
+      w._vlCountdownTextEl = cdTxt;
+      w._vlCountdownDepthEls = [cdD2, cdD1];
+
+      var endWrap = document.createElement('a-entity');
+      endWrap.setAttribute('id', 'vl-arena-end-wrap');
+      endWrap.setAttribute('visible', 'false');
+      var endD2 = vlMakeMsdfText('0.034', '11', '#112244', 'BLUE WON');
+      var endD1 = vlMakeMsdfText('0.017', '11', '#223366', 'BLUE WON');
+      var endTxt = vlMakeMsdfText('0', '11', '#4488ff', 'BLUE WON');
+      endWrap.appendChild(endD2);
+      endWrap.appendChild(endD1);
+      endWrap.appendChild(endTxt);
+      fxRoot.appendChild(endWrap);
+      w._vlEndWrap = endWrap;
+      w._vlEndTextEl = endTxt;
+      w._vlEndDepthEls = [endD2, endD1];
+
+      var goalWrap = document.createElement('a-entity');
+      goalWrap.setAttribute('id', 'vl-arena-goal-wrap');
+      goalWrap.setAttribute('visible', 'false');
+      var gD2 = vlMakeMsdfText('0.038', '13', '#552200', 'GOAL!');
+      var gD1 = vlMakeMsdfText('0.019', '13', '#884422', 'GOAL!');
+      var gTxt = vlMakeMsdfText('0', '13', '#ff4422', 'GOAL!');
+      goalWrap.appendChild(gD2);
+      goalWrap.appendChild(gD1);
+      goalWrap.appendChild(gTxt);
+      fxRoot.appendChild(goalWrap);
+      w._vlGoalWrap = goalWrap;
+      w._vlGoalTextEl = gTxt;
+      w._vlGoalDepthEls = [gD2, gD1];
+
+      var confRoot = document.createElement('a-entity');
+      confRoot.setAttribute('id', 'vl-confetti-root');
+      fxRoot.appendChild(confRoot);
+      w._vlConfettiRoot = confRoot;
+      w._vlConfettiPool = null;
+
+      var cdSig = document.createElement('a-entity');
+      cdSig.setAttribute(
+        'sound',
+        'src: url(audio/385928__pol__s001_countdown_signal.wav); autoplay: false; loop: false; volume: 0.92; positional: true; distanceModel: inverse; refDistance: 0.4; maxDistance: 18; rolloffFactor: 1.15; poolSize: 2'
+      );
+      fxRoot.appendChild(cdSig);
+      w._vlCountdownSignalEl = cdSig;
+
       function floorRectOutline(hw, hd, px, py, pz, color, op) {
         var tt = 0.007;
         wireBox(hw, tt, tt, color, px + ' ' + py + ' ' + (pz - hd), op);
@@ -1163,7 +1906,7 @@
       var penD = 0.11;
       var penW = A.goalW * 1.05;
       floorRectOutline(penD * 0.5, penW, -A.halfW + penD * 0.5 + A.wallT * 2, 0.027, 0, '#22ccff', 0.88);
-      floorRectOutline(penD * 0.5, penW, A.halfW - penD * 0.5 - A.wallT * 2, 0.027, 0, '#ffaa55', 0.88);
+      floorRectOutline(penD * 0.5, penW, A.halfW - penD * 0.5 - A.wallT * 2, 0.027, 0, '#ff7777', 0.88);
 
       var floorShape = new CANNON.Box(new CANNON.Vec3(A.halfW, 0.02, A.halfD));
       var floorBody = new CANNON.Body({ mass: 0, material: this.floorMat });
@@ -1342,7 +2085,750 @@
         });
       }
 
+      var puRoot = document.createElement('a-entity');
+      puRoot.setAttribute('id', 'vl-pu-root');
+      root.appendChild(puRoot);
+      w._vlPuRoot = puRoot;
+
+      var puOrbWrap = document.createElement('a-entity');
+      puOrbWrap.setAttribute('id', 'vl-pu-orb-wrap');
+      puOrbWrap.setAttribute('visible', 'false');
+      var puSph = document.createElement('a-sphere');
+      puSph.setAttribute('radius', String(CAR_HALF));
+      puSph.setAttribute(
+        'material',
+        'shader: flat; color: #ffffff; opacity: 0.44; transparent: true; side: double; depthWrite: false'
+      );
+      puOrbWrap.appendChild(puSph);
+      var puOrbIcon = document.createElement('a-entity');
+      puOrbIcon.setAttribute('class', 'vl-pu-orb-icon-root');
+      puOrbIcon.setAttribute('position', '0 0 0');
+      puOrbWrap.appendChild(puOrbIcon);
+      puRoot.appendChild(puOrbWrap);
+      w._vlPuOrbEl = puOrbWrap;
+      w._vlPuOrbMesh = puSph;
+      w._vlPuOrbIconEl = puOrbIcon;
+
+      var puDep = document.createElement('a-entity');
+      puDep.setAttribute('id', 'vl-pu-deploy-root');
+      puRoot.appendChild(puDep);
+      w._vlPuDeployRoot = puDep;
+      var dVis = [];
+      var vi;
+      for (vi = 0; vi < 8; vi++) {
+        var dv = document.createElement('a-entity');
+        dv.setAttribute('visible', 'false');
+        puDep.appendChild(dv);
+        dVis.push(dv);
+      }
+      w._vlPuDeployVis = dVis;
+
       this._arenaRoot = root;
+    },
+
+    _vlPuClear: function () {
+      this._vlPuState = { i: [0, 0, 0, 0], o: null, d: [] };
+      this._vlPuNextSpawn = 0;
+      this._vlBotPuDeployAt = [0, 0, 0, 0];
+      if (this._vlPuOrbEl) this._vlPuOrbEl.setAttribute('visible', 'false');
+      if (this._vlPuDeployVis) {
+        var hi;
+        for (hi = 0; hi < this._vlPuDeployVis.length; hi++) {
+          var dvh = this._vlPuDeployVis[hi];
+          if (dvh) {
+            this._vlPuStopMissileThrusterSound(dvh);
+            dvh.setAttribute('visible', 'false');
+          }
+        }
+      }
+    },
+
+    _vlPuArmSpawnTimer: function (now) {
+      this._vlPuNextSpawn = now + VL_PU_SPAWN_MS;
+    },
+
+    _vlPuDenormalize: function (p) {
+      var st = { i: [0, 0, 0, 0], o: null, d: [] };
+      if (!p) return st;
+      if (p.i && p.i.length === 4) st.i = p.i.slice();
+      if (p.o && p.o.length >= 5) {
+        var phs = ['grow', 'ready', 'dying'];
+        st.o = {
+          x: p.o[0],
+          y: p.o[1],
+          z: p.o[2],
+          ph: phs[p.o[3]] || 'ready',
+          k: p.o[4],
+          u: typeof p.o[5] === 'number' ? p.o[5] : 0,
+          uc: typeof p.o[6] === 'number' ? p.o[6] : 0,
+          tDie: typeof p.o[7] === 'number' ? p.o[7] : 0
+        };
+      }
+      if (p.d && p.d.length) {
+        var j;
+        for (j = 0; j < p.d.length; j++) {
+          var q = p.d[j];
+          if (!q) continue;
+          var recD = {
+            k: q.k,
+            x: q.x,
+            y: q.y,
+            z: q.z,
+            vx: q.vx || 0,
+            vy: q.vy || 0,
+            vz: q.vz || 0,
+            owner: q.ow,
+            armT: q.ar,
+            tgt: q.tg,
+            age: q.ag || 0,
+            dead: false
+          };
+          if (q.k === 2) {
+            if (typeof q.fx === 'number' && typeof q.fy === 'number' && typeof q.fz === 'number') {
+              recD.fwdx = q.fx;
+              recD.fwdy = q.fy;
+              recD.fwdz = q.fz;
+            } else {
+              var vmx = q.vx || 0;
+              var vmy = q.vy || 0;
+              var vmz = q.vz || 0;
+              var vlen = Math.sqrt(vmx * vmx + vmy * vmy + vmz * vmz) || 1e-6;
+              recD.fwdx = vmx / vlen;
+              recD.fwdy = vmy / vlen;
+              recD.fwdz = vmz / vlen;
+            }
+          }
+          st.d.push(recD);
+        }
+      }
+      return st;
+    },
+
+    _vlPuSerialize: function () {
+      var st = this._vlPuState;
+      if (!st || !st.i) return { i: [0, 0, 0, 0], o: null, d: [] };
+      var out = { i: st.i.slice(), o: null, d: [] };
+      if (st.o) {
+        var phn = st.o.ph === 'grow' ? 0 : st.o.ph === 'ready' ? 1 : 2;
+        out.o = [
+          st.o.x,
+          st.o.y,
+          st.o.z,
+          phn,
+          st.o.k,
+          st.o.u || 0,
+          st.o.uc != null ? st.o.uc : 0,
+          st.o.tDie || 0
+        ];
+      }
+      var j;
+      for (j = 0; j < st.d.length; j++) {
+        var D = st.d[j];
+        if (!D || D.dead) continue;
+        var rowD = {
+          k: D.k,
+          x: D.x,
+          y: D.y,
+          z: D.z,
+          vx: D.vx,
+          vy: D.vy,
+          vz: D.vz,
+          ow: D.owner,
+          ar: D.armT,
+          tg: D.tgt,
+          ag: D.age
+        };
+        if (D.k === 2 && typeof D.fwdx === 'number' && typeof D.fwdy === 'number' && typeof D.fwdz === 'number') {
+          rowD.fx = D.fwdx;
+          rowD.fy = D.fwdy;
+          rowD.fz = D.fwdz;
+        }
+        out.d.push(rowD);
+      }
+      return out;
+    },
+
+    _vlSpawnOrbHost: function (now, A) {
+      var marginX = A.halfW - A.wallT * 2 - CAR_HALF * 5;
+      var marginZ = A.halfD - A.wallT * 2 - CAR_HALF * 5;
+      var lx = (Math.random() * 2 - 1) * marginX;
+      var lz = (Math.random() * 2 - 1) * marginZ;
+      var ly = 0.02 + CAR_HALF * 1.25 + Math.random() * Math.max(0.06, A.cageH - CAR_HALF * 3.4);
+      var kind = Math.random() < 0.5 ? 1 : 2;
+      this._vlPuState.o = {
+        x: A.cx + lx,
+        y: A.cy + ly,
+        z: A.cz + lz,
+        t0: now,
+        ph: 'grow',
+        k: kind,
+        u: 0
+      };
+      vlPlaySoundEntityId('vl-pu-sonar-sound', 0.95 + Math.random() * 0.1, 0.82);
+      this._broadcastFx({ type: 'vl-pu', act: 'spawn' });
+    },
+
+    _vlPuPickMissileTarget: function (slot, x, y, z) {
+      var bestOpp = -1;
+      var bestOppD = 1e9;
+      var bestAny = -1;
+      var bestAnyD = 1e9;
+      var oi;
+      for (oi = 0; oi < 4; oi++) {
+        if (oi === slot) continue;
+        var b = this.carBodies[oi];
+        if (!b) continue;
+        var dx = b.position.x - x;
+        var dy = b.position.y - y;
+        var dz = b.position.z - z;
+        var dd = dx * dx + dy * dy + dz * dz;
+        if (dd < bestAnyD) {
+          bestAnyD = dd;
+          bestAny = oi;
+        }
+        if (!vlPuSameTeam(slot, oi) && dd < bestOppD) {
+          bestOppD = dd;
+          bestOpp = oi;
+        }
+      }
+      if (bestOpp >= 0) return bestOpp;
+      if (bestAny >= 0) return bestAny;
+      return (slot + 1) % 4;
+    },
+
+    _vlGrantPickupHost: function (slot, k, now) {
+      if (this._vlPuState.i[slot]) return;
+      this._vlPuState.i[slot] = k;
+      if (!this._vlIsHumanOccupyingSlot(slot)) {
+        this._vlBotPuDeployAt[slot] = now + VL_PU_BOT_DEPLOY_DELAY_MS + Math.random() * 900;
+      }
+      vlPlaySoundEntityId('vl-pu-sonar-sound', 1.02, 0.78);
+      this._broadcastFx({ type: 'vl-pu', act: 'pick', slot: slot, k: k });
+      if (slot === this.mySlot) this._pulseBothHands(0.88, 105);
+    },
+
+    _vlOrbTryPickupHost: function (now, pickR) {
+      var o = this._vlPuState.o;
+      if (!o || o.ph !== 'ready') return;
+      var si;
+      for (si = 0; si < 4; si++) {
+        if (this._vlPuState.i[si]) continue;
+        var b = this.carBodies[si];
+        if (!b) continue;
+        var dx = b.position.x - o.x;
+        var dy = b.position.y - o.y;
+        var dz = b.position.z - o.z;
+        if (dx * dx + dy * dy + dz * dz < pickR * pickR) {
+          this._vlGrantPickupHost(si, o.k, now);
+          o.ph = 'dying';
+          o.tDie = now;
+          o.uc = 0;
+          break;
+        }
+      }
+    },
+
+    _vlTryDeploySlotHost: function (slot, now) {
+      var k = this._vlPuState.i[slot];
+      if (!k || !this.carBodies[slot]) return;
+      var body = this.carBodies[slot];
+      var px = body.position.x;
+      var py = body.position.y;
+      var pz = body.position.z;
+      if (k === 1) {
+        this._vlPuState.d.push({
+          k: 1,
+          x: px,
+          y: py,
+          z: pz,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          owner: slot,
+          armT: 0,
+          tgt: -1,
+          age: 0,
+          dead: false
+        });
+      } else {
+        var tgtM = this._vlPuPickMissileTarget(slot, px, py, pz);
+        var fwM = this._bodyDirWorld(body, 0, 0, 1);
+        var fxx = fwM.x;
+        var fyy = fwM.y;
+        var fzz = fwM.z;
+        var flen = Math.sqrt(fxx * fxx + fyy * fyy + fzz * fzz) || 1e-6;
+        fxx /= flen;
+        fyy /= flen;
+        fzz /= flen;
+        var offM = VL_PU_MISSILE_SPAWN_FORWARD;
+        this._vlPuState.d.push({
+          k: 2,
+          x: px + fxx * offM,
+          y: py + fyy * offM,
+          z: pz + fzz * offM,
+          vx: fxx * VL_PU_MISSILE_SPEED,
+          vy: fyy * VL_PU_MISSILE_SPEED,
+          vz: fzz * VL_PU_MISSILE_SPEED,
+          owner: slot,
+          armT: 0,
+          tgt: tgtM,
+          age: 0,
+          dead: false,
+          fwdx: fxx,
+          fwdy: fyy,
+          fwdz: fzz
+        });
+      }
+      this._vlPuState.i[slot] = 0;
+      this._vlBotPuDeployAt[slot] = 0;
+    },
+
+    _vlDoExplosionHost: function (ex, ey, ez, now) {
+      var hitR = CAR_HALF * 3.05;
+      vlPlaySoundEntityId('vl-pu-hit-sound', 0.92 + Math.random() * 0.12, 0.88);
+      this._broadcastFx({ type: 'vl-pu', act: 'hit' });
+      var vi;
+      for (vi = 0; vi < 4; vi++) {
+        var b = this.carBodies[vi];
+        if (!b) continue;
+        var dx = b.position.x - ex;
+        var dy = b.position.y - ey;
+        var dz = b.position.z - ez;
+        if (dx * dx + dy * dy + dz * dz >= hitR * hitR) continue;
+        var L = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+        dx /= L;
+        dy /= L;
+        dz /= L;
+        b.velocity.x += dx * VL_PU_BLAST_LIN * (0.55 + Math.random() * 0.45);
+        b.velocity.y += dy * VL_PU_BLAST_LIN * 0.82;
+        b.velocity.z += dz * VL_PU_BLAST_LIN * (0.55 + Math.random() * 0.45);
+        b.angularVelocity.x += (Math.random() - 0.5) * VL_PU_BLAST_SPIN;
+        b.angularVelocity.y += (Math.random() - 0.5) * VL_PU_BLAST_SPIN;
+        b.angularVelocity.z += (Math.random() - 0.5) * VL_PU_BLAST_SPIN;
+        if (this._vlThrowClampUntil) this._vlThrowClampUntil[vi] = now + 1200;
+        if (this._vlAutoRollResumeMs) this._vlAutoRollResumeMs[vi] = now + 4500;
+      }
+    },
+
+    _vlTickDeployablesHost: function (now, dtSec, hitR) {
+      var st = this._vlPuState;
+      var di;
+      for (di = 0; di < st.d.length; di++) {
+        var D = st.d[di];
+        if (!D || D.dead) continue;
+        if (D.k === 1) {
+          D.age += dtSec;
+          /* Use age (replicated) for armed state — `armT` was host `performance.now()` and breaks client glow. */
+          var armedM = D.age * 1000 >= VL_PU_MINE_ARM_MS;
+          if (armedM) {
+            var ci;
+            for (ci = 0; ci < 4; ci++) {
+              var cb = this.carBodies[ci];
+              if (!cb) continue;
+              var mx = cb.position.x - D.x;
+              var my = cb.position.y - D.y;
+              var mz = cb.position.z - D.z;
+              if (mx * mx + my * my + mz * mz < hitR * hitR) {
+                this._vlDoExplosionHost(D.x, D.y, D.z, now);
+                D.dead = true;
+                break;
+              }
+            }
+          }
+        } else if (D.k === 2) {
+          D.age += dtSec;
+          var tbi = D.tgt;
+          var tb = tbi >= 0 && tbi < 4 ? this.carBodies[tbi] : null;
+          if (!tb || D.age > VL_PU_MISSILE_MAX_AGE) {
+            D.dead = true;
+            continue;
+          }
+          var seekOn = D.age >= VL_PU_MISSILE_SEEK_DELAY_SEC;
+          if (!seekOn) {
+            var uux = D.fwdx;
+            var uuy = D.fwdy;
+            var uuz = D.fwdz;
+            if (typeof uux !== 'number' || typeof uuy !== 'number' || typeof uuz !== 'number') {
+              var vm0 =
+                (D.vx || 0) * (D.vx || 0) + (D.vy || 0) * (D.vy || 0) + (D.vz || 0) * (D.vz || 0);
+              var il0 = 1 / (Math.sqrt(vm0) || 1e-6);
+              uux = (D.vx || 0) * il0;
+              uuy = (D.vy || 0) * il0;
+              uuz = (D.vz || 0) * il0;
+            }
+            D.vx = uux * VL_PU_MISSILE_SPEED;
+            D.vy = uuy * VL_PU_MISSILE_SPEED;
+            D.vz = uuz * VL_PU_MISSILE_SPEED;
+          } else {
+            var hx = tb.position.x - D.x;
+            var hy = tb.position.y - D.y;
+            var hz = tb.position.z - D.z;
+            var hlen = Math.sqrt(hx * hx + hy * hy + hz * hz) || 1e-6;
+            hx /= hlen;
+            hy /= hlen;
+            hz /= hlen;
+            var dvx = hx * VL_PU_MISSILE_SPEED - D.vx;
+            var dvy = hy * VL_PU_MISSILE_SPEED - D.vy;
+            var dvz = hz * VL_PU_MISSILE_SPEED - D.vz;
+            var turn = Math.min(1, VL_PU_MISSILE_TURN * dtSec);
+            D.vx += dvx * turn;
+            D.vy += dvy * turn;
+            D.vz += dvz * turn;
+            var vm = Math.sqrt(D.vx * D.vx + D.vy * D.vy + D.vz * D.vz) || 1e-6;
+            if (vm > VL_PU_MISSILE_SPEED * 1.08) {
+              var sc = (VL_PU_MISSILE_SPEED * 1.08) / vm;
+              D.vx *= sc;
+              D.vy *= sc;
+              D.vz *= sc;
+            }
+          }
+          D.x += D.vx * dtSec;
+          D.y += D.vy * dtSec;
+          D.z += D.vz * dtSec;
+          var hitRm = hitR * 0.92;
+          var hitSq = hitRm * hitRm;
+          var skipOwnHit = D.age < VL_PU_MISSILE_IGNORE_OWNER_SEC;
+          var ciH;
+          for (ciH = 0; ciH < 4; ciH++) {
+            var cHit = this.carBodies[ciH];
+            if (!cHit) continue;
+            if (skipOwnHit && ciH === D.owner) continue;
+            var mcx = cHit.position.x - D.x;
+            var mcy = cHit.position.y - D.y;
+            var mcz = cHit.position.z - D.z;
+            if (mcx * mcx + mcy * mcy + mcz * mcz < hitSq) {
+              this._vlDoExplosionHost(D.x, D.y, D.z, now);
+              D.dead = true;
+              break;
+            }
+          }
+        }
+      }
+      var live = [];
+      for (di = 0; di < st.d.length; di++) {
+        if (st.d[di] && !st.d[di].dead) live.push(st.d[di]);
+      }
+      st.d = live;
+    },
+
+    _vlTickPowerupsHost: function (now, dtSec) {
+      if (!this.isHost || !this.vlMatchActive || !this.vlMatchStartMs || !this.carBodies) return;
+      var st = this._vlPuState;
+      if (!st) return;
+      var A = ARENA;
+      var pickR = CAR_HALF * 2.28;
+      var hitR = CAR_HALF * 3.05;
+      if (!this._vlPuNextSpawn) this._vlPuArmSpawnTimer(now);
+      this._vlTickDeployablesHost(now, dtSec, hitR);
+      var o = st.o;
+      if (o) {
+        if (o.ph === 'grow') {
+          var ug = (now - o.t0) / VL_PU_ORB_GROW_MS;
+          if (ug >= 1) {
+            o.ph = 'ready';
+            o.u = 1;
+          } else {
+            o.u = ug;
+          }
+        } else if (o.ph === 'dying') {
+          o.uc = (now - o.tDie) / VL_PU_ORB_COLLECT_MS;
+          if (o.uc >= 1) st.o = null;
+        }
+        if (st.o && st.o.ph === 'ready') this._vlOrbTryPickupHost(now, pickR);
+      } else if (now >= this._vlPuNextSpawn) {
+        this._vlSpawnOrbHost(now, A);
+        this._vlPuArmSpawnTimer(now);
+      }
+      var s;
+      for (s = 0; s < 4; s++) {
+        var inp = this.inputs[s];
+        if (inp && inp.puD && st.i[s] > 0) {
+          this._vlTryDeploySlotHost(s, now);
+          inp.puD = 0;
+        }
+      }
+      for (s = 0; s < 4; s++) {
+        if (this._vlIsHumanOccupyingSlot(s)) continue;
+        if (st.i[s] > 0 && this._vlBotPuDeployAt[s] && now >= this._vlBotPuDeployAt[s]) {
+          this._vlTryDeploySlotHost(s, now);
+        }
+      }
+    },
+
+    _vlPuSlotColorHex: function (slot) {
+      var s = typeof slot === 'number' && slot >= 0 && slot < 4 ? slot : 0;
+      return SPEC[s] && SPEC[s].color ? SPEC[s].color : '#88aacc';
+    },
+
+    /** Naval mine: central sphere + outward bumps (child spheres), tinted by deployer cube. */
+    _vlPuRebuildMineVisual: function (el, ownerSlot) {
+      var pc = this._vlPuSlotColorHex(ownerSlot);
+      var rMain = 0.031;
+      var rBump = 0.01;
+      var matCore =
+        'shader: flat; color: ' +
+        pc +
+        '; metalness: 0.28; roughness: 0.42; emissive: ' +
+        pc +
+        '; emissiveIntensity: 0.38; side: double';
+      var ch = document.createElement('a-sphere');
+      ch.setAttribute('radius', String(rMain));
+      ch.setAttribute('position', '0 0 0');
+      ch.setAttribute('class', 'vl-pu-mine-part');
+      ch.setAttribute('material', matCore);
+      el.appendChild(ch);
+      var dirs = VL_PU_MINE_SPIKE_DIRS;
+      var ki;
+      for (ki = 0; ki < dirs.length; ki++) {
+        var d = dirs[ki];
+        var sp = document.createElement('a-sphere');
+        sp.setAttribute('radius', String(rBump));
+        var ox = d[0] * (rMain + rBump * 0.82);
+        var oy = d[1] * (rMain + rBump * 0.82);
+        var oz = d[2] * (rMain + rBump * 0.82);
+        sp.setAttribute('position', ox + ' ' + oy + ' ' + oz);
+        sp.setAttribute('class', 'vl-pu-mine-part');
+        sp.setAttribute(
+          'material',
+          'shader: flat; color: ' +
+            pc +
+            '; metalness: 0.32; roughness: 0.36; emissive: ' +
+            pc +
+            '; emissiveIntensity: 0.48; side: double'
+        );
+        el.appendChild(sp);
+      }
+    },
+
+    _vlPuClearOrbIcon: function (iconEl) {
+      if (!iconEl) return;
+      while (iconEl.firstChild) iconEl.removeChild(iconEl.firstChild);
+    },
+
+    /** Mini mine or cone inside the floating pickup orb (`kind` 1 / 2). */
+    _vlPuRebuildOrbPickupIcon: function (iconEl, kind) {
+      if (!iconEl) return;
+      this._vlPuClearOrbIcon(iconEl);
+      if (kind === 1) {
+        var rM = 0.012;
+        var rB = 0.0042;
+        var matC =
+          'shader: flat; color: #bcd8ee; metalness: 0.3; roughness: 0.4; emissive: #7a9ebb; emissiveIntensity: 0.38; side: double';
+        var ch0 = document.createElement('a-sphere');
+        ch0.setAttribute('radius', String(rM));
+        ch0.setAttribute('position', '0 0 0');
+        ch0.setAttribute('class', 'vl-pu-orb-icon-part');
+        ch0.setAttribute('material', matC);
+        iconEl.appendChild(ch0);
+        var dirsO = VL_PU_MINE_SPIKE_DIRS;
+        var kio;
+        for (kio = 0; kio < dirsO.length; kio++) {
+          var dO = dirsO[kio];
+          var spO = document.createElement('a-sphere');
+          spO.setAttribute('radius', String(rB));
+          var oxO = dO[0] * (rM + rB * 0.82);
+          var oyO = dO[1] * (rM + rB * 0.82);
+          var ozO = dO[2] * (rM + rB * 0.82);
+          spO.setAttribute('position', oxO + ' ' + oyO + ' ' + ozO);
+          spO.setAttribute('class', 'vl-pu-orb-icon-part');
+          spO.setAttribute('material', matC);
+          iconEl.appendChild(spO);
+        }
+      } else if (kind === 2) {
+        var mc = document.createElement('a-entity');
+        mc.setAttribute('rotation', '-90 0 0');
+        mc.setAttribute('geometry', 'primitive: cone; radiusBottom: 0.014; height: 0.038');
+        mc.setAttribute(
+          'material',
+          'shader: flat; color: #dceaff; metalness: 0.42; roughness: 0.28; emissive: #aacfff; emissiveIntensity: 0.48; side: double'
+        );
+        mc.setAttribute('class', 'vl-pu-orb-icon-part');
+        iconEl.appendChild(mc);
+      }
+    },
+
+    /** Spatial loop at missile deploy entity; detached when mine/hidden or type changes. */
+    _vlPuStopMissileThrusterSound: function (el) {
+      if (!el || !el.children || !el.children.length) return;
+      var ci;
+      for (ci = el.children.length - 1; ci >= 0; ci--) {
+        var ch = el.children[ci];
+        if (!ch || !ch.getAttribute || ch.getAttribute('class') !== 'vl-pu-missile-thruster') continue;
+        var sct = ch.components && ch.components.sound;
+        if (sct && sct.stopSound) try { sct.stopSound(); } catch (eSt) {}
+        el.removeChild(ch);
+      }
+      el._vlPuMissileThrustOn = false;
+    },
+
+    _vlPuEnsureMissileThrusterSound: function (el) {
+      if (!el) return;
+      this._resumeAudioIfNeeded();
+      var child = null;
+      var j;
+      for (j = 0; j < el.children.length; j++) {
+        var cj = el.children[j];
+        if (cj && cj.getAttribute && cj.getAttribute('class') === 'vl-pu-missile-thruster') {
+          child = cj;
+          break;
+        }
+      }
+      if (!child) {
+        child = document.createElement('a-entity');
+        child.setAttribute('class', 'vl-pu-missile-thruster');
+        child.setAttribute('position', '0 0 0');
+        child.setAttribute(
+          'sound',
+          'src: url(audio/thrusters_loopwav-14699.mp3); autoplay: false; loop: true; volume: 0.58; playbackRate: 1.35; positional: true; distanceModel: inverse; refDistance: 0.5; maxDistance: 24; rolloffFactor: 1.45; poolSize: 1'
+        );
+        el.appendChild(child);
+      }
+      var sc = child.components && child.components.sound;
+      if (!sc || !sc.playSound) return;
+      if (!el._vlPuMissileThrustOn) {
+        try {
+          sc.playSound();
+        } catch (ePl) {}
+        el._vlPuMissileThrustOn = true;
+      }
+    },
+
+    _vlPuApplyMineArmGlow: function (el, armed, baseHex) {
+      var emi = armed ? 0.62 : 0.34;
+      var kids = el.children || [];
+      var ci;
+      for (ci = 0; ci < kids.length; ci++) {
+        var c = kids[ci];
+        if (!c || !c.getAttribute || c.getAttribute('class') !== 'vl-pu-mine-part') continue;
+        c.setAttribute(
+          'material',
+          'shader: flat; color: ' +
+            baseHex +
+            '; metalness: 0.32; roughness: 0.38; emissive: ' +
+            baseHex +
+            '; emissiveIntensity: ' +
+            emi.toFixed(2) +
+            '; side: double'
+        );
+      }
+    },
+
+    _vlRenderPowerupsVisuals: function (now) {
+      var A = ARENA;
+      var st = this._vlPuState;
+      var orbEl = this._vlPuOrbEl;
+      var mesh = this._vlPuOrbMesh;
+      var dVis = this._vlPuDeployVis;
+      if (!st || !orbEl) return;
+      var o = st.o;
+      if (o) {
+        orbEl.setAttribute('visible', 'true');
+        var lx = o.x - A.cx;
+        var ly = o.y - A.cy;
+        var lz = o.z - A.cz;
+        orbEl.setAttribute('position', lx + ' ' + ly + ' ' + lz);
+        var sc;
+        var op = 0.38;
+        if (o.ph === 'grow') {
+          sc = Math.max(0.004, vlPuEaseSpawn(o.u || 0));
+        } else if (o.ph === 'dying') {
+          sc = 1 + (o.uc || 0) * 1.05;
+          op = 0.42 * (1 - Math.min(1, o.uc || 0));
+        } else {
+          sc = 1;
+        }
+        var puls = 1;
+        if (o.ph === 'ready') {
+          puls = 1 + 0.065 * Math.sin(now * 0.0056);
+          op *= 0.88 + 0.12 * (0.5 + 0.5 * Math.sin(now * 0.0044 + 0.3));
+        }
+        orbEl.setAttribute('scale', sc * puls + ' ' + sc * puls + ' ' + sc * puls);
+        var icEl = this._vlPuOrbIconEl;
+        if (icEl && typeof o.k === 'number' && icEl._vlOrbIconK !== o.k) {
+          this._vlPuRebuildOrbPickupIcon(icEl, o.k);
+          icEl._vlOrbIconK = o.k;
+        }
+        if (mesh) {
+          var col = o.k === 2 ? '#ddeeff' : '#fff8f0';
+          mesh.setAttribute(
+            'material',
+            'shader: flat; color: ' +
+              col +
+              '; opacity: ' +
+              op.toFixed(3) +
+              '; transparent: true; side: double; depthWrite: false'
+          );
+        }
+      } else if (orbEl) {
+        orbEl.setAttribute('visible', 'false');
+        if (this._vlPuOrbIconEl) {
+          this._vlPuClearOrbIcon(this._vlPuOrbIconEl);
+          this._vlPuOrbIconEl._vlOrbIconK = undefined;
+        }
+      }
+      if (!dVis) return;
+      var di;
+      for (di = 0; di < dVis.length; di++) {
+        var el = dVis[di];
+        if (!el) continue;
+        if (di < st.d.length) {
+          var D = st.d[di];
+          el.setAttribute('visible', 'true');
+          el.setAttribute('position', D.x - A.cx + ' ' + (D.y - A.cy) + ' ' + (D.z - A.cz));
+          if (D.k === 1) {
+            el.removeAttribute('geometry');
+            el.removeAttribute('material');
+            if (typeof el._vlPuMineOwner !== 'number' || el._vlPuMineOwner !== D.owner) {
+              this._vlPuStopMissileThrusterSound(el);
+              while (el.firstChild) el.removeChild(el.firstChild);
+              el._vlPuMineOwner = D.owner;
+              this._vlPuRebuildMineVisual(el, D.owner);
+            }
+            el._vlPuDepKind = 1;
+            var armHintM = D.age * 1000 >= VL_PU_MINE_ARM_MS;
+            this._vlPuApplyMineArmGlow(el, armHintM, this._vlPuSlotColorHex(D.owner));
+          } else {
+            if (el._vlPuDepKind !== 2) {
+              this._vlPuStopMissileThrusterSound(el);
+              while (el.firstChild) el.removeChild(el.firstChild);
+              el._vlPuDepKind = 2;
+            }
+            el._vlPuMineOwner = undefined;
+            var pcol = this._vlPuSlotColorHex(D.owner);
+            el.setAttribute('geometry', 'primitive: cone; radiusBottom: 0.02; height: 0.076');
+            var vx = D.vx;
+            var vy = D.vy;
+            var vz = D.vz;
+            var vm2 = vx * vx + vy * vy + vz * vz;
+            if (vm2 < 1e-12) {
+              el.setAttribute('rotation', '-90 0 0');
+            } else {
+              var invm = 1 / Math.sqrt(vm2);
+              vx *= invm;
+              vy *= invm;
+              vz *= invm;
+              var yawDeg = Math.atan2(vx, vz) * (180 / Math.PI);
+              var pitchDeg = -Math.asin(Math.max(-1, Math.min(1, vy))) * (180 / Math.PI) - 90;
+              el.setAttribute('rotation', pitchDeg + ' ' + yawDeg + ' 0');
+            }
+            el.setAttribute(
+              'material',
+              'shader: flat; color: ' +
+                pcol +
+                '; metalness: 0.48; roughness: 0.26; emissive: ' +
+                pcol +
+                '; emissiveIntensity: 0.5; side: double'
+            );
+            this._vlPuEnsureMissileThrusterSound(el);
+          }
+        } else {
+          this._vlPuStopMissileThrusterSound(el);
+          el.setAttribute('visible', 'false');
+          while (el.firstChild) el.removeChild(el.firstChild);
+          el._vlPuMineOwner = undefined;
+          el._vlPuDepKind = 0;
+        }
+      }
     },
 
     _resumeAudioIfNeeded: function () {
@@ -1418,7 +2904,20 @@
       }
     },
 
+    _vlBounceCooldownMs: function (impactSpeed) {
+      var s = (impactSpeed || 0) / 3.6;
+      if (s < 0) s = 0;
+      if (s > 1) s = 1;
+      return VL_BOUNCE_CD_SOFT_MS - s * (VL_BOUNCE_CD_SOFT_MS - VL_BOUNCE_CD_HARD_MS);
+    },
+
     _playBounceWorld: function (wx, wy, wz, speed) {
+      if (!this.isHost) {
+        var nowC = performance.now();
+        if (nowC < this._vlClientBounceNext) return;
+        /* Match host cooldown so clients don’t drop most of a rapid bounce train. */
+        this._vlClientBounceNext = nowC + this._vlBounceCooldownMs(speed || 0);
+      }
       this._resumeAudioIfNeeded();
       var el = document.getElementById('vl-bounce-sound');
       if (!el) return;
@@ -1426,22 +2925,12 @@
       if (!sc) return;
       el.object3D.position.set(wx, wy, wz);
       el.object3D.updateMatrixWorld(true);
-      var normSpeed = Math.min((speed || 0) / 12, 1);
-      var rate = 1.12 + normSpeed * 0.42;
-      var vol = 0.55 + normSpeed * 0.38;
-      try {
-        if (sc.pool && sc.pool.children) {
-          for (var i = 0; i < sc.pool.children.length; i++) {
-            var a = sc.pool.children[i];
-            if (a && !a.isPlaying) {
-              if (a.setPlaybackRate) a.setPlaybackRate(rate);
-              if (a.setVolume) a.setVolume(vol);
-            }
-          }
-        }
-      } catch (e1) {}
-      sc.stopSound();
-      sc.playSound();
+      var normSpeed = Math.min((speed || 0) / 9.5, 1);
+      var rate = 0.92 + Math.pow(normSpeed, 0.95) * 0.62;
+      var vol = Math.min(1, 0.28 + Math.pow(normSpeed, 1.05) * 0.72);
+      /* Don’t use A-Frame `stopSound`/`playSound` alone — see `vlSoundPoolStopEvery`. */
+      vlSoundPoolStopEvery(sc);
+      vlSoundPoolPlayOneShot(sc, rate, vol);
     },
 
     /**
@@ -1484,8 +2973,9 @@
      * @param {number} [ix] world X at goal (omit on clients if host sent no coords)
      * @param {number} [iy]
      * @param {number} [iz]
+     * @param {string} [team] `'blue'` | `'red'` — scoring side for arena “GOAL!” (fallback from `ix` vs arena center).
      */
-    _playGoalFxWorld: function (ix, iy, iz) {
+    _playGoalFxWorld: function (ix, iy, iz, team) {
       this._resumeAudioIfNeeded();
       this._vlStartGoalHapticBurst();
       var st = document.getElementById('vl-goal-sound');
@@ -1496,6 +2986,12 @@
           sc0.playSound();
         }
       }
+      var tTeam = team;
+      if (tTeam !== 'blue' && tTeam !== 'red') {
+        tTeam =
+          typeof ix === 'number' && isFinite(ix) ? (ix < ARENA.cx ? 'red' : 'blue') : 'blue';
+      }
+      this._vlStartGoalCelebration(tTeam);
       if (
         typeof ix !== 'number' ||
         typeof iy !== 'number' ||
@@ -1592,6 +3088,9 @@
         body.velocity.set(0, 0, 0);
         body.angularVelocity.set(0, 0, 0);
         return;
+      }
+      if (typeof slot === 'number' && slot >= 0 && slot < 4 && this._vlAutoRollResumeMs) {
+        this._vlAutoRollResumeMs[slot] = now + VL_AUTO_ROLL_AFTER_THROW_MS;
       }
       /* Use last tracked hand linear / angular velocity from sustain (body.pos matched hand each frame, so pos-delta was always ~0). */
       this._tmpVecThrow.set(G.lvx || 0, G.lvy || 0, G.lvz || 0);
@@ -1869,15 +3368,13 @@
       }
       var carIdx = this._carBodyIndex(other);
       if (carIdx >= 0) {
-        if (now < this._vlAudioNextCarHit) return;
-        this._vlAudioNextCarHit = now + 70;
         var carB = this.carBodies[carIdx];
         var midX = (p.x + carB.position.x) * 0.5;
         var midY = (p.y + carB.position.y) * 0.5;
         var midZ = (p.z + carB.position.z) * 0.5;
         var rel = new CANNON.Vec3();
         ball.velocity.vsub(carB.velocity, rel);
-        var hitSpeed = Math.max(rel.length(), impactN, 0.15);
+        var hitSpeed = Math.max(impactN * 1.25, rel.length() * 0.34, 0.12);
         /* Cannon slip is weak on fast glances; add ω ∝ r×v so cube hits visibly spin the ball. */
         var rx = p.x - carB.position.x;
         var ry = p.y - carB.position.y;
@@ -1897,17 +3394,21 @@
           w.y *= k;
           w.z *= k;
         }
-        this._playBounceWorld(midX, midY, midZ, hitSpeed);
-        if (carIdx === this.mySlot) {
-          this._pulseBothHands(0.72, 95);
+        if (hitSpeed >= VL_BOUNCE_MIN_NORMAL * 0.82 && now >= this._vlAudioNextCarHit) {
+          this._vlAudioNextCarHit = now + this._vlBounceCooldownMs(hitSpeed);
+          this._playBounceWorld(midX, midY, midZ, hitSpeed);
+          if (carIdx === this.mySlot) {
+            this._pulseBothHands(0.72, 95);
+          }
+          this._broadcastFx({ type: 'vl-carhit', slot: carIdx, x: midX, y: midY, z: midZ, sp: hitSpeed });
         }
-        this._broadcastFx({ type: 'vl-carhit', slot: carIdx, x: midX, y: midY, z: midZ, sp: hitSpeed });
         return;
       }
       if (this._isWallBody(other)) {
+        var bounceSp = Math.max(impactN, sp * VL_BOUNCE_BALL_SPEED_BLEND);
+        if (bounceSp < VL_BOUNCE_MIN_BALL_WALL) return;
         if (now < this._vlAudioNextBounce) return;
-        this._vlAudioNextBounce = now + 42;
-        var bounceSp = Math.max(sp, impactN, 0.12);
+        this._vlAudioNextBounce = now + this._vlBounceCooldownMs(bounceSp);
         this._playBounceWorld(p.x, p.y, p.z, bounceSp);
         this._broadcastFx({ type: 'vl-bounce', x: p.x, y: p.y, z: p.z, sp: bounceSp });
       }
@@ -1939,15 +3440,16 @@
       if (otherCarIdx >= 0) {
         var rel = carBody.velocity.vsub(other.velocity);
         relSp = Math.max(rel.length(), impactN, 0.15);
-        if (relSp < 0.2) return;
+        if (relSp < 0.32) return;
         midX = (carBody.position.x + other.position.x) * 0.5;
         midY = (carBody.position.y + other.position.y) * 0.5;
         midZ = (carBody.position.z + other.position.z) * 0.5;
         slots = [carIdx, otherCarIdx];
         syncAudio = carIdx < otherCarIdx;
       } else if (this._isWallBody(other)) {
-        relSp = Math.max(carBody.velocity.length(), impactN, 0.12);
-        if (relSp < 0.14) return;
+        var tang = Math.min(carBody.velocity.length() * 0.18, VL_BOUNCE_CAR_TANGENT_CAP);
+        relSp = Math.max(impactN, tang, 0.06);
+        if (relSp < VL_BOUNCE_MIN_NORMAL) return;
         midX = carBody.position.x;
         midY = carBody.position.y;
         midZ = carBody.position.z;
@@ -1987,7 +3489,7 @@
         sp: relSp
       });
       if (now < this._vlAudioNextCarObstacle) return;
-      this._vlAudioNextCarObstacle = now + 55;
+      this._vlAudioNextCarObstacle = now + this._vlBounceCooldownMs(relSp);
       this._playBounceWorld(midX, midY, midZ, relSp);
       for (si = 0; si < slots.length; si++) {
         if (slots[si] === this.mySlot) {
@@ -2080,6 +3582,14 @@
       return true;
     },
 
+    /** Right-hand haptic for B-deploy; debounced so XR `bbuttondown` + gather edge don’t double-fire. */
+    _vlPulseDeployHand: function () {
+      var n = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      if (this._vlPuDeployHapticAt && n - this._vlPuDeployHapticAt < 95) return;
+      this._vlPuDeployHapticAt = n;
+      this._pulseHand(vlHandEl('rightHand', 'vl-hand-right'), 0.58, 52);
+    },
+
     /** Quest “A” is unreliable via raw `gamepad.buttons` across runtimes; A-Frame emits `abuttondown` on the right hand entity. */
     _vlUpdateResetHintVisibility: function () {
       var scn = this.el.sceneEl || this.el;
@@ -2099,6 +3609,26 @@
         this._vlXMenuHintEl = xh || null;
       }
       if (xh) xh.setAttribute('visible', v);
+      var ph = this._vlPuDeployHintEl;
+      if (!ph) {
+        ph = document.getElementById('vl-pu-deploy-hint');
+        this._vlPuDeployHintEl = ph || null;
+      }
+      var pl = this._vlPuDeployHintLabelEl;
+      if (!pl) {
+        pl = document.getElementById('vl-pu-deploy-hint-label');
+        this._vlPuDeployHintLabelEl = pl || null;
+      }
+      if (!ph) return;
+      var inv =
+        this._vlPuState && this._vlPuState.i && typeof this.mySlot === 'number'
+          ? this._vlPuState.i[this.mySlot] || 0
+          : 0;
+      var showPu = v && this.vlMatchActive && this.vlMatchStartMs && inv > 0;
+      ph.setAttribute('visible', showPu);
+      if (showPu && pl) {
+        pl.setAttribute('text', 'value', inv === 1 ? 'Deploy Mine' : 'Deploy Missile');
+      }
     },
 
     _vlBindRightAButton: function () {
@@ -2149,7 +3679,21 @@
       this._vlRightBHandlersBound = true;
       this._vlRightHandBHook = rh;
       this._vlOnBbuttondown = function () {
-        self._vlTryToggleFpv();
+        if (
+          self.vlMatchActive &&
+          self.vlMatchStartMs &&
+          self._vlPuState &&
+          self._vlPuState.i[self.mySlot] > 0
+        ) {
+          self._vlPulseDeployHand();
+          if (self.isHost) {
+            if (self.inputs[self.mySlot]) self.inputs[self.mySlot].puD = 1;
+          } else {
+            self._vlPendingPuD = 1;
+          }
+          return;
+        }
+        if (VL_FPV_ENABLED) self._vlTryToggleFpv();
       };
       rh.addEventListener('bbuttondown', this._vlOnBbuttondown);
     },
@@ -2443,8 +3987,18 @@
           }
           var bEdgeXR = bNowXR && !this._vlPrevBGamepadXR;
           this._vlPrevBGamepadXR = !!bNowXR;
-          if (VL_FPV_ENABLED && bEdgeXR) {
-            this._vlTryToggleFpv();
+          if (bEdgeXR) {
+            if (
+              this.vlMatchActive &&
+              this.vlMatchStartMs &&
+              this._vlPuState &&
+              this._vlPuState.i[this.mySlot] > 0
+            ) {
+              out.puD = 1;
+              this._vlPulseDeployHand();
+            } else if (VL_FPV_ENABLED) {
+              this._vlTryToggleFpv();
+            }
           }
         }
         var lh = vlHandEl('leftHand', 'vl-hand-left');
@@ -2521,19 +4075,41 @@
         out.camOk = 0;
       }
       out.autoRoll = window._vlAutoRollEnabled ? 1 : 0;
+      if (kb['KeyB'] && !this._vlPrevPuBKey) {
+        if (
+          this.vlMatchActive &&
+          this.vlMatchStartMs &&
+          this._vlPuState &&
+          this._vlPuState.i[this.mySlot] > 0
+        ) {
+          out.puD = 1;
+          this._vlPulseDeployHand();
+        }
+      }
+      this._vlPrevPuBKey = !!kb['KeyB'];
       return out;
     },
 
     _applyCarControls: function (slot, inp, noStickTorque) {
       var body = this.carBodies[slot];
       if (!body || !inp) return;
+      var nowAR = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      var GGrab = this._vlGrabState && this._vlGrabState[slot];
+      var postThrowSuppress =
+        this._vlAutoRollResumeMs &&
+        typeof slot === 'number' &&
+        slot >= 0 &&
+        slot < 4 &&
+        this._vlAutoRollResumeMs[slot] > nowAR;
       var botSlot = this.isHost && !this._vlIsHumanOccupyingSlot(slot);
       var unbeatable = botSlot && !!window.vlBotUnbeatableMode;
       var tScale = unbeatable ? HELI_TORQUE_SCALE * 3.0 : (botSlot ? HELI_TORQUE_SCALE * VL_BOT_TORQUE_SCALE : HELI_TORQUE_SCALE);
       var fThrust = unbeatable ? THRUST_FORWARD : (botSlot ? THRUST_FORWARD * VL_BOT_THRUST_SCALE : THRUST_FORWARD);
       var autoRollHuman =
         (inp.autoRoll === undefined || inp.autoRoll === 1 || inp.autoRoll === true) &&
-        this._vlIsHumanOccupyingSlot(slot);
+        this._vlIsHumanOccupyingSlot(slot) &&
+        !(GGrab && GGrab.active) &&
+        !postThrowSuppress;
 
       if (!noStickTorque) {
         /* HeliVR/main.js lines 226–231: local torque (pitch, yaw*1.5, roll) then applyQuaternion(mesh). */
@@ -2619,6 +4195,8 @@
       var autoRollOn = inp.autoRoll === undefined || inp.autoRoll === 1 || inp.autoRoll === true;
       if (!autoRollOn) return;
       if (!this._vlIsHumanOccupyingSlot(slot)) return;
+      var nowRL = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      if (this._vlAutoRollResumeMs && this._vlAutoRollResumeMs[slot] > nowRL) return;
       var G = this._vlGrabState[slot];
       var R = this._vlSlotReset[slot];
       if (G && G.active) return;
@@ -3280,8 +4858,8 @@
         var gixW = A.cx - A.halfW + 0.06;
         var giyW = b.position.y;
         var gizW = b.position.z;
-        this._playGoalFxWorld(gixW, giyW, gizW);
-        this._broadcastFx({ type: 'vl-goal', ix: gixW, iy: giyW, iz: gizW });
+        this._playGoalFxWorld(gixW, giyW, gizW, 'red');
+        this._broadcastFx({ type: 'vl-goal', ix: gixW, iy: giyW, iz: gizW, team: 'red' });
         this._resetBall();
         this.goalCd = 2;
         return;
@@ -3295,8 +4873,8 @@
         var gixE = A.cx + A.halfW - 0.06;
         var giyE = b.position.y;
         var gizE = b.position.z;
-        this._playGoalFxWorld(gixE, giyE, gizE);
-        this._broadcastFx({ type: 'vl-goal', ix: gixE, iy: giyE, iz: gizE });
+        this._playGoalFxWorld(gixE, giyE, gizE, 'blue');
+        this._broadcastFx({ type: 'vl-goal', ix: gixE, iy: giyE, iz: gizE, team: 'blue' });
         this._resetBall();
         this.goalCd = 2;
       }
@@ -3345,6 +4923,11 @@
         this._vlHostLedCd[i] = -1;
         this._vlLedMode[i] = VL_LED_SM_NEUTRAL;
         this.carVisScale[i] = 1;
+        if (this._vlBotState && this._vlBotState[i]) {
+          this._vlBotState[i].smx = null;
+          this._vlBotState[i].smz = null;
+          this._vlBotState[i].driftUntil = 0;
+        }
       }
     },
 
@@ -3471,6 +5054,13 @@
           this.carVisScale[isc0] = 1;
         }
       }
+      if (!this.isHost) {
+        if (snap.vlPu) {
+          this._vlPuState = this._vlPuDenormalize(snap.vlPu);
+        } else {
+          this._vlPuState = { i: [0, 0, 0, 0], o: null, d: [] };
+        }
+      }
       if (typeof snap.score0 === 'number') {
         this.score[0] = snap.score0;
         this.score[1] = snap.score1;
@@ -3478,7 +5068,29 @@
       }
       if (typeof snap.vlMatchActive === 'boolean') {
         this.vlMatchActive = snap.vlMatchActive;
-        if (!snap.vlMatchActive) this.vlMatchRemainSec = null;
+        if (!snap.vlMatchActive) {
+          this.vlMatchRemainSec = null;
+          this._vlClientMatchPreStart = false;
+          this._vlMatchFxCountdownSoundDone = false;
+          this._vlPrevSnapPreStart = false;
+          this._vlGoAnimT0 = 0;
+        }
+      }
+      if (snap.vlMatchActive && snap.vlPreStart === true && !this._vlMatchFxCountdownSoundDone) {
+        this._vlMatchFxCountdownSoundDone = true;
+        this._vlFireMatchCountdownSignal();
+      }
+      if (typeof snap.vlPreStart === 'boolean') {
+        var wasSnapPre = !!this._vlPrevSnapPreStart;
+        this._vlPrevSnapPreStart = snap.vlPreStart;
+        this._vlClientMatchPreStart = snap.vlPreStart;
+        if (!snap.vlPreStart) {
+          this._vlLastClientSnapCd = -1;
+        }
+        if (snap.vlMatchActive && wasSnapPre && !snap.vlPreStart) {
+          this._vlGoAnimT0 = performance.now();
+          this._vlPlayMatchStartGoSound();
+        }
       }
       if (
         this.vlMatchActive &&
@@ -3575,6 +5187,10 @@
           if (this._vlLedMode[i] !== VL_LED_SM_NEUTRAL) return true;
         }
       }
+      if (this.vlMatchActive && !this.vlMatchStartMs) return true;
+      if (this._vlPuState && (this._vlPuState.o || (this._vlPuState.d && this._vlPuState.d.length > 0))) {
+        return true;
+      }
       return false;
     },
 
@@ -3582,8 +5198,14 @@
       var b = this.ballBody;
       var now = performance.now();
       var rem = null;
-      if (this.vlMatchActive && this.vlMatchStartMs) {
-        rem = Math.max(0, (VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000);
+      var vlPreStart = false;
+      if (this.vlMatchActive) {
+        if (this.vlMatchStartMs) {
+          rem = Math.max(0, (VL_MATCH_DURATION_MS - (now - this.vlMatchStartMs)) / 1000);
+        } else {
+          vlPreStart = true;
+          rem = Math.max(0, (VL_MATCH_START_COUNTDOWN_MS - (now - this._vlMatchCountdownT0)) / 1000);
+        }
       }
       var snap = {
         t: now,
@@ -3591,6 +5213,7 @@
         score1: this.score[1],
         vlMatchActive: !!this.vlMatchActive,
         vlMatchRemainSec: rem,
+        vlPreStart: vlPreStart,
         ball: {
           p: [b.position.x, b.position.y, b.position.z],
           q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w],
@@ -3599,7 +5222,8 @@
         },
         cars: [],
         vlLm: [this._vlLedMode[0], this._vlLedMode[1], this._vlLedMode[2], this._vlLedMode[3]],
-        cvSc: [this.carVisScale[0], this.carVisScale[1], this.carVisScale[2], this.carVisScale[3]]
+        cvSc: [this.carVisScale[0], this.carVisScale[1], this.carVisScale[2], this.carVisScale[3]],
+        vlPu: this._vlPuSerialize()
       };
       for (var i = 0; i < 4; i++) {
         var c = this.carBodies[i];
@@ -3621,10 +5245,19 @@
       this.vlMatchActive = false;
       this.vlMatchStartMs = 0;
       this.vlMatchRemainSec = null;
+      this._vlMatchCountdownT0 = 0;
+      this._vlLastMatchCountdownShown = -1;
+      this._vlClientMatchPreStart = false;
+      this._vlLastClientSnapCd = -1;
+      this._vlMatchFxCountdownSoundDone = false;
+      this._vlPrevSnapPreStart = false;
+      this._vlGoAnimT0 = 0;
+      this._vlStopArenaEndParty();
+      this._vlPuClear();
       this._vlMarkHudDirty();
       this._applySpectatorTransform(0);
       this._setStatus(
-        'Practice (offline) — zero-G arena. Quest B (or B key on desktop) toggles cockpit view inside your cube. Multiplayer: VR menu → Play online → Host or Join with a lobby number.'
+        'Practice (offline) — zero-G arena. Quest B = cockpit view when you have no power-up; with a power-up, B deploys it. Multiplayer: VR menu → Play online → Host or Join with a lobby number.'
       );
       this._resetBall();
       this._refreshCubeHighlights();
@@ -3652,6 +5285,9 @@
       this.vlMatchActive = false;
       this.vlMatchStartMs = 0;
       this.vlMatchRemainSec = null;
+      this._vlMatchCountdownT0 = 0;
+      this._vlLastMatchCountdownShown = -1;
+      this._vlClientMatchPreStart = false;
       this._applySpectatorTransform(0);
 
       this.peer = new Peer(hostId, vlPeerOptions(iceServers));
@@ -3662,6 +5298,10 @@
         self.vlMatchActive = false;
         self.vlMatchStartMs = 0;
         self.vlMatchRemainSec = null;
+        self._vlMatchCountdownT0 = 0;
+        self._vlLastMatchCountdownShown = -1;
+        self._vlClientMatchPreStart = false;
+        self._vlLastClientSnapCd = -1;
         self.score[0] = 0;
         self.score[1] = 0;
         self._setScoreText();
@@ -3778,7 +5418,8 @@
           camOk: msg.camOk ? 1 : 0,
           camx: typeof msg.camx === 'number' && isFinite(msg.camx) ? msg.camx : 0,
           camy: typeof msg.camy === 'number' && isFinite(msg.camy) ? msg.camy : 0,
-          camz: typeof msg.camz === 'number' && isFinite(msg.camz) ? msg.camz : 0
+          camz: typeof msg.camz === 'number' && isFinite(msg.camz) ? msg.camz : 0,
+          puD: msg.puD ? 1 : 0
         };
         if (this.inputs[sl].aEdge) {
           this._vlTryStartCubeReset(sl);
@@ -3875,7 +5516,28 @@
         } else {
           this.vlMatchRemainSec = null;
         }
-        if (!data.active) this.vlMatchRemainSec = null;
+        if (!data.active) {
+          this.vlMatchRemainSec = null;
+          this._vlClientMatchPreStart = false;
+          this._vlMatchFxCountdownSoundDone = false;
+          this._vlPrevSnapPreStart = false;
+          this._vlGoAnimT0 = 0;
+        }
+        if (typeof data.vlPreStart === 'boolean') {
+          var wasPre2 = !!this._vlClientMatchPreStart;
+          this._vlClientMatchPreStart = data.vlPreStart;
+          if (data.active && wasPre2 && !data.vlPreStart) {
+            this._vlGoAnimT0 = performance.now();
+            this._vlPlayMatchStartGoSound();
+          }
+        }
+        if (data.endWinner) {
+          this._vlStartArenaEndParty(String(data.endWinner));
+        }
+        if (data.endBanner) {
+          this._setStatus(String(data.endBanner));
+          this._vlPlayMatchEndStinger();
+        }
         this._setScoreText();
         this._vlMarkHudDirty();
         return;
@@ -3888,8 +5550,20 @@
         this._setStatus('Lobby full (4 players).');
         return;
       }
+      if (data.type === 'vl-pu' && data.act) {
+        if (data.act === 'spawn') {
+          vlPlaySoundEntityId('vl-pu-sonar-sound', 0.98, 0.58);
+        } else if (data.act === 'pick' && typeof data.slot === 'number' && data.slot === this.mySlot) {
+          this._pulseBothHands(0.88, 105);
+          vlPlaySoundEntityId('vl-pu-sonar-sound', 1.02, 0.72);
+        } else if (data.act === 'hit') {
+          vlPlaySoundEntityId('vl-pu-hit-sound', 0.95, 0.76);
+        }
+        return;
+      }
       if (data.type === 'vl-goal') {
-        this._playGoalFxWorld(data.ix, data.iy, data.iz);
+        var tmg = data.team === 'blue' || data.team === 'red' ? data.team : null;
+        this._playGoalFxWorld(data.ix, data.iy, data.iz, tmg);
         return;
       }
       if (data.type === 'vl-bounce' && typeof data.x === 'number') {
@@ -3914,8 +5588,8 @@
         if (typeof data.x === 'number') {
           this._playBounceWorld(data.x, data.y, data.z, data.sp || 0.2);
         }
-        for (ci = 0; ci < slots.length; ci++) {
-          if (slots[ci] === this.mySlot) {
+        for (var ci2 = 0; ci2 < slots.length; ci2++) {
+          if (slots[ci2] === this.mySlot) {
             this._pulseBothHands(0.55, 75);
             break;
           }
@@ -3954,7 +5628,14 @@
       var inp = this._gatherLocalInput();
       var kb = this.keys || {};
       if (VL_FPV_ENABLED && kb['KeyB']) {
-        if (!this._vlPrevBKey) this._vlTryToggleFpv();
+        if (!this._vlPrevBKey) {
+          var hasPuK =
+            this.vlMatchActive &&
+            this.vlMatchStartMs &&
+            this._vlPuState &&
+            this._vlPuState.i[this.mySlot] > 0;
+          if (!hasPuK) this._vlTryToggleFpv();
+        }
         this._vlPrevBKey = true;
       } else {
         this._vlPrevBKey = false;
@@ -3962,6 +5643,7 @@
       if (inp.aEdge) {
         this._pulseHand(vlHandEl('rightHand', 'vl-hand-right'), 0.45, 58);
       }
+      if (inp.puD) this._vlPendingPuD = 1;
       if (this.isHost) {
         this.inputs[this.mySlot] = inp;
       } else if (this.hostConn && this.hostConn.open) {
@@ -3971,6 +5653,8 @@
           this.lastInputSend = now;
           var aEdgeSend = this._vlPendingAEdge ? 1 : 0;
           if (this._vlPendingAEdge) this._vlPendingAEdge = 0;
+          var puDSend = this._vlPendingPuD ? 1 : 0;
+          if (this._vlPendingPuD) this._vlPendingPuD = 0;
           this.hostConn.send({
             type: 'inp',
             lx: inp.lx,
@@ -4001,13 +5685,15 @@
             camOk: inp.camOk,
             camx: inp.camx,
             camy: inp.camy,
-            camz: inp.camz
+            camz: inp.camz,
+            puD: puDSend
           });
         }
       }
 
       if (this.isHost) {
         var nowHost = performance.now();
+        this._vlTickMatchCountdownHost(nowHost);
         this._vlApplyBotInputs(nowHost);
         var ia;
         for (ia = 0; ia < 4; ia++) {
@@ -4048,6 +5734,7 @@
           this._vlApplyRollLockIfEnabled(yl);
         }
         this._checkGoals(dtSec);
+        this._vlTickPowerupsHost(nowHost, dtSec);
         this._syncMeshesFromPhysics();
         this._vlRecomputeLedModesHost(nowHost);
         this.frame++;
@@ -4070,12 +5757,14 @@
         this._syncMeshesFromPhysics();
       }
       this._updateThrusterSound(inp);
+      this._vlTickArenaMatchFx(t, dtSec);
       this._vlPumpHud(t);
       this._vlUpdateCarLedFaces(t);
       if (this._vlFpvActive) {
         this._vlTickFpvRigFollowCarMesh();
       }
       this._vlUpdateResetHintVisibility();
+      this._vlRenderPowerupsVisuals(typeof performance !== 'undefined' ? performance.now() : t);
     },
 
     remove: function () {
