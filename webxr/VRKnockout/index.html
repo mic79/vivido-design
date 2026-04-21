@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VR Knockout</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Fall Guys–style uphill race in VR: gravity, rolling hazards, finish line. Up to eight players online."
+    />
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="vk-game-menu.js"></script>
+    <script src="vrknockout.js"></script>
+  </head>
+  <body>
+    <!-- Pre-VR nickname overlay -->
+    <div
+      id="pre-vr-overlay"
+      style="
+        position: fixed;
+        inset: 0;
+        background: #111;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        color: white;
+        font-family: sans-serif;
+      "
+    >
+      <div style="text-align: center">
+        <h1 style="font-size: 2.5em; margin-bottom: 0.2em; letter-spacing: 0.1em">VR KNOCKOUT</h1>
+        <p style="color: #888; margin-bottom: 1.5em; max-width: 26em; margin-left: auto; margin-right: auto; line-height: 1.45">
+          Race to the finish in VR—three courses, up to eight players.
+        </p>
+        <label for="nickname-input" style="display: block; margin-bottom: 0.4em; font-size: 1.1em">Nickname</label>
+        <input
+          id="nickname-input"
+          type="text"
+          maxlength="12"
+          placeholder="Player"
+          style="
+            font-size: 1.2em;
+            padding: 0.4em 0.8em;
+            border: 2px solid #4488ff;
+            border-radius: 6px;
+            background: #222;
+            color: white;
+            text-align: center;
+            width: 200px;
+            outline: none;
+          "
+        />
+        <p style="font-size: 0.8em; color: #666; margin-top: 1.5em">Press <b>Enter VR</b> below to start</p>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var input = document.getElementById('nickname-input');
+        var saved = localStorage.getItem('vrknockout-nickname');
+        if (saved && input) input.value = saved;
+        if (input) {
+          input.addEventListener('input', function () {
+            localStorage.setItem('vrknockout-nickname', this.value);
+            window.playerNickname = this.value || 'Player';
+          });
+        }
+        window.playerNickname = (saved && saved.trim()) || (input && input.value.trim()) || 'Player';
+      })();
+      (function () {
+        try {
+          var r = localStorage.getItem('vrknockout-auto-stabilize');
+          if (r === null || r === '') {
+            window._vlAutoRollEnabled = localStorage.getItem('vrknockout-auto-yaw') !== '0';
+          } else {
+            window._vlAutoRollEnabled = r !== '0';
+          }
+        } catch (e) {
+          window._vlAutoRollEnabled = true;
+        }
+      })();
+    </script>
+
+    <div
+      id="vk-score"
+      style="
+        position: fixed;
+        right: 10px;
+        top: 10px;
+        z-index: 5;
+        font: 600 13px system-ui, sans-serif;
+        color: #ffb3d9;
+        pointer-events: none;
+        text-shadow: 0 0 6px #000;
+      "
+    >
+      Qualified 0/8 | --:--
+    </div>
+    <div
+      id="vk-status"
+      style="
+        position: fixed;
+        left: 10px;
+        bottom: 10px;
+        max-width: 420px;
+        z-index: 5;
+        font: 12px system-ui, sans-serif;
+        color: #fc8;
+        pointer-events: none;
+        text-shadow: 0 0 6px #000;
+        line-height: 1.4;
+      "
+    ></div>
+
+
+    <a-scene
+      vr-menu
+      vrknockout-game
+      sound-manager
+      xr-mode-ui="XRMode: xr; enterVREnabled: true; enterAREnabled: true"
+      renderer="antialias: true; colorManagement: true; alpha: true"
+      webxr="optionalFeatures: local-floor, bounded-floor, hit-test, dom-overlay; referenceSpaceType: local-floor"
+    >
+      <a-sky id="vl-sky" color="#120818" hide-on-enter-ar></a-sky>
+      <a-entity id="vr-rig" position="0 0 0" rotation="0 0 0">
+        <a-entity id="vl-spect-yaw" rotation="0 0 0">
+          <a-camera
+            id="cam"
+            position="0 1.55 0"
+            look-controls="pointerLockEnabled: false"
+            wasd-controls="enabled: false"
+          >
+            <a-entity id="game-menu" position="0 -0.05 -0.8" visible="false">
+              <a-plane
+                width="0.72"
+                height="0.58"
+                color="#000000"
+                material="opacity: 0.92; transparent: true; shader: flat"
+                position="0 0 -0.001"
+              ></a-plane>
+              <a-plane
+                width="0.74"
+                height="0.60"
+                color="#4488ff"
+                material="opacity: 0.4; transparent: true; shader: flat"
+                position="0 0 -0.002"
+              ></a-plane>
+              <a-text value="VR KNOCKOUT" position="0 0.22 0" align="center" width="0.8" color="#ffffff" font="dejavu"></a-text>
+              <a-text
+                id="menu-vk-scoreboard"
+                position="0 0.166 0"
+                align="center"
+                width="0.68"
+                color="#ffddee"
+                value="Qualified 0/8   |   --:--"
+              ></a-text>
+              <a-entity
+                id="menu-auto-roll-toggle"
+                class="clickable"
+                menu-click
+                position="-0.30 0.22 0"
+                geometry="primitive: box; width: 0.12; height: 0.05; depth: 0.005"
+                material="color: #44aa88; opacity: 0.9; shader: flat"
+              >
+                <a-text
+                  id="menu-auto-roll-text"
+                  value="Upright assist ON"
+                  align="center"
+                  width="0.26"
+                  color="#ffffff"
+                  position="0 0 0.004"
+                ></a-text>
+              </a-entity>
+              <a-entity
+                id="menu-music-toggle"
+                class="clickable"
+                menu-click
+                position="0.30 0.22 0"
+                geometry="primitive: box; width: 0.1; height: 0.05; depth: 0.005"
+                material="color: #44aa44; opacity: 0.9; shader: flat"
+              >
+                <a-text id="menu-music-icon" value="Music" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-entity position="0 0.098 0">
+                <a-entity
+                  id="menu-single"
+                  class="clickable"
+                  menu-click
+                  position="-0.2 0 0"
+                  geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                  material="color: #4488ff; opacity: 0.9; shader: flat"
+                >
+                  <a-text value="SINGLE" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity
+                  id="menu-multi"
+                  class="clickable"
+                  menu-click
+                  position="0 0 0"
+                  geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                  material="color: #333333; opacity: 0.9; shader: flat"
+                >
+                  <a-text value="MULTI" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity
+                  id="menu-stats"
+                  class="clickable"
+                  menu-click
+                  position="0.2 0 0"
+                  geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                  material="color: #333333; opacity: 0.9; shader: flat"
+                >
+                  <a-text value="STATS" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+              </a-entity>
+              <a-entity id="menu-lobby-section" visible="false" position="0 0.02 0">
+                <a-text value="Lobby:" position="-0.22 0 0" align="left" width="0.35" color="#cccccc"></a-text>
+                <a-entity
+                  id="menu-lobby-minus"
+                  class="clickable"
+                  menu-click
+                  position="-0.02 0 0"
+                  geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
+                  material="color: #555555; shader: flat"
+                >
+                  <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-text id="menu-lobby-number" value="1" position="0.06 0 0" align="center" width="0.4" color="#ffffff"></a-text>
+                <a-entity
+                  id="menu-lobby-plus"
+                  class="clickable"
+                  menu-click
+                  position="0.14 0 0"
+                  geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
+                  material="color: #555555; shader: flat"
+                >
+                  <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity
+                  id="menu-join"
+                  class="clickable"
+                  menu-click
+                  position="0.26 0 0"
+                  geometry="primitive: box; width: 0.12; height: 0.05; depth: 0.005"
+                  material="color: #22aa44; shader: flat"
+                >
+                  <a-text value="JOIN" align="center" width="0.35" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-text id="menu-players-list" value="Players: -" position="-0.3 -0.06 0" align="left" width="0.3" color="#aaaaaa"></a-text>
+                <a-text id="menu-queue-status" value="" position="-0.3 -0.12 0" align="left" width="0.3" color="#ffcc00"></a-text>
+              </a-entity>
+              <a-entity id="menu-queue-buttons" visible="false" position="0 -0.1 0">
+                <a-entity
+                  id="menu-join-queue"
+                  class="clickable"
+                  menu-click
+                  position="-0.1 0 0"
+                  geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
+                  material="color: #22aa44; shader: flat"
+                >
+                  <a-text value="JOIN QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity
+                  id="menu-leave-queue"
+                  class="clickable"
+                  menu-click
+                  position="0.1 0 0"
+                  visible="false"
+                  geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
+                  material="color: #cc3333; shader: flat"
+                >
+                  <a-text value="LEAVE QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+              </a-entity>
+              <a-entity id="menu-mirror-section" position="0 0.02 0">
+                <a-text value="Bot Mode:" position="-0.22 0 0" align="left" width="0.35" color="#cccccc"></a-text>
+                <a-entity
+                  id="menu-mirror-toggle"
+                  class="clickable"
+                  menu-click
+                  position="0.1 0 0"
+                  geometry="primitive: box; width: 0.24; height: 0.05; depth: 0.005"
+                  material="color: #555555; opacity: 0.9; shader: flat"
+                >
+                  <a-text id="menu-mirror-text" value="NORMAL" align="center" width="0.35" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+              </a-entity>
+              <a-entity id="menu-vk-course-section" position="0 -0.138 0">
+                <a-text value="Course" position="-0.31 0 0" align="left" width="0.26" color="#aab8cc"></a-text>
+                <a-entity
+                  id="menu-vk-track-prev"
+                  class="clickable"
+                  menu-click
+                  position="-0.1 0 0"
+                  geometry="primitive: box; width: 0.055; height: 0.038; depth: 0.005"
+                  material="color: #555555; shader: flat"
+                >
+                  <a-text value="&#x3C;" align="center" width="0.45" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-text
+                  id="menu-vk-track-name"
+                  position="0.05 0 0"
+                  align="left"
+                  width="0.44"
+                  color="#ffe6f5"
+                  value="Track 1"
+                ></a-text>
+                <a-entity
+                  id="menu-vk-track-next"
+                  class="clickable"
+                  menu-click
+                  position="0.26 0 0"
+                  geometry="primitive: box; width: 0.055; height: 0.038; depth: 0.005"
+                  material="color: #555555; shader: flat"
+                >
+                  <a-text value="&#x3E;" align="center" width="0.45" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+              </a-entity>
+              <a-entity id="menu-stats-section" visible="false" position="0 -0.02 0">
+                <a-entity position="0 0.06 0">
+                  <a-entity
+                    id="menu-stats-sp"
+                    class="clickable"
+                    menu-click
+                    position="-0.12 0 0"
+                    geometry="primitive: box; width: 0.2; height: 0.045; depth: 0.005"
+                    material="color: #4488ff; opacity: 0.9; shader: flat"
+                  >
+                    <a-text value="SP HISTORY" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+                  <a-entity
+                    id="menu-stats-mp"
+                    class="clickable"
+                    menu-click
+                    position="0.12 0 0"
+                    geometry="primitive: box; width: 0.2; height: 0.045; depth: 0.005"
+                    material="color: #333333; opacity: 0.9; shader: flat"
+                  >
+                    <a-text value="MP HISTORY" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+                </a-entity>
+                <a-text id="menu-stats-summary" value="No matches yet" position="-0.3 0.025 0" align="left" width="0.32" color="#ffcc00"></a-text>
+                <a-text
+                  id="menu-stats-text"
+                  value=""
+                  position="-0.3 -0.01 0"
+                  align="left"
+                  width="0.28"
+                  color="#cccccc"
+                  baseline="top"
+                  anchor="left"
+                ></a-text>
+                <a-entity position="0 -0.2 0">
+                  <a-entity
+                    id="menu-stats-prev"
+                    class="clickable"
+                    menu-click
+                    position="-0.2 0 0"
+                    geometry="primitive: box; width: 0.12; height: 0.04; depth: 0.005"
+                    material="color: #555555; opacity: 0.9; shader: flat"
+                  >
+                    <a-text value="< PREV" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+                  <a-text id="menu-stats-page" value="" position="0 0 0" align="center" width="0.25" color="#888888"></a-text>
+                  <a-entity
+                    id="menu-stats-next"
+                    class="clickable"
+                    menu-click
+                    position="0.2 0 0"
+                    geometry="primitive: box; width: 0.12; height: 0.04; depth: 0.005"
+                    material="color: #555555; opacity: 0.9; shader: flat"
+                  >
+                    <a-text value="NEXT >" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                  </a-entity>
+                </a-entity>
+                <a-entity
+                  id="menu-stats-replay-0"
+                  class="clickable"
+                  menu-click
+                  position="0.24 -0.028 0"
+                  visible="false"
+                  geometry="primitive: box; width: 0.14; height: 0.025; depth: 0.005"
+                  material="color: #4488ff; opacity: 0.9; shader: flat"
+                >
+                  <a-text id="menu-stats-replay-0-text" value="Watch replay" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity
+                  id="menu-stats-replay-1"
+                  class="clickable"
+                  menu-click
+                  position="0.24 -0.076 0"
+                  visible="false"
+                  geometry="primitive: box; width: 0.14; height: 0.025; depth: 0.005"
+                  material="color: #4488ff; opacity: 0.9; shader: flat"
+                >
+                  <a-text id="menu-stats-replay-1-text" value="Watch replay" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity
+                  id="menu-stats-replay-2"
+                  class="clickable"
+                  menu-click
+                  position="0.24 -0.124 0"
+                  visible="false"
+                  geometry="primitive: box; width: 0.14; height: 0.025; depth: 0.005"
+                  material="color: #4488ff; opacity: 0.9; shader: flat"
+                >
+                  <a-text id="menu-stats-replay-2-text" value="Watch replay" align="center" width="0.24" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+                <a-entity
+                  id="menu-stats-clear"
+                  class="clickable"
+                  menu-click
+                  position="0 -0.24 0"
+                  geometry="primitive: box; width: 0.18; height: 0.04; depth: 0.005"
+                  material="color: #cc3333; opacity: 0.9; shader: flat"
+                >
+                  <a-text value="CLEAR HISTORY" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
+              </a-entity>
+              <a-entity
+                id="menu-start-match"
+                class="clickable"
+                menu-click
+                position="0 -0.205 0"
+                geometry="primitive: box; width: 0.28; height: 0.06; depth: 0.005"
+                material="color: #ff8800; shader: flat"
+              >
+                <a-text id="menu-start-match-text" value="START MATCH" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-text value="X to close" position="0 -0.265 0" align="center" width="0.25" color="#666666"></a-text>
+            </a-entity>
+            <a-entity id="vk-match-hud" position="0 0.36 -0.78">
+              <a-text
+                id="vk-hud-scoreboard"
+                position="0 0 0"
+                align="center"
+                width="0.62"
+                color="#ffe6f5"
+                value="Qualified 0/8   |   --:--"
+              ></a-text>
+              <a-text
+                id="vk-hud-countdown-big"
+                position="0 0.14 0"
+                align="center"
+                anchor="center"
+                baseline="center"
+                visible="false"
+                width="1.35"
+                color="#fff566"
+                shader="msdf"
+                transparent="true"
+                alpha-test="0.08"
+                value=""
+              ></a-text>
+            </a-entity>
+          </a-camera>
+
+          <a-entity
+            id="leftHand"
+            hand-controls="hand: left"
+            oculus-touch-controls="hand: left"
+            laser-controls="hand: left"
+            raycaster="objects: .clickable; far: 10; enabled: false; lineColor: #ffffff; lineOpacity: 0"
+          >
+            <!-- Mirror A hint on X: −X grip offset + label on −X; same rotations as right (left hand tracking is already mirrored). -->
+            <a-entity id="vk-x-menu-hint" visible="false">
+              <a-entity position="-0.002 0.012 -0.062">
+                <a-entity rotation="68 170 180">
+                  <a-entity rotation="180 0 0">
+                    <a-entity
+                      animation="property: scale; from: 1 1 1; to: 1.2 1.2 1.2; dur: 800; dir: alternate; loop: true; easing: easeInOutSine"
+                    >
+                      <a-ring
+                        radius-inner="0.0086"
+                        radius-outer="0.0099"
+                        segments-theta="40"
+                        material="shader: flat; color: #ffffff; opacity: 0.96; transparent: true; side: double"
+                      ></a-ring>
+                      <a-text
+                        position="0 0 0"
+                        value="X"
+                        align="center"
+                        anchor="center"
+                        baseline="center"
+                        width="0.34"
+                        color="#ffffff"
+                        shader="msdf"
+                        transparent="true"
+                        alpha-test="0.08"
+                        side="double"
+                      ></a-text>
+                    </a-entity>
+                    <a-text
+                      position="-0.0125 0 0"
+                      value="Toggle menu"
+                      align="right"
+                      anchor="right"
+                      baseline="center"
+                      width="0.34"
+                      color="#ffffff"
+                      shader="msdf"
+                      transparent="true"
+                      alpha-test="0.08"
+                      side="double"
+                    ></a-text>
+                  </a-entity>
+                </a-entity>
+              </a-entity>
+            </a-entity>
+          </a-entity>
+          <a-entity
+            id="rightHand"
+            hand-controls="hand: right"
+            oculus-touch-controls="hand: right"
+            laser-controls="hand: right"
+            raycaster="objects: .clickable; far: 10; enabled: false; lineColor: #ffffff; lineOpacity: 0"
+          >
+            <!-- Grip-local hint; shared rotation so ring + texts lie in one plane (decorative, not device-accurate). -->
+            <a-entity id="vk-reset-hint" visible="false">
+              <a-entity position="0.002 0.012 -0.062">
+                <!-- Y in middle Euler slot = yaw: -10 → 170 is +180° in hand space (nested 0 180 0 was wrong local axis). -->
+                <a-entity rotation="68 170 180">
+                  <a-entity rotation="180 0 0">
+                    <a-entity
+                      animation="property: scale; from: 1 1 1; to: 1.2 1.2 1.2; dur: 800; dir: alternate; loop: true; easing: easeInOutSine"
+                    >
+                      <a-ring
+                        radius-inner="0.0086"
+                        radius-outer="0.0099"
+                        segments-theta="40"
+                        material="shader: flat; color: #ffffff; opacity: 0.96; transparent: true; side: double"
+                      ></a-ring>
+                      <a-text
+                        position="0 0 0"
+                        value="A"
+                        align="center"
+                        anchor="center"
+                        baseline="center"
+                        width="0.34"
+                        color="#ffffff"
+                        shader="msdf"
+                        transparent="true"
+                        alpha-test="0.08"
+                        side="double"
+                      ></a-text>
+                    </a-entity>
+                    <a-text
+                      position="0.0125 0 0"
+                      value="Reset (A)"
+                      align="left"
+                      anchor="left"
+                      baseline="center"
+                      width="0.34"
+                      color="#ffffff"
+                      shader="msdf"
+                      transparent="true"
+                      alpha-test="0.08"
+                      side="double"
+                    ></a-text>
+                  </a-entity>
+                </a-entity>
+              </a-entity>
+            </a-entity>
+            <!-- B = jump -->
+            <a-entity id="vk-jump-hint" visible="false">
+              <a-entity position="0.002 0.034 -0.062">
+                <a-entity rotation="68 170 180">
+                  <a-entity rotation="180 0 0">
+                    <a-entity
+                      animation="property: scale; from: 1 1 1; to: 1.15 1.15 1.15; dur: 700; dir: alternate; loop: true; easing: easeInOutSine"
+                    >
+                      <a-ring
+                        radius-inner="0.0084"
+                        radius-outer="0.0096"
+                        segments-theta="40"
+                        material="shader: flat; color: #ffccff; opacity: 0.95; transparent: true; side: double"
+                      ></a-ring>
+                      <a-text
+                        position="0 0 0"
+                        value="B"
+                        align="center"
+                        anchor="center"
+                        baseline="center"
+                        width="0.34"
+                        color="#ffe8ff"
+                        shader="msdf"
+                        transparent="true"
+                        alpha-test="0.08"
+                        side="double"
+                      ></a-text>
+                    </a-entity>
+                    <a-text
+                      position="0.0125 0 0"
+                      value="Jump"
+                      align="left"
+                      anchor="left"
+                      baseline="center"
+                      width="0.48"
+                      color="#ffe6ff"
+                      shader="msdf"
+                      transparent="true"
+                      alpha-test="0.08"
+                      side="double"
+                    ></a-text>
+                  </a-entity>
+                </a-entity>
+              </a-entity>
+            </a-entity>
+          </a-entity>
+        </a-entity>
+      </a-entity>
+
+      <a-entity
+        id="vl-bounce-sound"
+        sound="src: url(audio/impact-cinematic-boom-5-352465.mp3); autoplay: false; loop: false; volume: 0.92; positional: false; poolSize: 16"
+      ></a-entity>
+      <a-entity
+        id="vl-pu-sonar-sound"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 0.88; positional: false; poolSize: 3"
+      ></a-entity>
+      <a-entity
+        id="vl-pu-hit-sound"
+        sound="src: url(audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); autoplay: false; loop: false; volume: 0.9; positional: false; poolSize: 4"
+      ></a-entity>
+      <a-entity
+        id="vl-goal-sound"
+        sound="src: url(audio/bryansantosbreton-biodynamic-impact-braam-tonal-dark-176441.mp3); autoplay: false; loop: false; volume: 0.95; positional: false; poolSize: 2"
+      ></a-entity>
+      <a-entity
+        id="vl-goal-impact-sound"
+        sound="src: url(audio/bryansantosbreton-biodynamic-impact-braam-tonal-dark-176441.mp3); autoplay: false; loop: false; volume: 0.65; positional: true; distanceModel: linear; refDistance: 1; maxDistance: 20; poolSize: 2"
+      ></a-entity>
+      <a-entity
+        id="vl-thruster-sound"
+        sound="src: url(audio/thrusters_loopwav-14699.mp3); autoplay: false; loop: true; volume: 0.9; playbackRate: 1.35; positional: true; distanceModel: inverse; refDistance: 0.55; maxDistance: 26; rolloffFactor: 1.45; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="vl-led-sonar-0"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 1; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 10; rolloffFactor: 1.65; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="vl-led-sonar-1"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 1; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 10; rolloffFactor: 1.65; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="vl-led-sonar-2"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 1; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 10; rolloffFactor: 1.65; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="vl-led-sonar-3"
+        sound="src: url(audio/submarine-sonar-38243-once.mp3); autoplay: false; loop: false; volume: 1; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 10; rolloffFactor: 1.65; poolSize: 1"
+      ></a-entity>
+      <a-entity
+        id="bg-music"
+        sound="src: url(audio/amaksi-reflections-fashion-minimal-house-146299.mp3); autoplay: false; loop: true; volume: 0.3; positional: false"
+      ></a-entity>
+      <a-entity
+        id="match-music"
+        sound="src: url(audio/amaksi-reflections-fashion-minimal-house-146299.mp3); autoplay: false; loop: true; volume: 0; positional: false"
+      ></a-entity>
+      <a-entity light="type: ambient; color: #ccd; intensity: 0.7"></a-entity>
+      <a-entity light="type: directional; color: #fff; intensity: 0.45" position="-0.4 2.2 0.6"></a-entity>
+    </a-scene>
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        var scene = document.querySelector('a-scene');
+        if (!scene) return;
+        scene.addEventListener('enter-vr', function () {
+          var i = document.getElementById('nickname-input');
+          if (i) {
+            var v = (i.value || '').trim().slice(0, 12) || 'Player';
+            window.playerNickname = v;
+            localStorage.setItem('vrknockout-nickname', v);
+          }
+        });
+      });
+    </script>
+  </body>
+</html>
