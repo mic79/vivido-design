@@ -113,6 +113,22 @@
         line-height: 1.4;
       "
     ></div>
+    <div
+      id="vk-spine-debug"
+      style="
+        display: none;
+        position: fixed;
+        left: 10px;
+        bottom: 52px;
+        max-width: min(96vw, 720px);
+        z-index: 5;
+        font: 11px ui-monospace, monospace;
+        color: #9f9;
+        pointer-events: none;
+        text-shadow: 0 0 4px #000;
+        line-height: 1.35;
+      "
+    ></div>
 
 
     <a-scene
@@ -563,7 +579,7 @@
                 </a-entity>
               </a-entity>
             </a-entity>
-            <!-- B = jump -->
+            <!-- B or grip squeeze = jump -->
             <a-entity id="vk-jump-hint" visible="false">
               <a-entity position="0.002 0.034 -0.062">
                 <a-entity rotation="68 170 180">
@@ -593,11 +609,11 @@
                     </a-entity>
                     <a-text
                       position="0.0125 0 0"
-                      value="Jump"
+                      value="Jump (B or grip)"
                       align="left"
                       anchor="left"
                       baseline="center"
-                      width="0.48"
+                      width="0.56"
                       color="#ffe6ff"
                       shader="msdf"
                       transparent="true"

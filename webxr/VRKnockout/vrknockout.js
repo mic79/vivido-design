@@ -18,10 +18,116 @@
   var VK_SPAWN_LANE_ROT_KEY = 'vrknockout-spawn-lane-rot';
   var VK_GHOST_SAMPLE_MS = 100;
   var VK_GHOST_MAX_RUNS = 10;
+  /** Mid-session qualifying runs merged ahead of localStorage ghosts for bot spine selection (host only). */
+  var VK_SESSION_GHOST_MAX = 8;
   /** Looser than before so rocks / physics jitter do not keep bots in seek-only mode vs the recording. */
   var VK_GHOST_DEVIATION_M = 1.05;
   var VK_GHOST_RECOVER_OK_M = 0.55;
   var VK_GHOST_RECOVER_MS = 900;
+  /**
+   * Track 2–3: spinners / tiles desync bots from pure race-clock indexing; widen frame search and tolerances
+   * so `_vkTryGhostBot` replays inputs instead of staying in seek recovery.
+   */
+  var VK_GHOST_SYNC_BACK_T23 = 110;
+  var VK_GHOST_SYNC_FWD_T23 = 70;
+  var VK_GHOST_DEVIATION_T23 = 2.45;
+  var VK_GHOST_RECOVER_OK_T23 = 1.18;
+
+  function vkGhostTrackParams(courseTrack) {
+    var t = vkNormalizeCourseTrack(courseTrack);
+    if (t === 2 || t === 3) {
+      return {
+        syncBack: VK_GHOST_SYNC_BACK_T23,
+        syncFwd: VK_GHOST_SYNC_FWD_T23,
+        devM: VK_GHOST_DEVIATION_T23,
+        recoverOk: VK_GHOST_RECOVER_OK_T23
+      };
+    }
+    return { syncBack: 24, syncFwd: 16, devM: VK_GHOST_DEVIATION_M, recoverOk: VK_GHOST_RECOVER_OK_M };
+  }
+
+  /** Unit directions of icosahedron vertices — black “pentagon” caps on a soccer-style hazard sphere texture. */
+  function vkIcosahedronUnitDirs() {
+    var phi = (1 + Math.sqrt(5)) / 2;
+    var raw = [
+      [0, 1, phi],
+      [0, -1, phi],
+      [0, 1, -phi],
+      [0, -1, -phi],
+      [1, phi, 0],
+      [-1, phi, 0],
+      [1, -phi, 0],
+      [-1, -phi, 0],
+      [phi, 0, 1],
+      [phi, 0, -1],
+      [-phi, 0, 1],
+      [-phi, 0, -1]
+    ];
+    var out = [];
+    var i, L, x, y, z;
+    for (i = 0; i < raw.length; i++) {
+      x = raw[i][0];
+      y = raw[i][1];
+      z = raw[i][2];
+      L = Math.sqrt(x * x + y * y + z * z);
+      out.push({ x: x / L, y: y / L, z: z / L });
+    }
+    return out;
+  }
+
+  /**
+   * Canvas texture aligned with THREE.SphereGeometry UVs (u = θ/2π, v = φ/π, y-up, north at v=0).
+   * White base + 12 dark pentagonal caps + faint seam grid for readable spin at gameplay distance.
+   */
+  function vkBuildSoccerHazardRockTexture(THREE) {
+    var w = 640;
+    var h = 320;
+    var canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    var img = ctx.createImageData(w, h);
+    var data = img.data;
+    var dirs = vkIcosahedronUnitDirs();
+    var ix, iy, u, v, theta, phi, x, y, z, di, dot, g, seam, c;
+    for (iy = 0; iy < h; iy++) {
+      for (ix = 0; ix < w; ix++) {
+        u = (ix + 0.5) / w;
+        v = (iy + 0.5) / h;
+        theta = u * Math.PI * 2;
+        phi = v * Math.PI;
+        y = Math.cos(phi);
+        var sp = Math.sin(phi);
+        x = sp * Math.sin(theta);
+        z = sp * Math.cos(theta);
+        g = 1;
+        for (di = 0; di < dirs.length; di++) {
+          dot = x * dirs[di].x + y * dirs[di].y + z * dirs[di].z;
+          if (dot > 0.992) g = 0.06;
+          else if (dot > 0.935) g = Math.min(g, 0.06 + (0.992 - dot) / 0.057 * 0.94);
+        }
+        seam =
+          0.12 *
+          (Math.abs(Math.sin(theta * 5.5)) * Math.abs(Math.sin(phi * 6)) +
+            Math.abs(Math.sin(theta * 3 + phi * 4)));
+        c = Math.floor(255 * clamp(g * (1 - seam), 0, 1));
+        var p = (iy * w + ix) * 4;
+        data[p] = c;
+        data[p + 1] = c;
+        data[p + 2] = Math.floor(c * 0.97);
+        data[p + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.anisotropy = 4;
+    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   /** 2×8 start grid: column 0–7, row 0–1 (laneIdx 0–7 front row, 8–15 back row). Eight cars pick eight distinct lane indices each reset / match. */
   var VK_SPAWN_LANE_COUNT = 16;
   /** Z offset from start row center for row 0 vs row 1 (m), separated so pads do not overlap. */
@@ -46,6 +152,13 @@
   /** Row 0 (lanes 0–7) or 1 (lanes 8–15). */
   function vkLaneRow2(laneIdx) {
     return ((laneIdx | 0) >> 3) & 1;
+  }
+
+  function vkLaneGridDist16(a, b) {
+    return (
+      Math.abs(vkLaneCol8(a) - vkLaneCol8(b)) +
+      Math.abs(vkLaneRow2(a) - vkLaneRow2(b))
+    );
   }
 
   /**
@@ -616,8 +729,9 @@
   var VK_CAM_FOLLOW_WORLD_DZ = 1.58;
   /** First-order lag (rad/s) on follow XZ; lower = smoother. */
   var VK_CAM_FOLLOW_POS_HZ = 1.75;
-  /** When both grips held (two-hand adjust), do not move the rig from follow this frame. */
-  var VK_CAM_FOLLOW_GRIP_SKIP = 0.42;
+  /** Grip squeeze above this (0–1) counts as “pressed” for jump; below `VK_GRIP_JUMP_RELEASE` clears latch. */
+  var VK_GRIP_JUMP_PRESS = 0.52;
+  var VK_GRIP_JUMP_RELEASE = 0.28;
   /** If angle between carriage forward and ball→finish exceeds this (rad), start backing the camera up (60°). */
   var VK_CAM_FOLLOW_YAW_DIST_MIN_RAD = (60 * Math.PI) / 180;
   /** Z offset multiplier at 180° misalignment vs finish (1 = no extra at ≤60°). */
@@ -974,6 +1088,7 @@
       this._carSpawn = [];
       this.rockBodies = [];
       this.rockEls = [];
+      this._vkSoccerRockTex = null;
       this._vkRockSpawnNext = 0;
       this._vkPlinkoGapXs = null;
       this._vkPlinkoRockSpawnZ = null;
@@ -1001,6 +1116,8 @@
       this._vkFinishFxSparkState = null;
       /** World XZ + avoid radius for pink pillars — bots steer around these. */
       this._vkPillarAvoidPts = [];
+      /** Track 1 plinko: mid-gap XZ bands (void between pillars) — lateral dodge + jump suppress. */
+      this._vkPlinkoGapAvoidPts = [];
       this._vkLaneCols = null;
       this._vkLaneSlotZ = null;
       this._vkSpawnPhysY = 0;
@@ -1010,6 +1127,27 @@
       this._vkSlotSpawnLaneIdx = [0, 1, 2, 3, 8, 9, 10, 11];
       this._vkGhostRecBuf = null;
       this._vkGhostLastSample = 0;
+      /** Host: per human slot, sampled trajectory for ghost library + live spine handoff (see `_vkGhostRecordTickAfterPhysics`). */
+      this._vkGhostRecBufBySlot = [];
+      for (var ig = 0; ig < VK_MAX_SLOTS; ig++) this._vkGhostRecBufBySlot.push(null);
+      this._vkSessionGhostRuns = [];
+      this._vkSpineHudDebug = false;
+      /** Host: THREE.Line showing one bot’s ghost path in world space (see `_vkTickSpineGuideLine`). */
+      this._vkSpineGuide = null;
+      this._vkSpineGuideLastRebuild = 0;
+      this._vkSpineGuideLastRec = null;
+      try {
+        if (localStorage.getItem('vrknockout-debug-spine') === '1') this._vkSpineHudDebug = true;
+      } catch (eLsSp) {}
+      try {
+        var qsu =
+          typeof window !== 'undefined' &&
+          window.location &&
+          typeof window.location.search === 'string'
+            ? window.location.search
+            : '';
+        if (/\bvkSpine=1\b/i.test(qsu)) this._vkSpineHudDebug = true;
+      } catch (eSp) {}
       this._vkBotGhost = [];
       for (var i4 = 0; i4 < VK_MAX_SLOTS; i4++) this._vkBotGhost.push(null);
       /** Bot: best uphill progress (m) from spawn along _vkUphill; _vkBotHillProgAt = last time that improved. */
@@ -1054,6 +1192,8 @@
       /** RTSVR2-style grip pan: rig-local hand delta, ref updates each frame (see RTSVR2/js/input.js applyGripPan). */
       this._vkGripPanLInited = false;
       this._vkGripPanRInited = false;
+      this._vkGripJumpLatchedL = false;
+      this._vkGripJumpLatchedR = false;
       this._vkGripHandLocal = new THREE.Vector3();
       this._vkGripRefL = new THREE.Vector3();
       this._vkGripRefR = new THREE.Vector3();
@@ -1061,7 +1201,7 @@
       this._vkGripWorldDelta = new THREE.Vector3();
       /** Two-hand: separation → rig Y, twist → vl-spect-yaw. */
       this._vkTwoHand = null;
-      /** Smoothed rig XZ for VR follow-behind-car; Y follows car delta with jump gate, then grip runs after. */
+      /** Smoothed rig XZ for VR follow-behind-car; Y follows car delta with jump gate (grip no longer moves rig). */
       this._vkFollowSmX = 0;
       this._vkFollowSmZ = 0;
       this._vkFollowSmY = 0;
@@ -1078,6 +1218,8 @@
       this._vkSpinnerBodies = [];
       this._vkT3SliderBodies = [];
       this._vkFinishQualifyMinY = null;
+      this._vkFinishQualifyMaxY = null;
+      this._vkFinishQualifyHalfX = null;
       this._vkFinishCheckZMin = null;
       {
         var trInit = this.data.track | 0;
@@ -1154,7 +1296,25 @@
     },
 
     _vkPumpHud: function (now) {
-      if (!this._vkHudDirty && now - this._vkLastHudEmit < 220) return;
+      var ghostHudStrEarly = null;
+      if (this.isHost && this.vkMatchActive) {
+        var tbE = 0;
+        var wgh = 0;
+        var wgE;
+        for (wgE = 0; wgE < VK_MAX_SLOTS; wgE++) {
+          if (this._vkIsHumanOccupyingSlot(wgE)) continue;
+          tbE++;
+          var GGe = this._vkBotGhost && this._vkBotGhost[wgE];
+          if (GGe && GGe.rec && GGe.rec.frames && GGe.rec.frames.length >= 12) wgh++;
+        }
+        if (tbE > 0) ghostHudStrEarly = wgh + '/' + tbE;
+      }
+      var spineFast = !!(
+        this.isHost &&
+        this.vkMatchActive &&
+        (this._vkSpineHudDebug || (ghostHudStrEarly && this.vkMatchStartMs))
+      );
+      if (!this._vkHudDirty && now - this._vkLastHudEmit < 220 && !spineFast) return;
       this._vkLastHudEmit = now;
       this._vkHudDirty = false;
       var remSec = null;
@@ -1192,7 +1352,9 @@
           : preStart
             ? 'GO in ' + remSec + '…'
             : this._vkFormatClock(remSec);
-      var line = 'Qualified ' + q + '/' + VK_MAX_SLOTS + '   |   ' + tail;
+      var ghostHudStr = ghostHudStrEarly;
+      var line =
+        'Qualified ' + q + '/' + VK_MAX_SLOTS + '   |   ' + tail + (ghostHudStr ? '   ·   ghosts ' + ghostHudStr : '');
       if (this.scoreEl) this.scoreEl.textContent = line;
       var menuLine = document.getElementById('menu-vk-scoreboard');
       if (menuLine) menuLine.setAttribute('text', 'value', line);
@@ -1217,8 +1379,36 @@
         matchRemainSec: remSec,
         matchPreStart: preStart,
         blue: q,
-        red: VK_MAX_SLOTS - q
+        red: VK_MAX_SLOTS - q,
+        vkBotGhosts: ghostHudStr
       };
+      var spineDbg = document.getElementById('vk-spine-debug');
+      if (spineDbg) {
+        var spineDbgOn =
+          this.isHost &&
+          this.vkMatchActive &&
+          (this._vkSpineHudDebug || (ghostHudStr && this.vkMatchStartMs));
+        if (spineDbgOn) {
+          var parts = [];
+          var sb;
+          for (sb = 0; sb < VK_MAX_SLOTS; sb++) {
+            if (this._vkIsHumanOccupyingSlot(sb)) continue;
+            var Gb = this._vkBotGhost && this._vkBotGhost[sb];
+            if (!Gb || !Gb.rec || !Gb.rec.frames || !Gb.rec.frames.length) {
+              parts.push('B' + (sb + 1) + ':—');
+              continue;
+            }
+            var src = Gb.spineSrc || 'lib';
+            var frn = Gb.rec.frames.length;
+            parts.push('B' + (sb + 1) + ':' + src + '(' + frn + ')');
+          }
+          spineDbg.textContent = parts.join('  ');
+          spineDbg.style.display = parts.length ? 'block' : 'none';
+        } else {
+          spineDbg.textContent = '';
+          spineDbg.style.display = 'none';
+        }
+      }
       var scene = this.el.sceneEl;
       if (scene) scene.emit('vl-hud-update');
     },
@@ -1271,6 +1461,7 @@
     _vkTeardownCourse: function () {
       var w = this.world;
       var i;
+      this._vkDisposeSpineGuideLine();
       this._vkStopFinishFxCelebration();
       if (this.carBodies && this.carBodies.length) {
         for (i = 0; i < this.carBodies.length; i++) {
@@ -1335,6 +1526,11 @@
       this._buildCourse();
       this._resetRoundBodies();
       this._vkGhostRecBuf = null;
+      this._vkSessionGhostRuns = [];
+      if (this._vkGhostRecBufBySlot) {
+        var gx;
+        for (gx = 0; gx < this._vkGhostRecBufBySlot.length; gx++) this._vkGhostRecBufBySlot[gx] = null;
+      }
       this._vkRoundFinishes = [];
       this._vkFinishOrder = [];
       if (this._vkFinished) {
@@ -1392,6 +1588,8 @@
       var courseTrack = vkNormalizeCourseTrack(w._vkCourseTrack);
       w._vkCourseTrack = courseTrack;
       w._vkFinishQualifyMinY = null;
+      w._vkFinishQualifyMaxY = null;
+      w._vkFinishQualifyHalfX = null;
       w._vkFinishCheckZMin = null;
       if (!w._vkSpinnerBodies) w._vkSpinnerBodies = [];
       else w._vkSpinnerBodies.length = 0;
@@ -1452,13 +1650,26 @@
       } else {
         /* No continuous middle slab — gaps crossed on track-2 spinners or track-3 sliding tiles. */
         addStaticBox(vkFinHx, vkFinHy, vkFinHz, 0, startCy, VK_FINISH_PLATFORM_CENTER_Z, 0, 0, 0, 1, this.floorMat);
-        var deckTopT2 = startCy + startHy;
-        w._vkFinishQualifyMinY = deckTopT2 + PLAYER_R * 0.42;
         w._vkFinishCheckZMin = VK_FINISH_CHECK_Z_MIN;
       }
       /* Half-extents: match `startPlatVis` width/depth (3.55 full depth → half 1.775). */
       var vkStartHx = (pathHalfX * 2 + 1.32) * 0.5;
       addStaticBox(vkStartHx, startHy, 3.55 * 0.5, 0, startCy, 4.62, 0, 0, 0, 1, this.floorMat);
+
+      /*
+       * Finish qualification volume (all tracks): X ≈ arch span, Y from finish slab top through arch top,
+       * Z band unchanged. Uses finish slab top — not the higher start deck (fixes T2/T3 false rejects).
+       */
+      var platTopY =
+        courseTrack === 1 ? VK_FINISH_PLATFORM_CY + vkFinHy : startCy + vkFinHy;
+      var archBaseYQ =
+        courseTrack === 1
+          ? 1.38 - VK_FINISH_PLATFORM_THICK + VK_FINISH_PLATFORM_Y_EXTRA
+          : startCy + vkFinHy;
+      var archVolTopY = archBaseYQ + 1.88;
+      w._vkFinishQualifyMinY = platTopY - PLAYER_R - 0.36;
+      w._vkFinishQualifyMaxY = archVolTopY + PLAYER_R * 0.75;
+      w._vkFinishQualifyHalfX = vkFinHx + 0.24;
 
       /* Car spawn columns (independent of plinko pillars). */
       var cols = [];
@@ -1496,6 +1707,7 @@
         var zPegRow0 = zPegHighEnd + pillarRad * 0.5;
         var zPegMax = zPegLowEnd - minRowDz * 0.35;
         this._vkPillarAvoidPts.length = 0;
+        this._vkPlinkoGapAvoidPts.length = 0;
         var rampEdgeX = pathHalfX + pillarRad * 0.92;
         var pr;
         for (pr = 0; pr < 96; pr++) {
@@ -1531,6 +1743,23 @@
             vis.setAttribute('material', 'color: #ff9ec8; metalness: 0.35; roughness: 0.28; emissive: #aa4477; emissiveIntensity: 0.15');
             root.appendChild(vis);
           }
+          var gi;
+          for (gi = 0; gi < xs.length - 1; gi++) {
+            var gxm = (xs[gi] + xs[gi + 1]) * 0.5;
+            var gzm = pz;
+            var gym = 0.64 + VK_RAMP_GRADE * (this._vkSpawnZ - gzm);
+            var gapHalfW = (xs[gi + 1] - xs[gi]) * 0.36;
+            var gHalfZ = minRowDz * 0.38;
+            if (
+              gapHalfW > 0.032 &&
+              Math.abs(gxm) <= rampEdgeX - 0.02 &&
+              gym >= 0.08 &&
+              gym <= 2.58 &&
+              gzm <= zPegMax + 0.12
+            ) {
+              this._vkPlinkoGapAvoidPts.push({ x: gxm, z: gzm, halfW: gapHalfW, halfZ: gHalfZ });
+            }
+          }
         }
         w._vkPlinkoGapXs = [
           (xs4Top[0] + xs4Top[1]) * 0.5,
@@ -1541,6 +1770,7 @@
         w._vkPlinkoRockSpawnDzJitter = Math.min(minRowDz * 0.32, 0.2);
       } else {
         this._vkPillarAvoidPts.length = 0;
+        if (this._vkPlinkoGapAvoidPts) this._vkPlinkoGapAvoidPts.length = 0;
         w._vkPlinkoGapXs = null;
         w._vkPlinkoRockSpawnZ = null;
         w._vkPlinkoRockSpawnDzJitter = 0;
@@ -1830,9 +2060,20 @@
         (function (slot) {
           body.addEventListener('collide', function (e) {
             var c = e && e.contact;
-            /* Jump “grounded” only for floor/ramp-like support (normal has world +Y); walls won’t block jump. */
-            if (c && typeof c.ni.y === 'number' && c.ni.y > 0.22) {
-              self._vkGrounded[slot] = 22;
+            /* Jump support: any strong vertical contact (either normal sign) + mild boost for steep walls/rims. */
+            if (c && c.ni) {
+              var nyy = c.ni.y;
+              if (typeof nyy === 'number' && isFinite(nyy)) {
+                if (Math.abs(nyy) > 0.12) {
+                  self._vkGrounded[slot] = 32;
+                } else {
+                  var nxx = c.ni.x;
+                  var nzz = c.ni.z;
+                  if (typeof nxx === 'number' && typeof nzz === 'number' && Math.sqrt(nxx * nxx + nzz * nzz) > 0.65 && Math.abs(nyy) < 0.5) {
+                    self._vkGrounded[slot] = Math.max(self._vkGrounded[slot] | 0, 14);
+                  }
+                }
+              }
             }
             var impact = 0.6;
             if (c && typeof c.getImpactVelocityAlongNormal === 'function') {
@@ -2007,15 +2248,30 @@
         barBody.position.set(cx, armY, cz);
         w.world.addBody(barBody);
         w.staticBodies.push(barBody);
-        var discEl = document.createElement('a-cylinder');
-        discEl.setAttribute('radius', String(discR));
-        discEl.setAttribute('height', String(discH));
+        /* Pie sectors: stacked partial cylinders (theta in degrees) so the rim reads as alternating colors. */
+        var nSectors = 12;
+        var sectorDeg = 360 / nSectors;
+        var patternTwist = (di % 2) * (sectorDeg * 0.5);
+        var discEl = document.createElement('a-entity');
         discEl.setAttribute('position', cx + ' ' + discY + ' ' + cz);
-        discEl.setAttribute('segments-radial', '28');
-        discEl.setAttribute(
-          'material',
-          'color: #88ccee; metalness: 0.25; roughness: 0.42; emissive: #336699; emissiveIntensity: 0.12'
-        );
+        var sw;
+        for (sw = 0; sw < nSectors; sw++) {
+          var wedge = document.createElement('a-cylinder');
+          wedge.setAttribute('radius', String(discR));
+          wedge.setAttribute('height', String(discH));
+          wedge.setAttribute('segments-radial', '8');
+          wedge.setAttribute('theta-start', String(sw * sectorDeg + patternTwist));
+          wedge.setAttribute('theta-length', String(sectorDeg));
+          wedge.setAttribute('open-ended', 'false');
+          var even = sw % 2 === 0;
+          wedge.setAttribute(
+            'material',
+            even
+              ? 'color: #5ea8d8; metalness: 0.28; roughness: 0.4; emissive: #1a4a6e; emissiveIntensity: 0.14; side: double'
+              : 'color: #d4eefc; metalness: 0.18; roughness: 0.44; emissive: #5a88aa; emissiveIntensity: 0.1; side: double'
+          );
+          discEl.appendChild(wedge);
+        }
         root.appendChild(discEl);
         var barEl = document.createElement('a-cylinder');
         barEl.setAttribute('radius', String(pillarRad));
@@ -2296,10 +2552,26 @@
 
     _addRockBody: function (active) {
       var THREE = window.THREE || (typeof AFRAME !== 'undefined' && AFRAME.THREE);
-      var mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(ROCK_R, 20, 20),
-        new THREE.MeshStandardMaterial({ color: 0xff5533, roughness: 0.35, metalness: 0.2, emissive: 0x441100, emissiveIntensity: 0.2 })
-      );
+      if (!this._vkSoccerRockTex && THREE) {
+        try {
+          this._vkSoccerRockTex = vkBuildSoccerHazardRockTexture(THREE);
+        } catch (eTex) {
+          this._vkSoccerRockTex = null;
+        }
+      }
+      var matOpts = {
+        roughness: 0.42,
+        metalness: 0.08
+      };
+      if (this._vkSoccerRockTex) {
+        matOpts.map = this._vkSoccerRockTex;
+        matOpts.color = 0xffffff;
+      } else {
+        matOpts.color = 0xff5533;
+        matOpts.emissive = 0x441100;
+        matOpts.emissiveIntensity = 0.2;
+      }
+      var mesh = new THREE.Mesh(new THREE.SphereGeometry(ROCK_R, 32, 24), new THREE.MeshStandardMaterial(matOpts));
       var el = document.createElement('a-entity');
       el.setObject3D('mesh', mesh);
       this._arenaRoot.appendChild(el);
@@ -2544,9 +2816,6 @@
       var vm = scn.components && scn.components['vr-menu'];
       if (vm && vm.menuVisible) return;
       if (!inp) inp = {};
-      if ((inp.gripLVal || 0) >= VK_CAM_FOLLOW_GRIP_SKIP && (inp.gripRVal || 0) >= VK_CAM_FOLLOW_GRIP_SKIP) {
-        return;
-      }
       var ms = this.mySlot | 0;
       if (ms < 0 || ms >= VK_MAX_SLOTS) ms = 0;
       var tgtX;
@@ -2800,6 +3069,8 @@
       if (vm && vm.menuVisible) {
         this._vkGripPanLInited = false;
         this._vkGripPanRInited = false;
+        this._vkGripJumpLatchedL = false;
+        this._vkGripJumpLatchedR = false;
         this._vkTwoHand = null;
         return out;
       }
@@ -2891,9 +3162,31 @@
         roll += rxAdd;
         pitch -= ryAdd;
         out.grip = Math.max(out.gripLVal, out.gripRVal);
+        var glv = out.gripLVal || 0;
+        var grv = out.gripRVal || 0;
+        var pulseL = false;
+        var pulseR = false;
+        if (this._vkGripJumpLatchedL) {
+          if (glv < VK_GRIP_JUMP_RELEASE) this._vkGripJumpLatchedL = false;
+        } else if (glv >= VK_GRIP_JUMP_PRESS) {
+          out.j = 1;
+          this._vkGripJumpLatchedL = true;
+          pulseL = true;
+        }
+        if (this._vkGripJumpLatchedR) {
+          if (grv < VK_GRIP_JUMP_RELEASE) this._vkGripJumpLatchedR = false;
+        } else if (grv >= VK_GRIP_JUMP_PRESS) {
+          out.j = 1;
+          this._vkGripJumpLatchedR = true;
+          pulseR = true;
+        }
+        if (pulseL) this._pulseHand(vkHandEl('leftHand', 'vl-hand-left'), 0.34, 40);
+        if (pulseR) this._pulseHand(vkHandEl('rightHand', 'vl-hand-right'), 0.34, 40);
         gotL = this._vkHandWorld(lh, lp, lq);
         gotR = this._vkHandWorld(rh, rp, rq);
       } else {
+        this._vkGripJumpLatchedL = false;
+        this._vkGripJumpLatchedR = false;
         if (kb['KeyR']) {
           if (!this._vkPrevRkey) out.aEdge = 1;
           this._vkPrevRkey = true;
@@ -2963,44 +3256,9 @@
     },
 
     /**
-     * One-hand: RTSVR2-style grip pan (rig-local ref − hand, rotate by yaw, ref follows each frame).
-     * Both grips: original VRKnockout — hand separation + mid-height → rig Y, horizontal twist → vl-spect-yaw.
+     * XR rig grip locomotion (disabled): the VR rig follows the car; left/right squeeze is jump
+     * (see `_gatherLocalInput`). Kept as a no-op that clears stale grip-pan state.
      */
-    _vkApplyGripPanOne: function (handEl, side) {
-      var yawEl = this._rigYaw || this._rig;
-      var rigRot = yawEl.object3D.rotation.y;
-      this._vkGripHandLocal.copy(handEl.object3D.position);
-      var isL = side === 'L';
-      var inited = isL ? this._vkGripPanLInited : this._vkGripPanRInited;
-      var ref = isL ? this._vkGripRefL : this._vkGripRefR;
-      if (!inited) {
-        ref.copy(this._vkGripHandLocal);
-        if (isL) this._vkGripPanLInited = true;
-        else this._vkGripPanRInited = true;
-        return;
-      }
-      this._vkGripLocalDelta.subVectors(ref, this._vkGripHandLocal);
-      var cr = rigRot;
-      this._vkGripWorldDelta.set(
-        this._vkGripLocalDelta.x * Math.cos(cr) + this._vkGripLocalDelta.z * Math.sin(cr),
-        0,
-        -this._vkGripLocalDelta.x * Math.sin(cr) + this._vkGripLocalDelta.z * Math.cos(cr)
-      );
-      var pr = this._rig.getAttribute('position');
-      var defY = 1.55;
-      var heightMul = (typeof pr.y === 'number' && isFinite(pr.y) ? pr.y : defY) / defY;
-      if (heightMul < 0.65) heightMul = 0.65;
-      if (heightMul > 2.2) heightMul = 2.2;
-      /* Stronger pan; hand local Y → rig height (inverted vs default push-up). */
-      this._vkGripWorldDelta.multiplyScalar(2.45 * heightMul);
-      var nx = pr.x + this._vkGripWorldDelta.x;
-      var nz = pr.z + this._vkGripWorldDelta.z;
-      var dRigY = this._vkGripLocalDelta.y * 2.55 * heightMul;
-      var ny = Math.max(0.12, Math.min(3.6, (typeof pr.y === 'number' ? pr.y : 1.55) + dRigY));
-      this._rig.setAttribute('position', { x: nx, y: ny, z: nz });
-      ref.copy(this._vkGripHandLocal);
-    },
-
     _vkApplyRigLocomotion: function (inp) {
       var renderer = this.el.renderer;
       if (!renderer || !renderer.xr || !renderer.xr.isPresenting || !this._rig) return;
@@ -3012,72 +3270,9 @@
         this._vkTwoHand = null;
         return;
       }
-      var yawEl = this._rigYaw || this._rig;
-      var gThresh = 0.46;
-      var gL = (inp.gripLVal || 0) >= gThresh;
-      var gR = (inp.gripRVal || 0) >= gThresh;
-      var lh = vkHandEl('leftHand', 'vl-hand-left');
-      var rh = vkHandEl('rightHand', 'vl-hand-right');
-      var lp = this._vkGatherLp;
-      var rp = this._vkGatherRp;
-      var gotL = this._vkHandWorld(lh, lp, this._vkGatherLq);
-      var gotR = this._vkHandWorld(rh, rp, this._vkGatherRq);
-
-      if (gL && gR && gotL && gotR) {
-        this._vkGripPanLInited = false;
-        this._vkGripPanRInited = false;
-        var dx = rp.x - lp.x;
-        var dz = rp.z - lp.z;
-        var dy = rp.y - lp.y;
-        var dist = Math.sqrt(dx * dx + dy * dy + dz * dz) + 1e-6;
-        var midY = (lp.y + rp.y) * 0.5;
-        var ang = Math.atan2(dz, dx);
-        var rig = this._rig;
-        if (!this._vkTwoHand) {
-          var pr0 = rig.getAttribute('position');
-          var ry0 = yawEl.getAttribute('rotation');
-          var ydeg0 = ry0 && typeof ry0.y === 'number' ? ry0.y : 0;
-          this._vkTwoHand = {
-            dist0: dist,
-            midY0: midY,
-            prevAng: ang,
-            rigY0: pr0 && typeof pr0.y === 'number' ? pr0.y : 0,
-            yawDeg: ydeg0
-          };
-        } else {
-          var t = this._vkTwoHand;
-          var dDist = dist - t.dist0;
-          var dMidY = midY - t.midY0;
-          var ny = Math.max(0.12, Math.min(3.6, t.rigY0 + dDist * 1.75 - dMidY * 0.55));
-          var dAng = ang - t.prevAng;
-          while (dAng > Math.PI) dAng -= Math.PI * 2;
-          while (dAng < -Math.PI) dAng += Math.PI * 2;
-          t.prevAng = ang;
-          t.yawDeg += (dAng * 180) / Math.PI * 0.98;
-          var pr = rig.getAttribute('position');
-          rig.setAttribute('position', { x: pr.x, y: ny, z: pr.z });
-          yawEl.setAttribute('rotation', { x: 0, y: t.yawDeg, z: 0 });
-        }
-        return;
-      }
-
+      this._vkGripPanLInited = false;
+      this._vkGripPanRInited = false;
       this._vkTwoHand = null;
-
-      if (gL && !gR) {
-        if (lh && lh.object3D) this._vkApplyGripPanOne(lh, 'L');
-        else this._vkGripPanLInited = false;
-        this._vkGripPanRInited = false;
-      } else {
-        this._vkGripPanLInited = false;
-      }
-
-      if (gR && !gL) {
-        if (rh && rh.object3D) this._vkApplyGripPanOne(rh, 'R');
-        else this._vkGripPanRInited = false;
-        this._vkGripPanLInited = false;
-      } else {
-        this._vkGripPanRInited = false;
-      }
     },
 
     _applyCarControls: function (slot, inp, dtSec) {
@@ -3240,10 +3435,7 @@
     _vkRepickGhostForSlot: function (slot, playFromNow) {
       if (!this.isHost) return;
       if (this._vkIsHumanOccupyingSlot(slot)) return;
-      var trk = this._vkCourseTrack | 0;
-      var lib = vkGhostRunsForSpawnRot(this._vkMatchSpawnRot | 0, trk);
-      if (!lib.length) lib = vkLoadGhostRuns(trk);
-      lib = vkFilterPlayableGhostRuns(lib);
+      var lib = this._vkGhostLibraryForBots();
       var lanePref =
         this._vkSlotSpawnLaneIdx && typeof this._vkSlotSpawnLaneIdx[slot] === 'number'
           ? this._vkSlotSpawnLaneIdx[slot] | 0
@@ -3257,7 +3449,9 @@
         this._vkBotGhost[slot].playT0 = null;
         return;
       }
-      this._vkBotGhost[slot].rec = this._vkSelectGhostForBotSlot(lib, lanePref);
+      var pickR2 = this._vkSelectGhostForBotSlot(lib, lanePref);
+      this._vkBotGhost[slot].rec = pickR2;
+      this._vkBotGhost[slot].spineSrc = this._vkSpineSrcForRun(pickR2);
       this._vkBotGhost[slot].recIdx = 0;
       this._vkBotGhost[slot].recoverUntil = 0;
       this._vkBotGhost[slot].playT0 = playFromNow ? performance.now() : null;
@@ -3365,7 +3559,7 @@
     },
 
     /**
-     * Host: give the just-finished run to one bot still in the race.
+     * Host: give the just-finished run to every racing bot that does not already have a spine (`rec` null).
      * @param {number} finishSlot index 0–7 of who crossed (must match frames owner — local human in solo/MP host).
      */
     _vkGiveFinishedRecordingToBot: function (framesCopy, durationMs, finishSlot) {
@@ -3381,23 +3575,40 @@
         candidates.push(s);
       }
       if (!candidates.length) return;
-      var pick = candidates[Math.floor(Math.random() * candidates.length)];
-      if (!this._vkBotGhost[pick]) {
-        this._vkBotGhost[pick] = { rec: null, recIdx: 0, recoverUntil: 0, playT0: null };
-      }
       var laneFin =
         this._vkSlotSpawnLaneIdx && typeof this._vkSlotSpawnLaneIdx[fs] === 'number'
           ? this._vkSlotSpawnLaneIdx[fs] | 0
           : 0;
-      this._vkBotGhost[pick].rec = {
+      var livePayload = {
         durationMs: durationMs | 0,
         spawnRot: this._vkMatchSpawnRot | 0,
         spawnLaneIdx: laneFin % VK_SPAWN_LANE_COUNT,
         frames: framesCopy
       };
-      this._vkBotGhost[pick].recIdx = 0;
-      this._vkBotGhost[pick].recoverUntil = 0;
-      this._vkBotGhost[pick].playT0 = performance.now();
+      var tAssign = performance.now();
+      var ci;
+      for (ci = 0; ci < candidates.length; ci++) {
+        var slot = candidates[ci];
+        if (!this._vkBotGhost[slot]) {
+          this._vkBotGhost[slot] = { rec: null, recIdx: 0, recoverUntil: 0, playT0: null };
+        }
+        if (this._vkBotGhost[slot].rec) continue;
+        this._vkBotGhost[slot].rec = livePayload;
+        this._vkBotGhost[slot].recIdx = 0;
+        this._vkBotGhost[slot].recoverUntil = 0;
+        this._vkBotGhost[slot].playT0 = tAssign;
+        this._vkBotGhost[slot].spineSrc = 'live';
+      }
+      var sessRun = {
+        durationMs: durationMs | 0,
+        spawnRot: this._vkMatchSpawnRot | 0,
+        spawnLaneIdx: laneFin % VK_SPAWN_LANE_COUNT,
+        frames: framesCopy
+      };
+      this._vkSessionGhostRuns.push(sessRun);
+      while (this._vkSessionGhostRuns.length > VK_SESSION_GHOST_MAX) {
+        this._vkSessionGhostRuns.shift();
+      }
     },
 
     _vkSanLb: function (s) {
@@ -3642,9 +3853,14 @@
       if (now < this._vkJumpNextMs[slot]) return;
       var sp = this._carSpawn[slot];
       var vy = body.velocity.y;
+      var spawnY = this._vkSpawnPhysY;
+      var yCap =
+        spawnY != null && isFinite(spawnY)
+          ? spawnY + 5.75
+          : 6.5;
       var grounded =
         this._vkGrounded[slot] > 0 ||
-        (vy < 1.15 && body.position.y < 1.85 && body.position.y > -0.04);
+        (vy < 1.35 && body.position.y < yCap && body.position.y > -0.25);
       if (!grounded) return;
       body.velocity.x *= 0.92;
       body.velocity.z *= 0.92;
@@ -3799,6 +4015,22 @@
       return false;
     },
 
+    /**
+     * Host: saved ghosts for this spawn rotation + course, with mid-session qualifying runs prepended
+     * so fresh human lines beat stale library picks.
+     */
+    _vkGhostLibraryForBots: function () {
+      var trk = this._vkCourseTrack | 0;
+      var lib = vkGhostRunsForSpawnRot(this._vkMatchSpawnRot | 0, trk);
+      if (!lib.length) lib = vkLoadGhostRuns(trk);
+      lib = vkFilterPlayableGhostRuns(lib);
+      var sess = this._vkSessionGhostRuns && this._vkSessionGhostRuns.length
+        ? vkFilterPlayableGhostRuns(this._vkSessionGhostRuns)
+        : [];
+      if (!sess.length) return lib;
+      return sess.concat(lib);
+    },
+
     _vkAssignBotGhosts: function () {
       var s;
       for (s = 0; s < VK_MAX_SLOTS; s++) {
@@ -3807,38 +4039,58 @@
       if (!this.isHost) return;
       for (s = 0; s < VK_MAX_SLOTS; s++) {
         if (this._vkIsHumanOccupyingSlot(s) || this._vkFinished[s]) continue;
-        var trk = this._vkCourseTrack | 0;
-        var lib = vkGhostRunsForSpawnRot(this._vkMatchSpawnRot | 0, trk);
-        if (!lib.length) lib = vkLoadGhostRuns(trk);
-        lib = vkFilterPlayableGhostRuns(lib);
+        var lib = this._vkGhostLibraryForBots();
         var lanePref =
           this._vkSlotSpawnLaneIdx && typeof this._vkSlotSpawnLaneIdx[s] === 'number'
             ? this._vkSlotSpawnLaneIdx[s] | 0
             : 0;
         if (!lib.length) continue;
-        this._vkBotGhost[s].rec = this._vkSelectGhostForBotSlot(lib, lanePref);
+        var pickR = this._vkSelectGhostForBotSlot(lib, lanePref);
+        this._vkBotGhost[s].rec = pickR;
+        this._vkBotGhost[s].spineSrc = this._vkSpineSrcForRun(pickR);
         this._vkBotGhost[s].playT0 = null;
       }
     },
 
-    _vkGhostCommitFinish: function (durationMs) {
-      if (window.isMultiplayer) {
-        this._vkGhostRecBuf = null;
-        return;
+    /** Whether a ghost run object came from this match's session pool (reference identity). */
+    _vkSpineSrcForRun: function (rec) {
+      if (!rec) return 'lib';
+      var sj;
+      if (this._vkSessionGhostRuns && this._vkSessionGhostRuns.length) {
+        for (sj = 0; sj < this._vkSessionGhostRuns.length; sj++) {
+          if (this._vkSessionGhostRuns[sj] === rec) return 'sess';
+        }
       }
-      if (!this._vkGhostRecBuf || this._vkGhostRecBuf.length < 15) {
-        this._vkGhostRecBuf = null;
-        return;
-      }
+      return 'lib';
+    },
+
+    /**
+     * Solo: merge a qualifying finish into localStorage ghost library. Multiplayer: no-op (no shared ghost store).
+     * @param {number} durationMs
+     * @param {number} finishSlot 0–7
+     * @param {Array} [framesOpt] if set, use this frame array instead of `_vkGhostRecBufBySlot[finishSlot]`.
+     */
+    _vkGhostCommitFinish: function (durationMs, finishSlot, framesOpt) {
+      if (window.isMultiplayer) return;
+      var fs = typeof finishSlot === 'number' ? finishSlot | 0 : this.mySlot | 0;
+      if (fs < 0 || fs >= VK_MAX_SLOTS) fs = this.mySlot | 0;
+      var frames =
+        framesOpt && framesOpt.length >= 12
+          ? framesOpt
+          : this._vkGhostRecBufBySlot && this._vkGhostRecBufBySlot[fs] && this._vkGhostRecBufBySlot[fs].length >= 12
+            ? this._vkGhostRecBufBySlot[fs]
+            : null;
+      if (!frames || frames.length < 12) return;
+      var laneIdx =
+        this._vkSlotSpawnLaneIdx && typeof this._vkSlotSpawnLaneIdx[fs] === 'number'
+          ? this._vkSlotSpawnLaneIdx[fs] | 0
+          : 0;
       vkTryInsertGhostRun(
         {
           durationMs: durationMs,
           spawnRot: this._vkMatchSpawnRot | 0,
-          spawnLaneIdx:
-            this._vkSlotSpawnLaneIdx && typeof this._vkSlotSpawnLaneIdx[this.mySlot] === 'number'
-              ? this._vkSlotSpawnLaneIdx[this.mySlot] | 0
-              : 0,
-          frames: this._vkGhostRecBuf
+          spawnLaneIdx: laneIdx % VK_SPAWN_LANE_COUNT,
+          frames: frames
         },
         this._vkCourseTrack
       );
@@ -3855,32 +4107,373 @@
       };
     },
 
-    _vkGhostRecordTickAfterPhysics: function (now) {
-      if (window.isMultiplayer) return;
-      if (!this._vkGhostRecBuf || !this.vkMatchStartMs || this._vkFinished[this.mySlot]) return;
-      if (this._vkGhostRecBuf.length > 620) return;
-      if (now - this._vkGhostLastSample < VK_GHOST_SAMPLE_MS) return;
-      this._vkGhostLastSample = now;
-      var b = this.carBodies[this.mySlot];
-      var inp = this.inputs[this.mySlot];
-      if (!b || !inp) return;
-      var cy = this._vkCarriageYawRad && typeof this._vkCarriageYawRad[this.mySlot] === 'number' ? this._vkCarriageYawRad[this.mySlot] : 0;
-      this._vkGhostRecBuf.push([
-        Math.round(b.position.x * 1000) / 1000,
-        Math.round(b.position.y * 1000) / 1000,
-        Math.round(b.position.z * 1000) / 1000,
-        Math.round(cy * 1000) / 1000,
-        Math.round((inp.lx || 0) * 1000) / 1000,
-        Math.round((inp.trig || 0) * 1000) / 1000,
-        Math.round((inp.trigRev || 0) * 1000) / 1000,
-        inp.j ? 1 : 0
-      ]);
+    _vkDisposeSpineGuideLine: function () {
+      var sg = this._vkSpineGuide;
+      if (!sg || !sg.line) {
+        this._vkSpineGuide = null;
+        return;
+      }
+      try {
+        if (sg.line.parent) sg.line.parent.remove(sg.line);
+        if (sg.geo) sg.geo.dispose();
+        if (sg.mat) sg.mat.dispose();
+      } catch (eSg) {}
+      this._vkSpineGuide = null;
+      this._vkSpineGuideLastRec = null;
     },
 
-    _vkBotHazardPack: function (body, uhx, uhz) {
+    /**
+     * Host: rebuild a green world-space polyline from the first racing bot’s ghost frames (throttled).
+     * Off in production; enable with `?vkSpine=1` or `localStorage 'vrknockout-debug-spine' === '1'` (see init).
+     */
+    _vkTickSpineGuideLine: function (nowMs) {
+      var T = (typeof AFRAME !== 'undefined' && AFRAME.THREE) || (typeof window !== 'undefined' && window.THREE);
+      if (!this.isHost || !T || !this._arenaRoot || !this._arenaRoot.object3D) {
+        if (!this.isHost || !this.vkMatchActive) this._vkDisposeSpineGuideLine();
+        return;
+      }
+      if (!this.vkMatchActive || !this.vkMatchStartMs) {
+        this._vkDisposeSpineGuideLine();
+        return;
+      }
+      var showSlot = -1;
+      var Gshow = null;
+      var sb;
+      for (sb = 0; sb < VK_MAX_SLOTS; sb++) {
+        if (this._vkIsHumanOccupyingSlot(sb)) continue;
+        var Gx = this._vkBotGhost && this._vkBotGhost[sb];
+        if (Gx && Gx.rec && Gx.rec.frames && Gx.rec.frames.length >= 16) {
+          showSlot = sb;
+          Gshow = Gx;
+          break;
+        }
+      }
+      if (showSlot < 0 || !Gshow || !Gshow.rec) {
+        this._vkDisposeSpineGuideLine();
+        return;
+      }
+      var rec = Gshow.rec;
+      if (nowMs - this._vkSpineGuideLastRebuild < 380 && this._vkSpineGuideLastRec === rec && this._vkSpineGuide) {
+        return;
+      }
+      this._vkSpineGuideLastRebuild = nowMs;
+      this._vkSpineGuideLastRec = rec;
+      var frames = rec.frames;
+      var f0 = frames[0];
+      var sp = this._carSpawn[showSlot];
+      if (!sp || !vkGhostFrame0Valid(f0)) return;
+      var maxPts = 512;
+      var step = Math.max(1, Math.floor(frames.length / maxPts));
+      var nVert = Math.min(maxPts, 1 + Math.ceil(frames.length / step));
+      if (!this._vkSpineGuide) {
+        var geo = new T.BufferGeometry();
+        var pos = new Float32Array(maxPts * 3);
+        geo.setAttribute('position', new T.BufferAttribute(pos, 3));
+        geo.setDrawRange(0, 0);
+        var mat = new T.LineBasicMaterial({
+          color: 0x55ee99,
+          transparent: true,
+          opacity: 0.62,
+          depthTest: true,
+          depthWrite: false
+        });
+        var line = new T.Line(geo, mat);
+        line.frustumCulled = false;
+        line.renderOrder = 2;
+        this._arenaRoot.object3D.add(line);
+        this._vkSpineGuide = { line: line, geo: geo, attr: geo.attributes.position, maxPts: maxPts };
+      }
+      var attr = this._vkSpineGuide.attr;
+      var v = 0;
+      var fi;
+      for (fi = 0; fi < frames.length && v < maxPts; fi += step) {
+        var fr = frames[fi];
+        if (!vkGhostFrame0Valid(fr)) continue;
+        attr.setXYZ(v, sp.x + (fr[0] - f0[0]), sp.y + (fr[1] - f0[1]) + 0.07, sp.z + (fr[2] - f0[2]));
+        v++;
+      }
+      if (v < 2) {
+        this._vkSpineGuide.line.visible = false;
+        return;
+      }
+      attr.needsUpdate = true;
+      this._vkSpineGuide.geo.setDrawRange(0, v);
+      this._vkSpineGuide.line.visible = true;
+    },
+
+    /**
+     * Tracks 2–3: match ghost by nearest point in space (race-clock sync drifts on spinners/tiles).
+     * Track 1: time-localized window only.
+     */
+    _vkGhostBotPickFrameIndex: function (slot, body, frames, f0, tIdx) {
+      var gtp = vkGhostTrackParams(this._vkCourseTrack);
+      var t23 = (this._vkCourseTrack | 0) === 2 || (this._vkCourseTrack | 0) === 3;
+      var best = Math.min(frames.length - 1, Math.max(0, tIdx | 0));
+      var bestD2 = 1e18;
+      var ii;
+      var self = this;
+      function consider(idx) {
+        var w = self._vkGhostWorldTargetFromFrame(slot, frames[idx], f0);
+        if (!w) return;
+        var dx = body.position.x - w.x;
+        var dy = body.position.y - w.y;
+        var dz = body.position.z - w.z;
+        var dd = dx * dx + dy * dy + dz * dz;
+        if (dd < bestD2) {
+          bestD2 = dd;
+          best = idx;
+        }
+      }
+      if (t23) {
+        var stride = Math.max(1, Math.floor(frames.length / 96));
+        for (ii = 0; ii < frames.length; ii += stride) consider(ii);
+        var r0 = Math.max(0, best - 44);
+        var r1 = Math.min(frames.length - 1, best + 44);
+        for (ii = r0; ii <= r1; ii++) consider(ii);
+      } else {
+        var lo = Math.max(0, tIdx - gtp.syncBack);
+        var hi = Math.min(frames.length - 1, tIdx + gtp.syncFwd);
+        for (ii = lo; ii <= hi; ii++) consider(ii);
+      }
+      return { best: best, bestD2: bestD2 };
+    },
+
+    _vkGhostRecordTickAfterPhysics: function (now) {
+      if (!this.isHost || !this.vkMatchActive || !this.vkMatchStartMs) return;
+      if (now - this._vkGhostLastSample < VK_GHOST_SAMPLE_MS) return;
+      this._vkGhostLastSample = now;
+      var maxF = 620;
+      var slot;
+      for (slot = 0; slot < VK_MAX_SLOTS; slot++) {
+        if (!this._vkIsHumanOccupyingSlot(slot)) continue;
+        if (this._vkFinished[slot]) continue;
+        var buf = this._vkGhostRecBufBySlot && this._vkGhostRecBufBySlot[slot];
+        if (!buf) continue;
+        if (buf.length > maxF) continue;
+        var b = this.carBodies[slot];
+        var inp = this.inputs[slot];
+        if (!b || !inp) continue;
+        var cy =
+          this._vkCarriageYawRad && typeof this._vkCarriageYawRad[slot] === 'number'
+            ? this._vkCarriageYawRad[slot]
+            : 0;
+        buf.push([
+          Math.round(b.position.x * 1000) / 1000,
+          Math.round(b.position.y * 1000) / 1000,
+          Math.round(b.position.z * 1000) / 1000,
+          Math.round(cy * 1000) / 1000,
+          Math.round((inp.lx || 0) * 1000) / 1000,
+          Math.round((inp.trig || 0) * 1000) / 1000,
+          Math.round((inp.trigRev || 0) * 1000) / 1000,
+          inp.j ? 1 : 0
+        ]);
+      }
+    },
+
+    /**
+     * Short-horizon waypoint (~1 m) toward the finish, snapped onto the nearest safe support on T2/T3.
+     * Finishes the “aim finish + local plan” idea without continuous competing lateral pulls (reduces orbiting).
+     */
+    _vkBotShortGoalWorld: function (body, nowMs, uhx, uhz, slot) {
+      var out = { wx: body.position.x, wz: body.position.z, suggestJump: false };
+      if (!body || !body.position) return out;
+      var bx = body.position.x;
+      var by = body.position.y;
+      var bz = body.position.z;
+      var vx = body.velocity.x;
+      var vy = body.velocity.y;
+      var vz = body.velocity.z;
+      var pastZ =
+        (this._vkFinishZ != null && isFinite(this._vkFinishZ) ? this._vkFinishZ : VK_FINISH_LINE_Z) - 2.65;
+      var phx = this._vkPathHalfX || 2.35;
+      var trk = this._vkCourseTrack | 0;
+      var now =
+        nowMs != null && isFinite(nowMs)
+          ? nowMs
+          : typeof performance !== 'undefined' && performance.now
+            ? performance.now()
+            : 0;
+      var uhH = Math.sqrt(uhx * uhx + uhz * uhz) || 1;
+      var uhxN = uhx / uhH;
+      var uhzN = uhz / uhH;
+      if (trk === 1) {
+        var spIdx = slot != null && slot >= 0 ? slot | 0 : 0;
+        var spawn = this._carSpawn && this._carSpawn[spIdx] ? this._carSpawn[spIdx] : null;
+        var tx =
+          spawn && typeof spawn.x === 'number'
+            ? spawn.x * 0.35 + bx * 0.65
+            : bx * 0.92;
+        tx = clamp(tx, -phx * 0.94, phx * 0.94);
+        var dxf = tx - bx;
+        var dzf = pastZ - bz;
+        var lenf = Math.sqrt(dxf * dxf + dzf * dzf) + 1e-5;
+        var step = Math.min(1.2, 0.5 + lenf * 0.22);
+        out.wx = bx + (dxf / lenf) * step;
+        out.wz = bz + (dzf / lenf) * step;
+        return out;
+      }
+      if (trk === 2 && this._vkSpinnerBodies && this._vkSpinnerBodies.length) {
+        var Lk = 1.05;
+        var ax = bx + uhxN * Lk;
+        var az = bz + uhzN * Lk;
+        var spb = this._vkSpinnerBodies;
+        var si2;
+        var bestDh = 1e9;
+        var near2 = null;
+        for (si2 = 0; si2 < spb.length; si2++) {
+          var sp2 = spb[si2];
+          if (!sp2 || sp2.discR == null) continue;
+          var ddx = ax - sp2.cx;
+          var ddz = az - sp2.cz;
+          var dh = Math.sqrt(ddx * ddx + ddz * ddz);
+          if (dh < bestDh) {
+            bestDh = dh;
+            near2 = sp2;
+          }
+        }
+        if (near2) {
+          out.wx = near2.cx * 0.74 + ax * 0.26;
+          out.wz = near2.cz * 0.74 + az * 0.26;
+        } else {
+          out.wx = ax;
+          out.wz = az;
+        }
+        var bestCur = 1e9;
+        var curN = null;
+        for (si2 = 0; si2 < spb.length; si2++) {
+          var spc = spb[si2];
+          if (!spc || spc.discR == null) continue;
+          var dxc = bx - spc.cx;
+          var dzc = bz - spc.cz;
+          var dhc = Math.sqrt(dxc * dxc + dzc * dzc);
+          if (dhc < bestCur) {
+            bestCur = dhc;
+            curN = spc;
+          }
+        }
+        var progB = -(bx * uhxN + bz * uhzN);
+        var fwdN = null;
+        var fwdDh = 1e9;
+        for (si2 = 0; si2 < spb.length; si2++) {
+          var spf = spb[si2];
+          if (!spf || spf.discR == null) continue;
+          var progF = -(spf.cx * uhxN + spf.cz * uhzN);
+          if (progF < progB - 0.14) continue;
+          var dxfw = bx - spf.cx;
+          var dzfw = bz - spf.cz;
+          var dhfw = Math.sqrt(dxfw * dxfw + dzfw * dzfw);
+          if (dhfw < fwdDh) {
+            fwdDh = dhfw;
+            fwdN = spf;
+          }
+        }
+        if (!fwdN) fwdN = curN;
+        if (fwdN && fwdN.discY != null) {
+          var discTopY = fwdN.discY + (fwdN.discHalfH != null ? fwdN.discHalfH : 0.07);
+          var ballBottom = by - PLAYER_R;
+          var rF = fwdN.discR;
+          if (
+            vy < 1.08 &&
+            ballBottom < discTopY - 0.015 &&
+            ballBottom > discTopY - 0.58 &&
+            fwdDh > rF * 0.24 &&
+            fwdDh < rF * 1.14
+          ) {
+            out.suggestJump = true;
+          }
+        }
+        var aheadNear = 1e9;
+        var aheadSp = null;
+        for (si2 = 0; si2 < spb.length; si2++) {
+          var spa = spb[si2];
+          if (!spa || spa.discR == null) continue;
+          var progD = -(spa.cx * uhxN + spa.cz * uhzN);
+          if (progD <= progB + 0.03) continue;
+          var dxa = bx - spa.cx;
+          var dza = bz - spa.cz;
+          var dha = Math.sqrt(dxa * dxa + dza * dza);
+          if (dha < aheadNear) {
+            aheadNear = dha;
+            aheadSp = spa;
+          }
+        }
+        if (
+          curN &&
+          aheadSp &&
+          bestCur > curN.discR * 0.4 &&
+          aheadNear > curN.discR * 0.28 &&
+          aheadNear < curN.discR * 2.15 &&
+          vy < 0.95 &&
+          by < (aheadSp.discY != null ? aheadSp.discY : curN.discY) + 0.42
+        ) {
+          out.suggestJump = true;
+        }
+        return out;
+      }
+      if (trk === 3 && this._vkT3SliderBodies && this._vkT3SliderBodies.length) {
+        var list3 = this._vkT3SliderBodies;
+        var s3 = now * 0.001;
+        var Lk3 = 1.05;
+        var ax3 = bx + uhxN * Lk3;
+        var az3 = bz + uhzN * Lk3;
+        var bestD2 = 1e9;
+        var pickX = ax3;
+        var pickZ = az3;
+        var si3;
+        for (si3 = 0; si3 < list3.length; si3++) {
+          var p3 = list3[si3];
+          if (!p3 || p3.halfHx == null) continue;
+          var sn = p3.omega * s3 + p3.phase;
+          var px = p3.amp * Math.sin(sn);
+          var sx = clamp(ax3, px - p3.halfHx, px + p3.halfHx);
+          var sz = clamp(az3, p3.baseZ - p3.halfHz, p3.baseZ + p3.halfHz);
+          var ddx = sx - ax3;
+          var ddz = sz - az3;
+          var d2 = ddx * ddx + ddz * ddz;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            pickX = sx * 0.68 + ax3 * 0.32;
+            pickZ = sz * 0.68 + az3 * 0.32;
+          }
+        }
+        out.wx = pickX;
+        out.wz = pickZ;
+        var bestCur3 = 1e9;
+        var curP = null;
+        var platXC = bx;
+        for (si3 = 0; si3 < list3.length; si3++) {
+          var p3c = list3[si3];
+          if (!p3c || p3c.halfHx == null) continue;
+          var snC = p3c.omega * s3 + p3c.phase;
+          var pxc = p3c.amp * Math.sin(snC);
+          var dxc3 = bx - pxc;
+          var dzc3 = bz - p3c.baseZ;
+          var dhc3 = Math.sqrt(dxc3 * dxc3 + dzc3 * dzc3);
+          if (dhc3 < bestCur3) {
+            bestCur3 = dhc3;
+            curP = p3c;
+            platXC = pxc;
+          }
+        }
+        if (curP && Math.abs(bx - platXC) > curP.halfHx * 0.55 && vy < 0.9 && bestCur3 < curP.halfHx * 1.9) {
+          out.suggestJump = true;
+        }
+        return out;
+      }
+      return out;
+    },
+
+    _vkBotHazardPack: function (body, uhx, uhz, nowMs) {
       var dodgeLx = 0;
       var wantJump = false;
       var pillarPin = false;
+      var voidGap = false;
+      var now =
+        nowMs != null && isFinite(nowMs)
+          ? nowMs
+          : typeof performance !== 'undefined' && performance.now
+            ? performance.now()
+            : 0;
       var ri;
       var avoidR = ROCK_R * 4.5 + PLAYER_R * 2.2;
       var avoidR2 = avoidR * avoidR;
@@ -3923,10 +4516,114 @@
           }
         }
       }
-      return { dodgeLx: dodgeLx, wantJump: wantJump, pillarPin: pillarPin };
+      var gaps = this._vkPlinkoGapAvoidPts;
+      if (gaps && gaps.length) {
+        var gk;
+        for (gk = 0; gk < gaps.length; gk++) {
+          var gg = gaps[gk];
+          var gHalfZ = gg.halfZ != null ? gg.halfZ : 0.35;
+          var dxg = body.position.x - gg.x;
+          var dzg = body.position.z - gg.z;
+          if (Math.abs(dxg) > gg.halfW + 0.14 || Math.abs(dzg) > gHalfZ + 0.12) continue;
+          voidGap = true;
+          var aheadG = dxg * uhx + dzg * uhz;
+          if (aheadG > -0.92) {
+            var wCloseG = 1 - Math.max(Math.abs(dxg) / (gg.halfW + 0.06), Math.abs(dzg) / (gHalfZ + 0.05));
+            if (wCloseG < 0) wCloseG = 0;
+            dodgeLx -= clamp((dxg / (gg.halfW + 0.08)) * 2.05, -1, 1) * (0.42 + 0.58 * wCloseG);
+          }
+        }
+      }
+      var trk = this._vkCourseTrack | 0;
+      if (trk === 2 && this._vkSpinnerBodies && this._vkSpinnerBodies.length) {
+        var bz2 = body.position.z;
+        var by2 = body.position.y;
+        var bx2 = body.position.x;
+        if (bz2 < 2.68 && bz2 > -5.78) {
+          var spb = this._vkSpinnerBodies;
+          var si2;
+          var bestDh = 1e9;
+          var near2 = null;
+          for (si2 = 0; si2 < spb.length; si2++) {
+            var sp2 = spb[si2];
+            if (!sp2 || sp2.discR == null) continue;
+            var ddx2 = bx2 - sp2.cx;
+            var ddz2 = bz2 - sp2.cz;
+            var dh2 = Math.sqrt(ddx2 * ddx2 + ddz2 * ddz2);
+            if (dh2 < bestDh) {
+              bestDh = dh2;
+              near2 = sp2;
+            }
+          }
+          if (near2) {
+            var discR2 = near2.discR;
+            var topY2 = near2.discY + (near2.discHalfH != null ? near2.discHalfH : 0.07) + 0.04;
+            if (by2 < topY2 + PLAYER_R * 0.98 && by2 > near2.discY - 1.42) {
+              if (bestDh > discR2 * 0.84) voidGap = true;
+            }
+          }
+        }
+      }
+      if (trk === 3 && this._vkT3SliderBodies && this._vkT3SliderBodies.length) {
+        var list3 = this._vkT3SliderBodies;
+        var bz3 = body.position.z;
+        var by3 = body.position.y;
+        var bx3 = body.position.x;
+        if (bz3 < 2.78 && bz3 > -5.72) {
+          var refY3 = list3[0].baseY + (list3[0].slabHalfY != null ? list3[0].slabHalfY : 0.07);
+          if (by3 - PLAYER_R < refY3 + 0.34) {
+            var s3 = now * 0.001;
+            var onAny3 = false;
+            var si3;
+            for (si3 = 0; si3 < list3.length; si3++) {
+              var p3 = list3[si3];
+              if (!p3 || !p3.body || p3.halfHx == null) continue;
+              var sn3 = p3.omega * s3 + p3.phase;
+              var platX3 = p3.amp * Math.sin(sn3);
+              var dx3 = bx3 - platX3;
+              var dz3 = bz3 - p3.baseZ;
+              if (
+                Math.abs(dx3) <= p3.halfHx - PLAYER_R * 0.06 &&
+                Math.abs(dz3) <= p3.halfHz - PLAYER_R * 0.06 &&
+                by3 - PLAYER_R < refY3 + 0.22
+              ) {
+                onAny3 = true;
+                break;
+              }
+            }
+            var bestPlatX = bx3;
+            var bestHalfHx = list3[0].halfHx != null ? list3[0].halfHx : 0.55;
+            var bestHalfHz = list3[0].halfHz != null ? list3[0].halfHz : 0.55;
+            var bestDz3 = 1e9;
+            for (si3 = 0; si3 < list3.length; si3++) {
+              var p3b = list3[si3];
+              if (!p3b) continue;
+              var dzz = Math.abs(bz3 - p3b.baseZ);
+              if (dzz < bestDz3) {
+                bestDz3 = dzz;
+                var snb = p3b.omega * s3 + p3b.phase;
+                bestPlatX = p3b.amp * Math.sin(snb);
+                if (p3b.halfHx != null) bestHalfHx = p3b.halfHx;
+                if (p3b.halfHz != null) bestHalfHz = p3b.halfHz;
+              }
+            }
+            var nearSlabXZ =
+              bestDz3 < bestHalfHz * 1.12 &&
+              Math.abs(bx3 - bestPlatX) < bestHalfHx - PLAYER_R * 0.08;
+            if (!onAny3 && !nearSlabXZ) voidGap = true;
+          }
+        }
+      }
+      return { dodgeLx: dodgeLx, wantJump: wantJump, pillarPin: pillarPin, voidGap: voidGap };
     },
 
     _vkSeekTowardWorld: function (s, z, wx, wy, wz, uhx, uhz, body, nowMs) {
+      var trkW0 = this._vkCourseTrack | 0;
+      if (trkW0 === 2 || trkW0 === 3) {
+        var sgW = this._vkBotShortGoalWorld(body, nowMs, uhx, uhz, s);
+        wx = wx * 0.22 + sgW.wx * 0.78;
+        wz = wz * 0.22 + sgW.wz * 0.78;
+      }
       var toX = wx - body.position.x;
       var toZ = wz - body.position.z;
       var toH = Math.sqrt(toX * toX + toZ * toZ) + 1e-5;
@@ -3948,9 +4645,17 @@
       z.trigRev = vAlong < -0.16 ? 0.42 : 0;
       z.ry = clamp(-body.velocity.y * 0.034, -0.42, 0.42);
       z.rx = 0;
-      var haz = this._vkBotHazardPack(body, uhx, uhz);
+      var haz = this._vkBotHazardPack(body, uhx, uhz, nowMs);
       z.lx = clamp(z.lx + haz.dodgeLx, -1, 1);
-      if (haz.wantJump && Math.random() < 0.45) z.j = 1;
+      var trkSv = this._vkCourseTrack | 0;
+      var sgRec = this._vkBotShortGoalWorld(body, nowMs, uhx, uhz, s);
+      if (trkSv === 2 || trkSv === 3) {
+        var jmT2 = trkSv === 2 ? 0.58 : 0.4;
+        if (sgRec.suggestJump && body.velocity.y < 0.92 && Math.random() < jmT2) z.j = 1;
+        else if (haz.pillarPin && haz.wantJump && Math.random() < 0.38) z.j = 1;
+      } else if (haz.wantJump && !haz.voidGap && Math.random() < 0.45) {
+        z.j = 1;
+      }
     },
 
     _vkTryGhostBot: function (s, z, nowMs, uhx, uhz) {
@@ -3961,6 +4666,7 @@
       var frames = G.rec.frames;
       var f0 = frames[0];
       if (!body || !vkGhostFrame0Valid(f0)) return false;
+      var t23 = (this._vkCourseTrack | 0) === 2 || (this._vkCourseTrack | 0) === 3;
       /* playT0 = mid-match reset; vkMatchStartMs = after GO; else pre-GO (clip t≈0, no heuristic drift). */
       var elapsed;
       if (G.playT0 != null && isFinite(G.playT0)) {
@@ -3972,37 +4678,25 @@
       }
       if (elapsed < 0) elapsed = 0;
       var tIdx = Math.min(frames.length - 1, Math.floor(elapsed / VK_GHOST_SAMPLE_MS));
-      var lo = Math.max(0, tIdx - 24);
-      var hi = Math.min(frames.length - 1, tIdx + 16);
-      var best = tIdx;
-      var bestD = 1e9;
-      var ii;
-      for (ii = lo; ii <= hi; ii++) {
-        var w = this._vkGhostWorldTargetFromFrame(s, frames[ii], f0);
-        if (!w) continue;
-        var dx = body.position.x - w.x;
-        var dy = body.position.y - w.y;
-        var dz = body.position.z - w.z;
-        var dd = dx * dx + dy * dy + dz * dz;
-        if (dd < bestD) {
-          bestD = dd;
-          best = ii;
-        }
-      }
-      bestD = Math.sqrt(bestD);
+      var gtp = vkGhostTrackParams(this._vkCourseTrack);
+      var pick = this._vkGhostBotPickFrameIndex(s, body, frames, f0, tIdx);
+      var best = pick.best;
+      var bestD2 = pick.bestD2;
+      var bestD = Math.sqrt(bestD2);
+      if (bestD < gtp.devM * 0.55) G.recoverUntil = 0;
       G.recIdx = best;
       var frUse = frames[best];
       var wT = this._vkGhostWorldTargetFromFrame(s, frUse, f0);
       if (!wT) return false;
-      var needRecover = bestD > VK_GHOST_DEVIATION_M || G.recoverUntil > nowMs;
-      if (bestD > VK_GHOST_DEVIATION_M && G.recoverUntil <= nowMs) {
+      var needRecover = bestD > gtp.devM || G.recoverUntil > nowMs;
+      if (bestD > gtp.devM && G.recoverUntil <= nowMs) {
         G.recoverUntil = nowMs + VK_GHOST_RECOVER_MS;
       }
-      if (needRecover && bestD > VK_GHOST_RECOVER_OK_M) {
+      if (needRecover && bestD > gtp.recoverOk) {
         this._vkSeekTowardWorld(s, z, wT.x, wT.y, wT.z, uhx, uhz, body, nowMs);
         return true;
       }
-      if (bestD <= VK_GHOST_RECOVER_OK_M) G.recoverUntil = 0;
+      if (bestD <= gtp.recoverOk) G.recoverUntil = 0;
       var frN = frames[Math.min(frames.length - 1, best + 1)];
       var a = (elapsed - best * VK_GHOST_SAMPLE_MS) / VK_GHOST_SAMPLE_MS;
       if (a < 0) a = 0;
@@ -4012,12 +4706,48 @@
       z.trigRev = clamp((frUse[6] || 0) * (1 - a) + (frN ? frN[6] || 0 : 0) * a, 0, 1);
       z.ry = clamp(-body.velocity.y * 0.032, -0.42, 0.42);
       z.rx = 0;
-      var haz2 = this._vkBotHazardPack(body, uhx, uhz);
-      var trackOk = !needRecover || bestD <= VK_GHOST_RECOVER_OK_M;
-      var hazW = trackOk && bestD < 0.85 ? 0.2 : 0.55;
-      z.lx = clamp(z.lx + haz2.dodgeLx * hazW, -1, 1);
-      if ((frUse[7] || 0) > 0.5 && Math.random() < 0.88) z.j = 1;
-      if (haz2.wantJump && Math.random() < 0.18) z.j = 1;
+      var haz2 = this._vkBotHazardPack(body, uhx, uhz, nowMs);
+      var allowJump = !haz2.voidGap || haz2.pillarPin;
+      var trackOk = !needRecover || bestD <= gtp.recoverOk;
+      var tightBand = Math.min(0.85, gtp.recoverOk * 0.72);
+      var hazW = trackOk && bestD < tightBand ? (t23 ? 0.12 : 0.2) : t23 ? 0.38 : 0.55;
+      if (t23) hazW = Math.max(hazW, 0.36);
+      if (haz2.voidGap) hazW = Math.max(hazW, 0.58);
+      var dodgeTerm = haz2.dodgeLx * hazW;
+      if (t23) {
+        var sgB = this._vkBotShortGoalWorld(body, nowMs, uhx, uhz, s);
+        var cyB = this._vkCarriageYawRad[s];
+        var dxb = sgB.wx - body.position.x;
+        var dzb = sgB.wz - body.position.z;
+        if (Math.abs(dxb) + Math.abs(dzb) < 1e-5) {
+          dzb = -1;
+          dxb = 0;
+        }
+        var wyB = Math.atan2(dxb, dzb);
+        var yawEB = wyB - cyB;
+        while (yawEB > Math.PI) yawEB -= Math.PI * 2;
+        while (yawEB < -Math.PI) yawEB += Math.PI * 2;
+        var lxWp = clamp(yawEB * 3.4 + dxb * 0.52, -1, 1);
+        var wf = bestD < tightBand ? 0.35 : 0.66;
+        z.lx = clamp(z.lx * (1 - wf) + lxWp * wf + dodgeTerm * 0.32, -1, 1);
+        z.trig = clamp(z.trig, 0.52, 0.99);
+        z.trigRev = Math.min(z.trigRev, 0.36);
+        z.j = 0;
+        if (
+          allowJump &&
+          (sgB.suggestJump || haz2.pillarPin) &&
+          body.velocity.y < 0.95 &&
+          ((this._vkCourseTrack | 0) === 2 ? Math.random() < 0.62 : Math.random() < 0.4)
+        ) {
+          z.j = 1;
+        }
+      } else {
+        z.lx = clamp(z.lx + dodgeTerm, -1, 1);
+        if (allowJump && (frUse[7] || 0) > 0.5) {
+          if (Math.random() < 0.88) z.j = 1;
+        }
+        if (allowJump && haz2.wantJump && Math.random() < 0.18) z.j = 1;
+      }
       return true;
     },
 
@@ -4028,19 +4758,29 @@
     /**
      * @param {boolean} [allowThrust] default true; false during pre-GO countdown (yaw toward goal only).
      */
-    _vkGoalSeekBotFill: function (s, z, uhx, uhz, allowThrust) {
+    _vkGoalSeekBotFill: function (s, z, uhx, uhz, allowThrust, nowMs) {
       var body = this.carBodies[s];
       if (!body) return;
       var spawn = this._carSpawn[s];
       var phx = this._vkPathHalfX || 2.35;
-      var tx =
-        spawn && typeof spawn.x === 'number'
-          ? spawn.x * 0.42 + body.position.x * 0.58
-          : body.position.x;
-      tx = clamp(tx, -phx * 0.94, phx * 0.94);
       var pastZ = (this._vkFinishZ != null && isFinite(this._vkFinishZ) ? this._vkFinishZ : VK_FINISH_LINE_Z) - 2.65;
-      var dx = tx - body.position.x;
-      var dz = pastZ - body.position.z;
+      var trkH = this._vkCourseTrack | 0;
+      var sg = null;
+      if (trkH === 2 || trkH === 3) sg = this._vkBotShortGoalWorld(body, nowMs, uhx, uhz, s);
+      var dx;
+      var dz;
+      if (sg) {
+        dx = sg.wx - body.position.x;
+        dz = sg.wz - body.position.z;
+      } else {
+        var tx =
+          spawn && typeof spawn.x === 'number'
+            ? spawn.x * 0.42 + body.position.x * 0.58
+            : body.position.x;
+        tx = clamp(tx, -phx * 0.94, phx * 0.94);
+        dx = tx - body.position.x;
+        dz = pastZ - body.position.z;
+      }
       if (Math.abs(dx) + Math.abs(dz) < 1e-5) {
         dz = -1;
         dx = 0;
@@ -4055,12 +4795,89 @@
       z.trig = Math.abs(yawErr) < 0.38 ? 1 : clamp(0.62 + 0.38 * (1 - Math.min(1, Math.abs(yawErr) / 1.9)), 0.55, 0.95);
       z.ry = clamp(-body.velocity.y * 0.032, -0.42, 0.42);
       z.rx = 0;
-      var haz = this._vkBotHazardPack(body, uhx, uhz);
-      z.lx = clamp(z.lx + haz.dodgeLx * 0.28, -1, 1);
-      if (haz.wantJump && Math.abs(yawErr) < 0.48 && Math.random() < 0.15) z.j = 1;
+      var haz = this._vkBotHazardPack(body, uhx, uhz, nowMs);
+      var dodgeW = trkH === 2 || trkH === 3 ? 0.24 : haz.voidGap ? 0.55 : 0.28;
+      z.lx = clamp(z.lx + haz.dodgeLx * dodgeW, -1, 1);
+      if (trkH !== 2 && trkH !== 3 && haz.wantJump && !haz.voidGap && Math.abs(yawErr) < 0.48 && Math.random() < 0.15) {
+        z.j = 1;
+      } else if (
+        sg &&
+        sg.suggestJump &&
+        body.velocity.y < 0.95 &&
+        (trkH === 2 ? Math.random() < 0.64 : Math.random() < 0.38)
+      ) {
+        z.j = 1;
+      }
       if (allowThrust === false) {
         z.trig = 0;
         z.trigRev = 0;
+      }
+    },
+
+    /**
+     * Tracks 2–3: if the bot is asking for forward thrust but world velocity along the race direction
+     * stays tiny while hugging a platform, queue a jump (host `_vkTryJump` still applies cooldown / grounded).
+     */
+    _vkBotUnstuckForwardJump: function (slot, z, body, uhx, uhz, nowMs) {
+      var trk = this._vkCourseTrack | 0;
+      if (trk !== 2 && trk !== 3) return;
+      if (!body || !body.velocity) return;
+      var trig = z.trig || 0;
+      var rev = z.trigRev || 0;
+      if (trig < 0.26 || rev > 0.52) return;
+      var vy = body.velocity.y;
+      if (vy > 0.78) return;
+      var uhH = Math.sqrt(uhx * uhx + uhz * uhz) || 1;
+      var uhxN = uhx / uhH;
+      var uhzN = uhz / uhH;
+      var vAlong = body.velocity.x * uhxN + body.velocity.z * uhzN;
+      if (vAlong > 0.11) return;
+      var bx = body.position.x;
+      var bz = body.position.z;
+      var by = body.position.y;
+      if (trk === 2 && this._vkSpinnerBodies && this._vkSpinnerBodies.length) {
+        var spb = this._vkSpinnerBodies;
+        var si;
+        var bestD = 1e9;
+        var onCrown = false;
+        for (si = 0; si < spb.length; si++) {
+          var sp = spb[si];
+          if (!sp || sp.discR == null) continue;
+          var dx = bx - sp.cx;
+          var dz = bz - sp.cz;
+          var dh = Math.sqrt(dx * dx + dz * dz);
+          if (dh < bestD) bestD = dh;
+          if (dh < sp.discR * 0.4) {
+            var dTop = sp.discY + (sp.discHalfH != null ? sp.discHalfH : 0.07);
+            var bb = by - PLAYER_R;
+            if (bb > dTop - 0.11 && bb < dTop + 0.2) onCrown = true;
+          }
+        }
+        if (onCrown && bestD < 0.5) return;
+        for (si = 0; si < spb.length; si++) {
+          var sp2 = spb[si];
+          if (!sp2 || sp2.discR == null) continue;
+          var dx2 = bx - sp2.cx;
+          var dz2 = bz - sp2.cz;
+          if (dx2 * dx2 + dz2 * dz2 < (sp2.discR * 1.65) * (sp2.discR * 1.65)) {
+            z.j = 1;
+            return;
+          }
+        }
+      } else if (trk === 3 && this._vkT3SliderBodies && this._vkT3SliderBodies.length) {
+        var list3 = this._vkT3SliderBodies;
+        var s3 = (nowMs != null && isFinite(nowMs) ? nowMs : performance.now()) * 0.001;
+        var sj;
+        for (sj = 0; sj < list3.length; sj++) {
+          var p3 = list3[sj];
+          if (!p3 || p3.halfHx == null) continue;
+          var sn = p3.omega * s3 + p3.phase;
+          var px = p3.amp * Math.sin(sn);
+          if (Math.abs(bx - px) < p3.halfHx * 1.22 && Math.abs(bz - p3.baseZ) < p3.halfHz * 1.25) {
+            z.j = 1;
+            return;
+          }
+        }
       }
     },
 
@@ -4086,7 +4903,9 @@
         var z = zeroInput();
         if (this.vkMatchActive) {
           var preGo = !this.vkMatchStartMs;
-          this._vkGoalSeekBotFill(s, z, uhx, uhz, !preGo);
+          var ghosted = !preGo && this._vkTryGhostBot(s, z, nowMs, uhx, uhz);
+          if (!ghosted) this._vkGoalSeekBotFill(s, z, uhx, uhz, !preGo, nowMs);
+          if (!preGo) this._vkBotUnstuckForwardJump(s, z, body, uhx, uhz, nowMs);
         }
         this.inputs[s] = z;
       }
@@ -4253,6 +5072,42 @@
       }
     },
 
+    /**
+     * After `world.step`, Cannon keeps active pairs in `world.contacts`. Resting bodies often stop firing
+     * `collide` events every frame, so we refresh jump support from the solved contact normals here.
+     */
+    _vkRefreshGroundedFromContactsPostStep: function () {
+      var contacts = this.world && this.world.contacts;
+      if (!contacts || !contacts.length) return;
+      var k;
+      for (k = 0; k < contacts.length; k++) {
+        var eq = contacts[k];
+        if (!eq || !eq.bi || !eq.bj || !eq.ni) continue;
+        var bi = eq.bi;
+        var bj = eq.bj;
+        var biCar = typeof bi.vkSlot === 'number' && bi.vkSlot >= 0 && bi.vkSlot < VK_MAX_SLOTS;
+        var bjCar = typeof bj.vkSlot === 'number' && bj.vkSlot >= 0 && bj.vkSlot < VK_MAX_SLOTS;
+        if (biCar && bjCar) continue;
+        var slot = biCar ? bi.vkSlot : bjCar ? bj.vkSlot : null;
+        if (slot == null) continue;
+        var carBody = this.carBodies[slot];
+        var ny = eq.ni.y;
+        if (typeof ny !== 'number' || !isFinite(ny)) continue;
+        if (Math.abs(ny) > 0.1) {
+          this._vkGrounded[slot] = Math.max(this._vkGrounded[slot] | 0, 30);
+        } else {
+          var nx = eq.ni.x;
+          var nz = eq.ni.z;
+          if (typeof nx === 'number' && typeof nz === 'number') {
+            var hor = Math.sqrt(nx * nx + nz * nz);
+            if (hor > 0.55 && Math.abs(ny) < 0.55 && carBody && carBody.velocity.y < 1.05) {
+              this._vkGrounded[slot] = Math.max(this._vkGrounded[slot] | 0, 12);
+            }
+          }
+        }
+      }
+    },
+
     _vkTickGroundedDecay: function () {
       var i;
       for (i = 0; i < VK_MAX_SLOTS; i++) {
@@ -4267,27 +5122,49 @@
         if (this._vkFinished[i]) continue;
         var b = this.carBodies[i];
         if (!b) continue;
-        var finW = (this._vkPathHalfX || 2.35) + 0.32;
         var finMinY =
           this._vkFinishQualifyMinY != null && isFinite(this._vkFinishQualifyMinY)
             ? this._vkFinishQualifyMinY
             : VK_FINISH_QUALIFY_MIN_Y;
+        var finMaxY =
+          this._vkFinishQualifyMaxY != null && isFinite(this._vkFinishQualifyMaxY)
+            ? this._vkFinishQualifyMaxY
+            : 8.0;
+        var finHalfX =
+          this._vkFinishQualifyHalfX != null && isFinite(this._vkFinishQualifyHalfX)
+            ? this._vkFinishQualifyHalfX
+            : (this._vkPathHalfX || 2.35) + 0.55;
         var finZMin =
           this._vkFinishCheckZMin != null && isFinite(this._vkFinishCheckZMin)
             ? this._vkFinishCheckZMin
             : VK_FINISH_CHECK_Z_MIN;
+        var finZPlane = this._vkFinishZ != null && isFinite(this._vkFinishZ) ? this._vkFinishZ : VK_FINISH_LINE_Z;
+        var finZPast = finZPlane + 0.55;
         if (
-          b.position.z <= this._vkFinishZ &&
+          b.position.z <= finZPast &&
           b.position.z >= finZMin &&
-          Math.abs(b.position.x) < finW &&
-          b.position.y > finMinY
+          Math.abs(b.position.x) < finHalfX &&
+          b.position.y > finMinY &&
+          b.position.y < finMaxY
         ) {
+          var ghostCopy = null;
+          if (this._vkIsHumanOccupyingSlot(i)) {
+            if (
+              this._vkGhostRecBufBySlot &&
+              this._vkGhostRecBufBySlot[i] &&
+              this._vkGhostRecBufBySlot[i].length >= 12
+            ) {
+              ghostCopy = this._vkGhostRecBufBySlot[i].slice();
+            }
+          }
           this._vkFinished[i] = true;
           var finMs = Math.round(performance.now() - this.vkMatchStartMs);
-          if (i === this.mySlot && this._vkGhostRecBuf && this._vkGhostRecBuf.length >= 12) {
-            var ghostCopy = this._vkGhostRecBuf.slice();
-            this._vkGhostCommitFinish(finMs);
+          if (ghostCopy && ghostCopy.length >= 12) {
+            this._vkGhostCommitFinish(finMs, i, ghostCopy);
             this._vkGiveFinishedRecordingToBot(ghostCopy, finMs, i);
+          }
+          if (this._vkGhostRecBufBySlot && this._vkGhostRecBufBySlot[i]) {
+            this._vkGhostRecBufBySlot[i].length = 0;
           }
           this._vkFinishOrder.push(i);
           this._vkRoundFinishes.push({ slot: i, ms: finMs });
@@ -4661,7 +5538,7 @@
         this._vkResetBotHillProgress(now);
         this._vkGoFlashUntil = now + 780;
         this._vkLastCountdownSec = -999;
-        this._setStatus('GO! Race uphill — dodge the boulders, B to jump!');
+        this._setStatus('GO! Race uphill — dodge the boulders; B or either grip to jump.');
         /* Allow first rock wave on the next tick (was `now + 800`, which delayed waves by ~interval + 800 ms). */
         this._vkRockSpawnNext = now - ROCK_SPAWN_INTERVAL_MS - 1;
         var bounce = document.getElementById('vl-bounce-sound');
@@ -4695,8 +5572,14 @@
       } else {
         this._vkMatchSpawnRot = 0;
       }
-      this._vkGhostRecBuf = [];
+      this._vkGhostRecBuf = null;
       this._vkGhostLastSample = 0;
+      this._vkSessionGhostRuns = [];
+      this._vkGhostRecBufBySlot = [];
+      var gsi;
+      for (gsi = 0; gsi < VK_MAX_SLOTS; gsi++) {
+        this._vkGhostRecBufBySlot.push(this._vkIsHumanOccupyingSlot(gsi) ? [] : null);
+      }
       this._resetRoundBodies();
       this._vkAssignBotGhosts();
       this._setStatus('Get ready… countdown on the HUD.');
@@ -4710,6 +5593,7 @@
 
     vkEndMatch: function (reason) {
       if (!this.isHost) return;
+      this._vkDisposeSpineGuideLine();
       this.vkMatchActive = false;
       this.vkMatchStartMs = 0;
       this.vkMatchRemainSec = null;
@@ -4718,6 +5602,11 @@
       this._vkLastCountdownSec = -999;
       this._vkStopFinishFxCelebration();
       this._vkGhostRecBuf = null;
+      this._vkSessionGhostRuns = [];
+      if (this._vkGhostRecBufBySlot) {
+        var ge;
+        for (ge = 0; ge < this._vkGhostRecBufBySlot.length; ge++) this._vkGhostRecBufBySlot[ge] = null;
+      }
       var banner = reason ? String(reason) : 'Match over.';
       this._setStatus(banner);
       this._vkSetMatchMusicPlaying(false);
@@ -4890,8 +5779,8 @@
       this._resetRoundBodies();
       this._applySpectatorTransform(this.mySlot);
       this._refreshCubeHighlights();
-      this._setStatus(
-        'VR Knockout — race uphill (−Z). Right trigger thrusts along the cube’s facing (pitch lean tilts thrust; roll lean adds a slight sideways push); left trigger reverse; left stick turns the cube (aim). Right stick leans the cage (±15°); at speed, lean into corners for full steering — upright = wider line. Motion adds sway that settles. B = jump. Grips: one hand drag to move in the room; both = height + twist yaw. X = menu, A = reset. Multiplayer: host fills empty slots with bots.'
+        this._setStatus(
+        'VR Knockout — race uphill (−Z). Right trigger thrusts along the cube’s facing (pitch lean tilts thrust; roll lean adds a slight sideways push); left trigger reverse; left stick turns the cube (aim). Right stick leans the cage (±15°); at speed, lean into corners for full steering — upright = wider line. Motion adds sway that settles. B or squeeze either grip to jump (the VR view follows your car). X = menu, A = reset. Multiplayer: host fills empty slots with bots.'
       );
       this._vkMarkHudDirty();
       this._vkRebuildSlotNamesHost();
@@ -5329,7 +6218,7 @@
         this._setStatus(
           'Player ' +
             (this.mySlot + 1) +
-            ' — brightest ball is yours. Right trigger forward along cube aim, left back, left stick turns cube. B jumps. Grips: one-hand drag = move yourself; both = height + twist yaw.'
+            ' — brightest ball is yours. Right trigger forward along cube aim, left back, left stick turns cube. B or either grip jumps; the view follows your car.'
         );
         return;
       }
@@ -5454,6 +6343,8 @@
       if (this.isHost) {
         this._vkTickMatchCountdownHost(nowHost);
         this._vkApplyBotInputs(nowHost);
+        if (this._vkSpineHudDebug) this._vkTickSpineGuideLine(nowHost);
+        else if (this._vkSpineGuide) this._vkDisposeSpineGuideLine();
       }
       this._vkUpdateCubeLeanFromInputs(inp);
       if (this.isHost) {
@@ -5504,6 +6395,7 @@
         this._vkTickRockHazardRecycleHost();
         this._vkEnsurePlayersOnTrack();
         this._vkTickBotStuckHost(nowHost);
+        this._vkRefreshGroundedFromContactsPostStep();
         this._vkTickGroundedDecay();
         this._vkCheckFinish();
         this._vkGhostRecordTickAfterPhysics(nowHost);
