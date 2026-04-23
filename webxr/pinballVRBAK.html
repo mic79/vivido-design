@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pinball VR</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box
+        }
+
+        body {
+            overflow: hidden;
+            background: #000;
+            font-family: 'Segoe UI', sans-serif;
+            color: #fff
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            background: rgba(0, 0, 0, .7);
+            padding: 8px 20px;
+            border-radius: 20px;
+            border: 1px solid rgba(0, 200, 255, .3);
+            font-size: 13px;
+            pointer-events: none;
+            text-align: center;
+            backdrop-filter: blur(10px)
+        }
+
+        #info span {
+            color: #0cf;
+            font-weight: bold
+        }
+
+        #score-display {
+            position: absolute;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            font-size: 28px;
+            font-weight: bold;
+            color: #0cf;
+            text-shadow: 0 0 20px rgba(0, 200, 255, .8);
+            pointer-events: none;
+            font-family: 'Courier New', monospace
+        }
+
+        #balls-display {
+            position: absolute;
+            top: 95px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            font-size: 16px;
+            color: #f80;
+            text-shadow: 0 0 10px rgba(255, 136, 0, .6);
+            pointer-events: none
+        }
+
+        #game-over {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            text-align: center;
+            background: rgba(0, 0, 0, .85);
+            padding: 40px 60px;
+            border-radius: 20px;
+            border: 2px solid #f06;
+            backdrop-filter: blur(20px)
+        }
+
+        #game-over h1 {
+            font-size: 48px;
+            color: #f06;
+            text-shadow: 0 0 30px rgba(255, 0, 100, .8);
+            margin-bottom: 10px
+        }
+
+        #game-over .final-score {
+            font-size: 32px;
+            color: #0cf;
+            margin-bottom: 20px
+        }
+
+        #restart-btn {
+            background: linear-gradient(135deg, #0cf, #06f);
+            border: none;
+            color: #fff;
+            padding: 12px 40px;
+            font-size: 18px;
+            border-radius: 30px;
+            cursor: pointer;
+            transition: all .3s;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px
+        }
+
+        #restart-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(0, 200, 255, .6)
+        }
+
+        #vr-button {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            background: linear-gradient(135deg, #f06, #f80);
+            border: none;
+            color: #fff;
+            padding: 14px 40px;
+            font-size: 16px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            display: none
+        }
+
+        #plunger-bar {
+            position: absolute;
+            bottom: 80px;
+            right: 20px;
+            width: 30px;
+            height: 200px;
+            background: rgba(0, 0, 0, .5);
+            border: 1px solid rgba(0, 200, 255, .3);
+            border-radius: 15px;
+            z-index: 100;
+            overflow: hidden;
+            pointer-events: none
+        }
+
+        #plunger-fill {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 0%;
+            background: linear-gradient(to top, #f06, #f80);
+            border-radius: 15px;
+            transition: height .05s
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info"><span>A</span> Left Flipper &nbsp;|&nbsp; <span>L</span> Right Flipper &nbsp;|&nbsp;
+        <span>SPACE</span> Plunger (hold & release)
+    </div>
+    <div id="score-display">0</div>
+    <div id="balls-display">● ● ●</div>
+    <div id="plunger-bar">
+        <div id="plunger-fill"></div>
+    </div>
+    <div id="game-over">
+        <h1>GAME OVER</h1>
+        <div class="final-score">0</div><button id="restart-btn">PLAY AGAIN</button>
+    </div>
+    <div id="fps-display" style="position:fixed;top:10px;right:10px;z-index:200;background:rgba(0,0,0,.7);color:#0f0;font:bold 14px monospace;padding:4px 10px;border-radius:8px;pointer-events:none">-- FPS</div>
+    <button id="vr-button">ENTER VR</button>
+
+    <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.175.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.175.0/examples/jsm/",
+      "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+    }
+  }
+  </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import * as CANNON from 'cannon-es';
+
+        try { main(); } catch (e) { console.error('Init error:', e); }
+
+        function main() {
+            // ============================================================
+            // CONSTANTS
+            // ============================================================
+            const S = 0.0584;
+            const OX = 0.02628;       // playfield X offset (asymmetric shooter lane)
+            const TW = 10 * S;
+            const TL = 20 * S;
+            const TH = 0.9;
+            const SLOPE = 6.5 * Math.PI / 180;
+            const WH = 1 * S;
+            const WT = 0.5 * S;
+            const FT = 0.002;
+            const BR = 0.0146;
+            const BM = 0.08;
+            const FL = 2.4 * S;       // flipper length (60% of reference)
+            const FW = 0.5 * S;
+            const FH = 0.04672;
+            const FMAX = Math.PI / 7;
+            const FREST = -Math.PI / 6;
+            const FSPEED = 25;
+            const BUMR = 0.75 * S;
+            const BUMH = 1 * S;
+            const BUM_VEL = 3;
+            const LAUNCH_VEL = 4.7;
+            const PRATE = 2.5;
+            const FLIPPER_Z = 8 * S;
+            const FLIPPER_X = 2.4 * S; // pivot moved inward to match shorter flipper
+            const GA = 16 * Math.PI / 180;
+
+            // ============================================================
+            // GAME STATE
+            // ============================================================
+            let score = 0, ballsLeft = 3, active = true;
+            let pCharge = 0, pCharging = false, ballIn = false, ballShot = false;
+            const keys = { a: false, l: false, sp: false };
+            const vrIn = { lt: false, rt: false, lg: false, rg: false };
+            let vrPCharging = false, vrPCharge = 0;
+
+            // ============================================================
+            // PHYSICS WORLD
+            // ============================================================
+            const world = new CANNON.World();
+            world.gravity.set(0, -9.82, 0);
+            world.broadphase = new CANNON.SAPBroadphase(world);
+            world.solver.iterations = 10;
+
+            const matPF = new CANNON.Material('pf');
+            const matBall = new CANNON.Material('ball');
+            const matWall = new CANNON.Material('wall');
+            const matFlip = new CANNON.Material('flip');
+            const matBump = new CANNON.Material('bump');
+            // Contact materials matched to reference
+            world.addContactMaterial(new CANNON.ContactMaterial(matBall, matPF, { friction: 0.1, restitution: 0.6 }));
+            world.addContactMaterial(new CANNON.ContactMaterial(matBall, matWall, { friction: 0.1, restitution: 0.6 }));
+            world.addContactMaterial(new CANNON.ContactMaterial(matBall, matFlip, { friction: 0.2, restitution: 0.7 }));
+            world.addContactMaterial(new CANNON.ContactMaterial(matBall, matBump, { friction: 0.0, restitution: 0.5 }));
+
+            // Playfield body
+            const pfBody = new CANNON.Body({ mass: 0, material: matPF });
+            pfBody.addShape(new CANNON.Box(new CANNON.Vec3(TW / 2, FT / 2, TL / 2)));
+            pfBody.quaternion.setFromEuler(SLOPE, 0, 0);
+            pfBody.position.set(OX, TH, 0);
+            world.addBody(pfBody);
+
+            const l2w = (x, y, z) => {
+                const v = new CANNON.Vec3(x, y, z), o = new CANNON.Vec3();
+                pfBody.quaternion.vmult(v, o);
+                o.vadd(pfBody.position, o);
+                return o;
+            };
+
+            const addW = (hx, hy, hz, x, y, z, lq) => {
+                const b = new CANNON.Body({ mass: 0, material: matWall });
+                b.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+                b.position.copy(l2w(x, y, z));
+                if (lq) { const q = new CANNON.Quaternion(); pfBody.quaternion.mult(lq, q); b.quaternion.copy(q); }
+                else b.quaternion.copy(pfBody.quaternion);
+                world.addBody(b);
+            };
+
+            const addArc = (cx, cy, cz, r, h, tStart, tLen, segs) => {
+                const dT = tLen / segs;
+                const hx = h / 2;
+                const opp = Math.sin(dT) * r;
+                const adj = r - Math.cos(dT) * r;
+                const hz = 0.5 * Math.sqrt(opp * opp + adj * adj);
+                for (let i = 0; i < segs; i++) {
+                    const a = tStart + (i + 1) * dT;
+                    addW(hx, hx, hz, cx + Math.cos(a) * (r + hx), cy, cz + Math.sin(a) * (r + hx),
+                        new CANNON.Quaternion().setFromEuler(0, -a, 0));
+                }
+            };
+
+            const addCurve = (cx, cy, cz, r, h, tStart, tLen, segs) => {
+                const dT = tLen / segs;
+                const verts = [];
+                for (let i = 0; i <= segs; i++) {
+                    const t = tStart + i * dT;
+                    const x = cx + Math.cos(t) * r;
+                    const z = cz + Math.sin(t) * r;
+                    verts.push(x, cy, z, x, cy + h, z);
+                }
+                const idx = [];
+                for (let i = 0; i < segs; i++) {
+                    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+                    idx.push(a, b, c, b, d, c);
+                }
+                const body = new CANNON.Body({ mass: 0, material: matWall });
+                body.addShape(new CANNON.Trimesh(verts, idx));
+                body.position.copy(pfBody.position);
+                body.quaternion.copy(pfBody.quaternion);
+                world.addBody(body);
+            };
+
+            // Walls
+            const wy = WH / 2 + FT / 2;
+            addW(WT / 2, WH / 2, TL / 2, -5.25 * S, wy, 0);
+            addW(WT / 2, WH / 2, TL / 2, 5.25 * S, wy, 0);
+            addW(TW / 2, WH / 2, WT / 2, 0, wy, -10.25 * S);
+
+            // Bottom outlane walls (thin in X, long in Z so rotation doesn't intrude on lane)
+            addW(WT / 2, WH / 2, 0.2336 / 2, -3.5 * S, wy, 9.5 * S,
+                new CANNON.Quaternion().setFromEuler(0, -GA, 0));
+            addW(WT / 2, WH / 2, 0.2336 / 2, 3 * S, wy, 9.5 * S,
+                new CANNON.Quaternion().setFromEuler(0, GA, 0));
+
+            // Ceiling
+            const ceil = new CANNON.Body({ mass: 0, material: matWall });
+            ceil.addShape(new CANNON.Box(new CANNON.Vec3(0.6424 / 2, WT / 2, TL / 2)));
+            ceil.position.copy(l2w(0, 1.25 * S, 0));
+            ceil.quaternion.copy(pfBody.quaternion);
+            world.addBody(ceil);
+
+            // Orbit — 32-segment semicircle (matching reference CannonOrbit)
+            addArc(0, wy, -5 * S, 5 * S, WH, 0, -Math.PI, 32);
+
+            // Gutter curves — Trimesh walls (matching reference CannonCurve)
+            addCurve(-3 * S, FT / 2, 4.75 * S, 2 * S, WH, -Math.PI, -Math.PI * 0.3, 12);
+            addCurve(2.25 * S, FT / 2, 4.75 * S, 2 * S, WH, 0, Math.PI * 0.3, 12);
+
+            // Shooter lane
+            const slWallX = 4.3 * S;
+            const slWallLen = 15 * S;
+            addW(0.01168 / 2, WH / 2, slWallLen / 2, slWallX, wy, 2.5 * S);
+            addW(0.06424 / 2, WH / 2, WT / 2, 4.95 * S, wy, 10.25 * S);
+
+            // ============================================================
+            // FLIPPERS — kinematic rotation, extend toward center
+            // ============================================================
+            const FIXED_DT = 1 / 480;
+
+            function mkFlipper(side) {
+                const isLeft = side === 'left';
+                const pivotX = isLeft ? -(FLIPPER_X + FW) : FLIPPER_X;
+                const pivotY = FH / 2 + FT / 2 + 0.002;
+                const pivotZ = FLIPPER_Z;
+                const wp = l2w(pivotX, pivotY, pivotZ);
+
+                const fb = new CANNON.Body({ mass: 0, material: matFlip, type: CANNON.Body.KINEMATIC });
+                const shapeDir = isLeft ? 1 : -1;
+                fb.addShape(
+                    new CANNON.Box(new CANNON.Vec3(FL / 2, FH / 2, FW / 2)),
+                    new CANNON.Vec3(shapeDir * FL / 2, 0, 0)
+                );
+                fb.addShape(
+                    new CANNON.Sphere(FW / 2),
+                    new CANNON.Vec3(shapeDir * FL, 0, 0)
+                );
+                fb.position.copy(wp);
+                fb.collisionResponse = true;
+                world.addBody(fb);
+
+                let angle = FREST;
+                let currentAngle = FREST;
+                const _localQ = new CANNON.Quaternion();
+                const _finalQ = new CANNON.Quaternion();
+                const _localAV = new CANNON.Vec3();
+                const sign = isLeft ? 1 : -1;
+
+                function setAngle(a, av) {
+                    currentAngle = a;
+                    _localQ.setFromEuler(0, isLeft ? a : -a, 0);
+                    pfBody.quaternion.mult(_localQ, _finalQ);
+                    fb.quaternion.copy(_finalQ);
+                    _localAV.set(0, sign * (av || 0), 0);
+                    pfBody.quaternion.vmult(_localAV, fb.angularVelocity);
+                }
+                setAngle(FREST, 0);
+
+                return {
+                    body: fb, side, pivotX, pivotY, pivotZ, isLeft,
+                    getAngle() { return currentAngle; },
+                    step(fixedDt, isActive) {
+                        const prev = angle;
+                        if (isActive) {
+                            angle = Math.min(FMAX, angle + FSPEED * fixedDt);
+                        } else {
+                            angle = Math.max(FREST, angle - FSPEED * 0.7 * fixedDt);
+                        }
+                        const goingUp = angle > prev;
+                        const moving = angle !== prev;
+                        fb.collisionResponse = !moving || goingUp;
+                        setAngle(angle, goingUp ? (angle - prev) / fixedDt : 0);
+                    }
+                };
+            }
+            const lf = mkFlipper('left'), rf = mkFlipper('right');
+
+            world.addEventListener('preStep', () => {
+                lf.step(FIXED_DT, keys.a || vrIn.lt);
+                rf.step(FIXED_DT, keys.l || vrIn.rt);
+            });
+
+            // ============================================================
+            // BALL
+            // ============================================================
+            const bb = new CANNON.Body({ mass: BM, material: matBall });
+            bb.addShape(new CANNON.Sphere(BR));
+            bb.linearDamping = 0.05;
+            bb.angularDamping = 0.3;
+            bb.ccdSpeedThreshold = 0.5;
+            bb.ccdIterations = 20;
+            world.addBody(bb);
+
+            const _w2lOff = new CANNON.Vec3();
+            const _w2lIq = new CANNON.Quaternion();
+            const _w2lLp = new CANNON.Vec3();
+            function w2l(wp) {
+                wp.vsub(pfBody.position, _w2lOff);
+                pfBody.quaternion.conjugate(_w2lIq);
+                _w2lIq.vmult(_w2lOff, _w2lLp);
+                return _w2lLp;
+            }
+
+            // Check if ball is in the shooter lane area
+            function ballInLane() {
+                const lp = w2l(bb.position);
+                return lp.x > slWallX && lp.z > 4 * S;
+            }
+
+            function spawn() {
+                const p = l2w(4.75 * S, BR + FT / 2 + 0.01, 9.75 * S);
+                bb.position.copy(p);
+                bb.velocity.set(0, 0, 0);
+                bb.angularVelocity.set(0, 0, 0);
+                bb.quaternion.set(0, 0, 0, 1);
+                ballIn = true; ballShot = false;
+            }
+            const _launchLocal = new CANNON.Vec3();
+            const _launchWorld = new CANNON.Vec3();
+            function launch(charge) {
+                if (ballShot && !ballInLane()) return;
+                ballShot = true;
+                _launchLocal.set(0, 0, -LAUNCH_VEL * Math.max(0.15, charge));
+                pfBody.quaternion.vmult(_launchLocal, _launchWorld);
+                bb.velocity.copy(_launchWorld);
+            }
+
+            // ============================================================
+            // BUMPERS
+            // ============================================================
+            const bumps = [{ x: -2 * S, z: -6 * S }, { x: 2 * S, z: -6 * S }, { x: 0, z: -4 * S }];
+            const bumpMeshArr = [];
+            const _bumpD = new CANNON.Vec3();
+            bumps.forEach((bp, i) => {
+                const b = new CANNON.Body({ mass: 0, material: matBump });
+                b.addShape(new CANNON.Cylinder(BUMR, BUMR, BUMH, 12));
+                b.position.copy(l2w(bp.x, BUMH / 2 + FT / 2, bp.z));
+                b.quaternion.copy(pfBody.quaternion);
+                world.addBody(b);
+                b.addEventListener('collide', e => {
+                    if (e.body === bb) {
+                        bb.position.vsub(b.position, _bumpD);
+                        _bumpD.y = 0;
+                        _bumpD.normalize();
+                        _bumpD.scale(BUM_VEL, _bumpD);
+                        bb.velocity.x = _bumpD.x;
+                        bb.velocity.z = _bumpD.z;
+                        score += 100; updScore();
+                        if (bumpMeshArr[i]) { bumpMeshArr[i].material.emissiveIntensity = 4; setTimeout(() => bumpMeshArr[i].material.emissiveIntensity = 1.2, 150); }
+                    }
+                });
+            });
+
+            // ============================================================
+            // DRAIN
+            // ============================================================
+            function checkDrain() {
+                if (bb.position.y < TH - 0.5) { drain(); return; }
+                const lp = w2l(bb.position);
+                if (lp.z > TL / 2 + 0.05) drain();
+            }
+            function drain() {
+                if (!ballIn) return; ballIn = false; ballsLeft--;
+                updBalls();
+                // Hide ball off-screen
+                bb.position.set(0, -10, 0); bb.velocity.set(0, 0, 0);
+                if (ballsLeft <= 0) gameOver();
+                else { setTimeout(spawn, 1500); }
+            }
+
+            // ============================================================
+            // THREE.JS SCENE
+            // ============================================================
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x080818);
+
+            const cam = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.01, 100);
+            cam.position.set(OX, TH + 0.7, 0.8);
+            cam.lookAt(OX, TH, 0);
+            const vrRig = new THREE.Group();
+            vrRig.add(cam);
+            scene.add(vrRig);
+
+            const ren = new THREE.WebGLRenderer({ antialias: true });
+            ren.setPixelRatio(Math.min(devicePixelRatio, 2));
+            ren.setSize(innerWidth, innerHeight);
+            ren.shadowMap.enabled = true;
+            ren.shadowMap.type = THREE.PCFShadowMap;
+            ren.toneMapping = THREE.ACESFilmicToneMapping;
+            ren.toneMappingExposure = 1.4;
+            ren.xr.enabled = true;
+            document.body.appendChild(ren.domElement);
+
+            // ============================================================
+            // LIGHTING — strong enough for low-metalness materials
+            // ============================================================
+            scene.add(new THREE.AmbientLight(0x556688, 0.6));
+
+            const dirL = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirL.position.set(0.5, 3, 1);
+            dirL.castShadow = true;
+            dirL.shadow.mapSize.set(1024, 1024);
+            scene.add(dirL);
+
+            // Hemisphere light for soft fill
+            const hemiL = new THREE.HemisphereLight(0x4466aa, 0x111122, 0.5);
+            scene.add(hemiL);
+
+            // Colored point lights for neon glow
+            [
+                [0x00ccff, -0.15, TH + 0.15, -0.2, 4],
+                [0xff0066, 0.15, TH + 0.15, -0.1, 4],
+                [0xff8800, 0, TH + 0.1, 0.3, 3],
+            ].forEach(([c, x, y, z, i]) => {
+                const pl = new THREE.PointLight(c, i, 3, 1);
+                pl.position.set(x, y, z);
+                scene.add(pl);
+            });
+
+            // Spotlight from above
+            const spot = new THREE.SpotLight(0xffffff, 3, 4, Math.PI / 4, 0.5, 1);
+            spot.position.set(0, TH + 1.5, 0);
+            spot.target.position.set(0, TH, 0);
+            spot.castShadow = true;
+            scene.add(spot);
+            scene.add(spot.target);
+
+            // ============================================================
+            // TABLE VISUALS
+            // ============================================================
+            const tg = new THREE.Group();
+
+            // Playfield canvas texture
+            const pc = document.createElement('canvas'); pc.width = 512; pc.height = 1024;
+            const px = pc.getContext('2d');
+            const gr = px.createLinearGradient(0, 0, 0, 1024);
+            gr.addColorStop(0, '#0e0e3a'); gr.addColorStop(0.5, '#1e0e4a'); gr.addColorStop(1, '#0e0e3a');
+            px.fillStyle = gr; px.fillRect(0, 0, 512, 1024);
+            // Circles
+            px.strokeStyle = 'rgba(0,200,255,0.2)'; px.lineWidth = 2;
+            for (let i = 0; i < 15; i++) { px.beginPath(); px.arc(256, 300, 40 + i * 25, 0, Math.PI * 2); px.stroke(); }
+            // Diamonds
+            px.fillStyle = 'rgba(255,0,100,0.12)';
+            for (let y = 0; y < 1024; y += 80) for (let x = 0; x < 512; x += 80) { px.save(); px.translate(x + 40, y + 40); px.rotate(Math.PI / 4); px.fillRect(-6, -6, 12, 12); px.restore(); }
+            // Lane markings
+            px.strokeStyle = 'rgba(255,136,0,0.35)'; px.lineWidth = 3;
+            px.beginPath(); px.moveTo(100, 600); px.lineTo(200, 950); px.stroke();
+            px.beginPath(); px.moveTo(412, 600); px.lineTo(312, 950); px.stroke();
+            // Title
+            px.fillStyle = 'rgba(0,200,255,0.5)'; px.font = 'bold 52px Courier New'; px.textAlign = 'center';
+            px.fillText('PINBALL', 256, 190);
+            px.fillStyle = 'rgba(255,0,100,0.4)'; px.font = 'bold 30px Courier New';
+            px.fillText('V  R', 256, 232);
+            // Star bursts
+            px.fillStyle = 'rgba(255,200,0,0.15)';
+            [[180, 400], [320, 350], [240, 480]].forEach(([cx, cy]) => {
+                for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+                    px.beginPath(); px.moveTo(cx, cy);
+                    px.lineTo(cx + Math.cos(a) * 40, cy + Math.sin(a) * 40);
+                    px.lineTo(cx + Math.cos(a + Math.PI / 12) * 20, cy + Math.sin(a + Math.PI / 12) * 20);
+                    px.closePath(); px.fill();
+                }
+            });
+            const pfTex = new THREE.CanvasTexture(pc);
+
+            // Playfield mesh — low metalness so it's visible without envmap
+            const pfMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(TW, FT, TL),
+                new THREE.MeshStandardMaterial({ map: pfTex, metalness: 0.1, roughness: 0.5 })
+            );
+            pfMesh.receiveShadow = true;
+            tg.add(pfMesh);
+
+            // Wall material — visible chrome
+            const wMat = new THREE.MeshStandardMaterial({ color: 0xaabbcc, metalness: 0.4, roughness: 0.3 });
+
+            // Walls
+            const mkW = (w, h, d, x, y, z, ry) => {
+                const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wMat);
+                m.position.set(x, y, z); if (ry) m.rotation.y = ry; tg.add(m);
+            };
+            const mkArc = (cx, cy, cz, r, h, tStart, tLen, segs) => {
+                const dT = tLen / segs;
+                const opp = Math.sin(dT) * r;
+                const adj = r - Math.cos(dT) * r;
+                const segL = Math.sqrt(opp * opp + adj * adj);
+                for (let i = 0; i < segs; i++) {
+                    const a = tStart + (i + 1) * dT;
+                    mkW(h, h, segL, cx + Math.cos(a) * (r + h / 2), cy, cz + Math.sin(a) * (r + h / 2), -a);
+                }
+            };
+
+            const mkCurve = (cx, cy, cz, r, h, tStart, tLen, segs) => {
+                const dT = tLen / segs;
+                const pos = [];
+                for (let i = 0; i <= segs; i++) {
+                    const t = tStart + i * dT;
+                    const x = cx + Math.cos(t) * r;
+                    const z = cz + Math.sin(t) * r;
+                    pos.push(x, cy, z, x, cy + h, z);
+                }
+                const idx = [];
+                for (let i = 0; i < segs; i++) {
+                    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+                    idx.push(a, b, c, b, d, c);
+                }
+                const g = new THREE.BufferGeometry();
+                g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                g.setIndex(idx);
+                g.computeVertexNormals();
+                const mat = wMat.clone();
+                mat.side = THREE.DoubleSide;
+                tg.add(new THREE.Mesh(g, mat));
+            };
+            mkW(WT, WH, TL, -5.25 * S, wy, 0);
+            mkW(WT, WH, TL, 5.25 * S, wy, 0);
+            mkW(TW, WH, WT, 0, wy, -10.25 * S);
+            mkW(WT, WH, 0.2336, -3.5 * S, wy, 9.5 * S, -GA);
+            mkW(WT, WH, 0.2336, 3 * S, wy, 9.5 * S, GA);
+            mkW(0.01168, WH, slWallLen, slWallX, wy, 2.5 * S);
+            mkW(0.06424, WH, WT, 4.95 * S, wy, 10.25 * S);
+            mkArc(0, wy, -5 * S, 5 * S, WH, 0, -Math.PI, 32);
+            mkCurve(-3 * S, FT / 2, 4.75 * S, 2 * S, WH, -Math.PI, -Math.PI * 0.3, 12);
+            mkCurve(2.25 * S, FT / 2, 4.75 * S, 2 * S, WH, 0, Math.PI * 0.3, 12);
+
+            // Flipper meshes — extend TOWARD center from pivot
+            const fMat = new THREE.MeshStandardMaterial({ color: 0xff4400, metalness: 0.3, roughness: 0.3, emissive: 0xff2200, emissiveIntensity: 0.6 });
+            // Left flipper: pivot at -FLIPPER_X, extends in +X
+            const lfG = new THREE.BoxGeometry(FL, FH, FW); lfG.translate(FL / 2, 0, 0);
+            const lfM = new THREE.Mesh(lfG, fMat.clone()); tg.add(lfM);
+            // Right flipper: pivot at +FLIPPER_X, extends in -X
+            const rfG = new THREE.BoxGeometry(FL, FH, FW); rfG.translate(-FL / 2, 0, 0);
+            const rfM = new THREE.Mesh(rfG, fMat.clone()); tg.add(rfM);
+
+            // Bumper meshes
+            const bCols = [0x00ccff, 0xff0066, 0xff8800];
+            bumps.forEach((bp, i) => {
+                const bg = new THREE.Group();
+                const bc = new THREE.Mesh(
+                    new THREE.CylinderGeometry(BUMR, BUMR, BUMH, 16),
+                    new THREE.MeshStandardMaterial({ color: bCols[i], metalness: 0.3, roughness: 0.3, emissive: bCols[i], emissiveIntensity: 1.2 })
+                );
+                bc.castShadow = true; bg.add(bc);
+                const ring = new THREE.Mesh(
+                    new THREE.TorusGeometry(BUMR + 0.005, 0.003, 8, 24),
+                    new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.3, roughness: 0.2, emissive: bCols[i], emissiveIntensity: 0.6 })
+                );
+                ring.rotation.x = Math.PI / 2; ring.position.y = BUMH / 2; bg.add(ring);
+                bg.position.set(bp.x, BUMH / 2 + FT / 2, bp.z);
+                tg.add(bg);
+                bumpMeshArr.push(bc);
+            });
+
+            // Ball mesh
+            const ballMesh = new THREE.Mesh(
+                new THREE.SphereGeometry(BR, 32, 32),
+                new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.4, roughness: 0.15, emissive: 0x333333, emissiveIntensity: 0.2 })
+            );
+            ballMesh.castShadow = true;
+            scene.add(ballMesh);
+
+            // Backboard
+            const bbC = document.createElement('canvas'); bbC.width = 512; bbC.height = 256;
+            const bx = bbC.getContext('2d');
+            const bbT = new THREE.CanvasTexture(bbC);
+            function drawBB() {
+                bx.fillStyle = '#0a0a1a'; bx.fillRect(0, 0, 512, 256);
+                if (!active && ballsLeft <= 0) {
+                    bx.fillStyle = '#ff0066'; bx.font = 'bold 48px Courier New'; bx.textAlign = 'center';
+                    bx.fillText('GAME OVER', 256, 60);
+                    bx.fillStyle = '#00ccff'; bx.font = 'bold 56px Courier New';
+                    bx.fillText(score.toString().padStart(8, '0'), 256, 140);
+                    bx.fillStyle = '#ff8800'; bx.font = '22px sans-serif';
+                    bx.fillText('Squeeze / Grip to Play Again', 256, 200);
+                } else {
+                    bx.fillStyle = '#ff0066'; bx.font = 'bold 36px Courier New'; bx.textAlign = 'center';
+                    bx.fillText('PINBALL VR', 256, 50);
+                    bx.fillStyle = '#00ccff'; bx.font = 'bold 64px Courier New';
+                    bx.fillText(score.toString().padStart(8, '0'), 256, 140);
+                    bx.fillStyle = '#ff8800'; bx.font = '24px sans-serif';
+                    bx.fillText('BALLS: ' + '\u25CF'.repeat(ballsLeft) + '\u25CB'.repeat(Math.max(0, 3 - ballsLeft)), 256, 200);
+                }
+                if (currentFps > 0) {
+                    bx.fillStyle = '#0f0'; bx.font = 'bold 18px monospace'; bx.textAlign = 'right';
+                    bx.fillText(currentFps + ' FPS', 500, 240);
+                }
+                bbT.needsUpdate = true;
+            }
+            const bbM = new THREE.Mesh(
+                new THREE.PlaneGeometry(TW, TW * 0.5),
+                new THREE.MeshStandardMaterial({ map: bbT, emissive: 0xffffff, emissiveMap: bbT, emissiveIntensity: 0.8 })
+            );
+            bbM.position.set(0, WH + TW * 0.25 + 0.01, -TL / 2 - WT - 0.001);
+            tg.add(bbM);
+
+            // Legs
+            const legM = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.3, roughness: 0.5 });
+            const legG = new THREE.CylinderGeometry(0.015, 0.015, TH, 8);
+            [[-0.25, 0.5], [0.25, 0.5], [-0.25, -0.5], [0.25, -0.5]].forEach(([x, z]) => {
+                const l = new THREE.Mesh(legG, legM); l.position.set(x, -TH / 2, z * TL); tg.add(l);
+            });
+
+            // Plunger
+            const plM = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.008, 0.01, 0.06, 8),
+                new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.3, roughness: 0.2 })
+            );
+            plM.position.set(4.75 * S, 0.02, TL / 2 + 0.01);
+            tg.add(plM);
+
+            // Position table group
+            tg.position.set(OX, TH, 0);
+            tg.rotation.x = SLOPE;
+            scene.add(tg);
+
+            // Floor
+            const fl = new THREE.Mesh(
+                new THREE.PlaneGeometry(10, 10),
+                new THREE.MeshStandardMaterial({ color: 0x0a0a18, metalness: 0.2, roughness: 0.8 })
+            );
+            fl.rotation.x = -Math.PI / 2;
+            fl.receiveShadow = true;
+            scene.add(fl);
+
+            // ============================================================
+            // ORBIT CAMERA
+            // ============================================================
+            let oA = 0, oP = 0.7, oD = 1.0, drag = false, mx = 0, my = 0;
+            ren.domElement.addEventListener('mousedown', e => { if (e.button === 0) { drag = true; mx = e.clientX; my = e.clientY; } });
+            ren.domElement.addEventListener('mousemove', e => { if (drag) { oA -= (e.clientX - mx) * 0.005; oP = Math.max(0.1, Math.min(1.4, oP - (e.clientY - my) * 0.005)); mx = e.clientX; my = e.clientY; } });
+            ren.domElement.addEventListener('mouseup', () => { drag = false; });
+            ren.domElement.addEventListener('wheel', e => { oD = Math.max(0.4, Math.min(2.5, oD + e.deltaY * 0.001)); });
+
+            // ============================================================
+            // KEYBOARD
+            // ============================================================
+            addEventListener('keydown', e => {
+                const k = e.key.toLowerCase();
+                if (k === 'a') keys.a = true;
+                if (k === 'l') keys.l = true;
+                if (k === ' ') { e.preventDefault(); if (!keys.sp) { keys.sp = true; pCharging = true; pCharge = 0; } }
+            });
+            addEventListener('keyup', e => {
+                const k = e.key.toLowerCase();
+                if (k === 'a') keys.a = false;
+                if (k === 'l') keys.l = false;
+                if (k === ' ') { e.preventDefault(); keys.sp = false; if (pCharging && ballIn && !ballShot) launch(pCharge); pCharging = false; pCharge = 0; }
+            });
+
+            // ============================================================
+            // VR
+            // ============================================================
+            const vrBtn = document.getElementById('vr-button');
+            let vrSess = null;
+            if (navigator.xr) {
+                navigator.xr.isSessionSupported('immersive-vr').then(ok => {
+                    if (ok) {
+                        vrBtn.style.display = 'block'; vrBtn.onclick = () => {
+                            if (!vrSess) navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] }).then(startVR);
+                            else vrSess.end();
+                        };
+                    }
+                }).catch(() => { });
+            }
+            function startVR(s) {
+                vrSess = s; vrBtn.textContent = 'EXIT VR';
+                ren.xr.setReferenceSpaceType('local-floor');
+                vrRig.position.set(OX, 0, 0.8);
+                spot.castShadow = false;
+                dirL.shadow.mapSize.set(512, 512);
+                dirL.shadow.map?.dispose(); dirL.shadow.map = null;
+                ren.xr.setSession(s);
+                if (s.supportedFrameRates && s.supportedFrameRates.length && s.updateTargetFrameRate) {
+                    const best = Array.from(s.supportedFrameRates).sort((a, b) => b - a)[0];
+                    s.updateTargetFrameRate(best)
+                        .then(() => console.log('VR frame rate set to', best, 'Hz'))
+                        .catch(e => console.warn('Could not set VR frame rate:', e));
+                }
+                s.addEventListener('end', () => {
+                    vrSess = null; vrBtn.textContent = 'ENTER VR';
+                    vrRig.position.set(0, 0, 0);
+                    cam.position.set(OX, TH + 0.7, 0.8);
+                    cam.lookAt(OX, TH, 0);
+                    spot.castShadow = true;
+                    dirL.shadow.mapSize.set(1024, 1024);
+                    dirL.shadow.map?.dispose(); dirL.shadow.map = null;
+                });
+                const c0 = ren.xr.getController(0), c1 = ren.xr.getController(1);
+                scene.add(c0); scene.add(c1);
+                c0.addEventListener('selectstart', () => { vrIn.lt = true; }); c0.addEventListener('selectend', () => { vrIn.lt = false; });
+                c1.addEventListener('selectstart', () => { vrIn.rt = true; }); c1.addEventListener('selectend', () => { vrIn.rt = false; });
+                c0.addEventListener('squeezestart', () => {
+                    if (!active && ballsLeft <= 0) { restart(); return; }
+                    vrIn.lg = true; vrPCharging = true; vrPCharge = 0;
+                });
+                c0.addEventListener('squeezeend', () => { vrIn.lg = false; if (vrPCharging && ballIn && !ballShot) launch(vrPCharge); vrPCharging = false; vrPCharge = 0; });
+                c1.addEventListener('squeezestart', () => {
+                    if (!active && ballsLeft <= 0) { restart(); return; }
+                    vrIn.rg = true; vrPCharging = true; vrPCharge = 0;
+                });
+                c1.addEventListener('squeezeend', () => { vrIn.rg = false; if (vrPCharging && ballIn && !ballShot) launch(vrPCharge); vrPCharging = false; vrPCharge = 0; });
+            }
+
+            // ============================================================
+            // UI
+            // ============================================================
+            const scoreEl = document.getElementById('score-display');
+            const ballsEl = document.getElementById('balls-display');
+            const goEl = document.getElementById('game-over');
+            const plFill = document.getElementById('plunger-fill');
+
+            function updScore() { scoreEl.textContent = score; drawBB(); }
+            function updBalls() {
+                ballsEl.textContent = '\u25CF '.repeat(ballsLeft).trim() + (ballsLeft < 3 ? ' ' + '\u25CB '.repeat(3 - ballsLeft).trim() : '');
+                drawBB();
+            }
+            function gameOver() { active = false; goEl.style.display = 'block'; goEl.querySelector('.final-score').textContent = 'SCORE: ' + score; drawBB(); }
+            function restart() { score = 0; ballsLeft = 3; active = true; goEl.style.display = 'none'; updScore(); updBalls(); spawn(); }
+            document.getElementById('restart-btn').onclick = restart;
+
+            // ============================================================
+            // ANIMATION LOOP
+            // ============================================================
+            const clock = new THREE.Clock();
+            const fpsEl = document.getElementById('fps-display');
+            let fpsFrames = 0, fpsTime = performance.now(), currentFps = 0;
+            // Sync flipper visual: use known local position + Y-axis rotation
+            function syncFlipper(fd, m) {
+                m.position.set(fd.pivotX, fd.pivotY, fd.pivotZ);
+                const a = fd.getAngle();
+                m.rotation.set(0, fd.isLeft ? a : -a, 0);
+            }
+
+            function animate() {
+                const dt = Math.min(clock.getDelta(), 0.05);
+                if (active) {
+                    if (pCharging) pCharge = Math.min(1, pCharge + PRATE * dt);
+                    if (vrPCharging) vrPCharge = Math.min(1, vrPCharge + PRATE * dt);
+                    const ch = pCharging ? pCharge : vrPCharge;
+                    plFill.style.height = (ch * 100) + '%';
+                    plM.position.z = TL / 2 + 0.01 + ch * 0.03;
+
+                    world.step(FIXED_DT, dt, 10);
+                    if (ballIn) checkDrain();
+
+                    // Auto-reset ballShot when ball settles in the lane
+                    if (ballShot && ballInLane()) {
+                        const spd = bb.velocity.length();
+                        if (spd < 0.3) ballShot = false;
+                    }
+
+                    ballMesh.position.set(bb.position.x, bb.position.y, bb.position.z);
+                    ballMesh.quaternion.set(bb.quaternion.x, bb.quaternion.y, bb.quaternion.z, bb.quaternion.w);
+                    syncFlipper(lf, lfM);
+                    syncFlipper(rf, rfM);
+                }
+                if (!ren.xr.isPresenting) {
+                    cam.position.set(OX + Math.sin(oA) * Math.cos(oP) * oD, TH + Math.sin(oP) * oD, Math.cos(oA) * Math.cos(oP) * oD);
+                    cam.lookAt(OX, TH, 0);
+                }
+                fpsFrames++;
+                const fpsNow = performance.now();
+                if (fpsNow - fpsTime >= 500) {
+                    currentFps = Math.round(fpsFrames * 1000 / (fpsNow - fpsTime));
+                    fpsEl.textContent = currentFps + ' FPS';
+                    fpsFrames = 0; fpsTime = fpsNow;
+                    drawBB();
+                }
+                ren.render(scene, cam);
+            }
+            ren.setAnimationLoop(animate);
+
+            // Resize
+            addEventListener('resize', () => { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); ren.setSize(innerWidth, innerHeight); });
+
+            // Init
+            drawBB(); spawn();
+            console.log('Pinball VR ready! Table at y=' + TH);
+
+        } // end main
+    </script>
+</body>
+
+</html>

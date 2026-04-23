@@ -113,23 +113,42 @@
             box-shadow: 0 0 30px rgba(0, 200, 255, .6)
         }
 
-        #vr-button {
+        #xr-controls {
             position: absolute;
             bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
             z-index: 100;
-            background: linear-gradient(135deg, #f06, #f80);
+            display: none;
+            flex-direction: row;
+            align-items: center;
+            gap: 10px
+        }
+
+        #xr-controls .xr-btn {
             border: none;
             color: #fff;
-            padding: 14px 40px;
-            font-size: 16px;
+            padding: 14px 28px;
+            font-size: 15px;
             border-radius: 30px;
             cursor: pointer;
             font-weight: bold;
             text-transform: uppercase;
             letter-spacing: 2px;
             display: none
+        }
+
+        #vr-button.xr-btn {
+            background: linear-gradient(135deg, #f06, #f80)
+        }
+
+        #ar-button.xr-btn {
+            background: linear-gradient(135deg, #0c8, #0a6)
+        }
+
+        #xr-controls .xr-btn:hover {
+            transform: scale(1.03);
+            box-shadow: 0 0 24px rgba(255, 255, 255, .25)
         }
 
         #plunger-bar {
@@ -172,7 +191,10 @@
         <div class="final-score">0</div><button id="restart-btn">PLAY AGAIN</button>
     </div>
     <div id="fps-display" style="position:fixed;top:10px;right:10px;z-index:200;background:rgba(0,0,0,.7);color:#0f0;font:bold 14px monospace;padding:4px 10px;border-radius:8px;pointer-events:none">-- FPS</div>
-    <button id="vr-button">ENTER VR</button>
+    <div id="xr-controls">
+        <button type="button" id="ar-button" class="xr-btn">ENTER AR</button>
+        <button type="button" id="vr-button" class="xr-btn">ENTER VR</button>
+    </div>
 
     <script type="importmap">
   {
@@ -496,7 +518,8 @@
             // THREE.JS SCENE
             // ============================================================
             const scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x080818);
+            const sceneBackgroundColor = new THREE.Color(0x080818);
+            scene.background = sceneBackgroundColor;
 
             const cam = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.01, 100);
             cam.position.set(OX, TH + 0.7, 0.8);
@@ -505,9 +528,10 @@
             vrRig.add(cam);
             scene.add(vrRig);
 
-            const ren = new THREE.WebGLRenderer({ antialias: true });
+            const ren = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             ren.setPixelRatio(Math.min(devicePixelRatio, 2));
             ren.setSize(innerWidth, innerHeight);
+            ren.setClearColor(0x000000, 0);
             ren.shadowMap.enabled = true;
             ren.shadowMap.type = THREE.PCFShadowMap;
             ren.toneMapping = THREE.ACESFilmicToneMapping;
@@ -772,36 +796,84 @@
             });
 
             // ============================================================
-            // VR
+            // WebXR — VR + AR (passthrough), similar to VRLeague enter AR/VR
             // ============================================================
+            const xrControls = document.getElementById('xr-controls');
             const vrBtn = document.getElementById('vr-button');
-            let vrSess = null;
+            const arBtn = document.getElementById('ar-button');
+            let xrSess = null;
+            let xrMode = null;
+            let vrSupported = false, arSupported = false;
+            const xrInit = { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] };
+
+            function updateXrButtons() {
+                if (!xrSess) {
+                    vrBtn.style.display = vrSupported ? 'inline-block' : 'none';
+                    arBtn.style.display = arSupported ? 'inline-block' : 'none';
+                    vrBtn.textContent = 'ENTER VR';
+                    arBtn.textContent = 'ENTER AR';
+                } else if (xrMode === 'vr') {
+                    vrBtn.style.display = 'inline-block';
+                    vrBtn.textContent = 'EXIT VR';
+                    arBtn.style.display = 'none';
+                } else {
+                    arBtn.style.display = 'inline-block';
+                    arBtn.textContent = 'EXIT AR';
+                    vrBtn.style.display = 'none';
+                }
+            }
+
             if (navigator.xr) {
-                navigator.xr.isSessionSupported('immersive-vr').then(ok => {
-                    if (ok) {
-                        vrBtn.style.display = 'block'; vrBtn.onclick = () => {
-                            if (!vrSess) navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] }).then(startVR);
-                            else vrSess.end();
+                Promise.all([
+                    navigator.xr.isSessionSupported('immersive-vr').then(ok => { vrSupported = !!ok; return ok; }),
+                    navigator.xr.isSessionSupported('immersive-ar').then(ok => { arSupported = !!ok; return ok; })
+                ]).then(() => {
+                    if (vrSupported || arSupported) {
+                        xrControls.style.display = 'flex';
+                        updateXrButtons();
+                        vrBtn.onclick = () => {
+                            if (xrSess) { xrSess.end(); return; }
+                            if (!vrSupported) return;
+                            navigator.xr.requestSession('immersive-vr', xrInit).then(s => startXR(s, 'vr')).catch(e => console.warn('VR session:', e));
+                        };
+                        arBtn.onclick = () => {
+                            if (xrSess) { xrSess.end(); return; }
+                            if (!arSupported) return;
+                            navigator.xr.requestSession('immersive-ar', xrInit).then(s => startXR(s, 'ar')).catch(e => console.warn('AR session:', e));
                         };
                     }
                 }).catch(() => { });
             }
-            function startVR(s) {
-                vrSess = s; vrBtn.textContent = 'EXIT VR';
+
+            function startXR(s, mode) {
+                xrSess = s;
+                xrMode = mode;
+                updateXrButtons();
                 ren.xr.setReferenceSpaceType('local-floor');
                 vrRig.position.set(OX, 0, 0.8);
                 spot.castShadow = false;
                 dirL.shadow.mapSize.set(512, 512);
                 dirL.shadow.map?.dispose(); dirL.shadow.map = null;
+                if (mode === 'ar') {
+                    scene.background = null;
+                    fl.visible = false;
+                } else {
+                    scene.background = sceneBackgroundColor;
+                    fl.visible = true;
+                }
                 ren.xr.setSession(s);
                 if (s.supportedFrameRates && s.supportedFrameRates.length && s.updateTargetFrameRate) {
                     const best = Array.from(s.supportedFrameRates).sort((a, b) => b - a)[0];
                     s.updateTargetFrameRate(best)
-                        .then(() => console.log('VR frame rate set to', best, 'Hz'))
-                        .catch(e => console.warn('Could not set VR frame rate:', e));
+                        .then(() => console.log('XR frame rate set to', best, 'Hz'))
+                        .catch(e => console.warn('Could not set XR frame rate:', e));
                 }
                 s.addEventListener('end', () => {
-                    vrSess = null; vrBtn.textContent = 'ENTER VR';
+                    xrSess = null;
+                    xrMode = null;
+                    scene.background = sceneBackgroundColor;
+                    fl.visible = true;
+                    updateXrButtons();
                     vrRig.position.set(0, 0, 0);
                     cam.position.set(OX, TH + 0.7, 0.8);
                     cam.lookAt(OX, TH, 0);
