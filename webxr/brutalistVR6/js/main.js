@@ -273,20 +273,25 @@ const verticalSpeed = 2;
 const deadzone = 0.15;
 
 /* ── Locomotion modes ─────────────────────────────────────────────────────
- * "editor"  : free flight, no gravity (default — preserves bake workflow)
- * "physics" : moon gravity + Nock-style grab/throw locomotion
+ * "physics" : moon gravity + Nock-style grab/throw locomotion (default)
+ * "editor"  : free flight, no gravity — useful for inspecting bakes
  * Toggled at runtime with the Y button on the left controller.
  */
-let locomotionMode = "editor";
+let locomotionMode = "physics";
 const MOON_GRAVITY = 1.62;
 const MAX_FALL_SPEED = 30;
-const AIR_DAMPING = 0.4;       // per-second multiplier for horizontal air drag
-const GROUND_FRICTION = 0.85;  // per-second multiplier for ground friction
-const THROW_BOOST = 4.0;       // multiplier on release velocity (1 = 1:1)
-const VEL_HISTORY_FRAMES = 4;  // smoothing window for throw velocity
+const AIR_DAMPING = 0.4;          // per-second multiplier for horizontal air drag
+const GROUND_FRICTION = 0.85;     // per-second multiplier for ground friction
+const THROW_BOOST = 4.0;          // multiplier on release velocity (1 = 1:1)
+const VEL_HISTORY_FRAMES = 4;     // smoothing window for throw velocity
+const MAX_HORIZONTAL_SPEED = 24;  // hard cap on |XZ velocity| (m/s)
+const MAX_VERTICAL_SPEED = 6;     // hard cap on |Y velocity| (m/s)
+const MAX_JUMPS = 2;              // total upward throws before needing to land (Nock-like)
+const JUMP_THRESHOLD = 1.0;       // upward impulse Y component (m/s) that counts as a jump
 const handToCtrl = { left: null, right: null };
 const rigVelocity = new THREE.Vector3();
 let yButtonWasPressed = false;
+let jumpsRemaining = MAX_JUMPS;
 const grabState = {
   left:  { active: false, prevLocal: new THREE.Vector3(), history: [] },
   right: { active: false, prevLocal: new THREE.Vector3(), history: [] },
@@ -1641,8 +1646,48 @@ async function migrateLegacyToIDB(storageKey) {
   return written;
 }
 
+/**
+ * Try to load prebaked lightmaps that ship with the deployment from
+ * `./lightmaps/lightmap_<meshName>.png`. Each fetch is independent — a
+ * 404 just leaves that mesh unbaked, so partial bundles are fine.
+ * Returns true if at least one file loaded (and applies baked materials).
+ */
 async function loadPrebakedTextures() {
-  return false;
+  const baseUrl = "./lightmaps/";
+  const loaded = [];
+  const missing = [];
+  await Promise.all(
+    sceneObjects.map(async (obj) => {
+      const url = `${baseUrl}lightmap_${obj.name}.png`;
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) { missing.push(obj.name); return; }
+        const blob = await resp.blob();
+        const bitmap = await createImageBitmap(blob);
+        const canvas = document.createElement("canvas");
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        canvas.getContext("2d").drawImage(bitmap, 0, 0);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.flipY = true;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        configureLightmapCanvasTexture(tex);
+        obj.userData.lightmapTexture = tex;
+        loaded.push(obj.name);
+      } catch (_) {
+        missing.push(obj.name);
+      }
+    }),
+  );
+  if (loaded.length === 0) {
+    console.info("[brutalistVR6] loadPrebakedTextures: no PNGs in ./lightmaps/");
+    return false;
+  }
+  console.info(
+    `[brutalistVR6] loadPrebakedTextures: ${loaded.length}/${sceneObjects.length} loaded · missing: ${JSON.stringify(missing)}`,
+  );
+  applyBakedMaterials();
+  return true;
 }
 
 /**
@@ -1892,6 +1937,7 @@ function setupVRControllers() {
 function toggleLocomotionMode() {
   locomotionMode = locomotionMode === "editor" ? "physics" : "editor";
   rigVelocity.set(0, 0, 0);
+  jumpsRemaining = MAX_JUMPS;
   grabState.left.active = false;
   grabState.left.history.length = 0;
   grabState.right.active = false;
@@ -1954,29 +2000,59 @@ function updateGrabLocomotion(dt) {
         for (const h of state.history) { vx += h[0]; vy += h[1]; vz += h[2]; }
         const k = state.history.length;
         _handVel.set(vx / k, vy / k, vz / k).applyQuaternion(cameraRig.quaternion);
-        rigVelocity.x += -_handVel.x * THROW_BOOST;
-        rigVelocity.y += -_handVel.y * THROW_BOOST;
-        rigVelocity.z += -_handVel.z * THROW_BOOST;
+        let impX = -_handVel.x * THROW_BOOST;
+        let impY = -_handVel.y * THROW_BOOST;
+        let impZ = -_handVel.z * THROW_BOOST;
+
+        /* Jump-count logic (Nock-like): each upward throw consumes one
+         * jump; jumps reset on landing. When out of jumps the upward
+         * component is suppressed but horizontal motion still applies. */
+        if (impY > JUMP_THRESHOLD) {
+          if (jumpsRemaining > 0) jumpsRemaining--;
+          else impY = 0;
+        }
+
+        rigVelocity.x += impX;
+        rigVelocity.y += impY;
+        rigVelocity.z += impZ;
+
+        /* Hard caps so repeated throws in the same direction don't stack
+         * to absurd values, and to keep vertical motion gentle (Nock-like). */
+        const horizSpeed = Math.hypot(rigVelocity.x, rigVelocity.z);
+        if (horizSpeed > MAX_HORIZONTAL_SPEED) {
+          const s = MAX_HORIZONTAL_SPEED / horizSpeed;
+          rigVelocity.x *= s;
+          rigVelocity.z *= s;
+        }
+        if (rigVelocity.y > MAX_VERTICAL_SPEED) rigVelocity.y = MAX_VERTICAL_SPEED;
+        if (rigVelocity.y < -MAX_VERTICAL_SPEED) rigVelocity.y = -MAX_VERTICAL_SPEED;
       }
       state.history.length = 0;
     }
   }
 }
 
-/** True if rig is on the world floor or standing on top of a slab. */
+/**
+ * True if the rig is on the world floor or standing on the TOP face of a
+ * slab. Probe a small region just below the rig and require it to be near
+ * each slab's local +Y face — otherwise tall walls would falsely count as
+ * "ground" when the player simply touches them at any height, killing
+ * gravity and pinning them mid-air.
+ */
 function isGrounded() {
   if (cameraRig.position.y <= 0.01) return true;
   const px = cameraRig.position.x;
   const pz = cameraRig.position.z;
-  const py = cameraRig.position.y - 0.05;
+  const py = cameraRig.position.y - 0.1;
+  const r = PLAYER_RADIUS;
   for (const b of collisionBoxes) {
-    _localPt.set(px - b.cx, py + 0.2 - b.cy, pz - b.cz).applyMatrix3(b.mInv);
-    const ex = b.hx + PLAYER_RADIUS;
-    const ey = b.hy + PLAYER_RADIUS;
-    const ez = b.hz + PLAYER_RADIUS;
-    if (_localPt.x > -ex && _localPt.x < ex &&
-        _localPt.y > -ey && _localPt.y < ey &&
-        _localPt.z > -ez && _localPt.z < ez) return true;
+    _localPt.set(px - b.cx, py - b.cy, pz - b.cz).applyMatrix3(b.mInv);
+    /* Probe must be near the slab's TOP (local +Y face), not just inside
+     * its expanded box. Walls' top is way overhead, so they won't ground. */
+    if (_localPt.y < b.hy - 0.2 || _localPt.y > b.hy + 0.2) continue;
+    if (Math.abs(_localPt.x) > b.hx + r) continue;
+    if (Math.abs(_localPt.z) > b.hz + r) continue;
+    return true;
   }
   return false;
 }
@@ -2017,7 +2093,7 @@ function updatePhysicsMovement(dt, xrCamera) {
   const grabbing = grabState.left.active || grabState.right.active;
 
   rigVelocity.y -= MOON_GRAVITY * dt;
-  rigVelocity.y = Math.max(-MAX_FALL_SPEED, rigVelocity.y);
+  if (rigVelocity.y < -MAX_VERTICAL_SPEED) rigVelocity.y = -MAX_VERTICAL_SPEED;
 
   cameraRig.position.x += rigVelocity.x * dt;
   cameraRig.position.y += rigVelocity.y * dt;
@@ -2033,6 +2109,8 @@ function updatePhysicsMovement(dt, xrCamera) {
       rigVelocity.z *= Math.pow(AIR_DAMPING, dt);
     }
   }
+
+  if (grounded) jumpsRemaining = MAX_JUMPS;
 
   if (grounded) {
     const localDir = new THREE.Vector3(0, 0, -1);
@@ -2373,12 +2451,17 @@ async function init() {
     }
   }
 
-  /* Fixed Foveated Rendering: drop pixel cost in the periphery of each eye.
-   * Value 1 = max foveation (Quest's default for most apps). The blur is in
-   * the far edge of vision and unnoticeable in normal use; significant perf
-   * win on Quest 3 standalone. */
+  /* Fixed Foveated Rendering + 120 Hz request on session start.
+   * - Foveation 1: drop pixel cost in the periphery of each eye (Quest
+   *   default for most apps; barely perceptible).
+   * - WebXR sessions default to 90 Hz; Quest 3 supports 120 Hz but we
+   *   have to ask for it explicitly via updateTargetFrameRate. */
   renderer.xr.addEventListener("sessionstart", () => {
     if (renderer.xr.setFoveation) renderer.xr.setFoveation(1);
+    const session = renderer.xr.getSession();
+    if (session?.updateTargetFrameRate && session.supportedFrameRates?.includes(120)) {
+      session.updateTargetFrameRate(120).catch(() => {});
+    }
   });
 
   if (SHOW_FPS) {
