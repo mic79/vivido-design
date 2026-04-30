@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>brutalistVR6 — multi-bounce path-traced lightmap bake</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font-family: system-ui, sans-serif; }
+    #hud {
+      position: absolute; left: 10px; top: 10px; z-index: 100;
+      max-width: min(380px, 94vw);
+      background: rgba(0, 0, 0, 0.9); color: #fff; padding: 14px 16px; border-radius: 8px;
+      font-size: 13px; line-height: 1.45;
+    }
+    #hud h1 { margin: 0 0 8px; font-size: 15px; color: #4fc3f7; font-weight: 600; }
+    #meta { opacity: 0.8; font-size: 11px; margin-bottom: 10px; }
+    #samples { margin: 6px 0; color: #aaa; font-size: 12px; }
+    #status { margin: 8px 0; color: #e0e0e0; }
+    #bake-progress-wrap {
+      display: none; margin: 10px 0 6px; padding: 8px 0; border-top: 1px solid #333;
+    }
+    #bake-progress-wrap.active { display: block; }
+    #bake-progress { width: 100%; height: 12px; accent-color: #4fc3f7; }
+    #bake-detail { font-size: 11px; color: #9fd6ff; margin-top: 6px; line-height: 1.35; }
+    #bake-pulse {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #4fc3f7; margin-right: 6px; vertical-align: middle;
+      animation: bakePulse 0.9s ease-in-out infinite;
+    }
+    @keyframes bakePulse {
+      0%, 100% { opacity: 0.35; transform: scale(0.85); }
+      50% { opacity: 1; transform: scale(1); }
+    }
+    button {
+      display: block; width: 100%; margin-top: 8px; padding: 10px 12px; cursor: pointer;
+      border: none; border-radius: 4px; font-size: 13px;
+    }
+    .primary { background: #0088ff; color: #fff; }
+    .secondary { background: #333; color: #fff; }
+    #vr-button-host { position: absolute; right: 10px; bottom: 10px; z-index: 100; }
+    #fps {
+      position: absolute; right: 10px; top: 10px; z-index: 100;
+      background: rgba(0, 0, 0, 0.7); color: #4fc3f7; padding: 6px 10px;
+      border-radius: 4px; font: 600 13px/1 system-ui, sans-serif;
+      letter-spacing: 0.4px; pointer-events: none;
+    }
+    #importDlg {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7);
+      display: none; align-items: center; justify-content: center; z-index: 200;
+      font: 13px/1.45 system-ui, sans-serif; color: #fff;
+    }
+    #importDlg.active { display: flex; }
+    #importDlg .panel {
+      background: #181818; border: 1px solid #333; border-radius: 8px;
+      padding: 18px; max-width: 640px; width: 92vw; max-height: 84vh;
+      display: flex; flex-direction: column;
+    }
+    #importDlg h2 { margin: 0 0 6px; font-size: 15px; color: #4fc3f7; }
+    #importDlg .hint { font-size: 11px; opacity: 0.75; margin-bottom: 10px; }
+    #importDlg .rows { overflow-y: auto; border: 1px solid #2a2a2a; border-radius: 4px; }
+    #importDlg .row {
+      display: grid; grid-template-columns: 36px 1fr 180px;
+      gap: 10px; padding: 8px 10px; border-bottom: 1px solid #222; align-items: center;
+    }
+    #importDlg .row:last-child { border-bottom: none; }
+    #importDlg .row img { width: 36px; height: 36px; object-fit: cover; background: #000; border-radius: 3px; }
+    #importDlg .row .fname { font-size: 12px; color: #ddd; word-break: break-all; }
+    #importDlg .row .fmeta { font-size: 10px; color: #888; }
+    #importDlg .row select { width: 100%; padding: 6px; background: #222; color: #fff; border: 1px solid #333; border-radius: 3px; font-size: 12px; }
+    #importDlg .row.unmatched select { border-color: #c46; }
+    #importDlg .actions { margin-top: 12px; display: flex; gap: 8px; justify-content: flex-end; }
+    #importDlg .actions button { width: auto; margin: 0; padding: 8px 14px; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+        "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+        "three-gpu-pathtracer": "https://cdn.jsdelivr.net/npm/three-gpu-pathtracer@0.0.23/build/index.module.js",
+        "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="hud">
+    <h1>brutalistVR6</h1>
+    <div id="meta"></div>
+    <p style="margin:0 0 8px;">
+      Fork of <strong>brutalistVR5</strong> with <strong>multi-bounce path-traced lightmap bake</strong>:
+      every texel runs a real Monte Carlo path tracer (NEE sun + cosine-weighted bounces, default 3) instead of
+      v5's direct-only + constant fill. Light propagates through openings into enclosed volumes.
+      Knob: <code>?bvhMaxBounces=N</code> (3 = open scenes, 5–6 = enclosed rooms). Same UI, same Sky+bloom,
+      separate IndexedDB store from v5.
+      <br><strong>VR Stereo Preview</strong>: press <strong>B</strong> on the right controller in VR to render a stereoscopic 360° panorama
+      at your current position (path-traced, progressive). Press <strong>B</strong> again to exit and store the viewpoint as a glowing sphere.
+      Walk back within 1 m and press <strong>B</strong> to re-enter. Quality: <code>?vrpreviewres=low|medium|high|max</code> (default medium).
+      Samples per eye: <code>?vrsamples=N</code>. Max stored viewpoints: <code>?maxPanoramas=N</code> (default 3).
+    </p>
+    <div id="samples">Samples: 0</div>
+    <div id="bake-progress-wrap" aria-live="polite">
+      <div><span id="bake-pulse"></span><span id="bake-phase-label">Baking</span> <span id="bake-time" style="color:#ffb347;margin-left:8px;font-size:11px"></span></div>
+      <progress id="bake-progress" max="100" value="0"></progress>
+      <div id="bake-detail"></div>
+    </div>
+    <div id="status">Loading…</div>
+    <button type="button" id="bakeBtn" class="primary">Bake Multi-View</button>
+    <button type="button" id="bakeBVHBtn" class="primary">Bake BVH (recommended)</button>
+    <button type="button" id="debugBtn" class="secondary">Debug UV Colors</button>
+    <button type="button" id="uv2CheckerBtn" class="secondary">Test UV2 (checker)</button>
+    <button type="button" id="previewBtn" class="secondary" style="display:none">Toggle Preview</button>
+    <button type="button" id="exportBtn" class="secondary" style="display:none">Export Textures</button>
+    <button type="button" id="importBtn" class="secondary">Import Lightmap PNG(s)…</button>
+    <input type="file" id="importFile" accept="image/png,image/jpeg" multiple style="display:none" />
+  </div>
+  <div id="vr-button-host"></div>
+  <div id="fps">— FPS</div>
+  <div id="importDlg" role="dialog" aria-modal="true" aria-labelledby="importDlgTitle">
+    <div class="panel">
+      <h2 id="importDlgTitle">Map files to mesh names</h2>
+      <div id="importDlgHint" class="hint">Auto-matched rows are pre-selected; pin the rest manually. Choose <em>(skip)</em> to ignore a file.</div>
+      <div id="importDlgRows" class="rows"></div>
+      <div class="actions">
+        <button type="button" id="importDlgCancel" class="secondary">Cancel</button>
+        <button type="button" id="importDlgApply" class="primary">Apply</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
