@@ -39,49 +39,37 @@ export function buildBrutalistLayout(THREE, scene, opts = {}) {
   const grainGround = createGrainTexture(THREE);
   const materials = [];
 
-  const wallMat = new THREE.MeshPhysicalMaterial({
+  /* MeshStandardMaterial (not Physical) for a much lighter shader on Quest 3
+   * standalone. The previous Physical material's clearcoat (0.06) and sheen
+   * (0.22) were extremely subtle and contributed effectively zero perceptible
+   * difference at Quest 3 pixel density, but cost a non-trivial fragment-
+   * shader budget. BattleVR / spaceshooter use MeshStandardMaterial for the
+   * same reason. */
+  const wallMat = new THREE.MeshStandardMaterial({
     color: CONCRETE,
     roughness: fidelityMax ? 0.78 : 0.82,
     metalness: 0.07,
     roughnessMap: grainTex,
     envMapIntensity: fidelityMax ? 1.12 : 1.02,
-    clearcoat: 0.06,
-    clearcoatRoughness: 0.62,
-    sheen: 0.22,
-    sheenRoughness: 0.74,
-    sheenColor: new THREE.Color(0xc8c2b6),
   });
-  /* `darkMat` kept as a separate instance only so PBR maps/repeats stay independent if we
-   * tweak them later, but its colour now matches `wallMat` per user request. */
-  const darkMat = new THREE.MeshPhysicalMaterial({
+  const darkMat = new THREE.MeshStandardMaterial({
     color: CONCRETE_DARK,
     roughness: fidelityMax ? 0.78 : 0.82,
     metalness: 0.07,
     roughnessMap: grainTex,
     envMapIntensity: fidelityMax ? 1.12 : 1.02,
-    clearcoat: 0.06,
-    clearcoatRoughness: 0.62,
-    sheen: 0.22,
-    sheenRoughness: 0.74,
-    sheenColor: new THREE.Color(0xc8c2b6),
   });
   for (const m of [wallMat, darkMat]) {
     m.roughnessMap.repeat.set(5, 5);
     materials.push(m);
   }
 
-  /* Floor matches the walls (light concrete). Slight extra roughness + reduced sheen
-   * keeps it from looking like polished plastic; same base colour. */
-  const groundMat = new THREE.MeshPhysicalMaterial({
+  const groundMat = new THREE.MeshStandardMaterial({
     color: CONCRETE,
     roughness: fidelityMax ? 0.88 : 0.93,
     metalness: fidelityMax ? 0.05 : 0.02,
     roughnessMap: grainGround,
     envMapIntensity: fidelityMax ? 0.6 : 0.45,
-    clearcoat: fidelityMax ? 0.03 : 0,
-    sheen: fidelityMax ? 0.08 : 0.04,
-    sheenRoughness: 0.94,
-    sheenColor: new THREE.Color(0xc8c2b6),
   });
   groundMat.roughnessMap.repeat.set(24, 24);
   materials.push(groundMat);

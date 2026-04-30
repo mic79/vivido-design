@@ -2243,7 +2243,11 @@ function animate(time) {
     return;
   }
 
-  if (!isPreviewMode && !isDebugMode && !isUv2CheckerActive) {
+  /* Path tracer is desktop-preview-only. In VR its output is never displayed
+   * (line below uses `renderer.render` directly), so running it would just
+   * waste GPU time on a full-res Monte Carlo pass per frame — the single
+   * biggest perf hit on Quest 3 standalone. */
+  if (!renderer.xr.isPresenting && !isPreviewMode && !isDebugMode && !isUv2CheckerActive) {
     pathTracer.renderSample();
     if (samplesElement) samplesElement.textContent = `Samples: ${Math.floor(pathTracer.samples)}`;
   }
@@ -2360,6 +2364,14 @@ async function init() {
       /* ignore */
     }
   }
+
+  /* Fixed Foveated Rendering: drop pixel cost in the periphery of each eye.
+   * Value 1 = max foveation (Quest's default for most apps). The blur is in
+   * the far edge of vision and unnoticeable in normal use; significant perf
+   * win on Quest 3 standalone. */
+  renderer.xr.addEventListener("sessionstart", () => {
+    if (renderer.xr.setFoveation) renderer.xr.setFoveation(1);
+  });
 
   if (SHOW_FPS) {
     ensureVrFpsPanel(camera);
