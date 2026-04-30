@@ -214,6 +214,12 @@ let envData = null;
 let lightingApi = null;
 let isBaked = false;
 let isPreviewMode = false;
+/* Path tracer is opt-in for the 2D desktop view. Default OFF so the page
+ * loads cheap on Quest 3 standalone browser (before entering VR) without
+ * burning GPU on a Monte Carlo pass that nobody asked for. Click the
+ * "Path tracer" button to enable it for live preview / sample
+ * accumulation. Bakes drive the path tracer directly and ignore this flag. */
+let pathTracerActive = false;
 let isDebugMode = false;
 /** Raster preview: StandardMaterial lightMap samples `uv2` (checker reveals layout per face). */
 let isUv2CheckerActive = false;
@@ -2243,31 +2249,33 @@ function animate(time) {
     return;
   }
 
-  /* Path tracer is desktop-preview-only. In VR its output is never displayed
-   * (line below uses `renderer.render` directly), so running it would just
-   * waste GPU time on a full-res Monte Carlo pass per frame — the single
-   * biggest perf hit on Quest 3 standalone. */
-  if (!renderer.xr.isPresenting && !isPreviewMode && !isDebugMode && !isUv2CheckerActive) {
+  /* Path tracer is opt-in for desktop preview (off by default). In VR its
+   * output is never displayed, so it's also skipped there regardless. */
+  const ptRunning = pathTracerActive
+    && !renderer.xr.isPresenting
+    && !isPreviewMode
+    && !isDebugMode
+    && !isUv2CheckerActive;
+  if (ptRunning) {
     pathTracer.renderSample();
     if (samplesElement) samplesElement.textContent = `Samples: ${Math.floor(pathTracer.samples)}`;
   }
 
   if (renderer.xr.isPresenting) {
     updateVRMovement(delta);
-    /* VR uses direct renderer.render — composer/bloom is single-eye only.
-     * Mirrors brutalistVR's render loop. Sky mesh is still visible in VR,
-     * just without post-processing. */
+    /* VR uses direct renderer.render — composer/bloom is single-eye only. */
     renderer.render(scene, camera);
   } else {
     controls.update();
     if (isDebugMode || isUv2CheckerActive) {
-      /* Debug & UV2-checker visualizations are flat-color readouts; bloom
-       * would blow them out, so skip the composer here. */
       renderer.render(scene, camera);
     } else if (isPreviewMode) {
       /* Baked desktop view = composer chain (Sky + bloom + grain + SMAA). */
       if (composer) composer.render(delta * 0.001);
       else renderer.render(scene, camera);
+    } else if (!ptRunning) {
+      /* Default 2D view with path tracer paused: just render the live scene. */
+      renderer.render(scene, camera);
     }
   }
 }
@@ -2409,6 +2417,12 @@ async function init() {
   document.getElementById("uv2CheckerBtn")?.addEventListener("click", toggleUv2Checker);
   document.getElementById("previewBtn")?.addEventListener("click", togglePreview);
   document.getElementById("exportBtn")?.addEventListener("click", exportTextures);
+  document.getElementById("pathTracerBtn")?.addEventListener("click", () => {
+    pathTracerActive = !pathTracerActive;
+    const btn = document.getElementById("pathTracerBtn");
+    if (btn) btn.textContent = `Path Tracer: ${pathTracerActive ? "Running" : "Paused"}`;
+    if (pathTracerActive) pathTracer.reset();
+  });
 
   /* "Import Lightmap PNG(s)…" — proxy click to the hidden <input type=file>, then on
    * change pass the FileList to `importLightmapFiles` (which decodes, applies, saves). */
