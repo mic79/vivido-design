@@ -2,6 +2,32 @@ import { getRate } from './fxService.js';
 
 const { ref, computed, watch, unref } = Vue;
 
+// Locale-aware amount parser. Mirrors parseAmount() used elsewhere so that
+// users with a "1.234,56" Number Format setting can type "1234,56" or
+// "1.234,56" without it being mis-parsed as 123456 / 1234.56 (a 100x bug).
+// Heuristic: if the rightmost comma sits to the right of the rightmost dot,
+// dots are thousands separators and the comma is the decimal mark.
+function parseLocaleAmount(val) {
+  if (typeof val === 'number') return val;
+  if (!val || typeof val !== 'string') return NaN;
+  const s = val.trim();
+  const lastDot = s.lastIndexOf('.');
+  const lastComma = s.lastIndexOf(',');
+  if (lastComma > lastDot) {
+    return parseFloat(s.replace(/\./g, '').replace(',', '.'));
+  }
+  return parseFloat(s.replace(/,/g, ''));
+}
+
+// Render a number into the amount field using the user's preferred decimal
+// separator so the converted value matches the rest of the UI.
+function formatAmountForInput(num) {
+  const pref = (typeof localStorage !== 'undefined' && localStorage.getItem('valu_number_format')) || 'auto';
+  const str = Number(num).toString();
+  if (pref === 'de-DE') return str.replace('.', ',');
+  return str;
+}
+
 /**
  * Composable for currency conversion at data-entry time.
  *
@@ -86,10 +112,10 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
 
   function updateConverted() {
     if (!active.value || !rate.value) return;
-    const raw = parseFloat(String(foreignAmount.value).replace(/,/g, ''));
+    const raw = parseLocaleAmount(foreignAmount.value);
     if (isNaN(raw)) { setAmount(''); return; }
     const converted = Math.round(raw * rate.value * 100) / 100;
-    setAmount(String(converted));
+    setAmount(formatAmountForInput(converted));
   }
 
   function toggle() {
@@ -105,7 +131,7 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
 
   function buildFxTag() {
     if (!active.value || !foreignAmount.value) return '';
-    const raw = parseFloat(String(foreignAmount.value).replace(/,/g, ''));
+    const raw = parseLocaleAmount(foreignAmount.value);
     if (isNaN(raw)) return '';
     return `(${unref(foreignCurrency)} ${raw.toFixed(2)})`;
   }
