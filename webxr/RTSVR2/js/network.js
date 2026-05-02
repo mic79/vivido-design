@@ -541,9 +541,17 @@ export async function joinGame() {
 
     peer.on('open', () => {
       setLobbyMenuStatus(`Connecting to lobby ${selectedLobby}…`);
+      /**
+       * PeerJS 1.5.x: do NOT request `serialization: 'json'` — that picks the new
+       * `StreamConnection` transport which has a long-standing bug (peers/peerjs#1135,
+       * #1212, #1247) where the *receive* side silently stops dispatching `data` events
+       * after a few thousand chunked messages, even while the sender's `bufferedAmount`
+       * stays at 0. Symptom: client freezes mid-match while the host log shows snapshots
+       * still going out fine. The default `'binary'` (BinaryPack via `BufferedConnection`)
+       * is the older, battle-tested path with explicit 16 KB chunking and reassembly.
+       */
       const conn = peer.connect(hostId, {
         reliable: true,
-        serialization: 'json',
       });
       let settled = false;
       let openTimer = null;
@@ -774,8 +782,8 @@ function handleHostData(data) {
         const snap = data.snapshot;
         if (snap) syncMultiplayerPauseFromHostSnapshot(snap);
         /**
-         * PeerJS (`serialization: 'json'`) already produced a fresh JS object tree from
-         * `JSON.parse`; cloning again at 22 Hz costs ~5–10 ms / snapshot of pure CPU and
+         * PeerJS (`serialization: 'binary'` / BinaryPack) already produced a fresh JS
+         * object tree from `unpack()`; cloning again at 22 Hz is pure CPU/GC waste and
          * `applySnapshot` only reads fields, never stores references back into the snapshot.
          */
         applySnapshot(snap);
@@ -789,6 +797,9 @@ function handleHostData(data) {
       lastClientSnapshotSeq = -1;
       lastClientPauseSigFromSnap = '';
       lastClientSnapWallMs = 0;
+      clientSnapAppliedCount = 0;
+      clientSnapLastLogMs = 0;
+      clientSnapLastSeqLogged = -1;
       clearMpPauseState();
       syncMpPauseUi();
       lastClientPlayerTeamSig = '';
@@ -1169,25 +1180,90 @@ export function smoothNetClientUnitPositions(dt) {
   });
 }
 
+/**
+ * WebRTC `RTCDataChannel.bufferedAmount` past which we assume backpressure. With the
+ * `BufferedConnection` (binary) path PeerJS chunks at 16 KB and pauses sends when the
+ * channel buffer crosses 16 MB, so we don't strictly need this — but keeping the guard
+ * means a degenerate peer (slow CPU, network blip) can't grow the host's send queue
+ * unbounded; we drop that peer's frame and rely on the seq dedup to resync next snapshot.
+ */
+const NET_PEER_BACKPRESSURE_BYTES = 256 * 1024;
+
+let netBackpressureSkippedCount = 0;
+let netBackpressureLastWarnMs = 0;
+
+function getPeerBufferedBytes(conn) {
+  if (!conn) return 0;
+  const dc = conn.dataChannel || conn._dc;
+  if (dc && typeof dc.bufferedAmount === 'number') return dc.bufferedAmount;
+  if (typeof conn.bufferSize === 'number') return conn.bufferSize;
+  return 0;
+}
+
 // --- Broadcast (host only) ---
 export function broadcastData(data) {
   if (!State.gameSession.isHost) return;
-  const payload =
-    data && data.type === 'snapshot'
-      ? typeof structuredClone === 'function'
-        ? structuredClone(data)
-        : JSON.parse(JSON.stringify(data))
-      : data;
+  /**
+   * No `structuredClone` here: PeerJS (`serialization: 'binary'`) calls `pack()` for
+   * each peer, producing an independent buffer per send. The host doesn't mutate the
+   * snapshot after `broadcastData` returns, so cloning would be pure CPU/GC waste
+   * (≈3-7 ms per snapshot at typical mid-match sizes).
+   */
+  const isSnapshot = data && data.type === 'snapshot';
   connections.forEach(conn => {
-    if (conn && conn.open) {
-      try {
-        conn.send(payload);
-      } catch (_) { /* ignore */ }
+    if (!conn || !conn.open) return;
+    if (isSnapshot) {
+      const buffered = getPeerBufferedBytes(conn);
+      if (buffered > NET_PEER_BACKPRESSURE_BYTES) {
+        netBackpressureSkippedCount++;
+        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        if (now - netBackpressureLastWarnMs > 5000) {
+          netBackpressureLastWarnMs = now;
+          console.warn(
+            `[RTSVR2 net] backpressure: peer ${conn.peer || '?'} buffered=${buffered} bytes ` +
+            `(>${NET_PEER_BACKPRESSURE_BYTES}) — dropped ${netBackpressureSkippedCount} snapshots so far`
+          );
+        }
+        return;
+      }
+    }
+    try {
+      // BufferedConnection.send returns void, but keep the Promise guard in case a future
+      // PeerJS upgrade swaps in a Promise-returning transport (StreamConnection, etc.).
+      const r = conn.send(data);
+      if (r && typeof r.then === 'function') {
+        r.catch(err => {
+          const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+          if (now - netBackpressureLastWarnMs > 5000) {
+            netBackpressureLastWarnMs = now;
+            console.warn(`[RTSVR2 net] conn.send rejected for peer ${conn.peer || '?'}:`, err);
+          }
+        });
+      }
+    } catch (err) {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (now - netBackpressureLastWarnMs > 5000) {
+        netBackpressureLastWarnMs = now;
+        console.warn(`[RTSVR2 net] conn.send threw for peer ${conn.peer || '?'}:`, err);
+      }
     }
   });
 }
 
 // --- State snapshot (host sends periodically) ---
+
+/**
+ * Round a float to 1 decimal (10 cm precision). Map ranges are large (≈±200 units) and
+ * client interpolation smooths between samples, so 0.1m is well below renderer noise.
+ * Cuts JSON length per number from 10–18 chars (e.g. `-12.345678901`) to ≤6 chars.
+ */
+function rnd1(v) { return Math.round(v * 10) / 10; }
+/** 2 decimals (≈0.01 rad). Used for rotations/progress. */
+function rnd2(v) { return Math.round(v * 100) / 100; }
+
+/** Periodic snapshot-size diagnostics (every 5 s) so freezes are easier to reproduce. */
+let snapStatLastLogMs = 0;
+
 export function updateNetwork(time) {
   if (!State.gameSession.isMultiplayer || !State.gameSession.isHost) return;
   if (!State.gameSession.gameStarted) return;
@@ -1199,26 +1275,14 @@ export function updateNetwork(time) {
   hostSnapshotSeq += 1;
   const snapshot = {
     seq: hostSnapshotSeq,
-    time: State.gameSession.elapsedTime,
-    mp: State.gameSession.mpSessionPaused
-      ? {
-          paused: true,
-          reason: State.gameSession.mpPauseReason || 'unknown',
-          title: State.gameSession.mpPauseTitle || 'Match paused',
-          detail: State.gameSession.mpPauseDetail || '',
-          subline: State.gameSession.mpPauseSubline || '',
-          autoResumeAt: State.gameSession.mpPauseAutoResumeAt || 0,
-          seats: [...(State.gameSession.mpPendingHumanDropSeatIds || [])],
-        }
-      : { paused: false },
+    time: rnd2(State.gameSession.elapsedTime),
     gameOver: State.gameSession.gameOver,
     winner: State.gameSession.winner,
-    fx: State.takeHostFxForSnapshot(),
     units: [],
     buildings: [],
     players: State.players.map(p => ({
       credits: p.credits,
-      income: p.income,
+      income: rnd1(p.income),
       isDefeated: p.isDefeated,
       team: p.team,
       stats: p.stats
@@ -1234,70 +1298,120 @@ export function updateNetwork(time) {
     })),
     resourceFields: [],
   };
+  // Only attach optional sections when they have content — saves ~10–25 bytes per snap.
+  if (State.gameSession.mpSessionPaused) {
+    snapshot.mp = {
+      paused: true,
+      reason: State.gameSession.mpPauseReason || 'unknown',
+      title: State.gameSession.mpPauseTitle || 'Match paused',
+      detail: State.gameSession.mpPauseDetail || '',
+      subline: State.gameSession.mpPauseSubline || '',
+      autoResumeAt: State.gameSession.mpPauseAutoResumeAt || 0,
+      seats: [...(State.gameSession.mpPendingHumanDropSeatIds || [])],
+    };
+  } else {
+    snapshot.mp = { paused: false };
+  }
+  const fxList = State.takeHostFxForSnapshot();
+  if (fxList.length) snapshot.fx = fxList;
 
   State.resourceFields.forEach(f => {
-    snapshot.resourceFields.push({
-      id: f.id,
-      remaining: f.remaining,
-      depleted: !!f.depleted,
-    });
+    const rf = { id: f.id, remaining: f.remaining };
+    if (f.depleted) rf.depleted = true;
+    snapshot.resourceFields.push(rf);
   });
 
+  /**
+   * Per-unit JSON minimization. Skipping null/zero/false fields lets the typical idle
+   * unit shrink from ~280 bytes to ~70 bytes — at 30 units × 22 Hz that's ≈140 KB/s
+   * → ≈40 KB/s, well below the WebRTC backpressure cliff. The client's `applySnapshot`
+   * already coerces missing fields to null/0/false defaults so this is safe.
+   */
   State.units.forEach(u => {
-    snapshot.units.push({
+    const us = {
       id: u.id,
       type: u.type,
       ownerId: u.ownerId,
       team: u.team,
-      x: u.x,
-      z: u.z,
+      x: rnd1(u.x),
+      z: rnd1(u.z),
       hp: u.hp,
       maxHp: u.maxHp,
       state: u.state,
-      rotation: u.rotation,
-      lastFireTime: u.lastFireTime,
-      playerCommanded: !!u.playerCommanded,
-      targetUnitId: u.targetUnitId ?? null,
-      followLeadId: u.followLeadId ?? null,
-      squadOffsetX: u.squadOffsetX ?? 0,
-      squadOffsetZ: u.squadOffsetZ ?? 0,
-      targetBuildingId: u.targetBuildingId ?? null,
-      targetPos: u.targetPos ? { x: u.targetPos.x, z: u.targetPos.z } : null,
-      guardPos: u.guardPos ? { x: u.guardPos.x, z: u.guardPos.z } : null,
-      cargo: u.cargo,
-      assignedRefinery: u.assignedRefinery ?? null,
-      assignedField: u.assignedField ?? null,
-      lastHarvestedField: u.lastHarvestedField ?? null,
-    });
+      rotation: rnd2(u.rotation),
+    };
+    if (u.lastFireTime) us.lastFireTime = rnd1(u.lastFireTime);
+    if (u.playerCommanded) us.playerCommanded = true;
+    if (u.targetUnitId != null) us.targetUnitId = u.targetUnitId;
+    if (u.followLeadId != null) us.followLeadId = u.followLeadId;
+    if (u.squadOffsetX) us.squadOffsetX = rnd1(u.squadOffsetX);
+    if (u.squadOffsetZ) us.squadOffsetZ = rnd1(u.squadOffsetZ);
+    if (u.targetBuildingId != null) us.targetBuildingId = u.targetBuildingId;
+    if (u.targetPos) us.targetPos = { x: rnd1(u.targetPos.x), z: rnd1(u.targetPos.z) };
+    if (u.guardPos) us.guardPos = { x: rnd1(u.guardPos.x), z: rnd1(u.guardPos.z) };
+    // Cargo always sent: client uses `if (uData.cargo !== undefined)` and we need
+    // the 10 → 0 transition (harvester drops at refinery) to actually propagate.
+    us.cargo = u.cargo;
+    if (u.assignedRefinery != null) us.assignedRefinery = u.assignedRefinery;
+    if (u.assignedField != null) us.assignedField = u.assignedField;
+    if (u.lastHarvestedField != null) us.lastHarvestedField = u.lastHarvestedField;
+    snapshot.units.push(us);
   });
 
   State.buildings.forEach(b => {
-    snapshot.buildings.push({
+    const bs = {
       id: b.id,
       type: b.type,
       ownerId: b.ownerId,
       team: b.team,
-      x: b.x,
-      z: b.z,
+      x: rnd1(b.x),
+      z: rnd1(b.z),
       hp: b.hp,
       maxHp: b.maxHp,
-      constructionProgress: b.constructionProgress,
-      isBuilt: b.isBuilt,
-      captureProgress: b.captureProgress || 0,
-      rallyPoint: b.rallyPoint ? { x: b.rallyPoint.x, z: b.rallyPoint.z } : null,
-      productionQueue: (b.productionQueue || []).map(q => ({
-        unitType: q.unitType,
-        remainingTime: q.remainingTime,
-        totalTime: q.totalTime,
-        startedAtElapsed:
-          typeof q.startedAtElapsed === 'number' && Number.isFinite(q.startedAtElapsed)
-            ? q.startedAtElapsed
-            : undefined,
-      })),
-    });
+    };
+    // Always send constructionProgress: the 0.99 → 1.0 transition matters and the client
+    // uses `if (bData.constructionProgress !== undefined)` so omission would freeze the bar.
+    bs.constructionProgress = rnd2(b.constructionProgress);
+    if (b.isBuilt) bs.isBuilt = true;
+    if (b.captureProgress) bs.captureProgress = rnd2(b.captureProgress);
+    if (b.rallyPoint) bs.rallyPoint = { x: rnd1(b.rallyPoint.x), z: rnd1(b.rallyPoint.z) };
+    if (b.productionQueue && b.productionQueue.length) {
+      bs.productionQueue = b.productionQueue.map(q => {
+        const qs = {
+          unitType: q.unitType,
+          remainingTime: rnd2(q.remainingTime),
+          totalTime: q.totalTime,
+        };
+        if (typeof q.startedAtElapsed === 'number' && Number.isFinite(q.startedAtElapsed)) {
+          qs.startedAtElapsed = rnd2(q.startedAtElapsed);
+        }
+        return qs;
+      });
+    }
+    snapshot.buildings.push(bs);
   });
 
-  broadcastData({ type: 'snapshot', snapshot });
+  const payload = { type: 'snapshot', snapshot };
+  /**
+   * Diagnostic only: sample one snapshot every ~5 s (≈110 sent) — cheap enough that
+   * `JSON.stringify` overhead is amortized to <0.05 ms / sec. Helps trace regressions
+   * if the freeze recurs (peer disconnect, payload bloat, etc.).
+   */
+  if (time - snapStatLastLogMs > 5000) {
+    snapStatLastLogMs = time;
+    try {
+      const bytes = JSON.stringify(payload).length;
+      const peerCount = connections.size;
+      let peerBuf = 0;
+      connections.forEach(conn => { peerBuf += getPeerBufferedBytes(conn); });
+      console.log(
+        `[RTSVR2 net] snap=${bytes}B units=${snapshot.units.length} ` +
+        `bldgs=${snapshot.buildings.length} fx=${fxList.length} ` +
+        `peers=${peerCount} bufferedTotal=${peerBuf}B`
+      );
+    } catch (_) { /* ignore */ }
+  }
+  broadcastData(payload);
 }
 
 /** Multiplayer client: replay host-authored visuals/sfx (no gameplay side effects). */
@@ -1382,6 +1496,11 @@ function sanitizeProductionQueueFromSnapshot(raw) {
     });
 }
 
+/** Diagnostic state for client snapshot heartbeat. */
+let clientSnapAppliedCount = 0;
+let clientSnapLastLogMs = 0;
+let clientSnapLastSeqLogged = -1;
+
 // --- Apply snapshot (client-side) ---
 function applySnapshot(snapshot) {
   if (!snapshot) return;
@@ -1408,8 +1527,27 @@ function applySnapshot(snapshot) {
       clientSnapshotInterpGapMs = clientSnapshotInterpGapMs * 0.62 + gap * 0.38;
       clientSnapshotInterpGapMs = Math.max(40, Math.min(220, clientSnapshotInterpGapMs));
     }
+    /**
+     * If snapshots ever stop arriving, this warning is the breadcrumb that points at the
+     * network layer (vs. a frozen render or sim). Threshold > 1 s = host either disconnected,
+     * died, or got buried under WebRTC backpressure (see `NET_PEER_BACKPRESSURE_BYTES`).
+     */
+    if (gap > 1000) {
+      console.warn(`[RTSVR2 net] snapshot gap ${Math.round(gap)} ms (seq ${snapSeq})`);
+    }
   }
   lastClientSnapWallMs = wall;
+  if (isNetClient) {
+    clientSnapAppliedCount++;
+    if (wall - clientSnapLastLogMs > 5000) {
+      clientSnapLastLogMs = wall;
+      console.log(
+        `[RTSVR2 net] client applied ${clientSnapAppliedCount} snapshots (last seq=${snapSeq}, ` +
+        `+${snapSeq - clientSnapLastSeqLogged} since last log)`
+      );
+      clientSnapLastSeqLogged = snapSeq;
+    }
+  }
 
   let teamSig = '';
   snapshot.players.forEach((pData, i) => {
