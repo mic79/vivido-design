@@ -290,6 +290,29 @@ export function clearBuildPlacementFlags() {
   gameSession.buildModeHQId = null;
 }
 
+/**
+ * MP client only: drop pre-match lobby entities so the first host snapshot can repopulate
+ * `units` / `buildings` cleanly (no id collisions with `placeLobbyLunarSettlementShowcase`).
+ *
+ * The host calls the heavier `resetState()` from `onStartGame`; this is the lighter
+ * counterpart for joiners that must not disturb players, fog, resource fields, or session
+ * fields owned by the network handshake (`myPlayerId`, `mpSessionPaused`, …).
+ */
+export function resetMatchEntitiesForClient() {
+  units.clear();
+  unitsByPlayer.clear();
+  unitsByTeam.clear();
+  buildings.clear();
+  buildingsByPlayer.clear();
+  selectedUnits.clear();
+  pendingHostFx.length = 0;
+  players.forEach(p => { p.unitCount = 0; });
+  gameSession.elapsedTime = 0;
+  gameSession.gameOver = false;
+  gameSession.winner = -1;
+  clearBuildPlacementFlags();
+}
+
 // --- Reset all state ---
 export function resetState() {
   resetIds();

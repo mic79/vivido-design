@@ -233,8 +233,19 @@ function setupMultiplayerLifecycle() {
   if (mpLifecycleBound || typeof document === 'undefined') return;
   mpLifecycleBound = true;
   keepaliveTimerId = setInterval(tickMultiplayerKeepalive, NET_KEEPALIVE_INTERVAL_MS);
-  hostBgSimTimerId = setInterval(tickHostBackgroundSim, NET_HOST_BG_SIM_INTERVAL_MS);
   document.addEventListener('visibilitychange', onMpDocumentVisibilityChange);
+}
+
+/**
+ * Host-only: a backup `setInterval` that lets a backgrounded host tab keep simulating when
+ * `requestAnimationFrame` is throttled. Idempotent — `startHosting` may be invoked more
+ * than once if the user re-Hosts the same lobby. Clients must never start it (the dynamic
+ * `import('./loop.js')` + `queueMicrotask` add up at 22 Hz × every joined peer).
+ */
+function ensureHostBackgroundSimTimer() {
+  if (hostBgSimTimerId !== null) return;
+  if (typeof setInterval !== 'function') return;
+  hostBgSimTimerId = setInterval(tickHostBackgroundSim, NET_HOST_BG_SIM_INTERVAL_MS);
 }
 
 function tickMultiplayerKeepalive() {
@@ -251,6 +262,7 @@ function tickMultiplayerKeepalive() {
 }
 
 function tickHostBackgroundSim() {
+  if (!State.gameSession.isHost) return;
   if (typeof document === 'undefined' || !document.hidden) return;
   import('./loop.js')
     .then(m => {
@@ -360,6 +372,7 @@ export async function startHosting() {
     peer.on('open', () => {
       State.gameSession.isMultiplayer = true;
       State.gameSession.isHost = true;
+      ensureHostBackgroundSimTimer();
       console.log(`✅ Hosting as ${sessionID}`);
 
       refreshHostLobbyConnectionUi();
@@ -760,11 +773,12 @@ function handleHostData(data) {
       try {
         const snap = data.snapshot;
         if (snap) syncMultiplayerPauseFromHostSnapshot(snap);
-        applySnapshot(
-          typeof structuredClone === 'function'
-            ? structuredClone(snap)
-            : JSON.parse(JSON.stringify(snap))
-        );
+        /**
+         * PeerJS (`serialization: 'json'`) already produced a fresh JS object tree from
+         * `JSON.parse`; cloning again at 22 Hz costs ~5–10 ms / snapshot of pure CPU and
+         * `applySnapshot` only reads fields, never stores references back into the snapshot.
+         */
+        applySnapshot(snap);
       } catch (err) {
         console.error('[RTSVR2] applySnapshot failed', err);
       }
@@ -774,9 +788,20 @@ function handleHostData(data) {
     case 'game-start':
       lastClientSnapshotSeq = -1;
       lastClientPauseSigFromSnap = '';
+      lastClientSnapWallMs = 0;
       clearMpPauseState();
       syncMpPauseUi();
       lastClientPlayerTeamSig = '';
+      /**
+       * Drop pre-match lobby entities (`placeLobbyLunarSettlementShowcase` puts ~12 showcase
+       * units + 4 buildings into the client's State at boot). After the host runs `resetState`
+       * at start, its fresh entities reuse ids 0..N — without this clear the client merges
+       * snapshot data into stale lobby objects with the wrong `type` / owner buckets, so e.g.
+       * P1's HQ keeps rendering as a barracks (no textured HQ GLB) and the renderer churns on
+       * mismatched per-frame state. That stale work piles on around the first big production
+       * wave (~20–30 s in) and is the most common cause of the client appearing to freeze.
+       */
+      State.resetMatchEntitiesForClient();
       State.gameSession.gameStarted = true;
       State.gameSession.menuOpen = false;
       State.deselectAll();
@@ -1427,6 +1452,17 @@ function applySnapshot(snapshot) {
 
   snapshot.units.forEach(uData => {
     let unit = State.units.get(uData.id);
+    /**
+     * Defensive: if a snapshot arrives for an existing local unit whose `type` no longer
+     * matches the host (a leftover lobby showcase unit, or a late snapshot before
+     * `game-start` cleared us), tear the local copy down and rebuild from the host's data.
+     * Without this, we'd render the wrong GLB/footprint/colour for that id and selection
+     * raycasts would target the wrong logical entity.
+     */
+    if (unit && uData.type && unit.type !== uData.type) {
+      State.removeUnit(unit.id);
+      unit = null;
+    }
     if (!unit) {
       unit = Units.createUnit(uData.type, uData.ownerId, uData.x, uData.z, {
         id: uData.id,
@@ -1439,6 +1475,17 @@ function applySnapshot(snapshot) {
       }
     }
     if (unit) {
+      // Re-bucket on owner change (engineer capture, AI-takeover etc.) so `unitsByPlayer`
+      // stays consistent — otherwise selection / income / production caps drift on the client.
+      if (uData.ownerId !== undefined && unit.ownerId !== uData.ownerId) {
+        const oldSet = State.unitsByPlayer.get(unit.ownerId);
+        if (oldSet) oldSet.delete(unit.id);
+        unit.ownerId = uData.ownerId;
+        if (!State.unitsByPlayer.has(unit.ownerId)) {
+          State.unitsByPlayer.set(unit.ownerId, new Set());
+        }
+        State.unitsByPlayer.get(unit.ownerId).add(unit.id);
+      }
       if (uData.team !== undefined && unit.team !== uData.team) {
         const oldT = unit.team;
         const oldSet = State.unitsByTeam.get(oldT);
@@ -1482,6 +1529,17 @@ function applySnapshot(snapshot) {
 
   snapshot.buildings.forEach(bData => {
     let building = State.buildings.get(bData.id);
+    /**
+     * Mirror of the unit guard above: a stale lobby `bldg_0` (HQ at lobby position) sharing
+     * an id with the host's match-time HQ used to keep its lobby type/position; or worse,
+     * the lobby-built barracks could shadow a freshly-built refinery on the same id. Force
+     * a clean rebuild whenever the host says this id is a different building type.
+     */
+    if (building && bData.type && building.type !== bData.type) {
+      State.removeBuilding(building.id);
+      building = null;
+      if (bData.type !== 'hq') navDirty = true;
+    }
     if (!building) {
       Buildings.createBuilding(bData.type, bData.ownerId, bData.x, bData.z, {
         id: bData.id,
