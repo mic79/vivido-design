@@ -20,7 +20,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
-import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
+import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
 /* Sky removed: replaced by a programmatic equirect gradient sky whose
  * horizon colour is bound to the fog colour (see setupSkyAndBloom and
@@ -44,6 +44,11 @@ import {
   setOnSectorsChanged,
   SECTOR_SIZE,
   GRID_HALF,
+  setAntiRepetition,
+  getAntiRepetition,
+  setTextures,
+  getTextures,
+  getSectorTowerAnchors,
 } from "./sectors.js";
 import {
   initBots,
@@ -51,13 +56,34 @@ import {
   setBotsEnabled,
   getBotsEnabled,
   getBotsDebug,
+  getAntiAirDebug,
   killAllDrones,
   jumpToWave,
   spawnSpecificDrone,
+  ensureMusicStarted,
+  setCompassMode,
+  getCompassMode,
+  setUIVisible,
+  getUIVisible,
+  setBowHand,
+  getBowHand,
+  toggleBowHand,
+  notifySectorsChanged,
+  setArrowType,
+  getArrowType,
+  toggleArrowType,
+  restartRun,
+  getTopScores,
 } from "./bots.js";
 
-const ENV_URL =
-  "https://raw.githubusercontent.com/gkjohnson/3d-demo-data/master/hdri/aristea_wreck_puresky_2k.hdr";
+/* Local overcast EXR — used both as scene.environment (IBL ambient
+ * lighting source) AND as scene.background (visible sky dome). The
+ * "overcast" pick is deliberate: a uniformly-grey dome means every
+ * pixel of the sky deviates only ~5-10 % from the mean, so the
+ * fog-colour matching trick (see below in `init()`) holds the
+ * "no sector pop-in" guarantee that BattleVR's solid-grey sky was
+ * giving us, while still letting the player see an actual sky. */
+const ENV_URL = "textures/overcast_soil_puresky_1k.exr";
 
 function readIntParam(name, fallback) {
   try {
@@ -81,13 +107,74 @@ function readFloatParam(name, fallback) {
   }
 }
 
+/**
+ * Return the mean LINEAR-RGB colour of an equirect HDR/EXR texture as
+ * a `{ r, g, b }` object (values in [0, +∞) — HDR pixels can exceed 1).
+ *
+ * The EXR pixel data is already in linear-RGB float32, so this is a
+ * straight average of the channel values. We sample on a stride
+ * (~4096 samples regardless of texture size) for cheap one-time
+ * computation; for a 1k equirect (1024 × 512 = 524k pixels) that's a
+ * 128× speedup vs full pixel walk and gives an answer indistinguishable
+ * from the exact mean for the purpose of fog matching.
+ *
+ * Bright HDR pixels (a sun disc) would normally pull the mean far
+ * brighter than the visual "sky grey". We CLAMP each channel sample
+ * to 4× the per-pixel-channel mean before averaging — a stupid simple
+ * outlier filter that gives us a robust "background sky" mean even on
+ * EXRs that include direct-sun information. For an overcast EXR the
+ * clamp is essentially a no-op (no pixels far brighter than the rest).
+ */
+function sampleEquirectAverageLinear(tex) {
+  const img = tex.image;
+  const data = img?.data;
+  if (!data) return { r: 0.5, g: 0.5, b: 0.5 };
+  const w = img.width;
+  const h = img.height;
+  const channels = data.length / (w * h);     // 3 (RGB) or 4 (RGBA)
+  const targetSamples = 4096;
+  const stride = Math.max(1, Math.floor(Math.sqrt((w * h) / targetSamples)));
+  /* First pass: compute coarse mean for outlier-clamp threshold. */
+  let sumR = 0, sumG = 0, sumB = 0, count = 0;
+  for (let y = 0; y < h; y += stride) {
+    for (let x = 0; x < w; x += stride) {
+      const i = (y * w + x) * channels;
+      sumR += data[i];
+      sumG += data[i + 1];
+      sumB += data[i + 2];
+      count++;
+    }
+  }
+  const meanR0 = sumR / count;
+  const meanG0 = sumG / count;
+  const meanB0 = sumB / count;
+  const capR = meanR0 * 4;
+  const capG = meanG0 * 4;
+  const capB = meanB0 * 4;
+  /* Second pass: same stride, but each sample clamped to ≤ 4× the
+   * coarse mean. Keeps a sun disc from dominating the average. */
+  sumR = 0; sumG = 0; sumB = 0; count = 0;
+  for (let y = 0; y < h; y += stride) {
+    for (let x = 0; x < w; x += stride) {
+      const i = (y * w + x) * channels;
+      sumR += Math.min(data[i],     capR);
+      sumG += Math.min(data[i + 1], capG);
+      sumB += Math.min(data[i + 2], capB);
+      count++;
+    }
+  }
+  return { r: sumR / count, g: sumG / count, b: sumB / count };
+}
+
 /** Sun light intensity (overdriven so concrete actually triggers bloom and shadows
  *  read with real contrast). */
 const SUN_INTENSITY = readFloatParam("sun", 4.0);
-/** `?hdr=1` → use the photographic HDR equirect as scene.background. WARNING
- *  this disables the no-pop fog matching (background colour stops matching
- *  fog colour, so streaming pops become visible again). Opt-in only. */
-const USE_HDR = readIntParam("hdr", 0) === 1;
+/** Default ON: the overcast EXR doubles as both `scene.environment`
+ *  (IBL) and `scene.background` (visible sky), with the fog colour
+ *  set to the EXR's mean linear RGB at load time so streaming pops
+ *  remain invisible against the dome. `?hdr=0` opts out for users
+ *  who'd rather have the old solid-grey sky. */
+const USE_HDR = readIntParam("hdr", 1) === 1;
 
 /** SKY / FOG: ONE colour, used as both `scene.background` AND `scene.fog`.
  *
@@ -162,7 +249,7 @@ let controllerGrip1;
 let controllerGrip2;
 const vrInput = { leftStick: { x: 0, y: 0 }, rightStick: { x: 0, y: 0 } };
 const moveSpeed = 6;
-const rotateSpeed = 60;
+const rotateSpeed = 120;
 const verticalSpeed = 2;
 const deadzone = 0.15;
 
@@ -362,6 +449,153 @@ function drawVrFpsPanel(fps) {
 
 /* ── VR controllers ───────────────────────────────────────────────────── */
 
+/**
+ * Build the "B  Toggle Battle" floating label that mirrors VRKnockout's
+ * grip-mounted hints. Structure:
+ *
+ *   group
+ *     └── pulseGroup    (animates 1.0 → 1.2 — pulse only the ring + letter,
+ *           ├── ring     just like VRKnockout's <a-entity animation> wrapper
+ *           └── letter   that sits outside the static label)
+ *     └── label         (static, sits OUTSIDE the pulse so it doesn't grow)
+ *
+ * All three meshes are unlit BasicMaterial / RingGeometry, transparent,
+ * `depthTest:false` (so the controller mesh never occludes them) and
+ * `fog:false` (so atmospheric fog leaves them alone).
+ */
+function makeButtonHint(letter, label) {
+  const group = new THREE.Group();
+  group.name = `hint_${letter}`;
+
+  /* Ring dimensions match VRKnockout: inner 8.6 mm, outer 9.9 mm. */
+  const RING_INNER = 0.0086;
+  const RING_OUTER = 0.0099;
+
+  /* ── Pulse subgroup (ring + letter) ──────────────────────────────── */
+  const pulseGroup = new THREE.Group();
+  group.add(pulseGroup);
+
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.96,
+    side: THREE.DoubleSide, fog: false, toneMapped: false, depthTest: false,
+  });
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(RING_INNER, RING_OUTER, 40), ringMat,
+  );
+  ring.renderOrder = 9990;
+  pulseGroup.add(ring);
+
+  /* Letter centred in the ring. Square canvas + square plane so the glyph
+   * actually fills its share of the ring's inner area (the previous
+   * 256×64-canvas-on-rectangular-plane combo rendered the glyph at ~2 mm
+   * tall, which was indistinguishable from blank). Plane size is set to
+   * fit comfortably inside the ring's inner diameter (17.2 mm). */
+  const letterCanvasN = 96;
+  const letterCanvas = document.createElement("canvas");
+  letterCanvas.width = letterCanvasN;
+  letterCanvas.height = letterCanvasN;
+  {
+    const ctx = letterCanvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `700 ${Math.floor(letterCanvasN * 0.78)}px system-ui, -apple-system, sans-serif`;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    /* +1 px nudge for visual centring — most fonts have more headroom
+     * above the baseline than below the cap line. */
+    ctx.fillText(letter, letterCanvasN / 2, letterCanvasN / 2 + 1);
+  }
+  const letterTex = new THREE.CanvasTexture(letterCanvas);
+  letterTex.colorSpace = THREE.SRGBColorSpace;
+  letterTex.minFilter = THREE.LinearFilter;
+  letterTex.magFilter = THREE.LinearFilter;
+  letterTex.generateMipmaps = false;
+  const letterSize = 0.013; /* 13 mm — fits inside the 17.2 mm ring inner diameter. */
+  const letterMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(letterSize, letterSize),
+    new THREE.MeshBasicMaterial({
+      map: letterTex, transparent: true, side: THREE.DoubleSide,
+      fog: false, toneMapped: false, depthTest: false,
+    }),
+  );
+  /* +0.0002 m forward of the ring on the local Z so it always wins the
+   * sort even at identical renderOrder collisions. */
+  letterMesh.position.set(0, 0, 0.0002);
+  letterMesh.renderOrder = 9991;
+  pulseGroup.add(letterMesh);
+
+  /* ── Static label to the right of the ring ───────────────────────── */
+  const labelCanvasW = 384;
+  const labelCanvasH = 64;
+  const labelCanvas = document.createElement("canvas");
+  labelCanvas.width = labelCanvasW;
+  labelCanvas.height = labelCanvasH;
+  {
+    const ctx = labelCanvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "600 40px system-ui, -apple-system, sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.fillText(label, 4, labelCanvasH / 2);
+  }
+  const labelTex = new THREE.CanvasTexture(labelCanvas);
+  labelTex.colorSpace = THREE.SRGBColorSpace;
+  labelTex.minFilter = THREE.LinearFilter;
+  labelTex.magFilter = THREE.LinearFilter;
+  labelTex.generateMipmaps = false;
+  const LABEL_W = 0.045; /* 45 mm wide label — readable at controller distance. */
+  const LABEL_H = LABEL_W * (labelCanvasH / labelCanvasW);
+  const labelMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(LABEL_W, LABEL_H),
+    new THREE.MeshBasicMaterial({
+      map: labelTex, transparent: true, side: THREE.DoubleSide,
+      fog: false, toneMapped: false, depthTest: false,
+    }),
+  );
+  /* Plane is centred on its position. We want the plane's LEFT EDGE to
+   * sit just outside the ring's outer radius with a small gap (3 mm),
+   * so:  centre.x = RING_OUTER + gap + LABEL_W/2. This is what was
+   * wrong before — the previous setup put the centre at 0.0125 m which
+   * left the plane's left edge inside the ring. */
+  const LABEL_GAP = 0.003;
+  labelMesh.position.set(RING_OUTER + LABEL_GAP + LABEL_W / 2, 0, 0.0002);
+  labelMesh.renderOrder = 9991;
+  group.add(labelMesh);
+
+  /* Pulse only the ring + letter, never the label. 1.0 → 1.2 over ~800 ms,
+   * sin-eased — the same numbers VRKnockout uses (`from: 1 1 1; to: 1.2 1.2
+   * 1.2; dur: 800; dir: alternate; easing: easeInOutSine`). */
+  group.userData.pulseStart = performance.now();
+  group.userData.pulseTick = (now) => {
+    const t = (now - group.userData.pulseStart) / 1000;
+    const s = 1.0 + 0.1 * (0.5 + 0.5 * Math.sin(t * Math.PI * 1.25));
+    pulseGroup.scale.set(s, s, s);
+  };
+
+  return group;
+}
+
+/** Attach a button hint to a grip so it floats just above the face
+ * buttons, label readable when the player glances at their hand.
+ *
+ * Coordinates match VRKnockout's `<a-entity position="0.002 0.012 -0.062">`
+ * + rotation chain, translated into three.js controllerGrip space:
+ *   - WebXR grip frame: +Y is "up" out of the back of the hand, -Z is
+ *     forward along the controller toward the index trigger.
+ *   - Face buttons live a couple of cm forward of the grip and on the
+ *     top face (+Y). So the hint sits at ~(0, 0.025, -0.06) and is
+ *     rotated -π/2 around X so its plane lies flat on top of the
+ *     controller, then tilted forward ~15° so the text faces the visor. */
+function attachHintToGrip(grip, hint) {
+  const outer = new THREE.Group();
+  outer.position.set(0.002, 0.025, -0.062);
+  outer.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  outer.add(hint);
+  grip.add(outer);
+  return outer;
+}
+
+const _hintMeshes = [];
+
 function setupVRControllers() {
   const factory = new XRControllerModelFactory();
   controller1 = renderer.xr.getController(0);
@@ -375,11 +609,56 @@ function setupVRControllers() {
   controllerGrip2.add(factory.createControllerModel(controllerGrip2));
   cameraRig.add(controllerGrip2);
 
+  /* Once we know which grip is which hand, hang the matching button
+   * hints off each: "B Toggle Battle" on the right (button[5] = B on
+   * Quest Touch), "Y Toggle UI" on the left (button[5] = Y on the
+   * left controller — the upper face button on each hand). We
+   * delay-bind because handedness only becomes known on the
+   * controller's `connected` event. */
+  function bindRightHint(grip) {
+    if (grip.userData._hasBattleHint) return;
+    grip.userData._hasBattleHint = true;
+    const hint = makeButtonHint("B", "Toggle Battle");
+    attachHintToGrip(grip, hint);
+    _hintMeshes.push(hint);
+  }
+  /* Left controller carries TWO hints stacked vertically: Y on the
+   * upper face button (toggles HUD visibility) and X on the lower face
+   * button (toggles arrow type — normal ↔ explosive). VRKnockout's
+   * single-hint position for Y is `(0.002, 0.025, -0.062)`; X sits
+   * ~16 mm "below" Y along the controller's local +Z (toward the
+   * trigger) so it floats roughly over the X button on the front
+   * face plate. The two hints are independent groups so each pulses
+   * its own ring without dragging the other. */
+  function bindLeftHint(grip) {
+    if (grip.userData._hasLeftHints) return;
+    grip.userData._hasLeftHints = true;
+    /* Y — upper face button (matches existing position used for
+     * the right grip's B hint). */
+    const yHint = makeButtonHint("Y", "Toggle UI");
+    attachHintToGrip(grip, yHint);
+    _hintMeshes.push(yHint);
+    /* X — lower face button. Same yaw / pitch as Y, just shifted
+     * forward along the controller (toward the trigger) by 16 mm so
+     * the two ringed labels stack neatly without overlapping. */
+    const xHint = makeButtonHint("X", "Switch arrow");
+    const xOuter = new THREE.Group();
+    xOuter.position.set(0.002, 0.025, -0.062 + 0.016);
+    xOuter.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+    xOuter.add(xHint);
+    grip.add(xOuter);
+    _hintMeshes.push(xHint);
+  }
+
   controller1.addEventListener("connected", (e) => {
     if (e.data?.handedness) handToCtrl[e.data.handedness] = controllerGrip1;
+    if (e.data?.handedness === "right") bindRightHint(controllerGrip1);
+    if (e.data?.handedness === "left") bindLeftHint(controllerGrip1);
   });
   controller2.addEventListener("connected", (e) => {
     if (e.data?.handedness) handToCtrl[e.data.handedness] = controllerGrip2;
+    if (e.data?.handedness === "right") bindRightHint(controllerGrip2);
+    if (e.data?.handedness === "left") bindLeftHint(controllerGrip2);
   });
 }
 
@@ -393,6 +672,20 @@ function toggleLocomotionMode() {
   grabState.right.history.length = 0;
   console.log(`[locomotion] mode → ${locomotionMode}`);
   setStatus(`Locomotion: ${locomotionMode}`);
+}
+
+/** Master UI-visibility toggle. Hides the FPS panel + the bots.js
+ *  HUD layer (minimap, compass ribbon, combat HUD). The crosshair,
+ *  damage flashes, and controller button hints stay visible — they
+ *  are either critical aiming/feedback or live on the controller in
+ *  physical space (so hiding them would just leave the player staring
+ *  at unlabelled buttons). Bound to the left controller's Y button
+ *  and exposed as `brutalistVR8.toggleUI()`. */
+function toggleUIVisibility() {
+  const next = !getUIVisible();
+  setUIVisible(next);
+  if (vrFps.mesh) vrFps.mesh.visible = next && SHOW_FPS;
+  console.log(`[ui] visibility → ${next ? "on" : "off"}`);
 }
 
 const _handVel = new THREE.Vector3();
@@ -585,11 +878,19 @@ function updateVRMovement(delta) {
         vrInput.rightStick.y = stickY;
       }
     }
-    if (source.handedness === "left" && source.gamepad.buttons?.[5]?.pressed) {
+    /* Y button (left, button[5]) → master UI-visibility toggle. The
+     * matching "Y Toggle UI" hint sits on the left controller. Editor
+     * mode (the previous Y binding) is no longer wired to a button —
+     * it stays accessible via `brutalistVR8.toggleEditor()` in the
+     * console and via `?editor=1`, but the live binding is gone so
+     * accidental presses during combat just hide/show the HUD instead
+     * of switching locomotion mid-fight. */
+    if (source.handedness === "left"
+        && source.gamepad.buttons?.[5]?.pressed) {
       yPressed = true;
     }
   }
-  if (yPressed && !yButtonWasPressed) toggleLocomotionMode();
+  if (yPressed && !yButtonWasPressed) toggleUIVisibility();
   yButtonWasPressed = yPressed;
 
   const dt = delta / 1000;
@@ -714,6 +1015,15 @@ function animate(time) {
   lastTime = time;
   if (SHOW_FPS) tickFps(performance.now());
 
+  /* Tick the controller-hint pulse animation (small, no-op when no
+   * hints are bound). */
+  if (_hintMeshes.length > 0) {
+    const now = performance.now();
+    for (const h of _hintMeshes) {
+      if (h.userData?.pulseTick) h.userData.pulseTick(now);
+    }
+  }
+
   /* Stream sectors based on the player's current XZ. Cheap (returns
    * fast unless they crossed a cell boundary). */
   updateSectorStreaming(cameraRig.position);
@@ -767,18 +1077,11 @@ async function init() {
   camera.position.set(0, 2, 0);
 
   scene = new THREE.Scene();
-  /* SOLID-COLOUR background EXACTLY equal to fog colour. Copied from
-   * BattleVR (`fog="type: exponential; color: #000; density: 0.015"`
-   * + `<a-sky color="#000011">`), which works perfectly because the
-   * fog colour and the entire backdrop are the same colour — every
-   * pixel a slab fades into is the same pixel that's drawn behind
-   * the slab. No gradient sky, no Sky shader, no mismatch anywhere
-   * on the dome. This is the only configuration the three.js fog
-   * manual guarantees works.
-   *
-   * `SKY_HORIZON_HEX` is now overloaded as "the one colour" — both fog
-   * AND background AND any HUD that wants to match it. Keep it as ONE
-   * hex value; the previous gradient-zenith hex is unused.
+  /* Pre-load placeholder: solid grey background + matching fog. The
+   * EXR sky takes over once it loads (a few hundred ms later); until
+   * then we want a calm flat-grey rather than black so the first
+   * frames don't flash dark. The fog density and `?skyhorizon=`
+   * override are unchanged from the previous design.
    *
    * Density 0.025 + 5×5 active window + ±90 m sun-shadow frustum:
    *     d=60 m  (shadow cutoff edge): 89 % fogged
@@ -787,21 +1090,60 @@ async function init() {
    *     d=160 m (load/unload boundary): ~100 %
    *
    * Tunable: `?fogdensity=` (1/1000s, default 25 → 0.025).
-   *          `?skyhorizon=` (hex w/o #) — also recoloures fog. */
+   *          `?skyhorizon=` (hex w/o #) — fallback sky/fog colour
+   *                          when the EXR fails to load. */
   scene.background = new THREE.Color(SKY_HORIZON_HEX);
   const fogDensity = readIntParam("fogdensity", 25) / 1000;
   scene.fog = new THREE.FogExp2(SKY_HORIZON_HEX, fogDensity);
   scene.add(cameraRig);
 
-  setStatus("Loading HDR…");
+  /* Sky + IBL.
+   *
+   * The local overcast EXR fills both roles:
+   *   1. `scene.environment` — drives PBR ambient lighting (the
+   *      reflection of the sky on metalness ≥ 0 surfaces, the soft
+   *      sky-blue tint on the floor, etc).
+   *   2. `scene.background` — drawn as the actual sky dome the
+   *      player sees.
+   *
+   * To preserve the "no sector pop-in" guarantee we previously got
+   * from a solid-grey sky, we ALSO retune the fog colour to match
+   * the EXR's mean LINEAR RGB. The sky is overcast by design (≈
+   * uniform grey), so per-pixel deviation from the mean is small
+   * and the slab-fade-into-fog/sky transition stays nearly
+   * invisible across the dome.
+   *
+   * `?hdr=0` opts back into the old solid-grey-only behaviour. The
+   * EXR is still used as `scene.environment` in that mode (it
+   * doesn't cost anything extra and the IBL contribution is
+   * desirable regardless). */
+  setStatus("Loading sky…");
   try {
-    const envTexture = await new RGBELoader().loadAsync(ENV_URL);
+    /* Force Float32 pixel data so the CPU-side mean computation in
+     * `sampleEquirectAverageLinear` doesn't have to deal with raw
+     * half-float bits. The default would deliver a Uint16Array for
+     * a half-float EXR, which my plain-arithmetic averaging
+     * interprets as integers (= silent garbage values). */
+    const exrLoader = new EXRLoader();
+    exrLoader.setDataType(THREE.FloatType);
+    const envTexture = await exrLoader.loadAsync(ENV_URL);
     envTexture.mapping = THREE.EquirectangularReflectionMapping;
     scene.environment = envTexture;
     scene.environmentIntensity = 0.45;
-    if (USE_HDR) scene.background = envTexture;
+    if (USE_HDR) {
+      scene.background = envTexture;
+      /* Retune fog to the EXR's mean colour. Linear-space match —
+       * three.js fog mixes in linear before tone-mapping, so we
+       * want the linear avg, not the post-tonemap one. */
+      const avg = sampleEquirectAverageLinear(envTexture);
+      scene.fog.color.setRGB(avg.r, avg.g, avg.b, THREE.LinearSRGBColorSpace);
+      console.info(
+        `[brutalistVR8] sky: fog colour matched to EXR avg = `
+        + `linear(${avg.r.toFixed(3)}, ${avg.g.toFixed(3)}, ${avg.b.toFixed(3)})`,
+      );
+    }
   } catch (e) {
-    console.warn("HDR load failed", e);
+    console.warn("EXR load failed — falling back to solid-grey sky.", e);
   }
 
   /* Spawn the player at sector (0,0)'s centre, slightly offset so they
@@ -833,6 +1175,20 @@ async function init() {
     if (session?.updateTargetFrameRate && session.supportedFrameRates?.includes(120)) {
       session.updateTargetFrameRate(120).catch(() => {});
     }
+    /* Hide the desktop intro overlay the moment the headset takes over —
+     * it would block the swap to immersive mode visually anyway, but
+     * dropping display:none also stops the layout engine from re-running
+     * the gradient/animation work behind the scene. */
+    const intro = document.getElementById("intro-overlay");
+    if (intro) intro.style.display = "none";
+    /* Kick streaming music into life. The "Enter VR" click is the user
+     * gesture that lets the AudioContext resume; we're still inside that
+     * gesture's grace window when sessionstart fires. */
+    try {
+      ensureMusicStarted();
+    } catch (e) {
+      console.warn("[brutalistVR8] music start failed:", e);
+    }
   });
 
   if (SHOW_FPS) {
@@ -849,9 +1205,17 @@ async function init() {
   setupSunLight();
   setupSkyAndBloom();
 
-  /* Boot the sector streamer. Initial 3×3 around (0,0) loads here. */
-  initSectors(scene, { initialKey: "0,0" });
+  /* Boot the sector streamer. Initial 3×3 around (0,0) loads here.
+   * Pass the renderer so the streamer can read max anisotropy for its
+   * PBR concrete textures (2K, would otherwise alias at grazing angles). */
+  initSectors(scene, { initialKey: "0,0", renderer });
   setOnSectorsChanged(({ currentKey, activeKeys }) => {
+    /* Forward to bots so its anti-air manager can spawn / despawn
+     * tower-mounted batteries (and their snitch escorts) along with
+     * the procedural sectors that house them. The call is idempotent
+     * — bots.js diffs against its own loaded set, so calling on every
+     * stream tick is fine. */
+    notifySectorsChanged(activeKeys);
     /* Keep status line informative when not in combat. */
     if (!getBotsEnabled()) {
       setStatus(`sector ${currentKey} — ${activeKeys.length} active · ${getActiveSceneObjects().length} meshes · ${getActiveCollisionBoxes().length} OBBs`);
@@ -864,7 +1228,10 @@ async function init() {
 
   window.addEventListener("resize", onResize);
   renderer.setAnimationLoop(animate);
-  setStatus("Ready — 9×9 procedural sectors, 3×3 active around player");
+  /* Clear the intro overlay's `Loading…` line — by the time we get here
+   * the world is built and the only thing left is for the player to hit
+   * the ENTER VR button. No technical readout in the user-facing intro. */
+  setStatus("");
 
   /* Console API. Most v8 bake/preview commands removed. */
   window.brutalistVR8 = {
@@ -875,7 +1242,8 @@ async function init() {
         activeSectors: getActiveSectorKeys(),
         activeMeshes: getActiveSceneObjects().length,
         activeCollisionBoxes: getActiveCollisionBoxes().length,
-        worldGrid: `${GRID_HALF * 2 + 1}×${GRID_HALF * 2 + 1}`,
+        world: "infinite (procedurally streamed)",
+        minimapWindow: `${GRID_HALF * 2 + 1}×${GRID_HALF * 2 + 1}`,
         sectorSize: SECTOR_SIZE,
         sunIntensity: sunLight?.intensity,
         playerXZ: [Math.round(cameraRig.position.x), Math.round(cameraRig.position.z)],
@@ -883,25 +1251,177 @@ async function init() {
       console.info("brutalistVR8.status:", out);
       return out;
     },
-    /** Dump the archetype map for the full 9×9 grid. */
-    sectorMap() {
-      const metas = getAllSectorMetas();
+    /** Dump the archetype map for the (2*radius+1)² window centred on
+     *  the player's current sector. The world is infinite, so this is
+     *  always a sliding window — pass an explicit center/radius to
+     *  inspect somewhere else. */
+    sectorMap(radius = GRID_HALF, centerKey) {
+      const metas = getAllSectorMetas(centerKey || getCurrentSectorKey(), radius);
+      const cx = metas[0].sx + radius;
+      const cz = metas[0].sz + radius;
       const rows = [];
-      for (let sz = -GRID_HALF; sz <= GRID_HALF; sz++) {
+      for (let dz = -radius; dz <= radius; dz++) {
         const cells = [];
-        for (let sx = -GRID_HALF; sx <= GRID_HALF; sx++) {
-          const m = metas.find((mm) => mm.sx === sx && mm.sz === sz);
+        for (let dx = -radius; dx <= radius; dx++) {
+          const m = metas.find((mm) => mm.sx === cx - radius + dx && mm.sz === cz - radius + dz);
           cells.push(m ? m.archetype.padEnd(15) : "—".padEnd(15));
         }
         rows.push(cells.join(" "));
       }
-      console.info("brutalistVR8.sectorMap (sz=−4 top, sx=−4 left):\n" + rows.join("\n"));
+      console.info(
+        `brutalistVR8.sectorMap (centred on ${centerKey || getCurrentSectorKey()}, ` +
+          `radius ${radius}; top row = north, left col = west):\n` + rows.join("\n"),
+      );
       return metas;
     },
     /** Set sun intensity at runtime. */
     setSun(v) {
       if (sunLight) sunLight.intensity = v;
       console.info("brutalistVR8.setSun:", v);
+    },
+    /** Manually toggle editor (free-fly) ↔ physics locomotion. The Y-button
+     * shortcut is no longer wired (Y now toggles UI); this console call
+     * is the only way to switch locomotion modes at runtime. */
+    toggleEditor() {
+      toggleLocomotionMode();
+      return locomotionMode;
+    },
+    /** Toggle the HUD layer (FPS, minimap, compass ribbon, combat HUD)
+     *  on/off. Mirror of the left-controller Y button. Crosshair,
+     *  damage flashes, and controller hints stay visible. */
+    toggleUI() {
+      toggleUIVisibility();
+      return getUIVisible();
+    },
+    /** Set UI visibility to a specific state (true/false). */
+    setUI(v) {
+      const want = !!v;
+      if (want !== getUIVisible()) toggleUIVisibility();
+      return getUIVisible();
+    },
+    /** Switch the minimap orientation mode at runtime. Pass "north" for
+     *  a static (north-up) map with a heading triangle (default,
+     *  recommended for VR), or "heading" / "rotating" for a player-
+     *  forward-up map that spins as you turn. The compass ribbon at
+     *  the top of the FOV is unaffected — it always shows absolute
+     *  bearing. Equivalent to the URL param `?compass=`. */
+    setCompass(mode) {
+      const m = (mode || "").toLowerCase();
+      if (m !== "north" && m !== "heading" && m !== "rotating" && m !== "static") {
+        console.warn('brutalistVR8.setCompass: pass "north" or "heading"');
+        return getCompassMode();
+      }
+      const norm = (m === "rotating") ? "heading" : (m === "static") ? "north" : m;
+      setCompassMode(norm);
+      console.info("brutalistVR8.setCompass:", norm);
+      return norm;
+    },
+    /** Toggle the stochastic-sampling anti-repetition shader at runtime.
+     *  When OFF, slabs and ground revert to a single-tap PBR sample —
+     *  texture pattern repeats become visible again, but the GPU skips
+     *  ~3-4× of the fragment-shader texture-fetch work, restoring
+     *  performance on lower-end devices. The macro tint, per-slab UV
+     *  jitter, and per-slab tint jitter all stay on (they're free).
+     *  Equivalent boot flag: `?antirep=0`.
+     *  Examples:
+     *    brutalistVR8.setAntiRep(false)   // disable for perf testing
+     *    brutalistVR8.setAntiRep(true)    // re-enable
+     *    brutalistVR8.toggleAntiRep()     // flip current state
+     */
+    setAntiRep(v) {
+      setAntiRepetition(!!v);
+      console.info("brutalistVR8.setAntiRep:", getAntiRepetition());
+      return getAntiRepetition();
+    },
+    toggleAntiRep() {
+      setAntiRepetition(!getAntiRepetition());
+      console.info("brutalistVR8.toggleAntiRep:", getAntiRepetition());
+      return getAntiRepetition();
+    },
+    /** Master textures on/off switch. When OFF, every slab + ground
+     *  material has its map / normalMap / aoMap / roughnessMap /
+     *  metalnessMap nulled, and the shader recompiles to use ZERO
+     *  texture samples. The per-slab tint multipliers and the macro
+     *  brightness wave keep working — surfaces become flat-tinted
+     *  concrete shades with subtle world-space variation.
+     *
+     *  Use cases:
+     *    - Diagnose how much of the frame budget is the texture
+     *      pipeline (stochastic + sampling + decompression).
+     *    - Ship a "fast mode" for low-end hardware.
+     *    - Quick sanity check that geometry / lighting / fog all
+     *      look right independent of texture content.
+     *
+     *  Equivalent boot flag: `?textures=0`.
+     *  Examples:
+     *    brutalistVR8.setTextures(false)  // disable
+     *    brutalistVR8.setTextures(true)   // re-enable
+     *    brutalistVR8.toggleTextures()    // flip
+     */
+    setTextures(v) {
+      setTextures(!!v);
+      console.info("brutalistVR8.setTextures:", getTextures());
+      return getTextures();
+    },
+    toggleTextures() {
+      setTextures(!getTextures());
+      console.info("brutalistVR8.toggleTextures:", getTextures());
+      return getTextures();
+    },
+    /** Pick which hand holds the bow. Defaults to "left" (right hand
+     *  draws). Equivalent in-VR control: A button on the right
+     *  controller toggles handedness on the fly.
+     *  Examples:
+     *    brutalistVR8.setBowHand("right")
+     *    brutalistVR8.toggleBowHand()
+     *    brutalistVR8.getBowHand()  // → "left" | "right"
+     */
+    setBowHand(hand) {
+      const h = setBowHand(hand);
+      console.info("brutalistVR8.setBowHand:", h);
+      return h;
+    },
+    toggleBowHand() {
+      const h = toggleBowHand();
+      console.info("brutalistVR8.toggleBowHand:", h);
+      return h;
+    },
+    getBowHand() { return getBowHand(); },
+    /** Switch which arrow type the bow nocks next.
+     *  Values: "normal" (white-tip practice arrow, baseline damage)
+     *          "explosive" (sphere-tip, 4 m blast on impact / mid-flight
+     *           detonate via bow-hand trigger, 10 s recharge after use).
+     *  In-VR equivalent: X button on the left controller toggles.
+     *  Examples:
+     *    brutalistVR8.setArrowType("explosive")
+     *    brutalistVR8.toggleArrowType()
+     *    brutalistVR8.getArrowType()
+     */
+    setArrowType(t) {
+      const v = setArrowType(t);
+      console.info("brutalistVR8.setArrowType:", v);
+      return v;
+    },
+    toggleArrowType() {
+      const v = toggleArrowType();
+      console.info("brutalistVR8.toggleArrowType:", v);
+      return v;
+    },
+    getArrowType() { return getArrowType(); },
+
+    /* ── Run control ─────────────────────────────────────────────────
+     *  brutalistVR8.restartRun() — wipe run state and start a fresh
+     *  wave-1 immediately (used by the in-VR Play Again trigger).
+     *  brutalistVR8.topScores()  — readout of persisted leaderboard.
+     */
+    restartRun() {
+      restartRun();
+      console.info("brutalistVR8.restartRun: new run started");
+    },
+    topScores() {
+      const s = getTopScores();
+      console.info("brutalistVR8.topScores:", s);
+      return s;
     },
   };
   /* Bots module. Takes ownership of all combat — its only outward
@@ -919,14 +1439,25 @@ async function init() {
     /** Bots use this to know where drones should anchor their spawn /
      *  survey targets. */
     getPlayerPosition: () => cameraRig.position,
-    /** And this for the HUD minimap. */
-    getSectorInfo: () => ({
-      current: getCurrentSectorKey(),
-      active: getActiveSectorKeys(),
-      all: getAllSectorMetas(),
-      sectorSize: SECTOR_SIZE,
-      gridHalf: GRID_HALF,
-    }),
+    /** And this for the HUD minimap. The world is infinite, so the
+     *  metadata window is recomputed each call centred on the player's
+     *  current sector — the minimap shows a 9×9 view that slides with
+     *  the player rather than a fixed world grid. */
+    getSectorInfo: () => {
+      const current = getCurrentSectorKey();
+      return {
+        current,
+        active: getActiveSectorKeys(),
+        all: getAllSectorMetas(current, GRID_HALF),
+        sectorSize: SECTOR_SIZE,
+        gridHalf: GRID_HALF,
+      };
+    },
+    /** Look up the tallest-tower anchor for a sector key. Returns
+     *  [{x, y, z, yaw, w, d, ...}] (length 0 or 1). bots.js calls
+     *  this when a sector loads to decide where to plant an
+     *  AntiAirTurret. */
+    getSectorTowerAnchors,
     respawnPlayer: () => {
       cameraRig.position.copy(playerSpawnPos);
       rigVelocity.set(0, 0, 0);
@@ -941,10 +1472,41 @@ async function init() {
     setEnabled: setBotsEnabled,
     isEnabled: getBotsEnabled,
     debug: getBotsDebug,
+    /** Per-AA snapshot: position, FSM state, aim-focus, sees-player,
+     *  trackable (in passive-track range), and live component HP.
+     *  Use to verify HQs are spawning and engaging.
+     *  Examples:
+     *    brutalistVR8.bots.aaDebug()
+     *    console.table(brutalistVR8.bots.aaDebug())
+     */
+    aaDebug: () => {
+      const out = getAntiAirDebug();
+      console.info(`[brutalistVR8] anti-air emplacements (${out.length}):`);
+      console.table(out.map((e) => ({
+        sector: e.sector,
+        state: e.state,
+        dead: e.dead,
+        sees: e.sees,
+        relay: e.underRelay,
+        trackable: e.trackable,
+        distM: e.distToPlayer,
+        focus: e.aimFocus,
+        coreShielded: e.coreShielded,
+        pos: e.pos.join(","),
+      })));
+      return out;
+    },
     killAll: killAllDrones,
     jumpToWave,
     spawn: spawnSpecificDrone,
   };
+  /* The initial sector batch was loaded by initSectors() *before*
+   * setOnSectorsChanged() registered our callback, so the streamer
+   * never told bots about those sectors. Push the current active
+   * set in now so anti-air emplacements get planted on the
+   * already-loaded towers. After this, every subsequent stream tick
+   * goes through setOnSectorsChanged → notifySectorsChanged. */
+  notifySectorsChanged(getActiveSectorKeys());
   console.info("[brutalistVR8] console API ready — try brutalistVR8.status() or brutalistVR8.sectorMap()");
 }
 
