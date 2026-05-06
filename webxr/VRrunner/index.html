@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>VRrunner — room & hallway (WebXR)</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font-family: system-ui, sans-serif; color: #fff; }
+
+    /* ── VRKnockout-style fullscreen intro overlay ─────────────────────── */
+    #intro-overlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: #111;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff;
+    }
+    #intro-overlay .panel {
+      max-width: 540px; padding: 0 24px; text-align: center;
+    }
+    #intro-overlay h1 {
+      font-size: 2.6em; margin: 0 0 0.5em;
+      letter-spacing: 0.12em; font-weight: 700;
+      color: #4fc3f7;
+    }
+    #intro-overlay p {
+      color: #c8c8c8; margin: 0 0 0.4em; line-height: 1.55; font-size: 1.05em;
+      max-width: 26em; margin-left: auto; margin-right: auto;
+    }
+    /* ── Primary CTA: the three.js VRButton, restyled and parented inside
+     * the intro panel as the big "ENTER VR" button.
+     *
+     * VRButton applies its own inline styles for a floating bottom-centre
+     * placement — we override every property aggressively (with !important)
+     * so it sits flush in the panel as a real primary button. The label
+     * text it sets ("ENTER VR" / "VR NOT SUPPORTED" / "ENTER XR") is left
+     * unchanged because it already says what we want. */
+    #vr-button-host {
+      display: flex; justify-content: center; margin: 1.2em 0 0.4em;
+    }
+    #vr-button-host > button {
+      position: static !important;
+      left: auto !important; right: auto !important;
+      bottom: auto !important; top: auto !important;
+      transform: none !important;
+      width: auto !important; min-width: 220px !important;
+      padding: 14px 28px !important;
+      font: 600 16px/1 system-ui, sans-serif !important;
+      letter-spacing: 0.12em !important;
+      border: none !important; border-radius: 8px !important;
+      background: #4fc3f7 !important; color: #001520 !important;
+      opacity: 1 !important;
+      cursor: pointer !important;
+    }
+    #vr-button-host > button:hover { background: #82d6fa !important; }
+    #intro-overlay .status-line { margin-top: 1em; color: #4fc3f7; font-size: 0.85em; min-height: 1.2em; }
+
+    /* ── In-world HUD (after entering VR / after dismissing the intro) ──── */
+    #fps {
+      position: fixed; right: 10px; top: 10px; z-index: 100;
+      background: rgba(0, 0, 0, 0.7); color: #4fc3f7; padding: 6px 10px;
+      border-radius: 4px; font: 600 13px/1 system-ui, sans-serif;
+      letter-spacing: 0.4px; pointer-events: none;
+    }
+    /* Small floating panel hosting the Combat / Music buttons that bots.js
+     * appends. Hidden behind the intro overlay until the overlay is
+     * dismissed, then it stays in the top-left corner for desktop play.
+     * Inside an active VR session it's irrelevant (the buttons are also
+     * mirrored on the controller hint + B button). */
+    #hud {
+      position: fixed; left: 10px; top: 10px; z-index: 50;
+      background: rgba(0, 0, 0, 0.78); color: #fff; padding: 10px 12px; border-radius: 8px;
+      font-size: 12px; line-height: 1.4; min-width: 160px;
+    }
+    #hud h1 { margin: 0 0 6px; font-size: 13px; color: #4fc3f7; font-weight: 600; }
+    #hud button {
+      display: block; width: 100%; margin-top: 8px; padding: 8px 10px; cursor: pointer;
+      border: none; border-radius: 4px; font-size: 12px;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+        "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.8/src/index.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- VRKnockout-style fullscreen intro. Hidden on `sessionstart` from main.js,
+       and dismissable for desktop play via the small "Continue without VR" link. -->
+  <div id="intro-overlay">
+    <div class="panel">
+      <h1>VR&nbsp;RUNNER</h1>
+      <p>Room → hallway → obstacle. <strong>Earth gravity</strong>, one air jump. Throw direction matches <strong>where you face</strong> (same as brutalistVR8). Grab-throw only on the <strong>ground</strong> or at a <strong>wall</strong> (wall jump). <strong>End of hall</strong>: full <strong>glass wall</strong>, then a <strong>6&nbsp;m</strong> air gap and a <strong>10×10&nbsp;m</strong> neighbor roof — miss it and fall far enough → <strong>run resets</strong> (glass, arrows, combat). Fridge: <strong>45°</strong>. <strong>B</strong> toggles combat (or HUD).</p>
+      <!-- The three.js VRButton is appended here by main.js. Restyled by
+           CSS above as the primary "ENTER VR" CTA. -->
+      <div id="vr-button-host"></div>
+      <div id="status" class="status-line">Loading…</div>
+    </div>
+  </div>
+
+  <!-- bots.js looks up `#hud` to append Combat / Music buttons. Sits behind
+       the intro overlay; visible after dismissal for desktop play. -->
+  <div id="hud">
+    <h1>VRrunner</h1>
+  </div>
+
+  <div id="fps">— FPS</div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
