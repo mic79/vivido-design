@@ -22,6 +22,44 @@ const collisionBoxes_ = [];
 
 /** Meshes from loaded GLB models used for raycast-based collision. */
 const glbCollisionMeshes_ = [];
+
+/**
+ * Stream-sandbox sector GLBs (e.g. pizzaplex per cell): same BVH raycast path as map 0 rooftops.
+ * Tagged so `disposeRunnerLevel` does not dispose shared template geometry.
+ * @param {THREE.Mesh[]} meshes
+ */
+export function registerSandboxGlbCollisionMeshes(meshes) {
+  for (let i = 0; i < meshes.length; i++) {
+    const child = meshes[i];
+    if (!child?.isMesh || !child.geometry) continue;
+    child.updateMatrixWorld(true);
+    const g = child.geometry;
+    if (!g.boundsTree) {
+      g.computeBoundsTree({
+        maxLeafTris: 8,
+        maxDepth: 30,
+        strategy: 0,
+      });
+      g.computeBoundingSphere();
+    }
+    child.userData.sandboxGlbAux = true;
+    if (glbCollisionMeshes_.indexOf(child) < 0) glbCollisionMeshes_.push(child);
+  }
+}
+
+/** Remove sandbox meshes from the global GLB collision list (no geometry dispose). */
+export function unregisterSandboxGlbCollisionMeshes(meshes) {
+  if (!meshes?.length) return;
+  const toRemove = new Set(meshes);
+  const arr = glbCollisionMeshes_;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const child = arr[i];
+    if (toRemove.has(child)) {
+      arr.splice(i, 1);
+      delete child.userData.sandboxGlbAux;
+    }
+  }
+}
 /** One white material shared by all GLB collision meshes; disposed in `disposeRunnerLevel`. */
 let glbSharedWhiteMat_ = null;
 
@@ -1102,6 +1140,10 @@ export function disposeRunnerLevel(scene) {
     levelGroup_ = null;
   }
   collisionBoxes_.length = 0;
+  /* Sandbox clones share template geometries — never dispose their BVHs here. */
+  for (let i = glbCollisionMeshes_.length - 1; i >= 0; i--) {
+    if (glbCollisionMeshes_[i].userData?.sandboxGlbAux) glbCollisionMeshes_.splice(i, 1);
+  }
   for (let i = 0; i < glbCollisionMeshes_.length; i++) {
     const mesh = glbCollisionMeshes_[i];
     const g = mesh.geometry;

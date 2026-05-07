@@ -1,7 +1,8 @@
 /**
  * VRrunner — fork of brutalistVR8: static runner interior + same WebXR
- * locomotion (grab/throw, stick move). Procedural sector streaming is
- * disabled; collision comes from `runnerLevel.js` only.
+ * locomotion (grab/throw, stick move). Procedural brutalist sectors are
+ * disabled here; collision comes from `runnerLevel.js` unless `?map=1`
+ * (default), which uses `streamSandboxMap.js` (100 m 3D cells, 3³ active).
  */
 
 import * as THREE from "three";
@@ -52,6 +53,17 @@ import {
   getGlbFloorSupport,
   getGlbFloorY,
 } from "./runnerLevel.js";
+import {
+  initStreamSandbox,
+  disposeStreamSandbox,
+  updateStreamSandbox,
+  getSandboxCollisionBoxes,
+  getSandboxFloorY,
+  getSandboxDefaultSpawn,
+  getCurrentSandboxSectorKey,
+  getActiveSandboxSectorKeys,
+  SANDBOX_SECTOR,
+} from "./streamSandboxMap.js";
 import {
   initBots,
   updateBots,
@@ -111,6 +123,20 @@ function readFloatParam(name, fallback) {
     return fallback;
   }
 }
+
+/** `?map=0` — furnished runner interior. `?map=1` or omit — streaming sandbox. */
+function readMapIndex() {
+  try {
+    const m = new URLSearchParams(window.location.search).get("map");
+    if (m == null || m === "") return 1;
+    const n = parseInt(m, 10);
+    return n === 0 ? 0 : 1;
+  } catch (_) {
+    return 1;
+  }
+}
+
+const RUNNER_MAP_ID = readMapIndex();
 
 /**
  * Return the mean LINEAR-RGB colour of an equirect HDR/EXR texture as
@@ -939,6 +965,7 @@ const WALL_JUMP_KICK_HORIZ = 3.4;
 const WALL_JUMP_KICK_UP = 2.0;
 
 function getWorldCollisionBoxes() {
+  if (RUNNER_MAP_ID === 1) return getSandboxCollisionBoxes();
   return getRunnerCollisionBoxes();
 }
 
@@ -1036,7 +1063,9 @@ function updateGrabLocomotion(dt) {
 function getMergedGroundSupport(feetY, slack, out) {
   const px = cameraRig.position.x;
   const pz = cameraRig.position.z;
-  const obbY = getRunnerFloorY(px, pz, feetY, slack);
+  const obbY = RUNNER_MAP_ID === 1
+    ? getSandboxFloorY(px, pz, feetY, slack)
+    : getRunnerFloorY(px, pz, feetY, slack);
   const hasGlb = getGlbFloorSupport(px, pz, feetY, _ghTmp);
   if (obbY === null && !hasGlb) return false;
   /* Prefer the **higher** support. When heights tie within a few cm, keep the
@@ -1309,6 +1338,7 @@ function tickRunnerCollisionIntegration(headSourceCamera, dtSec) {
 
 let pitFallResetBusy = false;
 function tryRunnerPitFallReset() {
+  if (RUNNER_MAP_ID === 1) return;
   if (pitFallResetBusy || !scene || !cameraRig) return;
   if (!getWorldCollisionBoxes().length) return;
   if (cameraRig.position.y > RUNNER_PIT_RESET_Y) return;
@@ -1500,6 +1530,12 @@ function animate(time) {
 
   applyRunnerCameraDuck(camera, crouchViewGroup, { deltaMs: delta });
 
+  if (RUNNER_MAP_ID === 1 && cameraRig) {
+    if (updateStreamSandbox(cameraRig.position)) {
+      notifySectorsChanged([]);
+    }
+  }
+
   /* Shadow camera follows the player on a 1 m grid (stable shadows). */
   if (sunLight) {
     sunShadowFrame++;
@@ -1624,10 +1660,16 @@ async function init() {
     console.warn("EXR load failed — falling back to solid-grey sky.", e);
   }
 
-  /* Runner start: furnished room interior, facing toward +Z hallway (feet on slab top). */
-  playerSpawnPos.set(0, RUNNER_TOP_FLOOR_SURFACE_Y, -4);
-  cameraRig.position.copy(playerSpawnPos);
-  orbitTarget.set(0, 2, 10);
+  /* Runner start: map 0 = room interior; map 1 = sandbox centre-cube spawn. */
+  if (RUNNER_MAP_ID === 1) {
+    getSandboxDefaultSpawn(playerSpawnPos);
+    cameraRig.position.copy(playerSpawnPos);
+    orbitTarget.set(playerSpawnPos.x, playerSpawnPos.y + 3, playerSpawnPos.z + 25);
+  } else {
+    playerSpawnPos.set(0, RUNNER_TOP_FLOOR_SURFACE_Y, -4);
+    cameraRig.position.copy(playerSpawnPos);
+    orbitTarget.set(0, 2, 10);
+  }
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1648,6 +1690,22 @@ async function init() {
 
   renderer.xr.addEventListener("sessionstart", () => {
     if (renderer.xr.setFoveation) renderer.xr.setFoveation(1);
+    /* Lower GPU fill cost in headset (especially heavy maps like ?map=1).
+     * Default 1 = unchanged. Try ?xrscale=0.85 or 0.8 if you see tearing / low headroom. */
+    const xrScale = readFloatParam("xrscale", 1);
+    if (
+      xrScale > 0.4
+      && xrScale <= 1.5
+      && Math.abs(xrScale - 1) > 0.001
+      && typeof renderer.xr.setFramebufferScaleFactor === "function"
+    ) {
+      try {
+        renderer.xr.setFramebufferScaleFactor(xrScale);
+        console.info(`[VRrunner] WebXR framebuffer scale = ${xrScale} (?xrscale=)`);
+      } catch (e) {
+        console.warn("[VRrunner] xrscale / setFramebufferScaleFactor:", e);
+      }
+    }
     const session = renderer.xr.getSession();
     /* After `local-floor` reference space is applied, re-sync rig to spawn so
      * world Y matches the level floor (avoids starting under the slab). */
@@ -1688,8 +1746,18 @@ async function init() {
   setupSunLight();
   setupSkyAndBloom();
 
-  initRunnerLevel(scene, { shadows: DYNAMIC_SHADOWS });
-  setStatus("VRrunner · grab-throw jump / slide / wall jump");
+  if (RUNNER_MAP_ID === 0) {
+    initRunnerLevel(scene, { shadows: DYNAMIC_SHADOWS });
+    setStatus("VRrunner · room map (?map=0) · grab-throw / slide / wall jump");
+  } else {
+    disposeRunnerLevel(scene);
+    initStreamSandbox(scene, { shadows: DYNAMIC_SHADOWS });
+    updateStreamSandbox(cameraRig.position);
+    setStatus(
+      `VRrunner · stream sandbox (?map=1) · ${SANDBOX_SECTOR} m cells · 3³ active · `
+      + `centre ${getCurrentSandboxSectorKey()}`,
+    );
+  }
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.target.copy(orbitTarget);
@@ -1699,21 +1767,29 @@ async function init() {
   renderer.setAnimationLoop(animate);
   /* Clear the intro overlay's `Loading…` line — by the time we get here
    * the world is built and the only thing left is for the player to hit
-   * the ENTER VR button. No technical readout in the user-facing intro. */
-  setStatus("");
+   * the ENTER VR button. */
+  if (RUNNER_MAP_ID === 0) {
+    setStatus("");
+  } else {
+    setStatus(
+      `Stream test · ?map=0 for room · ${getActiveSandboxSectorKeys().length} sectors · `
+      + `cell ${SANDBOX_SECTOR} m`,
+    );
+  }
 
   /* Console API. Most v8 bake/preview commands removed. */
   window.VRrunner = window.brutalistVR8 = {
     /** Print streaming + scene state. */
     status() {
       const out = {
-        currentSector: getCurrentSectorKey(),
-        activeSectors: getActiveSectorKeys(),
-        activeMeshes: "(runner)",
+        map: RUNNER_MAP_ID,
+        currentSector: RUNNER_MAP_ID === 1 ? getCurrentSandboxSectorKey() : getCurrentSectorKey(),
+        activeSectors: RUNNER_MAP_ID === 1 ? getActiveSandboxSectorKeys() : getActiveSectorKeys(),
+        activeMeshes: RUNNER_MAP_ID === 1 ? "stream_sandbox" : "(runner)",
         activeCollisionBoxes: getWorldCollisionBoxes().length,
-        world: "VRrunner static level",
+        world: RUNNER_MAP_ID === 1 ? "VRrunner stream sandbox (100 m 3D cells)" : "VRrunner static level",
         minimapWindow: `${GRID_HALF * 2 + 1}×${GRID_HALF * 2 + 1}`,
-        sectorSize: SECTOR_SIZE,
+        sectorSize: RUNNER_MAP_ID === 1 ? SANDBOX_SECTOR : SECTOR_SIZE,
         sunIntensity: sunLight?.intensity,
         playerXZ: [Math.round(cameraRig.position.x), Math.round(cameraRig.position.z)],
       };
@@ -1898,7 +1974,7 @@ async function init() {
    * dependency is a getter for the active OBBs (so its drone steering
    * + grenade trajectory + projectile collision queries match what
    * the player physically collides with). */
-  initBots({
+  const botInitOpts = {
     scene,
     camera,
     cameraRig,
@@ -1910,20 +1986,6 @@ async function init() {
     /** Bots use this to know where drones should anchor their spawn /
      *  survey targets. */
     getPlayerPosition: () => cameraRig.position,
-    /** And this for the HUD minimap. The world is infinite, so the
-     *  metadata window is recomputed each call centred on the player's
-     *  current sector — the minimap shows a 9×9 view that slides with
-     *  the player rather than a fixed world grid. */
-    getSectorInfo: () => {
-      const current = getCurrentSectorKey();
-      return {
-        current,
-        active: getActiveSectorKeys(),
-        all: getAllSectorMetas(current, GRID_HALF),
-        sectorSize: SECTOR_SIZE,
-        gridHalf: GRID_HALF,
-      };
-    },
     /** Look up the tallest-tower anchor for a sector key. Returns
      *  [{x, y, z, yaw, w, d, ...}] (length 0 or 1). bots.js calls
      *  this when a sector loads to decide where to plant an
@@ -1938,7 +2000,20 @@ async function init() {
       grabState.left.history.length = 0;
       grabState.right.history.length = 0;
     },
-  });
+  };
+  if (RUNNER_MAP_ID === 0) {
+    botInitOpts.getSectorInfo = () => {
+      const current = getCurrentSectorKey();
+      return {
+        current,
+        active: getActiveSectorKeys(),
+        all: getAllSectorMetas(current, GRID_HALF),
+        sectorSize: SECTOR_SIZE,
+        gridHalf: GRID_HALF,
+      };
+    };
+  }
+  initBots(botInitOpts);
   setBattleOnBEnabled(true);
   window.brutalistVR8.bots = {
     setEnabled: setBotsEnabled,
@@ -1972,8 +2047,15 @@ async function init() {
     jumpToWave,
     spawn: spawnSpecificDrone,
   };
-  /* No streamed sectors in VRrunner — notify empty so AA spawners stay idle. */
-  notifySectorsChanged(getActiveSectorKeys());
+  if (RUNNER_MAP_ID === 1) {
+    notifySectorsChanged([]);
+    console.info(
+      `[VRrunner] map=1 stream sandbox — ${SANDBOX_SECTOR} m cells, active 3³, `
+      + `keys: ${getActiveSandboxSectorKeys().join("; ")}`,
+    );
+  } else {
+    notifySectorsChanged(getActiveSectorKeys());
+  }
   console.info("[VRrunner] console API ready — window.VRrunner === window.brutalistVR8");
 }
 
