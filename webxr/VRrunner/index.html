@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>VRrunner — room & hallway (WebXR)</title>
+  <title>VR RUNNER</title>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font-family: system-ui, sans-serif; color: #fff; }
 
@@ -88,13 +88,11 @@
   </script>
 </head>
 <body>
-  <!-- VRKnockout-style fullscreen intro. Hidden on `sessionstart` from main.js,
-       and dismissable for desktop play via the small "Continue without VR" link. -->
+  <!-- Fullscreen intro until WebXR session starts (see main.js). -->
   <div id="intro-overlay">
     <div class="panel">
       <h1>VR&nbsp;RUNNER</h1>
-      <p>Room → hallway → obstacle. <strong>Earth gravity</strong>, one air jump. Throw direction matches <strong>where you face</strong> (same as brutalistVR8). Grab-throw only on the <strong>ground</strong> or at a <strong>wall</strong> (wall jump). <strong>End of hall</strong>: full <strong>glass wall</strong>, then a <strong>6&nbsp;m</strong> air gap and a <strong>10×10&nbsp;m</strong> neighbor roof — miss it and fall far enough → <strong>run resets</strong> (glass, arrows, combat). Fridge: <strong>45°</strong>. <strong>B</strong> toggles combat (or HUD).</p>
-      <p style="font-size:0.95em;margin-top:0.75em"><strong>Map:</strong> omit <code>?map=</code> or use <strong><code>?map=1</code></strong> for the default <em>streaming sandbox</em> (100&nbsp;m 3D cells, 27 wireframe+cube cells, centre spawn). <strong><code>?map=0</code></strong> — furnished room / hallway. The <strong>pizzaplex</strong> ~105k-tri GLB is <strong>on by default</strong>: sector shells appear at once; GLB work is queued and spread across frames so streaming stays smooth. <strong>Your current cell</strong> uses the full GLB; other cells use merged+Lambert. <strong><code>?pizzaplex=0</code></strong> disables. <strong><code>?sectormerge=0</code></strong> (or <code>?roofmerge=0</code>) skips merge on non-player cells.</p>
+      <p>Explore a vast city: Run, jump, grapple, and let the city blur past you—then flip on combat and see how long you last.</p>
       <!-- The three.js VRButton is appended here by main.js. Restyled by
            CSS above as the primary "ENTER VR" CTA. -->
       <div id="vr-button-host"></div>
@@ -105,7 +103,7 @@
   <!-- bots.js looks up `#hud` to append Combat / Music buttons. Sits behind
        the intro overlay; visible after dismissal for desktop play. -->
   <div id="hud">
-    <h1>VRrunner</h1>
+    <h1>VR RUNNER</h1>
   </div>
 
   <div id="fps">— FPS</div>

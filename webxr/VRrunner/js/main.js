@@ -1716,7 +1716,6 @@ async function init() {
 
   if (RUNNER_MAP_ID === 0) {
     initRunnerLevel(scene, { shadows: DYNAMIC_SHADOWS });
-    setStatus("VRrunner · room map (?map=0) · grab-throw / slide / wall jump");
   } else {
     disposeRunnerLevel(scene);
     initStreamSandbox(scene, { shadows: DYNAMIC_SHADOWS, pizzaplex: false, city: true });
@@ -1726,10 +1725,6 @@ async function init() {
     cameraRig.position.copy(playerSpawnPos);
     orbitTarget.set(playerSpawnPos.x, playerSpawnPos.y + 3, playerSpawnPos.z + 25);
     updateStreamSandbox(cameraRig.position);
-    setStatus(
-      `VRrunner · stream sandbox (?map=1) · ${SANDBOX_SECTOR} m cells · city + sector grid · `
-      + `cell ${getCurrentSandboxSectorKey()}`,
-    );
   }
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -1744,17 +1739,8 @@ async function init() {
     if (document.visibilityState === "hidden") saveLastRigPositionToLs_();
   });
   renderer.setAnimationLoop(animate);
-  /* Clear the intro overlay's `Loading…` line — by the time we get here
-   * the world is built and the only thing left is for the player to hit
-   * the ENTER VR button. */
-  if (RUNNER_MAP_ID === 0) {
-    setStatus("");
-  } else {
-    setStatus(
-      `Stream test · ?map=0 for room · ${getActiveSandboxSectorKeys().length} sectors · `
-      + `cell ${SANDBOX_SECTOR} m`,
-    );
-  }
+  /* Clear the intro overlay status line — world is ready for ENTER VR. */
+  setStatus("");
 
   /* Console API. Most v8 bake/preview commands removed. */
   window.VRrunner = window.brutalistVR8 = {
