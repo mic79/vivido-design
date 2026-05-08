@@ -3,14 +3,15 @@
  * 100×100×100 m cells, active 3×3×3 around the player, wireframe bounds +
  * 10 m cube at each cell centre (OBB collision).
  *
- * **Pizzaplex** (`the_pizzaplex_entrance_no_texture.glb`, ~105k tris): **on by default** —
- * one **clone per active sector** in the 3³ ring, cell-fitted, merged + Lambert where
- * possible (distant cells). **Your current sector** uses an **unmerged** clone with
- * original materials so the full GLB shows. GLB strip/attach is **queued** and spread across
- * frames (`MAX_SECTOR_GLB_JOBS_PER_FRAME`) so the stream ring does not hitch.
- * Sector **shell** unload/load is also queued (`MAX_STREAM_SHELL_JOBS_PER_FRAME` per pass).
- * Merged distant shells share one baked `BufferGeometry` + BVH (built once) across sectors.
- * `?pizzaplex=0` disables. `?sectormerge=0` or `?roofmerge=0` skips merge on non-player sectors.
+ * **City** (`scene.gltf`): one large glTF, scaled **100×** on the root, then world Y shifted so AABB **min.y = 0** (floor).
+ * It spans many cells and overlaps sector cubes; mesh collision uses the same BVH path as
+ * other GLBs. BVH registration is **chunked** across animation frames so the main thread
+ * stays responsive. Sectors strictly **below** world floor (cell index sy = -1) are omitted
+ * unless `?underground=1` restores the full vertical 3³ ring.
+ *
+ * **Pizzaplex** (optional per-sector GLB): off by default while the city is the main art;
+ * `?pizzaplex=1` re-enables when `initStreamSandbox` does not force `pizzaplex: false`.
+ * Strip/attach is queued (`MAX_SECTOR_GLB_JOBS_PER_FRAME`); shell load/unload is queued too.
  */
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -18,6 +19,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   registerSandboxGlbCollisionMeshes,
   unregisterSandboxGlbCollisionMeshes,
+  getGlbFloorY,
 } from "./runnerLevel.js";
 
 export const SANDBOX_SECTOR = 100;
@@ -33,6 +35,11 @@ const PIZZAPLEX_URL = new URL(
   "../3d/the_pizzaplex_entrance_no_texture.glb",
   import.meta.url,
 ).href;
+const CITY_GLTF_URL = new URL("../3d/scene.gltf", import.meta.url).href;
+/** Uniform scale applied to the city root before floor snap (world metres). */
+const CITY_ROOT_SCALE = 100;
+/** BVH + collision registration per animation frame for the city (many meshes). */
+const CITY_COLLISION_MESHES_PER_FRAME = 40;
 
 const _origin = new THREE.Vector3();
 const _floorLp = new THREE.Vector3();
@@ -76,6 +83,18 @@ let streamSandboxGen_ = 0;
 /** Last cell key used for full-detail pizzaplex swap (see `reconcileSectorGlbDetailForPlayer_`). */
 let lastSectorGlbPlayerKey_ = /** @type {string | null} */ (null);
 
+/** Lowest included cell index sy (sectors below this row are never streamed). */
+let minSandboxCellSy_ = 0;
+/** @type {THREE.Group | null} */
+let cityRoot_ = null;
+/** Meshes registered for city collision (same refs as in runnerLevel). */
+const cityCollisionMeshes_ = /** @type {THREE.Mesh[]} */ ([]);
+/** Resolves when city is placed and collision BVHs are finished (or city disabled / failed). */
+let cityLoadPromise_ = /** @type {Promise<void>} */ (Promise.resolve());
+let cityLayoutReady_ = false;
+/** World-space AABB after city is floor-snapped (for spawn). */
+const cityWorldBox_ = new THREE.Box3();
+
 /** Default ON; `?pizzaplex=0` / `false` / `no` skips per-sector pizzaplex. */
 function readSectorGlbUrlFlag() {
   try {
@@ -96,6 +115,118 @@ function readSectorGlbMergeFlag() {
   } catch (_) {
     return true;
   }
+}
+
+/** `?underground=1` allows the sy = -1 row of the 3³ (cells with base Y below 0). */
+function readMinSandboxCellSyFlag_() {
+  try {
+    const u = new URLSearchParams(window.location.search).get("underground");
+    if (u === "1" || u === "true" || u === "yes") return -1;
+  } catch (_) {}
+  return 0;
+}
+
+function disposeOrphanGltfScene_(/** @type {THREE.Object3D} */ root) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = o.geometry;
+    if (g?.disposeBoundsTree) g.disposeBoundsTree();
+    g?.dispose?.();
+    const mat = o.material;
+    if (Array.isArray(mat)) {
+      for (let i = 0; i < mat.length; i++) mat[i]?.dispose?.();
+    } else {
+      mat?.dispose?.();
+    }
+  });
+}
+
+function disposeCity_(/** @type {THREE.Scene | null} */ sc = null) {
+  cityLayoutReady_ = false;
+  cityWorldBox_.makeEmpty();
+  if (cityCollisionMeshes_.length) {
+    unregisterSandboxGlbCollisionMeshes(cityCollisionMeshes_);
+    cityCollisionMeshes_.length = 0;
+  }
+  const s = sc || scene_;
+  if (cityRoot_ && s) {
+    s.remove(cityRoot_);
+    disposeOrphanGltfScene_(cityRoot_);
+    cityRoot_ = null;
+  }
+}
+
+/**
+ * @param {number} gen
+ * @returns {Promise<void>}
+ */
+async function loadSandboxCityAsync_(gen) {
+  if (!scene_) return;
+  let gltf;
+  try {
+    const loader = new GLTFLoader();
+    gltf = await loader.loadAsync(CITY_GLTF_URL);
+  } catch (err) {
+    console.warn("[VRrunner] sandbox: failed to load city glTF:", CITY_GLTF_URL, err);
+    return;
+  }
+  if (gen !== streamSandboxGen_ || !scene_) {
+    disposeOrphanGltfScene_(gltf.scene);
+    return;
+  }
+
+  cityRoot_ = gltf.scene;
+  cityRoot_.name = "sandbox_city";
+  cityRoot_.scale.setScalar(CITY_ROOT_SCALE);
+  cityRoot_.updateMatrixWorld(true);
+  _box.setFromObject(cityRoot_);
+  cityRoot_.position.y -= _box.min.y;
+  cityRoot_.updateMatrixWorld(true);
+  _box.setFromObject(cityRoot_);
+  cityWorldBox_.copy(_box);
+
+  /** @type {THREE.Mesh[]} */
+  const allMeshes = [];
+  cityRoot_.traverse((o) => {
+    if (o.isMesh && o.geometry) {
+      o.castShadow = shadows_;
+      o.receiveShadow = shadows_;
+      const m = o.material;
+      const mats = Array.isArray(m) ? m : [m];
+      for (let mi = 0; mi < mats.length; mi++) {
+        const mat = mats[mi];
+        if (mat && "fog" in mat && mat.fog === false) {
+          mat.fog = true;
+          mat.needsUpdate = true;
+        }
+      }
+      allMeshes.push(o);
+    }
+  });
+
+  scene_.add(cityRoot_);
+
+  let aborted = false;
+  for (let i = 0; i < allMeshes.length; i += CITY_COLLISION_MESHES_PER_FRAME) {
+    if (gen !== streamSandboxGen_ || !scene_) {
+      aborted = true;
+      break;
+    }
+    const chunk = allMeshes.slice(i, i + CITY_COLLISION_MESHES_PER_FRAME);
+    registerSandboxGlbCollisionMeshes(chunk);
+    for (let j = 0; j < chunk.length; j++) cityCollisionMeshes_.push(chunk[j]);
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+
+  if (aborted || gen !== streamSandboxGen_ || !scene_) {
+    disposeCity_(scene_);
+    return;
+  }
+  cityLayoutReady_ = true;
+  console.info(
+    `[VRrunner] sandbox: city glTF — ${allMeshes.length} mesh(es), world AABB `
+      + `y[${cityWorldBox_.min.y.toFixed(2)}, ${cityWorldBox_.max.y.toFixed(2)}]`,
+  );
 }
 
 function key3(sx, sy, sz) {
@@ -425,6 +556,15 @@ function attachSectorGlbForKey_(key) {
         o.castShadow = shadows_;
         o.receiveShadow = shadows_;
         o.frustumCulled = true;
+        const mm = o.material;
+        const mats = Array.isArray(mm) ? mm : [mm];
+        for (let fi = 0; fi < mats.length; fi++) {
+          const mat = mats[fi];
+          if (mat && "fog" in mat && mat.fog === false) {
+            mat.fog = true;
+            mat.needsUpdate = true;
+          }
+        }
         meshes.push(o);
       }
     });
@@ -441,6 +581,7 @@ function attachSectorGlbForKey_(key) {
       color: 0xdedede,
       emissive: 0x202028,
       emissiveIntensity: 0.28,
+      fog: true,
     });
   }
 
@@ -649,6 +790,7 @@ function loadSector_(sx, sy, sz) {
     color: 0xeeeeee,
     roughness: 0.78,
     metalness: 0.06,
+    fog: true,
   });
   const cube = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), cubeMat);
   cube.position.set(cx, cy, cz);
@@ -683,13 +825,14 @@ function loadSector_(sx, sy, sz) {
 
 /**
  * @param {THREE.Scene} scene
- * @param {{ shadows?: boolean, pizzaplex?: boolean }} [opts] — `pizzaplex: false` skips per-sector GLB.
+ * @param {{ shadows?: boolean, pizzaplex?: boolean, city?: boolean }} [opts] — `pizzaplex: false` skips per-sector GLB; `city: false` skips `scene.gltf`.
  */
 export function initStreamSandbox(scene, opts = {}) {
   disposeStreamSandbox(scene);
-  streamSandboxGen_++;
+  const gen = ++streamSandboxGen_;
   scene_ = scene;
   shadows_ = opts.shadows !== false;
+  minSandboxCellSy_ = readMinSandboxCellSyFlag_();
   if (typeof opts.pizzaplex === "boolean") {
     sectorGlbEnabled_ = opts.pizzaplex;
   } else {
@@ -708,6 +851,17 @@ export function initStreamSandbox(scene, opts = {}) {
       "[VRrunner] sandbox: per-sector pizzaplex GLB disabled (?pizzaplex=0).",
     );
   }
+  if (opts.city !== false) {
+    cityLoadPromise_ = loadSandboxCityAsync_(gen);
+  } else {
+    cityLoadPromise_ = Promise.resolve();
+    console.info("[VRrunner] sandbox: city glTF disabled (`city: false`).");
+  }
+}
+
+/** Await after `initStreamSandbox` on map 1 so spawn and physics see city collision. */
+export function whenSandboxCityReady() {
+  return cityLoadPromise_;
 }
 
 /**
@@ -715,6 +869,7 @@ export function initStreamSandbox(scene, opts = {}) {
  */
 export function disposeStreamSandbox(scene = null) {
   const sc = scene || scene_;
+  disposeCity_(sc);
   sectorGlbJobs_.length = 0;
   streamShellJobs_.length = 0;
   lastSectorGlbPlayerKey_ = null;
@@ -752,7 +907,9 @@ export function updateStreamSandbox(pos) {
     for (let dz = -ACTIVE_HALF; dz <= ACTIVE_HALF; dz++) {
       for (let dy = -ACTIVE_HALF; dy <= ACTIVE_HALF; dy++) {
         for (let dx = -ACTIVE_HALF; dx <= ACTIVE_HALF; dx++) {
-          want.add(key3(sx + dx, sy + dy, sz + dz));
+          const csy = sy + dy;
+          if (csy < minSandboxCellSy_) continue;
+          want.add(key3(sx + dx, csy, sz + dz));
         }
       }
     }
@@ -834,6 +991,28 @@ export function getSandboxFloorY(x, z, currentY, slack = 0.35) {
 }
 
 export function getSandboxDefaultSpawn(out) {
+  if (cityLayoutReady_ && !cityWorldBox_.isEmpty()) {
+    cityWorldBox_.getCenter(_center);
+    const cx = _center.x;
+    const cz = _center.z;
+    const minY = cityWorldBox_.min.y;
+    const maxY = cityWorldBox_.max.y;
+    /* `getGlbFloorY` only probes ~26 m below ref Y — step from the top of the city down
+     * so we find the highest walkable surface under the bbox centre (not global min.y). */
+    const step = 22;
+    const maxIter = Math.min(
+      2000,
+      Math.ceil((maxY - minY + 120) / step) + 10,
+    );
+    let refY = maxY + 1;
+    for (let i = 0; i < maxIter && refY > minY - 60; i++, refY -= step) {
+      const fy = getGlbFloorY(cx, cz, refY);
+      if (fy !== null) {
+        return out.set(cx, fy + 0.15, cz);
+      }
+    }
+    return out.set(cx, minY + 0.15, cz);
+  }
   const half = SANDBOX_SECTOR * 0.5;
   const y = half + CUBE_HALF + 0.05;
   return out.set(half, y, half);

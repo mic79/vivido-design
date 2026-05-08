@@ -10,11 +10,10 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
-/* Sky removed: replaced by a programmatic equirect gradient sky whose
- * horizon colour is bound to the fog colour (see setupSkyAndBloom and
- * `SKY_HORIZON_HEX` below). The procedural Sky shader does not respect
- * scene.fog, so geometry fading into fog visibly mismatched the bright
- * Sky horizon, making sector pop-in/out visible. */
+/* Solid black backdrop; **radial distance fog** (same RGB as sky) so fogged pixels match
+ * the sky without swimming when the headset rotates (unlike stock `THREE.Fog` depth fog).
+ * Default **2500 m** fog `far` and **2500 m** camera far clip (`?fogfar=` / `?camerafar=`).
+ * EXR is `scene.environment` (IBL) only. `?skyhorizon=` tints fog+backdrop hex. */
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
@@ -57,6 +56,7 @@ import {
   initStreamSandbox,
   disposeStreamSandbox,
   updateStreamSandbox,
+  whenSandboxCityReady,
   getSandboxCollisionBoxes,
   getSandboxFloorY,
   getSandboxDefaultSpawn,
@@ -64,6 +64,11 @@ import {
   getActiveSandboxSectorKeys,
   SANDBOX_SECTOR,
 } from "./streamSandboxMap.js";
+import {
+  setRadialFogParams,
+  setRadialFogColorHex,
+  patchRadialFogOntoObjectTree,
+} from "./radialFogMaterials.js";
 import {
   initBots,
   updateBots,
@@ -138,96 +143,31 @@ function readMapIndex() {
 
 const RUNNER_MAP_ID = readMapIndex();
 
-/**
- * Return the mean LINEAR-RGB colour of an equirect HDR/EXR texture as
- * a `{ r, g, b }` object (values in [0, +∞) — HDR pixels can exceed 1).
- *
- * The EXR pixel data is already in linear-RGB float32, so this is a
- * straight average of the channel values. We sample on a stride
- * (~4096 samples regardless of texture size) for cheap one-time
- * computation; for a 1k equirect (1024 × 512 = 524k pixels) that's a
- * 128× speedup vs full pixel walk and gives an answer indistinguishable
- * from the exact mean for the purpose of fog matching.
- *
- * Bright HDR pixels (a sun disc) would normally pull the mean far
- * brighter than the visual "sky grey". We CLAMP each channel sample
- * to 4× the per-pixel-channel mean before averaging — a stupid simple
- * outlier filter that gives us a robust "background sky" mean even on
- * EXRs that include direct-sun information. For an overcast EXR the
- * clamp is essentially a no-op (no pixels far brighter than the rest).
- */
-function sampleEquirectAverageLinear(tex) {
-  const img = tex.image;
-  const data = img?.data;
-  if (!data) return { r: 0.5, g: 0.5, b: 0.5 };
-  const w = img.width;
-  const h = img.height;
-  const channels = data.length / (w * h);     // 3 (RGB) or 4 (RGBA)
-  const targetSamples = 4096;
-  const stride = Math.max(1, Math.floor(Math.sqrt((w * h) / targetSamples)));
-  /* First pass: compute coarse mean for outlier-clamp threshold. */
-  let sumR = 0, sumG = 0, sumB = 0, count = 0;
-  for (let y = 0; y < h; y += stride) {
-    for (let x = 0; x < w; x += stride) {
-      const i = (y * w + x) * channels;
-      sumR += data[i];
-      sumG += data[i + 1];
-      sumB += data[i + 2];
-      count++;
-    }
-  }
-  const meanR0 = sumR / count;
-  const meanG0 = sumG / count;
-  const meanB0 = sumB / count;
-  const capR = meanR0 * 4;
-  const capG = meanG0 * 4;
-  const capB = meanB0 * 4;
-  /* Second pass: same stride, but each sample clamped to ≤ 4× the
-   * coarse mean. Keeps a sun disc from dominating the average. */
-  sumR = 0; sumG = 0; sumB = 0; count = 0;
-  for (let y = 0; y < h; y += stride) {
-    for (let x = 0; x < w; x += stride) {
-      const i = (y * w + x) * channels;
-      sumR += Math.min(data[i],     capR);
-      sumG += Math.min(data[i + 1], capG);
-      sumB += Math.min(data[i + 2], capB);
-      count++;
-    }
-  }
-  return { r: sumR / count, g: sumG / count, b: sumB / count };
-}
-
 /** Sun light intensity (overdriven so concrete actually triggers bloom and shadows
  *  read with real contrast). */
 const SUN_INTENSITY = readFloatParam("sun", 4.0);
-/** Default ON: the overcast EXR doubles as both `scene.environment`
- *  (IBL) and `scene.background` (visible sky), with the fog colour
- *  set to the EXR's mean linear RGB at load time so streaming pops
- *  remain invisible against the dome. `?hdr=0` opts out for users
- *  who'd rather have the old solid-grey sky. */
-const USE_HDR = readIntParam("hdr", 1) === 1;
+/** Overcast EXR is loaded as `scene.environment` (IBL); visible sky is solid BattleVR `<a-sky>`. */
 
 /** `false` = no sun shadow maps (saves GPU / avoids shadow-map cost). Set `true` to restore PCFSoft shadows. */
-const DYNAMIC_SHADOWS = false;
+const DYNAMIC_SHADOWS = true;
 
-/** SKY / FOG: ONE colour, used as both `scene.background` AND `scene.fog`.
- *
- *   Per the three.js fog manual, fog only "hides" geometry if the fog
- *   colour matches the colour visible behind that geometry. The cheapest
- *   and most bulletproof way to satisfy this is a solid-colour
- *   background equal to the fog colour everywhere on the dome (this is
- *   what BattleVR does: black fog + black a-sky). Anything fancier
- *   (procedural Sky, gradient sky, HDR equirect) introduces a mismatch
- *   somewhere on the dome and re-introduces visible pops.
- *
- *   Tunable via `?skyhorizon=` (six-digit hex without `#`).
- */
+/** Perspective far clip (m) — default matches fog so the GPU culls past the fog wall. */
+const CAMERA_FAR = readFloatParam("camerafar", 2500);
+
+/** Radial fog end distance (m); `fognear` must be less than `fogfar`. */
+const FOG_LINEAR_FAR_M = readFloatParam("fogfar", 2500);
+const FOG_LINEAR_NEAR_M = Math.min(
+  Math.max(1, readFloatParam("fognear", 1250)),
+  FOG_LINEAR_FAR_M - 1,
+);
+
+/** Solid backdrop (must match fog colour for clean hiding). Default `#000`; `?skyhorizon=11` → `#000011`. */
 const SKY_HORIZON_HEX = (() => {
   try {
     const v = new URLSearchParams(window.location.search).get("skyhorizon");
     if (v) return parseInt(v, 16);
   } catch (_) { /* noop */ }
-  return 0xc4ccd4;
+  return 0x000000;
 })();
 const SHOW_FPS = (() => {
   try {
@@ -275,9 +215,42 @@ const vrFps = {
   lastDrawn: -1,
 };
 const orbitTarget = new THREE.Vector3(0, 4, 0);
-/** Where the bots module teleports the player on respawn. Updates as the
- *  player roams (current sector centre). */
+/** Where the bots module teleports the player on respawn. Throttled saves also copy the rig here. */
 const playerSpawnPos = new THREE.Vector3(0, 0, 0);
+
+/** Last rig position for reload / `respawnPlayer` (same map id only). */
+const LS_LAST_RIG_KEY = "VRrunner:lastRigPos:v1";
+const LS_SAVE_INTERVAL_MS = 2000;
+let lastLsSaveRtMs_ = 0;
+
+function saveLastRigPositionToLs_() {
+  if (!cameraRig) return;
+  if (getWorldCollisionBoxes().length === 0) return;
+  try {
+    const p = cameraRig.position;
+    const payload = { map: RUNNER_MAP_ID, x: p.x, y: p.y, z: p.z, t: Date.now() };
+    localStorage.setItem(LS_LAST_RIG_KEY, JSON.stringify(payload));
+    playerSpawnPos.copy(p);
+  } catch (_) {
+    /* private mode / quota */
+  }
+}
+
+/** @returns {boolean} true if `playerSpawnPos` was restored from storage */
+function tryRestoreLastRigPositionFromLs_() {
+  try {
+    const raw = localStorage.getItem(LS_LAST_RIG_KEY);
+    if (!raw) return false;
+    const o = JSON.parse(raw);
+    if (!o || typeof o.map !== "number" || o.map !== RUNNER_MAP_ID) return false;
+    const { x, y, z } = o;
+    if (![x, y, z].every((v) => typeof v === "number" && Number.isFinite(v))) return false;
+    playerSpawnPos.set(x, y, z);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
 let controller1;
 let controller2;
@@ -1439,9 +1412,8 @@ function setupSunLight() {
   scene.add(sunLight.target);
   scene.add(sunLight);
 
-  /* Shadow frustum ±90 m: large enough that its hard cutoff lives well
-   * inside the FogExp2 wall (≥99% fogged at d≥90 m), so shadows
-   * appearing/disappearing as the player moves are invisible. 2048²
+  /* Shadow frustum ±90 m: keep the shadow map’s hard edge far enough out
+   * that it is usually softened by distance / BattleVR-style fog. 2048²
    * keeps texel density ≈ 8.8 cm — sharper than the old 1024²/±60 m
    * config (≈11.7 cm) despite the larger frustum. Tuneable via
    * `?shadowsize=` / `?shadowhalf=`. */
@@ -1453,8 +1425,11 @@ function setupSunLight() {
   cam.right = shadowHalf;
   cam.top = shadowHalf;
   cam.bottom = -shadowHalf;
-  cam.near = 10;
-  cam.far = SUN_LIGHT_DIST + 100 + shadowHalf;
+  /* Depth range along the light axis must cover the sun→scene span (tall scaled city).
+   * Defaults were ~270 m — far too shallow for ~2 km vertical art; casters fell outside
+   * the shadow volume so maps looked shadowless. Tune with `?shadownear=` / `?shadowfar=`. */
+  cam.near = readFloatParam("shadownear", 0.5);
+  cam.far = readIntParam("shadowfar", 8000);
   cam.updateProjectionMatrix();
   sunLight.shadow.bias = -0.0005;
   sunLight.shadow.normalBias = 0.025;
@@ -1474,8 +1449,7 @@ function setupSunLight() {
 /* ── Bloom (sky lives in `init` as a solid Color matching fog) ────────── */
 
 function setupSkyAndBloom() {
-  /* No sky shader, no gradient — the background is a solid Color set in
-   * `init()`, equal to fog colour. See the comment in `init` for why. */
+  /* No sky shader — solid near-black `scene.background` in `init()` (BattleVR `<a-sky>`). */
   composer = new EffectComposer(renderer);
   const pr0 = Math.min(window.devicePixelRatio || 1, 2);
   const wPx = Math.floor(window.innerWidth * pr0);
@@ -1513,9 +1487,17 @@ function onResize() {
   }
 }
 
+/** Catches async-loaded GLBs and lazy-created materials (WeakSet skips already-patched). */
+let radialFogScanFrame_ = 0;
+
 function animate(time) {
   const delta = time - lastTime;
   lastTime = time;
+  if (scene && (radialFogScanFrame_++ & 31) === 0) patchRadialFogOntoObjectTree(scene);
+  if (cameraRig && time - lastLsSaveRtMs_ > LS_SAVE_INTERVAL_MS) {
+    lastLsSaveRtMs_ = time;
+    saveLastRigPositionToLs_();
+  }
   if (SHOW_FPS) tickFps(performance.now());
   updateRunnerGlassShards(Math.min(0.1, (delta || 0) * 0.001));
 
@@ -1573,6 +1555,30 @@ function animate(time) {
   }
 }
 
+/**
+ * glTF often sets `material.fog = false` (opt-out of atmosphere). Re-enable for world meshes
+ * so radial fog (`radialFogMaterials.js`) applies; stock `scene.fog` is unused.
+ * Skips ShaderMaterial, RawShaderMaterial, and screen-space HUD (MeshBasic + depthTest off).
+ * @param {THREE.Object3D} root
+ */
+function enforceMaterialsUseSceneFog_(root) {
+  root.traverse((o) => {
+    const any = /** @type {any} */ (o);
+    if (!any.isMesh && !any.isLine && !any.isLineSegments && !any.isPoints) return;
+    const m = any.material;
+    if (!m) return;
+    const list = Array.isArray(m) ? m : [m];
+    for (let i = 0; i < list.length; i++) {
+      const mat = list[i];
+      if (!mat || !("fog" in mat) || mat.fog !== false) continue;
+      if (mat.isShaderMaterial || mat.isRawShaderMaterial) continue;
+      if (mat.isMeshBasicMaterial && mat.depthTest === false) continue;
+      mat.fog = true;
+      mat.needsUpdate = true;
+    }
+  });
+}
+
 /* ── init ─────────────────────────────────────────────────────────────── */
 
 async function init() {
@@ -1582,7 +1588,7 @@ async function init() {
   fpsState.windowStart = performance.now();
   drawVrFpsPanel(0);
 
-  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.025, 1500);
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.025, CAMERA_FAR);
   cameraRig = new THREE.Group();
   crouchViewGroup = new THREE.Group();
   crouchViewGroup.name = "crouch_view_offset";
@@ -1591,87 +1597,44 @@ async function init() {
   camera.position.set(0, RUNNER_STANDING_EYE_Y, 0);
 
   scene = new THREE.Scene();
-  /* Pre-load placeholder: solid grey background + matching fog. The
-   * EXR sky takes over once it loads (a few hundred ms later); until
-   * then we want a calm flat-grey rather than black so the first
-   * frames don't flash dark. The fog density and `?skyhorizon=`
-   * override are unchanged from the previous design.
-   *
-   * Density 0.025 + 5×5 active window + ±90 m sun-shadow frustum:
-   *     d=60 m  (shadow cutoff edge): 89 % fogged
-   *     d=80 m:                       98 % fogged
-   *     d=90 m  (shadow frustum edge): 99.4 % fogged
-   *     d=160 m (load/unload boundary): ~100 %
-   *
-   * Tunable: `?fogdensity=` (1/1000s, default 25 → 0.025).
-   *          `?skyhorizon=` (hex w/o #) — fallback sky/fog colour
-   *                          when the EXR fails to load. */
   scene.background = new THREE.Color(SKY_HORIZON_HEX);
-  const fogDensity = readIntParam("fogdensity", 25) / 1000;
-  scene.fog = new THREE.FogExp2(SKY_HORIZON_HEX, fogDensity);
+  scene.fog = null;
+  setRadialFogParams(FOG_LINEAR_NEAR_M, FOG_LINEAR_FAR_M, SKY_HORIZON_HEX);
   scene.add(cameraRig);
 
-  /* Sky + IBL.
-   *
-   * The local overcast EXR fills both roles:
-   *   1. `scene.environment` — drives PBR ambient lighting (the
-   *      reflection of the sky on metalness ≥ 0 surfaces, the soft
-   *      sky-blue tint on the floor, etc).
-   *   2. `scene.background` — drawn as the actual sky dome the
-   *      player sees.
-   *
-   * To preserve the "no sector pop-in" guarantee we previously got
-   * from a solid-grey sky, we ALSO retune the fog colour to match
-   * the EXR's mean LINEAR RGB. The sky is overcast by design (≈
-   * uniform grey), so per-pixel deviation from the mean is small
-   * and the slab-fade-into-fog/sky transition stays nearly
-   * invisible across the dome.
-   *
-   * `?hdr=0` opts back into the old solid-grey-only behaviour. The
-   * EXR is still used as `scene.environment` in that mode (it
-   * doesn't cost anything extra and the IBL contribution is
-   * desirable regardless). */
+  /* Overcast EXR → `scene.environment` only (IBL). `scene.background` matches radial fog colour (same hex). */
   setStatus("Loading sky…");
   try {
-    /* Force Float32 pixel data so the CPU-side mean computation in
-     * `sampleEquirectAverageLinear` doesn't have to deal with raw
-     * half-float bits. The default would deliver a Uint16Array for
-     * a half-float EXR, which my plain-arithmetic averaging
-     * interprets as integers (= silent garbage values). */
+    /* Float32 EXR pixels (half-float Uint16 would be wrong for CPU-side sampling). */
     const exrLoader = new EXRLoader();
     exrLoader.setDataType(THREE.FloatType);
     const envTexture = await exrLoader.loadAsync(ENV_URL);
     envTexture.mapping = THREE.EquirectangularReflectionMapping;
     scene.environment = envTexture;
-    scene.environmentIntensity = 0.45;
-    if (USE_HDR) {
-      scene.background = envTexture;
-      /* Retune fog to the EXR's mean colour. Linear-space match —
-       * three.js fog mixes in linear before tone-mapping, so we
-       * want the linear avg, not the post-tonemap one. */
-      const avg = sampleEquirectAverageLinear(envTexture);
-      scene.fog.color.setRGB(avg.r, avg.g, avg.b, THREE.LinearSRGBColorSpace);
-      console.info(
-        `[brutalistVR8] sky: fog colour matched to EXR avg = `
-        + `linear(${avg.r.toFixed(3)}, ${avg.g.toFixed(3)}, ${avg.b.toFixed(3)})`,
-      );
-    }
+    /* High IBL keeps “fogged” PBR surfaces brighter than pure fog colour (BattleVR is mostly standard + low IBL). */
+    scene.environmentIntensity = readFloatParam("env", 0.06);
+    scene.background = new THREE.Color(SKY_HORIZON_HEX);
+    setRadialFogColorHex(SKY_HORIZON_HEX);
+    console.info(
+      `[brutalistVR8] sky: radial fog near=${FOG_LINEAR_NEAR_M} far=${FOG_LINEAR_FAR_M} m, cameraFar=${CAMERA_FAR} m, `
+        + `backdrop+fog #${SKY_HORIZON_HEX.toString(16).padStart(6, "0")}; EXR = environment only. Tunables: ?fognear=, ?fogfar=, ?camerafar=, ?env=, ?skyhorizon=`,
+    );
   } catch (e) {
-    console.warn("EXR load failed — falling back to solid-grey sky.", e);
+    console.warn("EXR load failed — IBL unavailable; solid sky + fog unchanged.", e);
   }
 
-  /* Runner start: map 0 = room interior; map 1 = sandbox centre-cube spawn. */
-  if (RUNNER_MAP_ID === 1) {
-    getSandboxDefaultSpawn(playerSpawnPos);
-    cameraRig.position.copy(playerSpawnPos);
-    orbitTarget.set(playerSpawnPos.x, playerSpawnPos.y + 3, playerSpawnPos.z + 25);
-  } else {
+  /* Runner start: map 0 = room interior. Map 1 spawn is set after city glTF loads. */
+  if (RUNNER_MAP_ID === 0) {
     playerSpawnPos.set(0, RUNNER_TOP_FLOOR_SURFACE_Y, -4);
+    tryRestoreLastRigPositionFromLs_();
     cameraRig.position.copy(playerSpawnPos);
-    orbitTarget.set(0, 2, 10);
+    orbitTarget.set(playerSpawnPos.x, playerSpawnPos.y + 2, playerSpawnPos.z + 10);
   }
 
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    logarithmicDepthBuffer: CAMERA_FAR > 4000,
+  });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1707,10 +1670,15 @@ async function init() {
       }
     }
     const session = renderer.xr.getSession();
-    /* After `local-floor` reference space is applied, re-sync rig to spawn so
-     * world Y matches the level floor (avoids starting under the slab). */
+    /* After `local-floor` reference space is applied, keep XZ (saved or current roam);
+     * only snap Y to GLB floor under the rig so we do not start under collision. */
     if (cameraRig && getWorldCollisionBoxes().length > 0) {
-      cameraRig.position.copy(playerSpawnPos);
+      const px = cameraRig.position.x;
+      const pz = cameraRig.position.z;
+      const fy = getGlbFloorY(px, pz, cameraRig.position.y + 800);
+      if (fy !== null && Number.isFinite(fy)) {
+        cameraRig.position.y = fy + 0.15;
+      }
       rigVelocity.set(0, 0, 0);
     }
     if (session?.updateTargetFrameRate && session.supportedFrameRates?.includes(120)) {
@@ -1751,11 +1719,16 @@ async function init() {
     setStatus("VRrunner · room map (?map=0) · grab-throw / slide / wall jump");
   } else {
     disposeRunnerLevel(scene);
-    initStreamSandbox(scene, { shadows: DYNAMIC_SHADOWS });
+    initStreamSandbox(scene, { shadows: DYNAMIC_SHADOWS, pizzaplex: false, city: true });
+    await whenSandboxCityReady();
+    getSandboxDefaultSpawn(playerSpawnPos);
+    tryRestoreLastRigPositionFromLs_();
+    cameraRig.position.copy(playerSpawnPos);
+    orbitTarget.set(playerSpawnPos.x, playerSpawnPos.y + 3, playerSpawnPos.z + 25);
     updateStreamSandbox(cameraRig.position);
     setStatus(
-      `VRrunner · stream sandbox (?map=1) · ${SANDBOX_SECTOR} m cells · 3³ active · `
-      + `centre ${getCurrentSandboxSectorKey()}`,
+      `VRrunner · stream sandbox (?map=1) · ${SANDBOX_SECTOR} m cells · city + sector grid · `
+      + `cell ${getCurrentSandboxSectorKey()}`,
     );
   }
 
@@ -1764,6 +1737,12 @@ async function init() {
   controls.update();
 
   window.addEventListener("resize", onResize);
+  window.addEventListener("pagehide", () => {
+    saveLastRigPositionToLs_();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveLastRigPositionToLs_();
+  });
   renderer.setAnimationLoop(animate);
   /* Clear the intro overlay's `Loading…` line — by the time we get here
    * the world is built and the only thing left is for the player to hit
@@ -2014,6 +1993,8 @@ async function init() {
     };
   }
   initBots(botInitOpts);
+  enforceMaterialsUseSceneFog_(scene);
+  patchRadialFogOntoObjectTree(scene);
   setBattleOnBEnabled(true);
   window.brutalistVR8.bots = {
     setEnabled: setBotsEnabled,

@@ -285,6 +285,8 @@ const STEERING_MAX_FORCE = 24;           // m/s² acceleration ceiling
 const SEPARATION_RADIUS = 4.0;
 const AVOID_PROBE_DIST = 4.0;
 
+/** Offsets **above `getPlayerPosition()` (rig / feet)** — not absolute world Y
+ * (so drones stay near the player on tall sandbox city geometry). */
 const SPAWN_HEIGHT_RANGE = [22, 38];
 const SPAWN_RADIUS_RANGE = [25, 70];
 const TRACK_HEIGHT_OFFSET = 1.0;         // hover this much above the player's head
@@ -2627,10 +2629,11 @@ class Drone {
      * try to fly back to (0,0,0). */
     const player = getPlayerPosition_ ? getPlayerPosition_() : null;
     const px = player ? player.x : 0;
+    const py = player ? player.y : 0;
     const pz = player ? player.z : 0;
     const r = THREE.MathUtils.randFloat(SPAWN_RADIUS_RANGE[0], SPAWN_RADIUS_RANGE[1]);
     const a = Math.random() * Math.PI * 2;
-    const y = THREE.MathUtils.randFloat(SPAWN_HEIGHT_RANGE[0], SPAWN_HEIGHT_RANGE[1]);
+    const y = py + THREE.MathUtils.randFloat(SPAWN_HEIGHT_RANGE[0], SPAWN_HEIGHT_RANGE[1]);
     this.targetPos.set(px + Math.cos(a) * r, y, pz + Math.sin(a) * r);
     this.surveyChangeIn = THREE.MathUtils.randFloat(4, 8);
   }
@@ -3616,6 +3619,7 @@ class Drone {
    *      avoidance + separation + lift-from-rotors all work.
    */
   _tickSnitch(dt, playerHead, playerSpeed) {
+    const feetY = getPlayerPosition_ ? getPlayerPosition_().y : playerHead.y - 1.6;
     /* Same rotor + alertness + audio housekeeping as regular drones,
      * stripped of the engineer/kamikaze-specific blocks. */
     this.stateTime += dt;
@@ -3677,7 +3681,7 @@ class Drone {
       } else {
         this.targetPos.set(
           this._hqInvestigatePos.x,
-          SNITCH_DEFAULT_ALT,
+          Math.max(this._hqInvestigatePos.y, feetY) + SNITCH_DEFAULT_ALT,
           this._hqInvestigatePos.z,
         );
         this.applySteering(dt, STEERING_MAX_SPEED * 0.95);
@@ -3713,7 +3717,7 @@ class Drone {
         const r = 12 + Math.random() * 30;
         this.targetPos.set(
           anchor.x + Math.cos(ang) * r,
-          SNITCH_DEFAULT_ALT,
+          feetY + SNITCH_DEFAULT_ALT,
           anchor.z + Math.sin(ang) * r,
         );
         this.surveyChangeIn = 2.5 + Math.random() * 2.5;
@@ -3727,7 +3731,10 @@ class Drone {
       /* Climb to relay altitude — pick a target above the player
        * by a margin so we get LOS to the launchers above the
        * skyline. */
-      const targetY = Math.max(SNITCH_RELAY_ALT_MIN, _missileCruiseAlt - 6);
+      const targetY = Math.max(
+        playerHead.y + SNITCH_RELAY_ALT_MIN,
+        _missileCruiseAlt - 6,
+      );
       this.targetPos.set(playerHead.x, targetY, playerHead.z);
       this.applySteering(dt, STEERING_MAX_SPEED * 1.0);
       turretTarget = playerHead;
@@ -3738,7 +3745,7 @@ class Drone {
        * unobstructed. We additionally remember the NEAREST relayed
        * AA so the visible beam can render between snitch and AA. */
       this._relayedAA = null;
-      if (sees && dronePos.y > SNITCH_RELAY_ALT_MIN - 4) {
+      if (sees && dronePos.y > playerHead.y + SNITCH_RELAY_ALT_MIN - 4) {
         let nearest = null;
         let nearestDist = Infinity;
         for (const aa of antiair_) {
@@ -8595,7 +8602,7 @@ function _detonateAOE(pos, radius, damageProfile, pushImpulse, opts) {
 
 /* ── Snitch drone variant ──────────────────────────────────────────────
  *
- * Small reconnaissance drone that flies at SNITCH_DEFAULT_ALT (~2 m)
+ * Small reconnaissance drone that flies ~SNITCH_DEFAULT_ALT metres **above player feet**
  * and acts as a forward observer for anti-air emplacements. Behaviour:
  *
  *   PATROL  — drifts around at low altitude (default state).
@@ -8616,7 +8623,9 @@ function _detonateAOE(pos, radius, damageProfile, pushImpulse, opts) {
  * not the wave-finish quota (we don't want them gating wave
  * progression — they're an ambient threat, not a numbered enemy). */
 const DRONE_TYPE_SNITCH = "snitch";
+/** Metres **above player feet** (`getPlayerPosition()`), not world Y. */
 const SNITCH_DEFAULT_ALT = 2.0;
+/** Metres **above player head** for relay climb (not absolute world Y). */
 const SNITCH_RELAY_ALT_MIN = 25;
 const SNITCH_TARGET_COUNT = 2;
 const SNITCH_PATROL_RADIUS = 60;
@@ -10652,16 +10661,17 @@ function pickSpawnPoint(out) {
    * (rather than back at the world origin where they'd never be heard). */
   const player = getPlayerPosition_ ? getPlayerPosition_() : null;
   const px = player ? player.x : 0;
+  const py = player ? player.y : 0;
   const pz = player ? player.z : 0;
   for (let attempt = 0; attempt < 12; attempt++) {
     const r = THREE.MathUtils.randFloat(SPAWN_RADIUS_RANGE[0], SPAWN_RADIUS_RANGE[1]);
     const a = Math.random() * Math.PI * 2;
-    const y = THREE.MathUtils.randFloat(SPAWN_HEIGHT_RANGE[0], SPAWN_HEIGHT_RANGE[1]);
+    const y = py + THREE.MathUtils.randFloat(SPAWN_HEIGHT_RANGE[0], SPAWN_HEIGHT_RANGE[1]);
     out.set(px + Math.cos(a) * r, y, pz + Math.sin(a) * r);
     if (!pointInsideAnyOBB(out, 0.5)) return out;
   }
   /* Fallback: high above the player. */
-  out.set(px, SPAWN_HEIGHT_RANGE[1], pz);
+  out.set(px, py + SPAWN_HEIGHT_RANGE[1], pz);
   return out;
 }
 
@@ -11928,7 +11938,7 @@ function _tickSnitchSpawning(dt) {
   const r = 18 + Math.random() * (SNITCH_PATROL_RADIUS - 18);
   const sp = new THREE.Vector3(
     playerPos.x + Math.cos(ang) * r,
-    SNITCH_DEFAULT_ALT,
+    playerPos.y + SNITCH_DEFAULT_ALT,
     playerPos.z + Math.sin(ang) * r,
   );
   const drone = new Drone(sp, DRONE_TYPE_SNITCH);
