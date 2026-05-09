@@ -9,8 +9,8 @@
  * stays responsive. Sectors strictly **below** world floor (cell index sy = -1) are omitted
  * unless `?underground=1` restores the full vertical 3³ ring.
  *
- * **Pizzaplex** (optional per-sector GLB): off by default while the city is the main art;
- * `?pizzaplex=1` re-enables when `initStreamSandbox` does not force `pizzaplex: false`.
+ * **Pizzaplex** (per-sector GLB): **on** for map=1 unless `initStreamSandbox` passes
+ * `pizzaplex: false` or the URL has `?pizzaplex=0` / `false` / `no`.
  * Strip/attach is queued (`MAX_SECTOR_GLB_JOBS_PER_FRAME`); shell load/unload is queued too.
  */
 import * as THREE from "three";

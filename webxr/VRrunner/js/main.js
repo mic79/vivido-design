@@ -96,7 +96,16 @@ import {
   getTopScores,
   setBattleOnBEnabled,
   clearRunnerArcheryVolleys,
+  applyGrappleWinchStep,
+  isGrappleHookActive,
+  isArcheryDrawActive,
 } from "./bots.js";
+import {
+  preloadGlideAudio,
+  resumeGlideAudio,
+  tickGlideAudio,
+  muteGlideAudio,
+} from "./glideAudio.js";
 
 /* Local overcast EXR — used both as scene.environment (IBL ambient
  * lighting source) AND as scene.background (visible sky dome). The
@@ -198,6 +207,9 @@ let sunShadowFrame = 0;
 let lastTime = 0;
 let statusElement;
 let fpsElement;
+let fpsStackElement;
+let speedometerElement;
+let speedometerLastText_ = "";
 const fpsState = {
   frameCount: 0,
   windowStart: 0,
@@ -212,10 +224,11 @@ const vrFps = {
   /** @type {HTMLCanvasElement | null} */ canvas: null,
   /** @type {CanvasRenderingContext2D | null} */ ctx: null,
   /** @type {THREE.CanvasTexture | null} */ texture: null,
-  lastDrawn: -1,
+  /** Invalidation token for canvas redraw (FPS + air readout). */
+  lastSig: "",
 };
 const orbitTarget = new THREE.Vector3(0, 4, 0);
-/** Where the bots module teleports the player on respawn. Throttled saves also copy the rig here. */
+/** Where the bots module teleports the player on respawn (set at init + optional LS restore only). */
 const playerSpawnPos = new THREE.Vector3(0, 0, 0);
 
 /** Last rig position for reload / `respawnPlayer` (same map id only). */
@@ -230,7 +243,8 @@ function saveLastRigPositionToLs_() {
     const p = cameraRig.position;
     const payload = { map: RUNNER_MAP_ID, x: p.x, y: p.y, z: p.z, t: Date.now() };
     localStorage.setItem(LS_LAST_RIG_KEY, JSON.stringify(payload));
-    playerSpawnPos.copy(p);
+    /* Do not copy into `playerSpawnPos` — that made respawn / Play Again jump back into
+     * the same stuck interior the autosave had recorded. */
   } catch (_) {
     /* private mode / quota */
   }
@@ -252,6 +266,32 @@ function tryRestoreLastRigPositionFromLs_() {
   }
 }
 
+/** Drop bad saved coords, set spawn to map default, optionally move rig (unstuck from GLB interior). */
+function resetPlayerSpawnToDefault_() {
+  try {
+    localStorage.removeItem(LS_LAST_RIG_KEY);
+  } catch (_) {
+    /* ignore */
+  }
+  if (RUNNER_MAP_ID === 0) {
+    playerSpawnPos.set(0, RUNNER_TOP_FLOOR_SURFACE_Y, -4);
+  } else {
+    getSandboxDefaultSpawn(playerSpawnPos);
+  }
+}
+
+function teleportRigToSpawnAnchor_() {
+  if (!cameraRig) return;
+  cameraRig.position.copy(playerSpawnPos);
+  rigVelocity.set(0, 0, 0);
+  jumpsRemaining = MAX_JUMPS;
+  parkourJumpGlideBlockSec_ = 0;
+  grabState.left.active = false;
+  grabState.right.active = false;
+  grabState.left.history.length = 0;
+  grabState.right.history.length = 0;
+}
+
 let controller1;
 let controller2;
 let controllerGrip1;
@@ -259,6 +299,8 @@ let controllerGrip2;
 const vrInput = { leftStick: { x: 0, y: 0 }, rightStick: { x: 0, y: 0 } };
 /** Stick locomotion scale (m/s at full deflection). Parkour runs are often ~6–9 m/s bursts; we cap lower. */
 const moveSpeed = 3.5;
+/** Maps stick m/s into glide wind “airspeed” so light walk vs full sprint read clearly in volume/pitch. */
+const LOCOMOTION_AUDIO_UPSCALE = 1.9;
 const rotateSpeed = 120;
 const verticalSpeed = 2;
 const deadzone = 0.15;
@@ -269,6 +311,116 @@ let locomotionMode = "physics";
  *  value (~1.6) was for floaty combat; this project is grounded runner. */
 const PLAYER_GRAVITY = 9.81;
 const AIR_DAMPING = 0.4;
+/** Wingsuit: head-relative lateral sum + grip spread + 3D hand distance; latch/exit + pitch use all three. */
+const GLIDE_LAT_ENTER = 0.44;
+const GLIDE_SEP_ENTER = 0.36;
+const GLIDE_HAND_ENTER = 0.52;
+/** Exit as soon as any “arms in” metric fails (shoulder tuck / nock pose). */
+const GLIDE_LAT_EXIT = 0.34;
+const GLIDE_SEP_EXIT = 0.28;
+const GLIDE_HAND_EXIT = 0.4;
+/** Aerodynamic “pitch” from controller spacing (not head forward/back). */
+const GLIDE_PITCH_SEP_MIN = 0.18;
+const GLIDE_PITCH_SEP_MAX = 0.72;
+const GLIDE_PITCH_DIST_MIN = 0.28;
+const GLIDE_PITCH_DIST_MAX = 0.95;
+/** Below this lateral sum, wing strength → 0 (arms in / narrow). */
+const GLIDE_WING0 = 0.42;
+/** Lateral sum (m) mapped to wing = 1 — set above real max T so span can grow past “shoulder” without saturating. */
+const GLIDE_LAT_FULL = 1.02;
+/** Narrow pose: extra downward accel (fraction of g), strongest when wing→0. */
+const GLIDE_NARROW_FALL_G = 0.62;
+/** Wide pose: extra horizontal parasite drag scale (was too strong — killed |v| after pull-out). */
+const GLIDE_WIDE_PARASITE = 0.006;
+/** Gravity multiplier at full wing (arms wide). */
+const GLIDE_GRAV_MUL = 0.64;
+/** Extra downward acceleration when arms are narrow (tuck), as a fraction of g. */
+const GLIDE_TUCK_EXTRA_G_FRAC = 0.32;
+/** Reference airspeed (m/s) for lift / forward scaling; uses horizontal + fall component. */
+const GLIDE_DYN_REF_SPEED = 6.8;
+/** Lift scales ~ wing × dyn² × this (m/s²), before cap. */
+const GLIDE_LIFT_K = 19;
+const GLIDE_LIFT_MAX = 19;
+const GLIDE_SPEED_TO_LIFT = 1.18;
+/** Ref for linear speed→lift (was 52): uncapped high‑40s |v| fought cruise and parked ~46 m/s. */
+const GLIDE_SPEED_TO_LIFT_REF_MAX = 30;
+/** Pitch (hands vs head): flare adds lift, dive adds sink + forward. */
+const GLIDE_PITCH_LIFT = 2.85;
+const GLIDE_PITCH_DIVE_G = 3.6;
+/** Direct upward accel from flare pitch (pull hands back / up), m/s² at full wing+dyn. */
+const GLIDE_PITCH_FLARE_VERT = 7.2;
+const GLIDE_FORWARD_BASE = 2.85;
+const GLIDE_FORWARD_DYN = 10.5;
+const GLIDE_FORWARD_DIVE = 7.2;
+/** Multiplier on glide forward accel along look (base+dyn+dive+plunge in `forwardRaw`). */
+const GLIDE_FORWARD_MOMENTUM_MUL = 2;
+/** Minimum dyn (0..1) from airspeed so a fresh spread still has bite. */
+const GLIDE_DYN_FLOOR = 0.24;
+/** “Airspeed” for stall + speed→lift: hypot(hSpeed, |vy| * STALL_VY_WEIGHT). Uses |vy| so grapple
+ *  winch (often mostly vertical) and fast falls still open the lift trade, not only running XZ speed. */
+/** Upward motion also builds dynamic pressure for glide dyn (winch / flare), not only downward fall. */
+const GLIDE_UPWIND_FOR_DYN = 0.48;
+/** Wide + lift diverts some forward push into the climb (slightly less pure forward). */
+const GLIDE_WIDE_FORWARD_DIVERT = 0.16;
+/** Fast fall + spread: extra accel along **look**; scales with airspeed for dive entry. */
+const GLIDE_PLUNGE_FORWARD_ACCEL = 18;
+const GLIDE_PLUNGE_FORWARD_V0 = 4.5;
+const GLIDE_PLUNGE_FORWARD_V1 = 13;
+/** While `|vy|` is in plunge band, scale down forward divert so lift does not eat the new forward shove. */
+const GLIDE_PLUNGE_DIVERT_RELAX = 0.78;
+/** Fast fall used to fake a strong dive and kill pull-out; keep small so opening the suit uses vertical speed, not extra sink. */
+const GLIDE_PLUNGE_PITCH_BIAS = 0.22;
+/** At full plunge + wing, effective gravity multiplier scales by (1 - this * plungeTurn * easeWing). */
+const GLIDE_PLUNGE_GRAV_REDUCTION = 0.16;
+/** After ANY successful air jump — no glide latch while this runs (clears on land). Unconditional. */
+const GLIDE_AFTER_PARKOUR_JUMP_BLOCK_S = 3.55;
+/** Must be falling at least this fast (m/s, downward) to start a glide — avoids apex/micro latch. */
+const GLIDE_LATCH_MIN_DOWNWARD_SPEED = 2.1;
+/** Pull-out while descending (vy < 0 gate in code). */
+const GLIDE_FALL_SPEED_LIFT = 9;
+/** e-folding time (s) for redirecting vertical speed into horizontal along look while gliding. ~0.32s → fast pull-out from terminal fall. */
+const GLIDE_FALL_LEVEL_TAU = 0.32;
+/** While latched, fall→forward uses at least this wing blend so narrow poses don’t kill redirect. */
+const GLIDE_REDIRECT_EASE_MIN = 0.68;
+/** Above this |v| (m/s): add 20%×|v|×dt to `vy` (uses frame-start |v|). Same edge for stall blend hi.
+ * Hard “no faster than frame-start×e^(−5%×dt)” cap applies **only** when frame-start |v| ≥ this — otherwise gravity cannot accelerate a slow step-off. */
+const GLIDE_CRUISE_SPEED_MIN = 20;
+const GLIDE_CRUISE_VEL_FRAC_PER_S = 0.05;
+const GLIDE_CRUISE_UP_FRAC_PER_S = 0.2;
+/** Stall uses `hypot(hSpeed, |downward|)` so **falling** builds “air energy” and recovers lift (wingsuit-like); total |v| alone stayed ~2 m/s off a roof and never woke the wing. */
+const GLIDE_STALL_AIR_LO = 3.5;
+const GLIDE_STALL_LIFT_KILL = 0.88;
+const GLIDE_STALL_FWD_FLOOR = 0.1;
+/** Extra downward accel (×g) when stalled — net fall increases as airspeed drops under ~20 m/s. */
+const GLIDE_STALL_EXTRA_G = 0.62;
+/** Hard ceiling for glide-only upward speed (above jump cap; climb drag still kills sustained float). */
+const GLIDE_MAX_VY_UP_ABS = 9.15;
+const GLIDE_MAX_VY_UP_BASE = 2.55;
+const GLIDE_MAX_VY_UP_DYN = 6.35;
+/** Light fade at extreme climb only (jetpack-like baseline; drain does the real limit). */
+const GLIDE_LIFT_CLIMB_SOFT = 2.2;
+const GLIDE_LIFT_CLIMB_HARD = 9;
+const GLIDE_SPEED_LIFT_CLIMB_SOFT = 2.8;
+const GLIDE_SPEED_LIFT_CLIMB_HARD = 9.5;
+/** Wingsuit lift scales with **total** speed |v| (m/s): straight fall builds |v| toward MAX_FALL_SPEED fastest; below LO lift fades (sink / stall); above HI full pitch authority. */
+const GLIDE_LIFT_SPEED_LO = 1.25;
+const GLIDE_LIFT_SPEED_HI = 14;
+/** Yaw rate scale (deg/s at full arm-height asymmetry, scaled by horizontal speed). */
+const GLIDE_YAW_DEG_S = 92;
+/** Near-1: glide must not bleed horizontal energy to a fake “cruise” band (~17 m/s). */
+const GLIDE_AIR_DAMPING = 0.993;
+/** Safety ceiling only — must stay above plausible |v| after terminal pull-out. */
+const GLIDE_MAX_HORIZ = 72;
+/** Forward glide thrust fades toward `FWD_THRUST_FAST_MUL` as |v| crosses this band (still scaled by wing span). */
+const GLIDE_FWD_THRUST_FAST_LO = 20;
+const GLIDE_FWD_THRUST_FAST_HI = 34;
+const GLIDE_FWD_THRUST_FAST_MUL = 0.2;
+/** Lift needs forward airflow (XZ); stops level jet-lift at modest run speed. */
+const GLIDE_LIFT_HS_LO = 2.8;
+const GLIDE_LIFT_HS_HI = 11;
+/** Same lift gate from downward airspeed (m/s) so steep fall isn’t “no lift until hSpeed builds”). */
+const GLIDE_LIFT_PLUNGE_LO = 2.5;
+const GLIDE_LIFT_PLUNGE_HI = 15;
 /** Per-second horizontal retention on flat ground (`v *= pow(this, dt)`). Lower = faster stop. */
 const GROUND_FRICTION = 0.68;
 /** Gentler damping on GLB ramps so uphill stick input isn’t eaten every frame. */
@@ -283,12 +435,25 @@ const THROW_BOOST = 2.2;
 const VEL_HISTORY_FRAMES = 4;
 /** ~27 km/h cap — near elite sprint; sustained parkour is often lower. */
 const MAX_HORIZONTAL_SPEED = 7.5;
-/** ~0.5 m ballistic height from rest at g=9.81 when vy≈3.1 m/s. */
+/** Upward cap (m/s) — jumps / grapple. */
 const MAX_VERTICAL_SPEED = 6.3;
+/** Downward cap (m/s) in air without glide. ~2× prior cap so terminal speed converts visibly in wingsuit. */
+const MAX_FALL_SPEED = 56;
+/** After grapple winch ends, upward speed may briefly exceed jump cap (rope built real speed). */
+const GRAPPLE_POST_WINCH_UP_CAP = 20;
+const GRAPPLE_POST_WINCH_CARRY_S = 0.95;
 /** Single air jump — refilled only when truly landed (see updatePhysicsMovement). */
 const MAX_JUMPS = 1;
 const JUMP_THRESHOLD = 0.62;
 const handToCtrl = { left: null, right: null };
+/** True while wingsuit glide hysteresis is active (spread arms while falling). */
+let glideLatch_ = false;
+/** |v| at start of this frame’s glide wing block — hard ceiling after collision = this × exp(−cruise×dt). */
+let glideFrameS0_ = -1;
+/** >0: parkour jump / wall jump — do not allow new glide latch (run+jump+arms wide). */
+let parkourJumpGlideBlockSec_ = 0;
+let prevGrappleHookActive_ = false;
+let grapplePostWinchCarrySec_ = 0;
 const rigVelocity = new THREE.Vector3();
 /** Merged OBB slab + GLB mesh support for snapping, grounding, and slope locomotion. */
 const groundMerged = {
@@ -356,6 +521,18 @@ const PLAYER_RADIUS = 0.3;
 const HEAD_MARGIN = 0.15;
 const RIG_SAMPLE_YS = [0.2, 0.6, 1.0, 1.4, 1.75];
 const _headW = new THREE.Vector3();
+const _glLw = new THREE.Vector3();
+const _glRw = new THREE.Vector3();
+const _glMid = new THREE.Vector3();
+const _glHead = new THREE.Vector3();
+const _glFwd = new THREE.Vector3();
+const _glRight = new THREE.Vector3();
+const _glRigFwd = new THREE.Vector3();
+const _glRigRight = new THREE.Vector3();
+const _glDiveDir = new THREE.Vector3();
+const _glQuatW = new THREE.Quaternion();
+const _glEul = new THREE.Euler();
+const _worldUp = new THREE.Vector3(0, 1, 0);
 const _localPt = new THREE.Vector3();
 const _localPush = new THREE.Vector3();
 const _samples = [
@@ -586,6 +763,7 @@ function tryApplyWallJump(impX, impY, impZ) {
   rigVelocity.x += wnx * WALL_JUMP_KICK_HORIZ * scale;
   rigVelocity.z += wnz * WALL_JUMP_KICK_HORIZ * scale;
   rigVelocity.y += WALL_JUMP_KICK_UP * scale;
+  parkourJumpGlideBlockSec_ = GLIDE_AFTER_PARKOUR_JUMP_BLOCK_S;
 }
 
 function setStatus(t) {
@@ -608,14 +786,13 @@ function tickFps(nowMs) {
     fpsElement.textContent = `${fpsState.display} FPS`;
     fpsState.lastShown = fpsState.display;
   }
-  drawVrFpsPanel(fpsState.display);
 }
 
 function ensureVrFpsPanel(parentCamera) {
   if (vrFps.mesh || !parentCamera) return;
   const c = document.createElement("canvas");
   c.width = 256;
-  c.height = 96;
+  c.height = 132;
   const ctx = c.getContext("2d");
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -641,8 +818,11 @@ function ensureVrFpsPanel(parentCamera) {
   vrFps.mesh = mesh;
 }
 
-function drawVrFpsPanel(fps) {
-  if (!vrFps.ctx || fps === vrFps.lastDrawn) return;
+function drawVrFpsPanel(fps, speedMps) {
+  if (!vrFps.ctx) return;
+  const sig = `${fps}|${speedMps.toFixed(2)}`;
+  if (sig === vrFps.lastSig) return;
+  vrFps.lastSig = sig;
   const ctx = vrFps.ctx;
   const w = vrFps.canvas.width;
   const h = vrFps.canvas.height;
@@ -657,17 +837,33 @@ function drawVrFpsPanel(fps) {
   ctx.arcTo(0, 0, w, 0, r);
   ctx.closePath();
   ctx.fill();
-  ctx.fillStyle = "#4fc3f7";
-  ctx.font = "600 56px system-ui, sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "alphabetic";
-  ctx.fillText(`${fps}`, w - 70, 70);
   ctx.fillStyle = "#9fd6ff";
-  ctx.font = "500 28px system-ui, sans-serif";
+  ctx.font = "500 30px system-ui, sans-serif";
+  ctx.fillText(`${speedMps.toFixed(1)} m/s`, w - 20, 44);
+  ctx.fillStyle = "#4fc3f7";
+  ctx.font = "600 52px system-ui, sans-serif";
+  ctx.fillText(`${fps}`, w - 70, 106);
+  ctx.fillStyle = "#9fd6ff";
+  ctx.font = "500 26px system-ui, sans-serif";
   ctx.textAlign = "left";
-  ctx.fillText("FPS", w - 60, 66);
+  ctx.fillText("FPS", w - 58, 102);
   if (vrFps.texture) vrFps.texture.needsUpdate = true;
-  vrFps.lastDrawn = fps;
+}
+
+/** Call after physics + collision so speed matches integrated |v| (any direction). */
+function syncFpsStackHud() {
+  if (!SHOW_FPS || !getUIVisible()) return;
+  const speedMps = rigVelocity.length();
+  if (speedometerElement) {
+    const t = `${speedMps.toFixed(1)} m/s`;
+    if (t !== speedometerLastText_) {
+      speedometerElement.textContent = t;
+      speedometerLastText_ = t;
+    }
+  }
+  drawVrFpsPanel(fpsState.display, speedMps);
 }
 
 /* ── VR controllers ───────────────────────────────────────────────────── */
@@ -892,6 +1088,7 @@ function toggleLocomotionMode() {
   locomotionMode = locomotionMode === "editor" ? "physics" : "editor";
   rigVelocity.set(0, 0, 0);
   jumpsRemaining = MAX_JUMPS;
+  parkourJumpGlideBlockSec_ = 0;
   grabState.left.active = false;
   grabState.left.history.length = 0;
   grabState.right.active = false;
@@ -911,6 +1108,7 @@ function toggleUIVisibility() {
   const next = !getUIVisible();
   setUIVisible(next);
   if (vrFps.mesh) vrFps.mesh.visible = next && SHOW_FPS;
+  if (fpsStackElement) fpsStackElement.style.display = next && SHOW_FPS ? "flex" : "none";
   console.log(`[ui] visibility → ${next ? "on" : "off"}`);
 }
 
@@ -1003,6 +1201,9 @@ function updateGrabLocomotion(dt) {
           if (jumpsRemaining > 0) {
             jumpsRemaining--;
             impY *= Math.SQRT2;
+            /* Any successful air jump blocks glide latch — clears on land.
+             * Conditional checks (stick / rigVel) missed real VR cases where neither carried run speed. */
+            parkourJumpGlideBlockSec_ = GLIDE_AFTER_PARKOUR_JUMP_BLOCK_S;
           } else impY = 0;
         }
 
@@ -1026,7 +1227,7 @@ function updateGrabLocomotion(dt) {
           rigVelocity.z *= s;
         }
         if (rigVelocity.y > MAX_VERTICAL_SPEED) rigVelocity.y = MAX_VERTICAL_SPEED;
-        if (rigVelocity.y < -MAX_VERTICAL_SPEED) rigVelocity.y = -MAX_VERTICAL_SPEED;
+        if (rigVelocity.y < -MAX_FALL_SPEED) rigVelocity.y = -MAX_FALL_SPEED;
       }
       state.history.length = 0;
     }
@@ -1179,13 +1380,356 @@ function updateEditorMovement(dt, xrCamera) {
   }
 }
 
+/**
+ * Horizontal “where I look” for glide thrust / redirect.
+ * In WebXR, `renderer.xr.updateCamera(camera)` writes **this** `camera`’s world pose from the headset
+ * (ArrayCamera children are not the same — using them broke steering).
+ */
+function setGlideHorizontalForward_(xrCamera) {
+  cameraRig.updateMatrixWorld(true);
+  const src = (renderer?.xr?.isPresenting && camera) ? camera : (xrCamera || camera);
+  if (!src) return;
+  src.updateMatrixWorld(true);
+  src.getWorldDirection(_glFwd);
+  _glFwd.y = 0;
+  if (_glFwd.lengthSq() > 1e-5) {
+    _glFwd.normalize();
+    return;
+  }
+  src.getWorldQuaternion(_glQuatW);
+  _glEul.setFromQuaternion(_glQuatW, "YXZ");
+  const y = _glEul.y;
+  _glFwd.set(-Math.sin(y), 0, -Math.cos(y));
+  if (_glFwd.lengthSq() < 1e-10) _glFwd.set(0, 0, -1);
+  _glFwd.normalize();
+}
+
+/** Body-only XZ axes (rig yaw). Latch / wing width use this so **head turn** does not fake “arms in” and drop glide. */
+function setGlideRigHorizontalAxes_() {
+  _glRigFwd.set(0, 0, -1).applyQuaternion(cameraRig.quaternion);
+  _glRigFwd.y = 0;
+  if (_glRigFwd.lengthSq() < 1e-8) _glRigFwd.set(0, 0, -1);
+  _glRigFwd.normalize();
+  _glRigRight.set(-_glRigFwd.z, 0, _glRigFwd.x);
+  if (_glRigRight.lengthSq() < 1e-8) _glRigRight.set(1, 0, 0);
+  _glRigRight.normalize();
+}
+
 function updatePhysicsMovement(dt, xrCamera) {
+  glideFrameS0_ = -1;
   updateGrabLocomotion(dt);
+  /* Grapple winch must run **before** gravity + `position += v*dt` so the same
+   * frame’s integration matches the original `updateBots` → physics order. */
+  applyGrappleWinchStep(dt);
+
+  if (parkourJumpGlideBlockSec_ > 0) {
+    parkourJumpGlideBlockSec_ = Math.max(0, parkourJumpGlideBlockSec_ - dt);
+  }
+
+  const grappleHookActive = isGrappleHookActive();
+  if (prevGrappleHookActive_ && !grappleHookActive) {
+    grapplePostWinchCarrySec_ = GRAPPLE_POST_WINCH_CARRY_S;
+  }
 
   const grabbing = grabState.left.active || grabState.right.active;
+  const groundedStart = isGrounded();
+  if (groundedStart) {
+    glideLatch_ = false;
+    grapplePostWinchCarrySec_ = 0;
+    parkourJumpGlideBlockSec_ = 0;
+  }
+  if (grappleHookActive) glideLatch_ = false;
+  if (isArcheryDrawActive()) glideLatch_ = false;
 
-  rigVelocity.y -= PLAYER_GRAVITY * dt;
-  if (rigVelocity.y < -MAX_VERTICAL_SPEED) rigVelocity.y = -MAX_VERTICAL_SPEED;
+  let wingsuit = null;
+  if (
+    !grappleHookActive
+    && !isArcheryDrawActive()
+    && !groundedStart
+    && handToCtrl.left
+    && handToCtrl.right
+    && xrCamera
+  ) {
+    handToCtrl.left.getWorldPosition(_glLw);
+    handToCtrl.right.getWorldPosition(_glRw);
+    if (renderer?.xr?.isPresenting && camera) {
+      camera.getWorldPosition(_glHead);
+    } else {
+      (xrCamera || camera).getWorldPosition(_glHead);
+    }
+
+    setGlideRigHorizontalAxes_();
+    _glRight.copy(_glRigRight);
+
+    _localPt.copy(_glLw).sub(_glHead);
+    const latL = Math.abs(_localPt.dot(_glRigRight));
+    _localPt.copy(_glRw).sub(_glHead);
+    const latR = Math.abs(_localPt.dot(_glRigRight));
+    const lateralSpan = latL + latR;
+    _localPt.subVectors(_glRw, _glLw);
+    const lateralGripSep = Math.abs(_localPt.dot(_glRigRight));
+    const handDist = _glLw.distanceTo(_glRw);
+
+    if (!glideLatch_) {
+      if (
+        !isArcheryDrawActive()
+        && parkourJumpGlideBlockSec_ <= 0
+        && -rigVelocity.y >= GLIDE_LATCH_MIN_DOWNWARD_SPEED
+        && lateralSpan > GLIDE_LAT_ENTER
+        && lateralGripSep > GLIDE_SEP_ENTER
+        && handDist > GLIDE_HAND_ENTER
+      ) {
+        glideLatch_ = true;
+      }
+    } else if (
+      lateralSpan < GLIDE_LAT_EXIT
+      || lateralGripSep < GLIDE_SEP_EXIT
+      || handDist < GLIDE_HAND_EXIT
+      || isArcheryDrawActive()
+    ) {
+      glideLatch_ = false;
+    }
+    if (glideLatch_) {
+      glideFrameS0_ = Math.hypot(rigVelocity.x, rigVelocity.y, rigVelocity.z);
+      /* Thrust / pull-out follow **look**; latch geometry above uses **body** so head steering does not drop glide. */
+      setGlideHorizontalForward_(xrCamera);
+      /* Linear wing for tuck/narrow; eased curve so “past shoulder → full T” is strongly felt. */
+      const wing = THREE.MathUtils.clamp(
+        (lateralSpan - GLIDE_WING0) / (GLIDE_LAT_FULL - GLIDE_WING0 + 1e-5),
+        0,
+        1,
+      );
+      const easeWing = 1 - Math.pow(Math.max(0, 1 - wing), 2.1);
+      const tuck = 1 - wing;
+      const narrowFall = Math.pow(Math.max(0, 1 - wing), 2.05) * PLAYER_GRAVITY * GLIDE_NARROW_FALL_G;
+      const wideDrag = easeWing * easeWing * GLIDE_WIDE_PARASITE * 1.35;
+      /* Lift scales up with span; mid band gets a small extra (cruise) without punishing full T. */
+      const liftSpreadMul = 0.42 + 0.95 * easeWing + 0.22 * Math.sin(Math.PI * easeWing) * (1 - easeWing);
+      const hSpeed = Math.hypot(rigVelocity.x, rigVelocity.z);
+      const plungeEarly = Math.max(0, -rigVelocity.y);
+      const stallAir = Math.hypot(hSpeed, plungeEarly);
+      const speed3d = Math.hypot(rigVelocity.x, rigVelocity.y, rigVelocity.z);
+      const stallBlend =
+        1 - THREE.MathUtils.smoothstep(GLIDE_STALL_AIR_LO, GLIDE_CRUISE_SPEED_MIN, stallAir);
+      const liftSpeedMul = THREE.MathUtils.smoothstep(
+        GLIDE_LIFT_SPEED_LO,
+        GLIDE_LIFT_SPEED_HI,
+        speed3d,
+      );
+      const hNorm = THREE.MathUtils.clamp(hSpeed / 6.5, 0, 1);
+      const fallWind = Math.max(0, -rigVelocity.y) * 0.55;
+      const upWind = Math.max(0, rigVelocity.y) * GLIDE_UPWIND_FOR_DYN;
+      const airProxy = Math.hypot(hSpeed, fallWind, upWind);
+      const dyn = Math.min(
+        1,
+        (airProxy / Math.max(0.4, GLIDE_DYN_REF_SPEED))
+        * (airProxy / Math.max(0.4, GLIDE_DYN_REF_SPEED)),
+      );
+      const dynEff = Math.max(
+        dyn,
+        GLIDE_DYN_FLOOR * (1 - 0.65 * easeWing) + 0.55 * easeWing * Math.min(1, airProxy / 4.8),
+      );
+
+      _glMid.copy(_glLw).add(_glRw).multiplyScalar(0.5);
+      /* “Pitch” = mostly lateral grip spacing + 3D hand distance (narrows when nocking / arms in). */
+      const sepN = THREE.MathUtils.clamp(
+        (lateralGripSep - GLIDE_PITCH_SEP_MIN)
+          / (GLIDE_PITCH_SEP_MAX - GLIDE_PITCH_SEP_MIN + 1e-5) * 2
+          - 1,
+        -1,
+        1,
+      );
+      const distN = THREE.MathUtils.clamp(
+        (handDist - GLIDE_PITCH_DIST_MIN)
+          / (GLIDE_PITCH_DIST_MAX - GLIDE_PITCH_DIST_MIN + 1e-5) * 2
+          - 1,
+        -1,
+        1,
+      );
+      const glidePitch = THREE.MathUtils.clamp(0.52 * sepN + 0.48 * distN, -1, 1);
+      const plungeSpeed = Math.max(0, -rigVelocity.y);
+      const plungeTurn = THREE.MathUtils.smoothstep(
+        GLIDE_PLUNGE_FORWARD_V0,
+        GLIDE_PLUNGE_FORWARD_V1,
+        plungeSpeed,
+      );
+      const glidePitchEff = THREE.MathUtils.clamp(
+        glidePitch - plungeTurn * GLIDE_PLUNGE_PITCH_BIAS,
+        -1,
+        1,
+      );
+
+      const rollRaw = (_glLw.y - _glRw.y) * 2.4;
+      const rollN = THREE.MathUtils.clamp(rollRaw, -1, 1);
+      const yawRate =
+        -rollN * (GLIDE_YAW_DEG_S * (Math.PI / 180)) * (0.22 + 0.78 * hNorm);
+
+      let gravMul = THREE.MathUtils.lerp(1, GLIDE_GRAV_MUL, easeWing);
+      gravMul *= 1 - GLIDE_PLUNGE_GRAV_REDUCTION * plungeTurn * easeWing;
+      const tuckFall = tuck * PLAYER_GRAVITY * GLIDE_TUCK_EXTRA_G_FRAC;
+
+      const pitchAmp = 0.55 + 0.62 * easeWing;
+      const pitchLiftBoost = 1 + GLIDE_PITCH_LIFT * Math.max(0, -glidePitchEff) * pitchAmp;
+      const pitchDiveMul = 1 + 0.65 * Math.max(0, glidePitchEff) * pitchAmp;
+      const vyClimb = Math.max(0, rigVelocity.y);
+      const climbFade = 1 - THREE.MathUtils.smoothstep(GLIDE_LIFT_CLIMB_SOFT, GLIDE_LIFT_CLIMB_HARD, vyClimb);
+      const speedLiftFade = 1 - THREE.MathUtils.smoothstep(GLIDE_SPEED_LIFT_CLIMB_SOFT, GLIDE_SPEED_LIFT_CLIMB_HARD, vyClimb);
+      let liftMag = easeWing * dynEff * GLIDE_LIFT_K * (pitchLiftBoost / pitchDiveMul);
+      liftMag *= climbFade;
+      liftMag += easeWing * dynEff * GLIDE_SPEED_TO_LIFT
+        * Math.min(speed3d, GLIDE_SPEED_TO_LIFT_REF_MAX) * speedLiftFade;
+      liftMag += easeWing * dynEff * GLIDE_PITCH_FLARE_VERT * Math.max(0, -glidePitchEff) * climbFade;
+      if (rigVelocity.y < -0.35) {
+        liftMag += easeWing * dynEff * GLIDE_FALL_SPEED_LIFT * THREE.MathUtils.smoothstep(3.5, 18, plungeSpeed);
+      }
+      /* High-|v| lift bump: was smoothstep(24→52) + unbounded speed→lift — both peaked mid‑40s |v|. */
+      {
+        const hiLift = THREE.MathUtils.smoothstep(22, 36, speed3d)
+          * (1 - THREE.MathUtils.smoothstep(28, 40, speed3d));
+        liftMag += easeWing * dynEff * 6.2 * hiLift;
+      }
+      liftMag *= liftSpreadMul;
+      liftMag *= liftSpeedMul;
+      {
+        const liftFromFwd = THREE.MathUtils.smoothstep(GLIDE_LIFT_HS_LO, GLIDE_LIFT_HS_HI, hSpeed);
+        const liftFromPlunge = THREE.MathUtils.smoothstep(
+          GLIDE_LIFT_PLUNGE_LO,
+          GLIDE_LIFT_PLUNGE_HI,
+          plungeSpeed,
+        );
+        liftMag *= Math.max(liftFromFwd, liftFromPlunge);
+      }
+      liftMag = Math.min(liftMag, GLIDE_LIFT_MAX);
+      liftMag *= 1 - GLIDE_STALL_LIFT_KILL * stallBlend;
+
+      let diveSink = easeWing * Math.max(0, glidePitchEff) * GLIDE_PITCH_DIVE_G * pitchAmp;
+      diveSink *= 1 - 0.88 * THREE.MathUtils.smoothstep(10, 42, speed3d);
+      diveSink += stallBlend * easeWing * PLAYER_GRAVITY * GLIDE_STALL_EXTRA_G;
+
+      /* Wingsuit always pushes where you **look** (head yaw on XZ) — intentional steer, not stray rig drift. */
+      _glDiveDir.copy(_glFwd);
+
+      /* Narrow: little forward + fast sink; mid: cruise; wide: strong forward + parasite drag. */
+      const forwardSpread = 0.1 + 0.92 * easeWing * easeWing;
+      const airSpeedForPlunge = Math.hypot(hSpeed, plungeSpeed);
+      const plungeFromSpeed = 0.32 + 0.68 * THREE.MathUtils.smoothstep(2.2, 20, airSpeedForPlunge);
+      const forwardPlunge = plungeTurn * easeWing * dynEff * GLIDE_PLUNGE_FORWARD_ACCEL * plungeFromSpeed;
+      const forwardRaw =
+        forwardSpread
+        * (
+          GLIDE_FORWARD_BASE
+          + GLIDE_FORWARD_DYN * dynEff * (0.55 + 0.45 * easeWing)
+          + GLIDE_FORWARD_DIVE * Math.max(0, glidePitchEff) * pitchAmp
+          + forwardPlunge
+        );
+      const liftFrac = liftMag / Math.max(0.35, GLIDE_LIFT_MAX);
+      const plungeDivertRelax =
+        1 - GLIDE_PLUNGE_DIVERT_RELAX * THREE.MathUtils.smoothstep(
+          GLIDE_PLUNGE_FORWARD_V0,
+          GLIDE_PLUNGE_FORWARD_V1 + 2.5,
+          plungeSpeed,
+        );
+      const forwardAccelRaw =
+        forwardRaw
+        * (
+          1
+          - GLIDE_WIDE_FORWARD_DIVERT * easeWing * (0.35 + 0.65 * liftFrac) * plungeDivertRelax
+        );
+      const fwdSpan = Math.max(0.26, 0.2 + 0.8 * easeWing * easeWing);
+      /* Ramps up with span; rolls off as |v| rises so forward + lift do not pin airspeed in the 40s. */
+      const fwdFastFade =
+        THREE.MathUtils.lerp(
+          1,
+          GLIDE_FWD_THRUST_FAST_MUL,
+          THREE.MathUtils.smoothstep(GLIDE_FWD_THRUST_FAST_LO, GLIDE_FWD_THRUST_FAST_HI, speed3d),
+        );
+      const fwdThrottle = fwdSpan * fwdFastFade;
+      const stallFwd = THREE.MathUtils.lerp(GLIDE_STALL_FWD_FLOOR, 1, 1 - stallBlend);
+      const forwardAccel = forwardAccelRaw * fwdThrottle * stallFwd * GLIDE_FORWARD_MOMENTUM_MUL;
+
+      wingsuit = {
+        gravMul,
+        tuckFall,
+        narrowFall,
+        lift: liftMag,
+        diveSink,
+        yawRate,
+        forwardAccel,
+        diveDirX: _glDiveDir.x,
+        diveDirZ: _glDiveDir.z,
+        dyn: dynEff,
+        wideDrag,
+        easeWing,
+        stallBlend,
+      };
+    }
+  }
+
+  if (wingsuit) {
+    const speed3dNow = Math.hypot(rigVelocity.x, rigVelocity.y, rigVelocity.z);
+    let yAccel =
+      -PLAYER_GRAVITY * wingsuit.gravMul
+      - wingsuit.tuckFall
+      - wingsuit.narrowFall
+      + wingsuit.lift
+      - wingsuit.diveSink;
+    const vrBoost = THREE.MathUtils.smoothstep(38, 56, speed3dNow)
+      * (1 - 0.85 * THREE.MathUtils.smoothstep(28, 40, speed3dNow));
+    const stallB = wingsuit.stallBlend ?? 0;
+    yAccel += wingsuit.easeWing * PLAYER_GRAVITY * (0.55 + 2.05 * vrBoost) * (1 - 0.88 * stallB);
+    rigVelocity.y += yAccel * dt;
+    /* Must refresh hierarchy so synced `camera` world dir matches headset after any rig change. */
+    cameraRig.updateMatrixWorld(true);
+    setGlideHorizontalForward_(xrCamera);
+    const gdfx = _glFwd.x;
+    const gdfz = _glFwd.z;
+
+    rigVelocity.x += gdfx * wingsuit.forwardAccel * dt;
+    rigVelocity.z += gdfz * wingsuit.forwardAccel * dt;
+    const downSp = Math.max(0, -rigVelocity.y);
+    if (downSp > 0.04) {
+      const redStr = Math.max(wingsuit.easeWing, GLIDE_REDIRECT_EASE_MIN);
+      let take = downSp * (1 - Math.exp(-dt / GLIDE_FALL_LEVEL_TAU)) * redStr;
+      take *= 1 - 0.72 * (wingsuit.stallBlend ?? 0);
+      const maxStep = downSp * 0.55;
+      if (take > maxStep) take = maxStep;
+      rigVelocity.y += take;
+      rigVelocity.x += gdfx * take;
+      rigVelocity.z += gdfz * take;
+    }
+    /* VR: same yaw delta on **world XZ velocity** and **rig** (controllers follow rig; head stays tracked). */
+    if (renderer?.xr?.isPresenting) {
+      let dAirYaw = wingsuit.yawRate * dt;
+      const sx = Math.abs(vrInput.rightStick.x) > deadzone ? vrInput.rightStick.x : 0;
+      if (sx !== 0) {
+        /* Same deg/s as non-glide: `cameraRig.rotation.y -= sx * rotateSpeed * dt * (π/180)` */
+        dAirYaw -= sx * rotateSpeed * dt * (Math.PI / 180);
+      }
+      if (dAirYaw !== 0) {
+        _vTan.set(rigVelocity.x, 0, rigVelocity.z);
+        _vTan.applyAxisAngle(_worldUp, dAirYaw);
+        rigVelocity.x = _vTan.x;
+        rigVelocity.z = _vTan.z;
+        cameraRig.rotation.y += dAirYaw;
+      }
+    } else {
+      cameraRig.rotation.y += wingsuit.yawRate * dt;
+    }
+  } else {
+    rigVelocity.y -= PLAYER_GRAVITY * dt;
+  }
+  if (rigVelocity.y < -MAX_FALL_SPEED) rigVelocity.y = -MAX_FALL_SPEED;
+  const grapplePostWinchCarry = grapplePostWinchCarrySec_ > 0;
+  let upCap = grapplePostWinchCarry ? GRAPPLE_POST_WINCH_UP_CAP : MAX_VERTICAL_SPEED;
+  if (wingsuit && !grapplePostWinchCarry) {
+    upCap = Math.min(
+      GLIDE_MAX_VY_UP_ABS,
+      GLIDE_MAX_VY_UP_BASE + wingsuit.dyn * GLIDE_MAX_VY_UP_DYN,
+    );
+  }
+  if (!grappleHookActive && rigVelocity.y > upCap) {
+    rigVelocity.y = upCap;
+  }
 
   cameraRig.position.x += rigVelocity.x * dt;
   cameraRig.position.y += rigVelocity.y * dt;
@@ -1195,7 +1739,9 @@ function updatePhysicsMovement(dt, xrCamera) {
   const groundFlat =
     grounded && groundMerged.valid && groundMerged.normal.y >= SLOPE_FLAT_NY;
 
-  if (!grabbing) {
+  /* Squeeze-held grab skips damping unless wingsuit is active (spread arms glide
+   * must still shed horizontal speed / feel controlled). */
+  if (!grabbing || wingsuit) {
     if (grounded) {
       if (groundFlat) {
         rigVelocity.x *= Math.pow(GROUND_FRICTION, dt);
@@ -1208,8 +1754,15 @@ function updatePhysicsMovement(dt, xrCamera) {
         rigVelocity.copy(groundMerged.normal).multiplyScalar(vn).add(_vTan);
       }
     } else {
-      rigVelocity.x *= Math.pow(AIR_DAMPING, dt);
-      rigVelocity.z *= Math.pow(AIR_DAMPING, dt);
+      const airDamp = wingsuit ? GLIDE_AIR_DAMPING : AIR_DAMPING;
+      rigVelocity.x *= Math.pow(airDamp, dt);
+      rigVelocity.z *= Math.pow(airDamp, dt);
+      if (wingsuit?.wideDrag > 0) {
+        const hm = Math.hypot(rigVelocity.x, rigVelocity.z);
+        const parasite = Math.exp(-wingsuit.wideDrag * hm * dt);
+        rigVelocity.x *= parasite;
+        rigVelocity.z *= parasite;
+      }
     }
     /* Kill sub-threshold horizontal drift when the player is not actively steering
      * (stick centered). Residual velocity otherwise decays slowly from friction alone. */
@@ -1229,10 +1782,18 @@ function updatePhysicsMovement(dt, xrCamera) {
           rigVelocity.copy(nn).multiplyScalar(vn);
         }
       }
-    } else if (!grounded) {
+    } else if (!grounded && !wingsuit) {
       if (Math.hypot(rigVelocity.x, rigVelocity.z) < RIG_AIR_DRIFT_VEL_EPS) {
         rigVelocity.x = 0;
         rigVelocity.z = 0;
+      }
+    }
+    if (wingsuit) {
+      const hm = Math.hypot(rigVelocity.x, rigVelocity.z);
+      if (hm > GLIDE_MAX_HORIZ) {
+        const s = GLIDE_MAX_HORIZ / hm;
+        rigVelocity.x *= s;
+        rigVelocity.z *= s;
       }
     }
   }
@@ -1282,8 +1843,61 @@ function updatePhysicsMovement(dt, xrCamera) {
   snapRigToFloor(dt);
 
   const rotateX = Math.abs(vrInput.rightStick.x) > deadzone ? vrInput.rightStick.x : 0;
-  if (rotateX !== 0) {
+  /* VR wingsuit: right-stick yaw already rotates world XZ `rigVelocity` — rig-only yaw would not steer flight and would double inputs. */
+  if (rotateX !== 0 && !(renderer?.xr?.isPresenting && wingsuit)) {
     cameraRig.rotation.y -= rotateX * rotateSpeed * dt * (Math.PI / 180);
+  }
+
+  /* Glide wind is VR-only: desktop orbit + intro still run physics, which would
+   * otherwise drive `falling` and ramp the fall loop on the flat page. */
+  if (renderer?.xr?.isPresenting) {
+    const stLen = Math.hypot(vrInput.leftStick.x, vrInput.leftStick.y);
+    let locomotionSpeed = 0;
+    if (stLen > deadzone) {
+      locomotionSpeed = stLen * moveSpeed;
+      if (grounded && !groundFlat && groundMerged.valid) {
+        let rampBoost = 1.12;
+        if (groundMerged.fromGlb) {
+          const nn = groundMerged.normal;
+          rampBoost = 1.12 + Math.min(0.48, (SLOPE_FLAT_NY - nn.y) * 6.5);
+        }
+        locomotionSpeed *= rampBoost;
+      }
+      locomotionSpeed *= LOCOMOTION_AUDIO_UPSCALE;
+    }
+    tickGlideAudio({
+      dt,
+      falling: !grounded && rigVelocity.y < -0.38,
+      gliding: wingsuit != null,
+      horizSpeed: Math.hypot(rigVelocity.x, rigVelocity.z),
+      totalSpeed: Math.hypot(rigVelocity.x, rigVelocity.y, rigVelocity.z),
+      locomotionSpeed,
+    });
+  }
+
+  if (grapplePostWinchCarrySec_ > 0) {
+    grapplePostWinchCarrySec_ = Math.max(0, grapplePostWinchCarrySec_ - dt);
+  }
+  prevGrappleHookActive_ = grappleHookActive;
+}
+
+/**
+ * Glide cruise above ~20 m/s: 20%×|v|×dt to `vy`, then cap |v| ≤ frame-start×e^(−5%×dt) so speed cannot plateau.
+ * Below that speed at frame start: **no cap** — gravity and dive can raise |v| toward flying speed (real wingsuit).
+ */
+function applyGlideCruiseAfterCollision_(dt) {
+  if (!glideLatch_) return;
+  if (isGrounded()) return;
+  if (isGrappleHookActive() || isArcheryDrawActive()) return;
+  if (!(glideFrameS0_ > 1e-5)) return;
+  if (glideFrameS0_ < GLIDE_CRUISE_SPEED_MIN) {
+    return;
+  }
+  const sMax = glideFrameS0_ * Math.exp(-GLIDE_CRUISE_VEL_FRAC_PER_S * dt);
+  rigVelocity.y += GLIDE_CRUISE_UP_FRAC_PER_S * glideFrameS0_ * dt;
+  const sPost = Math.hypot(rigVelocity.x, rigVelocity.y, rigVelocity.z);
+  if (sPost > sMax + 1e-5) {
+    rigVelocity.multiplyScalar(sMax / sPost);
   }
 }
 
@@ -1332,6 +1946,10 @@ function updateVRMovement(delta) {
   /* Do not require `inputSources` — some runtimes expose it late; physics/collision
    * must still tick every frame or the player falls through the floor. */
   if (!session) return;
+  /* Match `WebGLRenderer.render`: refresh XR rig matrices **before** physics so thrust/yaw use current head pose. */
+  if (renderer.xr?.isPresenting && camera && typeof renderer.xr.updateCamera === "function") {
+    renderer.xr.updateCamera(camera);
+  }
   const inputSources = session.inputSources ?? [];
   vrInput.leftStick.x = 0;
   vrInput.leftStick.y = 0;
@@ -1383,6 +2001,7 @@ function updateVRMovement(delta) {
   }
 
   tickRunnerCollisionIntegration(xrCamera, dt);
+  applyGlideCruiseAfterCollision_(dt);
 }
 
 /* ── Real-time sun + shadows ──────────────────────────────────────────── */
@@ -1549,10 +2168,13 @@ function animate(time) {
     if (locomotionMode === "physics" && getWorldCollisionBoxes().length > 0) {
       updatePhysicsMovement(dtSec, camera);
       tickRunnerCollisionIntegration(camera, dtSec);
+      applyGlideCruiseAfterCollision_(dtSec);
     }
     if (composer && false) composer.render(delta * 0.001);
     else renderer.render(scene, camera);
   }
+
+  syncFpsStackHud();
 }
 
 /**
@@ -1583,10 +2205,14 @@ function enforceMaterialsUseSceneFog_(root) {
 
 async function init() {
   statusElement = document.getElementById("status");
+  fpsStackElement = document.getElementById("fps-stack");
   fpsElement = document.getElementById("fps");
-  if (fpsElement) fpsElement.style.display = SHOW_FPS ? "block" : "none";
+  speedometerElement = document.getElementById("speedometer");
+  if (fpsStackElement) {
+    fpsStackElement.style.display = SHOW_FPS && getUIVisible() ? "flex" : "none";
+  }
   fpsState.windowStart = performance.now();
-  drawVrFpsPanel(0);
+  drawVrFpsPanel(0, 0);
 
   camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.025, CAMERA_FAR);
   cameraRig = new THREE.Group();
@@ -1698,6 +2324,14 @@ async function init() {
     } catch (e) {
       console.warn("[brutalistVR8] music start failed:", e);
     }
+    try {
+      resumeGlideAudio();
+    } catch (_) { /* ignore */ }
+  });
+  renderer.xr.addEventListener("sessionend", () => {
+    try {
+      muteGlideAudio();
+    } catch (_) { /* ignore */ }
   });
 
   if (SHOW_FPS) {
@@ -1730,6 +2364,8 @@ async function init() {
   controls = new OrbitControls(camera, renderer.domElement);
   controls.target.copy(orbitTarget);
   controls.update();
+
+  preloadGlideAudio().catch(() => {});
 
   window.addEventListener("resize", onResize);
   window.addEventListener("pagehide", () => {
@@ -1929,6 +2565,17 @@ async function init() {
       restartRun();
       console.info("brutalistVR8.restartRun: new run started");
     },
+    /**
+     * Clear saved rig position, set respawn to this map’s default, teleport immediately.
+     * Use when stuck inside geometry or a bad reload keeps spawning you in a wall.
+     * Example: brutalistVR8.resetSpawnAndTeleport()
+     */
+    resetSpawnAndTeleport() {
+      resetPlayerSpawnToDefault_();
+      teleportRigToSpawnAnchor_();
+      console.info("brutalistVR8.resetSpawnAndTeleport: default spawn, rig moved to", playerSpawnPos.toArray());
+      return playerSpawnPos.toArray();
+    },
     topScores() {
       const s = getTopScores();
       console.info("brutalistVR8.topScores:", s);
@@ -1960,6 +2607,7 @@ async function init() {
       cameraRig.position.copy(playerSpawnPos);
       rigVelocity.set(0, 0, 0);
       jumpsRemaining = MAX_JUMPS;
+      parkourJumpGlideBlockSec_ = 0;
       grabState.left.active = false;
       grabState.right.active = false;
       grabState.left.history.length = 0;

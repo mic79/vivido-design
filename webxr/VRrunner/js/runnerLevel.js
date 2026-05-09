@@ -618,18 +618,26 @@ const SLIDE_DOWN_IMPULSE = 0.55;
  *  with rig-local `impY` so either “punch down” in rig or grip-local Y triggers slide.
  */
 export function getRunnerThrowAssist(rigPos, rigVelBefore, impX, impY, impZ, slideProbeY) {
-  if (!levelGroup_) return null;
-  const inHallAssist =
-    rigPos.z >= ASSIST_Z0
-    && rigPos.z <= assistZ1_
-    && Math.abs(rigPos.x) <= assistXHalf_;
-  const onGlbFootprint =
-    glbSlideXZ_ != null
-    && rigPos.x >= glbSlideXZ_.minX
-    && rigPos.x <= glbSlideXZ_.maxX
-    && rigPos.z >= glbSlideXZ_.minZ
-    && rigPos.z <= glbSlideXZ_.maxZ;
-  if (!inHallAssist && !onGlbFootprint) return null;
+  /* Runner interior: slide only in the hallway assist strip or on the rooftops GLB.
+   * When `levelGroup_` is absent (e.g. streaming sandbox after `disposeRunnerLevel`),
+   * allow slide from any grounded spot so WebXR grab-throw still works city-wide. */
+  let inSlideZone = false;
+  if (levelGroup_) {
+    const inHallAssist =
+      rigPos.z >= ASSIST_Z0
+      && rigPos.z <= assistZ1_
+      && Math.abs(rigPos.x) <= assistXHalf_;
+    const onGlbFootprint =
+      glbSlideXZ_ != null
+      && rigPos.x >= glbSlideXZ_.minX
+      && rigPos.x <= glbSlideXZ_.maxX
+      && rigPos.z >= glbSlideXZ_.minZ
+      && rigPos.z <= glbSlideXZ_.maxZ;
+    inSlideZone = inHallAssist || onGlbFootprint;
+  } else {
+    inSlideZone = true;
+  }
+  if (!inSlideZone) return null;
 
   if (impY > 0.52) return null;
   const probe = slideProbeY != null ? slideProbeY : 0;

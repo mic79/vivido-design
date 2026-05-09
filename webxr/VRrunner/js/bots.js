@@ -6138,6 +6138,24 @@ function _disarmGrapple() {
   else if (scene_) scene_.remove(m);
 }
 
+/** Winch step — call once per frame **after** `updatePhysicsMovement` / collision. */
+export function applyGrappleWinchStep(dt) {
+  _applyGrappleWinch(dt);
+}
+
+/** True while a stuck grapple anchor is still “live” for winch (blocks wingsuit in main).
+ * After `grappleWinchUsed`, the mesh may remain in the scene until culled — that must NOT
+ * keep blocking glide (was: stuck until the next arrow fired). */
+export function isGrappleHookActive() {
+  const m = activeGrappleMesh_;
+  return !!(m && m.parent && !m.userData.grappleWinchUsed);
+}
+
+/** True while bow string is held / arrow nocked — wingsuit must not run. */
+export function isArcheryDrawActive() {
+  return !!drawing_;
+}
+
 function _applyGrappleWinch(dt) {
   if (!cameraRig_ || !activeGrappleMesh_ || !bowHandTriggerHeld_ || playerDead()) return;
   if (activeGrappleMesh_.userData.grappleWinchUsed) return;
@@ -6568,7 +6586,8 @@ function updateArrows(dt) {
       arrows_.splice(i, 1);
     }
   }
-  _applyGrappleWinch(dt);
+  /* Grapple winch is applied from main.js **after** player physics/collision
+   * so locomotion air damping / wingsuit cannot cancel the same-frame dv. */
   _updateGrappleRopeVisual();
   prevBowHandWinch_ = bowHandTriggerHeld_;
 }

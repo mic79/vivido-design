@@ -55,12 +55,18 @@
     #intro-overlay .status-line { margin-top: 1em; color: #4fc3f7; font-size: 0.85em; min-height: 1.2em; }
 
     /* ── In-world HUD (after entering VR / after dismissing the intro) ──── */
-    #fps {
+    /* Desktop: simulated glide “airspeed” above FPS (VR draws the same on a head-locked panel). */
+    #fps-stack {
       position: fixed; right: 10px; top: 10px; z-index: 100;
+      display: none; flex-direction: column; align-items: flex-end; gap: 4px;
+      pointer-events: none;
+    }
+    #speedometer, #fps {
       background: rgba(0, 0, 0, 0.7); color: #4fc3f7; padding: 6px 10px;
       border-radius: 4px; font: 600 13px/1 system-ui, sans-serif;
-      letter-spacing: 0.4px; pointer-events: none;
+      letter-spacing: 0.4px;
     }
+    #speedometer { color: #9fd6ff; font-weight: 500; }
     /* Small floating panel hosting the Combat / Music buttons that bots.js
      * appends. Hidden behind the intro overlay until the overlay is
      * dismissed, then it stays in the top-left corner for desktop play.
@@ -106,7 +112,10 @@
     <h1>VR RUNNER</h1>
   </div>
 
-  <div id="fps">— FPS</div>
+  <div id="fps-stack">
+    <div id="speedometer">—</div>
+    <div id="fps">— FPS</div>
+  </div>
 
   <script type="module" src="./js/main.js"></script>
 </body>
