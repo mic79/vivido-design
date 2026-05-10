@@ -66,6 +66,13 @@ const SECTOR_UNDO_REDO_DEBOUNCE_MS = 300;
 const SNAP_GRID_M = 0.25;
 const SNAP_ROT_RAD = THREE.MathUtils.degToRad(15);
 const SNAP_SCALE_STEP = 0.05;
+/** Right laser + A with no collision hit: spawn this far along the aim ray (m). */
+const LASER_ADD_AIR_SPAWN_M = 2;
+/**
+ * Sector shell / props farther than this (m) along the ray are ignored for **add-at-hit**;
+ * otherwise the closest hit is often the outer boundary ~100 m away and the new piece is invisible.
+ */
+const LASER_ADD_SURFACE_MAX_M = 12;
 /** @type {string[]} */
 const sectorUndoStack_ = [];
 /** @type {string[]} */
@@ -634,9 +641,8 @@ function applySurfaceFaceStackFromHit_(hit, rayDirWorld, fallbackGrip, libId, sc
  */
 function tryInstantAddFromRightLaser_(rightGrip, gpRight, getLoadedSectorRec, setStatus) {
   syncUserSectorRootsWorldMatrix_(getLoadedSectorRec);
-  const hit = raycastClosestCollisionHit_(rightGrip, 220);
-  if (!hit) {
-    setStatus?.("Add: aim right laser at a surface");
+  if (!getGripWorldRay(rightGrip, _origin, _dir)) {
+    setStatus?.("Add: right controller not tracked");
     return;
   }
   const lib = getCurrentLibraryId();
@@ -645,24 +651,42 @@ function tryInstantAddFromRightLaser_(rightGrip, gpRight, getLoadedSectorRec, se
     return;
   }
   const snapOff = xrIndexTriggerSnapOverride_(gpRight?.buttons?.[0]);
-  if (!getGripWorldRay(rightGrip, _origin, _dir)) {
-    setStatus?.("Add: aim right laser at a surface");
-    return;
+  const hitRaw = raycastClosestCollisionHit_(rightGrip, 220);
+  const hit =
+    hitRaw && hitRaw.distance <= LASER_ADD_SURFACE_MAX_M ? hitRaw : null;
+
+  let surfaceStack = false;
+  let refFaceSnap = false;
+  /** @type {THREE.Vector3 | null} */
+  let addScale = null;
+
+  if (hit) {
+    const refMesh = /** @type {THREE.Mesh} */ (hit.object);
+    const refLibId = refMesh?.userData?.sectorLibraryId;
+    const matchRefScale = !snapOff && !!refLibId && refLibId === lib && !!refMesh?.isMesh;
+    let stackScaleVec = null;
+    if (matchRefScale) {
+      refMesh.getWorldScale(_refMatchScale);
+      sanitizeInstanceScale_(_refMatchScale);
+      stackScaleVec = _refMatchScale;
+    }
+    const applied = applySurfaceFaceStackFromHit_(hit, _dir, rightGrip, lib, stackScaleVec, snapOff, _cPos, _quat);
+    surfaceStack = applied.surfaceStack;
+    refFaceSnap = applied.refFaceSnap;
+    if (!surfaceStack) {
+      _cPos.copy(hit.point);
+    }
+    if (matchRefScale && surfaceStack) {
+      addScale = _refMatchScale;
+    }
+  } else {
+    _cPos.copy(_origin).addScaledVector(_dir, LASER_ADD_AIR_SPAWN_M);
+    placementQuatFromGrip_(rightGrip, _quat);
+    if (!snapOff) {
+      snapWorldEulerOnQuaternion_(_quat);
+    }
   }
-  const refMesh = /** @type {THREE.Mesh} */ (hit.object);
-  const refLibId = refMesh?.userData?.sectorLibraryId;
-  const matchRefScale = !snapOff && !!refLibId && refLibId === lib && !!refMesh?.isMesh;
-  let stackScaleVec = null;
-  if (matchRefScale) {
-    refMesh.getWorldScale(_refMatchScale);
-    sanitizeInstanceScale_(_refMatchScale);
-    stackScaleVec = _refMatchScale;
-  }
-  const { surfaceStack, refFaceSnap } = applySurfaceFaceStackFromHit_(hit, _dir, rightGrip, lib, stackScaleVec, snapOff, _cPos, _quat);
-  if (!surfaceStack) {
-    _cPos.copy(hit.point);
-  }
-  const addScale = matchRefScale && surfaceStack ? _refMatchScale : null;
+
   if (!snapOff && (!surfaceStack || (surfaceStack && !refFaceSnap))) {
     snapWorldPositionToAxisGridUsingLibraryBounds(_cPos, _quat, addScale, lib, SNAP_GRID_M);
   }
@@ -670,9 +694,13 @@ function tryInstantAddFromRightLaser_(rightGrip, gpRight, getLoadedSectorRec, se
   const nk = sectorKeyFromWorldPos(_cPos);
   refreshSectorKeys_(nk, nk, getLoadedSectorRec);
   ensureUserSectorMeshesInRunnerGlbCollision(getLoadedSectorRec);
-  setStatus?.(
-    surfaceStack ? (addScale ? `Placed ${lib} (surface · matched scale)` : `Placed ${lib} (surface)`) : `Placed ${lib}`,
-  );
+  if (hit) {
+    setStatus?.(
+      surfaceStack ? (addScale ? `Placed ${lib} (surface · matched scale)` : `Placed ${lib} (surface)`) : `Placed ${lib}`,
+    );
+  } else {
+    setStatus?.(`Placed ${lib} (${LASER_ADD_AIR_SPAWN_M} m ahead)`);
+  }
 }
 
 /**
