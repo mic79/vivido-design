@@ -11,6 +11,9 @@
  *
  * **Pizzaplex** (per-sector GLB): **on** for map=1 unless `initStreamSandbox` passes
  * `pizzaplex: false` or the URL has `?pizzaplex=0` / `false` / `no`.
+ *
+ * **User sector props** (`data/sectorAssets.json`): primitive library + per-cell instances;
+ * streamed with each sector shell (see `sandboxSectorAssets.js` + `brutalistVR8.sandboxEditor`).
  * Strip/attach is queued (`MAX_SECTOR_GLB_JOBS_PER_FRAME`); shell load/unload is queued too.
  */
 import * as THREE from "three";
@@ -20,7 +23,14 @@ import {
   registerSandboxGlbCollisionMeshes,
   unregisterSandboxGlbCollisionMeshes,
   getGlbFloorY,
+  clearRunnerGlassShardMeshes,
+  setRunnerGlassSceneRef,
 } from "./runnerLevel.js";
+import {
+  attachUserSectorAssets,
+  detachUserSectorAssets,
+  setSandboxSectorCollisionRebuild,
+} from "./sandboxSectorAssets.js";
 
 export const SANDBOX_SECTOR = 100;
 /** Active window half-extent in cells → (2*1+1)³ = 27 sectors. */
@@ -213,6 +223,9 @@ async function loadSandboxCityAsync_(gen) {
       break;
     }
     const chunk = allMeshes.slice(i, i + CITY_COLLISION_MESHES_PER_FRAME);
+    for (let ci = 0; ci < chunk.length; ci++) {
+      chunk[ci].userData.sandboxCityGlb = true;
+    }
     registerSandboxGlbCollisionMeshes(chunk);
     for (let j = 0; j < chunk.length; j++) cityCollisionMeshes_.push(chunk[j]);
     await new Promise((r) => requestAnimationFrame(r));
@@ -747,6 +760,7 @@ function unloadSector_(key) {
   if (!rec || !rootGroup_) return;
 
   removePendingSectorGlbJobsForKey_(key);
+  detachUserSectorAssets(rec);
   stripSectorGlbFromRecord_(rec);
 
   rec.outline.geometry?.dispose?.();
@@ -810,7 +824,7 @@ function loadSector_(sx, sy, sz) {
     makeAxisOBB(wx, wy + CUBE_HALF - 0.04, wz, CUBE_HALF, 0.05, CUBE_HALF, true),
   ];
 
-  loaded_.set(key, {
+  const rec = {
     group: g,
     collision,
     outline,
@@ -820,7 +834,11 @@ function loadSector_(sx, sy, sz) {
     sectorGlbOwnsMergedGeometry: false,
     sectorGlbMergedCacheRef: false,
     sectorGlbFullDetail: false,
-  });
+    userSectorRoot: null,
+    userSectorMeshes: null,
+  };
+  loaded_.set(key, rec);
+  attachUserSectorAssets(key, /** @type {any} */ (loaded_.get(key)));
 }
 
 /**
@@ -857,6 +875,8 @@ export function initStreamSandbox(scene, opts = {}) {
     cityLoadPromise_ = Promise.resolve();
     console.info("[VRrunner] sandbox: city glTF disabled (`city: false`).");
   }
+  setSandboxSectorCollisionRebuild(rebuildCollisionFlat_);
+  setRunnerGlassSceneRef(scene);
 }
 
 /** Await after `initStreamSandbox` on map 1 so spawn and physics see city collision. */
@@ -881,6 +901,9 @@ export function disposeStreamSandbox(scene = null) {
   scene_ = null;
   lastKey_ = null;
   activeCollision_.length = 0;
+  clearRunnerGlassShardMeshes();
+  setRunnerGlassSceneRef(null);
+  setSandboxSectorCollisionRebuild(null);
   disposeSectorGlbTemplate_();
 }
 
@@ -952,6 +975,11 @@ export function updateStreamSandbox(pos) {
 
 export function getSandboxCollisionBoxes() {
   return activeCollision_;
+}
+
+/** Active sector shell record (`group`, collision, user props, …) or `null`. */
+export function getSandboxSectorRecord(key) {
+  return loaded_.get(key) ?? null;
 }
 
 export function getCurrentSandboxSectorKey() {

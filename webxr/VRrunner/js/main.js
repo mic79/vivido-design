@@ -51,6 +51,9 @@ import {
   resolveGlbMeshCollisions,
   getGlbFloorSupport,
   getGlbFloorY,
+  getSandboxGlbCollisionMeshes,
+  setRunnerGlassDecalRemoval,
+  setRunnerGlassSceneRef,
 } from "./runnerLevel.js";
 import {
   initStreamSandbox,
@@ -62,8 +65,39 @@ import {
   getSandboxDefaultSpawn,
   getCurrentSandboxSectorKey,
   getActiveSandboxSectorKeys,
+  getSandboxSectorRecord,
   SANDBOX_SECTOR,
 } from "./streamSandboxMap.js";
+import {
+  resetSectorAssetDocumentToDefaults,
+  tryLoadSectorAssetDocumentFromUrl,
+  buildEditorLibraryPreviewRoot,
+  setSectorAssetDocumentFromJson,
+  loadSectorAssetDocumentFromIndexedDB,
+  persistSectorAssetsToIndexedDB,
+  clearSectorAssetsFromIndexedDB,
+  getDocumentLibrary,
+} from "./sandboxSectorAssets.js";
+import {
+  tickSandboxSectorEditor,
+  resetSandboxSectorEditorInputEdges,
+  updateEditorAimLasers,
+  getPairedXRControllerGrips,
+  isSandboxEditorManipulating,
+  forceEditorManipulatorEnd,
+  editorDownloadJson,
+  editorGetJson,
+  editorLoadJson,
+  editorReloadAllLoadedSectors,
+  editorCycleLibrary,
+  editorGetLibraryId,
+  editorListLibrary,
+  ensureUserSectorMeshesInRunnerGlbCollision,
+  installSectorEditorUndoHooks,
+  redoSandboxSectorEdit,
+  undoSandboxSectorEdit,
+  getSandboxEditorSnapSettings,
+} from "./sandboxSectorEditor.js";
 import {
   setRadialFogParams,
   setRadialFogColorHex,
@@ -99,6 +133,8 @@ import {
   applyGrappleWinchStep,
   isGrappleHookActive,
   isArcheryDrawActive,
+  setEditorLocomotionActive,
+  removeSurfaceDecalsNearRunnerGlassObb,
 } from "./bots.js";
 import {
   preloadGlideAudio,
@@ -151,6 +187,17 @@ function readMapIndex() {
 }
 
 const RUNNER_MAP_ID = readMapIndex();
+
+/** `?editor=1` — map=1 only: start in free-fly + sector prop editor (see brutalistVR8.sandboxEditor). */
+function readSandboxEditorBoot() {
+  try {
+    const v = new URLSearchParams(window.location.search).get("editor");
+    return v === "1" || v === "true" || v === "yes";
+  } catch (_) {
+    return false;
+  }
+}
+const START_SANDBOX_EDITOR = readSandboxEditorBoot();
 
 /** Sun light intensity (overdriven so concrete actually triggers bloom and shadows
  *  read with real contrast). */
@@ -227,6 +274,167 @@ const vrFps = {
   /** Invalidation token for canvas redraw (FPS + air readout). */
   lastSig: "",
 };
+
+/** Head-locked list of sector-editor library entries (map=1 + editor locomotion). */
+const editorLibHud = {
+  /** @type {THREE.Mesh | null} */ mesh: null,
+  /** @type {HTMLCanvasElement | null} */ canvas: null,
+  /** @type {CanvasRenderingContext2D | null} */ ctx: null,
+  /** @type {THREE.CanvasTexture | null} */ texture: null,
+  lastSig: "",
+};
+
+/** Short confirmation line on `editorLibHud` (DOM status is hidden in headset). */
+let editorVrToastText_ = "";
+let editorVrToastUntilMs_ = 0;
+let editorVrToastIsError_ = false;
+
+/**
+ * @param {string} msg
+ * @param {{ durationMs?: number, error?: boolean }} [opts]
+ */
+function showEditorVrToast(msg, opts = {}) {
+  const durationMs = opts.durationMs ?? 3800;
+  editorVrToastText_ = msg;
+  editorVrToastUntilMs_ = performance.now() + durationMs;
+  editorVrToastIsError_ = !!opts.error;
+  updateEditorLibraryHud({ force: true });
+}
+
+/** Quest grip: analog `value` often precedes `pressed`. */
+function xrGripSqueezedFromBtn(btn) {
+  if (!btn) return false;
+  if (btn.pressed) return true;
+  const v = typeof btn.value === "number" ? btn.value : 0;
+  return v > 0.55;
+}
+
+/** World-space aim lines while map=1 sector editor is active (crosshair hidden in bots). */
+const editorAimLasers = {
+  /** @type {THREE.Group | null} */ root: null,
+  /** @type {THREE.Line | null} */ lineL: null,
+  /** @type {THREE.Line | null} */ lineR: null,
+  /** @type {THREE.BufferGeometry | null} */ geomL: null,
+  /** @type {THREE.BufferGeometry | null} */ geomR: null,
+};
+
+/** Ghost mesh on the right controller showing the active library primitive. */
+const editorLibHandPreview = {
+  /** @type {THREE.Group | null} */ holder: null,
+  /** @type {THREE.Object3D | null} */ parentGrip: null,
+  lastId: "",
+};
+/** Cancels non-uniform world scale from the XR grip chain so the library preview keeps correct proportions. */
+const editorLibPreviewGripWorldS = new THREE.Vector3();
+
+function disposeObject3DSubtree(root) {
+  root.traverse((o) => {
+    if (o.isMesh) {
+      o.geometry?.dispose?.();
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (let i = 0; i < mats.length; i++) mats[i]?.dispose?.();
+    }
+  });
+}
+
+/**
+ * @param {THREE.Object3D | null} rightGrip
+ * @param {string} libraryId
+ */
+function syncEditorLibraryHandPreview(rightGrip, libraryId) {
+  if (isSandboxEditorManipulating()) {
+    if (editorLibHandPreview.holder) editorLibHandPreview.holder.visible = false;
+    return;
+  }
+  if (!rightGrip) {
+    if (editorLibHandPreview.holder) editorLibHandPreview.holder.visible = false;
+    editorLibHandPreview.parentGrip = null;
+    return;
+  }
+  if (!editorLibHandPreview.holder) {
+    const h = new THREE.Group();
+    h.name = "editorLibPreviewHolder";
+    h.position.set(0, 0, -0.08);
+    editorLibHandPreview.holder = h;
+  }
+  const h = editorLibHandPreview.holder;
+  if (editorLibHandPreview.parentGrip !== rightGrip) {
+    if (h.parent) h.removeFromParent();
+    rightGrip.add(h);
+    editorLibHandPreview.parentGrip = rightGrip;
+  }
+  if (!libraryId) {
+    h.visible = false;
+    return;
+  }
+  h.visible = true;
+  rightGrip.updateMatrixWorld(true);
+  rightGrip.getWorldScale(editorLibPreviewGripWorldS);
+  const gwx = Math.abs(editorLibPreviewGripWorldS.x);
+  const gwy = Math.abs(editorLibPreviewGripWorldS.y);
+  const gwz = Math.abs(editorLibPreviewGripWorldS.z);
+  if (gwx > 1e-6 && gwy > 1e-6 && gwz > 1e-6) {
+    h.scale.set(1 / gwx, 1 / gwy, 1 / gwz);
+  } else {
+    h.scale.set(1, 1, 1);
+  }
+  if (editorLibHandPreview.lastId === libraryId) return;
+  editorLibHandPreview.lastId = libraryId;
+  while (h.children.length) {
+    const ch = h.children[0];
+    disposeObject3DSubtree(ch);
+    h.remove(ch);
+  }
+  const pr = buildEditorLibraryPreviewRoot(libraryId);
+  if (pr) h.add(pr);
+}
+
+function clearEditorLibraryHandPreview() {
+  editorLibHandPreview.lastId = "";
+  editorLibHandPreview.parentGrip = null;
+  if (!editorLibHandPreview.holder) return;
+  const h = editorLibHandPreview.holder;
+  while (h.children.length) {
+    const ch = h.children[0];
+    disposeObject3DSubtree(ch);
+    h.remove(ch);
+  }
+  h.scale.set(1, 1, 1);
+  h.visible = false;
+  if (h.parent) h.removeFromParent();
+}
+
+function ensureEditorAimLasers() {
+  if (editorAimLasers.root || !scene) return;
+  const mat = new THREE.LineBasicMaterial({
+    color: 0x4fc3f7,
+    transparent: true,
+    opacity: 0.82,
+    depthTest: true,
+    toneMapped: false,
+    fog: false,
+  });
+  const mkGeom = () => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+    return g;
+  };
+  editorAimLasers.geomL = mkGeom();
+  editorAimLasers.geomR = mkGeom();
+  editorAimLasers.lineL = new THREE.Line(editorAimLasers.geomL, mat);
+  editorAimLasers.lineR = new THREE.Line(editorAimLasers.geomR, mat);
+  editorAimLasers.lineL.frustumCulled = false;
+  editorAimLasers.lineR.frustumCulled = false;
+  editorAimLasers.lineL.renderOrder = 100;
+  editorAimLasers.lineR.renderOrder = 100;
+  const root = new THREE.Group();
+  root.name = "editorAimLasers";
+  root.add(editorAimLasers.lineL);
+  root.add(editorAimLasers.lineR);
+  scene.add(root);
+  editorAimLasers.root = root;
+}
+
 const orbitTarget = new THREE.Vector3(0, 4, 0);
 /** Where the bots module teleports the player on respawn (set at init + optional LS restore only). */
 const playerSpawnPos = new THREE.Vector3(0, 0, 0);
@@ -307,6 +515,12 @@ const deadzone = 0.15;
 
 /* ── Locomotion modes ─────────────────────────────────────────────────── */
 let locomotionMode = "physics";
+/** Map=1: both grip (squeeze) buttons held — enter/exit editor after this many ms. */
+const EDITOR_BOTH_GRIP_HOLD_MS = 800;
+let bothGripSqueezeStartMs_ = 0;
+let bothGripChordArmed_ = true;
+/** After a both-grip toggle, ignore until both squeezes release (prevents double flip). */
+let bothGripChordCooldownUntilRelease_ = false;
 /** Earth-like vertical acceleration (m/s²). The old brutalistVR8 “moon”
  *  value (~1.6) was for floaty combat; this project is grounded runner. */
 const PLAYER_GRAVITY = 9.81;
@@ -852,6 +1066,127 @@ function drawVrFpsPanel(fps, speedMps) {
   if (vrFps.texture) vrFps.texture.needsUpdate = true;
 }
 
+function ensureEditorLibraryHud(parentCamera) {
+  if (editorLibHud.mesh || !parentCamera || RUNNER_MAP_ID !== 1) return;
+  const c = document.createElement("canvas");
+  c.width = 420;
+  c.height = 318;
+  const ctx = c.getContext("2d");
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  const aspect = c.width / c.height;
+  const planeH = 0.15;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeH * aspect, planeH),
+    new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+      fog: false,
+    }),
+  );
+  /* Upper-left of HMD view — list of named pieces; ▸ = active (also on right hand). */
+  mesh.position.set(-0.26, 0.07, -0.58);
+  mesh.renderOrder = 9998;
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  parentCamera.add(mesh);
+  editorLibHud.canvas = c;
+  editorLibHud.ctx = ctx;
+  editorLibHud.texture = tex;
+  editorLibHud.mesh = mesh;
+}
+
+/** @param {{ force?: boolean }} [opts] */
+function updateEditorLibraryHud(opts = {}) {
+  if (!editorLibHud.ctx || !editorLibHud.mesh) return;
+  const ids = editorListLibrary();
+  const cur = editorGetLibraryId();
+  const sig = `${cur}|${ids.join(",")}`;
+  if (!opts.force && sig === editorLibHud.lastSig) return;
+  editorLibHud.lastSig = sig;
+  const ctx = editorLibHud.ctx;
+  const w = editorLibHud.canvas.width;
+  const h = editorLibHud.canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(6, 10, 18, 0.9)";
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = "#4fc3f7";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, w - 2, h - 2);
+  ctx.fillStyle = "#4fc3f7";
+  ctx.font = "600 20px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("Asset library (this floating panel)", 14, 8);
+  ctx.fillStyle = "#a8c4d8";
+  ctx.font = "500 13px system-ui, sans-serif";
+  ctx.fillText("L/R thumbstick click = cycle library piece.", 14, 28);
+  ctx.fillText("Right A = add at right laser hit · Left Y = delete (aim w/ right laser).", 14, 44);
+  ctx.fillStyle = "#7a9aad";
+  ctx.font = "500 14px system-ui, sans-serif";
+  ctx.fillText("Grip prop (laser on it) to move; both grips = scale while carrying.", 14, 62);
+      ctx.fillText("Snap 25 cm AABB + 15° pitch/yaw/roll; trigger pressed or ~full pull = free.", 14, 80);
+  ctx.fillText("Left squeeze+Y = undo · left squeeze+X = redo (BattleVR-style).", 14, 98);
+  ctx.fillText("Menu or hold Y+B ~0.5s = save browser · export JSON: brutalistVR8.sandboxEditor.download()", 14, 116);
+  ctx.font = "500 17px ui-monospace, monospace";
+  const lh = 22;
+  let y = 142;
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    const sel = id === cur;
+    if (sel) {
+      ctx.fillStyle = "rgba(79, 195, 247, 0.22)";
+      ctx.fillRect(8, y - 2, w - 16, lh);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(`▸ ${id}`, 14, y);
+    } else {
+      ctx.fillStyle = "#b8c8d8";
+      ctx.fillText(`  ${id}`, 14, y);
+    }
+    y += lh;
+    if (y > h - 12) break;
+  }
+  if (ids.length === 0) {
+    ctx.fillStyle = "#8899aa";
+    ctx.fillText("(empty library)", 14, y);
+  }
+  const now = performance.now();
+  if (editorVrToastText_ && now < editorVrToastUntilMs_) {
+    const pad = 10;
+    const barH = 34;
+    const barY = h - barH - 8;
+    if (editorVrToastIsError_) {
+      ctx.fillStyle = "rgba(183, 28, 28, 0.92)";
+      ctx.fillRect(pad, barY, w - pad * 2, barH);
+      ctx.strokeStyle = "#ef9a9a";
+    } else {
+      ctx.fillStyle = "rgba(46, 125, 50, 0.92)";
+      ctx.fillRect(pad, barY, w - pad * 2, barH);
+      ctx.strokeStyle = "#81c784";
+    }
+    ctx.lineWidth = 1;
+    ctx.strokeRect(pad + 0.5, barY + 0.5, w - pad * 2 - 1, barH - 1);
+    ctx.fillStyle = editorVrToastIsError_ ? "#ffebee" : "#e8f5e9";
+    ctx.font = "600 15px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(editorVrToastText_, w * 0.5, barY + barH * 0.5);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+  } else if (editorVrToastText_ && now >= editorVrToastUntilMs_) {
+    editorVrToastText_ = "";
+    editorVrToastUntilMs_ = 0;
+    editorVrToastIsError_ = false;
+  }
+  if (editorLibHud.texture) editorLibHud.texture.needsUpdate = true;
+}
+
 /** Call after physics + collision so speed matches integrated |v| (any direction). */
 function syncFpsStackHud() {
   if (!SHOW_FPS || !getUIVisible()) return;
@@ -1006,6 +1341,7 @@ function makeButtonHint(letter, label) {
  *     controller, then tilted forward ~15° so the text faces the visor. */
 function attachHintToGrip(grip, hint) {
   const outer = new THREE.Group();
+  outer.userData.vrRunnerHintStack = true;
   outer.position.set(0.002, 0.025, -0.062);
   outer.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
   outer.add(hint);
@@ -1015,77 +1351,274 @@ function attachHintToGrip(grip, hint) {
 
 const _hintMeshes = [];
 
+function clearVRControllerHints() {
+  for (const grip of [controllerGrip1, controllerGrip2]) {
+    if (!grip) continue;
+    for (let i = grip.children.length - 1; i >= 0; i--) {
+      const ch = grip.children[i];
+      if (ch.userData?.vrRunnerHintStack) grip.remove(ch);
+    }
+    grip.userData._hasBattleHint = false;
+    grip.userData._hasLeftHints = false;
+    grip.userData._hasEditorSandboxHints = false;
+    grip.userData._hasMap1EditorChordHint = false;
+  }
+  _hintMeshes.length = 0;
+}
+
+function mountGameBattleHint(grip) {
+  if (grip.userData._hasBattleHint) return;
+  grip.userData._hasBattleHint = true;
+  const hint = makeButtonHint("B", "Toggle Battle");
+  attachHintToGrip(grip, hint);
+  _hintMeshes.push(hint);
+}
+
+function mountGameLeftHints(grip) {
+  if (grip.userData._hasLeftHints) return;
+  grip.userData._hasLeftHints = true;
+  const yHint = makeButtonHint("Y", "Toggle UI");
+  attachHintToGrip(grip, yHint);
+  _hintMeshes.push(yHint);
+  const xHint = makeButtonHint("X", "Cycle arrows");
+  const xOuter = new THREE.Group();
+  xOuter.userData.vrRunnerHintStack = true;
+  xOuter.position.set(0.002, 0.025, -0.062 + 0.016);
+  xOuter.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  xOuter.add(xHint);
+  grip.add(xOuter);
+  _hintMeshes.push(xHint);
+}
+
+function mountEditorSandboxHintsLeft(grip) {
+  if (grip.userData._hasEditorSandboxHints) return;
+  grip.userData._hasEditorSandboxHints = true;
+  const h0 = makeButtonHint("St", "Stick: lib prev");
+  attachHintToGrip(grip, h0);
+  _hintMeshes.push(h0);
+  const h1 = makeButtonHint("Sq+Y", "Undo");
+  const o1 = new THREE.Group();
+  o1.userData.vrRunnerHintStack = true;
+  o1.position.set(0.002, 0.025, -0.062 + 0.016);
+  o1.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  o1.add(h1);
+  grip.add(o1);
+  _hintMeshes.push(h1);
+  const h1b = makeButtonHint("Sq+X", "Redo");
+  const o1b = new THREE.Group();
+  o1b.userData.vrRunnerHintStack = true;
+  o1b.position.set(0.002, 0.025, -0.062 + 0.024);
+  o1b.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  o1b.add(h1b);
+  grip.add(o1b);
+  _hintMeshes.push(h1b);
+  const yHint = makeButtonHint("Y", "Del prop (aim R)");
+  const oY = new THREE.Group();
+  oY.userData.vrRunnerHintStack = true;
+  oY.position.set(0.002, 0.025, -0.062 + 0.036);
+  oY.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  oY.add(yHint);
+  grip.add(oY);
+  _hintMeshes.push(yHint);
+  const h2 = makeButtonHint("2", "Both grips 0.8s exit");
+  const o2 = new THREE.Group();
+  o2.userData.vrRunnerHintStack = true;
+  o2.position.set(0.002, 0.025, -0.062 + 0.048);
+  o2.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  o2.add(h2);
+  grip.add(o2);
+  _hintMeshes.push(h2);
+}
+
+function mountEditorSandboxHintsRight(grip) {
+  if (grip.userData._hasEditorSandboxHints) return;
+  grip.userData._hasEditorSandboxHints = true;
+  const h0 = makeButtonHint("St", "Stick: lib next");
+  attachHintToGrip(grip, h0);
+  _hintMeshes.push(h0);
+  const h1 = makeButtonHint("A", "Add at laser");
+  const o1 = new THREE.Group();
+  o1.userData.vrRunnerHintStack = true;
+  o1.position.set(0.002, 0.025, -0.062 + 0.016);
+  o1.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  o1.add(h1);
+  grip.add(o1);
+  _hintMeshes.push(h1);
+  const h1b = makeButtonHint("G", "Grip: move prop");
+  const o1b = new THREE.Group();
+  o1b.userData.vrRunnerHintStack = true;
+  o1b.position.set(0.002, 0.025, -0.062 + 0.024);
+  o1b.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  o1b.add(h1b);
+  grip.add(o1b);
+  _hintMeshes.push(h1b);
+  const h2 = makeButtonHint("M", "Save: Menu / Y+B → browser (IndexedDB)");
+  const o2 = new THREE.Group();
+  o2.userData.vrRunnerHintStack = true;
+  o2.position.set(0.002, 0.025, -0.062 + 0.036);
+  o2.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  o2.add(h2);
+  grip.add(o2);
+  _hintMeshes.push(h2);
+}
+
+/** Map 0 editor: no combat/bow hints — UI toggle + fly reminder only. */
+function mountEditorInteriorHintsLeft(grip) {
+  if (grip.userData._hasEditorSandboxHints) return;
+  grip.userData._hasEditorSandboxHints = true;
+  const yHint = makeButtonHint("Y", "Toggle UI");
+  attachHintToGrip(grip, yHint);
+  _hintMeshes.push(yHint);
+}
+
+function mountEditorInteriorHintsRight(grip) {
+  if (grip.userData._hasEditorSandboxHints) return;
+  grip.userData._hasEditorSandboxHints = true;
+  const h = makeButtonHint("E", "Editor fly");
+  attachHintToGrip(grip, h);
+  _hintMeshes.push(h);
+}
+
+function refreshGripHintsForLocomotion() {
+  if (!controllerGrip1 || !controllerGrip2) return;
+  clearVRControllerHints();
+  const editor = locomotionMode === "editor";
+  const sandbox = RUNNER_MAP_ID === 1;
+  if (editor && sandbox) {
+    if (handToCtrl.left) mountEditorSandboxHintsLeft(handToCtrl.left);
+    if (handToCtrl.right) mountEditorSandboxHintsRight(handToCtrl.right);
+    return;
+  }
+  if (editor) {
+    if (handToCtrl.left) mountEditorInteriorHintsLeft(handToCtrl.left);
+    if (handToCtrl.right) mountEditorInteriorHintsRight(handToCtrl.right);
+    return;
+  }
+  if (handToCtrl.right) mountGameBattleHint(handToCtrl.right);
+  if (handToCtrl.left) mountGameLeftHints(handToCtrl.left);
+  if (RUNNER_MAP_ID === 1 && handToCtrl.right) mountMap1EditorEnterChordHint(handToCtrl.right);
+}
+
+/** Quest: no console — show how to open the sandbox sector editor from play mode. */
+function mountMap1EditorEnterChordHint(grip) {
+  if (grip.userData._hasMap1EditorChordHint) return;
+  grip.userData._hasMap1EditorChordHint = true;
+  const h = makeButtonHint("2", "Hold BOTH grips 0.8s");
+  const o = new THREE.Group();
+  o.userData.vrRunnerHintStack = true;
+  o.position.set(0.002, 0.025, -0.062 + 0.048);
+  o.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
+  o.add(h);
+  grip.add(o);
+  _hintMeshes.push(h);
+}
+
 function setupVRControllers() {
   const factory = new XRControllerModelFactory();
+  /* Quest + Chrome remote preview: `XRControllerModelFactory` can throw when the
+   * runtime profile has no `assetUrl` (promise rejection / null motionController).
+   * `?simplexrctrl=1` skips GLTF controller shells — grips still track; only visuals drop. */
+  const skipXrControllerGltf = readIntParam("simplexrctrl", 0) === 1;
   /* Same parent as the headset camera so crouchViewGroup Y offset moves
    * hands + view together (controllers were on cameraRig before). */
   const xrHandsParent = crouchViewGroup;
   controller1 = renderer.xr.getController(0);
   xrHandsParent.add(controller1);
   controllerGrip1 = renderer.xr.getControllerGrip(0);
-  controllerGrip1.add(factory.createControllerModel(controllerGrip1));
+  if (skipXrControllerGltf) {
+    console.info("[VRrunner] simplexrctrl=1 — XR controller GLTF models disabled.");
+    controllerGrip1.add(new THREE.Group());
+  } else {
+    controllerGrip1.add(factory.createControllerModel(controllerGrip1));
+  }
   xrHandsParent.add(controllerGrip1);
   controller2 = renderer.xr.getController(1);
   xrHandsParent.add(controller2);
   controllerGrip2 = renderer.xr.getControllerGrip(1);
-  controllerGrip2.add(factory.createControllerModel(controllerGrip2));
+  if (skipXrControllerGltf) {
+    controllerGrip2.add(new THREE.Group());
+  } else {
+    controllerGrip2.add(factory.createControllerModel(controllerGrip2));
+  }
   xrHandsParent.add(controllerGrip2);
 
-  /* Once we know which grip is which hand, hang the matching button
-   * hints off each: "B Toggle Battle" on the right (button[5] = B on
-   * Quest Touch), "Y Toggle UI" on the left (button[5] = Y on the
-   * left controller — the upper face button on each hand). We
-   * delay-bind because handedness only becomes known on the
-   * controller's `connected` event. */
-  function bindRightHint(grip) {
-    if (grip.userData._hasBattleHint) return;
-    grip.userData._hasBattleHint = true;
-    const hint = makeButtonHint("B", "Toggle Battle");
-    attachHintToGrip(grip, hint);
-    _hintMeshes.push(hint);
-  }
-  /* Left controller carries TWO hints stacked vertically: Y on the
-   * upper face button (toggles HUD visibility) and X on the lower face
-   * button (cycles arrow: normal → explosive → grapple). VRKnockout's
-   * single-hint position for Y is `(0.002, 0.025, -0.062)`; X sits
-   * ~16 mm "below" Y along the controller's local +Z (toward the
-   * trigger) so it floats roughly over the X button on the front
-   * face plate. The two hints are independent groups so each pulses
-   * its own ring without dragging the other. */
-  function bindLeftHint(grip) {
-    if (grip.userData._hasLeftHints) return;
-    grip.userData._hasLeftHints = true;
-    /* Y — upper face button (matches existing position used for
-     * the right grip's B hint). */
-    const yHint = makeButtonHint("Y", "Toggle UI");
-    attachHintToGrip(grip, yHint);
-    _hintMeshes.push(yHint);
-    /* X — lower face button. Same yaw / pitch as Y, just shifted
-     * forward along the controller (toward the trigger) by 16 mm so
-     * the two ringed labels stack neatly without overlapping. */
-    const xHint = makeButtonHint("X", "Cycle arrows");
-    const xOuter = new THREE.Group();
-    xOuter.position.set(0.002, 0.025, -0.062 + 0.016);
-    xOuter.rotation.set(-Math.PI / 2 + 0.25, 0, 0);
-    xOuter.add(xHint);
-    grip.add(xOuter);
-    _hintMeshes.push(xHint);
+  function clearHandSlotForGrip(grip) {
+    if (handToCtrl.left === grip) handToCtrl.left = null;
+    if (handToCtrl.right === grip) handToCtrl.right = null;
   }
 
-  controller1.addEventListener("connected", (e) => {
-    if (e.data?.handedness) handToCtrl[e.data.handedness] = controllerGrip1;
-    if (e.data?.handedness === "right") bindRightHint(controllerGrip1);
-    if (e.data?.handedness === "left") bindLeftHint(controllerGrip1);
+  function onGripConnected(grip, e) {
+    const src = e.data || null;
+    grip.userData.xrInputSource = src;
+    const h = src?.handedness;
+    if (h === "left") handToCtrl.left = grip;
+    else if (h === "right") handToCtrl.right = grip;
+    else {
+      /* Some Quest / WebXR builds omit handedness until later — reserve slots. */
+      if (!handToCtrl.left) handToCtrl.left = grip;
+      else if (!handToCtrl.right) handToCtrl.right = grip;
+    }
+    refreshGripHintsForLocomotion();
+  }
+
+  function onGripDisconnected(grip) {
+    grip.userData.xrInputSource = null;
+    clearHandSlotForGrip(grip);
+    refreshGripHintsForLocomotion();
+  }
+
+  controller1.addEventListener("connected", (e) => onGripConnected(controllerGrip1, e));
+  controller1.addEventListener("disconnected", () => onGripDisconnected(controllerGrip1));
+  controller2.addEventListener("connected", (e) => onGripConnected(controllerGrip2, e));
+  controller2.addEventListener("disconnected", () => onGripDisconnected(controllerGrip2));
+}
+
+/** Hidden file input for brutalistVR8.sandboxEditor.pickFile (map 1). */
+let sectorAssetFileInput_ = null;
+function ensureSectorAssetFileInput_() {
+  if (sectorAssetFileInput_) return sectorAssetFileInput_;
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = "application/json,.json";
+  inp.style.display = "none";
+  document.body.appendChild(inp);
+  inp.addEventListener("change", () => {
+    const f = inp.files?.[0];
+    if (!f) return;
+    f.text()
+      .then((t) => {
+        editorLoadJson(t);
+        editorReloadAllLoadedSectors(getSandboxSectorRecord);
+        console.info("[sandboxEditor] loaded", f.name);
+        setStatus(`Loaded sector assets: ${f.name}`);
+        inp.value = "";
+      })
+      .catch((err) => console.warn("[sandboxEditor] load failed:", err));
   });
-  controller2.addEventListener("connected", (e) => {
-    if (e.data?.handedness) handToCtrl[e.data.handedness] = controllerGrip2;
-    if (e.data?.handedness === "right") bindRightHint(controllerGrip2);
-    if (e.data?.handedness === "left") bindLeftHint(controllerGrip2);
-  });
+  sectorAssetFileInput_ = inp;
+  return inp;
 }
 
 function toggleLocomotionMode() {
+  if (locomotionMode === "editor" && RUNNER_MAP_ID === 1 && scene) {
+    forceEditorManipulatorEnd(scene, getSandboxSectorRecord, { commit: true });
+  }
   locomotionMode = locomotionMode === "editor" ? "physics" : "editor";
+  resetSandboxSectorEditorInputEdges();
+  setEditorLocomotionActive(locomotionMode === "editor");
+  if (RUNNER_MAP_ID === 1 && locomotionMode === "physics") {
+    /* Full sector re-attach (same as after JSON load / placing props) — not only BVH
+     * re-register — so breakable-glass panes + OBBs stay aligned after editor sessions. */
+    editorReloadAllLoadedSectors(getSandboxSectorRecord);
+    ensureUserSectorMeshesInRunnerGlbCollision(getSandboxSectorRecord);
+  }
+  if (locomotionMode === "editor" && RUNNER_MAP_ID === 1) {
+    editorLibHud.lastSig = "";
+    editorLibHandPreview.lastId = "";
+  } else {
+    clearEditorLibraryHandPreview();
+  }
+  refreshGripHintsForLocomotion();
   rigVelocity.set(0, 0, 0);
   jumpsRemaining = MAX_JUMPS;
   parkourJumpGlideBlockSec_ = 0;
@@ -1098,12 +1631,11 @@ function toggleLocomotionMode() {
 }
 
 /** Master UI-visibility toggle. Hides the FPS panel + the bots.js
- *  HUD layer (minimap, compass ribbon, combat HUD). The crosshair,
- *  damage flashes, and controller button hints stay visible — they
- *  are either critical aiming/feedback or live on the controller in
- *  physical space (so hiding them would just leave the player staring
- *  at unlabelled buttons). Bound to the left controller's Y button
- *  and exposed as `brutalistVR8.toggleUI()`. */
+ *  HUD layer (minimap, compass ribbon, combat HUD). The crosshair
+ *  stays on in combat (bots); in map=1 editor locomotion it is hidden
+ *  there and aim lasers are drawn instead. Damage flashes and
+ *  controller hints stay visible. Bound to the left controller's Y
+ *  button and exposed as `brutalistVR8.toggleUI()`. */
 function toggleUIVisibility() {
   const next = !getUIVisible();
   setUIVisible(next);
@@ -1322,7 +1854,7 @@ function snapRigToFloor(dtSec) {
   const px = cameraRig.position.x;
   const pz = cameraRig.position.z;
   if (glbSlope) {
-    const fyR = getGlbFloorY(px, pz, cameraRig.position.y + 1.5);
+    const fyR = getGlbFloorY(px, pz, cameraRig.position.y);
     if (fyR !== null) {
       const gap = fyR - cameraRig.position.y;
       if (gap > 0.085 && gap < 3.2) {
@@ -1340,7 +1872,7 @@ function snapRigToFloor(dtSec) {
   const needsYClamp =
     !groundMerged.valid || groundMerged.normal.y >= SLOPE_FLAT_NY;
   if (needsYClamp) {
-    const fy = getGlbFloorY(px, pz, cameraRig.position.y + 1.5);
+    const fy = getGlbFloorY(px, pz, cameraRig.position.y);
     if (fy !== null) {
       const feet = cameraRig.position.y;
       if (feet < fy - 0.055 && feet > fy - 2.4) {
@@ -1352,31 +1884,40 @@ function snapRigToFloor(dtSec) {
 }
 
 function updateEditorMovement(dt, xrCamera) {
-  const localDir = new THREE.Vector3(0, 0, -1);
-  localDir.applyQuaternion(xrCamera.quaternion);
-  localDir.applyQuaternion(cameraRig.quaternion);
-  const direction = new THREE.Vector3(localDir.x, 0, localDir.z);
-  const dirLength = direction.length();
-  if (dirLength > 0.01) direction.divideScalar(dirLength);
-  else {
+  /* Head‑relative XZ fly: use headset **world** yaw only. `xrCamera.quaternion` is
+   * local to the rig — composing it again with `cameraRig.quaternion` double‑applied
+   * body yaw and broke stick direction vs where you look. */
+  xrCamera.getWorldQuaternion(_glQuatW);
+  _glEul.setFromQuaternion(_glQuatW, "YXZ");
+  _glEul.x = 0;
+  _glEul.z = 0;
+  _glQuatW.setFromEuler(_glEul);
+  const direction = _glFwd;
+  direction.set(0, 0, -1).applyQuaternion(_glQuatW);
+  direction.y = 0;
+  if (direction.lengthSq() < 1e-10) {
     direction.set(0, 0, -1).applyQuaternion(cameraRig.quaternion);
     direction.y = 0;
-    direction.normalize();
   }
-  const strafe = new THREE.Vector3(-direction.z, 0, direction.x);
+  if (direction.lengthSq() < 1e-10) direction.set(0, 0, -1);
+  direction.normalize();
+  const strafe = _localPush;
+  strafe.set(-direction.z, 0, direction.x);
   const moveX = Math.abs(vrInput.leftStick.x) > deadzone ? -vrInput.leftStick.x : 0;
   const moveY = Math.abs(vrInput.leftStick.y) > deadzone ? -vrInput.leftStick.y : 0;
+  const flyMul = RUNNER_MAP_ID === 1 ? 2.85 : 1;
   if (moveX !== 0 || moveY !== 0) {
-    cameraRig.position.x += (direction.x * moveY - strafe.x * moveX) * moveSpeed * dt;
-    cameraRig.position.z += (direction.z * moveY - strafe.z * moveX) * moveSpeed * dt;
+    cameraRig.position.x += (direction.x * moveY - strafe.x * moveX) * moveSpeed * flyMul * dt;
+    cameraRig.position.z += (direction.z * moveY - strafe.z * moveX) * moveSpeed * flyMul * dt;
   }
   const rotateX = Math.abs(vrInput.rightStick.x) > deadzone ? vrInput.rightStick.x : 0;
   if (rotateX !== 0) {
     cameraRig.rotation.y -= rotateX * rotateSpeed * dt * (Math.PI / 180);
   }
   const moveVertical = Math.abs(vrInput.rightStick.y) > deadzone ? vrInput.rightStick.y : 0;
+  const vertMul = RUNNER_MAP_ID === 1 ? 2.4 : 1;
   if (moveVertical !== 0) {
-    cameraRig.position.y -= moveVertical * verticalSpeed * dt;
+    cameraRig.position.y -= moveVertical * verticalSpeed * vertMul * dt;
   }
 }
 
@@ -1907,7 +2448,19 @@ function applyGlideCruiseAfterCollision_(dt) {
  * @param {THREE.Camera} headSourceCamera — XR rig camera or desktop `camera` for head world pos.
  */
 function tickRunnerCollisionIntegration(headSourceCamera, dtSec) {
-  if (getWorldCollisionBoxes().length === 0) return;
+  /* Sandbox can briefly flatten to zero OBBs while streaming; user props / city
+   * GLBs still live in `glbCollisionMeshes_` and must keep resolving in physics. */
+  if (getWorldCollisionBoxes().length === 0 && getSandboxGlbCollisionMeshes().length === 0) {
+    return;
+  }
+  /* Breakable glass **before** OBB resolve: thin user-glass OBBs live in the same list as
+   * walls, so `resolveAllCollisions` would push the rig out of the pane first and
+   * `tryShatterRunnerGlassPlayer` would almost never see an overlap. */
+  cameraRig.updateMatrixWorld(true);
+  _headW.copy(headSourceCamera.position).applyMatrix4(cameraRig.matrixWorld);
+  tryShatterRunnerGlassPlayer(
+    cameraRig.position, rigVelocity, _headW.x, _headW.y, _headW.z,
+  );
   resolveAllCollisions(cameraRig.position);
   /* Two passes: one closest-hit per height can miss stacked penetration after a
    * large dt or stick step — second pass matches common “solver iterations” cheaply. */
@@ -1915,11 +2468,6 @@ function tickRunnerCollisionIntegration(headSourceCamera, dtSec) {
   resolveGlbMeshCollisions(cameraRig.position, 0.35, rigVelocity);
   /* Floor snap *after* OBB push so wall pushes can't shove us off the slab. */
   snapRigToFloor(dtSec);
-  cameraRig.updateMatrixWorld(true);
-  _headW.copy(headSourceCamera.position).applyMatrix4(cameraRig.matrixWorld);
-  tryShatterRunnerGlassPlayer(
-    cameraRig.position, rigVelocity, _headW.x, _headW.y, _headW.z,
-  );
   tryRunnerPitFallReset();
 }
 
@@ -1941,6 +2489,28 @@ function tryRunnerPitFallReset() {
   }
 }
 
+/** @param {Gamepad | null | undefined} gp @param {boolean} toLeftHand */
+function applyGamepadAxesToVRInput_(gp, toLeftHand) {
+  if (!gp?.axes || gp.axes.length < 2) return;
+  const axes = gp.axes;
+  let stickX;
+  let stickY;
+  if (axes.length >= 4) {
+    stickX = axes[2];
+    stickY = axes[3];
+  } else {
+    stickX = axes[0] || 0;
+    stickY = axes[1] || 0;
+  }
+  if (toLeftHand) {
+    vrInput.leftStick.x = stickX;
+    vrInput.leftStick.y = stickY;
+  } else {
+    vrInput.rightStick.x = stickX;
+    vrInput.rightStick.y = stickY;
+  }
+}
+
 function updateVRMovement(delta) {
   const session = renderer.xr.getSession();
   /* Do not require `inputSources` — some runtimes expose it late; physics/collision
@@ -1950,42 +2520,43 @@ function updateVRMovement(delta) {
   if (renderer.xr?.isPresenting && camera && typeof renderer.xr.updateCamera === "function") {
     renderer.xr.updateCamera(camera);
   }
-  const inputSources = session.inputSources ?? [];
   vrInput.leftStick.x = 0;
   vrInput.leftStick.y = 0;
   vrInput.rightStick.x = 0;
   vrInput.rightStick.y = 0;
-  let yPressed = false;
-  for (let i = 0; i < inputSources.length; i++) {
-    const source = inputSources[i];
-    if (!source?.gamepad) continue;
-    const axes = source.gamepad.axes;
-    if (axes && axes.length >= 2) {
-      let stickX, stickY;
-      if (axes.length >= 4) { stickX = axes[2]; stickY = axes[3]; }
-      else { stickX = axes[0] || 0; stickY = axes[1] || 0; }
-      if (source.handedness === "left") {
-        vrInput.leftStick.x = stickX;
-        vrInput.leftStick.y = stickY;
-      } else if (source.handedness === "right") {
-        vrInput.rightStick.x = stickX;
-        vrInput.rightStick.y = stickY;
+
+  const xrPad = getPairedXRControllerGrips(session, controllerGrip1, controllerGrip2);
+  applyGamepadAxesToVRInput_(xrPad.L?.gamepad, true);
+  applyGamepadAxesToVRInput_(xrPad.R?.gamepad, false);
+  const squeezeLeft = xrPad.squeezeLeft;
+  const squeezeRight = xrPad.squeezeRight;
+  const yPressed = !!(xrPad.L?.gamepad?.buttons?.[5]?.pressed);
+  const sandboxEditorFlyEarly = locomotionMode === "editor" && RUNNER_MAP_ID === 1;
+  if (yPressed && !yButtonWasPressed && !sandboxEditorFlyEarly) toggleUIVisibility();
+  yButtonWasPressed = yPressed;
+
+  /* Quest map=1: hold BOTH grip (squeeze) buttons to toggle editor ↔ physics (no keyboard). */
+  if (RUNNER_MAP_ID === 1 && !isSandboxEditorManipulating()) {
+    if (squeezeLeft && squeezeRight) {
+      if (bothGripChordCooldownUntilRelease_) {
+        /* ignore hold until both released after a toggle */
+      } else if (bothGripSqueezeStartMs_ <= 0) {
+        bothGripSqueezeStartMs_ = performance.now();
+      } else if (
+        bothGripChordArmed_
+        && performance.now() - bothGripSqueezeStartMs_ >= EDITOR_BOTH_GRIP_HOLD_MS
+      ) {
+        bothGripChordArmed_ = false;
+        bothGripChordCooldownUntilRelease_ = true;
+        bothGripSqueezeStartMs_ = 0;
+        toggleLocomotionMode();
       }
-    }
-    /* Y button (left, button[5]) → master UI-visibility toggle. The
-     * matching "Y Toggle UI" hint sits on the left controller. Editor
-     * mode (the previous Y binding) is no longer wired to a button —
-     * it stays accessible via `brutalistVR8.toggleEditor()` in the
-     * console and via `?editor=1`, but the live binding is gone so
-     * accidental presses during combat just hide/show the HUD instead
-     * of switching locomotion mid-fight. */
-    if (source.handedness === "left"
-        && source.gamepad.buttons?.[5]?.pressed) {
-      yPressed = true;
+    } else {
+      bothGripSqueezeStartMs_ = 0;
+      bothGripChordArmed_ = true;
+      bothGripChordCooldownUntilRelease_ = false;
     }
   }
-  if (yPressed && !yButtonWasPressed) toggleUIVisibility();
-  yButtonWasPressed = yPressed;
 
   /* Clamp dt — the first XR frame can be hundreds of ms after page load and
    * uncapped gravity would tunnel the rig past every floor before snap fires. */
@@ -2000,8 +2571,39 @@ function updateVRMovement(delta) {
     updateEditorMovement(dt, xrCamera);
   }
 
-  tickRunnerCollisionIntegration(xrCamera, dt);
-  applyGlideCruiseAfterCollision_(dt);
+  const sandboxEditorFly = locomotionMode === "editor" && RUNNER_MAP_ID === 1;
+  if (!sandboxEditorFly) {
+    if (editorLibHud.mesh) editorLibHud.mesh.visible = false;
+    if (editorAimLasers.root) editorAimLasers.root.visible = false;
+    clearEditorLibraryHandPreview();
+    tickRunnerCollisionIntegration(xrCamera, dt);
+    applyGlideCruiseAfterCollision_(dt);
+  } else {
+    ensureEditorLibraryHud(xrCamera);
+    ensureEditorAimLasers();
+    if (editorLibHud.mesh) editorLibHud.mesh.visible = true;
+    if (editorAimLasers.root) editorAimLasers.root.visible = true;
+    tickSandboxSectorEditor({
+      session,
+      scene,
+      gripA: controllerGrip1,
+      gripB: controllerGrip2,
+      getLoadedSectorRec: getSandboxSectorRecord,
+      setStatus,
+      showVrToast: showEditorVrToast,
+    });
+    if (editorAimLasers.geomL && editorAimLasers.geomR) {
+      updateEditorAimLasers(
+        xrPad.leftGrip,
+        xrPad.rightGrip,
+        editorAimLasers.geomL,
+        editorAimLasers.geomR,
+        220,
+      );
+    }
+    syncEditorLibraryHandPreview(xrPad.rightGrip, editorGetLibraryId());
+    if (editorLibHud.mesh) updateEditorLibraryHud({ force: true });
+  }
 }
 
 /* ── Real-time sun + shadows ──────────────────────────────────────────── */
@@ -2165,7 +2767,10 @@ function animate(time) {
   } else {
     controls.update();
     const dtSec = Math.max(0, Math.min(0.1, (delta || 0) * 0.001));
-    if (locomotionMode === "physics" && getWorldCollisionBoxes().length > 0) {
+    if (
+      locomotionMode === "physics"
+      && (getWorldCollisionBoxes().length > 0 || getSandboxGlbCollisionMeshes().length > 0)
+    ) {
       updatePhysicsMovement(dtSec, camera);
       tickRunnerCollisionIntegration(camera, dtSec);
       applyGlideCruiseAfterCollision_(dtSec);
@@ -2327,6 +2932,9 @@ async function init() {
     try {
       resumeGlideAudio();
     } catch (_) { /* ignore */ }
+    try {
+      refreshGripHintsForLocomotion();
+    } catch (_) { /* ignore */ }
   });
   renderer.xr.addEventListener("sessionend", () => {
     try {
@@ -2353,12 +2961,59 @@ async function init() {
   } else {
     disposeRunnerLevel(scene);
     initStreamSandbox(scene, { shadows: DYNAMIC_SHADOWS, pizzaplex: false, city: true });
+    /* `disposeRunnerLevel` clears the shard scene ref; `initStreamSandbox` sets it again,
+     * but re-assert here so glass shard FX never silently no-op if init order changes. */
+    setRunnerGlassSceneRef(scene);
     await whenSandboxCityReady();
     getSandboxDefaultSpawn(playerSpawnPos);
     tryRestoreLastRigPositionFromLs_();
     cameraRig.position.copy(playerSpawnPos);
     orbitTarget.set(playerSpawnPos.x, playerSpawnPos.y + 3, playerSpawnPos.z + 25);
+    /* Load sector JSON **before** the first stream tick so every `loadSector_` →
+     * `attachUserSectorAssets` sees `doc_.sectors` (saved glass). Previously we
+     * called `updateStreamSandbox` first: early shells attached with an empty doc,
+     * and `editorReloadAllLoadedSectors` only refreshed sectors already in `loaded_`
+     * (often a subset), leaving breakable-glass registration / BVH out of sync until
+     * a later editor attach (e.g. placing a new window) forced a full re-attach. */
+    resetSectorAssetDocumentToDefaults({ skipIndexedDbSave: true });
+    try {
+      const idbText = await loadSectorAssetDocumentFromIndexedDB();
+      if (idbText) {
+        try {
+          setSectorAssetDocumentFromJson(idbText, {
+            skipDocumentReplacedHook: true,
+            skipIndexedDbSave: true,
+          });
+          console.info("[VRrunner] sector props loaded from IndexedDB (browser save).");
+        } catch (e) {
+          console.warn("[VRrunner] IndexedDB sector doc invalid, falling back to bundled JSON.", e);
+          const ok = await tryLoadSectorAssetDocumentFromUrl(
+            new URL("../data/sectorAssets.json", import.meta.url).href,
+          );
+          if (!ok) {
+            console.info("[VRrunner] data/sectorAssets.json not found — sector editor uses default library.");
+          }
+        }
+      } else {
+        const ok = await tryLoadSectorAssetDocumentFromUrl(
+          new URL("../data/sectorAssets.json", import.meta.url).href,
+        );
+        if (!ok) {
+          console.info("[VRrunner] data/sectorAssets.json not found — sector editor uses default library.");
+        }
+      }
+    } catch (err) {
+      console.warn("[VRrunner] sector asset load:", err);
+    }
     updateStreamSandbox(cameraRig.position);
+    editorReloadAllLoadedSectors(getSandboxSectorRecord);
+    ensureUserSectorMeshesInRunnerGlbCollision(getSandboxSectorRecord);
+    installSectorEditorUndoHooks();
+    if (START_SANDBOX_EDITOR) {
+      locomotionMode = "editor";
+      resetSandboxSectorEditorInputEdges();
+      editorLibHud.lastSig = "";
+    }
   }
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -2370,6 +3025,9 @@ async function init() {
   window.addEventListener("resize", onResize);
   window.addEventListener("pagehide", () => {
     saveLastRigPositionToLs_();
+    if (RUNNER_MAP_ID === 1) {
+      persistSectorAssetsToIndexedDB().catch(() => {});
+    }
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") saveLastRigPositionToLs_();
@@ -2377,6 +3035,14 @@ async function init() {
   renderer.setAnimationLoop(animate);
   /* Clear the intro overlay status line — world is ready for ENTER VR. */
   setStatus("");
+  if (RUNNER_MAP_ID === 1 && START_SANDBOX_EDITOR) {
+    setStatus(
+      "Sandbox editor (VR): upper-left panel = library. Right A = add at right laser. "
+        + "Left Y = delete (aim w/ right laser). Snap: 25 cm AABB + 15° euler (pitch/yaw/roll); index trigger pressed or full pull = no snap. "
+        + "Left squeeze+Y / +X = undo/redo. Menu or Y+B hold = save (IndexedDB); brutalistVR8.sandboxEditor.download() = JSON. "
+        + "Both grips 0.8s = physics.",
+    );
+  }
 
   /* Console API. Most v8 bake/preview commands removed. */
   window.VRrunner = window.brutalistVR8 = {
@@ -2425,12 +3091,109 @@ async function init() {
       if (sunLight) sunLight.intensity = v;
       console.info("brutalistVR8.setSun:", v);
     },
-    /** Manually toggle editor (free-fly) ↔ physics locomotion. The Y-button
-     * shortcut is no longer wired (Y now toggles UI); this console call
-     * is the only way to switch locomotion modes at runtime. */
+    /** Toggle editor (free-fly) ↔ physics. Hides bow, skips combat/archery
+     *  inputs in bots, and swaps grip hints (sandbox map=1 → sector editor). */
     toggleEditor() {
       toggleLocomotionMode();
       return locomotionMode;
+    },
+    /** Map=1: JSON sector props + in-VR editor (with `toggleEditor()` free-fly). */
+    sandboxEditor: {
+      help() {
+        console.info(
+          "[sandboxEditor] Quest VR: map=1, then hold BOTH grip buttons 0.8s to enter/exit editor (or start with ?editor=1). "
+            + "Right A adds at right laser hit; left Y deletes prop under right laser (Y does not toggle UI in editor). "
+            + "Placement snaps AABB to 25 cm and rotation to 15° steps on pitch, yaw, and roll; index trigger pressed or ~92%+ pull on release (or right trigger with A) disables snap. "
+            + "Verify active values: brutalistVR8.sandboxEditor.snapSettings() and merged library: .getLibrary(). "
+            + "Left squeeze+Y = undo, left squeeze+X = redo (document snapshots, BattleVR-style). "
+            + "Grips grab/move props; both grips while carrying scales. Menu or Y+B hold = save to IndexedDB (browser). "
+            + "download() exports sectorAssets.json. saveLocal() / clearLocalSave() for IDB. pickFile() is desktop-only.",
+        );
+      },
+      undo() {
+        if (RUNNER_MAP_ID !== 1) return false;
+        const ok = undoSandboxSectorEdit(getSandboxSectorRecord);
+        if (ok) console.info("[sandboxEditor] undo");
+        else console.info("[sandboxEditor] nothing to undo");
+        return ok;
+      },
+      redo() {
+        if (RUNNER_MAP_ID !== 1) return false;
+        const ok = redoSandboxSectorEdit(getSandboxSectorRecord);
+        if (ok) console.info("[sandboxEditor] redo");
+        else console.info("[sandboxEditor] nothing to redo");
+        return ok;
+      },
+      pickFile() {
+        if (RUNNER_MAP_ID !== 1) {
+          console.warn("[sandboxEditor] only available on map=1");
+          return;
+        }
+        ensureSectorAssetFileInput_().click();
+      },
+      /** Export current document as `sectorAssets.json` (file download). */
+      download() {
+        editorDownloadJson();
+        console.info("[sandboxEditor] download: sectorAssets.json");
+      },
+      /** Save current document to IndexedDB immediately (same as Menu / Y+B chord). */
+      async saveLocal() {
+        if (RUNNER_MAP_ID !== 1) return false;
+        try {
+          await persistSectorAssetsToIndexedDB();
+          console.info("[sandboxEditor] saved to IndexedDB");
+          setStatus("Saved locally (IndexedDB)");
+          if (locomotionMode === "editor" && editorLibHud.mesh) {
+            showEditorVrToast("Saved — browser storage");
+          }
+          return true;
+        } catch (e) {
+          console.warn("[sandboxEditor] saveLocal failed:", e);
+          setStatus("Save failed — see console");
+          if (locomotionMode === "editor" && editorLibHud.mesh) {
+            showEditorVrToast("Save failed (see console)", { error: true });
+          }
+          return false;
+        }
+      },
+      /** Drop the browser-stored copy; next launch uses bundled JSON / defaults until you save again. */
+      async clearLocalSave() {
+        if (RUNNER_MAP_ID !== 1) return false;
+        await clearSectorAssetsFromIndexedDB();
+        console.info("[sandboxEditor] cleared IndexedDB sector save");
+        return true;
+      },
+      getJson() {
+        return editorGetJson();
+      },
+      loadJson(text) {
+        editorLoadJson(text);
+        editorReloadAllLoadedSectors(getSandboxSectorRecord);
+        editorLibHud.lastSig = "";
+        updateEditorLibraryHud({ force: true });
+      },
+      reloadVisible() {
+        editorReloadAllLoadedSectors(getSandboxSectorRecord);
+      },
+      cycle(delta = 1) {
+        const id = editorCycleLibrary(delta);
+        console.info("[sandboxEditor] library →", id);
+        return id;
+      },
+      getLibraryId() {
+        return editorGetLibraryId();
+      },
+      /** `{ positionGridM, rotationSnapDeg, yawSnapDeg (alias), uniformScaleStep }` from the running bundle (not from saved JSON). */
+      snapSettings() {
+        return getSandboxEditorSnapSettings();
+      },
+      /** Merged library after defaults (use to confirm e.g. `crate_m` is 2×2×2 m in memory). */
+      getLibrary() {
+        return getDocumentLibrary();
+      },
+      listLibrary() {
+        return editorListLibrary();
+      },
     },
     /** Toggle the HUD layer (FPS, minimap, compass ribbon, combat HUD)
      *  on/off. Mirror of the left-controller Y button. Crosshair,
@@ -2627,6 +3390,9 @@ async function init() {
     };
   }
   initBots(botInitOpts);
+  setRunnerGlassDecalRemoval(removeSurfaceDecalsNearRunnerGlassObb);
+  setEditorLocomotionActive(locomotionMode === "editor");
+  refreshGripHintsForLocomotion();
   enforceMaterialsUseSceneFog_(scene);
   patchRadialFogOntoObjectTree(scene);
   setBattleOnBEnabled(true);

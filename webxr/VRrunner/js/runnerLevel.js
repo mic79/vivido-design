@@ -23,6 +23,11 @@ const collisionBoxes_ = [];
 /** Meshes from loaded GLB models used for raycast-based collision. */
 const glbCollisionMeshes_ = [];
 
+/** City + sector GLBs + user sector props (read-only; do not mutate the array). */
+export function getSandboxGlbCollisionMeshes() {
+  return glbCollisionMeshes_;
+}
+
 /**
  * Stream-sandbox sector GLBs (e.g. pizzaplex per cell): same BVH raycast path as map 0 rooftops.
  * Tagged so `disposeRunnerLevel` does not dispose shared template geometry.
@@ -105,13 +110,19 @@ const _glbNormalMatrix = new THREE.Matrix3();
  */
 export function resolveGlbMeshCollisions(rigPos, radius, outVel = null) {
   if (glbCollisionMeshes_.length === 0) return;
+  /* Match OBB path in main (`resolveAllCollisions`): slide/duck shrinks hull there but this
+   * used to ignore `getRigSampleHeightMul` / `getRunnerRadiusMul`, so GLB-only obstacles felt
+   * “full height” while ducking (e.g. sandbox props, rooftops). */
+  const yMul = getRigSampleHeightMul();
+  const rMul = getRunnerRadiusMul();
+  const effR = radius * rMul;
   _glbRaycaster.firstHitOnly = true;
-  _glbRaycaster.far = radius * 3;
+  _glbRaycaster.far = effR * 3;
   const sampleYs = [0.4, 0.9, 1.3, 1.65];
   /* One **closest** penetrating hit per sample height (BattleVR `checkBVHMeshCollision`),
    * not a sum over all rays — summing caused uphill stutter and killed long ramp climbs. */
   for (let sy = 0; sy < sampleYs.length; sy++) {
-    _glbOrigin.set(rigPos.x, rigPos.y + sampleYs[sy], rigPos.z);
+    _glbOrigin.set(rigPos.x, rigPos.y + sampleYs[sy] * yMul, rigPos.z);
     let closestDist = Infinity;
     /** @type {{ hit: THREE.Intersection, rayDir: THREE.Vector3 } | null} */
     let best = null;
@@ -121,7 +132,7 @@ export function resolveGlbMeshCollisions(rigPos, radius, outVel = null) {
       const hits = _glbRaycaster.intersectObjects(glbCollisionMeshes_, false);
       if (hits.length > 0) {
         const t = hits[0].distance;
-        if (t < radius && t < closestDist) {
+        if (t < effR && t < closestDist) {
           closestDist = t;
           best = { hit: hits[0], rayDir };
         }
@@ -136,7 +147,7 @@ export function resolveGlbMeshCollisions(rigPos, radius, outVel = null) {
     _glbPushOut.subVectors(_glbOrigin, hit.point);
     if (_glbNormal.dot(_glbPushOut) < 0) _glbNormal.negate();
     if (rayDir.y < -0.45 && _glbNormal.y > 0.92) continue;
-    const push = radius - hit.distance + 0.008;
+    const push = effR - hit.distance + 0.008;
     if (push <= 0) continue;
     rigPos.addScaledVector(_glbNormal, push);
     if (outVel) {
@@ -158,7 +169,10 @@ const GLB_FLOOR_PROBE_RX = [0, 0.28, -0.28, 0.2, -0.2];
 const GLB_FLOOR_PROBE_RZ = [0, 0, 0, 0.22, -0.22];
 
 /**
- * Topmost walkable hit along one downward column (skips beams / sides by normal).
+ * Walkable hit along one downward column (skips beams / sides by normal).
+ * Ignores horizontal surfaces **clearly above** the rig reference so low overhangs
+ * (tables, bars) are not chosen as “ground” while sliding underneath — that used to
+ * snap the player upward onto the overhang instead of the real floor.
  * @param {{ y:number, point:THREE.Vector3, normal:THREE.Vector3 }} out
  * @returns {boolean}
  */
@@ -171,6 +185,9 @@ function probeGlbFloorColumn_(sampleX, sampleZ, feetY, out) {
   _glbRaycaster.firstHitOnly = true;
   const maxAboveFeet = feetY + 1.1;
   const maxBelowFeet = feetY - 8;
+  /* Tighter while slide/duck so overhangs just above the hull are skipped first. */
+  const yMul = getRigSampleHeightMul();
+  const maxHullAboveFeet = yMul < 0.5 ? 0.34 : 0.52;
   for (let i = 0; i < hits.length; i++) {
     const h = hits[i];
     const hy = h.point.y;
@@ -180,6 +197,7 @@ function probeGlbFloorColumn_(sampleX, sampleZ, feetY, out) {
     _glbNormalMatrix.getNormalMatrix(h.object.matrixWorld);
     _glbNormal.copy(h.face.normal).applyMatrix3(_glbNormalMatrix).normalize();
     if (_glbNormal.y < GLB_FLOOR_MIN_NY) continue;
+    if (hy > feetY + maxHullAboveFeet) continue;
     out.y = hy;
     out.point.copy(h.point);
     out.normal.copy(_glbNormal);
@@ -270,7 +288,7 @@ const _glbCpTarget = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
  * @param {THREE.Vector3} origin
  * @param {THREE.Vector3} dir unit direction
  * @param {number} maxDist
- * @param {{ t:number, point:THREE.Vector3, normal:THREE.Vector3 } | null} outHit optional; `outHit.box` is not set (use null for OBB-only callers)
+ * @param {{ t:number, point:THREE.Vector3, normal:THREE.Vector3, object?: THREE.Object3D | null } | null} outHit optional; `outHit.box` is not set (use null for OBB-only callers). `outHit.object` is the intersected mesh/object when present.
  * @returns {number} distance along ray, or Infinity
  */
 export function rayCastRunnerGlbMeshes(origin, dir, maxDist, outHit = null) {
@@ -291,6 +309,7 @@ export function rayCastRunnerGlbMeshes(origin, dir, maxDist, outHit = null) {
     } else {
       outHit.normal.copy(dir).negate();
     }
+    outHit.object = h.object ?? null;
   }
   return t;
 }
@@ -349,7 +368,14 @@ export function pushWorldPointOutOfRunnerGlbMeshes(worldPos, pad, accumulatePush
 
 /** Breakable hall-end windows (arrow or player burst) — one entry per story glass. */
 const _runnerGlassLp = new THREE.Vector3();
-/** @type {{ obb: object | null, mesh: THREE.Mesh | null, broken: boolean }[]} */
+/** Stream-sandbox user `glass_break`: require rig world speed above this (m/s) before body contact can shatter. */
+const SANDBOX_GLASS_PLAYER_BREAK_SPEED_MPS = 5;
+/**
+ * @typedef {{ obb: object | null, mesh: THREE.Mesh | null, broken: boolean,
+ *   removeObbFromWorld?: ((obb: object) => void) | null,
+ *   bidirectionalShatter?: boolean }} RunnerGlassPane
+ */
+/** @type {RunnerGlassPane[]} */
 let runnerGlassPanes_ = [];
 /** Template material cloned per pane; never assigned to a mesh — dispose on level teardown. */
 let runnerGlassTemplateMat_ = null;
@@ -357,8 +383,16 @@ let runnerGlassTemplateMat_ = null;
 /** Scene ref for shard FX (not parented under levelGroup). */
 /** @type {THREE.Scene | null} */
 let runnerSceneRef_ = null;
-/** @type {{ mesh: THREE.Mesh, vel: THREE.Vector3, angVel: THREE.Vector3, t: number }[]} */
+/** @type {{ mesh: THREE.Mesh, vel: THREE.Vector3, angVel: THREE.Vector3, t: number, tMax: number, op0: number }[]} */
 const glassShardParts_ = [];
+
+/** Wired from main.js to bots: strip impact decals stuck on a pane when it shatters. */
+/** @type {((obb: object) => void) | null} */
+let runnerGlassDecalRemoval_ = null;
+
+export function setRunnerGlassDecalRemoval(fn) {
+  runnerGlassDecalRemoval_ = typeof fn === "function" ? fn : null;
+}
 
 const GLASS_BREAK_AUDIO_URL = new URL(
   "../audio/dragon-studio-glass-breaking-504033.mp3",
@@ -374,35 +408,60 @@ function playGlassBreakSound() {
 }
 
 function clearAllGlassShards_() {
-  if (!runnerSceneRef_) {
-    glassShardParts_.length = 0;
-    return;
-  }
   for (const s of glassShardParts_) {
-    runnerSceneRef_.remove(s.mesh);
+    const sc = resolveShardSceneFromHint_(s.mesh) || runnerSceneRef_;
+    if (sc) sc.remove(s.mesh);
     s.mesh.geometry?.dispose?.();
     s.mesh.material?.dispose?.();
   }
   glassShardParts_.length = 0;
 }
 
-function spawnGlassShatterFromObb(obb) {
-  if (!runnerSceneRef_) return;
+/** Resolve `THREE.Scene` for shard FX when `runnerSceneRef_` was cleared (e.g. after `disposeRunnerLevel`). */
+function resolveShardSceneFromHint_(hint) {
+  let o = hint;
+  while (o) {
+    if (o.isScene) return o;
+    o = o.parent;
+  }
+  return null;
+}
+
+/**
+ * @param {object} obb
+ * @param {boolean} [isSandboxGlass] — user-placed panes: isotropic burst + larger shards
+ *   (hall glass keeps the legacy +Z-forward bias).
+ * @param {THREE.Object3D | null} [sceneHint] — pane mesh still in the graph; used if `runnerSceneRef_` is null.
+ */
+function spawnGlassShatterFromObb(obb, isSandboxGlass = false, sceneHint = null) {
+  /* Prefer the pane mesh's ancestor `Scene` so shards always live in the same graph
+   * as user props (XR / streaming can leave `runnerSceneRef_` stale or null). */
+  const fromHint = resolveShardSceneFromHint_(sceneHint);
+  const sceneRef = fromHint || runnerSceneRef_;
+  if (!sceneRef) return;
+  runnerSceneRef_ = sceneRef;
   const cx = obb.cx;
   const cy = obb.cy;
   const cz = obb.cz;
   const hx = obb.hx;
   const hy = obb.hy;
   const hz = obb.hz;
-  const n = 52;
+  const n = isSandboxGlass ? 68 : 52;
   for (let i = 0; i < n; i++) {
     const jx = (Math.random() - 0.5) * 2;
     const jy = (Math.random() - 0.5) * 2;
     const jz = (Math.random() - 0.5) * 2;
-    const sx = 0.055 + Math.random() * 0.2;
-    const sy = 0.045 + Math.random() * 0.2;
-    const sz = 0.012 + Math.random() * 0.038;
+    const sx = isSandboxGlass
+      ? 0.075 + Math.random() * 0.24
+      : 0.055 + Math.random() * 0.2;
+    const sy = isSandboxGlass
+      ? 0.06 + Math.random() * 0.22
+      : 0.045 + Math.random() * 0.2;
+    const sz = isSandboxGlass
+      ? 0.018 + Math.random() * 0.05
+      : 0.012 + Math.random() * 0.038;
     const geom = new THREE.BoxGeometry(sx, sy, sz);
+    const op0 = isSandboxGlass ? 0.97 : 0.94;
     const mat = new THREE.MeshStandardMaterial({
       color: new THREE.Color().setHSL(
         0.52 + Math.random() * 0.07,
@@ -412,7 +471,7 @@ function spawnGlassShatterFromObb(obb) {
       metalness: 0.18 + Math.random() * 0.12,
       roughness: 0.38 + Math.random() * 0.25,
       transparent: true,
-      opacity: 0.94,
+      opacity: op0,
     });
     const mesh = new THREE.Mesh(geom, mat);
     mesh.position.set(
@@ -427,22 +486,40 @@ function spawnGlassShatterFromObb(obb) {
     );
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    runnerSceneRef_.add(mesh);
-    const vel = new THREE.Vector3(
-      (Math.random() - 0.5) * 5,
-      Math.random() * 6 + 2.4,
-      3.2 + Math.random() * 7,
-    );
+    sceneRef.add(mesh);
+    let vel;
+    if (isSandboxGlass) {
+      vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2,
+      );
+      if (vel.lengthSq() < 1e-6) vel.set(0, 1, 0.15);
+      vel.normalize();
+      vel.multiplyScalar(3.2 + Math.random() * 7.5);
+      vel.y += 0.9 + Math.random() * 3.2;
+    } else {
+      vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 5,
+        Math.random() * 6 + 2.4,
+        3.2 + Math.random() * 7,
+      );
+    }
     const angVel = new THREE.Vector3(
       (Math.random() - 0.5) * 16,
       (Math.random() - 0.5) * 16,
       (Math.random() - 0.5) * 16,
     );
+    const life = isSandboxGlass
+      ? 3.05 + Math.random() * 1.35
+      : 2.35 + Math.random() * 0.75;
     glassShardParts_.push({
       mesh,
       vel,
       angVel,
-      t: 2.35 + Math.random() * 0.75,
+      t: life,
+      tMax: life,
+      op0,
     });
   }
 }
@@ -451,19 +528,26 @@ function spawnGlassShatterFromObb(obb) {
 export function updateRunnerGlassShards(dtSec) {
   const g = 11.8;
   const dt = Math.min(0.08, Math.max(0, dtSec));
-  if (!glassShardParts_.length || !runnerSceneRef_) return;
+  if (!glassShardParts_.length) return;
   for (let i = glassShardParts_.length - 1; i >= 0; i--) {
     const s = glassShardParts_[i];
+    const sc = resolveShardSceneFromHint_(s.mesh) || runnerSceneRef_;
+    if (!sc) {
+      glassShardParts_.splice(i, 1);
+      continue;
+    }
     s.t -= dt;
     s.vel.y -= g * dt;
     s.mesh.position.addScaledVector(s.vel, dt);
     s.mesh.rotation.x += s.angVel.x * dt;
     s.mesh.rotation.y += s.angVel.y * dt;
     s.mesh.rotation.z += s.angVel.z * dt;
-    const fade = THREE.MathUtils.clamp(s.t / 2.0, 0, 1);
-    s.mesh.material.opacity = fade * 0.92;
+    const tMax = s.tMax > 1e-6 ? s.tMax : 2.0;
+    const op0 = s.op0 != null ? s.op0 : 0.92;
+    const fade = THREE.MathUtils.clamp(s.t / tMax, 0, 1);
+    s.mesh.material.opacity = fade * op0;
     if (s.t <= 0 || s.mesh.position.y < -2.8) {
-      runnerSceneRef_.remove(s.mesh);
+      sc.remove(s.mesh);
       s.mesh.geometry.dispose();
       s.mesh.material.dispose();
       glassShardParts_.splice(i, 1);
@@ -708,6 +792,49 @@ function _removeRunnerGlassFromCollision(obb) {
   if (idx >= 0) collisionBoxes_.splice(idx, 1);
 }
 
+/**
+ * Stream-sandbox user props: register a breakable glass pane (OBB lives outside `collisionBoxes_`).
+ * @param {{ obb: object, mesh: THREE.Mesh, removeObbFromWorld: (obb: object) => void, bidirectionalShatter?: boolean }} opts
+ */
+export function registerSandboxBreakableGlassPane(opts) {
+  if (!opts?.obb || !opts?.mesh || !opts.removeObbFromWorld) return;
+  runnerGlassPanes_.push({
+    obb: opts.obb,
+    mesh: opts.mesh,
+    broken: false,
+    removeObbFromWorld: opts.removeObbFromWorld,
+    bidirectionalShatter: !!opts.bidirectionalShatter,
+  });
+}
+
+/** Remove sandbox breakable-glass panes tied to these meshes (no FX; for sector detach/refresh). */
+export function unregisterSandboxBreakableGlassForMeshes(meshes) {
+  if (!meshes?.length) return;
+  const set = new Set(meshes);
+  for (let i = runnerGlassPanes_.length - 1; i >= 0; i--) {
+    const pane = runnerGlassPanes_[i];
+    if (!pane.removeObbFromWorld || !pane.mesh || !set.has(pane.mesh)) continue;
+    if (!pane.broken && pane.obb) pane.removeObbFromWorld(pane.obb);
+    runnerGlassPanes_.splice(i, 1);
+  }
+}
+
+/** Scene used for glass shard FX (map 0 hall glass and map 1 sandbox breakables). */
+export function setRunnerGlassSceneRef(scene) {
+  runnerSceneRef_ = scene;
+}
+
+/** Clear shard particles; call before clearing `setRunnerGlassSceneRef(null)`. */
+export function clearRunnerGlassShardMeshes() {
+  for (const s of glassShardParts_) {
+    const sc = resolveShardSceneFromHint_(s.mesh) || runnerSceneRef_;
+    if (sc) sc.remove(s.mesh);
+    s.mesh.geometry?.dispose?.();
+    s.mesh.material?.dispose?.();
+  }
+  glassShardParts_.length = 0;
+}
+
 function shatterRunnerGlassPane_(pane) {
   if (!pane || pane.broken) return;
   const obb = pane.obb;
@@ -715,30 +842,58 @@ function shatterRunnerGlassPane_(pane) {
   pane.broken = true;
   if (obb) {
     playGlassBreakSound();
-    spawnGlassShatterFromObb(obb);
+    runnerGlassDecalRemoval_?.(obb);
+    /* Pass mesh so we can find `THREE.Scene` if `runnerSceneRef_` was nulled
+     * (e.g. `disposeRunnerLevel` before sandbox init order bugs / HMR). */
+    spawnGlassShatterFromObb(obb, !!pane.removeObbFromWorld, mesh);
   }
   if (mesh) {
+    unregisterSandboxGlbCollisionMeshes([mesh]);
     mesh.removeFromParent();
     mesh.geometry?.dispose?.();
     const mat = mesh.material;
     if (mat && !Array.isArray(mat)) mat.dispose?.();
   }
-  if (obb) _removeRunnerGlassFromCollision(obb);
+  if (obb) {
+    if (pane.removeObbFromWorld) pane.removeObbFromWorld(obb);
+    else _removeRunnerGlassFromCollision(obb);
+  }
   pane.obb = null;
   pane.mesh = null;
+  if (pane.removeObbFromWorld) {
+    const idx = runnerGlassPanes_.indexOf(pane);
+    if (idx >= 0) runnerGlassPanes_.splice(idx, 1);
+  }
 }
 
 /**
- * @param {object} box — OBB from `rayHitWorldRich` / collision list
- * @returns {boolean} true if this was the runner glass and it shattered
+ * @param {object | null} box — OBB from `rayHitWorldRich` when the winning hit was an OBB slab
+ * @param {THREE.Vector3} [_point]
+ * @param {THREE.Vector3} [_normal]
+ * @param {THREE.Object3D | null | undefined} [glbHitObject] — when the winning hit was GLB (thin user glass often wins vs its OBB), the struck mesh (e.g. sandbox `glass_break`).
+ * @returns {boolean} true if this was runner / sandbox breakable glass and it shattered
  */
-export function tryShatterRunnerGlassArrow(box) {
-  if (!box) return false;
-  for (let i = 0; i < runnerGlassPanes_.length; i++) {
-    const pane = runnerGlassPanes_[i];
-    if (!pane.broken && pane.obb && box === pane.obb) {
-      shatterRunnerGlassPane_(pane);
-      return true;
+export function tryShatterRunnerGlassArrow(box, _point, _normal, glbHitObject) {
+  if (box) {
+    for (let i = 0; i < runnerGlassPanes_.length; i++) {
+      const pane = runnerGlassPanes_[i];
+      if (!pane.broken && pane.obb && box === pane.obb) {
+        shatterRunnerGlassPane_(pane);
+        return true;
+      }
+    }
+  }
+  if (glbHitObject?.isMesh) {
+    for (let i = 0; i < runnerGlassPanes_.length; i++) {
+      const pane = runnerGlassPanes_[i];
+      if (
+        !pane.broken
+        && pane.removeObbFromWorld
+        && pane.mesh === glbHitObject
+      ) {
+        shatterRunnerGlassPane_(pane);
+        return true;
+      }
     }
   }
   return false;
@@ -754,7 +909,7 @@ export function tryShatterRunnerGlassArrow(box) {
 export function tryShatterRunnerGlassPlayer(rigPos, rigVel, headWx, headWy, headWz) {
   const fwd = rigVel.z;
   const horiz = Math.hypot(rigVel.x, rigVel.z);
-  if (fwd < 1.65 && horiz < 2.1) return false;
+  const rigSpeed = Math.hypot(rigVel.x, rigVel.y, rigVel.z);
 
   const pad = 0.14;
   const yMul = getRigSampleHeightMul();
@@ -764,6 +919,12 @@ export function tryShatterRunnerGlassPlayer(rigPos, rigVel, headWx, headWy, head
   for (let p = 0; p < runnerGlassPanes_.length; p++) {
     const pane = runnerGlassPanes_[p];
     if (pane.broken || !pane.obb) continue;
+    /* Sandbox user glass: world speed must exceed threshold (handled before OBB resolve; see main.js).
+     * Hall-end glass keeps the original forward-burst thresholds. */
+    const fastEnough = pane.removeObbFromWorld
+      ? rigSpeed > SANDBOX_GLASS_PLAYER_BREAK_SPEED_MPS
+      : fwd >= 1.65 || horiz >= 2.1;
+    if (!fastEnough) continue;
     const b = pane.obb;
     const test = (x, y, z, r) => {
       _runnerGlassLp.set(x - b.cx, y - b.cy, z - b.cz).applyMatrix3(b.mInv);
@@ -1127,11 +1288,22 @@ export function initRunnerLevel(scene, opts = {}) {
 export function disposeRunnerLevel(scene) {
   for (let i = 0; i < runnerGlassPanes_.length; i++) {
     const pane = runnerGlassPanes_[i];
+    if (pane.removeObbFromWorld && pane.obb && !pane.broken) {
+      try {
+        pane.removeObbFromWorld(pane.obb);
+      } catch (_) {
+        /* ignore */
+      }
+    }
     if (pane.mesh) {
-      pane.mesh.removeFromParent();
-      pane.mesh.geometry?.dispose?.();
-      const mat = pane.mesh.material;
-      if (mat && !Array.isArray(mat)) mat.dispose?.();
+      if (pane.removeObbFromWorld) {
+        unregisterSandboxGlbCollisionMeshes([pane.mesh]);
+      } else {
+        pane.mesh.removeFromParent();
+        pane.mesh.geometry?.dispose?.();
+        const mat = pane.mesh.material;
+        if (mat && !Array.isArray(mat)) mat.dispose?.();
+      }
     }
   }
   runnerGlassPanes_.length = 0;

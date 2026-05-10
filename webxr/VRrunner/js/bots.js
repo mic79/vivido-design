@@ -1016,9 +1016,15 @@ function rayHitOBBRich(origin, dir, b, maxDist, outInfo) {
  *  points outward from the surface (away from the box interior). */
 const _rhwInfo = { axis: 0, sign: 1 };
 const _rhwBestInfo = { axis: 0, sign: 1 };
-const _glbWorldRayHit = { t: 0, point: new THREE.Vector3(), normal: new THREE.Vector3() };
+const _glbWorldRayHit = {
+  t: 0,
+  point: new THREE.Vector3(),
+  normal: new THREE.Vector3(),
+  object: /** @type {THREE.Object3D | null} */ (null),
+};
 const _glbDronePushAcc = new THREE.Vector3();
 function rayHitWorldRich(origin, dir, maxDist, outHit) {
+  outHit.glbHitObject = null;
   const boxes = getCollisionBoxes_();
   let best = Infinity;
   let bestBox = null;
@@ -1037,6 +1043,7 @@ function rayHitWorldRich(origin, dir, maxDist, outHit) {
     outHit.point.copy(_glbWorldRayHit.point);
     outHit.normal.copy(_glbWorldRayHit.normal);
     outHit.box = null;
+    outHit.glbHitObject = _glbWorldRayHit.object ?? null;
     return true;
   }
   if (!Number.isFinite(best) || !bestBox) return false;
@@ -1052,6 +1059,7 @@ function rayHitWorldRich(origin, dir, maxDist, outHit) {
   outHit.point.copy(origin).addScaledVector(dir, best);
   outHit.t = best;
   outHit.box = bestBox;
+  outHit.glbHitObject = null;
   return true;
 }
 
@@ -5861,6 +5869,7 @@ function _buildArrowMesh(isExplosive = false, isGrapple = false) {
 
 function _attachBowToHand(hand) {
   if (!ARCHERY_ENABLED) return;
+  if (editorLocomotionActive_) return;
   const ctrl = _getControllerByHand(hand);
   if (!ctrl) return; // handedness not known yet — caller should retry next frame
   if (!bowGroup_) bowGroup_ = _buildBowVisual();
@@ -5909,6 +5918,7 @@ function _toggleBowHand() {
 
 function _ensureArcherySetup() {
   if (!ARCHERY_ENABLED) return;
+  if (editorLocomotionActive_) return;
   if (bowGroup_ && bowAttachedTo_) return;
   _attachBowToHand(bowHandedness_);
 }
@@ -6293,6 +6303,8 @@ const _arrowWallHit = {
   point: new THREE.Vector3(),
   normal: new THREE.Vector3(),
   box: null,
+  /** When `rayHitWorldRich` chose a GLB hit over OBB, the struck object (for sandbox breakable glass). */
+  glbHitObject: /** @type {THREE.Object3D | null} */ (null),
 };
 const _expFxN = new THREE.Vector3();
 
@@ -6406,7 +6418,10 @@ function updateArrows(dt) {
       if (a.explosive && (hasDroneOrAA || hasMissile || hasWallFinal)) {
         if (hasWallFinal) {
           shatterRunnerGlassIfHit_?.(
-            _arrowWallHit.box, _arrowWallHit.point, _arrowWallHit.normal,
+            _arrowWallHit.box,
+            _arrowWallHit.point,
+            _arrowWallHit.normal,
+            _arrowWallHit.glbHitObject,
           );
         }
         let blastN = null;
@@ -6541,9 +6556,14 @@ function updateArrows(dt) {
       }
       if (hasWallFinal) {
         if (shatterRunnerGlassIfHit_?.(
-          _arrowWallHit.box, _arrowWallHit.point, _arrowWallHit.normal,
+          _arrowWallHit.box,
+          _arrowWallHit.point,
+          _arrowWallHit.normal,
+          _arrowWallHit.glbHitObject,
         )) {
-          spawnSurfaceImpact(_arrowWallHit.point, _arrowWallHit.normal);
+          /* Do not spawn a wall decal here — the pane is removed and the
+           * decal would float. Decals on this pane are cleared from
+           * `shatterRunnerGlassPane_` via `setRunnerGlassDecalRemoval`. */
           _clearGrappleRopeIfMesh(a.mesh);
           scene_.remove(a.mesh);
           arrows_.splice(i, 1);
@@ -8929,6 +8949,7 @@ const _wallHit = {
   point: new THREE.Vector3(),
   normal: new THREE.Vector3(),
   box: null,
+  glbHitObject: /** @type {THREE.Object3D | null} */ (null),
 };
 function fireHitscan() {
   if (playerFireCooldown_ > 0 || playerDead()) return;
@@ -9452,6 +9473,36 @@ function spawnSurfaceImpact(point, normal) {
     scene_.remove(old.mesh);
     old.mesh.geometry.dispose?.();
     old.mesh.material.dispose?.();
+  }
+}
+
+const _glassDecalObbLp = new THREE.Vector3();
+
+/** Remove impact decals whose positions lie inside the glass OBB expanded
+ *  slightly along all axes (catches normal-offset decal quads on thin panes).
+ *  Called when runner / sandbox breakable glass shatters. */
+export function removeSurfaceDecalsNearRunnerGlassObb(obb) {
+  if (!obb?.mInv || !scene_) return;
+  const pad = 0.22;
+  const limX = obb.hx + pad;
+  const limY = obb.hy + pad;
+  const limZ = obb.hz + pad;
+  for (let i = decals_.length - 1; i >= 0; i--) {
+    const d = decals_[i];
+    const p = d.mesh.position;
+    _glassDecalObbLp.set(p.x - obb.cx, p.y - obb.cy, p.z - obb.cz).applyMatrix3(
+      obb.mInv,
+    );
+    if (
+      Math.abs(_glassDecalObbLp.x) <= limX
+      && Math.abs(_glassDecalObbLp.y) <= limY
+      && Math.abs(_glassDecalObbLp.z) <= limZ
+    ) {
+      scene_.remove(d.mesh);
+      d.mesh.geometry?.dispose?.();
+      d.mesh.material?.dispose?.();
+      decals_.splice(i, 1);
+    }
   }
 }
 
@@ -10596,6 +10647,14 @@ function updateCrosshair() {
     return;
   }
 
+  /* VRrunner sandbox sector editor: combat reticle is meaningless; lasers
+   * in main.js show place/delete aim instead. */
+  if (editorLocomotionActive_) {
+    crosshairMesh_.visible = false;
+    _updateCrosshairRechargeRing();
+    return;
+  }
+
   /* Pick the aim ray. In archery mode the reticle should track the
    * actual arrow trajectory:
    *   • while drawing → ray from bow hand toward (bow − draw), i.e.
@@ -11037,6 +11096,28 @@ export function setBattleOnBEnabled(v) {
   battleOnBEnabled_ = !!v;
 }
 
+/** When true (VRrunner editor / free-fly), bow is hidden and B/X/archery inputs are skipped. */
+let editorLocomotionActive_ = false;
+
+export function setEditorLocomotionActive(on) {
+  const v = !!on;
+  if (v === editorLocomotionActive_) return;
+  editorLocomotionActive_ = v;
+  if (v) _detachBowForEditor();
+  else if (ARCHERY_ENABLED) _ensureArcherySetup();
+}
+
+function _detachBowForEditor() {
+  if (!ARCHERY_ENABLED) return;
+  if (drawing_) _cancelDraw();
+  if (grenadeAiming_) cancelGrenadeAim();
+  if (bowGroup_?.parent) bowGroup_.parent.remove(bowGroup_);
+  bowAttachedTo_ = null;
+  prevDrawTrigger_ = true;
+  prevTriggerL_ = true;
+  prevTriggerR_ = true;
+}
+
 function pollVRInputs() {
   if (!renderer_.xr.isPresenting) return;
   const session = renderer_.xr.getSession();
@@ -11082,6 +11163,16 @@ function pollVRInputs() {
     /* While dead, only the right-trigger restart input matters —
      * skip the rest of the input loop so we don't toggle combat
      * off, swap arrow types, fire the bow, etc. */
+    prevTriggerR_ = triggerR;
+    prevTriggerL_ = triggerL;
+    prevButtonX_ = battleButton;
+    prevAButton_ = aButton;
+    prevXButton_ = xButton;
+    prevDrawTrigger_ = false;
+    return;
+  }
+
+  if (editorLocomotionActive_) {
     prevTriggerR_ = triggerR;
     prevTriggerL_ = triggerL;
     prevButtonX_ = battleButton;
@@ -11646,7 +11737,7 @@ function pulseBothControllersImpact(intensity = 1, durationMs = 110) {
  * @param {() => THREE.Vector3 | null} [opts.getPlayerVelocity]
  * @param {() => THREE.Vector3} [opts.getPlayerSpawn]
  * @param {() => void} [opts.respawnPlayer]
- * @param {(box: object, point: THREE.Vector3, normal: THREE.Vector3) => boolean} [opts.shatterRunnerGlassIfHit]
+ * @param {(box: object | null, point: THREE.Vector3, normal: THREE.Vector3, glbHitObject?: THREE.Object3D | null) => boolean} [opts.shatterRunnerGlassIfHit]
  */
 export function initBots(opts) {
   if (initDone_) return;
