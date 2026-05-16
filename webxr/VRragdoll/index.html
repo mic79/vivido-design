@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VRragdoll — Rapier NPC + VRrunner body IK</title>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+          "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.14.0/rapier.es.js"
+        }
+      }
+    </script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        color: #ddd;
+        font-family: system-ui, sans-serif;
+      }
+      #app {
+        height: 100%;
+      }
+      #hud {
+        position: fixed;
+        left: 12px;
+        bottom: 12px;
+        max-width: min(420px, 92vw);
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 8px;
+        font-size: 13px;
+        line-height: 1.45;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #hud kbd {
+        background: #333;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud"></div>
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>
