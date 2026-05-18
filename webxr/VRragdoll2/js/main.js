@@ -23,14 +23,18 @@ import {
   setArrowRagdollCallbacks,
   applyGrappleWinchStep,
   isArcheryDrawActive,
-  isGrappleHookActive
-} from '../../VRrunner/js/bots.js';
+  isGrappleHookActive,
+  visitInFlightArrows
+} from './archery.js';
 import {
   bindBulletTimeVignette,
   getBulletTimeScale,
   notifyArrowHitNpc,
+  registerInFlightArrowVisitor,
   updateBulletTime
 } from './bullet-time.js';
+
+registerInFlightArrowVisitor(visitInFlightArrows);
 
 const CHARACTER_URL =
   'https://cdn.jsdelivr.net/gh/mattvb91/rapierjs-ragdoll@main/public/character.glb';

@@ -3,7 +3,9 @@
  * ramp out as the torso nears the floor. Physics/mixer use scaled dt; headset stays real-time.
  */
 import * as THREE from 'three';
-import { visitInFlightArrows } from '../../VRrunner/js/bots.js';
+
+/** @type {((fn: (arrow: { prev: import('three').Vector3, pos: import('three').Vector3, vel: import('three').Vector3, speed: number }) => void) => void) | null} */
+let visitInFlightArrows = null;
 
 const BT_SLOW = 0.08;
 const BT_RAMP_IN_SEC = 0.52;
@@ -35,6 +37,13 @@ export function bindBulletTimeVignette(el) {
 
 export function notifyArrowHitNpc() {
   arrowHitThisFrame = true;
+}
+
+/**
+ * @param {typeof visitInFlightArrows} fn
+ */
+export function registerInFlightArrowVisitor(fn) {
+  visitInFlightArrows = fn;
 }
 
 export function getBulletTimeScale() {
@@ -88,16 +97,18 @@ export function updateBulletTime(realDt, ragdoll, isOverPlatformXZ, platformTopY
   }
 
   if (bulletPhase === 'idle' || bulletPhase === 'impending') {
-    visitInFlightArrows((a) => {
-      if (a.speed < 4) return;
-      _arrowDir.copy(a.vel).multiplyScalar(1 / a.speed);
-      const segLen = a.speed * BT_ARROW_PROBE_SEC;
-      _arrowStart.copy(a.pos);
-      const probe = ragdoll.probeArrowSegmentHit(_arrowStart, _arrowDir, segLen);
-      if (!probe) return;
-      const timeToHit = probe.t / a.speed;
-      if (timeToHit <= BT_IMPACT_LOOKAHEAD_SEC) impending = true;
-    });
+    if (visitInFlightArrows) {
+      visitInFlightArrows((a) => {
+        if (a.speed < 4) return;
+        _arrowDir.copy(a.vel).multiplyScalar(1 / a.speed);
+        const segLen = a.speed * BT_ARROW_PROBE_SEC;
+        _arrowStart.copy(a.pos);
+        const probe = ragdoll.probeArrowSegmentHit(_arrowStart, _arrowDir, segLen);
+        if (!probe) return;
+        const timeToHit = probe.t / a.speed;
+        if (timeToHit <= BT_IMPACT_LOOKAHEAD_SEC) impending = true;
+      });
+    }
     if (impending) {
       bulletPhase = 'impending';
       bulletTarget = BT_SLOW;

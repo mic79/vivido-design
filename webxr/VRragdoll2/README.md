@@ -1,4 +1,4 @@
-# VRragdoll
+# VRragdoll2
 
 WebXR + **Three.js** + **Rapier** + the **same skinned character** as [rapierjs-ragdoll](https://github.com/mattvb91/rapierjs-ragdoll) (`character.glb` from jsDelivr). Bone names match the physics template so ragdoll + idle animation work like the reference demo.
 
@@ -27,7 +27,7 @@ WebXR + **Three.js** + **Rapier** + the **same skinned character** as [rapierjs-
 
 ## Running
 
-Serve `VRragdoll/` (or parent `WebXR/`) over HTTP. Open `index.html`.
+Serve `VRragdoll2/` over HTTP. Open `index.html`. No sibling `VRrunner/` folder required.
 
 **Player model:** `3d/Y Bot.fbx` (bundled copy of VRrunner’s Mixamo Y Bot). If the FBX fails to load, VR still works; the IK body stays hidden until load succeeds.
 
@@ -35,7 +35,11 @@ Serve `VRragdoll/` (or parent `WebXR/`) over HTTP. Open `index.html`.
 
 ## Files
 
-- `js/main.js` — scene, VRrunner rig, locomotion, NPC load
+- `js/main.js` — scene, VR rig, locomotion, NPC load, archery + bullet time
+- `js/archery.js` — re-exports bow/arrows from vendored VRrunner code
+- `js/vendor/bots.js` — VRrunner archery + sandbox API (copy of `VRrunner/js/bots.js`)
+- `js/vendor/runnerLevel-stub.js` — empty GLB collision stubs (platform uses `runner-collision-boxes.js`)
+- `js/bullet-time.js` — Max Payne slow-mo around arrow hits
 - `js/bodyIkAvatar.js` — Mixamo body IK (from VRrunner)
 - `js/xr-input.js` — Quest gamepad pairing
 - `js/ragdoll-npc.js` — Rapier ragdoll (ported from `Ragdoll.ts`)
@@ -43,4 +47,4 @@ Serve `VRragdoll/` (or parent `WebXR/`) over HTTP. Open `index.html`.
 ## References
 
 - [mattvb91/rapierjs-ragdoll](https://github.com/mattvb91/rapierjs-ragdoll)
-- `VRrunner/` — proven Three.js WebXR + body IK
+- Archery originally from `VRrunner/js/bots.js` (vendored under `js/vendor/`)
