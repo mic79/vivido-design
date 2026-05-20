@@ -1,0 +1,171 @@
+/**
+ * In-headset game UI: hover feedback, minimap clicks, build/production buttons.
+ * Uses window.__rtsVrMinimapClick(wx, wz, moveMode) from ui.js after init.
+ */
+(function () {
+  AFRAME.registerComponent('vr-button-hover', {
+    schema: {
+      hoverColor: { type: 'color', default: '#4a7a4a' },
+      hoverOpacity: { type: 'number', default: 1 },
+    },
+    init: function () {
+      this.baseColor = '#333333';
+      this.baseOpacity = 1;
+      this.onEnter = this.onEnter.bind(this);
+      this.onLeave = this.onLeave.bind(this);
+      this.onLoaded = this.onLoaded.bind(this);
+      this.el.addEventListener('loaded', this.onLoaded);
+      if (this.el.sceneEl && this.el.sceneEl.hasLoaded) {
+        this.el.sceneEl.addEventListener('loaded', this.onLoaded);
+      }
+      this.el.addEventListener('mouseenter', this.onEnter);
+      this.el.addEventListener('mouseleave', this.onLeave);
+    },
+    onLoaded: function () {
+      const mesh = this.el.getObject3D('mesh');
+      if (!mesh || !mesh.material || !mesh.material.color) return;
+      this.baseColor = '#' + mesh.material.color.getHexString();
+      this.baseOpacity =
+        mesh.material.opacity !== undefined ? mesh.material.opacity : 1;
+      this._meshBaseCaptured = true;
+    },
+    /** Called from `rts-vr-aim-ray-ui-hover` — A-Frame `emit('mouseenter')` does not always reach here in XR. */
+    applyFromVrUiRay: function (isOver) {
+      if (isOver) {
+        if (!this.el.classList.contains('clickable')) return;
+        if (!this._meshBaseCaptured) {
+          this.onLoaded();
+        }
+        this.el.setAttribute('material', 'color', this.data.hoverColor);
+        this.el.setAttribute('material', 'opacity', this.data.hoverOpacity);
+      } else {
+        this.el.setAttribute('material', 'color', this.baseColor);
+        this.el.setAttribute('material', 'opacity', this.baseOpacity);
+      }
+    },
+    onEnter: function () {
+      if (!this.el.classList.contains('clickable')) return;
+      this.el.setAttribute('material', 'color', this.data.hoverColor);
+      this.el.setAttribute('material', 'opacity', this.data.hoverOpacity);
+    },
+    onLeave: function () {
+      this.el.setAttribute('material', 'color', this.baseColor);
+      this.el.setAttribute('material', 'opacity', this.baseOpacity);
+    },
+    remove: function () {
+      this.el.removeEventListener('loaded', this.onLoaded);
+      this.el.removeEventListener('mouseenter', this.onEnter);
+      this.el.removeEventListener('mouseleave', this.onLeave);
+    },
+  });
+
+  AFRAME.registerComponent('rts-vr-minimap', {
+    schema: {
+      mapSize: { type: 'number', default: 200 },
+    },
+    init: function () {
+      this.onClick = this.onClick.bind(this);
+      this.el.addEventListener('click', this.onClick);
+    },
+    onClick: function (evt) {
+      const visible = this.el.getAttribute('visible');
+      if (visible === false || visible === 'false') return;
+      if (!this.el.classList.contains('clickable')) return;
+
+      const inter = evt.detail && evt.detail.intersection;
+      const uv = inter && inter.uv;
+      if (!uv) return;
+
+      const span =
+        typeof window.__rtsMinimapWorldSpanM === 'number' && window.__rtsMinimapWorldSpanM > 0
+          ? window.__rtsMinimapWorldSpanM
+          : this.data.mapSize;
+      const half = span / 2;
+      const u = uv.x;
+      const v = uv.y;
+      // Match flat minimap (ui.js handleMinimapClick): wx mirrors U; WZ uses V upward (Three UV v=0 bottom)
+      let wx = (1 - u) * span - half;
+      let wz = v * span - half;
+      const playR =
+        typeof window.__rtsMapUnitNavRadius === 'number' && window.__rtsMapUnitNavRadius > 0
+          ? window.__rtsMapUnitNavRadius
+          : (half * Math.SQRT2 - 15) * Math.sqrt(4);
+      const d = Math.hypot(wx, wz);
+      if (d > playR && d > 1e-6) {
+        wx *= playR / d;
+        wz *= playR / d;
+      }
+
+      const grip =
+        typeof window.__rtsIsVrGripHeld === 'function'
+          ? window.__rtsIsVrGripHeld()
+          : false;
+      const moveMode = grip;
+
+      if (typeof window.__rtsVrMinimapClick === 'function') {
+        window.__rtsVrMinimapClick(wx, wz, moveMode);
+      }
+    },
+    remove: function () {
+      this.el.removeEventListener('click', this.onClick);
+    },
+  });
+
+  AFRAME.registerComponent('rts-vr-build-btn', {
+    schema: {
+      kind: { type: 'string', default: 'produce' },
+      buildingId: { type: 'string', default: '' },
+      unitType: { type: 'string', default: '' },
+      buildingType: { type: 'string', default: '' },
+    },
+    init: function () {
+      this.onClick = this.onClick.bind(this);
+      this.el.addEventListener('click', this.onClick);
+    },
+    onClick: function () {
+      if (!this.el.classList.contains('clickable')) return;
+      const root = document.getElementById('vr-build-panel-root');
+      if (root) {
+        const vis = root.getAttribute('visible');
+        if (vis === false || vis === 'false') return;
+      }
+
+      const k = this.data.kind;
+      if (k === 'build' && window._startBuildMode) {
+        window._startBuildMode(this.data.buildingType);
+      } else if (k === 'produce' && window._queueUnit) {
+        window._queueUnit(this.data.buildingId, this.data.unitType);
+      } else if (k === 'cancel' && window._cancelQueueUnit) {
+        window._cancelQueueUnit(this.data.buildingId, this.data.unitType);
+      } else if (k === 'sellBuilding' && window._requestSellBuilding) {
+        window._requestSellBuilding(this.data.buildingId);
+      } else if (k === 'deployMobileHq' && window._deployMobileHq) {
+        window._deployMobileHq();
+      }
+    },
+    remove: function () {
+      this.el.removeEventListener('click', this.onClick);
+    },
+  });
+
+  AFRAME.registerComponent('rts-vr-sell-vehicle-btn', {
+    init: function () {
+      this.onClick = this.onClick.bind(this);
+      this.el.addEventListener('click', this.onClick);
+    },
+    onClick: function () {
+      if (!this.el.classList.contains('clickable')) return;
+      const hud = document.getElementById('vr-game-hud');
+      if (hud) {
+        const vis = hud.getAttribute('visible');
+        if (vis === false || vis === 'false') return;
+      }
+      if (typeof window._requestSellSelectedVehicles === 'function') {
+        window._requestSellSelectedVehicles();
+      }
+    },
+    remove: function () {
+      this.el.removeEventListener('click', this.onClick);
+    },
+  });
+})();

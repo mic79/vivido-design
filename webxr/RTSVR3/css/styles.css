@@ -1,0 +1,215 @@
+/* ========================================
+   RTSVR2 — Styles
+   Loading screen and overlay UI
+   ======================================== */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  overflow: hidden;
+  background: #000;
+  font-family: 'Consolas', 'Courier New', monospace;
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+/* Full-screen black until runSceneRevealFromBlack; under #loading-screen, above WebGL canvas */
+#scene-reveal-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 1;
+}
+
+/* Loading Screen */
+#loading-screen {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: radial-gradient(ellipse at center, #0a1a0a 0%, #000 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  transition: opacity 0.5s ease;
+}
+
+#loading-content {
+  text-align: center;
+}
+
+#loading-content h1 {
+  color: #0f0;
+  font-size: 48px;
+  font-weight: 300;
+  letter-spacing: 0.2em;
+  margin-bottom: 20px;
+  text-shadow: 0 0 30px rgba(0, 255, 0, 0.3);
+}
+
+#loading-content p {
+  color: #888;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+#loading-bar {
+  width: 200px;
+  height: 3px;
+  background: #222;
+  margin: 0 auto;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#loading-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #0a0, #0f0);
+  animation: loadPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes loadPulse {
+  0%, 100% { transform: translateX(-100%); }
+  50% { transform: translateX(0); }
+}
+
+/* Game Menu */
+#game-menu button:hover {
+  filter: brightness(1.3);
+  transform: scale(1.02);
+}
+
+#game-menu button {
+  transition: filter 0.15s, transform 0.15s;
+}
+
+/* Minimap hover */
+#minimap-container {
+  transition: opacity 0.2s;
+}
+
+#minimap-container:hover {
+  opacity: 0.8;
+}
+
+/* Mount for HUD/menu; passes clicks through except on children with pointer-events: auto */
+#xr-dom-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 500;
+}
+
+/* A-Frame VR button override */
+.a-enter-vr-button {
+  background: rgba(0, 170, 0, 0.5) !important;
+  border: 1px solid #0a0 !important;
+}
+
+/* Phones/tablets in flat 2D RTS: hide immersive entry (see input.js shouldShowImmersiveVrEntry). */
+body.rts-hide-immersive-vr .a-enter-vr-button {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Help panel: desktop = compact card top-right; touch = sheet under stats (opened with Help). */
+#hud-help-panel {
+  position: fixed;
+  z-index: 124;
+  box-sizing: border-box;
+}
+
+#game-hud.rts-vr-session #hud-help-panel,
+#game-hud.rts-vr-session #hud-flat-actions {
+  display: none !important;
+}
+
+/* Desktop / mouse+keyboard: help is a compact card, toggled with Help (same as touch sheet). */
+#game-hud:not(.rts-touch) #hud-help-panel {
+  display: none;
+  top: 8px;
+  right: 8px;
+  left: auto;
+  width: min(440px, 94vw);
+  padding: 6px 10px;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 6px;
+}
+
+#game-hud:not(.rts-touch).rts-help-open #hud-help-panel {
+  display: block !important;
+}
+
+#game-hud.rts-touch #hud-help-panel {
+  display: none;
+  top: 64px;
+  left: 8px;
+  right: 8px;
+  width: auto;
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 12px;
+  border: 1px solid #444;
+  background: rgba(10, 14, 18, 0.96);
+  border-radius: 8px;
+}
+
+#game-hud.rts-touch.rts-help-open #hud-help-panel {
+  display: block;
+}
+
+#game-hud.rts-touch #hud-resources {
+  max-width: calc(100vw - 72px);
+}
+
+#hud-main-menu-toggle {
+  display: none;
+}
+
+#game-hud.rts-touch #hud-main-menu-toggle {
+  display: flex;
+}
+
+/* After first-run Start: main menu only — match HUD (stats, help, actions) appears once `gameStarted`. */
+#game-hud.rts-pre-match #hud-resources-stats {
+  display: none !important;
+}
+#game-hud.rts-pre-match #hud-bot-debug {
+  display: none !important;
+}
+#game-hud.rts-pre-match #hud-version-fps {
+  margin-top: 0;
+}
+#game-hud.rts-pre-match #hud-help-panel,
+#game-hud.rts-pre-match #hud-flat-actions {
+  display: none !important;
+}
+#game-hud.rts-pre-match #hud-selection,
+#game-hud.rts-pre-match #hud-status,
+#game-hud.rts-pre-match #hud-victory {
+  display: none !important;
+}
+
+@media (max-width: 520px) {
+  #game-hud.rts-touch #hud-resources {
+    max-width: calc(100vw - 16px);
+  }
+}
+
+#minimap-container #hud-minimap-toggle {
+  box-sizing: border-box;
+}

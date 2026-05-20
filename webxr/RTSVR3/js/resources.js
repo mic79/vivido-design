@@ -1,0 +1,512 @@
+// ========================================
+// RTSVR2 — Resource System
+// Resource fields, harvesters, income
+// ========================================
+
+import {
+  HARVEST_AMOUNT, HARVEST_TIME, DEPOSIT_TIME,
+  BOT_FIELD_ENEMY_CHECK_RADIUS, BOT_FIELD_THREAT_SCORE_SQ, BOT_HARVESTER_FLEE_ENEMY_RADIUS,
+  clampWorldToPlayableDisk,
+} from './config.js';
+import * as State from './state.js';
+import * as Pathfinding from './pathfinding.js';
+import * as Fog from './fog.js';
+import { unitGrid } from './spatial.js';
+
+/** Must match `moveToField` / `moveToRefinery` arrival checks (world m). */
+const HARVESTER_ARRIVE_RADIUS = 12;
+/** Max distance from crystal / refinery while harvesting or depositing (arrival + drift slack). */
+const HARVESTER_WORK_RADIUS = HARVESTER_ARRIVE_RADIUS + 5;
+
+// --- Harvester state machine ---
+// States: idle -> movingToField -> harvesting -> movingToRefinery -> depositing -> (repeat)
+
+export function updateHarvesters(dt) {
+  State.units.forEach(unit => {
+    if (unit.hp <= 0 || unit.type !== 'harvester') return;
+
+    switch (unit.state) {
+      case 'idle':
+        assignHarvesterTask(unit);
+        break;
+
+      case 'movingToField':
+        moveToField(unit, dt);
+        break;
+
+      case 'harvesting':
+        harvest(unit, dt);
+        break;
+
+      case 'movingToRefinery':
+        moveToRefinery(unit, dt);
+        break;
+
+      case 'depositing':
+        deposit(unit, dt);
+        break;
+
+      case 'moving':
+        // Player commanded move — don't override
+        break;
+
+      default:
+        if (!unit.playerCommanded) {
+          unit.state = 'idle';
+        }
+        break;
+    }
+  });
+}
+
+function fieldHasVisibleCombatThreat(field, team) {
+  return unitGrid.queryRadiusFiltered(field.x, field.z, BOT_FIELD_ENEMY_CHECK_RADIUS, e =>
+    e.team !== team && e.hp > 0 && e.damage > 0 && Fog.isVisibleToTeam(team, e.x, e.z)
+  ).length > 0;
+}
+
+function botHarvesterSeesCombatEnemy(unit) {
+  const p = State.players[unit.ownerId];
+  if (!p?.isBot || unit.playerCommanded) return false;
+  return unitGrid.queryRadiusFiltered(unit.x, unit.z, BOT_HARVESTER_FLEE_ENEMY_RADIUS, e =>
+    e.team !== p.team && e.hp > 0 && e.damage > 0 && Fog.isVisibleToTeam(p.team, e.x, e.z)
+  ).length > 0;
+}
+
+function isFieldTempBlockedForBotHarvester(unit, fieldId) {
+  const t = unit._botFieldBlockUntil?.[fieldId];
+  return t != null && State.gameSession.elapsedTime < t;
+}
+
+/** Pick known field with best (distance² + threat penalty); visible enemies only. */
+function findBestResourceFieldForBot(unit) {
+  const player = State.players[unit.ownerId];
+  if (!player) return null;
+  const team = player.team;
+  let best = null;
+  let bestScore = Infinity;
+  const R = BOT_FIELD_ENEMY_CHECK_RADIUS;
+
+  State.resourceFields.forEach(field => {
+    if (field.depleted) return;
+    if (isFieldTempBlockedForBotHarvester(unit, field.id)) return;
+    if (!Fog.wasExploredByTeam(team, field.x, field.z)) return;
+    const distSq = Pathfinding.getDistanceSq(unit.x, unit.z, field.x, field.z);
+    let threat = 0;
+    unitGrid.queryRadiusFiltered(field.x, field.z, R, e =>
+      e.team !== team && e.hp > 0 && e.damage > 0 && Fog.isVisibleToTeam(team, e.x, e.z)
+    ).forEach(() => {
+      threat += BOT_FIELD_THREAT_SCORE_SQ;
+    });
+    const score = distSq + threat;
+    if (score < bestScore) {
+      bestScore = score;
+      best = field;
+    }
+  });
+
+  return best || findNearestResourceField(unit);
+}
+
+function assignHarvesterTask(unit) {
+  // If player commanded move, don't auto-assign
+  if (unit.playerCommanded) return;
+
+  const player = State.players[unit.ownerId];
+  if (!player) return;
+
+  // Nearest refinery (including one still building — was excluded by constructionProgress filter before).
+  const refinery = findNearestRefinery(unit);
+  if (!refinery) return; // No refinery - stay idle
+
+  let field = null;
+  if (unit.lastHarvestedField) {
+    const prevField = State.resourceFields.get(unit.lastHarvestedField);
+    if (prevField && !prevField.depleted) {
+      const blocked = player.isBot && isFieldTempBlockedForBotHarvester(unit, prevField.id);
+      const hot = player.isBot && fieldHasVisibleCombatThreat(prevField, player.team);
+      if (!blocked && !hot) {
+        field = prevField;
+      } else {
+        unit.lastHarvestedField = null;
+      }
+    }
+  }
+
+  // If no previous field or it's depleted, find nearest resource field with resources
+  if (!field) {
+    field = player.isBot ? findBestResourceFieldForBot(unit) : findNearestResourceField(unit);
+  }
+  
+  // No known crystal in fog yet — cannot start a harvest loop (refinery alone does not send them "to" it first).
+  if (!field) return;
+
+  unit.assignedRefinery = refinery.id;
+  unit.assignedField = field.id;
+  unit.state = 'movingToField';
+  unit.targetPos = { x: field.x, z: field.z };
+  unit.path = null;
+}
+
+function moveToField(unit, dt) {
+  const field = State.resourceFields.get(unit.assignedField);
+  if (!field || field.depleted) {
+    // Find new field
+    unit.assignedField = null;
+    unit.state = 'idle';
+    return;
+  }
+
+  if (botHarvesterSeesCombatEnemy(unit)) {
+    if (unit.assignedField) {
+      if (!unit._botFieldBlockUntil) unit._botFieldBlockUntil = {};
+      unit._botFieldBlockUntil[unit.assignedField] = State.gameSession.elapsedTime + 12;
+    }
+    unit.assignedField = null;
+    unit.lastHarvestedField = null;
+    unit.state = 'idle';
+    unit.targetPos = null;
+    unit.path = null;
+    return;
+  }
+
+  // Check if arrived at field (increased radius to allow multi-harvester grouping)
+  const dist = Pathfinding.getDistance(unit.x, unit.z, field.x, field.z);
+  if (dist < HARVESTER_ARRIVE_RADIUS) {
+    unit.state = 'harvesting';
+    unit.targetPos = null;
+    unit.path = null;
+    unit._harvestTimer = 0;
+    return;
+  }
+
+  // Continue moving (movement handled by main movement system)
+  if (!unit.targetPos) {
+    unit.targetPos = { x: field.x, z: field.z };
+    unit.path = null;
+  }
+
+  // Use main movement system
+  moveAlongPathSimple(unit, dt);
+}
+
+function harvest(unit, dt) {
+  const field = State.resourceFields.get(unit.assignedField);
+  if (!field || field.depleted) {
+    unit.state = 'idle';
+    unit.assignedField = null;
+    return;
+  }
+
+  const distField = Pathfinding.getDistance(unit.x, unit.z, field.x, field.z);
+  if (distField > HARVESTER_WORK_RADIUS) {
+    unit.state = 'movingToField';
+    unit.targetPos = { x: field.x, z: field.z };
+    unit.path = null;
+    unit._harvestTimer = 0;
+    return;
+  }
+
+  if (botHarvesterSeesCombatEnemy(unit)) {
+    if (unit.assignedField) {
+      if (!unit._botFieldBlockUntil) unit._botFieldBlockUntil = {};
+      unit._botFieldBlockUntil[unit.assignedField] = State.gameSession.elapsedTime + 12;
+    }
+    unit.assignedField = null;
+    unit.lastHarvestedField = null;
+    unit.state = 'idle';
+    unit.targetPos = null;
+    unit.path = null;
+    unit._harvestTimer = 0;
+    return;
+  }
+
+  unit._harvestTimer = (unit._harvestTimer || 0) + dt;
+
+  if (unit._harvestTimer >= HARVEST_TIME) {
+    // Collect resources
+    const amount = Math.min(HARVEST_AMOUNT, field.remaining);
+    field.remaining -= amount;
+    unit.cargo = amount;
+    unit.lastHarvestedField = field.id;
+
+    if (field.remaining <= 0) {
+      field.depleted = true;
+      field.remaining = 0;
+      console.log(`⛏️ Resource field ${field.id} depleted`);
+    }
+
+    // Head back to nearest refinery from *here* (assignedRefinery was chosen at trip start near old base;
+    // after harvesting at a far field, a closer expansion refinery must win).
+    unit.state = 'movingToRefinery';
+    const dropRef = findNearestRefinery(unit);
+    if (dropRef) {
+      unit.assignedRefinery = dropRef.id;
+      unit.targetPos = { x: dropRef.x, z: dropRef.z };
+    } else {
+      unit.state = 'idle';
+    }
+    unit.path = null;
+    unit._harvestTimer = 0;
+  }
+}
+
+function moveToRefinery(unit, dt) {
+  const refinery = State.buildings.get(unit.assignedRefinery);
+  if (!refinery || refinery.hp <= 0) {
+    // Find new refinery
+    const newRef = findNearestRefinery(unit);
+    if (newRef) {
+      unit.assignedRefinery = newRef.id;
+      unit.targetPos = { x: newRef.x, z: newRef.z };
+      unit.path = null;
+    } else {
+      unit.state = 'idle';
+    }
+    return;
+  }
+
+  const dist = Pathfinding.getDistance(unit.x, unit.z, refinery.x, refinery.z);
+  if (dist < HARVESTER_ARRIVE_RADIUS) {
+    unit.state = 'depositing';
+    unit.targetPos = null;
+    unit.path = null;
+    unit._depositTimer = 0;
+    return;
+  }
+
+  if (!unit.targetPos) {
+    unit.targetPos = { x: refinery.x, z: refinery.z };
+    unit.path = null;
+  }
+
+  moveAlongPathSimple(unit, dt);
+}
+
+function deposit(unit, dt) {
+  const ref = State.buildings.get(unit.assignedRefinery);
+  if (!ref || ref.hp <= 0) {
+    unit.state = 'idle';
+    unit.targetPos = null;
+    unit.path = null;
+    unit._depositTimer = 0;
+    return;
+  }
+  if (Pathfinding.getDistance(unit.x, unit.z, ref.x, ref.z) > HARVESTER_WORK_RADIUS) {
+    unit.state = 'movingToRefinery';
+    unit.targetPos = { x: ref.x, z: ref.z };
+    unit.path = null;
+    unit._depositTimer = 0;
+    return;
+  }
+
+  unit._depositTimer = (unit._depositTimer || 0) + dt;
+
+  if (unit._depositTimer >= DEPOSIT_TIME) {
+    // Deposit cargo
+    const player = State.players[unit.ownerId];
+    if (player && unit.cargo > 0) {
+      player.credits += unit.cargo;
+      if (player.stats) player.stats.creditsEarned += unit.cargo;
+      unit.cargo = 0;
+    }
+
+    // Go back for more
+    unit._depositTimer = 0;
+    unit.state = 'idle'; // Will auto-assign in next tick
+  }
+}
+
+// --- Simple movement for harvesters ---
+function moveAlongPathSimple(unit, dt) {
+  if (!unit.path || unit.path.length === 0 || unit.pathIndex >= unit.path.length) {
+    if (!unit.targetPos) return;
+    const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z);
+    
+    // If we've reached the closest point to destination but can't proceed,
+    // explicitly try to transition to the required action state instead of just aborting to idle and losing our action sequence.
+    if (!path || path.length === 0) {
+      // Never pretend we arrived: path failure used to force harvesting/depositing even when
+      // still far from the crystal or refinery (e.g. stuck on nav) — UI showed "Harvesting" on empty nodes.
+      if (unit.state === 'movingToRefinery') {
+        const ref = State.buildings.get(unit.assignedRefinery);
+        if (
+          ref &&
+          ref.hp > 0 &&
+          Pathfinding.getDistance(unit.x, unit.z, ref.x, ref.z) < HARVESTER_ARRIVE_RADIUS
+        ) {
+          unit.state = 'depositing';
+          unit.targetPos = null;
+          unit.path = null;
+          unit._depositTimer = 0;
+        } else {
+          unit.state = 'idle';
+          unit.targetPos = null;
+          unit.path = null;
+        }
+      } else if (unit.state === 'movingToField') {
+        const field = State.resourceFields.get(unit.assignedField);
+        if (
+          field &&
+          !field.depleted &&
+          Pathfinding.getDistance(unit.x, unit.z, field.x, field.z) < HARVESTER_ARRIVE_RADIUS
+        ) {
+          unit.state = 'harvesting';
+          unit.targetPos = null;
+          unit.path = null;
+          unit._harvestTimer = 0;
+        } else {
+          unit.assignedField = null;
+          unit.state = 'idle';
+          unit.targetPos = null;
+          unit.path = null;
+        }
+      } else {
+        unit.state = 'idle';
+        unit.targetPos = null;
+        unit.path = null;
+      }
+      unit._harvestTimer = 0;
+      unit._depositTimer = 0;
+      return;
+    }
+    if (!Pathfinding.isPathValidOnGrid(path)) {
+      unit.path = null;
+      unit.pathIndex = 0;
+      return;
+    }
+    unit.path = Pathfinding.trimPathFromUnit(path, unit.x, unit.z);
+    unit.pathIndex = 0;
+  }
+
+  while (unit.pathIndex < unit.path.length - 1) {
+    const ahead = unit.path[unit.pathIndex];
+    if (Math.hypot(ahead.x - unit.x, ahead.z - unit.z) < 1.0) {
+      unit.pathIndex++;
+    } else {
+      break;
+    }
+  }
+
+  const wp = unit.path[unit.pathIndex];
+  if (!wp) {
+    unit.path = null;
+    unit.pathIndex = 0;
+    return;
+  }
+
+  const dx = wp.x - unit.x;
+  const dz = wp.z - unit.z;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+
+  if (dist < 1.0) {
+    unit.pathIndex++;
+    return;
+  }
+
+  const moveSpeed = unit.speed * dt;
+  const ratio = Math.min(1, moveSpeed / dist);
+  const nx = unit.x + dx * ratio;
+  const nz = unit.z + dz * ratio;
+  const res = Pathfinding.resolveNavMotion(unit.x, unit.z, nx, nz);
+  if (res.blocked) {
+    unit.path = null;
+    unit.pathIndex = 0;
+    return;
+  }
+  unit.x = res.x;
+  unit.z = res.z;
+  const ox = unit.x;
+  const oz = unit.z;
+  const clamped = clampWorldToPlayableDisk(unit.x, unit.z, 0);
+  const clampRes = Pathfinding.resolveNavMotion(ox, oz, clamped.x, clamped.z);
+  unit.x = clampRes.x;
+  unit.z = clampRes.z;
+  if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
+    const s = Pathfinding.pushOutOfObstacle(unit.x, unit.z);
+    unit.x = s.x;
+    unit.z = s.z;
+  }
+
+  if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+    unit.rotation = Math.atan2(dx, dz);
+  }
+}
+
+// --- Helpers ---
+function findNearestRefinery(unit) {
+  // Any living refinery (under construction counts — getPlayerBuildingsOfType omits progress < 1).
+  const playerBuildings = State.getPlayerBuildings(unit.ownerId).filter(
+    b => b.type === 'refinery' && b.hp > 0
+  );
+  if (playerBuildings.length === 0) return null;
+
+  let nearest = null;
+  let minDist = Infinity;
+
+  playerBuildings.forEach(b => {
+    if (b.hp <= 0) return;
+    const dist = Pathfinding.getDistanceSq(unit.x, unit.z, b.x, b.z);
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = b;
+    }
+  });
+
+  return nearest;
+}
+
+function findNearestResourceField(unit) {
+  let nearest = null;
+  let minDist = Infinity;
+  const player = State.players[unit.ownerId];
+  if (!player) return null;
+
+  State.resourceFields.forEach(field => {
+    if (field.depleted) return;
+
+    // Fog of war check: Harvester only "knows" about fields seen by their team
+    if (!Fog.wasExploredByTeam(player.team, field.x, field.z)) return;
+
+    const dist = Pathfinding.getDistanceSq(unit.x, unit.z, field.x, field.z);
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = field;
+    }
+  });
+
+  return nearest;
+}
+
+/**
+ * Player (or host) orders a harvester to work a specific crystal until it is depleted.
+ * If the unit is already carrying ore to a refinery, only `lastHarvestedField` is updated so the new field is used after deposit.
+ * @returns {boolean} true if the order was stored (including deferred while carrying cargo).
+ */
+export function assignHarvesterToField(unit, fieldId) {
+  if (!unit || unit.type !== 'harvester' || unit.hp <= 0) return false;
+  const field = State.resourceFields.get(fieldId);
+  if (!field || field.depleted) return false;
+  const refinery = findNearestRefinery(unit);
+  if (!refinery) return false;
+
+  unit.lastHarvestedField = field.id;
+
+  const carrying = (unit.cargo || 0) > 0;
+  if (carrying && (unit.state === 'movingToRefinery' || unit.state === 'depositing')) {
+    return true;
+  }
+
+  unit.playerCommanded = false;
+  unit.assignedRefinery = refinery.id;
+  unit.assignedField = field.id;
+  unit.state = 'movingToField';
+  unit.targetPos = { x: field.x, z: field.z };
+  unit.targetUnitId = null;
+  unit.targetBuildingId = null;
+  unit.path = null;
+  unit.pathIndex = 0;
+  unit.guardPos = null;
+  unit._harvestTimer = 0;
+  return true;
+}
