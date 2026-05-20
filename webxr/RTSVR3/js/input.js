@@ -707,6 +707,11 @@ export function initInput(sceneEl) {
     // A and B buttons are on the right controller
     rightHand.addEventListener('abuttondown', () => selectAllOfType());
     rightHand.addEventListener('bbuttondown', () => {
+      if (UI.isRtsConfirmOpen && UI.isRtsConfirmOpen()) {
+        UI.dismissRtsConfirm();
+        UI.showStatus('Cancelled');
+        return;
+      }
       const hadBuild = !!State.gameSession.buildMode;
       if (hadBuild) {
         State.clearBuildPlacementFlags();
@@ -780,6 +785,11 @@ export function initInput(sceneEl) {
       vrLeft.thumbY = ax.y;
     });
     const leftVrXButtonAction = () => {
+      if (UI.isRtsConfirmOpen && UI.isRtsConfirmOpen()) {
+        UI.dismissRtsConfirm();
+        UI.showStatus('Cancelled');
+        return;
+      }
       if (State.gameSession.buildMode) {
         State.clearBuildPlacementFlags();
         clearBuildBanner();
@@ -1661,6 +1671,7 @@ function isClientPointBlockedForWorldTouch(clientX, clientY) {
   if (el.closest('#hud-main-menu-toggle')) return true;
   if (el.closest('#hud-help-panel')) return true;
   if (el.closest('#build-placement-banner')) return true;
+  if (el.closest('#rts-confirm-overlay')) return true;
   if (el.closest('#loading-screen')) return true;
   if (el.closest('#app-start-overlay')) return true;
   return false;
@@ -2373,6 +2384,10 @@ export function toggleBuildMode(buildingType) {
 }
 
 function showBuildBanner(name, cost) {
+  if (getIsVR()) {
+    UI.setVrBuildPlacementHint(name, cost);
+    return;
+  }
   let banner = document.getElementById('build-placement-banner');
   if (!banner) {
     banner = document.createElement('div');
@@ -2418,6 +2433,7 @@ function showBuildBanner(name, cost) {
 }
 
 function clearBuildBanner() {
+  UI.clearVrBuildPlacementHint();
   const banner = document.getElementById('build-placement-banner');
   if (banner) banner.style.display = 'none';
   document.body.style.cursor = '';

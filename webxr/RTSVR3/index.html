@@ -6,7 +6,7 @@
   <title>RTS VR II — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.3.49">
+  <meta name="rts-version" content="0.3.50">
 
   <script type="importmap">
   {
@@ -212,6 +212,128 @@
               <a-text class="no-raycast" id="vr-build-queue" position="-0.29 0.10 0" align="left" width="0.68" color="#ffee66" value="" visible="false"></a-text>
               <a-entity id="vr-build-buttons" position="0 -0.05 0"></a-entity>
               <a-text class="no-raycast" value="Trigger to activate" position="0 -0.22 0" align="center" width="0.48" color="#555555"></a-text>
+            </a-entity>
+
+            <a-text
+              class="no-raycast"
+              id="vr-hud-build-mode"
+              position="0 0.24 0.02"
+              align="center"
+              width="0.78"
+              color="#66ff99"
+              value=""
+              visible="false"
+            ></a-text>
+          </a-entity>
+
+          <!-- Sell confirm + MP pause: wrist children (not under #vr-game-hud — that hides in lobby). -->
+          <a-entity id="vr-confirm-root" position="0 0 0.05" visible="false">
+            <a-plane
+              width="0.70"
+              height="0.54"
+              color="#081018"
+              material="opacity: 0.96; transparent: true; shader: flat"
+              position="0 0 -0.006"
+            ></a-plane>
+            <a-text
+              class="no-raycast"
+              id="vr-confirm-title"
+              position="0 0.20 0.02"
+              align="center"
+              width="0.95"
+              color="#ffaa66"
+              value=""
+            ></a-text>
+            <a-text
+              class="no-raycast"
+              id="vr-confirm-message"
+              position="0 0.05 0.02"
+              align="center"
+              width="0.88"
+              color="#c8d8ee"
+              value=""
+            ></a-text>
+            <a-entity
+              id="vr-confirm-cancel-btn"
+              class="clickable"
+              vr-button-hover="hoverColor: #3a4a58"
+              position="-0.17 -0.17 0.012"
+              geometry="primitive: plane; width: 0.30; height: 0.09"
+              material="color: #1a2228; transparent: true; opacity: 0.96; side: double"
+              rts-vr-confirm-btn="action: cancel"
+            >
+              <a-text class="no-raycast" value="Cancel" position="0 0 0.012" align="center" width="1.4" color="#cccccc"></a-text>
+            </a-entity>
+            <a-entity
+              id="vr-confirm-ok-btn"
+              class="clickable"
+              vr-button-hover="hoverColor: #6a4830"
+              position="0.17 -0.17 0.012"
+              geometry="primitive: plane; width: 0.30; height: 0.09"
+              material="color: #4a2810; transparent: true; opacity: 0.96; side: double"
+              rts-vr-confirm-btn="action: confirm"
+            >
+              <a-text class="no-raycast" id="vr-confirm-ok-label" value="Confirm" position="0 0 0.012" align="center" width="1.15" color="#ffe8cc"></a-text>
+            </a-entity>
+            <a-text class="no-raycast" value="Left X: cancel" position="0 -0.24 0.02" align="center" width="0.55" color="#666666"></a-text>
+          </a-entity>
+
+          <a-entity id="vr-mp-pause-root" position="0 0 0.05" visible="false">
+            <a-plane
+              width="0.72"
+              height="0.58"
+              color="#040a14"
+              material="opacity: 0.96; transparent: true; shader: flat"
+              position="0 0 -0.006"
+            ></a-plane>
+            <a-text
+              class="no-raycast"
+              id="vr-mp-pause-title"
+              position="0 0.22 0.02"
+              align="center"
+              width="0.95"
+              color="#9df"
+              value="Paused"
+            ></a-text>
+            <a-text
+              class="no-raycast"
+              id="vr-mp-pause-detail"
+              position="0 0.06 0.02"
+              align="center"
+              width="0.88"
+              color="#c8d8ee"
+              value=""
+            ></a-text>
+            <a-text
+              class="no-raycast"
+              id="vr-mp-pause-countdown"
+              position="0 -0.02 0.02"
+              align="center"
+              width="0.85"
+              color="#fc6"
+              value=""
+              visible="false"
+            ></a-text>
+            <a-text
+              class="no-raycast"
+              id="vr-mp-pause-subline"
+              position="0 -0.10 0.02"
+              align="center"
+              width="0.82"
+              color="#9bc"
+              value=""
+            ></a-text>
+            <a-entity
+              id="vr-mp-pause-resume-btn"
+              class="clickable"
+              vr-button-hover="hoverColor: #2a7a2a"
+              position="0 -0.20 0.012"
+              visible="false"
+              geometry="primitive: plane; width: 0.52; height: 0.09"
+              material="color: #143214; transparent: true; opacity: 0.96; side: double"
+              rts-vr-mp-pause-btn
+            >
+              <a-text class="no-raycast" value="Resume (AI seats)" position="0 0 0.012" align="center" width="1.1" color="#cfc"></a-text>
             </a-entity>
           </a-entity>
         </a-entity>

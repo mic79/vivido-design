@@ -625,18 +625,11 @@ export function updateEngineerRepair(dt) {
 
     if (!patient && (unit.state === 'idle' || (unit.state === 'moving' && !unit.playerCommanded))) {
       const r = ENGINEER_REPAIR_RANGE;
-      const r2 = r * r;
-      let bestD2 = r2 + 1;
-      State.units.forEach(other => {
-        if (other.id === unit.id || other.team !== unit.team || !isVehicleNeedingRepair(other)) return;
-        const dx = other.x - unit.x;
-        const dz = other.z - unit.z;
-        const d2 = dx * dx + dz * dz;
-        if (d2 <= r2 && d2 < bestD2) {
-          bestD2 = d2;
-          patient = other;
-        }
-      });
+      patient = unitGrid.findNearest(unit.x, unit.z, r, other =>
+        other.id !== unit.id &&
+        other.team === unit.team &&
+        isVehicleNeedingRepair(other)
+      );
     }
 
     if (!patient) return;

@@ -1,9 +1,8 @@
 // ========================================
 // RTSVR2 — Pathfinding
 // 1. `grid` walkability mask (debug overlay, slope, buildings) — source of truth.
-// 2. three-pathfinding nav mesh built from that grid as BufferGeometry (+Y up, XZ ground).
-//    See https://github.com/donmccurdy/three-pathfinding
-// 3. `findPath` queries the nav mesh; results are validated on `grid` before use.
+// 2. `findPath` uses grid A* only (`findPathNavMesh` / three-pathfinding zone is not used at runtime).
+// 3. Terrain slope + rim blocking is baked once into `staticTerrainMask`; building place/destroy only reapplies footprints.
 // ========================================
 
 import {
@@ -27,11 +26,15 @@ const ROWS = COLS;
 
 const grid = new Uint8Array(COLS * ROWS);
 const navPlateHeightCache = new Float32Array(COLS * ROWS);
+/** Terrain/resources/border/dilation only — copied then building rects applied (fast rebuild). */
+let staticTerrainMask = null;
 
 const NAV_ZONE = 'rtsvr2_battlefield';
 /** @type {InstanceType<typeof import('three-pathfinding').Pathfinding> | null} */
 let pathfindingEngine = null;
 let navMeshReady = false;
+
+let navRebuildPending = false;
 
 function worldToCol(wx) { return Math.floor((wx + NAV_GRID_HALF) / CELL); }
 function worldToRow(wz) { return Math.floor((wz + NAV_GRID_HALF) / CELL); }
@@ -168,11 +171,21 @@ function dilateBlockedCells(layers = 2) {
   }
 }
 
-export function initPathfinding() {
-  rebuildNavMesh();
+/** Call if terrain mesh is regenerated mid-session (rare); next rebuild recomputes slope mask. */
+export function invalidateStaticTerrainMask() {
+  staticTerrainMask = null;
 }
 
-export function rebuildNavMesh() {
+function applyBuildingObstaclesToGrid() {
+  State.buildings.forEach(building => {
+    if (building.hp <= 0) return;
+    const half = (building.size || 4) / 2 + OBSTACLE_BUFFER;
+    markRect(building.x, building.z, half, half);
+  });
+}
+
+/** One-time ~64k-cell terrain bake (height samples + slope + dilation). Buildings applied separately. */
+function buildStaticTerrainMask() {
   grid.fill(0);
 
   State.resourceFields.forEach(field => {
@@ -224,14 +237,6 @@ export function rebuildNavMesh() {
 
   dilateBlockedCells(2);
 
-  // Buildings **after** terrain dilation: otherwise removing a structure frees cells to walkable,
-  // then dilation re-blocks them from nearby rim/slope — looks like the nav map never opened.
-  State.buildings.forEach(building => {
-    if (building.hp <= 0) return;
-    const half = (building.size || 4) / 2 + OBSTACLE_BUFFER;
-    markRect(building.x, building.z, half, half);
-  });
-
   for (let c = 0; c < COLS; c++) {
     for (let r = 0; r < ROWS; r++) {
       const idx = r * COLS + c;
@@ -246,19 +251,52 @@ export function rebuildNavMesh() {
     }
   }
 
-  let walkN = 0;
-  let blockN = 0;
-  for (let i = 0; i < grid.length; i++) {
-    if (grid[i] === 0) walkN++;
-    else blockN++;
-  }
+  staticTerrainMask = grid.slice();
+}
 
-  rebuildPathfindingZone();
-  console.log(`✅ Pathfinding grid + nav mesh rebuilt (walkable ${walkN}, blocked ${blockN})`);
-
+function finishNavRebuild() {
   if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
     window.dispatchEvent(new CustomEvent('rts-nav-rebuilt'));
   }
+}
+
+function rebuildNavMeshNow() {
+  navRebuildPending = false;
+  if (!staticTerrainMask) {
+    buildStaticTerrainMask();
+  } else {
+    grid.set(staticTerrainMask);
+  }
+  applyBuildingObstaclesToGrid();
+  finishNavRebuild();
+}
+
+export function initPathfinding() {
+  invalidateStaticTerrainMask();
+  rebuildNavMesh();
+}
+
+/**
+ * Refresh walkability after building place/destroy. Terrain mask is cached; no Three.js nav zone rebuild.
+ * Coalesces multiple calls in the same frame (bots often place several structures per tick).
+ */
+export function rebuildNavMesh() {
+  if (navRebuildPending) return;
+  navRebuildPending = true;
+  const schedule =
+    typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : cb => setTimeout(cb, 0);
+  schedule(() => {
+    if (!navRebuildPending) return;
+    rebuildNavMeshNow();
+  });
+}
+
+/** Immediate rebuild (match start, game-start snapshot) — skip rAF coalescing. */
+export function rebuildNavMeshImmediate() {
+  navRebuildPending = false;
+  rebuildNavMeshNow();
 }
 
 /**

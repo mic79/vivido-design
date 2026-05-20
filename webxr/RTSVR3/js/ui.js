@@ -36,25 +36,88 @@ let lastBuildPanelUpdate = 0;
 let lastBuildPanelRenderedSig = '';
 /** Dismiss handler for the RTS confirm overlay (sell building / vehicles). */
 let rtsConfirmCleanup = null;
+/** True while a sell/destructive confirm is open (desktop DOM and/or wrist VR panel). */
+let rtsConfirmActive = false;
+let pendingRtsConfirmOnConfirm = null;
 
-function dismissRtsConfirm() {
+function stripHtmlForVrText(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function isRtsConfirmOpen() {
+  return rtsConfirmActive;
+}
+
+export function dismissRtsConfirm() {
+  rtsConfirmActive = false;
+  pendingRtsConfirmOnConfirm = null;
+  const vrRoot = document.getElementById('vr-confirm-root');
+  if (vrRoot) {
+    vrRoot.setAttribute('visible', 'false');
+    ['vr-confirm-cancel-btn', 'vr-confirm-ok-btn'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.classList.remove('clickable');
+    });
+  }
   if (typeof rtsConfirmCleanup === 'function') {
     rtsConfirmCleanup();
     rtsConfirmCleanup = null;
   }
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+}
+
+function showVrRtsConfirmDialog(opts) {
+  const title = opts.title || 'Confirm';
+  const message = stripHtmlForVrText(opts.message || '');
+  const confirmLabel = opts.confirmLabel || 'Confirm';
+  const onConfirm = opts.onConfirm;
+
+  rtsConfirmActive = true;
+  pendingRtsConfirmOnConfirm = typeof onConfirm === 'function' ? onConfirm : null;
+
+  const vrRoot = document.getElementById('vr-confirm-root');
+  const titleEl = document.getElementById('vr-confirm-title');
+  const msgEl = document.getElementById('vr-confirm-message');
+  const okLab = document.getElementById('vr-confirm-ok-label');
+  if (titleEl) titleEl.setAttribute('value', title);
+  if (msgEl) msgEl.setAttribute('value', message.slice(0, 220));
+  if (okLab) okLab.setAttribute('value', confirmLabel.slice(0, 28));
+
+  if (vrRoot) vrRoot.setAttribute('visible', 'true');
+  ['vr-confirm-cancel-btn', 'vr-confirm-ok-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.classList.add('clickable');
+  });
+
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+  showStatus('Confirm on wrist — Cancel or confirm with laser + trigger');
 }
 
 /**
- * Small modal for destructive actions (replaces `confirm()` for styling + VR mirror).
+ * Small modal for destructive actions (replaces `confirm()` for styling + VR wrist panel).
  * @param {{ title: string, message: string, confirmLabel?: string, cancelLabel?: string, onConfirm: () => void }} opts
  */
 function showRtsConfirmDialog(opts) {
   dismissRtsConfirm();
+  if (Input.getIsVR()) {
+    showVrRtsConfirmDialog(opts);
+    return;
+  }
   const title = opts.title || 'Confirm';
   const message = opts.message || '';
   const confirmLabel = opts.confirmLabel || 'Confirm';
   const cancelLabel = opts.cancelLabel || 'Cancel';
   const onConfirm = opts.onConfirm;
+
+  rtsConfirmActive = true;
 
   const wrap = document.createElement('div');
   wrap.id = 'rts-confirm-overlay';
@@ -236,9 +299,69 @@ function updateMpPauseCountdownDom() {
   }
 }
 
+function syncVrMpPauseOverlay() {
+  const vrRoot = document.getElementById('vr-mp-pause-root');
+  if (!vrRoot) return;
+  const inVr = Input.getIsVR();
+  const paused = State.gameSession.mpSessionPaused;
+  const show =
+    inVr &&
+    paused &&
+    (State.gameSession.gameStarted || State.gameSession.isMultiplayer);
+  vrRoot.setAttribute('visible', show ? 'true' : 'false');
+
+  const titleEl = document.getElementById('vr-mp-pause-title');
+  const detailEl = document.getElementById('vr-mp-pause-detail');
+  const subEl = document.getElementById('vr-mp-pause-subline');
+  const cdEl = document.getElementById('vr-mp-pause-countdown');
+  const resumeBtn = document.getElementById('vr-mp-pause-resume-btn');
+
+  if (titleEl) titleEl.setAttribute('value', (State.gameSession.mpPauseTitle || 'Paused').slice(0, 80));
+  if (detailEl) {
+    detailEl.setAttribute('value', stripHtmlForVrText(State.gameSession.mpPauseDetail || '').slice(0, 200));
+  }
+  const subFull = mpPauseFormattedSubline();
+  if (subEl) subEl.setAttribute('value', subFull.slice(0, 160));
+
+  if (cdEl) {
+    const until = State.gameSession.mpPauseAutoResumeAt;
+    const showCd =
+      show &&
+      State.gameSession.mpPauseReason === 'remote_left' &&
+      typeof until === 'number' &&
+      until > 0;
+    if (showCd) {
+      const remSec = Math.ceil((until - Date.now()) / 1000);
+      const maxSec = Math.max(1, Math.round(NET_HOST_PAUSE_AUTO_RESUME_MS / 1000));
+      cdEl.setAttribute(
+        'value',
+        remSec > 0 ? `Auto-resume in ${remSec}s (max ${maxSec}s)` : 'Auto-resume…'
+      );
+      cdEl.setAttribute('visible', true);
+    } else {
+      cdEl.setAttribute('value', '');
+      cdEl.setAttribute('visible', false);
+    }
+  }
+
+  const showResume =
+    show &&
+    State.gameSession.isHost &&
+    State.gameSession.isMultiplayer &&
+    State.gameSession.mpPauseReason === 'remote_left';
+  if (resumeBtn) {
+    resumeBtn.setAttribute('visible', showResume ? 'true' : 'false');
+    if (showResume) resumeBtn.classList.add('clickable');
+    else resumeBtn.classList.remove('clickable');
+  }
+
+  if (show) refreshHandRaycasters();
+}
+
 /** Show or hide the multiplayer disconnect / session pause banner (host + clients). */
 export function syncMpPauseOverlay() {
   createMpPauseOverlay();
+  syncVrMpPauseOverlay();
   const root = document.getElementById('mp-pause-overlay');
   if (!root) return;
   if (!State.gameSession.mpSessionPaused) {
@@ -261,7 +384,7 @@ export function syncMpPauseOverlay() {
     }
     return;
   }
-  root.style.display = 'flex';
+  root.style.display = Input.getIsVR() ? 'none' : 'flex';
   const t = document.getElementById('mp-pause-title');
   const d = document.getElementById('mp-pause-detail');
   const s = document.getElementById('mp-pause-subline');
@@ -304,6 +427,7 @@ export function syncMpPauseOverlay() {
         return;
       }
       updateMpPauseCountdownDom();
+      syncVrMpPauseOverlay();
       const el = document.getElementById('mp-pause-subline');
       const line = mpPauseFormattedSubline();
       if (el) el.textContent = line;
@@ -373,6 +497,19 @@ export function initUI() {
   createBuildMenu();
   createMpPauseOverlay();
   window._dismissAppStartGate = dismissAppStartGate;
+  window._dismissRtsConfirm = dismissRtsConfirm;
+  window._confirmRtsConfirm = () => {
+    const fn = pendingRtsConfirmOnConfirm;
+    dismissRtsConfirm();
+    if (typeof fn === 'function') {
+      try {
+        fn();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+  window._hostResumeMpPause = () => Network.hostResumeFromPause();
 
   window._requestSellBuilding = buildingId => {
     if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
@@ -814,11 +951,24 @@ function syncVrGameHudVisibility() {
     plane.setAttribute('visible', on ? 'true' : 'false');
   }
 
+  const confirmRoot = document.getElementById('vr-confirm-root');
+  if (confirmRoot) {
+    confirmRoot.setAttribute('visible', inVr && rtsConfirmActive ? 'true' : 'false');
+  }
+
   const buildRoot = document.getElementById('vr-build-panel-root');
   if (buildRoot) {
     const showBuildUi =
       !!(activeBuildingPanel || (activeMobileDeployUnitIds && activeMobileDeployUnitIds.length > 0));
-    buildRoot.setAttribute('visible', showHud && showBuildUi ? 'true' : 'false');
+    buildRoot.setAttribute(
+      'visible',
+      showHud && showBuildUi && !rtsConfirmActive ? 'true' : 'false'
+    );
+  }
+
+  const mpPauseRoot = document.getElementById('vr-mp-pause-root');
+  if (mpPauseRoot && inVr && State.gameSession.mpSessionPaused) {
+    syncVrMpPauseOverlay();
   }
 }
 
@@ -2140,6 +2290,21 @@ export function hideBuildingPanel() {
 
 export function showResourceFieldPanel(resource) {
   activeResourceField = resource;
+}
+
+/** In-headset hint while placing a structure (DOM #build-placement-banner is not visible in VR). */
+export function setVrBuildPlacementHint(name, cost) {
+  const el = document.getElementById('vr-hud-build-mode');
+  if (!el || !Input.getIsVR()) return;
+  el.setAttribute('value', `Placing: ${name} ($${cost}) — trigger on ground · X cancel`);
+  el.setAttribute('visible', true);
+}
+
+export function clearVrBuildPlacementHint() {
+  const el = document.getElementById('vr-hud-build-mode');
+  if (!el) return;
+  el.setAttribute('value', '');
+  el.setAttribute('visible', false);
 }
 
 export function showStatus(msg) {

@@ -817,7 +817,7 @@ function handleHostData(data) {
        * wave (~20–30 s in) and is the most common cause of the client appearing to freeze.
        */
       State.resetMatchEntitiesForClient();
-      Pathfinding.rebuildNavMesh();
+      Pathfinding.rebuildNavMeshImmediate();
       State.gameSession.gameStarted = true;
       State.gameSession.menuOpen = false;
       State.deselectAll();

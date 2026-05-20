@@ -282,7 +282,7 @@ function onStartGame(mode) {
     }
   });
 
-  Pathfinding.rebuildNavMesh();
+  Pathfinding.rebuildNavMeshImmediate();
 
   // Start
   State.gameSession.gameStarted = true;

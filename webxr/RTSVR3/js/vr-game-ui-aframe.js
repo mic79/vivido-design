@@ -148,6 +148,50 @@
     },
   });
 
+  AFRAME.registerComponent('rts-vr-confirm-btn', {
+    schema: { action: { type: 'string', default: '' } },
+    init: function () {
+      this.onClick = this.onClick.bind(this);
+      this.el.addEventListener('click', this.onClick);
+    },
+    onClick: function () {
+      if (!this.el.classList.contains('clickable')) return;
+      const root = document.getElementById('vr-confirm-root');
+      if (root) {
+        const vis = root.getAttribute('visible');
+        if (vis === false || vis === 'false') return;
+      }
+      const action = this.data.action;
+      if (action === 'cancel' && typeof window._dismissRtsConfirm === 'function') {
+        window._dismissRtsConfirm();
+      } else if (action === 'confirm' && typeof window._confirmRtsConfirm === 'function') {
+        window._confirmRtsConfirm();
+      }
+    },
+    remove: function () {
+      this.el.removeEventListener('click', this.onClick);
+    },
+  });
+
+  AFRAME.registerComponent('rts-vr-mp-pause-btn', {
+    init: function () {
+      this.onClick = this.onClick.bind(this);
+      this.el.addEventListener('click', this.onClick);
+    },
+    onClick: function () {
+      if (!this.el.classList.contains('clickable')) return;
+      const root = document.getElementById('vr-mp-pause-root');
+      if (root) {
+        const vis = root.getAttribute('visible');
+        if (vis === false || vis === 'false') return;
+      }
+      if (typeof window._hostResumeMpPause === 'function') window._hostResumeMpPause();
+    },
+    remove: function () {
+      this.el.removeEventListener('click', this.onClick);
+    },
+  });
+
   AFRAME.registerComponent('rts-vr-sell-vehicle-btn', {
     init: function () {
       this.onClick = this.onClick.bind(this);
