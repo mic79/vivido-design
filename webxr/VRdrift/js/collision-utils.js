@@ -212,6 +212,29 @@
       return best > -Infinity ? best : null;
     },
 
+    /**
+     * Walkable height near the player — ignores deck far above (ramp slope projection teleports).
+     */
+    getSupportFloorHeightAt: function (worldX, worldZ, selector, refY, maxAbove) {
+      const reach =
+        maxAbove != null
+          ? maxAbove
+          : window.VRDRIFT && window.VRDRIFT.MAX_FLOOR_SUPPORT_REACH != null
+            ? window.VRDRIFT.MAX_FLOOR_SUPPORT_REACH
+            : 0.55;
+      let best = -Infinity;
+      const surfaces = selector
+        ? Array.from(document.querySelectorAll(selector))
+        : [];
+      surfaces.forEach((el) => {
+        const y = boxTopHeightAt(el, worldX, worldZ);
+        if (y == null) return;
+        if (refY != null && y > refY + reach) return;
+        if (y > best) best = y;
+      });
+      return best > -Infinity ? best : null;
+    },
+
     getFloorNormalAt: function (worldX, worldZ, selector, maxY) {
       let bestY = -Infinity;
       let bestNormal = null;
@@ -258,6 +281,87 @@
       const m = margin == null ? 0.02 : margin;
       const c = contactAt(point, radius + m, el);
       return c.push || new THREE.Vector3(0, 0, 0);
+    },
+
+    /**
+     * Resolve sphere vs [drift-floor] — full correction (no per-frame cap).
+     * Returns true if point was adjusted.
+     */
+    enforceSphereAboveFloors: function (point, radius, maxFix) {
+      if (!point || radius == null) return false;
+      const cap = maxFix != null ? maxFix : null;
+      let changed = false;
+
+      this.querySurfaces('[drift-floor]').forEach((el) => {
+        if (isArenaGameBall(el)) return;
+        const push = this.getCollisionPush(point, radius, el, 0.001);
+        const len = push.length();
+        if (len < 1e-8) return;
+        if (cap != null && len > cap) push.multiplyScalar(cap / len);
+        point.add(push);
+        changed = true;
+      });
+
+      const floorY = this.getWalkableHeightAt(
+        point.x,
+        point.z,
+        '[drift-floor]',
+        point.y + radius + 2
+      );
+      if (floorY != null) {
+        const minY = floorY + radius;
+        if (point.y < minY - 1e-5) {
+          if (cap != null) point.y += Math.min(minY - point.y, cap);
+          else point.y = minY;
+          changed = true;
+        }
+      }
+      return changed;
+    },
+
+    /** Push sphere center out of non-floor [drift-surface] walls (mirrors floor enforce). */
+    enforceSphereOutsideWalls: function (point, radius, maxFix) {
+      if (!point || radius == null) return false;
+      const cap = maxFix != null ? maxFix : null;
+      let changed = false;
+
+      this.querySurfaces('[drift-surface]').forEach((el) => {
+        if (el.hasAttribute('drift-floor')) return;
+        if (isArenaGameBall(el)) return;
+        const push = this.getCollisionPush(point, radius, el, 0.001);
+        const len = push.length();
+        if (len < 1e-8) return;
+        if (cap != null && len > cap) push.multiplyScalar(cap / len);
+        point.add(push);
+        changed = true;
+      });
+
+      return changed;
+    },
+
+    /** Deepest wall penetration at point (for palm wall contact). */
+    getBestWallContact: function (point, radius) {
+      let bestEl = null;
+      let bestPush = null;
+      let bestLen = 0;
+      this.querySurfaces('[drift-surface]').forEach((el) => {
+        if (el.hasAttribute('drift-floor')) return;
+        if (isArenaGameBall(el)) return;
+        const push = this.getCollisionPush(point, radius, el, 0.001);
+        const len = push.length();
+        if (len > bestLen) {
+          bestLen = len;
+          bestPush = push;
+          bestEl = el;
+        }
+      });
+      if (!bestPush || bestLen < 1e-8) return null;
+      return {
+        el: bestEl,
+        push: bestPush,
+        normal: bestPush.clone().multiplyScalar(1 / bestLen),
+        depth: bestLen
+      };
     },
 
     querySurfaces: function (selector) {

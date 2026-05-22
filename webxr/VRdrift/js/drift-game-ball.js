@@ -6,9 +6,9 @@
   const C = window.VRDRIFT;
   const GROUP_PLAYER = 1;
   const GROUP_STATIC = 4;
+  const GROUP_WALL = 32;
   const GROUP_GAME_BALL = 8;
   const GROUP_PALM = 16;
-  const GROUP_CHEST = 32;
   const GROUP_BODY = 64;
 
   function buildMesh(el, color) {
@@ -79,9 +79,9 @@
         material: ballMat
       });
       this.body.fixedRotation = false;
+      this.body.allowSleep = false;
       this.body.collisionFilterGroup = GROUP_GAME_BALL;
-      this.body.collisionFilterMask =
-        GROUP_STATIC | GROUP_PALM | GROUP_BODY | GROUP_CHEST;
+      this.body.collisionFilterMask = GROUP_STATIC | GROUP_WALL | GROUP_PALM | GROUP_BODY;
       this.body.position.set(pos.x, y, pos.z);
       Phys.world.addBody(this.body);
       this.el._driftGameBallBody = this.body;
@@ -147,17 +147,4 @@
       comp.syncMesh();
     }
   };
-
-  const origAdd = window.VRDriftPhysics && window.VRDriftPhysics.addStaticFromElement;
-  if (origAdd && !window.VRDriftPhysics._gameBallGroups) {
-    window.VRDriftPhysics._gameBallGroups = true;
-    window.VRDriftPhysics.addStaticFromElement = function (el, material) {
-      const body = origAdd.call(this, el, material);
-      if (body) {
-        body.collisionFilterGroup = GROUP_STATIC;
-        body.collisionFilterMask = GROUP_PLAYER | GROUP_GAME_BALL;
-      }
-      return body;
-    };
-  }
 })();

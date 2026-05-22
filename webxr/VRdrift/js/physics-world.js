@@ -4,7 +4,23 @@
   const world = new CANNON.World();
   world.gravity.set(0, C.GRAVITY, 0);
   world.broadphase = new CANNON.NaiveBroadphase();
-  world.solver.iterations = 12;
+  world.solver.iterations =
+    C.PHYSICS_SOLVER_ITERATIONS != null ? C.PHYSICS_SOLVER_ITERATIONS : 24;
+
+  const stiff =
+    C.CONTACT_EQUATION_STIFFNESS != null ? C.CONTACT_EQUATION_STIFFNESS : 1e7;
+  const relax =
+    C.CONTACT_EQUATION_RELAXATION != null ? C.CONTACT_EQUATION_RELAXATION : 3;
+
+  function contact(a, b, opts) {
+    world.addContactMaterial(
+      new CANNON.ContactMaterial(a, b, {
+        contactEquationStiffness: stiff,
+        contactEquationRelaxation: relax,
+        ...opts
+      })
+    );
+  }
 
   const defaultMat = new CANNON.Material('drift-default');
   const floorMat = new CANNON.Material('drift-floor');
@@ -12,13 +28,9 @@
   const gameBallMat = new CANNON.Material('drift-game-ball');
   const palmMat = new CANNON.Material('drift-palm');
 
-  function contact(a, b, opts) {
-    world.addContactMaterial(new CANNON.ContactMaterial(a, b, opts));
-  }
-
-  contact(floorMat, playerMat, { friction: 0.42, restitution: 0.02 });
-  contact(defaultMat, playerMat, { friction: 0.36, restitution: 0.04 });
-  contact(playerMat, playerMat, { friction: 0.2, restitution: 0.08 });
+  contact(floorMat, playerMat, { friction: 0.42, restitution: 0 });
+  contact(defaultMat, playerMat, { friction: 0.36, restitution: 0 });
+  contact(playerMat, playerMat, { friction: 0.2, restitution: 0 });
 
   const ballF = C.GAME_BALL_FRICTION != null ? C.GAME_BALL_FRICTION : 0.22;
   const ballR = C.GAME_BALL_RESTITUTION != null ? C.GAME_BALL_RESTITUTION : 0.52;
@@ -29,6 +41,8 @@
   contact(gameBallMat, floorMat, { friction: ballF, restitution: ballR });
   contact(gameBallMat, defaultMat, { friction: ballF, restitution: ballR * 0.95 });
   contact(gameBallMat, palmMat, { friction: palmF, restitution: palmR });
+  contact(floorMat, palmMat, { friction: palmF * 0.9, restitution: 0 });
+  contact(defaultMat, palmMat, { friction: palmF * 0.85, restitution: 0 });
   contact(gameBallMat, playerMat, { friction: bodyF, restitution: bodyR });
 
   let stepAccum = 0;
@@ -45,7 +59,8 @@
       if (!dt || dt <= 0) return;
       stepAccum += dt;
       const step = 1 / C.PHYSICS_HZ;
-      const maxSubsteps = 3;
+      const maxSubsteps =
+        C.PHYSICS_MAX_SUBSTEPS != null ? C.PHYSICS_MAX_SUBSTEPS : 6;
       let n = 0;
       while (stepAccum >= step && n < maxSubsteps) {
         world.step(step);
@@ -125,6 +140,9 @@
       }
       body.position.set(pos.x, pos.y, pos.z);
       body.quaternion.set(q.x, q.y, q.z, q.w);
+      const isFloor = el.hasAttribute('drift-floor');
+      body.collisionFilterGroup = isFloor ? 4 : 32;
+      body.collisionFilterMask = isFloor ? 1 | 8 | 16 | 64 : 1 | 8 | 64;
       world.addBody(body);
       el._driftStaticBody = body;
       return body;

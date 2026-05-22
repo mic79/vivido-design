@@ -1,4 +1,4 @@
-﻿      AFRAME.registerComponent('mixamo-body-avatar', {
+      AFRAME.registerComponent('mixamo-body-avatar', {
         schema: {
           playerId: { type: 'string', default: 'local' },
           color: { type: 'color', default: '#4A90E2' },
@@ -508,7 +508,7 @@
 
         setupPalmDebugMeshes: function () {
           if (!window.VRDriftPalmFrame) return;
-          const show = (window.VRDRIFT || {}).SHOW_HAND_COLLISION_DEBUG !== false;
+          const show = (window.VRDRIFT || {}).SHOW_HAND_COLLISION_DEBUG === true;
           const ext = window.VRDriftPalmFrame.palmHalfExtents();
           ['left', 'right'].forEach((side) => {
             if (this._palmDebug[side]) return;
@@ -563,6 +563,8 @@
           mesh.material.color.setHex(active ? 0xffee88 : 0x88ddff);
           mesh.material.opacity = active ? 0.9 : 0.85;
         },
+
+        tickOrder: 0,
 
         tick: function(time, deltaTime) {
           if (!this.modelLoaded || !this.skeleton) return;

@@ -47,6 +47,10 @@
       this._cPoint = new CANNON.Vec3();
       this._bodyVel = new THREE.Vector3();
       this._relPalmDelta = new THREE.Vector3();
+      this._palmPhys = new THREE.Vector3();
+      this._palmTrack = new THREE.Vector3();
+      this._palmSupportN = new THREE.Vector3();
+      this._palmSupportCorr = new THREE.Vector3();
       this._grabPull = new THREE.Vector3();
       this._grabTarget = new THREE.Vector3();
       this._grabLockErr = new THREE.Vector3();
@@ -58,8 +62,21 @@
       this._prevPalmTouch = { left: null, right: null };
       this._prevBraking = { left: false, right: false };
       this._prevGameBallTouch = { left: false, right: false };
-      this._floorGripLockout = { left: false, right: false };
       this._floorGripPending = { left: false, right: false };
+      this._floorGripEngage = { left: 0, right: 0 };
+      this._openFloorWasContact = { left: false, right: false };
+      this._openWallWasContact = { left: false, right: false };
+      this._wallPlantWasContact = { left: false, right: false };
+      this._floorGripPushing = { left: false, right: false };
+      this._floorGripWasContact = { left: false, right: false };
+      this._palmDrivePush = false;
+      this._palmWallPush = false;
+      this._palmSkateActive = false;
+      this.lastPhysPalmPos = {
+        left: new THREE.Vector3(),
+        right: new THREE.Vector3()
+      };
+      this._physPalmReady = { left: false, right: false };
       this._lastSkateHaptic = { left: 0, right: 0 };
       this.grounded = false;
       this.groundNormal = new THREE.Vector3(0, 1, 0);
@@ -86,21 +103,21 @@
       this.applyRigOffset();
       console.log('[VRdrift] Cannon locomotion + arena game ball loaded');
 
+      this._pendingVrSnap = false;
       this.el.sceneEl.addEventListener('enter-vr', () => {
         this.ensureHandsVisible();
         this.applyRigOffset();
-        if (!this._vrGroundSnapped) {
-          window.setTimeout(() => {
-            this.snapToGround();
-            this._vrGroundSnapped = true;
-          }, 100);
-        }
+        this._pendingVrSnap = true;
+        this._vrGroundSnapped = true;
+        this.snapBodyToHeadset();
+        window.setTimeout(() => this.snapBodyToHeadset(), 120);
+        window.setTimeout(() => this.snapBodyToHeadset(), 400);
       });
 
       if (this.rig) this.rig.object3D.rotation.y = this.rotationY;
       if (!this._sceneGroundSnapped) {
         window.setTimeout(() => {
-          this.snapToGround();
+          if (this.isVrLocomotionActive()) this.snapBodyToHeadset();
           this._sceneGroundSnapped = true;
         }, 200);
       }
@@ -140,27 +157,84 @@
       return out;
     },
 
-    snapToGround: function () {
+    /** Align locomotion ball under headset; zero velocity (locomotion ball has no floor collider). */
+    snapBodyToHeadset: function () {
       if (!this.body || !this.camera) return;
       const cam = new THREE.Vector3();
       const anchor = new THREE.Vector3();
       this.camera.object3D.getWorldPosition(cam);
       this.getBodyAnchorWorld(cam, anchor);
       const floorY = Collide.getFloorHeight(anchor.x, anchor.z, cam.y);
-      if (floorY == null) return;
-
-      const ballY = floorY + C.BODY_BALL_RADIUS;
-      const gap = ballY - this.body.position.y;
-      if (Math.abs(gap) < 0.008) return;
-
-      this.body.position.x = anchor.x;
-      this.body.position.z = anchor.z;
-      this.body.position.y += gap;
-      if (Math.abs(gap) > 0.04) {
-        this.body.velocity.y = 0;
-      }
+      const y =
+        floorY != null ? floorY + C.BODY_BALL_RADIUS : this.body.position.y;
+      this.body.position.set(anchor.x, y, anchor.z);
+      this.body.velocity.set(0, 0, 0);
+      this.body.angularVelocity.set(0, 0, 0);
+      this.body.force.set(0, 0, 0);
+      this.body.torque.set(0, 0, 0);
+      this.grounded = true;
+      this.groundNormal.set(0, 1, 0);
+      this._groundContactFrames = 12;
+      this.resetPalmKinematics();
       this.applyRigOffset();
-      this.syncPlayerFromPhysicsBody();
+      if (this.isVrLocomotionActive()) this.syncPlayerFromPhysicsBody();
+    },
+
+    snapToGround: function () {
+      this.snapBodyToHeadset();
+    },
+
+    resetPalmKinematics: function () {
+      if (window.VRDriftPalmBall) {
+        window.VRDriftPalmBall._ready.left = false;
+        window.VRDriftPalmBall._ready.right = false;
+      }
+      ['left', 'right'].forEach((key) => {
+        const hand = key === 'left' ? this.leftHand : this.rightHand;
+        if (!hand) return;
+        const palm = new THREE.Vector3();
+        this.getTrackedPalmPos(hand, palm);
+        this.lastPalmPos[key].copy(palm);
+        this.lastPhysPalmPos[key].copy(palm);
+        this.palmDelta[key].set(0, 0, 0);
+        this.handVel[key].set(0, 0, 0);
+        this._palmReady[key] = true;
+        this._physPalmReady[key] = false;
+      });
+    },
+
+    /** One floor settle per frame — Cannon handles contact; snap when close, no multi-pass bounce. */
+    constrainBodyToFloor: function () {
+      if (!this.body) return;
+      const bx = this.body.position.x;
+      const by = this.body.position.y;
+      const bz = this.body.position.z;
+      const reach =
+        C.MAX_FLOOR_SUPPORT_REACH != null ? C.MAX_FLOOR_SUPPORT_REACH : 0.55;
+      const maxLift =
+        C.MAX_FLOOR_CORRECTION != null ? C.MAX_FLOOR_CORRECTION : 0.08;
+      const snapTol =
+        C.FLOOR_SNAP_TOLERANCE != null ? C.FLOOR_SNAP_TOLERANCE : 0.12;
+      const floorY = Col.getSupportFloorHeightAt(
+        bx,
+        bz,
+        '[drift-floor]',
+        by,
+        reach
+      );
+      if (floorY == null) return;
+      const minY = floorY + C.BODY_BALL_RADIUS;
+      const gap = minY - by;
+      if (gap <= 0 || gap > reach + C.BODY_BALL_RADIUS) return;
+      if (gap <= snapTol) {
+        this.body.position.y = minY;
+      } else {
+        this.body.position.y += Math.min(gap, maxLift);
+      }
+      if (this.body.velocity.y < 0) this.body.velocity.y = 0;
+      this.grounded = true;
+      this.groundNormal.set(0, 1, 0);
+      this._groundContactFrames = Math.max(this._groundContactFrames, 6);
     },
 
     ensureHandsVisible: function () {
@@ -207,8 +281,8 @@
       this.body.sleepAngularSpeedLimit = 0.2;
       this.body.position.set(spawn.x, spawn.y, spawn.z);
       this.body.collisionFilterGroup = 1;
-      /* Floor/walls only — game ball hits body capsule (GROUP_BODY), not this sphere */
-      this.body.collisionFilterMask = 4;
+      /* Locomotion ball: floor + walls (same static groups as game ball). */
+      this.body.collisionFilterMask = 4 | 32;
       const self = this;
       this.body.addEventListener('collide', function (e) {
         self.onBodyCollide(e);
@@ -336,7 +410,7 @@
     },
 
     syncPlayerFromPhysicsBody: function () {
-      if (!this.body) return;
+      if (!this.body || !this.isVrLocomotionActive()) return;
       const b = this.body;
       this.el.object3D.position.set(b.position.x, b.position.y, b.position.z);
       this.velocity.set(b.velocity.x, b.velocity.y, b.velocity.z);
@@ -344,7 +418,32 @@
       this.syncBodyCollisionDebug();
     },
 
-    /** Ceiling only — wall/floor handled by Cannon player body (avoids post-step teleport fights). */
+    /** Head + torso vs walls/floor (geometric); Cannon ball also hits static group. */
+    resolvePlayerCollisions: function () {
+      if (!this.body || !Collide) return;
+      const grabState = {
+        left: !!(
+          this.isGrabbing.left ||
+          (this.gripHeld.left && this.isBraking.left) ||
+          this.palmFloorGripActive('left')
+        ),
+        right: !!(
+          this.isGrabbing.right ||
+          (this.gripHeld.right && this.isBraking.right) ||
+          this.palmFloorGripActive('right')
+        )
+      };
+      let vel = this.readBodyVelocity(this._bodyVel);
+      vel = Collide.resolvePlayer(this.el, vel, grabState);
+      this.body.position.set(
+        this.el.object3D.position.x,
+        this.el.object3D.position.y,
+        this.el.object3D.position.z
+      );
+      this.body.velocity.set(vel.x, vel.y, vel.z);
+      this.velocity.copy(vel);
+    },
+
     resolveCeilingOnly: function () {
       if (!Collide || !this.body || !this.camera) return;
       const ceiling = document.querySelector('#arena-ceiling');
@@ -374,7 +473,7 @@
     detectGameBallContact: function () {
       ['left', 'right'].forEach((key) => {
         this.gameBallContact[key] =
-          window.VRDriftPalmBall && window.VRDriftPalmBall.hadContact(key);
+          window.VRDriftPalmBall && window.VRDriftPalmBall.hadGameBallContact(key);
       });
     },
 
@@ -390,7 +489,7 @@
       const gameEl = window.VRDriftGameBall ? window.VRDriftGameBall.getEl() : null;
       if (!gameEl || !hand) return Infinity;
       const hp = this.getPalmWorldPos(hand, new THREE.Vector3());
-      return Col.distanceToSurface(hp, C.PALM_RADIUS, gameEl);
+      return Col.distanceToSurface(hp, this.palmProbeRadius(), gameEl);
     },
 
     setupInput: function () {
@@ -443,15 +542,22 @@
       if (!evt.target || !evt.target.object3D || this.menuBlocks()) return;
       const key = this.handKey(evt.target);
       this.gripHeld[key] = down;
+      if (!down) this._floorGripPushing[key] = false;
       if (down) {
         this.tryGripAttach(key, evt.target);
       } else {
-        this._floorGripLockout[key] = false;
         this._floorGripPending[key] = false;
-        const wasBraking = this.isBraking[key];
+        const wasFloor =
+          this.palmTouch[key] &&
+          this.palmTouch[key].hasAttribute('drift-floor');
+        const wasWallBrake =
+          this.isBraking[key] &&
+          this.brakeSurface[key] &&
+          !this.brakeSurface[key].hasAttribute('drift-floor');
         this.releaseGrip(key, evt.target);
-        this.releaseFloorGrip(key, false);
-        if (wasBraking) this.applyWallJump(key);
+        this.releaseFloorGrip(key);
+        if (wasWallBrake) this.applyWallJump(key);
+        if (wasFloor) this.applyWallJump(key);
       }
     },
 
@@ -470,14 +576,296 @@
       return false;
     },
 
+    /** Palm center = physics sphere pose (Orion: palms are the contact authority). */
     getPalmWorldPos: function (hand, out) {
-      const palmEl = hand.id === 'leftHand' ? this.leftPalm : this.rightPalm;
-      if (palmEl && palmEl.object3D) {
-        palmEl.object3D.getWorldPosition(out);
-      } else {
-        hand.object3D.getWorldPosition(out);
+      const key = hand.id === 'leftHand' ? 'left' : 'right';
+      if (
+        window.VRDriftPalmBall &&
+        window.VRDriftPalmBall.getPalmWorldPosition(key, out)
+      ) {
+        return out;
       }
-      return out;
+      const q = new THREE.Quaternion();
+      return this.getHandColliderPose(hand, out, q);
+    },
+
+    getTrackedPalmPos: function (hand, out) {
+      const q = new THREE.Quaternion();
+      if (this.fillHandPalmWorldPose(hand, out, q)) return out;
+      return hand.object3D.getWorldPosition(out);
+    },
+
+    isVrLocomotionActive: function () {
+      const scene = this.el.sceneEl;
+      return !!(scene && scene.is('vr-mode'));
+    },
+
+    /** Flat screen: freeze physics only — never move #player (camera parent) from body pose. */
+    holdDesktopBody: function () {
+      if (!this.body) return;
+      this.body.velocity.set(0, 0, 0);
+      this.body.angularVelocity.set(0, 0, 0);
+      this.body.force.set(0, 0, 0);
+      this.body.torque.set(0, 0, 0);
+      this.velocity.set(0, 0, 0);
+      this.grounded = true;
+    },
+
+    palmProbeRadius: function () {
+      return C.PALM_SPHERE_RADIUS != null ? C.PALM_SPHERE_RADIUS : 0.05;
+    },
+
+    palmTouchMaxGap: function () {
+      if (C.PALM_TOUCH_MAX_GAP != null) return C.PALM_TOUCH_MAX_GAP;
+      return C.PALM_CONTACT_DIST != null ? C.PALM_CONTACT_DIST : 0.008;
+    },
+
+    palmHadStaticContact: function (key) {
+      return !!(window.VRDriftPalmBall && window.VRDriftPalmBall.hadStaticContact(key));
+    },
+
+    /** Palm Cannon on drift-floor (useLastFrame = pre-physics support from prior step). */
+    palmOnDriftFloor: function (key, useLastFrame) {
+      const PB = window.VRDriftPalmBall;
+      const hand = key === 'left' ? this.leftHand : this.rightHand;
+      if (!hand) return false;
+      const gap =
+        C.PALM_STATIC_FLOOR_GAP != null ? C.PALM_STATIC_FLOOR_GAP : 0.028;
+      const r = this.palmProbeRadius();
+      const track = this._palmTrack;
+      this.getTrackedPalmPos(hand, track);
+      const Col = window.VRDriftCollision;
+      if (Col) {
+        const floorY = Col.getWalkableHeightAt(
+          track.x,
+          track.z,
+          '[drift-floor]',
+          track.y + 2
+        );
+        if (floorY != null && track.y <= floorY + r + gap) return true;
+      }
+      if (!PB) return false;
+      const contacted = useLastFrame ? PB._wasStaticContact[key] : PB.hadStaticContact(key);
+      if (!contacted) return false;
+      const touch = this.palmTouch[key];
+      if (touch && touch.hasAttribute('drift-floor')) return true;
+      return !!this.resolveWalkablePalmTouch(key, hand, gap);
+    },
+
+    /** Palm Cannon on wall/ramp side (not walkable floor). */
+    palmOnStaticWall: function (key, useLastFrame) {
+      if (this.palmOnDriftFloor(key, useLastFrame)) return false;
+      const hand = key === 'left' ? this.leftHand : this.rightHand;
+      const gap =
+        C.PALM_WALL_TOUCH_GAP != null ? C.PALM_WALL_TOUCH_GAP : 0.028;
+      if (hand && this.resolveWallPalmTouch(key, hand, gap)) return true;
+
+      const PB = window.VRDriftPalmBall;
+      if (!PB) return false;
+      const contacted = useLastFrame ? PB._wasStaticContact[key] : PB.hadStaticContact(key);
+      if (!contacted) return false;
+      const inclineNy =
+        C.PALM_FLOOR_SKATE_INCLINE_NY != null ? C.PALM_FLOOR_SKATE_INCLINE_NY : 0.92;
+      const n = this._palmSupportN;
+      if (PB.getStaticContactNormal(key, n)) {
+        if (n.lengthSq() < 1e-8) return true;
+        n.normalize();
+        return n.y < inclineNy;
+      }
+      return true;
+    },
+
+    /** Cancel world gravity while palms were planted on floor last frame. */
+    applyPalmFloorSupportForces: function () {
+      if (!this.body || this.isRailGrabActive()) return;
+      let count = 0;
+      ['left', 'right'].forEach((key) => {
+        if (this.palmOnDriftFloor(key, true)) count++;
+      });
+      if (count < 1) return;
+      this.body.wakeUp();
+      this.body.force.y += -this.body.mass * C.GRAVITY;
+    },
+
+    /**
+     * Tracked palm penetrating a wall → shift body so contact stays on the surface.
+     * (Moving the rig is how WebXR keeps hands from clipping — we never teleport controllers.)
+     */
+    applyWallPalmSolidContact: function () {
+      if (!this.body) return;
+      let handSpeedSq = 0;
+      ['left', 'right'].forEach((key) => {
+        handSpeedSq += this.handVel[key].lengthSq();
+      });
+      const handCap =
+        C.PALM_WALL_SOLID_MAX_HAND_SPEED != null
+          ? C.PALM_WALL_SOLID_MAX_HAND_SPEED
+          : 0.35;
+      if (handSpeedSq > handCap * handCap) return;
+
+      const r = this.palmProbeRadius();
+      const maxFix =
+        C.PALM_RIG_WALL_MAX_STEP != null ? C.PALM_RIG_WALL_MAX_STEP : 0.055;
+      const tol =
+        C.PALM_RIG_WALL_TOLERANCE != null ? C.PALM_RIG_WALL_TOLERANCE : 0.01;
+      const palm = this._palmTrack;
+      const push = this._palmSupportCorr;
+      push.set(0, 0, 0);
+      let bestLen = 0;
+
+      ['left', 'right'].forEach((key) => {
+        const hand = key === 'left' ? this.leftHand : this.rightHand;
+        if (!hand) return;
+        this.getTrackedPalmPos(hand, palm);
+        const hit = Col.getBestWallContact(palm, r);
+        if (!hit || hit.depth < tol) return;
+        const len = hit.push.length();
+        if (len > bestLen) {
+          bestLen = len;
+          push.copy(hit.push);
+        }
+      });
+
+      if (bestLen < tol) return;
+      if (bestLen > maxFix) push.multiplyScalar(maxFix / bestLen);
+      this.body.wakeUp();
+      this.body.position.x += push.x;
+      this.body.position.y += push.y;
+      this.body.position.z += push.z;
+    },
+
+    /** Kinematic rig lift: floor only — wall solid contact handled separately. */
+    applyPalmRigSupport: function () {
+      if (!this.body || !window.VRDriftPalmBall || this.isRailGrabActive()) return;
+      if (this._palmDrivePush || this._palmSkateActive) return;
+      if (
+        this.palmOnStaticWall('left', false) ||
+        this.palmOnStaticWall('right', false)
+      ) {
+        return;
+      }
+
+      const tol =
+        C.PALM_RIG_SUPPORT_TOLERANCE != null ? C.PALM_RIG_SUPPORT_TOLERANCE : 0.018;
+      const maxStep =
+        C.PALM_RIG_SUPPORT_MAX_STEP != null ? C.PALM_RIG_SUPPORT_MAX_STEP : 0.028;
+      const blend =
+        C.PALM_RIG_SUPPORT_BLEND != null ? C.PALM_RIG_SUPPORT_BLEND : 0.22;
+      const inclineNy =
+        C.PALM_FLOOR_SKATE_INCLINE_NY != null ? C.PALM_FLOOR_SKATE_INCLINE_NY : 0.92;
+
+      const phys = this._palmPhys;
+      const track = this._palmTrack;
+      const n = this._palmSupportN;
+      const corr = this._palmSupportCorr;
+      let maxLiftY = 0;
+      let bestIncline = 0;
+      corr.set(0, 0, 0);
+
+      const bodyFloorY = Col.getWalkableHeightAt(
+        this.body.position.x,
+        this.body.position.z,
+        '[drift-floor]',
+        this.body.position.y + 2
+      );
+      if (bodyFloorY != null) {
+        const minBodyY = bodyFloorY + C.BODY_BALL_RADIUS;
+        if (this.body.position.y < minBodyY - tol) {
+          maxLiftY = Math.max(maxLiftY, minBodyY - this.body.position.y);
+        }
+      }
+
+      ['left', 'right'].forEach((key) => {
+        if (!this.palmOnDriftFloor(key, false)) return;
+        const hand = key === 'left' ? this.leftHand : this.rightHand;
+        if (!hand || !window.VRDriftPalmBall.getPalmWorldPosition(key, phys)) return;
+
+        this.getTrackedPalmPos(hand, track);
+        if (window.VRDriftPalmBall.getStaticContactNormal(key, n)) {
+          if (n.lengthSq() < 1e-8) n.set(0, 1, 0);
+          else n.normalize();
+        } else {
+          n.set(0, 1, 0);
+        }
+
+        const dx = phys.x - track.x;
+        const dy = phys.y - track.y;
+        const dz = phys.z - track.z;
+        const along = dx * n.x + dy * n.y + dz * n.z;
+        if (along > tol) {
+          if (n.y >= inclineNy) {
+            maxLiftY = Math.max(maxLiftY, along);
+          } else if (along > bestIncline) {
+            bestIncline = along;
+            corr.set(n.x * along, n.y * along, n.z * along);
+          }
+        }
+      });
+
+      let applied = false;
+      if (maxLiftY > tol) {
+        const lift = Math.min(maxLiftY * blend, maxStep);
+        this.body.wakeUp();
+        this.body.position.y += lift;
+        applied = true;
+      }
+      if (bestIncline > tol) {
+        const clen = corr.length();
+        const s = clen > maxStep ? maxStep / clen : blend;
+        this.body.wakeUp();
+        this.body.position.x += corr.x * s;
+        this.body.position.y += corr.y * s;
+        this.body.position.z += corr.z * s;
+        applied = true;
+      }
+
+      if (!applied) return;
+      this.zeroPlantedVerticalVelocity();
+    },
+
+    zeroPlantedVerticalVelocity: function () {
+      if (!this.body) return;
+      const v = this.body.velocity;
+      if (Math.abs(v.y) < 0.5) v.y = 0;
+    },
+
+    /** Kill vertical jitter while palms are planted on the floor. */
+    dampPalmPlantedBody: function () {
+      if (!this.body || this._palmDrivePush) return;
+      let planted = 0;
+      ['left', 'right'].forEach((key) => {
+        if (this.palmOnDriftFloor(key, false)) planted++;
+      });
+      if (planted < 1) return;
+      const v = this.body.velocity;
+      v.y = 0;
+      const horiz = Math.sqrt(v.x * v.x + v.z * v.z);
+      if (horiz < 0.08) {
+        v.x = 0;
+        v.z = 0;
+      }
+    },
+
+    palmTouchesFloor: function (key, hand, forGrip) {
+      hand = hand || (key === 'left' ? this.leftHand : this.rightHand);
+      if (!hand) return false;
+      const maxGap = forGrip
+        ? C.PALM_FLOOR_GRIP_MAX_GAP != null
+          ? C.PALM_FLOOR_GRIP_MAX_GAP
+          : 0.022
+        : C.PALM_FLOOR_TOUCH_MAX_GAP != null
+          ? C.PALM_FLOOR_TOUCH_MAX_GAP
+          : 0.012;
+      const floor = this.findNearestSurface(hand, '[drift-floor]', maxGap, 0);
+      if (!floor) return false;
+      if (this.palmHadStaticContact(key)) return true;
+      const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
+      const d = Col.distanceToSurface(palm, this.palmProbeRadius(), floor);
+      return d <= maxGap;
+    },
+
+    getPalmSyncOpts: function () {
+      return { floorGrip: { left: null, right: null } };
     },
 
     /**
@@ -491,31 +879,121 @@
       return outMatrix.identity();
     },
 
-    getHandColliderPose: function (hand, outPos, outQuat) {
+    /** Raw tracked palm frame (avatar/controller) — hands are authoritative. */
+    fillHandPalmWorldPose: function (hand, outPos, outQuat) {
       const side = hand.id === 'leftHand' ? 'left' : 'right';
       const bodyEl = document.querySelector('#local-body');
       const avatar = bodyEl && bodyEl.components['mixamo-body-avatar'];
-      if (avatar && avatar.getPalmWorldPose && avatar.getPalmWorldPose(side, outPos, outQuat)) {
-        return outPos;
+      if (
+        avatar &&
+        avatar.modelLoaded &&
+        avatar.getPalmWorldPose &&
+        window.VRDriftPalmFrame &&
+        avatar.getPalmWorldPose(side, outPos, outQuat)
+      ) {
+        return true;
+      }
+      if (this.isVrLocomotionActive()) {
+        hand.object3D.getWorldPosition(outPos);
+        hand.object3D.getWorldQuaternion(outQuat);
+        return true;
       }
       hand.object3D.updateMatrixWorld(true);
       const localM = this.getPalmColliderLocalMatrix(new THREE.Matrix4());
       const worldM = new THREE.Matrix4().multiplyMatrices(hand.object3D.matrixWorld, localM);
       const scale = new THREE.Vector3();
       worldM.decompose(outPos, outQuat, scale);
+      return true;
+    },
+
+    getHandColliderPose: function (hand, outPos, outQuat) {
+      this.fillHandPalmWorldPose(hand, outPos, outQuat);
       return outPos;
+    },
+
+    findNearestSurfaceAtPoint: function (point, selector, maxDist, probeExtra) {
+      let best = null;
+      let bestD = maxDist != null ? maxDist : this.palmTouchMaxGap();
+      const probeR = this.palmProbeRadius() + (probeExtra || 0);
+      Col.querySurfaces(selector).forEach((el) => {
+        if (window.VRDriftGameBall && window.VRDriftGameBall.isGameBallElement(el)) return;
+        const d = Col.distanceToSurface(point, probeR, el);
+        if (d <= bestD) {
+          bestD = d;
+          best = el;
+        }
+      });
+      return best;
+    },
+
+    findNearestWallAtPoint: function (point, maxDist) {
+      let best = null;
+      let bestD = maxDist != null ? maxDist : this.palmTouchMaxGap();
+      const probeR = this.palmProbeRadius();
+      Col.querySurfaces('[drift-surface]').forEach((el) => {
+        if (el.hasAttribute('drift-floor')) return;
+        if (window.VRDriftGameBall && window.VRDriftGameBall.isGameBallElement(el)) return;
+        const d = Col.distanceToSurface(point, probeR, el);
+        if (d <= bestD) {
+          bestD = d;
+          best = el;
+        }
+      });
+      return best;
+    },
+
+    /** Nearest wall at tracked palm — hands are the contact authority for walls. */
+    resolveWallPalmTouch: function (key, hand, maxGap) {
+      const handRef = hand || (key === 'left' ? this.leftHand : this.rightHand);
+      if (!handRef) return null;
+      const gap = maxGap != null ? maxGap : 0.008;
+      const palm = this._palmPhys;
+      this.getTrackedPalmPos(handRef, palm);
+      return this.findNearestWallAtPoint(palm, gap);
     },
 
     findNearestSurface: function (hand, selector, maxDist, probeExtra) {
       const hp = this.getPalmWorldPos(hand, new THREE.Vector3());
+      return this.findNearestSurfaceAtPoint(hp, selector, maxDist, probeExtra);
+    },
+
+    /**
+     * Pick drift-floor under the palm (ramps vs flat arena) using distance + Cannon contact normal.
+     */
+    resolveWalkablePalmTouch: function (key, hand, maxGap) {
+      const handRef = hand || (key === 'left' ? this.leftHand : this.rightHand);
+      if (!handRef) return null;
+      const palm = new THREE.Vector3();
+      if (this.gripHeld[key]) {
+        this.getTrackedPalmPos(handRef, palm);
+      } else {
+        this.getPalmWorldPos(handRef, palm);
+      }
+      const probeR = this.palmProbeRadius();
+      const gap = maxGap != null ? maxGap : 0.032;
+      const cn = new THREE.Vector3();
+      let hasCn = false;
+      if (
+        window.VRDriftPalmBall &&
+        window.VRDriftPalmBall.getStaticContactNormal(key, cn)
+      ) {
+        hasCn = true;
+      }
       let best = null;
-      let bestD = maxDist != null ? maxDist : C.PALM_CONTACT_DIST;
-      const probeR = C.PALM_RADIUS + (probeExtra || 0);
-      Col.querySurfaces(selector).forEach((el) => {
-        if (window.VRDriftGameBall && window.VRDriftGameBall.isGameBallElement(el)) return;
-        const d = Col.distanceToSurface(hp, probeR, el);
-        if (d <= bestD) {
-          bestD = d;
+      let bestScore = Infinity;
+      Col.querySurfaces('[drift-floor]').forEach((el) => {
+        if (window.VRDriftGameBall && window.VRDriftGameBall.isGameBallElement(el)) {
+          return;
+        }
+        const d = Col.distanceToSurface(palm, probeR, el);
+        if (d > gap) return;
+        let score = d;
+        if (hasCn) {
+          const gn = Col.getSurfaceNormal(palm, el);
+          score += (1 - Math.abs(cn.x * gn.x + cn.y * gn.y + cn.z * gn.z)) * 0.12;
+        }
+        if (score < bestScore) {
+          bestScore = score;
           best = el;
         }
       });
@@ -531,56 +1009,66 @@
       );
     },
 
-    releaseFloorGrip: function (key, lockUntilGripUp) {
-      this.isBraking[key] = false;
-      this._floorGripPending[key] = false;
-      this.brakeSurface[key] = null;
-      this.brakeAnchor[key] = null;
-      if (lockUntilGripUp) {
-        this._floorGripLockout[key] = true;
-        this.gripHeld[key] = false;
-      }
+    isFloorGrab: function (key) {
+      return !!(
+        this.gripHeld[key] &&
+        this.palmTouch[key] &&
+        this.palmTouch[key].hasAttribute('drift-floor')
+      );
     },
 
-    startFloorBrake: function (key, hand, surf) {
-      const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
-      this.isGrabbing[key] = false;
-      this.grabInfo[key] = null;
-      this._floorGripPending[key] = false;
-      this.isBraking[key] = true;
-      this.brakeSurface[key] = surf;
-      this.brakeAnchor[key] = {
-        anchorPalm: palm.clone(),
-        lastPalmPos: palm.clone()
-      };
-      if (this.body) {
-        const slow = C.FLOOR_GRIP_INITIAL_SLOW != null ? C.FLOOR_GRIP_INITIAL_SLOW : 0.4;
-        const v = this.body.velocity;
-        v.x *= slow;
-        v.y *= slow;
-        v.z *= slow;
+    palmFloorGripActive: function (key) {
+      if (!this.gripHeld[key] || !this.palmHadStaticContact(key)) return false;
+      const touch = this.palmTouch[key];
+      if (touch && touch.hasAttribute('drift-floor')) return true;
+      const hand = key === 'left' ? this.leftHand : this.rightHand;
+      if (!hand) return false;
+      const gap =
+        C.PALM_STATIC_FLOOR_GAP != null ? C.PALM_STATIC_FLOOR_GAP : 0.028;
+      return !!this.resolveWalkablePalmTouch(key, hand, gap);
+    },
+
+    /** 0 while moving fast, → 1 only after braking below crawl speed (enables full coupling). */
+    updateFloorGripEngage: function (key, speed, dt) {
+      if (!this.palmFloorGripActive(key)) {
+        this._floorGripEngage[key] = 0;
+        return 0;
       }
+      const crawl =
+        C.FLOOR_GRIP_FULL_COUPLE_SPEED != null ? C.FLOOR_GRIP_FULL_COUPLE_SPEED : 1.35;
+      const rate = C.FLOOR_GRIP_ENGAGE_RATE != null ? C.FLOOR_GRIP_ENGAGE_RATE : 2.5;
+      const target = speed <= crawl ? 1 : 0;
+      const alpha = 1 - Math.exp(-rate * dt);
+      const e = this._floorGripEngage[key];
+      this._floorGripEngage[key] = e + (target - e) * alpha;
+      return this._floorGripEngage[key];
+    },
+
+    isAnyGrabActive: function () {
+      return this.isRailGrabActive();
+    },
+
+    releaseFloorGrip: function (key) {
+      this._floorGripPending[key] = false;
     },
 
     tryGripAttach: function (key, hand) {
-      if (!hand || this._floorGripLockout[key]) return;
+      if (!hand) return;
       const gripSurf = this.findNearestGrip(hand);
       if (gripSurf) {
         this.attachGrip(key, hand, gripSurf);
         return;
       }
-      this._floorGripPending[key] = true;
+      if (this.palmTouchesFloor(key, hand, true) && window.VRDriftHaptics) {
+        window.VRDriftHaptics.pulseHand(
+          hand,
+          C.HAPTIC_GRIP_INTENSITY != null ? C.HAPTIC_GRIP_INTENSITY : 0.52,
+          C.HAPTIC_GRIP_MS != null ? C.HAPTIC_GRIP_MS : 48
+        );
+      }
     },
 
-    updatePendingFloorGrip: function () {
-      ['left', 'right'].forEach((key) => {
-        if (!this._floorGripPending[key] || !this.gripHeld[key] || this._floorGripLockout[key]) return;
-        const hand = key === 'left' ? this.leftHand : this.rightHand;
-        if (!hand) return;
-        const floor = this.findNearestSurface(hand, '[drift-floor]');
-        if (floor) this.startFloorBrake(key, hand, floor);
-      });
-    },
+    updatePendingFloorGrip: function () {},
 
     attachGrip: function (key, hand, surface) {
       const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
@@ -658,7 +1146,9 @@
       const v = this.body.velocity;
       const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
       const max = this.isRailGrabActive()
-        ? (C.GRIP_MAX_SPEED != null ? C.GRIP_MAX_SPEED : 3.2)
+        ? C.GRIP_MAX_SPEED != null
+          ? C.GRIP_MAX_SPEED
+          : 3.2
         : this.data.maxSpeed;
       if (len > max) {
         const s = max / len;
@@ -685,7 +1175,7 @@
     },
 
     applyThrusterForces: function (dt) {
-      if (!this.body || this.isRailGrabActive()) return;
+      if (!this.body || this.isAnyGrabActive()) return;
       const mass = this.body.mass;
       const addHand = (hand) => {
         const d = new THREE.Vector3(0, -1, 0);
@@ -701,41 +1191,53 @@
     },
 
     /**
-     * Grip rail: lock palm to the world anchor on the bar/pole — body moves so the hand stays glued.
+     * Grip anchor: rails (anchor − palm) and floor (palm − anchor) so the body follows hand motion.
      */
     applyGripAnchor: function (dt) {
       if (!this.body || !dt) return;
-      const stiff = C.GRIP_ANCHOR_STIFFNESS != null ? C.GRIP_ANCHOR_STIFFNESS : 26;
+      const stiff = C.GRIP_ANCHOR_STIFFNESS != null ? C.GRIP_ANCHOR_STIFFNESS : 22;
       const maxV = C.GRIP_MAX_SPEED != null ? C.GRIP_MAX_SPEED : 3.2;
       const releaseDist = C.GRIP_RELEASE_DIST != null ? C.GRIP_RELEASE_DIST : 0.55;
       const gravCancel = C.GRIP_GRAVITY_CANCEL != null ? C.GRIP_GRAVITY_CANCEL : 0.94;
-      const alpha = 1 - Math.exp(-stiff * dt);
       let any = false;
 
       ['left', 'right'].forEach((key) => {
         const info = this.grabInfo[key];
-        if (!this.isGrabbing[key] || !info || !info.isGripPoint) return;
+        if (!this.isGrabbing[key] || !info || !info.anchorWorld) return;
+        if (!info.isGripPoint) return;
         const hand = key === 'left' ? this.leftHand : this.rightHand;
-        if (!hand || !info.anchorWorld) return;
+        if (!hand) return;
         any = true;
 
         const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
+        let alpha = 1 - Math.exp(-stiff * dt);
+        const maxCorr = C.GRIP_MAX_CORR != null ? C.GRIP_MAX_CORR : 0.045;
+        const release = releaseDist;
+
         this._grabPull.copy(palm).sub(info.anchorWorld);
-        if (this._grabPull.length() > releaseDist) {
+        if (this._grabPull.length() > release) {
           this.releaseGrip(key, hand);
           return;
         }
-
         this._grabLockErr.copy(info.anchorWorld).sub(palm);
         const b = this.body;
         b.wakeUp();
-        b.position.x += this._grabLockErr.x * alpha;
-        b.position.y += this._grabLockErr.y * alpha;
-        b.position.z += this._grabLockErr.z * alpha;
-
-        b.velocity.x = (this._grabLockErr.x * alpha) / dt;
-        b.velocity.y = (this._grabLockErr.y * alpha) / dt;
-        b.velocity.z = (this._grabLockErr.z * alpha) / dt;
+        let dx = this._grabLockErr.x * alpha;
+        let dy = this._grabLockErr.y * alpha;
+        let dz = this._grabLockErr.z * alpha;
+        const clen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (clen > maxCorr) {
+          const s = maxCorr / clen;
+          dx *= s;
+          dy *= s;
+          dz *= s;
+        }
+        b.position.x += dx;
+        b.position.y += dy;
+        b.position.z += dz;
+        b.velocity.x = dx / dt;
+        b.velocity.y = dy / dt;
+        b.velocity.z = dz / dt;
         const spd = Math.sqrt(b.velocity.x * b.velocity.x + b.velocity.y * b.velocity.y + b.velocity.z * b.velocity.z);
         if (spd > maxV) {
           const s = maxV / spd;
@@ -788,64 +1290,495 @@
       });
     },
 
-    applyArmPush: function (dt) {
-      if (!dt) return;
-      const pb = this.body;
-      const bv = pb ? this.readBodyVelocity(this._bodyVel) : new THREE.Vector3();
-      ['left', 'right'].forEach((key) => {
-        if (this.isGrabbing[key] || this.isBraking[key]) return;
-        if (!this.palmTouch[key] || !this._palmReady[key]) return;
-        const hand = key === 'left' ? this.leftHand : this.rightHand;
-        const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
-
-        if (!pb) return;
-        this._relPalmDelta.copy(this.palmDelta[key]);
-        this._relPalmDelta.x -= bv.x * dt;
-        this._relPalmDelta.y -= bv.y * dt;
-        this._relPalmDelta.z -= bv.z * dt;
-        if (this._relPalmDelta.lengthSq() < 1e-8) return;
-        const n = Col.getSurfaceNormal(palm, this.palmTouch[key]);
-        const push = this._relPalmDelta.clone().negate();
-        const into = n.clone().multiplyScalar(push.dot(n));
-        if (into.y < 0) push.sub(into);
-        if (push.lengthSq() < 1e-8) return;
-        pb.wakeUp();
-        pb.velocity.x += push.x * C.ARM_PUSH_GAIN;
-        pb.velocity.y += push.y * C.ARM_PUSH_GAIN;
-        pb.velocity.z += push.z * C.ARM_PUSH_GAIN;
-      });
-    },
-
     /**
-     * Floor grip: slam speed down at grab point; if the hand moves, release → normal palm-skate.
+     * Palm on surface + controller motion: rig follows inverse of tracked palm delta.
+     * Open-hand floor: lift/jump only from arm push (handInto on rel palm delta). No sphere-gap lift.
+     * Fast push: v = sx/dt. Swipe: steer. Flat floor subtracts full body step (no landing bounce).
      */
-    updateFloorGripBrake: function (dt) {
-      if (!this.body || !dt) return;
-      const releaseDist = C.FLOOR_GRIP_RELEASE_DIST != null ? C.FLOOR_GRIP_RELEASE_DIST : 0.1;
-      const brakeF = Math.pow(
-        C.FLOOR_GRIP_BRAKE_FACTOR != null ? C.FLOOR_GRIP_BRAKE_FACTOR : 0.55,
-        dt * 60
-      );
+    applyPalmContactCoupling: function (dt) {
+      if (!this.body || !dt || !window.VRDriftPalmBall) return;
+      if (this.isRailGrabActive()) return;
+
+      const couple =
+        C.PALM_CONTACT_COUPLING != null ? C.PALM_CONTACT_COUPLING : 1;
+      const maxStep =
+        C.PALM_CONTACT_MAX_STEP != null ? C.PALM_CONTACT_MAX_STEP : 0.055;
+      const minInto =
+        C.PALM_CONTACT_MIN_INTO != null ? C.PALM_CONTACT_MIN_INTO : 0.0004;
+      const maxDelta = C.PALM_DELTA_MAX != null ? C.PALM_DELTA_MAX : 0.07;
+      const bv = this.readBodyVelocity(this._bodyVel);
+      const bodySpeed = Math.sqrt(bv.x * bv.x + bv.y * bv.y + bv.z * bv.z);
+      const n = new THREE.Vector3();
+      const bodyStep = new THREE.Vector3();
+      let sx = 0;
+      let sy = 0;
+      let sz = 0;
+      let nActive = 0;
+      let anyFloorGrip = false;
+      let openFloorCoupled = false;
+      let openPushInto = false;
+      let nSumX = 0;
+      let nSumY = 0;
+      let nSumZ = 0;
+      let nSumN = 0;
+      let maxFloorEngage = 0;
+      let anyWallCoupled = false;
+      let openWallCoupled = false;
+      let openWallPush = false;
+      const wallSteerBlend =
+        C.PALM_WALL_SKATE_STEER_BLEND != null ? C.PALM_WALL_SKATE_STEER_BLEND : 0.32;
+      const wallMaxSkateDv =
+        C.PALM_WALL_SKATE_MAX_DV != null ? C.PALM_WALL_SKATE_MAX_DV : 1.05;
+      const staticFloorGap =
+        C.PALM_STATIC_FLOOR_GAP != null ? C.PALM_STATIC_FLOOR_GAP : 0.032;
+      const crawlCouple =
+        C.FLOOR_GRIP_FULL_COUPLE_SPEED != null ? C.FLOOR_GRIP_FULL_COUPLE_SPEED : 1.35;
+      const minSkateTangent =
+        C.PALM_FLOOR_SKATE_MIN_TANGENT != null ? C.PALM_FLOOR_SKATE_MIN_TANGENT : 0.018;
+      const minSkateInto =
+        C.PALM_FLOOR_SKATE_MIN_INTO != null ? C.PALM_FLOOR_SKATE_MIN_INTO : 0.006;
+      const minSkateDrive =
+        C.PALM_FLOOR_SKATE_MIN_DRIVE != null ? C.PALM_FLOOR_SKATE_MIN_DRIVE : 0.02;
+      const maxSkateDv =
+        C.PALM_FLOOR_SKATE_MAX_DV != null ? C.PALM_FLOOR_SKATE_MAX_DV : 0.55;
+      const steerBlend =
+        C.PALM_FLOOR_SKATE_STEER_BLEND != null ? C.PALM_FLOOR_SKATE_STEER_BLEND : 0.22;
+      const inclineNy =
+        C.PALM_FLOOR_SKATE_INCLINE_NY != null ? C.PALM_FLOOR_SKATE_INCLINE_NY : 0.92;
+      const inclineTang =
+        C.PALM_FLOOR_SKATE_INCLINE_TANGENT != null
+          ? C.PALM_FLOOR_SKATE_INCLINE_TANGENT
+          : 0.01;
 
       ['left', 'right'].forEach((key) => {
-        if (!this.isBraking[key]) return;
-        const surf = this.brakeSurface[key];
-        if (!surf || !surf.hasAttribute('drift-floor')) return;
+        if (!this._palmReady[key]) return;
         const hand = key === 'left' ? this.leftHand : this.rightHand;
-        const anchor = this.brakeAnchor[key];
-        if (!hand || !anchor || !anchor.anchorPalm) return;
+        if (!hand) return;
 
-        const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
-        if (palm.distanceTo(anchor.anchorPalm) > releaseDist) {
-          this.releaseFloorGrip(key, true);
+        let coupled = false;
+
+        if (this.palmHadStaticContact(key)) {
+          const walkable = this.resolveWalkablePalmTouch(key, hand, staticFloorGap);
+          if (walkable) this.palmTouch[key] = walkable;
+
+          const onFloor = !!(this.palmTouch[key] && this.palmTouch[key].hasAttribute('drift-floor'));
+          if (onFloor) {
+            coupled = true;
+            const floorGrip = this.palmFloorGripActive(key);
+            let gripScale = 1;
+            if (floorGrip) {
+              anyFloorGrip = true;
+              gripScale = this.updateFloorGripEngage(key, bodySpeed, dt);
+              maxFloorEngage = Math.max(maxFloorEngage, gripScale);
+            }
+            const onOpenFloor =
+              !floorGrip && this.palmTouch[key].hasAttribute('drift-floor');
+            const onFloorPlant = onOpenFloor || floorGrip;
+            if (onOpenFloor) {
+              if (!this._openFloorWasContact[key]) {
+                this._openFloorWasContact[key] = true;
+                const tp = this.getTrackedPalmPos(hand, new THREE.Vector3());
+                this.lastPalmPos[key].copy(tp);
+                this.palmDelta[key].set(0, 0, 0);
+              }
+            } else {
+              this._openFloorWasContact[key] = false;
+            }
+            if (floorGrip) {
+              if (!this._floorGripWasContact[key]) {
+                this._floorGripWasContact[key] = true;
+                const tp = this.getTrackedPalmPos(hand, new THREE.Vector3());
+                this.lastPalmPos[key].copy(tp);
+                this.palmDelta[key].set(0, 0, 0);
+              }
+            } else {
+              this._floorGripWasContact[key] = false;
+            }
+
+            const trackPalm = this.getTrackedPalmPos(hand, new THREE.Vector3());
+            if (window.VRDriftPalmBall.getStaticContactNormal(key, n)) {
+              /* Cannon contact normal */
+            } else {
+              n.copy(Col.getSurfaceNormal(trackPalm, this.palmTouch[key]));
+            }
+
+            const inclineWalk = onFloorPlant && n.y < inclineNy;
+            nSumX += n.x;
+            nSumY += n.y;
+            nSumZ += n.z;
+            nSumN++;
+
+            this._relPalmDelta.copy(this.palmDelta[key]);
+            bodyStep.copy(bv).multiplyScalar(dt);
+            const bodyAlong = n.x * bodyStep.x + n.y * bodyStep.y + n.z * bodyStep.z;
+            if (onFloorPlant && inclineWalk) {
+              this._relPalmDelta.x -= n.x * bodyAlong;
+              this._relPalmDelta.y -= n.y * bodyAlong;
+              this._relPalmDelta.z -= n.z * bodyAlong;
+            } else if (onFloorPlant) {
+              this._relPalmDelta.sub(bodyStep);
+            } else {
+              bodyStep.x -= n.x * bodyAlong;
+              bodyStep.y -= n.y * bodyAlong;
+              bodyStep.z -= n.z * bodyAlong;
+              this._relPalmDelta.sub(bodyStep);
+            }
+
+            let dLen = this._relPalmDelta.length();
+            if (dLen > maxDelta && dLen > 1e-8) {
+              this._relPalmDelta.multiplyScalar(maxDelta / dLen);
+              dLen = maxDelta;
+            }
+
+            const handInto = -(
+              this._relPalmDelta.x * n.x +
+              this._relPalmDelta.y * n.y +
+              this._relPalmDelta.z * n.z
+            );
+
+            if (onFloorPlant) {
+              const nd =
+                this._relPalmDelta.x * n.x +
+                this._relPalmDelta.y * n.y +
+                this._relPalmDelta.z * n.z;
+              const tangX = this._relPalmDelta.x - n.x * nd;
+              const tangY = this._relPalmDelta.y - n.y * nd;
+              const tangZ = this._relPalmDelta.z - n.z * nd;
+              const tangLen = Math.sqrt(tangX * tangX + tangY * tangY + tangZ * tangZ);
+              const tangGate = inclineWalk ? inclineTang : minSkateTangent;
+              if (tangLen < tangGate && handInto < minSkateInto) return;
+              if (handInto >= minSkateInto) {
+                openPushInto = true;
+                if (floorGrip) this._floorGripPushing[key] = true;
+              }
+            } else if (handInto < minInto && dLen < minInto) {
+              return;
+            }
+
+            if (
+              floorGrip &&
+              (bodySpeed > crawlCouple || gripScale < 0.35) &&
+              handInto < minSkateInto
+            ) {
+              return;
+            }
+
+            const coupleScale =
+              floorGrip && handInto >= minSkateInto ? 1 : gripScale;
+            let mx = -this._relPalmDelta.x * couple * coupleScale;
+            let my = -this._relPalmDelta.y * couple * coupleScale;
+            let mz = -this._relPalmDelta.z * couple * coupleScale;
+            const rigInto = mx * n.x + my * n.y + mz * n.z;
+            if (rigInto < 0) {
+              mx -= n.x * rigInto;
+              my -= n.y * rigInto;
+              mz -= n.z * rigInto;
+            }
+
+            sx += mx;
+            sy += my;
+            sz += mz;
+            nActive++;
+            if (onOpenFloor) openFloorCoupled = true;
+            return;
+          }
+        }
+
+        this._openWallWasContact[key] = false;
+        if (coupled || this.palmOnDriftFloor(key, false)) return;
+
+        const wallGap =
+          C.PALM_WALL_TOUCH_GAP != null ? C.PALM_WALL_TOUCH_GAP : 0.008;
+        const wallSurf = this.resolveWallPalmTouch(key, hand, wallGap);
+        if (!wallSurf) {
+          this._wallPlantWasContact[key] = false;
           return;
         }
 
-        const v = this.body.velocity;
-        v.x *= brakeF;
-        v.y *= brakeF;
-        v.z *= brakeF;
-        anchor.lastPalmPos.copy(palm);
+        this.palmTouch[key] = wallSurf;
+        const trackPalm = this.getTrackedPalmPos(hand, new THREE.Vector3());
+        const r = this.palmProbeRadius();
+        if (Col.distanceToSurface(trackPalm, r, wallSurf) > wallGap) {
+          this._wallPlantWasContact[key] = false;
+          return;
+        }
+
+        if (!this._wallPlantWasContact[key]) {
+          this._wallPlantWasContact[key] = true;
+          this.lastPalmPos[key].copy(trackPalm);
+          this.palmDelta[key].set(0, 0, 0);
+        }
+
+        this._openWallWasContact[key] = true;
+        openWallCoupled = true;
+        anyWallCoupled = true;
+
+        n.copy(Col.getSurfaceNormal(trackPalm, wallSurf));
+        nSumX += n.x;
+        nSumY += n.y;
+        nSumZ += n.z;
+        nSumN++;
+
+        const wallCouple =
+          C.PALM_WALL_COUPLE != null ? C.PALM_WALL_COUPLE : couple;
+        /* Hand motion beyond rig/body travel — not body slamming into the wall. */
+        this._relPalmDelta.copy(this.palmDelta[key]);
+        bodyStep.copy(bv).multiplyScalar(dt);
+        this._relPalmDelta.sub(bodyStep);
+
+        let dLen = this._relPalmDelta.length();
+        if (dLen > maxDelta && dLen > 1e-8) {
+          this._relPalmDelta.multiplyScalar(maxDelta / dLen);
+          dLen = maxDelta;
+        }
+
+        const handInto = -(
+          this._relPalmDelta.x * n.x +
+          this._relPalmDelta.y * n.y +
+          this._relPalmDelta.z * n.z
+        );
+        const nd =
+          this._relPalmDelta.x * n.x +
+          this._relPalmDelta.y * n.y +
+          this._relPalmDelta.z * n.z;
+        const tangX = this._relPalmDelta.x - n.x * nd;
+        const tangY = this._relPalmDelta.y - n.y * nd;
+        const tangZ = this._relPalmDelta.z - n.z * nd;
+        const tangLen = Math.sqrt(tangX * tangX + tangY * tangY + tangZ * tangZ);
+        if (tangLen < minSkateTangent && handInto < minSkateInto) return;
+        if (handInto >= minSkateInto) openWallPush = true;
+
+        let mx = -this._relPalmDelta.x * wallCouple;
+        let my = -this._relPalmDelta.y * wallCouple;
+        let mz = -this._relPalmDelta.z * wallCouple;
+        const rigInto = mx * n.x + my * n.y + mz * n.z;
+        if (rigInto < 0) {
+          mx -= n.x * rigInto;
+          my -= n.y * rigInto;
+          mz -= n.z * rigInto;
+        }
+
+        sx += mx;
+        sy += my;
+        sz += mz;
+        nActive++;
+      });
+
+      if (anyFloorGrip) {
+        this.applyFloorGripBrake(dt, bodySpeed);
+      }
+
+      if (nActive < 1) return;
+      sx /= nActive;
+      sy /= nActive;
+      sz /= nActive;
+      let len = Math.sqrt(sx * sx + sy * sy + sz * sz);
+      if (len < 1e-8) return;
+      const wallMaxStep =
+        C.PALM_WALL_MAX_STEP != null ? C.PALM_WALL_MAX_STEP : maxStep;
+      const stepCap =
+        openWallCoupled && !anyFloorGrip && !openFloorCoupled ? wallMaxStep : maxStep;
+      if (len > stepCap && len > 1e-8) {
+        const s = stepCap / len;
+        sx *= s;
+        sy *= s;
+        sz *= s;
+        len = stepCap;
+      }
+
+      const brakeOnly =
+        anyFloorGrip &&
+        !openPushInto &&
+        (bodySpeed > crawlCouple || maxFloorEngage < 0.65);
+      const openSkateOnly =
+        (openFloorCoupled || openWallCoupled) && !anyFloorGrip;
+      const floorGripCouple = anyFloorGrip && !openSkateOnly;
+      const plantCouple = openSkateOnly || floorGripCouple;
+      const plantLaunch = openPushInto && plantCouple && openFloorCoupled;
+
+      this.body.wakeUp();
+      if (!brakeOnly) {
+        if (plantLaunch) {
+          this.body.position.x += sx;
+          this.body.position.y += sy;
+          this.body.position.z += sz;
+          if (dt > 1e-6) {
+            this.body.velocity.x = sx / dt;
+            this.body.velocity.y = sy / dt;
+            this.body.velocity.z = sz / dt;
+          }
+          this._palmSkateActive = true;
+        } else if (plantCouple && openWallCoupled) {
+          const driveGate = minSkateInto;
+          const driveCouple = len >= driveGate;
+          if (driveCouple) {
+            this.body.position.x += sx;
+            this.body.position.y += sy;
+            this.body.position.z += sz;
+          }
+          if (dt > 1e-6 && len >= driveGate) {
+            let cvx = sx / dt;
+            let cvy = sy / dt;
+            let cvz = sz / dt;
+            const capDv =
+              C.PALM_WALL_SKATE_MAX_DV != null
+                ? C.PALM_WALL_SKATE_MAX_DV
+                : this.data.maxSpeed != null
+                  ? this.data.maxSpeed
+                  : 11;
+            const cvLen = Math.sqrt(cvx * cvx + cvy * cvy + cvz * cvz);
+            if (cvLen > capDv && cvLen > 1e-8) {
+              const s = capDv / cvLen;
+              cvx *= s;
+              cvy *= s;
+              cvz *= s;
+            }
+            const v = this.body.velocity;
+            if (openWallPush) {
+              /* Deliberate arm push-off — speed matches hand drive, not inverted body slam. */
+              v.x = cvx;
+              v.y = cvy;
+              v.z = cvz;
+            } else {
+              /* Swipe along wall only — steer tangent; never launch from body impact. */
+              const t =
+                steerBlend * Math.min(1, len / driveGate);
+              v.x += (cvx - v.x) * t;
+              v.y += (cvy - v.y) * t;
+              v.z += (cvz - v.z) * t;
+            }
+            this._palmSkateActive = true;
+            this._palmWallPush = openWallPush;
+          }
+          this.absorbWallBodyImpact(nSumX, nSumY, nSumZ, nSumN, openWallPush);
+        } else if (plantCouple) {
+          const driveGate = minSkateDrive;
+          const driveCouple = len >= driveGate;
+          if (driveCouple) {
+            this.body.position.x += sx;
+            this.body.position.y += sy;
+            this.body.position.z += sz;
+          }
+          if (dt > 1e-6 && len >= driveGate) {
+            let cvx = sx / dt;
+            let cvy = sy / dt;
+            let cvz = sz / dt;
+            if (nSumN > 0) {
+              let nx = nSumX / nSumN;
+              let ny = nSumY / nSumN;
+              let nz = nSumZ / nSumN;
+              const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz);
+              if (nLen > 1e-8) {
+                nx /= nLen;
+                ny /= nLen;
+                nz /= nLen;
+                const nd = cvx * nx + cvy * ny + cvz * nz;
+                cvx -= nx * nd;
+                cvy -= ny * nd;
+                cvz -= nz * nd;
+              }
+            }
+            const capDv = maxSkateDv;
+            const cvLen = Math.sqrt(cvx * cvx + cvy * cvy + cvz * cvz);
+            if (cvLen > capDv && cvLen > 1e-8) {
+              const s = capDv / cvLen;
+              cvx *= s;
+              cvy *= s;
+              cvz *= s;
+            }
+            if (cvLen > 1e-6) {
+              const steerK = steerBlend;
+              const drive = Math.min(1, len / driveGate);
+              const t = steerK * drive;
+              const v = this.body.velocity;
+              v.x += (cvx - v.x) * t;
+              v.y += (cvy - v.y) * t;
+              v.z += (cvz - v.z) * t;
+              this._palmSkateActive = true;
+            }
+          } else if (floorGripCouple) {
+            this.zeroPlantedVerticalVelocity();
+          }
+        } else {
+          this.body.position.x += sx;
+          this.body.position.y += sy;
+          this.body.position.z += sz;
+          if (dt > 1e-6) {
+            this.body.velocity.x = sx / dt;
+            this.body.velocity.y = sy / dt;
+            this.body.velocity.z = sz / dt;
+          }
+        }
+      }
+
+      /* Only skip rig damp/support during an actual upward launch, not idle open-hand plant. */
+      this._palmDrivePush = openPushInto && this.body.velocity.y > 0.12;
+      if (!this._palmDrivePush) {
+        this._palmDrivePush = !!this._palmWallPush;
+      }
+
+      if (openFloorCoupled && !openPushInto) {
+        this.zeroPlantedVerticalVelocity();
+      }
+      this.capVelocity();
+    },
+
+    /** Palm on wall, no arm push: kill motion into the surface (catch/slide, never invert). */
+    absorbWallBodyImpact: function (nSumX, nSumY, nSumZ, nSumN, handPushing) {
+      if (!this.body || handPushing || nSumN < 1) return;
+      let nx = nSumX / nSumN;
+      let ny = nSumY / nSumN;
+      let nz = nSumZ / nSumN;
+      const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (nLen < 1e-8) return;
+      nx /= nLen;
+      ny /= nLen;
+      nz /= nLen;
+      const v = this.body.velocity;
+      const vn = v.x * nx + v.y * ny + v.z * nz;
+      if (vn >= -0.02) return;
+      v.x -= nx * vn;
+      v.y -= ny * vn;
+      v.z -= nz * vn;
+    },
+
+    /** Grip + floor: ease speed down (m/s²); stronger when moving faster — never snap v to zero. */
+    applyFloorGripBrake: function (dt, bodySpeed) {
+      if (!this.body || !dt) return;
+      let gripCount = 0;
+      ['left', 'right'].forEach((key) => {
+        if (this.palmFloorGripActive(key)) gripCount++;
+      });
+      if (gripCount < 1) return;
+
+      const v = this.body.velocity;
+      const speed =
+        bodySpeed != null
+          ? bodySpeed
+          : Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+      if (speed < 0.04) return;
+
+      const decel =
+        C.FLOOR_GRIP_MAX_DECEL != null ? C.FLOOR_GRIP_MAX_DECEL : 16;
+      const shed = decel * dt;
+      const scale = Math.max(0, (speed - shed) / speed);
+      this.body.wakeUp();
+      v.x *= scale;
+      v.y *= scale;
+      v.z *= scale;
+    },
+
+    applyArmPush: function () {},
+
+    applyPalmSurfaceLocomotion: function () {},
+
+    updatePhysPalmKinematics: function () {
+      if (!window.VRDriftPalmBall) return;
+      const pos = new THREE.Vector3();
+      ['left', 'right'].forEach((key) => {
+        if (!window.VRDriftPalmBall.getPalmWorldPosition(key, pos)) return;
+        this.lastPhysPalmPos[key].copy(pos);
+        this._physPalmReady[key] = true;
       });
     },
 
@@ -867,17 +1800,17 @@
     },
 
     updateHandKinematics: function (dt) {
+      const q = new THREE.Quaternion();
       ['left', 'right'].forEach((key) => {
         const hand = key === 'left' ? this.leftHand : this.rightHand;
         if (!hand) return;
         const cur = new THREE.Vector3();
         hand.object3D.getWorldPosition(cur);
-        const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
+        const palm = new THREE.Vector3();
+        this.getTrackedPalmPos(hand, palm);
         if (this._palmReady[key] && dt > 0) {
           this.palmDelta[key].subVectors(palm, this.lastPalmPos[key]);
           this.handVel[key].copy(this.palmDelta[key]).divideScalar(dt);
-          const bv = this.readBodyVelocity(this._bodyVel);
-          this.handVel[key].sub(bv);
         } else {
           this.palmDelta[key].set(0, 0, 0);
           this.handVel[key].set(0, 0, 0);
@@ -889,45 +1822,90 @@
     },
 
     detectPalmTouches: function () {
+      const gap = this.palmTouchMaxGap();
+      const floorGap =
+        C.PALM_FLOOR_TOUCH_MAX_GAP != null ? C.PALM_FLOOR_TOUCH_MAX_GAP : 0.012;
+      const staticFloorGap =
+        C.PALM_STATIC_FLOOR_GAP != null ? C.PALM_STATIC_FLOOR_GAP : 0.032;
       ['left', 'right'].forEach((key) => {
-        if (this.isGrabbing[key] || this.isBraking[key]) return;
         const hand = key === 'left' ? this.leftHand : this.rightHand;
         if (!hand) return;
-        this.palmTouch[key] = this.findNearestSurface(hand, '[drift-surface]');
+        if (this.palmHadStaticContact(key)) {
+          const floorHit = this.resolveWalkablePalmTouch(key, hand, staticFloorGap);
+          if (floorHit) {
+            this.palmTouch[key] = floorHit;
+            return;
+          }
+          const wallHit = this.resolveWallPalmTouch(key, hand, staticFloorGap);
+          if (wallHit) {
+            this.palmTouch[key] = wallHit;
+            return;
+          }
+          const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
+          this.palmTouch[key] = this.findNearestSurfaceAtPoint(
+            palm,
+            '[drift-surface]',
+            staticFloorGap,
+            0
+          );
+          return;
+        }
+        const wallNear = this.resolveWallPalmTouch(key, hand, floorGap);
+        if (wallNear) {
+          this.palmTouch[key] = wallNear;
+          return;
+        }
+        const floor = this.resolveWalkablePalmTouch(key, hand, floorGap);
+        if (floor) {
+          this.palmTouch[key] = floor;
+          return;
+        }
+        if (this.isGrabbing[key] || this.isBraking[key]) return;
+        this.palmTouch[key] = null;
       });
     },
 
-    applyPalmSkate: function (dt) {
-      if (!dt) return;
-      const pb = this.body;
-      ['left', 'right'].forEach((key) => {
-        if (this.isGrabbing[key] || this.isBraking[key] || !this.palmTouch[key]) return;
-        const hand = key === 'left' ? this.leftHand : this.rightHand;
-        if (!hand) return;
-        const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
-        const n = Col.getSurfaceNormal(palm, this.palmTouch[key]);
-        if (pb) {
-          const hv = this.handVel[key];
-          const tangent = hv.clone().sub(n.clone().multiplyScalar(hv.dot(n)));
-          if (tangent.lengthSq() < 0.0004) return;
-          pb.wakeUp();
-          const v = pb.velocity;
-          v.x += tangent.x * C.SKATE_GAIN * dt;
-          v.y += tangent.y * C.SKATE_GAIN * dt;
-          v.z += tangent.z * C.SKATE_GAIN * dt;
-        }
-      });
+    applyPalmSkate: function () {
+      /* Replaced by VRDriftPalmBall.drivePlayerFromPalms after physics step. */
     },
 
     isActivelySkating: function () {
+      const coastSpeed =
+        C.PALM_FLOOR_SKATE_COAST_SPEED != null ? C.PALM_FLOOR_SKATE_COAST_SPEED : 0.35;
+      const wallCoast =
+        C.PALM_WALL_COAST_SPEED != null ? C.PALM_WALL_COAST_SPEED : 0.32;
+      const bv = this.readBodyVelocity(this._bodyVel);
+      const bodySpeed = Math.sqrt(bv.x * bv.x + bv.y * bv.y + bv.z * bv.z);
+
       return ['left', 'right'].some((key) => {
-        if (this.isGrabbing[key] || this.isBraking[key] || !this.palmTouch[key]) return false;
+        if (this.isGrabbing[key] || this.isBraking[key]) return false;
+
+        if (
+          this.palmOnStaticWall(key, false) &&
+          (this._wallPlantWasContact[key] || this._openWallWasContact[key]) &&
+          (bodySpeed >= wallCoast || this.handVel[key].lengthSq() > 0.0012)
+        ) {
+          return true;
+        }
+
+        if (!this.palmTouch[key]) return false;
+
+        if (
+          !this.gripHeld[key] &&
+          this.palmTouch[key].hasAttribute('drift-floor') &&
+          this.palmHadStaticContact(key) &&
+          bodySpeed >= coastSpeed
+        ) {
+          return true;
+        }
+
+        if (!this.palmHadStaticContact(key)) return false;
         const hand = key === 'left' ? this.leftHand : this.rightHand;
-        if (!hand) return false;
+        if (!hand || !this._physPalmReady[key]) return false;
         const palm = this.getPalmWorldPos(hand, new THREE.Vector3());
         const n = Col.getSurfaceNormal(palm, this.palmTouch[key]);
-        const hv = this.handVel[key];
-        const tangent = hv.clone().sub(n.clone().multiplyScalar(hv.dot(n)));
+        const move = palm.clone().sub(this.lastPhysPalmPos[key]);
+        const tangent = move.sub(n.clone().multiplyScalar(move.dot(n)));
         return tangent.lengthSq() >= 0.0004;
       });
     },
@@ -936,7 +1914,7 @@
       if (!this.body || !dt) return;
       if (this.isActivelySkating()) return;
       if (this.thrusterActive.left || this.thrusterActive.right) return;
-      if (this.isGrabbing.left || this.isGrabbing.right || this.isRailGrabActive()) return;
+      if (this.isAnyGrabActive()) return;
       const f = Math.pow(C.AIR_DAMPING != null ? C.AIR_DAMPING : 0.998, dt * 60);
       const v = this.body.velocity;
       v.x *= f;
@@ -966,7 +1944,7 @@
     },
 
     cancelVelocityIntoGround: function () {
-      if (!this.body || !this.grounded) return;
+      if (!this.body || !this.grounded || this.isAnyGrabActive()) return;
       const v = this.body.velocity;
       const n = this.groundNormal;
       const into = v.x * n.x + v.y * n.y + v.z * n.z;
@@ -981,7 +1959,6 @@
       ['left', 'right'].forEach((key) => {
         const hand = key === 'left' ? this.leftHand : this.rightHand;
         if (!hand || !this.gripHeld[key]) return;
-        if (this._floorGripLockout[key]) return;
         if (this.isGrabbing[key]) return;
 
         const gripSurf = this.findNearestGrip(hand);
@@ -990,7 +1967,12 @@
           return;
         }
 
-        const surf = this.findNearestSurface(hand, '[drift-surface]');
+        if (!this.palmHadStaticContact(key)) return;
+        const surf = this.findNearestSurface(
+          hand,
+          '[drift-surface]',
+          this.palmTouchMaxGap()
+        );
         if (surf && !surf.hasAttribute('drift-floor')) {
           this.isBraking[key] = true;
           this.brakeSurface[key] = surf;
@@ -1017,7 +1999,9 @@
           left: !!this.palmTouch.left || !!this.gameBallContact.left,
           right: !!this.palmTouch.right || !!this.gameBallContact.right,
           grabL: this.isGrabbing.left,
-          grabR: this.isGrabbing.right
+          grabR: this.isGrabbing.right,
+          floorL: this.isFloorGrab('left'),
+          floorR: this.isFloorGrab('right')
         });
       }
     },
@@ -1055,26 +2039,40 @@
     frame: function (dtMs) {
       if (!this.rig) return;
       const dt = Math.min((dtMs || 16) / 1000, 0.033);
+      this._palmSkateActive = false;
+      this._palmWallPush = false;
       if (this.menuBlocks()) return;
+
+      if (!this.isVrLocomotionActive()) {
+        if (
+          window.VRDriftPalmBall &&
+          window.VRDriftPalmBall.showPalmSphereDebug &&
+          window.VRDriftPalmBall.showPalmSphereDebug()
+        ) {
+          window.VRDriftPalmBall.sync(
+            dt,
+            this.getHandColliderPose.bind(this),
+            this.leftHand,
+            this.rightHand,
+            this.camera,
+            null
+          );
+          window.VRDriftPalmBall.syncHandCollisionDebug({});
+        }
+        this.holdDesktopBody();
+        this.updateSpeedHud();
+        return;
+      }
+
+      if (this._pendingVrSnap) {
+        this.snapBodyToHeadset();
+        this._pendingVrSnap = false;
+      }
 
       this.applyRotation(dt);
       this.updateHandKinematics(dt);
-      this.updatePendingFloorGrip();
-      this.updateFloorGripBrake(dt);
-      this.detectPalmTouches();
-      this.updateGripHeld();
-      this.clearBodyWrench();
-      this.applyArmPush(dt);
-      this.applyPalmSkate(dt);
-      this.applyCoastDamping(dt);
-      this.applyGripAnchor(dt);
-      this.applyBrakePull(dt);
-      this.applyThrusterForces(dt);
-      this.applyBraking(dt);
-      this.cancelVelocityIntoGround();
-      this.capVelocity();
-
       if (window.VRDriftPalmBall) {
+        const palmOpts = this.getPalmSyncOpts();
         const capsule = this.getBodyCapsuleSyncOpts();
         window.VRDriftPalmBall.sync(
           dt,
@@ -1082,20 +2080,76 @@
           this.leftHand,
           this.rightHand,
           this.camera,
-          capsule
+          capsule,
+          palmOpts
         );
       }
+      this.updatePendingFloorGrip();
+      this.updateGripHeld();
+      this.clearBodyWrench();
+      this.applyPalmFloorSupportForces();
+      this.applyCoastDamping(dt);
+      this.applyBrakePull(dt);
+      this.applyThrusterForces(dt);
+      this.applyBraking(dt);
+      this.detectGround();
+      this.cancelVelocityIntoGround();
+      this.capVelocity();
 
       if (Phys && Phys.stepWorld) Phys.stepWorld(dt);
 
+      if (window.VRDriftPalmBall) {
+        window.VRDriftPalmBall.finishPhysicsStep();
+        window.VRDriftPalmBall.snapPalmsToHands(
+          this.getHandColliderPose.bind(this),
+          this.leftHand,
+          this.rightHand,
+          (key) => this.palmOnDriftFloor(key, false)
+        );
+        const gameBody =
+          window.VRDriftGameBall && window.VRDriftGameBall.getBody
+            ? window.VRDriftGameBall.getBody()
+            : null;
+        if (gameBody) {
+          window.VRDriftPalmBall.driveGameBallFromPalms(gameBody, dt);
+        }
+      }
+
       if (window.VRDriftGameBall) window.VRDriftGameBall.syncAfterPhysics();
 
+      if (window.VRDriftPalmBall) {
+        this.detectPalmTouches();
+        this.applyGripAnchor(dt);
+        window.VRDriftPalmBall.constrainPalms(this.getPalmSyncOpts());
+        this.updatePhysPalmKinematics();
+      } else {
+        this.detectPalmTouches();
+      }
       this.detectGameBallContact();
       if (window.VRDriftHaptics) window.VRDriftHaptics.update(this, dt);
       this.stabilizeBody();
       this.dampIdleSpin(dt);
       this.detectGround();
       this.syncPlayerFromPhysicsBody();
+      this.resolvePlayerCollisions();
+      if (window.VRDriftPalmBall) {
+        this.applyPalmContactCoupling(dt);
+        this.applyWallPalmSolidContact();
+        this.syncPlayerFromPhysicsBody();
+      }
+      this.applyPalmRigSupport();
+      this.dampPalmPlantedBody();
+      if (window.VRDriftPalmBall) window.VRDriftPalmBall.enforcePalmsAboveFloor();
+      if (window.VRDriftPalmBall) {
+        window.VRDriftPalmBall.snapPalmsToHands(
+          this.getHandColliderPose.bind(this),
+          this.leftHand,
+          this.rightHand,
+          (key) => this.palmOnDriftFloor(key, false)
+        );
+      }
+      this.syncPlayerFromPhysicsBody();
+      this.constrainBodyToFloor();
       this.resolveCeilingOnly();
       this.ensureHandsVisible();
       this.syncPalmGlow();
@@ -1111,6 +2165,7 @@
 
   /* Tick after #local-body IK so palm colliders match visible avatar hands. */
   AFRAME.registerComponent('drift-locomotion-tick', {
+    tickOrder: 2,
     tick: function (t, dtMs) {
       const player = document.querySelector('#player');
       if (player && player.components['drift-locomotion']) {

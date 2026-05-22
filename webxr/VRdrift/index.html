@@ -23,22 +23,25 @@
       })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/FBXLoader.js"></script>
-    <script src="js/config.js?v=20250522i"></script>
-    <script src="js/soccer-ball-texture.js?v=20250522i"></script>
-    <script src="js/collision-utils.js?v=20250522i"></script>
-    <script src="js/collision-resolve.js?v=20250522i"></script>
-    <script src="js/physics-world.js?v=20250522i"></script>
-    <script src="js/drift-grip.js?v=20250522i"></script>
-    <script src="js/mixamo-body-avatar.js?v=20250522i"></script>
-    <script src="js/drift-haptics.js?v=20250522i"></script>
-    <script src="js/drift-game-ball.js?v=20250522i"></script>
-    <script src="js/drift-hand-visual.js?v=20250522i"></script>
-    <script src="js/drift-palm-ball.js?v=20250522i"></script>
-    <script src="js/drift-locomotion.js?v=20250522i"></script>
+    <script src="js/config.js?v=20250523i"></script>
+    <script src="js/soccer-ball-texture.js?v=20250523i"></script>
+    <script src="js/collision-utils.js?v=20250523i"></script>
+    <script src="js/collision-resolve.js?v=20250523i"></script>
+    <script src="js/physics-world.js?v=20250523i"></script>
+    <script src="js/drift-grip.js?v=20250523i"></script>
+    <script src="js/drift-palm-frame.js?v=20250523i"></script>
+    <script src="js/mixamo-body-avatar.js?v=20250523i"></script>
+    <script src="js/drift-haptics.js?v=20250523i"></script>
+    <script src="js/drift-game-ball.js?v=20250523i"></script>
+    <script src="js/drift-hand-visual.js?v=20250523i"></script>
+    <script src="js/drift-palm-ball.js?v=20250523i"></script>
+    <script src="js/drift-locomotion.js?v=20250523i"></script>
     <script src="js/network.js"></script>
-    <script src="js/ui.js"></script>
-    <script src="js/drift-shadows.js?v=20250522i"></script>
-    <script src="js/arena.js?v=20250522i"></script>
+    <script src="js/forward-raycaster.js?v=20250523i"></script>
+    <script src="js/ui.js?v=20250523i"></script>
+    <script src="js/drift-shadows.js?v=20250523i"></script>
+    <script src="js/drift-floor-grid.js?v=20250523i"></script>
+    <script src="js/arena.js?v=20250523i"></script>
     <style>
       body { margin: 0; background: #0a0e14; }
       #enter-vr-hint {
@@ -70,7 +73,7 @@
       <a-assets></a-assets>
 
       <!-- Station hub: floor + walls + ramps + grip rails (only rails are drift-grip) -->
-      <a-entity id="arena">
+      <a-entity id="arena" drift-floor-grid="cellM: 1; size: 48">
         <!-- Interior lighting (sun was outside the 48×48 box — arena looked black inside) -->
         <a-entity light="type: ambient; color: #c8d4ee; intensity: 0.5"></a-entity>
         <a-entity
@@ -101,17 +104,26 @@
         <a-box position="-24 8 0" width="1" height="16" depth="48" color="#1e2838" drift-surface drift-wall></a-box>
         <a-box position="24 8 0" width="1" height="16" depth="48" color="#1e2838" drift-surface drift-wall></a-box>
 
-        <!-- Low-G ramp -->
-        <a-box
-          position="0 0.5 -14"
-          width="14"
-          height="0.4"
-          depth="10"
-          rotation="-18 0 0"
-          color="#3d4a5c"
-          drift-surface
-          drift-floor
-        ></a-box>
+        <!-- Low-G ramp: fill slab = walls; thin deck = walkable floor (no Y-teleport up the slope face) -->
+        <a-entity position="0 -1.69 -13.29" rotation="-18 0 0">
+          <a-box
+            width="14"
+            height="5"
+            depth="10"
+            color="#3d4a5c"
+            drift-surface
+            drift-wall
+          ></a-box>
+          <a-box
+            position="0 2.425 0"
+            width="14"
+            height="0.15"
+            depth="10"
+            color="#4a5a6e"
+            drift-surface
+            drift-floor
+          ></a-box>
+        </a-entity>
 
         <!-- Parkour block -->
         <a-box position="-8 2 -6" width="6" height="4" depth="6" color="#445566" drift-surface drift-wall></a-box>
@@ -171,7 +183,7 @@
         <a-entity
           id="arena-game-ball"
           position="0 0.3 -3.5"
-          drift-game-ball="color: #ffdd44; mass: 9"
+          drift-game-ball="color: #ffdd44; mass: 3"
         ></a-entity>
       </a-entity>
 
@@ -186,7 +198,7 @@
             <a-entity id="hud-status" position="0 0.05 -0.6" text="value: ; align: center; width: 0.9; color: #cccccc"></a-entity>
 
             <a-entity id="game-menu" position="0 0 -0.85" visible="false">
-              <a-plane width="1.1" height="0.65" color="#000000" material="opacity: 0.88; transparent: true" position="0 0 -0.01"></a-plane>
+              <a-plane width="1.1" height="0.78" color="#000000" material="opacity: 0.88; transparent: true" position="0 -0.04 -0.01"></a-plane>
               <a-text value="VR DRIFT" position="0 0.24 0" align="center" width="1" color="#88ccff"></a-text>
               <a-entity id="menu-solo" position="-0.22 0.08 0" geometry="primitive: plane; width: 0.28; height: 0.07" material="color: #224466" class="clickable">
                 <a-text value="SOLO" align="center" width="0.8" position="0 0 0.01" color="#fff"></a-text>
@@ -205,6 +217,14 @@
               <a-entity id="menu-lobby-plus" position="0.12 -0.14 0" geometry="primitive: plane; width: 0.05; height: 0.05" material="color: #335533" class="clickable">
                 <a-text value="+" align="center" width="1" position="0 0 0.01"></a-text>
               </a-entity>
+              <a-text value="Rig height" position="-0.28 -0.24 0" align="left" width="0.4" color="#aaa"></a-text>
+              <a-entity id="menu-rig-minus" position="-0.05 -0.24 0" geometry="primitive: plane; width: 0.05; height: 0.05" material="color: #553333" class="clickable">
+                <a-text value="-" align="center" width="1" position="0 0 0.01"></a-text>
+              </a-entity>
+              <a-text id="menu-rig-num" value="0.0 m" position="0.04 -0.24 0" align="center" width="0.55" color="#fff"></a-text>
+              <a-entity id="menu-rig-plus" position="0.12 -0.24 0" geometry="primitive: plane; width: 0.05; height: 0.05" material="color: #335533" class="clickable">
+                <a-text value="+" align="center" width="1" position="0 0 0.01"></a-text>
+              </a-entity>
             </a-entity>
 
           </a-entity>
@@ -214,6 +234,7 @@
             visible="false"
             custom-hand-controls
             hand-controls="hand: left; handModelStyle: lowPoly"
+            forward-raycaster="hand: left; lineColor: #ffffff; maxLength: 10; enabled: false; objects: .clickable"
           >
             <!-- Palm anchor only (invisible) — game-ball collider wireframes are separate -->
             <a-sphere
@@ -230,6 +251,7 @@
             visible="false"
             custom-hand-controls
             hand-controls="hand: right; handModelStyle: lowPoly"
+            forward-raycaster="hand: right; lineColor: #ffffff; maxLength: 10; enabled: false; objects: .clickable"
           >
             <a-sphere
               id="right-palm"
@@ -243,13 +265,13 @@
         </a-entity>
       </a-entity>
 
-      <a-entity id="hand-collision-debug"></a-entity>
+      <a-entity id="hand-collision-debug" visible="true"></a-entity>
 
       <!-- Mixamo Y Bot IK body (root-level, like BattleVR) -->
       <a-entity
         id="local-body"
         visible="true"
-        mixamo-body-avatar="playerId: local; color: #44aaff; hideHead: true; lod: high; modelPath: ../assets/Y Bot.fbx"
+        mixamo-body-avatar="playerId: local; color: #44aaff; hideHead: true; hideBelowGut: true; lod: high; modelPath: ../assets/Y Bot.fbx"
       ></a-entity>
 
       <!-- After avatar IK + hand-controls so palm colliders match visible mesh hands -->
