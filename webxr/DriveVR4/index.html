@@ -1737,7 +1737,7 @@
 
                     updateChaseVehicles(dt);
 
-                    if (pendingInitialCitySpawn && vrRunnerCityReady) {
+                    if (pendingInitialCitySpawn && vrRunnerCityReady && isCityDrivePhysicsReady()) {
                         pendingInitialCitySpawn = false;
                         applyDefaultPlayerCitySpawn();
                     }
@@ -8928,6 +8928,13 @@
                 }
             }
 
+            /** Free-roam spawn needs Bullet street bodies under the car or it falls through to the y=0 fallback. */
+            function isCityDrivePhysicsReady() {
+                if (vrRunnerCityPhysicsBuilding) return false;
+                if (vrRunnerCityPhysicsPending.length) return false;
+                return vrRunnerCityPhysicsBodies.length > 0;
+            }
+
             /** Up-facing city tris → static Bullet meshes so wheel rays get traction (not just BVH snap). */
             function addCityMeshWalkablePhysics(mesh) {
                 if (!mesh || !mesh.geometry || !mesh.geometry.attributes.position) return 0;
@@ -9007,8 +9014,7 @@
                         console.log(
                             '✅ City drive physics —',
                             vrRunnerCityPhysicsBodies.length,
-                            'walkable mesh bodies (up-facing tris only)',
-                            detectQuest() ? '(Quest: fallback y=0 plane kept for gaps)' : ''
+                            'walkable mesh bodies (up-facing tris only)'
                         );
                         if (driveFallbackGroundBody) {
                             removeDriveFallbackGroundPhysics();
@@ -9018,14 +9024,14 @@
                 }
                 vrRunnerCityPhysicsBuilding = true;
                 var isQuest = detectQuest();
-                var perFrame = isQuest ? 4 : 2;
+                var perFrame = isQuest ? 12 : 6;
                 var end = Math.min(perFrame, vrRunnerCityPhysicsPending.length);
                 var addedTris = 0;
                 for (var i = 0; i < end; i++) {
                     var mesh = vrRunnerCityPhysicsPending.shift();
                     addedTris += addCityMeshWalkablePhysics(mesh);
                 }
-                if (addedTris > 0 && (vrRunnerCityPhysicsBodies.length & 7) === 0) {
+                if (addedTris > 0 && (vrRunnerCityPhysicsBodies.length & 31) === 0) {
                     console.log('🔧 City drive physics…', vrRunnerCityPhysicsBodies.length, 'bodies');
                 }
                 requestAnimationFrame(processCityWalkablePhysicsQueue);
