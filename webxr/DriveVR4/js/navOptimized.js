@@ -23,6 +23,17 @@ function sortedIndexOf(sortedIdx, cellIdx) {
     return -1;
 }
 
+function sortedLowerBound(sortedIdx, cellIdx) {
+    var lo = 0;
+    var hi = sortedIdx.length;
+    while (lo < hi) {
+        var mid = (lo + hi) >>> 1;
+        if (sortedIdx[mid] < cellIdx) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
 function sortedInsertPos(sortedIdx, cellIdx) {
     var lo = 0;
     var hi = sortedIdx.length;
@@ -909,8 +920,107 @@ export function paintNavMapPixels(px, grid, minGroundY) {
 }
 
 /**
- * Paint a local nav window straight onto a 2D canvas (minimap HUD / VR).
- * Does not need the full-grid texture used by the world overlay.
+ * Build minimap terrain as one ImageData (single putImageData — no thousands of fillRect).
+ */
+export function paintNavMapRegionImageData(grid, centerIx, centerIz, cellR, destW, destH) {
+    var w = grid.gridW;
+    var h = grid.gridH;
+    var mainId = grid.largestComponentId;
+    var ix0 = Math.max(0, centerIx - cellR);
+    var ix1 = Math.min(w - 1, centerIx + cellR);
+    var iz0 = Math.max(0, centerIz - cellR);
+    var iz1 = Math.min(h - 1, centerIz + cellR);
+    var cells = cellR * 2 + 1;
+    var minIdx = iz0 * w + ix0;
+    var maxIdx = iz1 * w + ix1;
+    var nPix = destW * destH;
+    var data = new Uint8ClampedArray(nPix * 4);
+    for (var bi = 0; bi < nPix; bi++) {
+        var bo = bi * 4;
+        data[bo] = 28;
+        data[bo + 1] = 28;
+        data[bo + 2] = 34;
+        data[bo + 3] = 242;
+    }
+
+    function fillCell(ix, iz, r, g, b, a) {
+        var x0 = Math.floor(((ix - centerIx + cellR) * destW) / cells);
+        var x1 = Math.floor(((ix - centerIx + cellR + 1) * destW) / cells);
+        var y0 = Math.floor(((iz - centerIz + cellR) * destH) / cells);
+        var y1 = Math.floor(((iz - centerIz + cellR + 1) * destH) / cells);
+        if (x1 <= x0) x1 = x0 + 1;
+        if (y1 <= y0) y1 = y0 + 1;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > destW) x1 = destW;
+        if (y1 > destH) y1 = destH;
+        for (var py = y0; py < y1; py++) {
+            var row = py * destW;
+            for (var px = x0; px < x1; px++) {
+                var o = (row + px) * 4;
+                data[o] = r;
+                data[o + 1] = g;
+                data[o + 2] = b;
+                data[o + 3] = a;
+            }
+        }
+    }
+
+    if (!grid.sparse && grid.walkable) {
+        for (var diz = iz0; diz <= iz1; diz++) {
+            for (var dix = ix0; dix <= ix1; dix++) {
+                var didx = navCellIndex(grid, dix, diz);
+                if (grid.water && grid.water[didx]) {
+                    fillCell(dix, diz, 50, 140, 255, 217);
+                } else if (grid.walkable[didx]) {
+                    var isMain = !mainId || (grid.labels && grid.labels[didx] === mainId);
+                    fillCell(dix, diz, isMain ? 0 : 170, isMain ? 255 : 210, isMain ? 110 : 70, isMain ? 184 : 140);
+                }
+            }
+        }
+        return new ImageData(data, destW, destH);
+    }
+
+    if (grid.waterBitmap) {
+        var bm = grid.waterBitmap;
+        for (var wiz = iz0; wiz <= iz1; wiz++) {
+            for (var wix = ix0; wix <= ix1; wix++) {
+                var widx = navCellIndex(grid, wix, wiz);
+                if (bm[widx >> 3] & (1 << (widx & 7))) {
+                    fillCell(wix, wiz, 50, 140, 255, 217);
+                }
+            }
+        }
+    }
+
+    if (grid.greyIdx && grid.greyIdx.length) {
+        var gi0 = sortedLowerBound(grid.greyIdx, minIdx);
+        for (var gi = gi0; gi < grid.greyIdx.length; gi++) {
+            var gidx = grid.greyIdx[gi];
+            if (gidx > maxIdx) break;
+            fillCell(gidx % w, (gidx / w) | 0, 120, 125, 135, 199);
+        }
+    }
+
+    if (grid.walkIdx && grid.walkIdx.length) {
+        var wi0 = sortedLowerBound(grid.walkIdx, minIdx);
+        for (var wi = wi0; wi < grid.walkIdx.length; wi++) {
+            var widx = grid.walkIdx[wi];
+            if (widx > maxIdx) break;
+            var isMain = !mainId || grid.walkLabel[wi] === mainId;
+            if (isMain) {
+                fillCell(widx % w, (widx / w) | 0, 0, 255, 110, 184);
+            } else {
+                fillCell(widx % w, (widx / w) | 0, 170, 210, 70, 140);
+            }
+        }
+    }
+
+    return new ImageData(data, destW, destH);
+}
+
+/**
+ * Paint a local nav window onto a 2D canvas (legacy; prefer paintNavMapRegionImageData for HUD).
  */
 export function paintNavMapRegion(ctx, grid, minGroundY, centerIx, centerIz, cellR, destX, destY, destSize) {
     var w = grid.gridW;
@@ -923,26 +1033,76 @@ export function paintNavMapRegion(ctx, grid, minGroundY, centerIx, centerIz, cel
     var cells = cellR * 2 + 1;
     var cellPx = destSize / cells;
     var pad = cellPx < 2 ? 0.5 : 0;
+    var minIdx = iz0 * w + ix0;
+    var maxIdx = iz1 * w + ix1;
 
     ctx.fillStyle = 'rgba(28,28,34,0.95)';
     ctx.fillRect(destX, destY, destSize, destSize);
 
-    for (var iz = iz0; iz <= iz1; iz++) {
-        for (var ix = ix0; ix <= ix1; ix++) {
-            var flags = navGetCellFlags(grid, navCellIndex(grid, ix, iz));
-            var px = destX + (ix - centerIx + cellR) * cellPx;
-            var py = destY + (iz - centerIz + cellR) * cellPx;
-            if (flags.water) {
-                ctx.fillStyle = 'rgba(50,140,255,0.85)';
-            } else if (flags.grey) {
-                ctx.fillStyle = 'rgba(120,125,135,0.78)';
-            } else if (flags.walkable) {
-                var isMain = !mainId || flags.label === mainId;
-                ctx.fillStyle = isMain ? 'rgba(0,255,110,0.72)' : 'rgba(170,210,70,0.55)';
-            } else {
-                continue;
+    function cellPxAt(ix, iz) {
+        return {
+            x: destX + (ix - centerIx + cellR) * cellPx,
+            y: destY + (iz - centerIz + cellR) * cellPx
+        };
+    }
+
+    if (!grid.sparse && grid.walkable) {
+        for (var iz = iz0; iz <= iz1; iz++) {
+            for (var ix = ix0; ix <= ix1; ix++) {
+                var idx = navCellIndex(grid, ix, iz);
+                var p = cellPxAt(ix, iz);
+                if (grid.water && grid.water[idx]) {
+                    ctx.fillStyle = 'rgba(50,140,255,0.85)';
+                } else if (grid.walkable[idx]) {
+                    var isMain = !mainId || (grid.labels && grid.labels[idx] === mainId);
+                    ctx.fillStyle = isMain ? 'rgba(0,255,110,0.72)' : 'rgba(170,210,70,0.55)';
+                } else {
+                    continue;
+                }
+                ctx.fillRect(p.x, p.y, cellPx + pad, cellPx + pad);
             }
-            ctx.fillRect(px, py, cellPx + pad, cellPx + pad);
+        }
+        return;
+    }
+
+    if (grid.waterBitmap) {
+        var bm = grid.waterBitmap;
+        for (var wiz = iz0; wiz <= iz1; wiz++) {
+            for (var wix = ix0; wix <= ix1; wix++) {
+                var widx = navCellIndex(grid, wix, wiz);
+                if (bm[widx >> 3] & (1 << (widx & 7))) {
+                    var wp = cellPxAt(wix, wiz);
+                    ctx.fillStyle = 'rgba(50,140,255,0.85)';
+                    ctx.fillRect(wp.x, wp.y, cellPx + pad, cellPx + pad);
+                }
+            }
+        }
+    }
+
+    if (grid.greyIdx && grid.greyIdx.length) {
+        var gi0 = sortedLowerBound(grid.greyIdx, minIdx);
+        for (var gi = gi0; gi < grid.greyIdx.length; gi++) {
+            var gidx = grid.greyIdx[gi];
+            if (gidx > maxIdx) break;
+            var gix = gidx % w;
+            var giz = (gidx / w) | 0;
+            var gp = cellPxAt(gix, giz);
+            ctx.fillStyle = 'rgba(120,125,135,0.78)';
+            ctx.fillRect(gp.x, gp.y, cellPx + pad, cellPx + pad);
+        }
+    }
+
+    if (grid.walkIdx && grid.walkIdx.length) {
+        var wi0 = sortedLowerBound(grid.walkIdx, minIdx);
+        for (var wi = wi0; wi < grid.walkIdx.length; wi++) {
+            var widx = grid.walkIdx[wi];
+            if (widx > maxIdx) break;
+            var ix = widx % w;
+            var iz = (widx / w) | 0;
+            var pp = cellPxAt(ix, iz);
+            var isMain = !mainId || grid.walkLabel[wi] === mainId;
+            ctx.fillStyle = isMain ? 'rgba(0,255,110,0.72)' : 'rgba(170,210,70,0.55)';
+            ctx.fillRect(pp.x, pp.y, cellPx + pad, cellPx + pad);
         }
     }
 }

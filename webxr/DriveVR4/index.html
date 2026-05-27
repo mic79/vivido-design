@@ -399,6 +399,7 @@
         navGetFloorYAt,
         paintNavMapPixels,
         paintNavMapRegion,
+        paintNavMapRegionImageData,
         findCityNavPathWorldSparse,
         packSparseGridToCompactBinary,
         packSparseGridToSlimBinary,
@@ -457,6 +458,7 @@
         navGetFloorYAt: navGetFloorYAt,
         paintNavMapPixels: paintNavMapPixels,
         paintNavMapRegion: paintNavMapRegion,
+        paintNavMapRegionImageData: paintNavMapRegionImageData,
         findCityNavPathWorldSparse: findCityNavPathWorldSparse,
         packSparseGridToCompactBinary: packSparseGridToCompactBinary,
         packSparseGridToSlimBinary: packSparseGridToSlimBinary,
@@ -980,6 +982,11 @@
             var cityNavMinimapLastGoalKey = '';
             var cityNavMinimapLastChaseCount = -1;
             var cityNavMinimapLastDirtyMs = 0;
+            var cityNavMinimapTerrainCanvas = null;
+            var cityNavMinimapTerrainCtx = null;
+            var cityNavMinimapTerrainIx = -99999;
+            var cityNavMinimapTerrainIz = -99999;
+            var cityNavMinimapFrameSkip = 0;
             var _cityNavMinimapWorld = new THREE.Vector3();
 
             /** Chase cars — physics pursuers on city nav (?chase=1, ?chasers=2). */
@@ -1008,6 +1015,8 @@
             var CHASE_ENGINE_FORCE_MUL = 1.25;
             var chaseSpawnTimer = null;
             var chaseMinimapInvalidateTimer = null;
+            /** One-shot A* warmup when chase is first enabled (not at app load). */
+            var chasePathPrewarmDone = false;
             var CHASE_PURSUIT_CAPTURE_MS = 5000;
             var CHASE_TOUCH_HORIZ_M = 2.6;
             var CHASE_TOUCH_VERT_M = 1.75;
@@ -2987,6 +2996,8 @@
                     }
                     
                     console.log('🔊 Audio system initialized (spatial HRTF)');
+                    getChasePoliceConeGeo();
+                    loadChaseSirenSharedBuffer(audioContext).catch(function() { /* optional */ });
                     
                     // Start audio on first user interaction
                     var startAudioOnInteraction = function() {
@@ -6460,6 +6471,9 @@
                 }
                 
 
+                if (isChaseBot) {
+                    botRef._chaseDriveActive = true;
+                }
                 if (isChaseBot && spatialAudio && audioContext) {
                     botRef.engineSound = new EngineSound(audioContext, 48, 0.055, spatialAudio, {
                         refDistance: 8, maxDistance: 380, rolloffFactor: 1.15
@@ -11793,7 +11807,31 @@
             function invalidateCityNavMinimap() {
                 cityNavMinimapLastIx = -99999;
                 cityNavMinimapLastIz = -99999;
+                cityNavMinimapTerrainIx = -99999;
+                cityNavMinimapTerrainIz = -99999;
                 cityNavMinimapLastChaseCount = -1;
+            }
+
+            /** North-up terrain tile — rebuilt only when the car moves to a new nav cell. */
+            function rebuildCityNavMinimapTerrain(grid, playerIx, playerIz, inner) {
+                if (playerIx === cityNavMinimapTerrainIx && playerIz === cityNavMinimapTerrainIz) {
+                    return;
+                }
+                if (!cityNavMinimapTerrainCanvas) {
+                    cityNavMinimapTerrainCanvas = document.createElement('canvas');
+                    cityNavMinimapTerrainCtx = cityNavMinimapTerrainCanvas.getContext('2d');
+                }
+                if (cityNavMinimapTerrainCanvas.width !== inner) {
+                    cityNavMinimapTerrainCanvas.width = inner;
+                    cityNavMinimapTerrainCanvas.height = inner;
+                }
+                var cellR = Math.ceil(cityNavMinimapRadiusM / grid.cellSize);
+                var img = NavOpt.paintNavMapRegionImageData(
+                    grid, playerIx, playerIz, cellR, inner, inner
+                );
+                cityNavMinimapTerrainCtx.putImageData(img, 0, 0);
+                cityNavMinimapTerrainIx = playerIx;
+                cityNavMinimapTerrainIz = playerIz;
             }
 
             function worldToNavMinimapPx(wx, wz, carX, carZ, cx, cy, pxPerM) {
@@ -11894,7 +11932,9 @@
             function drawCityNavMinimap() {
                 if (!cityNavMinimapCtx) return;
                 var grid = getCityNavGrid();
-                if (!grid || (!grid.sparse && !grid.walkable)) return;
+                if (!grid || (!grid.sparse && !grid.walkable && !(grid.walkIdx && grid.walkIdx.length))) {
+                    return;
+                }
                 if (!getDriveNavCarWorld(_cityNavMinimapWorld)) return;
 
                 var carX = _cityNavMinimapWorld.x;
@@ -11907,26 +11947,18 @@
                 if (getDriveNavGoalWorld(_driveCompassGoalPos)) {
                     goalKey = _driveCompassGoalPos.x.toFixed(0) + ',' + _driveCompassGoalPos.z.toFixed(0);
                 }
-                var now = performance.now();
                 var headingDelta = headingDeg - cityNavMinimapLastHeadingDeg;
                 while (headingDelta > 180) headingDelta -= 360;
                 while (headingDelta < -180) headingDelta += 360;
                 var chaseCount = chaseActive ? chaseVehicles.length : 0;
-                if (playerIx === cityNavMinimapLastIx
-                    && playerIz === cityNavMinimapLastIz
-                    && Math.abs(headingDelta) < 3
-                    && pathLen === cityNavMinimapLastPathLen
-                    && goalKey === cityNavMinimapLastGoalKey
-                    && chaseCount === cityNavMinimapLastChaseCount) {
+                var movedCell = playerIx !== cityNavMinimapLastIx || playerIz !== cityNavMinimapLastIz;
+                var turned = Math.abs(headingDelta) >= 2;
+                var overlayChanged = pathLen !== cityNavMinimapLastPathLen
+                    || goalKey !== cityNavMinimapLastGoalKey
+                    || chaseCount !== cityNavMinimapLastChaseCount;
+                if (!movedCell && !turned && !overlayChanged) {
                     return;
                 }
-                cityNavMinimapLastIx = playerIx;
-                cityNavMinimapLastIz = playerIz;
-                cityNavMinimapLastHeadingDeg = headingDeg;
-                cityNavMinimapLastPathLen = pathLen;
-                cityNavMinimapLastGoalKey = goalKey;
-                cityNavMinimapLastChaseCount = chaseCount;
-                cityNavMinimapLastDirtyMs = now;
 
                 var ctx = cityNavMinimapCtx;
                 var W = cityNavMinimapCanvas.width;
@@ -11937,6 +11969,20 @@
                 var inner = W - pad * 2;
                 var mapRadiusPx = inner * 0.5;
                 var pxPerM = inner / (cityNavMinimapRadiusM * 2);
+                var terrainX = cx - inner * 0.5;
+                var terrainY = cy - inner * 0.5;
+
+                if (movedCell) {
+                    rebuildCityNavMinimapTerrain(grid, playerIx, playerIz, inner);
+                }
+
+                cityNavMinimapLastIx = playerIx;
+                cityNavMinimapLastIz = playerIz;
+                cityNavMinimapLastHeadingDeg = headingDeg;
+                cityNavMinimapLastPathLen = pathLen;
+                cityNavMinimapLastGoalKey = goalKey;
+                cityNavMinimapLastChaseCount = chaseCount;
+                cityNavMinimapLastDirtyMs = performance.now();
 
                 ctx.clearRect(0, 0, W, H);
                 ctx.fillStyle = 'rgba(0,0,0,0.82)';
@@ -11957,21 +12003,16 @@
                 ctx.rotate(-headingRad);
                 ctx.translate(-cx, -cy);
 
-                var cellR = Math.ceil(cityNavMinimapRadiusM / grid.cellSize);
-                var terrainOk;
-                if (grid.sparse || NavOpt.isSparseNavGrid(grid)) {
-                    NavOpt.paintNavMapRegion(
-                        ctx, grid, cityNavMapMinGroundY,
-                        playerIx, playerIz, cellR,
-                        cx - inner * 0.5, cy - inner * 0.5, inner
-                    );
+                var terrainOk = false;
+                if (cityNavMinimapTerrainCanvas && cityNavMinimapTerrainCanvas.width) {
+                    ctx.drawImage(cityNavMinimapTerrainCanvas, terrainX, terrainY, inner, inner);
                     terrainOk = true;
-                } else {
+                } else if (!grid.sparse && grid.walkable) {
                     terrainOk = blitCityNavMinimapTerrain(ctx, grid, playerIx, playerIz, cx, cy, inner);
                 }
                 if (!terrainOk) {
                     ctx.fillStyle = 'rgba(40,40,48,0.9)';
-                    ctx.fillRect(cx - inner * 0.5, cy - inner * 0.5, inner, inner);
+                    ctx.fillRect(terrainX, terrainY, inner, inner);
                 }
 
                 if (playerCityBasePathPoints && playerCityBasePathPoints.length > 1) {
@@ -12248,10 +12289,13 @@
                     }
                     return;
                 }
+                cityNavMinimapFrameSkip++;
+                if ((cityNavMinimapFrameSkip & 3) !== 0) {
+                    return;
+                }
                 ensureCityNavMinimap();
                 layoutCityNavMinimapPanel();
                 if (cityNavMinimapMesh) {
-                    var inXR = renderer && renderer.xr && renderer.xr.isPresenting;
                     var hudOk = !inXR || (vrHUD && vrHUD.visible);
                     cityNavMinimapMesh.visible = !!hudOk;
                 }
@@ -13147,6 +13191,82 @@
                 return { pos: pos, quat: quat };
             }
 
+            /** Warm pathfinding once when chase turns on (not at load — keeps chase-off FPS clean). */
+            function prewarmChasePathOnEnable() {
+                if (chasePathPrewarmDone || isMultiplayer) return;
+                var grid = getCityNavGrid();
+                if (!grid || !vehicleRef || !vehicleRef.vehicle) return;
+                chasePathPrewarmDone = true;
+                scheduleCityNavBuildTick(function() {
+                    var p = getChaseTargetWorldPos(_chaseTargetPos);
+                    findCityNavPathWorld(p.x, p.z, p.x + 200, p.z + 200, grid);
+                });
+            }
+
+            function destroyChaseVehicleRef(ref) {
+                if (!ref) return;
+                if (ref.vehicle) {
+                    physicsWorld.removeAction(ref.vehicle);
+                }
+                if (ref.vehicleBody) {
+                    physicsWorld.removeRigidBody(ref.vehicleBody);
+                }
+                if (ref.chassisMesh) {
+                    scene.remove(ref.chassisMesh);
+                }
+                if (ref.physicsWireframe) {
+                    scene.remove(ref.physicsWireframe);
+                }
+                if (ref.wheelMeshes) {
+                    for (var wi = 0; wi < ref.wheelMeshes.length; wi++) {
+                        if (ref.wheelMeshes[wi]) {
+                            scene.remove(ref.wheelMeshes[wi]);
+                        }
+                    }
+                }
+                if (ref.syncFn) {
+                    var syncIdx = syncList.indexOf(ref.syncFn);
+                    if (syncIdx >= 0) syncList.splice(syncIdx, 1);
+                }
+                if (ref.engineSound && typeof ref.engineSound.stop === 'function') {
+                    ref.engineSound.stop();
+                    ref.engineSound = null;
+                }
+                if (ref.sirenSound && typeof ref.sirenSound.stop === 'function') {
+                    ref.sirenSound.stop();
+                    ref.sirenSound = null;
+                }
+                detachChasePoliceLights(ref);
+            }
+
+            /** LOD park: raycast vehicle off + hide meshes (tracked on ref._chaseDriveActive). */
+            function setChaseVehicleDormant(ref, dormant) {
+                if (!ref) return;
+                if (ref.vehicle && physicsWorld) {
+                    if (dormant && ref._chaseDriveActive) {
+                        physicsWorld.removeAction(ref.vehicle);
+                        ref._chaseDriveActive = false;
+                    } else if (!dormant && !ref._chaseDriveActive) {
+                        physicsWorld.addAction(ref.vehicle);
+                        ref._chaseDriveActive = true;
+                    }
+                }
+                var show = !dormant;
+                if (ref.chassisMesh) {
+                    ref.chassisMesh.visible = show;
+                }
+                if (ref.wheelMeshes) {
+                    for (var wi = 0; wi < ref.wheelMeshes.length; wi++) {
+                        if (ref.wheelMeshes[wi]) {
+                            ref.wheelMeshes[wi].visible = show;
+                        }
+                    }
+                }
+                if (ref.chasePoliceLights && ref.chasePoliceLights.group) {
+                    ref.chasePoliceLights.group.visible = show;
+                }
+            }
+
             function teleportChaseVehicle(ref, pos, quat) {
                 if (!ref || !ref.vehicleBody) return;
                 var xf = new Ammo.btTransform();
@@ -13184,39 +13304,7 @@
 
             function removeChaseVehicleEntry(entry) {
                 if (!entry || !entry.ref) return;
-                var ref = entry.ref;
-                if (ref.vehicle) {
-                    physicsWorld.removeAction(ref.vehicle);
-                }
-                if (ref.vehicleBody) {
-                    physicsWorld.removeRigidBody(ref.vehicleBody);
-                }
-                if (ref.chassisMesh) {
-                    scene.remove(ref.chassisMesh);
-                }
-                if (ref.physicsWireframe) {
-                    scene.remove(ref.physicsWireframe);
-                }
-                if (ref.wheelMeshes) {
-                    for (var wi = 0; wi < ref.wheelMeshes.length; wi++) {
-                        if (ref.wheelMeshes[wi]) {
-                            scene.remove(ref.wheelMeshes[wi]);
-                        }
-                    }
-                }
-                if (ref.syncFn) {
-                    var syncIdx = syncList.indexOf(ref.syncFn);
-                    if (syncIdx >= 0) syncList.splice(syncIdx, 1);
-                }
-                if (ref.engineSound && typeof ref.engineSound.stop === 'function') {
-                    ref.engineSound.stop();
-                    ref.engineSound = null;
-                }
-                if (ref.sirenSound && typeof ref.sirenSound.stop === 'function') {
-                    ref.sirenSound.stop();
-                    ref.sirenSound = null;
-                }
-                detachChasePoliceLights(ref);
+                destroyChaseVehicleRef(entry.ref);
             }
 
             function removeChaseVehicles() {
@@ -13438,6 +13526,8 @@
                 var color = CHASE_COLORS[slotIndex % CHASE_COLORS.length];
                 var ref = createBotVehicle(spawn.pos, spawn.quat, color, { chaseMode: true });
                 if (!ref) return false;
+                attachChasePoliceLights(ref);
+                ref._chaseDriveActive = true;
                 teleportChaseVehicle(ref, spawn.pos, spawn.quat);
                 var entry = {
                     ref: ref,
@@ -13450,11 +13540,14 @@
                 };
                 entry.syncFn = ref.syncFn;
                 chaseVehicles.push(entry);
-                entry.ref.needsReplan = true;
+                entry.ref.needsReplan = false;
                 teleportChaseVehicle(ref, spawn.pos, spawn.quat);
                 scaleChaseSirenVolumes();
                 startChaseSoundsForRef(ref);
                 scheduleChaseMinimapInvalidate();
+                scheduleCityNavBuildTick(function() {
+                    entry.ref.needsReplan = true;
+                });
                 return true;
             }
 
@@ -13534,6 +13627,7 @@
 
             function spawnChaseVehicles() {
                 if (!chaseEnabled || isMultiplayer) return;
+                prewarmChasePathOnEnable();
                 if (!physicsWorld) {
                     chasePendingSpawn = true;
                     return;
@@ -13570,19 +13664,9 @@
 
             function parkChaseVehicleEntry(entry) {
                 if (!entry || entry.parked || !entry.ref) return;
-                var ref = entry.ref;
-                if (ref.vehicle && physicsWorld) {
-                    physicsWorld.removeAction(ref.vehicle);
-                }
-                if (ref.chassisMesh) ref.chassisMesh.visible = false;
-                if (ref.wheelMeshes) {
-                    for (var wi = 0; wi < ref.wheelMeshes.length; wi++) {
-                        if (ref.wheelMeshes[wi]) ref.wheelMeshes[wi].visible = false;
-                    }
-                }
-                if (ref.physicsWireframe) ref.physicsWireframe.visible = false;
-                if (ref.chasePoliceLights && ref.chasePoliceLights.group) {
-                    ref.chasePoliceLights.group.visible = false;
+                setChaseVehicleDormant(entry.ref, true);
+                if (entry.ref.physicsWireframe) {
+                    entry.ref.physicsWireframe.visible = false;
                 }
                 entry.parked = true;
             }
@@ -13590,15 +13674,7 @@
             function unparkChaseVehicleEntry(entry) {
                 if (!entry || !entry.parked || !entry.ref) return;
                 var ref = entry.ref;
-                if (ref.vehicle && physicsWorld) {
-                    physicsWorld.addAction(ref.vehicle);
-                }
-                if (ref.chassisMesh) ref.chassisMesh.visible = true;
-                if (ref.wheelMeshes) {
-                    for (var wi = 0; wi < ref.wheelMeshes.length; wi++) {
-                        if (ref.wheelMeshes[wi]) ref.wheelMeshes[wi].visible = true;
-                    }
-                }
+                setChaseVehicleDormant(ref, false);
                 if (ref.physicsWireframe && vehicleRef && vehicleRef.physicsWireframe) {
                     ref.physicsWireframe.visible = vehicleRef.physicsWireframe.visible;
                     if (ref.physicsWireframe.visible && ref.vehicle) {
@@ -13607,9 +13683,6 @@
                         var qu = tmUp.getRotation();
                         syncChassisWireframe(ref, pu.x(), pu.y(), pu.z(), qu.x(), qu.y(), qu.z(), qu.w());
                     }
-                }
-                if (ref.chasePoliceLights && ref.chasePoliceLights.group) {
-                    ref.chasePoliceLights.group.visible = true;
                 }
                 ref.needsReplan = true;
                 entry.parked = false;
@@ -14476,6 +14549,7 @@
 
             function restoreCityNavMapFromBuildObject(b, sourceLabel) {
                 attachCityNavRuntime(b, sourceLabel);
+                invalidateCityNavMinimap();
                 if (showCityNavMap) {
                     createCityNavMapVisual(b, { skipIdb: true });
                 } else {
