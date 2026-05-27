@@ -389,6 +389,21 @@
         shouldRunUnitTick,
         horizDistSq,
     } from './js/chaseWorld.js';
+    import {
+        isSparseNavGrid,
+        parseCompactDv2nToSparseGrid,
+        optimizeDenseBuildObject,
+        labelSparseNavComponents,
+        navIsDrivableAt,
+        navGetCellFlags,
+        navGetFloorYAt,
+        paintNavMapPixels,
+        findCityNavPathWorldSparse,
+        packSparseGridToCompactBinary,
+        sparseNavStats,
+        sparseSetWaterCell,
+        sparseSetLandCell,
+    } from './js/navOptimized.js';
     import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 
     /* ESM namespace is sealed — use a plain object so legacy code can use THREE.GLTFLoader etc. */
@@ -425,6 +440,21 @@
         shouldRunUnitTick: shouldRunUnitTick,
         horizDistSq: horizDistSq,
     };
+    window.__driveVrNavOptimized = {
+        isSparseNavGrid: isSparseNavGrid,
+        parseCompactDv2nToSparseGrid: parseCompactDv2nToSparseGrid,
+        optimizeDenseBuildObject: optimizeDenseBuildObject,
+        labelSparseNavComponents: labelSparseNavComponents,
+        navIsDrivableAt: navIsDrivableAt,
+        navGetCellFlags: navGetCellFlags,
+        navGetFloorYAt: navGetFloorYAt,
+        paintNavMapPixels: paintNavMapPixels,
+        findCityNavPathWorldSparse: findCityNavPathWorldSparse,
+        packSparseGridToCompactBinary: packSparseGridToCompactBinary,
+        sparseNavStats: sparseNavStats,
+        sparseSetWaterCell: sparseSetWaterCell,
+        sparseSetLandCell: sparseSetLandCell,
+    };
     window.__driveVrChasePerf = ChasePerf;
     window.__driveVrLighting = {
         setRadialFogParams: setRadialFogParams,
@@ -452,12 +482,17 @@
             console.error('chaseWorld module not loaded — check js/chaseWorld.js');
             return;
         }
+        if (!window.__driveVrNavOptimized) {
+            console.error('navOptimized module not loaded — check js/navOptimized.js');
+            return;
+        }
         window.__driveVr4Booting = true;
         Ammo().then(function (Ammo) {
             if (window.__driveVr4Booted) {
                 return;
             }
             var cw = window.__driveVrChaseWorld;
+            var NavOpt = window.__driveVrNavOptimized;
             var ChasePerf = cw.ChasePerf;
             var ChaseCollisionBroadphase = cw.ChaseCollisionBroadphase;
             var detectQuest = cw.detectQuest;
@@ -693,6 +728,10 @@
             })();
             var cityNavExportDone = false;
             var CITY_NAV_BUNDLE_DEFAULT = 'VRrunner/nav/vrrunner-city.nav.bin';
+            /** Preferred shipped nav (DV2N fmt=2 sparse). Falls back to .nav.bin (auto-optimized at load). */
+            var CITY_NAV_BUNDLE_OPTIMIZED = 'VRrunner/nav/vrrunner-city.nav.opt.bin';
+            /** Last bundle load failure (HTTP or parse); cleared on success. */
+            var lastCityNavBundleLoadError = '';
             var cityNavIdbPromise = null;
             var CITY_NAV_IDB_NAME = 'drivevr3_navmap';
             /** DriveVR3: top-down ray excludes roof mass above street (no bridge/headroom pass). ?navmode=legacy for 1 m cube. */
@@ -9373,9 +9412,10 @@
             /** Floor at path sample — prefer nav-grid tier (avoids snapping probe under roofs). */
             function resolvePathBakeFloorY(x, z, pathRefY, meshes, grid) {
                 if (grid) {
-                    var idx = getCityNavCellIndexAtWorldXZ(x, z, grid);
-                    if (idx >= 0 && grid.floorY && isFinite(grid.floorY[idx])) {
-                        return grid.floorY[idx];
+                    var ix = Math.floor((x - grid.minX) / grid.cellSize);
+                    var iz = Math.floor((z - grid.minZ) / grid.cellSize);
+                    if (ix >= 0 && iz >= 0 && ix < grid.gridW && iz < grid.gridH) {
+                        return NavOpt.navGetFloorYAt(grid, ix, iz);
                     }
                 }
                 var fy = getCityWalkableFloorY(x, z, pathRefY, meshes);
@@ -9387,9 +9427,10 @@
 
             function getNavFloorYAt(x, z, grid) {
                 if (!grid) return null;
-                var idx = getCityNavCellIndexAtWorldXZ(x, z, grid);
-                if (idx < 0) return null;
-                return (grid.floorY && isFinite(grid.floorY[idx])) ? grid.floorY[idx] : 0.35;
+                var ix = Math.floor((x - grid.minX) / grid.cellSize);
+                var iz = Math.floor((z - grid.minZ) / grid.cellSize);
+                if (ix < 0 || iz < 0 || ix >= grid.gridW || iz >= grid.gridH) return null;
+                return NavOpt.navGetFloorYAt(grid, ix, iz);
             }
 
             function probeCityNavSphereBlockedAtFloor(x, z, floorY, meshes, sphereRadius) {
@@ -10661,6 +10702,10 @@
             }
 
             function relabelCityNavGrid(grid) {
+                if (NavOpt.isSparseNavGrid(grid)) {
+                    labelSparseNavComponents(grid);
+                    return;
+                }
                 var b = {
                     gridW: grid.gridW,
                     gridH: grid.gridH,
@@ -10690,28 +10735,40 @@
                     console.warn('💧 Outside nav grid @', pos.x.toFixed(1), pos.z.toFixed(1));
                     return;
                 }
-                if (!grid.waterManual) {
-                    grid.waterManual = new Uint8Array(grid.gridW * grid.gridH);
-                }
                 var ix = idx % grid.gridW;
                 var iz = (idx / grid.gridW) | 0;
-                if (grid.water[idx]) {
-                    grid.water[idx] = 0;
-                    grid.waterManual[idx] = 1;
-                    var land = probeCityNavWalkableAt(pos.x, pos.z, vrRunnerCityCollisionMeshes, grid.cellSize);
-                    if (land) {
-                        grid.walkable[idx] = 1;
-                        grid.floorY[idx] = land.y;
-                        grid.floorNy[idx] = land.ny;
+                if (grid.sparse) {
+                    var flags = NavOpt.navGetCellFlags(grid, idx);
+                    if (flags.water) {
+                        var landS = probeCityNavWalkableAt(pos.x, pos.z, vrRunnerCityCollisionMeshes, grid.cellSize);
+                        NavOpt.sparseSetLandCell(grid, idx, landS ? landS.y : flags.floorY, true);
+                        console.log('💧 Nav cell OFF → land', ix, iz, '@ XZ', pos.x.toFixed(1), pos.z.toFixed(1));
                     } else {
-                        grid.walkable[idx] = 0;
+                        NavOpt.sparseSetWaterCell(grid, idx, flags.floorY, true);
+                        console.log('💧 Nav cell ON → water', ix, iz, '@ XZ', pos.x.toFixed(1), pos.z.toFixed(1));
                     }
-                    console.log('💧 Nav cell OFF → land', ix, iz, '@ XZ', pos.x.toFixed(1), pos.z.toFixed(1));
                 } else {
-                    grid.water[idx] = 1;
-                    grid.waterManual[idx] = 1;
-                    grid.walkable[idx] = 0;
-                    console.log('💧 Nav cell ON → water', ix, iz, '@ XZ', pos.x.toFixed(1), pos.z.toFixed(1));
+                    if (!grid.waterManual) {
+                        grid.waterManual = new Uint8Array(grid.gridW * grid.gridH);
+                    }
+                    if (grid.water[idx]) {
+                        grid.water[idx] = 0;
+                        grid.waterManual[idx] = 1;
+                        var land = probeCityNavWalkableAt(pos.x, pos.z, vrRunnerCityCollisionMeshes, grid.cellSize);
+                        if (land) {
+                            grid.walkable[idx] = 1;
+                            grid.floorY[idx] = land.y;
+                            grid.floorNy[idx] = land.ny;
+                        } else {
+                            grid.walkable[idx] = 0;
+                        }
+                        console.log('💧 Nav cell OFF → land', ix, iz, '@ XZ', pos.x.toFixed(1), pos.z.toFixed(1));
+                    } else {
+                        grid.water[idx] = 1;
+                        grid.waterManual[idx] = 1;
+                        grid.walkable[idx] = 0;
+                        console.log('💧 Nav cell ON → water', ix, iz, '@ XZ', pos.x.toFixed(1), pos.z.toFixed(1));
+                    }
                 }
                 relabelCityNavGrid(grid);
                 refreshCityNavMapTexture(grid);
@@ -10744,6 +10801,18 @@
             function capturePreservedNavEdits(grid) {
                 if (!grid || !grid.waterManual) return null;
                 var cells = [];
+                if (grid.sparse && grid.waterManual && grid.waterManual.length) {
+                    for (var mi = 0; mi < grid.waterManual.length; mi++) {
+                        var midx = grid.waterManual[mi];
+                        var flags = NavOpt.navGetCellFlags(grid, midx);
+                        cells.push({
+                            ix: midx % grid.gridW,
+                            iz: (midx / grid.gridW) | 0,
+                            water: flags.water ? 1 : 0,
+                            walkable: flags.walkable ? 1 : 0
+                        });
+                    }
+                } else if (!grid.sparse) {
                 for (var i = 0; i < grid.waterManual.length; i++) {
                     if (grid.waterManual[i]) {
                         cells.push({
@@ -10753,6 +10822,7 @@
                             walkable: grid.walkable[i]
                         });
                     }
+                }
                 }
                 if (!cells.length) return null;
                 return { gridW: grid.gridW, gridH: grid.gridH, cells: cells };
@@ -10780,11 +10850,7 @@
             }
 
             function isCityNavCellDrivable(grid, ix, iz) {
-                if (ix < 0 || iz < 0 || ix >= grid.gridW || iz >= grid.gridH) return false;
-                var idx = iz * grid.gridW + ix;
-                if (!grid.walkable[idx]) return false;
-                if (grid.water && grid.water[idx]) return false;
-                return true;
+                return NavOpt.navIsDrivableAt(grid, ix, iz);
             }
 
             function findNearestDrivableNavCell(grid, ix, iz, maxRadius) {
@@ -10808,10 +10874,9 @@
             }
 
             function navCellCenterWorld(grid, ix, iz) {
-                var idx = iz * grid.gridW + ix;
                 return new THREE.Vector3(
                     grid.minX + (ix + 0.5) * grid.cellSize,
-                    (grid.floorY && isFinite(grid.floorY[idx])) ? grid.floorY[idx] : 0.35,
+                    NavOpt.navGetFloorYAt(grid, ix, iz),
                     grid.minZ + (iz + 0.5) * grid.cellSize
                 );
             }
@@ -11166,6 +11231,14 @@
             }
 
             function findCityNavPathWorld(startX, startZ, goalX, goalZ, grid) {
+                if (NavOpt.isSparseNavGrid(grid)) {
+                    return NavOpt.findCityNavPathWorldSparse(grid, startX, startZ, goalX, goalZ, {
+                        findNearestDrivableNavCell: findNearestDrivableNavCell,
+                        navCellCenterWorld: navCellCenterWorld,
+                        simplifyCityNavPathPoints: simplifyCityNavPathPoints,
+                        applyCityNavPathMargin: applyCityNavPathMargin
+                    });
+                }
                 var startIx = Math.floor((startX - grid.minX) / grid.cellSize);
                 var startIz = Math.floor((startZ - grid.minZ) / grid.cellSize);
                 var goalIx = Math.floor((goalX - grid.minX) / grid.cellSize);
@@ -11787,7 +11860,7 @@
             function drawCityNavMinimap() {
                 if (!cityNavMinimapCtx) return;
                 var grid = cityNavMapGroup && cityNavMapGroup.userData.navGrid;
-                if (!grid || !grid.walkable) return;
+                if (!grid || (!grid.sparse && !grid.walkable)) return;
                 if (!getDriveNavCarWorld(_cityNavMinimapWorld)) return;
 
                 var carX = _cityNavMinimapWorld.x;
@@ -13851,54 +13924,31 @@
             }
 
             function paintCityNavMapPixels(px, grid) {
-                var w = grid.gridW;
-                var walk = grid.walkable;
-                var labels = grid.labels;
-                var water = grid.water;
-                var landBase = grid.landBase;
-                var floorY = grid.floorY;
-                var mainId = grid.largestComponentId;
-                var minY = cityNavMapMinGroundY - 0.5;
-                for (var iz = 0; iz < grid.gridH; iz++) {
-                    for (var ix = 0; ix < w; ix++) {
-                        var idx = iz * w + ix;
-                        var p = idx * 4;
-                        if (water && water[idx]) {
-                            px[p] = 50;
-                            px[p + 1] = 140;
-                            px[p + 2] = 255;
-                            px[p + 3] = 170;
-                            continue;
-                        }
-                        var isLandBase = landBase && landBase[idx];
-                        if (!isLandBase && floorY && floorY[idx] > minY && !walk[idx]) {
-                            isLandBase = true;
-                        }
-                        if (isLandBase && !walk[idx]) {
-                            px[p] = 120;
-                            px[p + 1] = 125;
-                            px[p + 2] = 135;
-                            px[p + 3] = 200;
-                            continue;
-                        }
-                        if (!walk[idx]) {
-                            px[p + 3] = 0;
-                            continue;
-                        }
-                        var isMain = !mainId || labels[idx] === mainId;
-                        if (isMain) {
-                            px[p] = 0;
-                            px[p + 1] = 255;
-                            px[p + 2] = 110;
-                            px[p + 3] = 150;
-                        } else {
-                            px[p] = 170;
-                            px[p + 1] = 210;
-                            px[p + 2] = 70;
-                            px[p + 3] = 90;
-                        }
-                    }
+                NavOpt.paintNavMapPixels(px, grid, cityNavMapMinGroundY);
+            }
+
+            function ensureNavBuildObjectOptimized(b, sourceLabel) {
+                if (NavOpt.isSparseNavGrid(b)) return b;
+                var statsBefore = (b.gridW * b.gridH) | 0;
+                try {
+                    NavOpt.optimizeDenseBuildObject(b, cityNavMapMinGroundY);
+                } catch (err) {
+                    var msg = err && err.message ? err.message : String(err);
+                    throw new Error(
+                        'nav dense→sparse failed' +
+                        (sourceLabel ? ' (' + sourceLabel + ')' : '') + ': ' + msg +
+                        '. Use vrrunner-city.nav.opt.bin or export with exportOptimizedNavBundle().'
+                    );
                 }
+                var st = NavOpt.sparseNavStats(b);
+                console.log(
+                    '🗺️ Nav optimized to sparse runtime' +
+                    (sourceLabel ? ' (' + sourceLabel + ')' : '') + ' —',
+                    st.drivable.toLocaleString(), 'drivable /',
+                    statsBefore.toLocaleString(), 'cells',
+                    '(' + ((st.drivable / Math.max(1, statsBefore)) * 100).toFixed(1) + '% of grid)'
+                );
+                return b;
             }
 
             function getCityNavCacheKeyForCell(cellSize) {
@@ -13977,6 +14027,10 @@
                     return v;
                 }
                 if (cityMode !== 'vrrunner') return '';
+                return CITY_NAV_BUNDLE_OPTIMIZED;
+            }
+
+            function getCityNavBundleFallbackUrl() {
                 return CITY_NAV_BUNDLE_DEFAULT;
             }
 
@@ -14077,6 +14131,24 @@
             }
 
             function cityNavGridToBuildObject(grid) {
+                if (NavOpt.isSparseNavGrid(grid)) {
+                    return {
+                        sparse: true,
+                        minX: grid.minX,
+                        minZ: grid.minZ,
+                        cellSize: grid.cellSize,
+                        gridW: grid.gridW,
+                        gridH: grid.gridH,
+                        largestComponentId: grid.largestComponentId,
+                        walkIdx: grid.walkIdx,
+                        walkY: grid.walkY,
+                        walkLabel: grid.walkLabel,
+                        waterIdx: grid.waterIdx,
+                        waterY: grid.waterY,
+                        greyIdx: grid.greyIdx,
+                        waterManual: grid.waterManual
+                    };
+                }
                 return normalizeCityNavBuildArrays({
                     minX: grid.minX,
                     minZ: grid.minZ,
@@ -14316,17 +14388,9 @@
                 if (!total || total > CITY_NAV_MAX_EXPORT_CELLS) throw new Error('nav bundle bad grid size');
 
                 if (fmt === 2) {
-                    var sparseB = expandCityNavSparseToBuildObject({
-                        gridW: gridW,
-                        gridH: gridH,
-                        cellSize: cellSize,
-                        minX: minX,
-                        minZ: minZ,
-                        sparseOffset: o,
-                        dv: dv
-                    });
-                    sparseB.largestComponentId = largestComponentId;
-                    labelCityNavComponents(sparseB);
+                    var sparseB = NavOpt.parseCompactDv2nToSparseGrid(
+                        dv, o, gridW, gridH, cellSize, minX, minZ, largestComponentId
+                    );
                     return { key: key, b: sparseB };
                 }
 
@@ -14357,12 +14421,14 @@
                     floorNy: readTyped(Float32Array, total * 4),
                     labels: readTyped(Int32Array, total * 4)
                 };
-                return { key: key, b: b };
+                return { key: key, b: b, fmt: 1 };
             }
 
             function restoreCityNavMapFromBuildObject(b, sourceLabel) {
+                ensureNavBuildObjectOptimized(b, sourceLabel);
                 createCityNavMapVisual(b, { skipIdb: true });
                 cityNavMapBuilt = true;
+                var st = NavOpt.sparseNavStats(b);
                 console.log(
                     '🗺️ Nav map loaded from',
                     sourceLabel,
@@ -14370,6 +14436,7 @@
                     b.gridW + '×' + b.gridH,
                     '@',
                     b.cellSize.toFixed(1) + 'm',
+                    st ? ('sparse: ' + st.drivable.toLocaleString() + ' drivable cells') : '',
                     '(Shift+N rebuild, Ctrl+Shift+E export)'
                 );
             }
@@ -14382,20 +14449,23 @@
             }
 
             function exportCityNavBuildObject(b, key, fileName) {
+                ensureNavBuildObjectOptimized(b, 'export');
                 var total = cityNavGridCellCount(b);
-                var compact = cityNavShouldUseCompactExport(total);
+                var compact = true;
                 var buf;
                 try {
                     console.log(
-                        '🗺️ Exporting nav (' + (compact ? 'sparse fmt=2' : 'full fmt=1') + ')…',
-                        cityNavExportSizeHint(b.gridW, b.gridH, b.cellSize, compact)
+                        '🗺️ Exporting nav (sparse fmt=2)…',
+                        cityNavExportSizeHint(b.gridW, b.gridH, b.cellSize, true)
                     );
-                    buf = compact ? packCityNavMapBinaryCompact(b, key) : packCityNavMapBinary(b, key);
+                    buf = NavOpt.isSparseNavGrid(b)
+                        ? NavOpt.packSparseGridToCompactBinary(b, key)
+                        : packCityNavMapBinaryCompact(b, key);
                 } catch (err) {
                     console.error('🗺️ Nav export failed —', err && err.message ? err.message : err);
                     return false;
                 }
-                fileName = fileName || 'vrrunner-city.nav.bin';
+                fileName = fileName || 'vrrunner-city.nav.opt.bin';
                 downloadCityNavBlob(buf, fileName);
                 console.log(
                     '🗺️ Exported nav bundle —',
@@ -14493,22 +14563,16 @@
 
             window.exportCityNavMapBundle = exportCityNavMapBundle;
             window.exportCityNavMapFromIdb = exportCityNavMapFromIdb;
+            /** Download sparse vrrunner-city.nav.opt.bin from current loaded nav (after N or bundle load). */
+            window.exportOptimizedNavBundle = function(fileName) {
+                return exportCityNavMapBundle(fileName || 'vrrunner-city.nav.opt.bin');
+            };
             if (window.DriveVR3) {
                 window.DriveVR3.exportCityNavMapBundle = exportCityNavMapBundle;
                 window.DriveVR3.exportCityNavMapFromIdb = exportCityNavMapFromIdb;
             }
 
-            function tryRestoreCityNavMapFromBundle(done) {
-                var url = getCityNavBundleUrl();
-                if (!url) {
-                    done(false);
-                    return;
-                }
-                var key = getCityNavCacheKey();
-                if (!key) {
-                    done(false);
-                    return;
-                }
+            function loadCityNavBundleFromUrl(url, key, done) {
                 console.log('🗺️ Loading bundled nav map…', url);
                 fetch(url)
                     .then(function(res) {
@@ -14535,16 +14599,65 @@
                             );
                         }
                         restoreCityNavMapFromBuildObject(unpacked.b, 'bundle ' + url);
+                        lastCityNavBundleLoadError = '';
                         done(true);
                     })
                     .catch(function(err) {
-                        console.log(
-                            '🗺️ No bundled nav map at',
-                            url,
-                            '(' + (err && err.message ? err.message : err) + ') — will try browser cache or build'
-                        );
-                        done(false);
+                        lastCityNavBundleLoadError = err && err.message ? err.message : String(err);
+                        done(false, err);
                     });
+            }
+
+            function tryRestoreCityNavMapFromBundle(done) {
+                var primaryUrl = getCityNavBundleUrl();
+                if (!primaryUrl) {
+                    done(false);
+                    return;
+                }
+                var key = getCityNavCacheKey();
+                if (!key) {
+                    done(false);
+                    return;
+                }
+                loadCityNavBundleFromUrl(primaryUrl, key, function(ok, err) {
+                    if (ok) {
+                        done(true);
+                        return;
+                    }
+                    var fallback = getCityNavBundleFallbackUrl();
+                    if (fallback && fallback !== primaryUrl) {
+                        console.log(
+                            '🗺️ Optimized nav not found at', primaryUrl,
+                            '(' + (err && err.message ? err.message : err) + ') — trying', fallback
+                        );
+                        loadCityNavBundleFromUrl(fallback, key, function(ok2, err2) {
+                            if (!ok2) {
+                                var msg2 = err2 && err2.message ? err2.message : String(err2 || '');
+                                if (msg2.indexOf('HTTP') === 0) {
+                                    console.log(
+                                        '🗺️ No bundled nav map — will try browser cache or build',
+                                        '(' + msg2 + ')'
+                                    );
+                                } else {
+                                    console.error(
+                                        '🗺️ Nav bundle downloaded but failed to apply:',
+                                        fallback,
+                                        '—', msg2
+                                    );
+                                    console.log('🗺️ Will try browser cache or build (N)');
+                                }
+                            }
+                            done(!!ok2);
+                        });
+                        return;
+                    }
+                    console.log(
+                        '🗺️ No bundled nav map at',
+                        primaryUrl,
+                        '(' + (err && err.message ? err.message : err) + ') — will try browser cache or build'
+                    );
+                    done(false);
+                });
             }
 
             function openCityNavIdb() {
@@ -14566,7 +14679,9 @@
             function saveCityNavMapToIdb(b) {
                 var key = getCityNavCacheKey();
                 if (!key) return;
+                ensureNavBuildObjectOptimized(b, 'idb');
                 openCityNavIdb().then(function(db) {
+                    var compactBuf = NavOpt.packSparseGridToCompactBinary(b, key);
                     var rec = {
                         key: key,
                         minX: b.minX,
@@ -14575,26 +14690,20 @@
                         gridW: b.gridW,
                         gridH: b.gridH,
                         largestComponentId: b.largestComponentId,
-                        walkable: b.walkable.buffer.slice(b.walkable.byteOffset, b.walkable.byteOffset + b.walkable.byteLength),
-                        water: b.water.buffer.slice(b.water.byteOffset, b.water.byteOffset + b.water.byteLength),
-                        waterSurface: b.waterSurface.buffer.slice(b.waterSurface.byteOffset, b.waterSurface.byteOffset + b.waterSurface.byteLength),
-                        waterManual: b.waterManual
-                            ? b.waterManual.buffer.slice(b.waterManual.byteOffset, b.waterManual.byteOffset + b.waterManual.byteLength)
-                            : new Uint8Array(b.gridW * b.gridH).buffer,
-                        floorY: b.floorY.buffer.slice(b.floorY.byteOffset, b.floorY.byteOffset + b.floorY.byteLength),
-                        floorNy: b.floorNy.buffer.slice(b.floorNy.byteOffset, b.floorNy.byteOffset + b.floorNy.byteLength),
-                        labels: b.labels.buffer.slice(b.labels.byteOffset, b.labels.byteOffset + b.labels.byteLength)
+                        navFmt: 2,
+                        navBin: compactBuf
                     };
-                    if (b.landBase) {
-                        rec.landBase = b.landBase.buffer.slice(
-                            b.landBase.byteOffset,
-                            b.landBase.byteOffset + b.landBase.byteLength
-                        );
-                    }
                     var tx = db.transaction('grids', 'readwrite');
                     tx.objectStore('grids').put(rec);
                     tx.oncomplete = function() {
-                        console.log('🗺️ Nav map saved to browser cache —', b.gridW + '×' + b.gridH, '@', b.cellSize.toFixed(1) + 'm');
+                        var st = NavOpt.sparseNavStats(b);
+                        console.log(
+                            '🗺️ Nav map saved to browser cache (sparse fmt=2) —',
+                            b.gridW + '×' + b.gridH,
+                            '@', b.cellSize.toFixed(1) + 'm,',
+                            (compactBuf.byteLength / 1048576).toFixed(2) + ' MB,',
+                            st ? st.drivable.toLocaleString() + ' drivable' : ''
+                        );
                     };
                 }).catch(function() { /* cache optional */ });
             }
@@ -14610,11 +14719,21 @@
                     var req = tx.objectStore('grids').get(key);
                     req.onsuccess = function() {
                         var rec = req.result;
-                        if (!rec || !rec.walkable) {
+                        if (!rec) {
                             done(false);
                             return;
                         }
                         if (!cityNavCacheKeyMatches(rec.key, rec.cellSize)) {
+                            done(false);
+                            return;
+                        }
+                        if (rec.navBin && rec.navFmt === 2) {
+                            var unpacked = unpackCityNavMapBinary(rec.navBin);
+                            restoreCityNavMapFromBuildObject(unpacked.b, 'browser cache (sparse)');
+                            done(true);
+                            return;
+                        }
+                        if (!rec.walkable) {
                             done(false);
                             return;
                         }
@@ -14669,10 +14788,18 @@
                             return;
                         }
                         if (!showCityNavMap) {
-                            console.log(
-                                '🗺️ No bundled nav at', CITY_NAV_BUNDLE_DEFAULT,
-                                '— add the file or use ?navmap=1 to build (N)'
-                            );
+                            if (lastCityNavBundleLoadError && lastCityNavBundleLoadError.indexOf('HTTP') !== 0) {
+                                console.warn(
+                                    '🗺️ Nav bundle at', CITY_NAV_BUNDLE_DEFAULT,
+                                    'failed to load:', lastCityNavBundleLoadError,
+                                    '— use ?navmap=1 or N to rebuild'
+                                );
+                            } else {
+                                console.log(
+                                    '🗺️ No bundled nav at', CITY_NAV_BUNDLE_DEFAULT,
+                                    '— add the file or use ?navmap=1 to build (N)'
+                                );
+                            }
                             return;
                         }
                         if (cityNavMapAutoBuild) {
@@ -14954,6 +15081,7 @@
                 }
 
                 if (b.phase === 'render') {
+                    ensureNavBuildObjectOptimized(b, 'bake');
                     createCityNavMapVisual(b);
                     cityNavMapBuilt = true;
                     cityNavBuild = null;
@@ -15102,14 +15230,21 @@
                     cellSize: b.cellSize,
                     gridW: b.gridW,
                     gridH: b.gridH,
+                    largestComponentId: b.largestComponentId,
+                    sparse: !!b.sparse,
+                    walkIdx: b.walkIdx,
+                    walkY: b.walkY,
+                    walkLabel: b.walkLabel,
+                    waterIdx: b.waterIdx,
+                    waterY: b.waterY,
+                    greyIdx: b.greyIdx,
+                    waterManual: b.waterManual,
                     walkable: b.walkable,
                     water: b.water,
                     waterSurface: b.waterSurface,
-                    waterManual: b.waterManual,
                     floorY: b.floorY,
                     floorNy: b.floorNy,
                     labels: b.labels,
-                    largestComponentId: b.largestComponentId,
                     landBase: b.landBase
                 };
 
@@ -15135,18 +15270,16 @@
                 var iz = Math.floor((z - grid.minZ) / grid.cellSize);
                 if (ix < 0 || iz < 0 || ix >= grid.gridW || iz >= grid.gridH) return null;
                 var idx = iz * grid.gridW + ix;
-                var isWater = grid.water && !!grid.water[idx];
-                var onWaterMesh = grid.waterSurface && !!grid.waterSurface[idx];
-                var isManual = grid.waterManual && !!grid.waterManual[idx];
+                var flags = NavOpt.navGetCellFlags(grid, idx);
                 return {
                     ix: ix,
                     iz: iz,
-                    water: isWater,
-                    waterMesh: onWaterMesh,
-                    manualWater: isManual,
-                    walkable: !!grid.walkable[idx],
-                    isolated: !isWater && grid.walkable[idx] && grid.labels[idx] !== grid.largestComponentId,
-                    main: !isWater && grid.walkable[idx] && grid.labels[idx] === grid.largestComponentId
+                    water: flags.water,
+                    waterMesh: flags.waterSurface,
+                    manualWater: flags.waterManual,
+                    walkable: flags.walkable,
+                    isolated: flags.walkable && flags.label !== grid.largestComponentId,
+                    main: flags.walkable && flags.label === grid.largestComponentId
                 };
             }
 
