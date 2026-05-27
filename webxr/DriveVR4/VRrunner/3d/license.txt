@@ -1,0 +1,8 @@
+Model Information:
+* title:	Mirror's Edge Catalyst (City of Glass)
+* source:	https://sketchfab.com/3d-models/mirrors-edge-catalyst-city-of-glass-9edc0240a14c444c8417ad6a6831a6de
+* author:	Dimabes2 (https://sketchfab.com/Dimabes2)
+
+Model License:
+* license type:	SKETCHFAB Standard (https://sketchfab.com/licenses)
+* requirements:	Under basic restrictions, use worldwide, on all types of media, commercially or not, and in all types of derivative works
