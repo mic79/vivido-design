@@ -398,6 +398,7 @@
         navGetCellFlags,
         navGetFloorYAt,
         paintNavMapPixels,
+        paintNavMapRegion,
         findCityNavPathWorldSparse,
         packSparseGridToCompactBinary,
         packSparseGridToSlimBinary,
@@ -455,6 +456,7 @@
         navGetCellFlags: navGetCellFlags,
         navGetFloorYAt: navGetFloorYAt,
         paintNavMapPixels: paintNavMapPixels,
+        paintNavMapRegion: paintNavMapRegion,
         findCityNavPathWorldSparse: findCityNavPathWorldSparse,
         packSparseGridToCompactBinary: packSparseGridToCompactBinary,
         packSparseGridToSlimBinary: packSparseGridToSlimBinary,
@@ -11955,7 +11957,19 @@
                 ctx.rotate(-headingRad);
                 ctx.translate(-cx, -cy);
 
-                if (!blitCityNavMinimapTerrain(ctx, grid, playerIx, playerIz, cx, cy, inner)) {
+                var cellR = Math.ceil(cityNavMinimapRadiusM / grid.cellSize);
+                var terrainOk;
+                if (grid.sparse || NavOpt.isSparseNavGrid(grid)) {
+                    NavOpt.paintNavMapRegion(
+                        ctx, grid, cityNavMapMinGroundY,
+                        playerIx, playerIz, cellR,
+                        cx - inner * 0.5, cy - inner * 0.5, inner
+                    );
+                    terrainOk = true;
+                } else {
+                    terrainOk = blitCityNavMinimapTerrain(ctx, grid, playerIx, playerIz, cx, cy, inner);
+                }
+                if (!terrainOk) {
                     ctx.fillStyle = 'rgba(40,40,48,0.9)';
                     ctx.fillRect(cx - inner * 0.5, cy - inner * 0.5, inner, inner);
                 }
@@ -12223,10 +12237,11 @@
             }
 
             function updateCityNavMinimap() {
+                var inXR = renderer && renderer.xr && renderer.xr.isPresenting;
                 var show = cityNavMinimapEnabled
                     && cityNavMapBuilt
                     && getCityNavGrid()
-                    && (cameraMode === 'firstperson' || cameraMode === 'fly');
+                    && (cameraMode === 'firstperson' || cameraMode === 'fly' || inXR);
                 if (!show) {
                     if (cityNavMinimapMesh) {
                         cityNavMinimapMesh.visible = false;
@@ -14464,10 +14479,11 @@
                 if (showCityNavMap) {
                     createCityNavMapVisual(b, { skipIdb: true });
                 } else {
+                    invalidateCityNavMinimap();
                     console.log(
-                        '🗺️ Nav logic ready from',
+                        '🗺️ Nav ready from',
                         sourceLabel,
-                        '(overlay off — chase/path use nav; press N for map)'
+                        '— minimap HUD on; N toggles full-city overlay only'
                     );
                 }
                 var st = NavOpt.sparseNavStats(b);
@@ -14479,7 +14495,7 @@
                     '@',
                     b.cellSize.toFixed(1) + 'm',
                     st ? ('sparse: ' + st.drivable.toLocaleString() + ' drivable cells') : '',
-                    '(Shift+N rebuild, Ctrl+Shift+E export)'
+                    '(minimap auto · N=world overlay · Shift+N rebuild)'
                 );
             }
 
@@ -16209,7 +16225,7 @@
             
             function createObjects() {
                 console.log('🏙️ DriveVR4 — VRrunner city chase');
-                console.log('🗺️ Nav: bundled VRrunner/nav/vrrunner-city.nav.opt.bin · N=overlay · Shift+N=rebuild');
+                console.log('🗺️ Nav: bundled opt.bin · minimap HUD auto · N=full-city overlay · Shift+N=rebuild');
 
                 initEnvironment();
 

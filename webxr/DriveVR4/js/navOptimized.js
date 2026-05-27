@@ -908,6 +908,45 @@ export function paintNavMapPixels(px, grid, minGroundY) {
     }
 }
 
+/**
+ * Paint a local nav window straight onto a 2D canvas (minimap HUD / VR).
+ * Does not need the full-grid texture used by the world overlay.
+ */
+export function paintNavMapRegion(ctx, grid, minGroundY, centerIx, centerIz, cellR, destX, destY, destSize) {
+    var w = grid.gridW;
+    var h = grid.gridH;
+    var mainId = grid.largestComponentId;
+    var ix0 = Math.max(0, centerIx - cellR);
+    var ix1 = Math.min(w - 1, centerIx + cellR);
+    var iz0 = Math.max(0, centerIz - cellR);
+    var iz1 = Math.min(h - 1, centerIz + cellR);
+    var cells = cellR * 2 + 1;
+    var cellPx = destSize / cells;
+    var pad = cellPx < 2 ? 0.5 : 0;
+
+    ctx.fillStyle = 'rgba(28,28,34,0.95)';
+    ctx.fillRect(destX, destY, destSize, destSize);
+
+    for (var iz = iz0; iz <= iz1; iz++) {
+        for (var ix = ix0; ix <= ix1; ix++) {
+            var flags = navGetCellFlags(grid, navCellIndex(grid, ix, iz));
+            var px = destX + (ix - centerIx + cellR) * cellPx;
+            var py = destY + (iz - centerIz + cellR) * cellPx;
+            if (flags.water) {
+                ctx.fillStyle = 'rgba(50,140,255,0.85)';
+            } else if (flags.grey) {
+                ctx.fillStyle = 'rgba(120,125,135,0.78)';
+            } else if (flags.walkable) {
+                var isMain = !mainId || flags.label === mainId;
+                ctx.fillStyle = isMain ? 'rgba(0,255,110,0.72)' : 'rgba(170,210,70,0.55)';
+            } else {
+                continue;
+            }
+            ctx.fillRect(px, py, cellPx + pad, cellPx + pad);
+        }
+    }
+}
+
 export function findCityNavPathWorldSparse(grid, startX, startZ, goalX, goalZ, helpers) {
     var findNearest = helpers.findNearestDrivableNavCell;
     var cellCenter = helpers.navCellCenterWorld;
