@@ -19,8 +19,8 @@ export const ChasePerf = {
     /** Beyond this: remove raycast vehicle action until player approaches. */
     lodParkRadiusM: 220,
     physicsMaxSubstepsDesktop: 6,
-    physicsMaxSubstepsQuest: 3,
-    physicsMaxSubstepsXR: 4,
+    physicsMaxSubstepsQuest: 4,
+    physicsMaxSubstepsXR: 6,
     /** Max chase↔player collision pair checks per frame (after spatial filter). */
     collisionPairBudget: 48,
     /** Max pursuers getting replan/LOS work per frame. */
@@ -32,7 +32,8 @@ export const ChasePerf = {
     /** Only this many nearest cars run SpotLight beacons. */
     policeSpotlightMax: 4,
     spatialCellSizeM: 32,
-    skipCityBulletOnQuest: true,
+    /** Must stay false — Quest needs Bullet walkable tris for wheel raycasts (BVH-only = no traction). */
+    skipCityBulletOnQuest: false,
     rearviewMirrorFrameSkipQuest: 2,
     rearviewMirrorFrameSkipDesktop: 1,
 };

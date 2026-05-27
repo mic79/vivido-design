@@ -8873,6 +8873,17 @@
                 }
             }
 
+            function shouldSkipCityBulletPhysicsOnQuest() {
+                if (!detectQuest()) return false;
+                try {
+                    var p = new URLSearchParams(window.location.search);
+                    if (p.get('skipcitybullet') === '1' || p.get('skipcitybullet') === 'true') {
+                        return true;
+                    }
+                } catch (e) { /* noop */ }
+                return !!ChasePerf.skipCityBulletOnQuest;
+            }
+
             function createDriveFallbackGroundPhysics() {
                 var halfX = 600;
                 var halfZ = 600;
@@ -8886,7 +8897,7 @@
                     cx = gCenter.x;
                     cz = gCenter.z;
                 }
-                var groundHalfY = 0.05;
+                var groundHalfY = detectQuest() ? 2.0 : 0.05;
                 var groundCenterY = -groundHalfY;
                 console.log(
                     '🔧 Fallback ground physics —',
@@ -8921,9 +8932,14 @@
 
             function queueCityWalkablePhysicsBuild(meshes) {
                 if (!physicsWorld || !meshes || !meshes.length) return;
-                if (detectQuest() && ChasePerf.skipCityBulletOnQuest) {
-                    console.log('📱 Quest: BVH-only city collision (skipping Bullet walkable meshes)');
+                if (shouldSkipCityBulletPhysicsOnQuest()) {
+                    console.warn(
+                        '📱 Quest: BVH-only mode (?skipcitybullet=1) — wheels may not grip; remove param for normal drive physics'
+                    );
                     return;
+                }
+                if (detectQuest()) {
+                    console.log('📱 Quest: building city drive physics for wheel traction (same as DriveVR3)');
                 }
                 for (var i = 0; i < meshes.length; i++) {
                     vrRunnerCityPhysicsPending.push(meshes[i]);
