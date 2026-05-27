@@ -19,8 +19,9 @@ export const ChasePerf = {
     /** Beyond this: remove raycast vehicle action until player approaches. */
     lodParkRadiusM: 220,
     physicsMaxSubstepsDesktop: 6,
-    physicsMaxSubstepsQuest: 4,
-    physicsMaxSubstepsXR: 6,
+    /** Match DriveVR2/3 — low substeps make wheel rays miss streets on Quest. */
+    physicsMaxSubstepsQuest: 10,
+    physicsMaxSubstepsXR: 10,
     /** Max chase↔player collision pair checks per frame (after spatial filter). */
     collisionPairBudget: 48,
     /** Max pursuers getting replan/LOS work per frame. */
@@ -51,7 +52,7 @@ export function getMaxActiveUnits() {
 }
 
 export function getPhysicsMaxSubsteps(inXR) {
-    if (detectQuest()) return inXR ? ChasePerf.physicsMaxSubstepsXR : ChasePerf.physicsMaxSubstepsQuest;
+    if (detectQuest()) return ChasePerf.physicsMaxSubstepsQuest;
     return inXR ? ChasePerf.physicsMaxSubstepsXR : ChasePerf.physicsMaxSubstepsDesktop;
 }
 

@@ -8897,7 +8897,7 @@
                     cx = gCenter.x;
                     cz = gCenter.z;
                 }
-                var groundHalfY = detectQuest() ? 2.0 : 0.05;
+                var groundHalfY = 0.05;
                 var groundCenterY = -groundHalfY;
                 console.log(
                     '🔧 Fallback ground physics —',
@@ -8923,6 +8923,9 @@
 
             function removeDriveFallbackGroundPhysics() {
                 if (!driveFallbackGroundBody || !physicsWorld) return;
+                if (detectQuest()) {
+                    return;
+                }
                 physicsWorld.removeRigidBody(driveFallbackGroundBody);
                 driveFallbackGroundBody = null;
                 driveFallbackGroundAdded = false;
@@ -8964,7 +8967,7 @@
                 var edge1 = new THREE.Vector3();
                 var edge2 = new THREE.Vector3();
                 var normal = new THREE.Vector3();
-                var floorMinNy = 0.45;
+                var floorMinNy = detectQuest() ? 0.26 : 0.45;
                 var triCount = 0;
 
                 function tryAddTriangle(i0, i1, i2) {
@@ -9028,7 +9031,8 @@
                         console.log(
                             '✅ City drive physics —',
                             vrRunnerCityPhysicsBodies.length,
-                            'walkable mesh bodies (up-facing tris only)'
+                            'walkable mesh bodies (up-facing tris only)',
+                            detectQuest() ? '(Quest: fallback y=0 plane kept for gaps)' : ''
                         );
                         if (driveFallbackGroundBody) {
                             removeDriveFallbackGroundPhysics();
@@ -9037,8 +9041,8 @@
                     return;
                 }
                 vrRunnerCityPhysicsBuilding = true;
-                var isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
-                var perFrame = isQuest ? 1 : 2;
+                var isQuest = detectQuest();
+                var perFrame = isQuest ? 4 : 2;
                 var end = Math.min(perFrame, vrRunnerCityPhysicsPending.length);
                 var addedTris = 0;
                 for (var i = 0; i < end; i++) {
@@ -15670,6 +15674,8 @@
                 var velVec = new THREE.Vector3(vel.x(), vel.y(), vel.z());
 
                 if (!_cityRaycaster) _cityRaycaster = new THREE.Raycaster();
+                var isQuest = detectQuest();
+                var isPlayer = vehicleData === vehicleRef;
                 var effR = 1.05;
                 if (vehicleData === botVehicleRef && botVehicleRef && botVehicleRef.cityPathMode) {
                     effR = 1.12;
@@ -15677,8 +15683,8 @@
                 var sampleYs = [0.45, 0.95];
                 var dirs = getCityHullDirections();
                 var totalPushXZ = new THREE.Vector3();
-                var maxPerHit = 0.14;
-                var maxTotalXZ = 0.38;
+                var maxPerHit = isQuest && isPlayer ? 0.1 : 0.14;
+                var maxTotalXZ = isQuest && isPlayer ? 0.28 : 0.38;
                 _cityRaycaster.firstHitOnly = true;
                 _cityRaycaster.far = effR * 2.5;
 
