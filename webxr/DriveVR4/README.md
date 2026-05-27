@@ -16,7 +16,7 @@ Open `index.html` (local server recommended). Default city: `VRrunner/3d/scene.g
 
 `js/chaseWorld.js` provides spatial broadphase for vehicle collisions, physics substep budgets, and AI throttling.
 
-Quest profile: fewer pursuers; **10** physics substeps (same as DriveVR2/3); **nav-grid street physics** (continuous drive surfaces at correct height — mesh triangle physics is holey on slopes); player skips BVH hull depenetrate (buildings only via wheel rays + nav ground); y≈0 fallback plane kept. Optional `?skipcitybullet=1` disables all street Bullet (debug only).
+Same city drive physics on all platforms as DriveVR2: `stepSimulation(dt, 10)`, walkable mesh tris → Bullet bodies for wheel traction, BVH hull push for building depenetrate, fallback flat ground removed once mesh bodies exist.
 
 ## URL params
 

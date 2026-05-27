@@ -900,14 +900,6 @@
             var vrRunnerCityPhysicsPending = [];
             var vrRunnerCityPhysicsBuilding = false;
             var vrRunnerCityPhysicsBodies = [];
-            var vrRunnerNavDrivePhysicsBodies = [];
-            var vrRunnerNavDrivePhysicsBuilding = false;
-            var vrRunnerNavDrivePhysicsReady = false;
-            var vrRunnerNavDriveChunkQueue = null;
-            var vrRunnerQuestDriveAwaitingNav = false;
-            var vrRunnerQuestDriveFallbackMeshes = null;
-            var vrRunnerQuestMeshFallbackTimer = null;
-            var NAV_DRIVE_CHUNK_CELLS = 8;
             var driveAmbientLight = null;
             var driveDirLight = null;
             var VRRUNNER_SKY_HEX = (function() {
@@ -1716,9 +1708,7 @@
                     physicsWorld.stepSimulation(dt, 10);
                     // City BVH hull push after physics — pre-step teleport caused snap/spin on buildings.
                     if (vrRunnerCityReady) {
-                        if (!detectQuest()) {
-                            resolveVehicleCityCollisions(vehicleRef, dt);
-                        }
+                        resolveVehicleCityCollisions(vehicleRef, dt);
                         if (botVehicleRef && !trackEditorMode) {
                             resolveVehicleCityCollisions(botVehicleRef, dt);
                         }
@@ -1747,7 +1737,7 @@
 
                     updateChaseVehicles(dt);
 
-                    if (pendingInitialCitySpawn && vrRunnerCityReady && isCityDrivePhysicsReady()) {
+                    if (pendingInitialCitySpawn && vrRunnerCityReady) {
                         pendingInitialCitySpawn = false;
                         applyDefaultPlayerCitySpawn();
                     }
@@ -4883,8 +4873,10 @@
                 var spawnRot = cityPose.rotation;
                 var faceDir = new THREE.Vector3(0, 0, 1).applyQuaternion(spawnRot);
 
-                if (vrRunnerCityReady) {
-                    var floorY = getCityDriveSurfaceY(spawnPos.x, spawnPos.z, spawnPos.y);
+                if (vrRunnerCityReady && vrRunnerCityCollisionMeshes.length) {
+                    var floorY = getCityWalkableFloorY(
+                        spawnPos.x, spawnPos.z, spawnPos.y, vrRunnerCityCollisionMeshes
+                    );
                     if (floorY !== null) {
                         spawnPos.y = floorY + WHEEL_AXIS_Y + WHEEL_RADIUS + VEHICLE_SUSPENSION_REST_LENGTH;
                     }
@@ -4924,8 +4916,10 @@
                 var spawnRot = new THREE.Quaternion();
                 spawnRot.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(faceDir.x, faceDir.z));
 
-                if (vrRunnerCityReady) {
-                    var floorY = getCityDriveSurfaceY(spawnPos.x, spawnPos.z, spawnPos.y);
+                if (vrRunnerCityReady && vrRunnerCityCollisionMeshes.length) {
+                    var floorY = getCityWalkableFloorY(
+                        spawnPos.x, spawnPos.z, spawnPos.y, vrRunnerCityCollisionMeshes
+                    );
                     if (floorY !== null) {
                         spawnPos.y = floorY + WHEEL_AXIS_Y + WHEEL_RADIUS + VEHICLE_SUSPENSION_REST_LENGTH;
                     }
@@ -8878,17 +8872,6 @@
                 }
             }
 
-            function shouldSkipCityBulletPhysicsOnQuest() {
-                if (!detectQuest()) return false;
-                try {
-                    var p = new URLSearchParams(window.location.search);
-                    if (p.get('skipcitybullet') === '1' || p.get('skipcitybullet') === 'true') {
-                        return true;
-                    }
-                } catch (e) { /* noop */ }
-                return !!ChasePerf.skipCityBulletOnQuest;
-            }
-
             function createDriveFallbackGroundPhysics() {
                 var halfX = 600;
                 var halfZ = 600;
@@ -8928,9 +8911,6 @@
 
             function removeDriveFallbackGroundPhysics() {
                 if (!driveFallbackGroundBody || !physicsWorld) return;
-                if (detectQuest()) {
-                    return;
-                }
                 physicsWorld.removeRigidBody(driveFallbackGroundBody);
                 driveFallbackGroundBody = null;
                 driveFallbackGroundAdded = false;
@@ -8938,74 +8918,7 @@
                 console.log('🔧 Removed fallback ground — city mesh drive physics active');
             }
 
-            function isCityDrivePhysicsReady() {
-                if (!detectQuest()) {
-                    return !vrRunnerCityPhysicsBuilding && !vrRunnerCityPhysicsPending.length &&
-                        (vrRunnerCityPhysicsBodies.length > 0 || driveFallbackGroundAdded);
-                }
-                if (vrRunnerNavDrivePhysicsReady) return true;
-                if (vrRunnerNavDrivePhysicsBuilding || vrRunnerQuestDriveAwaitingNav) return false;
-                return !vrRunnerCityPhysicsBuilding && !vrRunnerCityPhysicsPending.length &&
-                    vrRunnerCityPhysicsBodies.length > 0;
-            }
-
-            function scheduleQuestMeshDriveFallback(ms) {
-                if (vrRunnerQuestMeshFallbackTimer != null) {
-                    clearTimeout(vrRunnerQuestMeshFallbackTimer);
-                }
-                vrRunnerQuestMeshFallbackTimer = setTimeout(function () {
-                    vrRunnerQuestMeshFallbackTimer = null;
-                    if (vrRunnerNavDrivePhysicsReady || vrRunnerNavDrivePhysicsBuilding) return;
-                    if (!vrRunnerQuestDriveFallbackMeshes) return;
-                    console.warn('📱 Quest: nav street physics not ready — falling back to mesh triangles');
-                    var fallbackMeshes = vrRunnerQuestDriveFallbackMeshes;
-                    vrRunnerQuestDriveAwaitingNav = false;
-                    vrRunnerQuestDriveFallbackMeshes = null;
-                    queueCityMeshWalkablePhysicsBuild(fallbackMeshes);
-                }, ms != null ? ms : 18000);
-            }
-
-            function tryQueueQuestNavDrivePhysics() {
-                if (vrRunnerNavDrivePhysicsReady || vrRunnerNavDrivePhysicsBuilding) return true;
-                var grid = getCityNavGrid();
-                if (!grid || !grid.sparse || !grid.walkIdx || !grid.walkIdx.length) return false;
-                if (vrRunnerQuestMeshFallbackTimer != null) {
-                    clearTimeout(vrRunnerQuestMeshFallbackTimer);
-                    vrRunnerQuestMeshFallbackTimer = null;
-                }
-                vrRunnerQuestDriveAwaitingNav = false;
-                queueCityNavDrivePhysicsBuild(grid);
-                return true;
-            }
-
-            function onCityNavDrivePhysicsReady() {
-                if (pendingInitialCitySpawn && vrRunnerCityReady) {
-                    pendingInitialCitySpawn = false;
-                    applyDefaultPlayerCitySpawn();
-                } else if (vehicleRef && vehicleRef.vehicle && vehicleRef.vehicleBody) {
-                    snapPlayerVehicleToCityFloor();
-                }
-            }
-
-            function snapPlayerVehicleToCityFloor() {
-                if (!vehicleRef || !vehicleRef.vehicle || !vehicleRef.vehicleBody) return;
-                var tm = vehicleRef.vehicle.getChassisWorldTransform();
-                var p = tm.getOrigin();
-                var q = tm.getRotation();
-                var floorY = getCityDriveSurfaceY(p.x(), p.z(), p.y());
-                if (floorY === null || !isFinite(floorY)) return;
-                var newY = floorY + WHEEL_AXIS_Y + WHEEL_RADIUS + VEHICLE_SUSPENSION_REST_LENGTH;
-                TRANSFORM_AUX.setIdentity();
-                TRANSFORM_AUX.setOrigin(new Ammo.btVector3(p.x(), newY, p.z()));
-                TRANSFORM_AUX.setRotation(new Ammo.btQuaternion(q.x(), q.y(), q.z(), q.w()));
-                vehicleRef.vehicleBody.setWorldTransform(TRANSFORM_AUX);
-                vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
-                vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
-                vehicleRef.vehicle.resetSuspension();
-                syncPlayerChassisFromPhysics();
-            }
-
-            function queueCityMeshWalkablePhysicsBuild(meshes) {
+            function queueCityWalkablePhysicsBuild(meshes) {
                 if (!physicsWorld || !meshes || !meshes.length) return;
                 for (var i = 0; i < meshes.length; i++) {
                     vrRunnerCityPhysicsPending.push(meshes[i]);
@@ -9013,110 +8926,6 @@
                 if (!vrRunnerCityPhysicsBuilding) {
                     processCityWalkablePhysicsQueue();
                 }
-            }
-
-            function queueCityWalkablePhysicsBuild(meshes) {
-                if (!physicsWorld || !meshes || !meshes.length) return;
-                if (shouldSkipCityBulletPhysicsOnQuest()) {
-                    console.warn(
-                        '📱 Quest: BVH-only mode (?skipcitybullet=1) — wheels may not grip; remove param for normal drive physics'
-                    );
-                    return;
-                }
-                if (detectQuest()) {
-                    vrRunnerQuestDriveFallbackMeshes = meshes;
-                    if (tryQueueQuestNavDrivePhysics()) return;
-                    vrRunnerQuestDriveAwaitingNav = true;
-                    console.log('📱 Quest: waiting for nav bundle — street physics from nav grid (not mesh holes)');
-                    scheduleQuestMeshDriveFallback(18000);
-                    return;
-                }
-                queueCityMeshWalkablePhysicsBuild(meshes);
-            }
-
-            /** Quest: static boxes from bundled nav walk cells (continuous streets, correct Y). */
-            function queueCityNavDrivePhysicsBuild(grid) {
-                if (!physicsWorld || !grid || !grid.walkIdx || !grid.walkIdx.length) return;
-                if (vrRunnerNavDrivePhysicsReady || vrRunnerNavDrivePhysicsBuilding) return;
-                var chunkCells = NAV_DRIVE_CHUNK_CELLS;
-                var chunkMap = new Map();
-                var gw = grid.gridW | 0;
-                var walkIdx = grid.walkIdx;
-                var walkY = grid.walkY;
-                for (var wi = 0; wi < walkIdx.length; wi++) {
-                    var cellIdx = walkIdx[wi];
-                    var ix = cellIdx % gw;
-                    var iz = (cellIdx / gw) | 0;
-                    var cix = (ix / chunkCells) | 0;
-                    var ciz = (iz / chunkCells) | 0;
-                    var key = cix + ',' + ciz;
-                    var y = walkY[wi];
-                    var prev = chunkMap.get(key);
-                    if (!prev || y > prev.maxY) {
-                        chunkMap.set(key, { cix: cix, ciz: ciz, maxY: y });
-                    }
-                }
-                var chunks = Array.from(chunkMap.values());
-                chunkMap = null;
-                vrRunnerNavDriveChunkQueue = {
-                    grid: grid,
-                    chunks: chunks,
-                    i: 0,
-                    chunkCells: chunkCells
-                };
-                vrRunnerNavDrivePhysicsBuilding = true;
-                console.log(
-                    '📱 Quest nav street physics —',
-                    chunks.length,
-                    'chunks from',
-                    walkIdx.length.toLocaleString(),
-                    'walk cells'
-                );
-                processCityNavDrivePhysicsChunkQueue();
-            }
-
-            function processCityNavDrivePhysicsChunkQueue() {
-                var q = vrRunnerNavDriveChunkQueue;
-                if (!q || !physicsWorld) return;
-                var grid = q.grid;
-                var chunkCells = q.chunkCells;
-                var chunkWorld = chunkCells * grid.cellSize;
-                var halfXZ = chunkWorld * 0.5;
-                var halfY = 0.16;
-                var perFrame = 160;
-                var end = Math.min(q.i + perFrame, q.chunks.length);
-                for (var ci = q.i; ci < end; ci++) {
-                    var ch = q.chunks[ci];
-                    var cx = grid.minX + (ch.cix * chunkCells + chunkCells * 0.5) * grid.cellSize;
-                    var cz = grid.minZ + (ch.ciz * chunkCells + chunkCells * 0.5) * grid.cellSize;
-                    var topY = ch.maxY;
-                    var centerY = topY - halfY;
-                    var shape = new Ammo.btBoxShape(new Ammo.btVector3(halfXZ, halfY, halfXZ));
-                    var transform = new Ammo.btTransform();
-                    transform.setIdentity();
-                    transform.setOrigin(new Ammo.btVector3(cx, centerY, cz));
-                    var motionState = new Ammo.btDefaultMotionState(transform);
-                    var rbInfo = new Ammo.btRigidBodyConstructionInfo(
-                        0, motionState, shape, new Ammo.btVector3(0, 0, 0)
-                    );
-                    var body = new Ammo.btRigidBody(rbInfo);
-                    body.setFriction(0.92);
-                    body.setRestitution(0.04);
-                    physicsWorld.addRigidBody(body);
-                    vrRunnerNavDrivePhysicsBodies.push(body);
-                }
-                q.i = end;
-                if (end < q.chunks.length) {
-                    requestAnimationFrame(processCityNavDrivePhysicsChunkQueue);
-                    return;
-                }
-                vrRunnerNavDriveChunkQueue = null;
-                vrRunnerNavDrivePhysicsBuilding = false;
-                vrRunnerNavDrivePhysicsReady = true;
-                vrRunnerQuestDriveFallbackMeshes = null;
-                vrRunnerQuestDriveAwaitingNav = false;
-                console.log('✅ Quest nav street physics ready —', vrRunnerNavDrivePhysicsBodies.length, 'chunks');
-                onCityNavDrivePhysicsReady();
             }
 
             /** Up-facing city tris → static Bullet meshes so wheel rays get traction (not just BVH snap). */
@@ -9257,24 +9066,6 @@
                 }
                 _cityRaycaster.firstHitOnly = true;
                 return found ? bestY : null;
-            }
-
-            /** Drive/spawn height: nav grid on Quest (matches street physics), else mesh BVH. */
-            function getCityDriveSurfaceY(x, z, refY) {
-                var grid = getCityNavGrid();
-                if (grid && grid.cellSize > 0) {
-                    var ix = Math.floor((x - grid.minX) / grid.cellSize);
-                    var iz = Math.floor((z - grid.minZ) / grid.cellSize);
-                    if (NavOpt.navIsDrivableAt(grid, ix, iz)) {
-                        return NavOpt.navGetFloorYAt(grid, ix, iz);
-                    }
-                }
-                if (vrRunnerCityCollisionMeshes.length) {
-                    return getCityWalkableFloorY(
-                        x, z, refY != null ? refY : 2, vrRunnerCityCollisionMeshes
-                    );
-                }
-                return null;
             }
 
             /** Street topography: lowest up-facing land hit (not roof). */
@@ -14404,9 +14195,6 @@
                 if (NavOpt.attachWaterBitmap) NavOpt.attachWaterBitmap(b);
                 cityNavRuntimeGrid = buildNavGridUserDataFromBuild(b);
                 cityNavMapBuilt = true;
-                if (detectQuest()) {
-                    tryQueueQuestNavDrivePhysics();
-                }
             }
 
             function ensureCityNavMapVisual() {
