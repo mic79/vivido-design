@@ -345,7 +345,7 @@
             </div>
         </div>
     </div>
-    <div id="info">DriveVR4 — VRrunner city · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> reset · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car</div>
+    <div id="info">DriveVR4 — VRrunner city · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> reset · <b>T</b> / VR <b>left X</b> track editor · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car</div>
     <button id="vrButton" style="display: none;">Enter VR</button>
     
     <!-- Background Music -->
@@ -703,6 +703,7 @@
             var cachedRoadStripTexture = null;
             var trackEditorRebuildGeneration = 0;
             var trackEditorSpawnIndex = 0;
+            var trackEditorEditIndex = 0;
             var pendingInitialTrackSpawn = false;
             var pendingInitialCitySpawn = false;
             var DEFAULT_PLAYER_CITY_SPAWN_X = 170.9;
@@ -719,6 +720,15 @@
             var TRACK_EDITOR_MIN_Y = -15;
             var TRACK_EDITOR_MAX_Y = 120;
             var TRACK_EDITOR_MIN_TURN_DOT = -0.15;
+            var TRACK_EDITOR_VR_STICK_DEADZONE = 0.45;
+            var TRACK_EDITOR_VR_REPEAT_MS = 140;
+            var trackEditorVrRepeatAt = {};
+            var trackEditorVrButtonState = {};
+            var trackEditorVrLastToggleTime = 0;
+            /** Quest / xr-standard: X on left, A on right (same index, per hand). */
+            var TRACK_EDITOR_VR_BTN_FACE_LEFT_X = 4;
+            /** If last control point is within this horizontal distance of the first, treat as closed-loop duplicate. */
+            var TRACK_LOOP_CLOSE_EPS = 4;
             var _trackEditorCamForward = new THREE.Vector3();
             var _trackEditorCamRight = new THREE.Vector3();
             var _trackEditorWorldUp = new THREE.Vector3(0, 1, 0);
@@ -1808,8 +1818,8 @@
                     actions['flyBoost'] = true;
                 }
 
-                if (e.code === 'KeyT' && !renderer.xr.isPresenting) {
-                    /* track editor removed in DriveVR4 */
+                if (e.code === 'KeyT') {
+                    toggleTrackEditor();
                     e.preventDefault();
                     e.stopPropagation();
                     return false;
@@ -3230,6 +3240,28 @@
                     currentSpeed = Math.abs(vehicleRef.vehicle.getCurrentSpeedKmHour());
                 }
                 context.fillText('SPEED: ' + Math.round(currentSpeed) + ' km/h', 20, yPos);
+                yPos += lineHeight;
+
+                if (trackEditorMode && trackEditorControlPoints.length) {
+                    context.fillStyle = '#ffcc66';
+                    var ep = trackEditorControlPoints[getTrackEditorEditIndex()];
+                    context.fillText('EDIT PT ' + (getTrackEditorEditIndex() + 1) + '/' + trackEditorControlPoints.length, 20, yPos);
+                    yPos += lineHeight;
+                    context.font = '24px Arial';
+                    context.fillText(
+                        'R stick move · trig/grip height · L stick pt/bank · left X exit',
+                        20, yPos
+                    );
+                    context.font = 'bold 32px Arial';
+                    context.fillStyle = '#ffffff';
+                    yPos += lineHeight;
+                    context.fillText(
+                        'pos ' + ep.x.toFixed(0) + ',' + ep.y.toFixed(0) + ',' + ep.z.toFixed(0) +
+                            ' bank ' + clampTrackBank(ep.bank).toFixed(0),
+                        20, yPos
+                    );
+                    yPos += lineHeight;
+                }
                 
                 texture.needsUpdate = true;
             }
@@ -5067,6 +5099,7 @@
             }
             
             function checkCheckpointProgress(carPosition) {
+                if (trackEditorMode) return;
                 if (!checkpointMarkers || checkpointMarkers.length === 0) return;
                 
                 var nextIndex = playerCurrentCheckpoint % checkpointMarkers.length;
@@ -6728,8 +6761,8 @@
                                         }
                                     }
                                     
-                                    // Car controls (only when menu is not visible and not in fly mode)
-                                    if (!isMenuVisible && cameraMode !== 'fly') {
+                                    // Car controls (not in menu, fly mode, or track editor)
+                                    if (!isMenuVisible && cameraMode !== 'fly' && !trackEditorMode) {
                                         // Thumbstick for steering
                                         if (gamepad.axes && gamepad.axes.length >= 4) {
                                             vrSteering = gamepad.axes[2] || 0;
@@ -6752,7 +6785,7 @@
                                     }
                                     
                                     // A button (index 4) for camera switching (only when menu is not visible)
-                                    if (!isMenuVisible && gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
+                                    if (!isMenuVisible && !trackEditorMode && gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
                                         // Prevent rapid switching with a simple debounce
                                         if (!this.lastCameraSwitchTime || (Date.now() - this.lastCameraSwitchTime) > 500) {
                                             switchCamera();
@@ -6812,7 +6845,7 @@
                     updateLaserPointers();
                                     
                                     // Thumbstick click (index 3): reset in drive modes, spawn car in fly
-                                    if (!isMenuVisible && gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed) {
+                                    if (!isMenuVisible && !trackEditorMode && gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed) {
                                         if (cameraMode === 'fly') {
                                             if (!this.lastFlySpawnTime || (Date.now() - this.lastFlySpawnTime) > 500) {
                                                 spawnCarAtFlyCamera();
@@ -6896,15 +6929,19 @@
                                     }
                                 }
                             }
+                            if (!isMenuVisible) {
+                                handleTrackEditorVRInput(session, dt);
+                            }
                         }
                     }
 
                     // Combine keyboard and VR input (but disable car controls in desktop fly mode)
                     var isDesktopFlyMode = (cameraMode === 'fly' && !renderer.xr.isPresenting);
-                    var acceleration = (isDesktopFlyMode ? false : actions.acceleration) || (vrAcceleration > 0.1);
-                    var braking = (isDesktopFlyMode ? false : actions.braking) || (vrBraking > 0.1);
-                    var left = (isDesktopFlyMode ? false : actions.left) || (vrSteering < -0.1);
-                    var right = (isDesktopFlyMode ? false : actions.right) || (vrSteering > 0.1);
+                    var driveDisabled = isDesktopFlyMode || trackEditorMode;
+                    var acceleration = (driveDisabled ? false : actions.acceleration) || (vrAcceleration > 0.1);
+                    var braking = (driveDisabled ? false : actions.braking) || (vrBraking > 0.1);
+                    var left = (driveDisabled ? false : actions.left) || (vrSteering < -0.1);
+                    var right = (driveDisabled ? false : actions.right) || (vrSteering > 0.1);
 
                     // Arcade-style steering - more responsive and forgiving
                     var absSpeed = Math.abs(speed);
@@ -7255,7 +7292,8 @@
 
             function getTrackEditorEditIndex() {
                 if (!trackEditorControlPoints.length) return 0;
-                return playerCurrentCheckpoint % trackEditorControlPoints.length;
+                var n = trackEditorControlPoints.length;
+                return ((trackEditorEditIndex % n) + n) % n;
             }
 
             var TRACK_EDITOR_NAV_SNAP_M = 15;
@@ -7353,6 +7391,17 @@
                 } else {
                     trackEditorSpawnIndex = 0;
                 }
+            }
+
+            /** Nearest control point to the car = stand here; the point ahead on the loop is what we edit. */
+            function initTrackEditorEditIndexFromPlayer() {
+                if (!pathPoints.length) {
+                    trackEditorEditIndex = 0;
+                    return;
+                }
+                initTrackEditorSpawnIndex();
+                var n = pathPoints.length;
+                trackEditorEditIndex = (trackEditorSpawnIndex + 1) % n;
             }
 
             function removePhysicsDebugByName(name) {
@@ -7466,24 +7515,26 @@
                 if (n < 4) return false;
                 var prev = cps[(index - 1 + n) % n];
                 var next = cps[(index + 1) % n];
+                var prevIsClosure = isTrackLoopClosurePair(prev, candidate);
+                var nextIsClosure = isTrackLoopClosurePair(candidate, next);
 
                 var dxp = candidate.x - prev.x;
                 var dzp = candidate.z - prev.z;
                 var horizPrev = Math.sqrt(dxp * dxp + dzp * dzp);
-                if (horizPrev < TRACK_EDITOR_MIN_SPACING) return false;
+                if (!prevIsClosure && horizPrev < TRACK_EDITOR_MIN_SPACING) return false;
 
                 var dxn = next.x - candidate.x;
                 var dzn = next.z - candidate.z;
                 var horizNext = Math.sqrt(dxn * dxn + dzn * dzn);
-                if (horizNext < TRACK_EDITOR_MIN_SPACING) return false;
+                if (!nextIsClosure && horizNext < TRACK_EDITOR_MIN_SPACING) return false;
 
-                if (Math.abs(candidate.y - prev.y) / horizPrev > TRACK_EDITOR_MAX_GRADE) return false;
-                if (Math.abs(candidate.y - next.y) / horizNext > TRACK_EDITOR_MAX_GRADE) return false;
+                if (!prevIsClosure && horizPrev > 0.01 && Math.abs(candidate.y - prev.y) / horizPrev > TRACK_EDITOR_MAX_GRADE) return false;
+                if (!nextIsClosure && horizNext > 0.01 && Math.abs(candidate.y - next.y) / horizNext > TRACK_EDITOR_MAX_GRADE) return false;
                 if (candidate.y < TRACK_EDITOR_MIN_Y || candidate.y > TRACK_EDITOR_MAX_Y) return false;
 
                 var vIn = new THREE.Vector3(dxp, 0, dzp);
                 var vOut = new THREE.Vector3(dxn, 0, dzn);
-                if (vIn.lengthSq() > 0.01 && vOut.lengthSq() > 0.01) {
+                if (!prevIsClosure && !nextIsClosure && vIn.lengthSq() > 0.01 && vOut.lengthSq() > 0.01) {
                     vIn.normalize();
                     vOut.normalize();
                     if (vIn.dot(vOut) < TRACK_EDITOR_MIN_TURN_DOT) return false;
@@ -7591,14 +7642,17 @@
                 var info = document.getElementById('info');
                 if (!info) return;
                 if (!trackEditorMode) {
-                    info.innerHTML = 'DriveVR3 — top-down nav (green streets, grey buildings, blue water)<br>WASD/VR · B Menu · C Camera · R Reset · <b>P</b> physics wireframes · <b>T</b> track editor (desktop)<br>City: VRrunner <code>scene.gltf</code> · <code>?navtopgap=2.5</code> · Shift+N rebuild · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car here';
+                    info.innerHTML = 'DriveVR4 — VRrunner city · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> reset · <b>T</b> / VR <b>left X</b> track editor · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car';
                     return;
                 }
                 var idx = getTrackEditorEditIndex();
                 var p = trackEditorControlPoints[idx];
+                var vrHint = renderer.xr.isPresenting
+                    ? '<br>VR: right stick move (head-relative) · trigger/grip height · left stick prev/next pt & bank · <b>left X</b> exit'
+                    : '<br>←→ strafe · ↑↓ forward (camera-relative, 1m) · Shift+↑↓ Y · Shift+←→ bank · PgUp/PgDn change edit point (you stand at the previous point)';
                 info.innerHTML =
                     '<b>TRACK EDITOR</b> — <b>T</b> exit · editing next checkpoint point <b>' + (idx + 1) + '</b>/' + trackEditorControlPoints.length +
-                    '<br>←→ strafe · ↑↓ forward (camera-relative, 1m) · Shift+↑↓ Y · Shift+←→ bank · PgUp/PgDn spawn point' +
+                    vrHint +
                     '<br>pos ' + p.x.toFixed(1) + ', ' + p.y.toFixed(1) + ', ' + p.z.toFixed(1) + ' · bank ' + clampTrackBank(p.bank).toFixed(0) + '°' +
                     '<br><i>?track=</i> updates in the address bar (copy link to share)';
             }
@@ -7627,6 +7681,10 @@
                 if (!trackEditorControlPoints.length) return;
                 var gen = ++trackEditorRebuildGeneration;
                 trackLoadSource = 'editor';
+                trackEditorControlPoints = collapseDuplicateClosureControlPoints(trackEditorControlPoints);
+                if (trackEditorEditIndex >= trackEditorControlPoints.length) {
+                    trackEditorEditIndex = 0;
+                }
                 buildPathPointsFromControlData(trackEditorControlPoints, false);
                 racingPath = new THREE.CatmullRomCurve3(pathPoints, true);
                 disposeTrackMeshesAndPhysics();
@@ -7645,20 +7703,101 @@
                 });
             }
 
-            function toggleTrackEditor() {
-                if (renderer.xr.isPresenting) {
-                    console.log('Track editor is desktop-only (press T on keyboard).');
-                    return;
+            function trackEditorVrReady(action) {
+                var now = Date.now();
+                if (!trackEditorVrRepeatAt[action] || now - trackEditorVrRepeatAt[action] >= TRACK_EDITOR_VR_REPEAT_MS) {
+                    trackEditorVrRepeatAt[action] = now;
+                    return true;
                 }
+                return false;
+            }
+
+            function trackEditorVrAxisStep(action, value) {
+                if (Math.abs(value) < TRACK_EDITOR_VR_STICK_DEADZONE) return 0;
+                if (!trackEditorVrReady(action)) return 0;
+                return value > 0 ? 1 : -1;
+            }
+
+            function trackEditorVrButtonPressed(action, pressed) {
+                var was = !!trackEditorVrButtonState[action];
+                trackEditorVrButtonState[action] = !!pressed;
+                return pressed && !was;
+            }
+
+            function handleTrackEditorVRInput(session, dt) {
+                if (!renderer.xr.isPresenting || !session || !session.inputSources) return;
+
+                for (var si = 0; si < session.inputSources.length; si++) {
+                    var inputSource = session.inputSources[si];
+                    var gamepad = inputSource.gamepad;
+                    if (!gamepad) continue;
+
+                    if (inputSource.handedness === 'left') {
+                        if (trackEditorVrButtonPressed('toggle', gamepad.buttons && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X] && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X].pressed)) {
+                            if (!trackEditorVrLastToggleTime || Date.now() - trackEditorVrLastToggleTime > 500) {
+                                toggleTrackEditor();
+                                trackEditorVrLastToggleTime = Date.now();
+                            }
+                        }
+                        if (trackEditorMode && gamepad.axes && gamepad.axes.length >= 4) {
+                            var lx = gamepad.axes[2] || 0;
+                            var ly = gamepad.axes[3] || 0;
+                            var bankDir = trackEditorVrAxisStep('vrBank', lx);
+                            if (bankDir) {
+                                tryAdjustTrackEditorPoint(0, 0, 0, bankDir * TRACK_EDITOR_BANK_STEP);
+                            }
+                            var ptDir = trackEditorVrAxisStep('vrPtSel', ly);
+                            if (ptDir > 0) {
+                                var nUp = trackEditorControlPoints.length;
+                                if (nUp) {
+                                    trackEditorEditIndex = (getTrackEditorEditIndex() + 1) % nUp;
+                                    spawnPlayerAtTrackControlPoint(trackEditorEditIndex);
+                                }
+                            } else if (ptDir < 0) {
+                                var nDn = trackEditorControlPoints.length;
+                                if (nDn) {
+                                    trackEditorEditIndex = (getTrackEditorEditIndex() - 1 + nDn) % nDn;
+                                    spawnPlayerAtTrackControlPoint(trackEditorEditIndex);
+                                }
+                            }
+                        }
+                    }
+
+                    if (inputSource.handedness === 'right' && trackEditorMode) {
+                        if (gamepad.axes && gamepad.axes.length >= 4) {
+                            var stickX = gamepad.axes[2] || 0;
+                            var stickY = gamepad.axes[3] || 0;
+                            var fwd = -trackEditorVrAxisStep('vrFwd', stickY);
+                            var str = trackEditorVrAxisStep('vrStrafe', stickX);
+                            if (fwd) tryAdjustTrackEditorPointCameraRelative(fwd, 0);
+                            if (str) tryAdjustTrackEditorPointCameraRelative(0, str);
+                        }
+                        if (gamepad.buttons && gamepad.buttons[0] && (gamepad.buttons[0].value || 0) > 0.5 && trackEditorVrReady('vrYUp')) {
+                            tryAdjustTrackEditorPoint(0, TRACK_EDITOR_VERT_STEP, 0, 0);
+                        }
+                        if (gamepad.buttons && gamepad.buttons[1] && (gamepad.buttons[1].value || 0) > 0.5 && trackEditorVrReady('vrYDn')) {
+                            tryAdjustTrackEditorPoint(0, -TRACK_EDITOR_VERT_STEP, 0, 0);
+                        }
+                    }
+                }
+            }
+
+            function toggleTrackEditor() {
                 trackEditorMode = !trackEditorMode;
                 if (trackEditorMode) {
+                    if (renderer.xr.isPresenting && cameraMode === 'fly') {
+                        switchCamera();
+                    }
                     if (!trackEditorControlPoints.length) {
                         var trackData = loadTrackControlPoints();
-                        trackEditorControlPoints = cloneTrackControlPoints(trackData.controlPoints);
+                        trackEditorControlPoints = collapseDuplicateClosureControlPoints(
+                            cloneTrackControlPoints(trackData.controlPoints)
+                        );
                     }
                     removeBotVehicle();
                     rebuildTrackFromEditor();
-                    initTrackEditorSpawnIndex();
+                    initTrackEditorEditIndexFromPlayer();
+                    spawnPlayerAtTrackControlPoint(trackEditorEditIndex);
                     updateTrackEditorUrl();
                     console.log('✏️ Track editor ON — editing checkpoint', getTrackEditorEditIndex() + 1);
                 } else {
@@ -7683,14 +7822,17 @@
                 updateTrackEditorHud();
             }
 
-            function spawnPlayerAtTrackControlPoint(controlIndex) {
+            function spawnPlayerAtTrackControlPoint(editIndex) {
                 if (!vehicleRef || !vehicleRef.vehicleBody || !pathPoints.length) return;
                 var n = pathPoints.length;
-                controlIndex = ((controlIndex % n) + n) % n;
-                trackEditorSpawnIndex = controlIndex;
-                playerCurrentCheckpoint = controlIndex;
+                editIndex = ((editIndex % n) + n) % n;
+                var standIndex = (editIndex - 1 + n) % n;
+                trackEditorEditIndex = editIndex;
+                trackEditorSpawnIndex = standIndex;
+                playerLastPassedCheckpoint = standIndex;
+                playerCurrentCheckpoint = editIndex;
 
-                var resetPosition = pathPoints[controlIndex].clone();
+                var resetPosition = pathPoints[standIndex].clone();
                 var roadY = getRoadSurfaceElevation(resetPosition.x, resetPosition.z);
                 if (roadY > resetPosition.y - 10) {
                     resetPosition.y = roadY + 1;
@@ -7698,8 +7840,7 @@
                     resetPosition.y = resetPosition.y + 2;
                 }
 
-                var nextIndex = (controlIndex + 1) % n;
-                var direction = new THREE.Vector3().subVectors(pathPoints[nextIndex], resetPosition);
+                var direction = new THREE.Vector3().subVectors(pathPoints[editIndex], resetPosition);
                 direction.y = 0;
                 if (direction.lengthSq() < 0.01) {
                     direction.set(0, 0, 1);
@@ -7721,22 +7862,24 @@
                 updateNextCheckpointMarker();
                 updateTrackEditorMarker();
                 updateTrackEditorHud();
-                console.log('🚗 Spawned at control point', controlIndex + 1, '/', n);
+                console.log('🚗 Editing point', editIndex + 1, '/', n, '— standing at point', standIndex + 1);
             }
 
             function handleTrackEditorKeydown(e) {
-                if (!trackEditorMode || renderer.xr.isPresenting || isMenuVisible) return false;
+                if (!trackEditorMode || isMenuVisible) return false;
 
                 if (e.code === 'PageUp') {
-                    var nUp = pathPoints.length;
-                    var fromUp = getTrackEditorNavIndexFromPlayer();
-                    spawnPlayerAtTrackControlPoint((fromUp + 1) % nUp);
+                    var nUp = trackEditorControlPoints.length;
+                    if (!nUp) return true;
+                    trackEditorEditIndex = (getTrackEditorEditIndex() + 1) % nUp;
+                    spawnPlayerAtTrackControlPoint(trackEditorEditIndex);
                     return true;
                 }
                 if (e.code === 'PageDown') {
-                    var nDn = pathPoints.length;
-                    var fromDn = getTrackEditorNavIndexFromPlayer();
-                    spawnPlayerAtTrackControlPoint((fromDn - 1 + nDn) % nDn);
+                    var nDn = trackEditorControlPoints.length;
+                    if (!nDn) return true;
+                    trackEditorEditIndex = (getTrackEditorEditIndex() - 1 + nDn) % nDn;
+                    spawnPlayerAtTrackControlPoint(trackEditorEditIndex);
                     return true;
                 }
 
@@ -7774,6 +7917,26 @@
                 return false;
             }
 
+            function controlPointsHorizDistSq(a, b) {
+                var dx = a.x - b.x;
+                var dz = a.z - b.z;
+                return dx * dx + dz * dz;
+            }
+
+            function isTrackLoopClosurePair(a, b) {
+                return controlPointsHorizDistSq(a, b) < TRACK_LOOP_CLOSE_EPS * TRACK_LOOP_CLOSE_EPS;
+            }
+
+            /** CatmullRomCurve3(..., true) already closes the loop; drop redundant last == first point. */
+            function collapseDuplicateClosureControlPoints(points) {
+                if (!points || points.length < 4) return points;
+                if (isTrackLoopClosurePair(points[0], points[points.length - 1])) {
+                    console.log('↩️ Closed track: removed duplicate last control point (same as start)');
+                    return points.slice(0, -1);
+                }
+                return points;
+            }
+
             function parseCompactTrackParam(trackParam) {
                 if (!trackParam || typeof trackParam !== 'string') return null;
                 var decoded = trackParam;
@@ -7805,7 +7968,7 @@
                         bank: parts.length >= 4 ? clampTrackBank(parts[3]) : 0
                     });
                 }
-                return points;
+                return collapseDuplicateClosureControlPoints(points);
             }
 
             function encodeCompactTrackParam(controlPoints) {
@@ -7849,6 +8012,7 @@
             }
 
             function buildPathPointsFromControlData(controlPoints, applyElevationSmoothing) {
+                controlPoints = collapseDuplicateClosureControlPoints(controlPoints);
                 pathPoints = [];
                 pathBankDegrees = [];
                 var rawPoints = controlPoints.map(function(p) {
@@ -7914,6 +8078,7 @@
 
             function createRacingPath() {
                 var trackData = loadTrackControlPoints();
+                trackData.controlPoints = collapseDuplicateClosureControlPoints(trackData.controlPoints);
                 trackEditorControlPoints = cloneTrackControlPoints(trackData.controlPoints);
                 buildPathPointsFromControlData(trackData.controlPoints, trackData.applyElevationSmoothing);
 
@@ -8427,7 +8592,7 @@
                 // Create checkpoint data without visual elements
                 checkpointMarkers = [];
                 
-                for (var i = 0; i < pathPoints.length - 1; i++) { // -1 because last point is same as first
+                for (var i = 0; i < pathPoints.length; i++) {
                     checkpointMarkers.push({
                         position: pathPoints[i].clone(),
                         index: i
@@ -8452,11 +8617,19 @@
                     scene.remove(nextCheckpointMarker);
                 }
                 
-                // Create glowing marker for next checkpoint
-                var nextIndex = playerCurrentCheckpoint % checkpointMarkers.length;
-                var checkpoint = checkpointMarkers[nextIndex];
-                
-                if (checkpoint && checkpoint.position) {
+                var markerPos = null;
+                if (trackEditorMode && pathPoints.length) {
+                    var editIndex = getTrackEditorEditIndex();
+                    markerPos = pathPoints[editIndex];
+                } else if (checkpointMarkers.length) {
+                    var nextIndex = playerCurrentCheckpoint % checkpointMarkers.length;
+                    var checkpoint = checkpointMarkers[nextIndex];
+                    if (checkpoint && checkpoint.position) {
+                        markerPos = checkpoint.position;
+                    }
+                }
+
+                if (markerPos) {
                     var glowGeometry = new THREE.SphereGeometry(4, 16, 16);
                     var glowMaterial = new THREE.MeshBasicMaterial({
                         color: 0xffff00,
@@ -8464,17 +8637,15 @@
                         opacity: 0.8
                     });
                     nextCheckpointMarker = new THREE.Mesh(glowGeometry, glowMaterial);
-                    nextCheckpointMarker.position.copy(checkpoint.position);
-                    // Position marker relative to track elevation at this point
-                    var trackElevation = checkpoint.position.y;
-                    nextCheckpointMarker.position.y = trackElevation + 8; // 8m above track for visibility
+                    nextCheckpointMarker.position.copy(markerPos);
+                    nextCheckpointMarker.position.y = markerPos.y + 8;
                     
                     scene.add(nextCheckpointMarker);
                     
                     // Make it pulse
                     nextCheckpointMarker.userData = { pulseTime: 0 };
                     
-                    console.log('📍 Next checkpoint marker updated at:', checkpoint.position);
+                    console.log('📍 Next checkpoint marker updated at:', markerPos);
                 }
             }
 
