@@ -46,25 +46,23 @@ The bot follows `denseWaypoints` built from the same `racingPath` as the road. A
 
 ## Track editor
 
-Press **T** to toggle editor (desktop or VR). Use **fly camera** (**C**) to scout spots in the city, then place the track with layout mode.
+Press **T** (desktop) or open the **VR menu → EDITOR** button to toggle the editor. Use **fly camera** (**C** / VR **A**) to scout spots in the city, then place the track with layout mode.
 
 | Key / control | Action |
 |---------------|--------|
-| **T** | Toggle editor on/off |
-| **G** / VR left **Y** | Toggle **layout mode** (move **entire track** vs single point) |
+| **T** / VR menu **EDITOR** | Toggle editor on/off |
+| **G** / VR menu **MODE: POINT/LAYOUT** | Toggle **layout mode** (move **entire track** vs single point) |
 | **← → ↑ ↓** | Point mode: move one control point 1 m (camera-relative) |
 | **G + layout** | Move **all** control points 25 m (camera-relative on XZ) |
 | **Ctrl** (layout) | 100 m steps (4× faster repositioning in the city) |
 | **Shift+↑ ↓** | Point: Y ±1 m · Layout: Y ±10 m for whole track |
 | **Shift+← →** | Bank ±5° (point mode only) |
 | **PgUp / PgDn** | Next / previous edit point (you stand at the previous point) |
-| VR left **X** | Toggle editor |
-| VR sticks (no modifier) | Fly only while in fly camera |
-| VR **grip or trigger** (per hand) | Track-edit modifier (like Shift/Ctrl); that hand’s stick/trig/grip edit instead of fly |
-| VR **R** mod + stick | Point or layout move (head-relative) |
-| VR **R** mod + trig / grip | Point or layout height |
-| VR **L** mod + stick | Point: bank (X) / next·prev point (Y) · Layout: move all on XZ |
-| VR **L** mod + trig / grip | Layout: whole-track height only |
+| VR left **X / Y** | Previous / next edit point |
+| VR **hold left grip** | Modify modifier — sticks edit the point/track instead of flying |
+| VR L-grip + **right stick** | Move point (or whole track in layout mode) on the ground plane |
+| VR L-grip + **left stick Y** | Point/track height up · down |
+| VR L-grip + **left stick X** | Bank ±5° (point mode only) |
 
 Layout mode keeps track shape intact (only translates every control point). Height is still limited to the editor Y range. Save to a personal slot or copy `?track=…` when done.
 
@@ -77,17 +75,32 @@ Copy the `?track=…` string from the HUD or run `DriveVR2.getEditorTrack()` in 
 
 ## VR motion controllers
 
-In headset, Quest-style **controller shells** and **floating button labels** (same VRrunner / VRKnockout pattern: pulsing ring + text beside each hint) show on your grips for the current mode (drive, menu, track editor).
+In headset, Quest-style **controller shells** and **floating button labels** (same VRrunner / VRKnockout pattern: pulsing ring + text beside each hint) show on your grips for the current mode (drive, fly, menu, track editor). Labels refresh by mode and update live when you hold a grip modifier.
 
-- Grips are parented to the **scene** (not the car camera rig), so WebXR tracking stays aligned with your real hands.
-- A bright blue **fallback shell** is always added; optional Quest GLTF loads on top.
-- Labels refresh when you open the menu, track editor, or layout mode.
+**Button map (fly / track editor):**
+
+| Control | Right hand | Left hand |
+|---------|-----------|-----------|
+| Thumbstick | Move (left/right/fwd/back) | Rotate (X) + Up/Down (Y) |
+| **A / B** | A = drive/fly · B = menu | — |
+| **X / Y** | — | X = prev point · Y = next point |
+| **Grip (hold)** | Fast movement modifier | Modify Point/Track modifier (editor) |
+| **Trigger** | (nothing; UI click when menu open) | (nothing; UI click when menu open) |
+
+In **drive mode** the right hand keeps car controls (stick = steer, trigger = gas, grip = brake); the labels switch accordingly.
+
+- Grips are parented to the camera rig so WebXR tracking stays aligned with your real hands.
+- Labels refresh when you open the menu, toggle the editor / layout mode, or press/release a grip modifier.
 - Add **`?simplexrctrl=1`** if GLTF controller models fail to load (hints still work; fallback mesh only).
+
+## Menu lasers
+
+When the menu (or track selector) is open, **both** controllers show an independent laser. Each laser hovers and clicks on its **own trigger** — left and right work fully independently.
 
 ## Fly camera
 
 - **C** / VR **A** — toggle fly / driving camera
-- **Shift** (hold) / VR **hold left Y** (fly) or **hold left stick click** (track editor + fly) — **10× faster** movement
+- **Shift** (hold) / VR **hold right grip** — **10× faster** movement
 - **J** — spawn car at fly camera (fly mode only)
 - No position limits in fly mode
 

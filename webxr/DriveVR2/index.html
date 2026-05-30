@@ -614,6 +614,11 @@
             let vrLaserPointers = [];
             var vrHandToGrip = { left: null, right: null };
             var vrControllersSetupDone = false;
+            // Held-modifier state (right grip = fast movement, left grip = modify point/track)
+            var vrLeftGripHeld = false;
+            var vrRightGripHeld = false;
+            // Per-hand trigger edge state for independent menu laser clicks
+            var vrMenuTriggerWasPressed = { left: false, right: false };
             
             // App version and FPS
             const APP_VERSION = 'DriveVR2 v2.0';
@@ -1966,79 +1971,65 @@
                 vrHandToGrip.right = xr.handToCtrl.right;
             }
 
-            function mountDriveHintsLeft(grip) {
-                if (grip.userData._hasDriveLeftHints) return;
-                grip.userData._hasDriveLeftHints = true;
-                attachVrHintToGrip(grip, makeVrButtonHint('X', 'Track editor'));
-                mountVrHintStackOffset(grip, makeVrButtonHint('Sq', 'Click: cam Y'), 0.016);
-            }
-
-            function mountDriveHintsRight(grip) {
-                if (grip.userData._hasDriveRightHints) return;
-                grip.userData._hasDriveRightHints = true;
-                attachVrHintToGrip(grip, makeVrButtonHint('B', 'Menu'));
-                mountVrHintStackOffset(grip, makeVrButtonHint('A', 'Camera'), 0.016);
-                mountVrHintStackOffset(grip, makeVrButtonHint('St', 'Steer'), 0.024);
-                mountVrHintStackOffset(grip, makeVrButtonHint('Tr', 'Gas'), 0.032);
-                mountVrHintStackOffset(grip, makeVrButtonHint('Gr', 'Brake'), 0.040);
-                mountVrHintStackOffset(grip, makeVrButtonHint('Sq', 'Reset car'), 0.048);
-            }
-
-            function mountVrMenuHintsRight(grip) {
-                if (grip.userData._hasMenuRightHints) return;
-                grip.userData._hasMenuRightHints = true;
-                attachVrHintToGrip(grip, makeVrButtonHint('B', 'Menu / back'));
-                mountVrHintStackOffset(grip, makeVrButtonHint('Tr', 'Click UI'), 0.016);
-            }
-
-            function mountVrMenuHintsLeft(grip) {
-                attachVrHintToGrip(grip, makeVrButtonHint('Tr', 'Click UI'));
-            }
-
-            function mountFlyHintsLeft(grip) {
-                if (grip.userData._hasFlyLeftHints) return;
-                grip.userData._hasFlyLeftHints = true;
-                attachVrHintToGrip(grip, makeVrButtonHint('St', 'Fly turn / height'));
-                mountVrHintStackOffset(grip, makeVrButtonHint('Y', 'Hold: fast fly'), 0.016);
-                mountVrHintStackOffset(grip, makeVrButtonHint('X', 'Track editor'), 0.024);
-            }
-
-            function mountFlyHintsRight(grip) {
-                if (grip.userData._hasFlyRightHints) return;
-                grip.userData._hasFlyRightHints = true;
-                attachVrHintToGrip(grip, makeVrButtonHint('St', 'Fly move'));
-                mountVrHintStackOffset(grip, makeVrButtonHint('Tr', 'Fly up'), 0.016);
-                mountVrHintStackOffset(grip, makeVrButtonHint('Gr', 'Fly down'), 0.024);
-                mountVrHintStackOffset(grip, makeVrButtonHint('A', 'Camera'), 0.032);
-            }
-
-            function mountTrackEditorHintsLeft(grip) {
-                if (grip.userData._hasEditorLeftHints) return;
-                grip.userData._hasEditorLeftHints = true;
-                attachVrHintToGrip(grip, makeVrButtonHint('X', 'Exit editor'));
-                mountVrHintStackOffset(grip, makeVrButtonHint('Y', trackEditorLayoutMode ? 'Point mode' : 'Layout mode'), 0.016);
+            /**
+             * Build the ordered button-hint list for one hand based on the current
+             * mode (menu / track editor / fly / drive) and whether the grip modifiers
+             * are being held. Each entry is [shortLetter, label].
+             */
+            function buildVrHintList(hand) {
+                if (isVRPointerMenuActive()) {
+                    return hand === 'right'
+                        ? [['Tr', 'Click UI'], ['B', 'Close menu']]
+                        : [['Tr', 'Click UI']];
+                }
+                if (trackEditorMode) {
+                    var editing = vrLeftGripHeld;
+                    var tgt = trackEditorLayoutMode ? 'Track' : 'Point';
+                    if (hand === 'right') {
+                        return [
+                            ['St', editing ? ('Move ' + tgt) : 'Move'],
+                            ['Gr', 'Hold: Fast movement'],
+                            ['A', 'Drive/Fly mode'],
+                            ['B', 'Menu']
+                        ];
+                    }
+                    return [
+                        ['St', editing ? 'Up/Down + Bank' : 'Rotate + Up/Down'],
+                        ['X', 'Prev point'],
+                        ['Y', 'Next point'],
+                        ['Gr', editing ? ('Modifying ' + tgt) : ('Hold: Modify ' + tgt)]
+                    ];
+                }
                 if (cameraMode === 'fly') {
-                    mountVrHintStackOffset(grip, makeVrButtonHint('St', 'Fly (no mod)'), 0.024);
-                    mountVrHintStackOffset(grip, makeVrButtonHint('Sq', 'Hold: fast fly'), 0.032);
+                    if (hand === 'right') {
+                        return [
+                            ['St', vrRightGripHeld ? 'Fast movement' : 'Movement'],
+                            ['Gr', 'Hold: Fast movement'],
+                            ['A', 'Drive mode'],
+                            ['B', 'Menu']
+                        ];
+                    }
+                    return [['St', vrRightGripHeld ? 'Rotate + Up/Down (fast)' : 'Rotate + Up/Down']];
                 }
-                mountVrHintStackOffset(grip, makeVrButtonHint('L+', trackEditorLayoutMode ? 'Mod+stick: move all' : 'Mod+stick: bank / pt'), cameraMode === 'fly' ? 0.040 : 0.032);
-                if (trackEditorLayoutMode) {
-                    var layoutZ = cameraMode === 'fly' ? 0.048 : 0.040;
-                    mountVrHintStackOffset(grip, makeVrButtonHint('Tr', 'Mod Y up (all)'), layoutZ);
-                    mountVrHintStackOffset(grip, makeVrButtonHint('Gr', 'Mod Y down (all)'), layoutZ + 0.008);
+                // Drive mode
+                if (hand === 'right') {
+                    return [
+                        ['St', 'Steer'],
+                        ['Tr', 'Gas'],
+                        ['Gr', 'Brake'],
+                        ['A', 'Fly mode'],
+                        ['B', 'Menu']
+                    ];
                 }
+                return [];
             }
 
-            function mountTrackEditorHintsRight(grip) {
-                if (grip.userData._hasEditorRightHints) return;
-                grip.userData._hasEditorRightHints = true;
-                attachVrHintToGrip(grip, makeVrButtonHint('A', 'Camera'));
-                if (cameraMode === 'fly') {
-                    mountVrHintStackOffset(grip, makeVrButtonHint('St', 'Fly (no mod)'), 0.016);
+            function mountVrHintList(grip, list) {
+                if (!grip || !list || !list.length) return;
+                attachVrHintToGrip(grip, makeVrButtonHint(list[0][0], list[0][1]));
+                for (var i = 1; i < list.length; i++) {
+                    mountVrHintStackOffset(grip, makeVrButtonHint(list[i][0], list[i][1]), 0.008 * (i + 1));
                 }
-                mountVrHintStackOffset(grip, makeVrButtonHint('R+', trackEditorLayoutMode ? 'Mod+stick: move all' : 'Mod+stick: point'), 0.024);
-                mountVrHintStackOffset(grip, makeVrButtonHint('Tr', trackEditorLayoutMode ? 'Mod Y up (all)' : 'Mod Y up (pt)'), 0.032);
-                mountVrHintStackOffset(grip, makeVrButtonHint('Gr', trackEditorLayoutMode ? 'Mod Y down (all)' : 'Mod Y down (pt)'), 0.040);
             }
 
             function refreshDriveVrGripHints() {
@@ -2058,23 +2049,8 @@
                         if (!right && xr.controllerGrip2) right = xr.controllerGrip2;
                     }
                 }
-                if (isVRPointerMenuActive()) {
-                    if (right) mountVrMenuHintsRight(right);
-                    if (left) mountVrMenuHintsLeft(left);
-                    return;
-                }
-                if (trackEditorMode) {
-                    if (left) mountTrackEditorHintsLeft(left);
-                    if (right) mountTrackEditorHintsRight(right);
-                    return;
-                }
-                if (cameraMode === 'fly') {
-                    if (left) mountFlyHintsLeft(left);
-                    if (right) mountFlyHintsRight(right);
-                    return;
-                }
-                if (left) mountDriveHintsLeft(left);
-                if (right) mountDriveHintsRight(right);
+                if (left) mountVrHintList(left, buildVrHintList('left'));
+                if (right) mountVrHintList(right, buildVrHintList('right'));
             }
 
             function activateDriveVrXrSession() {
@@ -3146,6 +3122,7 @@
                         console.log('Creating new VR menu...');
                         try {
                             createVRMenu();
+                            updateVRMenuDisplay();
                             console.log('VR Menu created successfully');
                         } catch (error) {
                             console.error('Error creating VR menu:', error);
@@ -3307,23 +3284,30 @@
                 vrMenuButtons.push(musicToggle);
                 vrMenu.add(musicGroup);
 
+                // Track editor toggle + Point/Layout toggle row
+                const editorBtn = createVRButton('EDITOR: OFF', -0.18, -0.24, 0.32, 0.07, '#aa6600', 'track-editor-toggle');
+                const pointLayoutBtn = createVRButton('MODE: POINT', 0.2, -0.24, 0.32, 0.07, '#446688', 'track-point-layout-toggle');
+                vrMenu.add(editorBtn);
+                vrMenu.add(pointLayoutBtn);
+                vrMenuButtons.push(editorBtn, pointLayoutBtn);
+
                 // Track selector button
-                const trackBtn = createVRButton('TRACKS', 0, -0.25, 0.28, 0.08, '#6644aa', 'select-track');
+                const trackBtn = createVRButton('TRACKS', 0, -0.32, 0.28, 0.07, '#6644aa', 'select-track');
                 vrMenu.add(trackBtn);
                 vrMenuButtons.push(trackBtn);
                 
                 // Start Race button
-                const startBtn = createVRButton('START RACE', 0, -0.38, 0.25, 0.08, '#00aa00', 'start-race');
+                const startBtn = createVRButton('START RACE', 0, -0.40, 0.25, 0.07, '#00aa00', 'start-race');
                 vrMenu.add(startBtn);
                 vrMenuButtons.push(startBtn);
                 
                 // Close button
-                const closeBtn = createVRButton('CLOSE', 0, -0.48, 0.2, 0.08, '#666666', 'close');
+                const closeBtn = createVRButton('CLOSE', 0, -0.48, 0.2, 0.07, '#666666', 'close');
                 vrMenu.add(closeBtn);
                 vrMenuButtons.push(closeBtn);
                 
                 // Status display
-                const statusDisplay = createVRText('Disconnected', 0, -0.58, 0.4);
+                const statusDisplay = createVRText('Disconnected', 0, -0.56, 0.4);
                 statusDisplay.userData.type = 'display';
                 statusDisplay.userData.id = 'status';
                 vrMenu.add(statusDisplay);
@@ -3393,6 +3377,21 @@
                 return mesh;
             }
 
+            /** Redraw a VR button's label text (uses the textCanvas created in createVRButton). */
+            function setVrButtonText(button, text) {
+                if (!button || !button.userData) return;
+                var canvas = button.userData.textCanvas;
+                var texture = button.userData.textTexture;
+                if (!canvas || !texture) return;
+                var ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 22px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(text, canvas.width / 2, 40);
+                texture.needsUpdate = true;
+            }
+
             function updateVRMenuDisplay() {
                 if (!vrMenu) return;
                 
@@ -3447,6 +3446,15 @@
                     else if (id === 'multiplayer') active = isMultiplayer;
                     else if (id === 'bot-toggle') active = botEnabled;
                     else if (id === 'music-toggle') active = musicEnabled;
+                    else if (id === 'track-editor-toggle') {
+                        active = trackEditorMode;
+                        setVrButtonText(button, trackEditorMode ? 'EDITOR: ON' : 'EDITOR: OFF');
+                    }
+                    else if (id === 'track-point-layout-toggle') {
+                        disabled = !trackEditorMode;
+                        active = trackEditorMode && trackEditorLayoutMode;
+                        setVrButtonText(button, trackEditorLayoutMode ? 'MODE: LAYOUT' : 'MODE: POINT');
+                    }
                     else if (id === 'connect') {
                         // Update connect button based on connection state
                         disabled = (connectionState === 'connecting');
@@ -3499,154 +3507,171 @@
                 }
             }
 
-            function handleVRMenuClick(controllerIndex) {
-                if (!vrMenuRaycaster || vrControllers.length === 0) return;
-                if (!vrMenu && !vrTrackSelector) return;
-                
-                // Use the specific controller that triggered the click
-                const controller = vrControllers[controllerIndex];
-                if (!controller || !controller.matrixWorld) return;
-                
-                // Set raycaster from controller
-                const tempMatrix = new THREE.Matrix4();
-                tempMatrix.identity().extractRotation(controller.matrixWorld);
-                
-                vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-                vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-                
-                var activeButtons = (vrTrackSelector && vrTrackSelector.visible) ? vrTrackButtons : vrMenuButtons;
-                if (!activeButtons.length) return;
-                
-                // Check intersections with menu buttons
-                const intersects = vrMenuRaycaster.intersectObjects(activeButtons, true);
-                
-                if (intersects.length > 0) {
-                    const clickedObject = intersects[0].object.parent;
-                    const buttonId = clickedObject.userData.id;
-                    
-                    // Check if button is disabled
-                    if (clickedObject.userData.disabled) {
-                        console.log('VR Menu button clicked but disabled:', buttonId);
-                        return;
-                    }
-                    
-                    console.log('VR Menu button clicked:', buttonId);
-                    
-                    // Handle button actions
-                    switch (buttonId) {
-                        case 'singleplayer':
-                            console.log('Switching to singleplayer');
-                            switchToSingleplayer();
-                            break;
-                        case 'multiplayer':
-                            console.log('Switching to multiplayer');
-                            switchToMultiplayer();
-                            break;
-                        case 'lobby-minus':
-                            console.log('Lobby minus clicked');
-                            changeLobby(-1);
-                            break;
-                        case 'lobby-plus':
-                            console.log('Lobby plus clicked');
-                            changeLobby(1);
-                            break;
-                        case 'connect':
-                            if (connectionState === 'connected') {
-                                disconnectFromLobby();
-                            } else {
-                                connectToLobby();
-                            }
-                            break;
-                        case 'auto-connect':
-                            autoConnect();
-                            break;
-                        case 'bot-toggle':
-                            toggleBot();
-                            break;
-                        case 'music-toggle':
-                            toggleMusic();
-                            break;
-                        case 'select-track':
-                            openTrackSelector();
-                            break;
-                        case 'track-selector-back':
-                            closeTrackSelector();
-                            break;
-                        case 'track-tab-presets':
-                            setTrackSelectorTab('presets');
-                            break;
-                        case 'track-tab-personal':
-                            setTrackSelectorTab('personal');
-                            break;
-                        case 'start-race':
-                            startRace();
-                            break;
-                        case 'close':
-                            if (vrTrackSelector && vrTrackSelector.visible) {
-                                closeTrackSelector();
-                            } else {
-                                toggleMenu();
-                            }
-                            break;
-                    }
-
-                    if (buttonId.indexOf('track-load-preset-') === 0) {
-                        loadPresetTrack(buttonId.replace('track-load-preset-', ''));
-                    } else if (buttonId.indexOf('track-load-personal-') === 0) {
-                        loadPersonalTrackSlot(parseInt(buttonId.replace('track-load-personal-', ''), 10));
-                    } else if (buttonId.indexOf('track-save-personal-') === 0) {
-                        savePersonalTrackSlot(parseInt(buttonId.replace('track-save-personal-', ''), 10));
-                    } else if (buttonId.indexOf('track-delete-personal-') === 0) {
-                        deletePersonalTrackSlot(parseInt(buttonId.replace('track-delete-personal-', ''), 10));
-                    }
-                    
-                    // Update menu display after action
-                    if (vrMenu && vrMenu.visible) {
-                        updateVRMenuDisplay();
-                    }
-                    if (vrTrackSelector && vrTrackSelector.visible) {
-                        updateVRTrackSelectorDisplay();
-                    }
+            /** Resolve the ray (target-ray) controller object for a hand, with index fallback. */
+            function getVrRayControllerForHand(handedness, index) {
+                var api = getDriveVrXrApi();
+                if (api) {
+                    var xr = api.get();
+                    if (xr && xr.handToPose && xr.handToPose[handedness]) return xr.handToPose[handedness];
                 }
+                return vrControllers[index] || null;
             }
 
-            function updateVRMenuHover(controllerIndex) {
-                if (!vrMenuRaycaster || vrControllers.length === 0) return;
-                if (!vrMenu && !vrTrackSelector) return;
-                
-                // Use the specific controller for hover detection
-                const controller = vrControllers[controllerIndex];
-                if (!controller || !controller.matrixWorld) return;
-                
-                var activeButtons = (vrTrackSelector && vrTrackSelector.visible) ? vrTrackButtons : vrMenuButtons;
-                
-                // Reset all buttons to normal state first
-                activeButtons.forEach(button => {
-                    const material = button.userData.material;
-                    if (!button.userData.active) {
+            function vrMenuActiveButtons() {
+                return (vrTrackSelector && vrTrackSelector.visible) ? vrTrackButtons : vrMenuButtons;
+            }
+
+            /** Raycast from a controller and return the hovered button group (or null). */
+            function vrMenuRaycastButton(controller) {
+                if (!vrMenuRaycaster || !controller || !controller.matrixWorld) return null;
+                var activeButtons = vrMenuActiveButtons();
+                if (!activeButtons.length) return null;
+                const tempMatrix = new THREE.Matrix4();
+                tempMatrix.identity().extractRotation(controller.matrixWorld);
+                vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+                vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+                const intersects = vrMenuRaycaster.intersectObjects(activeButtons, true);
+                if (!intersects.length) return null;
+                return intersects[0].object.parent;
+            }
+
+            /**
+             * Drive both controllers' menu lasers every frame: each controller raycasts
+             * from its own pose, highlights what it points at, and clicks on its OWN
+             * trigger rising edge — so left and right work fully independently.
+             */
+            function updateVRMenuPointers() {
+                if (!isVRPointerMenuActive() || !vrMenuRaycaster) {
+                    vrMenuTriggerWasPressed.left = false;
+                    vrMenuTriggerWasPressed.right = false;
+                    return;
+                }
+                var session = renderer.xr.getSession();
+                if (!session || !session.inputSources) return;
+                var activeButtons = vrMenuActiveButtons();
+
+                // Reset hover for all buttons once per frame, then re-highlight from each hand
+                activeButtons.forEach(function(button) {
+                    var material = button.userData.material;
+                    if (material && !button.userData.active) {
                         material.color.copy(button.userData.originalColor);
                         material.opacity = 0.8;
                     }
                 });
-                
-                // Set raycaster from this controller
-                const tempMatrix = new THREE.Matrix4();
-                tempMatrix.identity().extractRotation(controller.matrixWorld);
-                
-                vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-                vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-                
-                // Check intersections with menu buttons
-                const intersects = vrMenuRaycaster.intersectObjects(activeButtons, true);
-                
-                // Highlight hovered button for this controller
-                if (intersects.length > 0) {
-                    const hoveredObject = intersects[0].object.parent;
-                    const material = hoveredObject.userData.material;
-                    if (material && !hoveredObject.userData.active && !hoveredObject.userData.disabled) {
-                        material.color.setHex(0xffffff);
-                        material.opacity = 1.0;
+
+                var seen = { left: false, right: false };
+                for (var i = 0; i < session.inputSources.length; i++) {
+                    var src = session.inputSources[i];
+                    var hand = src.handedness;
+                    if ((hand !== 'left' && hand !== 'right') || !src.gamepad) continue;
+                    seen[hand] = true;
+
+                    var controller = getVrRayControllerForHand(hand, i);
+                    var hit = vrMenuRaycastButton(controller);
+
+                    if (hit) {
+                        var mat = hit.userData.material;
+                        if (mat && !hit.userData.active && !hit.userData.disabled) {
+                            mat.color.setHex(0xffffff);
+                            mat.opacity = 1.0;
+                        }
                     }
+
+                    var trig = src.gamepad.buttons && src.gamepad.buttons[0];
+                    var pressed = !!(trig && trig.pressed);
+                    if (pressed && !vrMenuTriggerWasPressed[hand] && hit) {
+                        activateVrMenuButton(hit);
+                    }
+                    vrMenuTriggerWasPressed[hand] = pressed;
+                }
+                if (!seen.left) vrMenuTriggerWasPressed.left = false;
+                if (!seen.right) vrMenuTriggerWasPressed.right = false;
+            }
+
+            function activateVrMenuButton(clickedObject) {
+                if (!clickedObject || !clickedObject.userData) return;
+                const buttonId = clickedObject.userData.id;
+                if (clickedObject.userData.disabled) {
+                    console.log('VR Menu button clicked but disabled:', buttonId);
+                    return;
+                }
+
+                console.log('VR Menu button clicked:', buttonId);
+
+                switch (buttonId) {
+                    case 'singleplayer':
+                        switchToSingleplayer();
+                        break;
+                    case 'multiplayer':
+                        switchToMultiplayer();
+                        break;
+                    case 'lobby-minus':
+                        changeLobby(-1);
+                        break;
+                    case 'lobby-plus':
+                        changeLobby(1);
+                        break;
+                    case 'connect':
+                        if (connectionState === 'connected') {
+                            disconnectFromLobby();
+                        } else {
+                            connectToLobby();
+                        }
+                        break;
+                    case 'auto-connect':
+                        autoConnect();
+                        break;
+                    case 'bot-toggle':
+                        toggleBot();
+                        break;
+                    case 'music-toggle':
+                        toggleMusic();
+                        break;
+                    case 'track-editor-toggle':
+                        toggleTrackEditor();
+                        break;
+                    case 'track-point-layout-toggle':
+                        if (trackEditorMode) toggleTrackEditorLayoutMode();
+                        break;
+                    case 'select-track':
+                        openTrackSelector();
+                        break;
+                    case 'track-selector-back':
+                        closeTrackSelector();
+                        break;
+                    case 'track-tab-presets':
+                        setTrackSelectorTab('presets');
+                        break;
+                    case 'track-tab-personal':
+                        setTrackSelectorTab('personal');
+                        break;
+                    case 'start-race':
+                        startRace();
+                        break;
+                    case 'close':
+                        if (vrTrackSelector && vrTrackSelector.visible) {
+                            closeTrackSelector();
+                        } else {
+                            toggleMenu();
+                        }
+                        break;
+                }
+
+                if (buttonId.indexOf('track-load-preset-') === 0) {
+                    loadPresetTrack(buttonId.replace('track-load-preset-', ''));
+                } else if (buttonId.indexOf('track-load-personal-') === 0) {
+                    loadPersonalTrackSlot(parseInt(buttonId.replace('track-load-personal-', ''), 10));
+                } else if (buttonId.indexOf('track-save-personal-') === 0) {
+                    savePersonalTrackSlot(parseInt(buttonId.replace('track-save-personal-', ''), 10));
+                } else if (buttonId.indexOf('track-delete-personal-') === 0) {
+                    deletePersonalTrackSlot(parseInt(buttonId.replace('track-delete-personal-', ''), 10));
+                }
+
+                if (vrMenu && vrMenu.visible) {
+                    updateVRMenuDisplay();
+                }
+                if (vrTrackSelector && vrTrackSelector.visible) {
+                    updateVRTrackSelectorDisplay();
                 }
             }
 
@@ -6729,14 +6754,34 @@
                     
                     if (renderer.xr.isPresenting) {
                         const session = renderer.xr.getSession();
-                        if (cameraMode === 'fly' && !isMenuVisible) {
-                            actions['flyBoost'] = false;
+
+                        // Pre-scan grip modifiers: right grip = fast movement, left grip = modify point/track
+                        var prevLeftGrip = vrLeftGripHeld;
+                        var prevRightGrip = vrRightGripHeld;
+                        vrLeftGripHeld = false;
+                        vrRightGripHeld = false;
+                        if (session && session.inputSources) {
+                            for (let s = 0; s < session.inputSources.length; s++) {
+                                var sp = session.inputSources[s];
+                                if (!sp.gamepad) continue;
+                                if (sp.handedness === 'left') vrLeftGripHeld = isVrGripHeld(sp.gamepad);
+                                else if (sp.handedness === 'right') vrRightGripHeld = isVrGripHeld(sp.gamepad);
+                            }
                         }
+                        // Fast-movement boost is active only while the right grip is held in fly mode
+                        actions['flyBoost'] = (cameraMode === 'fly' && !isMenuVisible && vrRightGripHeld);
+                        // While the left grip is held in the track editor, the sticks edit instead of fly
+                        var vrEditing = trackEditorMode && vrLeftGripHeld;
+                        // Update floating labels when a grip modifier toggles (cheap edge-triggered refresh)
+                        if (!isMenuVisible && (prevLeftGrip !== vrLeftGripHeld || prevRightGrip !== vrRightGripHeld)) {
+                            refreshDriveVrGripHints();
+                        }
+
                         if (session && session.inputSources) {
                             for (let i = 0; i < session.inputSources.length; i++) {
                                 const inputSource = session.inputSources[i];
                                 const gamepad = inputSource.gamepad;
-                                
+
                                 if (gamepad && inputSource.handedness === 'right') {
                                     // Start audio on first VR controller interaction
                                     if (!vrAudioStarted && gamepad.buttons) {
@@ -6744,174 +6789,64 @@
                                             if (gamepad.buttons[j] && gamepad.buttons[j].pressed) {
                                                 startEngineAudio();
                                                 vrAudioStarted = true;
-                                                console.log('🎵 VR audio started via controller button press');
                                                 break;
                                             }
                                         }
                                     }
-                                    
-                                    // Car controls (not in menu, fly mode, or track editor)
+
+                                    // Drive controls: right stick = steer, trigger = gas, grip = brake
                                     if (!isMenuVisible && cameraMode !== 'fly' && !trackEditorMode) {
-                                        // Thumbstick for steering
-                                        if (gamepad.axes && gamepad.axes.length >= 4) {
-                                            vrSteering = gamepad.axes[2] || 0;
-                                        }
-                                        
-                                        // Trigger for acceleration
-                                        if (gamepad.buttons && gamepad.buttons[0]) {
-                                            vrAcceleration = gamepad.buttons[0].value || 0;
-                                        }
-                                        
-                                        // Grip for braking
-                                        if (gamepad.buttons && gamepad.buttons[1]) {
-                                            vrBraking = gamepad.buttons[1].value || 0;
-                                        }
+                                        if (gamepad.axes && gamepad.axes.length >= 4) vrSteering = gamepad.axes[2] || 0;
+                                        if (gamepad.buttons && gamepad.buttons[0]) vrAcceleration = gamepad.buttons[0].value || 0;
+                                        if (gamepad.buttons && gamepad.buttons[1]) vrBraking = gamepad.buttons[1].value || 0;
                                     } else {
-                                        // Reset car controls when menu is open or in fly mode
                                         vrSteering = 0;
                                         vrAcceleration = 0;
                                         vrBraking = 0;
                                     }
-                                    
-                                    // A button (index 4) for camera switching (only when menu is not visible)
+
+                                    // A button = toggle drive / fly mode
                                     if (!isMenuVisible && gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
-                                        // Prevent rapid switching with a simple debounce
                                         if (!this.lastCameraSwitchTime || (Date.now() - this.lastCameraSwitchTime) > 500) {
                                             switchCamera();
                                             this.lastCameraSwitchTime = Date.now();
                                         }
                                     }
-                                    
-                                    // B button (index 5) for menu toggle
+
+                                    // B button = toggle menu
                                     if (gamepad.buttons && gamepad.buttons[5] && gamepad.buttons[5].pressed) {
-                                        // Prevent rapid toggling with a simple debounce
                                         if (!this.lastMenuToggleTime || (Date.now() - this.lastMenuToggleTime) > 500) {
                                             toggleMenu();
                                             this.lastMenuToggleTime = Date.now();
                                         }
                                     }
-                                    
-                    // VR Menu interaction with trigger (index 0)
-                    if (isVRPointerMenuActive() && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
-                        if (!this.lastMenuClickTime || (Date.now() - this.lastMenuClickTime) > 300) {
-                            // Find which controller this input source belongs to
-                            let controllerIndex = -1;
-                            const session = renderer.xr.getSession();
-                            if (session && session.inputSources) {
-                                for (let i = 0; i < session.inputSources.length; i++) {
-                                    if (session.inputSources[i] === inputSource) {
-                                        controllerIndex = i;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (controllerIndex >= 0) {
-                                handleVRMenuClick(controllerIndex);
-                            }
-                            this.lastMenuClickTime = Date.now();
-                        }
-                    }
-                    
-                    // VR Menu raycasting for hover effects
-                    if (isVRPointerMenuActive()) {
-                        // Find which controller this input source belongs to
-                        let controllerIndex = -1;
-                        const session = renderer.xr.getSession();
-                        if (session && session.inputSources) {
-                            for (let i = 0; i < session.inputSources.length; i++) {
-                                if (session.inputSources[i] === inputSource) {
-                                    controllerIndex = i;
-                                    break;
-                                }
-                            }
-                        }
-                        if (controllerIndex >= 0) {
-                            updateVRMenuHover(controllerIndex);
-                        }
-                    }
-                    
-                    // Update laser pointer visibility
-                    updateLaserPointers();
-                                    
-                                    // Y button (index 3) for car reset (only when menu is not visible)
-                                    if (!isMenuVisible && !trackEditorMode && gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed) {
-                                        if (!this.lastResetTime || (Date.now() - this.lastResetTime) > 500) {
-                                            resetCar();
-                                            this.lastResetTime = Date.now();
-                                        }
-                                    }
-                                    
-                                    // VR Fly Camera Controls (right hand; blocked while grip/trigger = track-edit modifier)
-                                    if (cameraMode === 'fly' && !isMenuVisible && !(trackEditorMode && isVrTrackEditModifierHeld(gamepad))) {
+
+                                    // Right thumbstick = horizontal movement (fast while right grip held; suppressed while editing)
+                                    if (cameraMode === 'fly' && !isMenuVisible && !vrEditing) {
                                         var flyDelta = dt * vrFlySpeed * (actions['flyBoost'] ? flyBoostMultiplier : 1);
-                                        var rotationSpeed = 2.0; // Rotation speed multiplier
-                                        
-                                        // Right thumbstick: X = strafe left/right, Y = forward/back movement (KEEP WORKING)
                                         if (gamepad.axes && gamepad.axes.length >= 4) {
-                                            var moveX = gamepad.axes[2] || 0; // Right thumbstick X = strafe
-                                            var moveZ = gamepad.axes[3] || 0; // Right thumbstick Y = forward/back
-                                            
-                                            // Create movement vectors relative to current rotation
+                                            var moveX = gamepad.axes[2] || 0;
+                                            var moveZ = gamepad.axes[3] || 0;
                                             var forward = new THREE.Vector3(0, 0, -1);
                                             var right = new THREE.Vector3(1, 0, 0);
-                                            
-                                            // Apply current Y rotation to movement vectors
                                             forward.applyEuler(vrFlyRotation);
                                             right.applyEuler(vrFlyRotation);
-                                            
-                                            // Apply movement
                                             vrFlyPosition.add(right.multiplyScalar(moveX * flyDelta));
                                             vrFlyPosition.add(forward.multiplyScalar(-moveZ * flyDelta));
                                         }
-                                        
-                                        // Trigger buttons for up/down movement
-                                        if (gamepad.buttons && gamepad.buttons[0]) {
-                                            var upMovement = gamepad.buttons[0].value || 0;
-                                            vrFlyPosition.y += upMovement * flyDelta;
-                                        }
-                                        
-                                        if (gamepad.buttons && gamepad.buttons[1]) {
-                                            var downMovement = gamepad.buttons[1].value || 0;
-                                            vrFlyPosition.y -= downMovement * flyDelta;
-                                        }
                                     }
                                 }
-                                
+
                                 if (gamepad && inputSource.handedness === 'left') {
-                                    if (cameraMode === 'fly' && !isMenuVisible && isVrFlyBoostHeld(gamepad)) {
-                                        actions['flyBoost'] = true;
-                                    }
-                                    // LEFT CONTROLLER - VR Fly Camera Controls (rotation and up/down)
-                                    // VR controller debug logging removed
-                                    if (cameraMode === 'fly' && !isMenuVisible && !(trackEditorMode && isVrTrackEditModifierHeld(gamepad))) {
-                                        var flyDelta = dt * vrFlySpeed * (actions['flyBoost'] ? flyBoostMultiplier : 1);
-                                        var rotationSpeed = 2.0; // Rotation speed multiplier
-                                        
-                                        // Left controller thumbstick: X = rotation, Y = up/down movement
+                                    // Left thumbstick = rotation (X) + up/down movement (Y); suppressed while editing
+                                    if (cameraMode === 'fly' && !isMenuVisible && !vrEditing) {
+                                        var flyDeltaL = dt * vrFlySpeed * (actions['flyBoost'] ? flyBoostMultiplier : 1);
+                                        var rotationSpeed = 2.0;
                                         if (gamepad.axes && gamepad.axes.length >= 4) {
-                                            var rotateY = gamepad.axes[2] || 0; // Left thumbstick X = Y rotation
-                                            var moveY = gamepad.axes[3] || 0;   // Left thumbstick Y = vertical movement
-                                            
-                                            // Debug logging
-                                            if (Math.abs(rotateY) > 0.1 || Math.abs(moveY) > 0.1) {
-                                                console.log('🎮 Left controller - Rotate:', rotateY.toFixed(2), 'MoveY:', moveY.toFixed(2));
-                                            }
-                                            
-                                            // Apply Y rotation (turning left/right) - inverted for natural feel
+                                            var rotateY = gamepad.axes[2] || 0;
+                                            var moveY = gamepad.axes[3] || 0;
                                             vrFlyRotation.y -= rotateY * rotationSpeed * dt;
-                                            
-                                            // Apply vertical movement (up/down)
-                                            vrFlyPosition.y -= moveY * flyDelta; // Inverted for natural feel
-                                        }
-                                    }
-                                    
-                                    // Left thumbstick click — cam Y (drive only; in fly Sq = fast, Y = fast)
-                                    if (!trackEditorMode && cameraMode !== 'fly' && gamepad.buttons && gamepad.buttons[TRACK_EDITOR_VR_BTN_THUMBSTICK_LEFT]) {
-                                        if (gamepad.buttons[TRACK_EDITOR_VR_BTN_THUMBSTICK_LEFT].pressed && !window.leftThumbstickPressed) {
-                                            window.leftThumbstickPressed = true;
-                                            showVRCameraPosition();
-                                        } else if (!gamepad.buttons[TRACK_EDITOR_VR_BTN_THUMBSTICK_LEFT].pressed) {
-                                            window.leftThumbstickPressed = false;
+                                            vrFlyPosition.y -= moveY * flyDeltaL;
                                         }
                                     }
                                 }
@@ -6920,6 +6855,10 @@
                                 handleTrackEditorVRInput(session, dt);
                             }
                         }
+
+                        // Independent dual-controller menu laser pointers (hover + click per hand)
+                        updateVRMenuPointers();
+                        updateLaserPointers();
                     }
 
                     // Combine keyboard and VR input (but disable car controls in desktop fly mode)
@@ -7855,108 +7794,79 @@
                 return pressed && !was;
             }
 
-            function isVrTrackEditModifierHeld(gamepad) {
+            /** True while the controller's grip (squeeze) is held past the modifier threshold. */
+            function isVrGripHeld(gamepad) {
                 if (!gamepad || !gamepad.buttons) return false;
-                var trig = gamepad.buttons[TRACK_EDITOR_VR_BTN_TRIGGER];
                 var grip = gamepad.buttons[TRACK_EDITOR_VR_BTN_GRIP];
-                var t = trig && (trig.value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD;
-                var g = grip && (grip.value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD;
-                return !!(t || g);
+                return !!(grip && ((grip.value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD || grip.pressed));
             }
 
-            /** VR fly boost (desktop Shift): hold left Y, or left stick click in track editor (Y = layout). */
-            function isVrFlyBoostHeld(gamepad) {
-                if (!gamepad || !gamepad.buttons) return false;
-                if (trackEditorMode) {
-                    var sq = gamepad.buttons[TRACK_EDITOR_VR_BTN_THUMBSTICK_LEFT];
-                    return !!(sq && ((sq.value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD || sq.pressed));
-                }
-                var yBtn = gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_Y];
-                return !!(yBtn && ((yBtn.value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD || yBtn.pressed));
+            function trackEditorSelectNextPoint(dir) {
+                var n = trackEditorControlPoints.length;
+                if (!n) return;
+                setTrackEditorEditIndex((getTrackEditorEditIndex() + (dir > 0 ? 1 : -1) + n) % n);
             }
 
+            /**
+             * Track editor VR controls (menu closed, editor on):
+             *   Left X / Y          -> previous / next control point
+             *   Hold LEFT grip (modify modifier):
+             *     Right thumbstick  -> move point/track in the camera-relative ground plane
+             *     Left thumbstick Y -> move point/track up / down
+             *     Left thumbstick X -> adjust banking (point mode only)
+             *   Point vs whole-track is governed by trackEditorLayoutMode (toggled in the menu).
+             */
             function handleTrackEditorVRInput(session, dt) {
-                if (!renderer.xr.isPresenting || !session || !session.inputSources) return;
+                if (!trackEditorMode || !renderer.xr.isPresenting || !session || !session.inputSources) return;
 
+                var leftPad = null;
+                var rightPad = null;
                 for (var si = 0; si < session.inputSources.length; si++) {
-                    var inputSource = session.inputSources[si];
-                    var gamepad = inputSource.gamepad;
-                    if (!gamepad) continue;
+                    var src = session.inputSources[si];
+                    if (!src.gamepad) continue;
+                    if (src.handedness === 'left') leftPad = src.gamepad;
+                    else if (src.handedness === 'right') rightPad = src.gamepad;
+                }
 
-                    if (inputSource.handedness === 'left') {
-                        if (trackEditorVrButtonPressed('toggle', gamepad.buttons && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X] && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X].pressed)) {
-                            if (!trackEditorVrLastToggleTime || Date.now() - trackEditorVrLastToggleTime > 500) {
-                                toggleTrackEditor();
-                                trackEditorVrLastToggleTime = Date.now();
-                            }
-                        }
-                        if (trackEditorMode && gamepad.buttons && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_Y] &&
-                            trackEditorVrButtonPressed('layoutToggle', gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_Y].pressed)) {
-                            toggleTrackEditorLayoutMode();
-                        }
-                        if (trackEditorMode && isVrTrackEditModifierHeld(gamepad)) {
-                            if (trackEditorLayoutMode && gamepad.axes && gamepad.axes.length >= 4) {
-                                var lxL = gamepad.axes[2] || 0;
-                                var lyL = gamepad.axes[3] || 0;
-                                var layoutFwdL = -trackEditorVrAxisStep('vrLayoutLFwd', lyL);
-                                var layoutStrL = trackEditorVrAxisStep('vrLayoutLStr', lxL);
-                                if (layoutFwdL) tryTranslateWholeTrackCameraRelative(layoutFwdL, 0, 1);
-                                if (layoutStrL) tryTranslateWholeTrackCameraRelative(0, layoutStrL, 1);
-                            } else if (!trackEditorLayoutMode && gamepad.axes && gamepad.axes.length >= 4) {
-                                var bankDir = trackEditorVrAxisStep('vrBank', gamepad.axes[2] || 0);
-                                if (bankDir) {
-                                    tryAdjustTrackEditorPoint(0, 0, 0, bankDir * TRACK_EDITOR_BANK_STEP);
-                                }
-                                var ptDir = trackEditorVrAxisStep('vrPtSel', gamepad.axes[3] || 0);
-                                if (ptDir > 0) {
-                                    var nUp = trackEditorControlPoints.length;
-                                    if (nUp) setTrackEditorEditIndex((getTrackEditorEditIndex() + 1) % nUp);
-                                } else if (ptDir < 0) {
-                                    var nDn = trackEditorControlPoints.length;
-                                    if (nDn) setTrackEditorEditIndex((getTrackEditorEditIndex() - 1 + nDn) % nDn);
-                                }
-                            }
-                            if (trackEditorLayoutMode && gamepad.buttons) {
-                                if (gamepad.buttons[TRACK_EDITOR_VR_BTN_TRIGGER] && (gamepad.buttons[TRACK_EDITOR_VR_BTN_TRIGGER].value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD && trackEditorVrReady('vrLayoutLTrigUp')) {
-                                    tryTranslateWholeTrack(0, TRACK_EDITOR_LAYOUT_VERT_STEP, 0);
-                                }
-                                if (gamepad.buttons[TRACK_EDITOR_VR_BTN_GRIP] && (gamepad.buttons[TRACK_EDITOR_VR_BTN_GRIP].value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD && trackEditorVrReady('vrLayoutLGripDn')) {
-                                    tryTranslateWholeTrack(0, -TRACK_EDITOR_LAYOUT_VERT_STEP, 0);
-                                }
-                            }
-                        }
+                // X / Y = previous / next control point (no modifier needed)
+                if (leftPad && leftPad.buttons) {
+                    var xBtn = leftPad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X];
+                    var yBtn = leftPad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_Y];
+                    if (trackEditorVrButtonPressed('prevPoint', xBtn && xBtn.pressed)) trackEditorSelectNextPoint(-1);
+                    if (trackEditorVrButtonPressed('nextPoint', yBtn && yBtn.pressed)) trackEditorSelectNextPoint(1);
+                }
+
+                // All modify actions require holding the LEFT grip.
+                if (!leftPad || !isVrGripHeld(leftPad)) return;
+                var layout = trackEditorLayoutMode;
+
+                // Right thumbstick -> camera-relative horizontal movement of point / whole track
+                if (rightPad && rightPad.axes && rightPad.axes.length >= 4) {
+                    var rx = rightPad.axes[2] || 0;
+                    var ry = rightPad.axes[3] || 0;
+                    var fwd = -trackEditorVrAxisStep(layout ? 'vrLayoutFwd' : 'vrFwd', ry);
+                    var str = trackEditorVrAxisStep(layout ? 'vrLayoutStrafe' : 'vrStrafe', rx);
+                    if (layout) {
+                        if (fwd) tryTranslateWholeTrackCameraRelative(fwd, 0, 1);
+                        if (str) tryTranslateWholeTrackCameraRelative(0, str, 1);
+                    } else {
+                        if (fwd) tryAdjustTrackEditorPointCameraRelative(fwd, 0);
+                        if (str) tryAdjustTrackEditorPointCameraRelative(0, str);
                     }
+                }
 
-                    if (inputSource.handedness === 'right' && trackEditorMode && isVrTrackEditModifierHeld(gamepad)) {
-                        if (gamepad.axes && gamepad.axes.length >= 4) {
-                            var stickX = gamepad.axes[2] || 0;
-                            var stickY = gamepad.axes[3] || 0;
-                            if (trackEditorLayoutMode) {
-                                var layoutFwd = -trackEditorVrAxisStep('vrLayoutFwd', stickY);
-                                var layoutStr = trackEditorVrAxisStep('vrLayoutStrafe', stickX);
-                                if (layoutFwd) tryTranslateWholeTrackCameraRelative(layoutFwd, 0, 1);
-                                if (layoutStr) tryTranslateWholeTrackCameraRelative(0, layoutStr, 1);
-                            } else {
-                                var fwd = -trackEditorVrAxisStep('vrFwd', stickY);
-                                var str = trackEditorVrAxisStep('vrStrafe', stickX);
-                                if (fwd) tryAdjustTrackEditorPointCameraRelative(fwd, 0);
-                                if (str) tryAdjustTrackEditorPointCameraRelative(0, str);
-                            }
-                        }
-                        if (gamepad.buttons[TRACK_EDITOR_VR_BTN_TRIGGER] && (gamepad.buttons[TRACK_EDITOR_VR_BTN_TRIGGER].value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD) {
-                            if (trackEditorLayoutMode && trackEditorVrReady('vrLayoutYUp')) {
-                                tryTranslateWholeTrack(0, TRACK_EDITOR_LAYOUT_VERT_STEP, 0);
-                            } else if (!trackEditorLayoutMode && trackEditorVrReady('vrYUp')) {
-                                tryAdjustTrackEditorPoint(0, TRACK_EDITOR_VERT_STEP, 0, 0);
-                            }
-                        }
-                        if (gamepad.buttons[TRACK_EDITOR_VR_BTN_GRIP] && (gamepad.buttons[TRACK_EDITOR_VR_BTN_GRIP].value || 0) > TRACK_EDITOR_VR_MODIFIER_THRESHOLD) {
-                            if (trackEditorLayoutMode && trackEditorVrReady('vrLayoutYDn')) {
-                                tryTranslateWholeTrack(0, -TRACK_EDITOR_LAYOUT_VERT_STEP, 0);
-                            } else if (!trackEditorLayoutMode && trackEditorVrReady('vrYDn')) {
-                                tryAdjustTrackEditorPoint(0, -TRACK_EDITOR_VERT_STEP, 0, 0);
-                            }
-                        }
+                // Left thumbstick -> Y up/down (push forward = up) and banking (point mode only)
+                if (leftPad.axes && leftPad.axes.length >= 4) {
+                    var lx = leftPad.axes[2] || 0;
+                    var ly = leftPad.axes[3] || 0;
+                    var vert = -trackEditorVrAxisStep(layout ? 'vrLayoutVert' : 'vrVert', ly);
+                    if (vert) {
+                        if (layout) tryTranslateWholeTrack(0, vert * TRACK_EDITOR_LAYOUT_VERT_STEP, 0);
+                        else tryAdjustTrackEditorPoint(0, vert * TRACK_EDITOR_VERT_STEP, 0, 0);
+                    }
+                    if (!layout) {
+                        var bankDir = trackEditorVrAxisStep('vrBank', lx);
+                        if (bankDir) tryAdjustTrackEditorPoint(0, 0, 0, bankDir * TRACK_EDITOR_BANK_STEP);
                     }
                 }
             }
@@ -8216,15 +8126,14 @@
             }
 
             var DEFAULT_TRACK_PARAM =
-                '-48.00,0.00,80.00|-8.01,1.00,80.00|24.00,1.00,32.00|48.00,0.00,8.00|' +
-                '88.00,1.00,16.00|104.00,1.00,48.00|72.00,6.00,72.00|32.00,6.00,56.00|' +
-                '8.00,6.00,8.00|0.00,6.00,-40.00|16.00,1.00,-72.00|64.00,1.00,-80.00|' +
-                '104.00,1.00,-40.00|112.00,6.00,16.00|80.00,15.00,56.00|16.00,9.00,64.00|' +
-                '-32.00,16.00,56.00|-64.00,6.00,8.00|-72.00,6.00,-32.00|-48.00,6.00,-72.00|' +
-                '0.00,6.00,-80.00|56.00,6.00,-56.00|40.00,12.00,0.00|0.00,12.00,16.00|' +
-                '-40.00,6.00,0.00|-56.00,12.00,-40.00|-64.00,12.00,-72.00|-88.00,12.00,-80.00|' +
-                '-112.00,6.00,-56.00|-104.00,6.00,-16.00|-112.00,1.00,24.00|-87.08,1.00,79.60|' +
-                '-48.00,0.00,80.00';
+                '316.26,50.00,991.64|356.25,51.00,991.64|388.26,55.00,943.64|412.26,55.00,919.64|' +
+                '452.26,58.00,927.64|470.57,62.00,953.75,15|424.59,59.00,980.20,15|395.33,63.00,975.83,15|' +
+                '386.14,62.00,917.81,5|364.92,60.00,872.39|380.26,65.00,839.64|419.85,66.00,838.71|' +
+                '465.00,75.00,873.96|472.24,81.00,926.72|435.39,76.00,950.83|379.31,80.00,971.75|' +
+                '332.26,83.00,967.64|300.26,83.00,919.64|292.26,77.00,879.64|316.26,73.00,839.64,20|' +
+                '364.26,74.00,831.64,20|424.72,79.00,855.25,45|407.45,74.00,921.95,25|359.07,61.00,957.61,20|' +
+                '324.26,49.00,911.64,5|308.26,50.00,871.64,-5|300.26,55.00,839.64,-10|276.26,58.00,831.64,-10|' +
+                '252.26,56.00,855.64,-10|260.26,56.00,895.64,-5|252.26,51.00,935.64|281.98,46.00,984.37';
 
             function getDefaultTrackControlPoints() {
                 var parsed = parseCompactTrackParam(DEFAULT_TRACK_PARAM);
