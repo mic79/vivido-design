@@ -824,7 +824,10 @@
             var trackEditorVrLastToggleTime = 0;
             /** Quest / xr-standard: X on left, A on right (same index, per hand). */
             var TRACK_EDITOR_VR_BTN_FACE_LEFT_X = 4;
+            /** Thumbstick click (index 3) — same on left and right gamepads. */
+            var TRACK_EDITOR_VR_BTN_THUMBSTICK_CLICK = 3;
             var TRACK_EDITOR_VR_BTN_THUMBSTICK_LEFT = 3;
+            var vrRightStickResetWasPressed = false;
             /** If last control point is within this horizontal distance of the first, treat as closed-loop duplicate. */
             var TRACK_LOOP_CLOSE_EPS = 4;
             var _trackEditorCamForward = new THREE.Vector3();
@@ -2011,12 +2014,13 @@
                     }
                     return [['St', vrRightGripHeld ? 'Rotate + Up/Down (fast)' : 'Rotate + Up/Down']];
                 }
-                // Drive mode
+                // Drive mode (race / driving camera)
                 if (hand === 'right') {
                     return [
                         ['St', 'Steer'],
                         ['Tr', 'Gas'],
                         ['Gr', 'Brake'],
+                        ['Sq', 'Reset car'],
                         ['A', 'Fly mode'],
                         ['B', 'Menu']
                     ];
@@ -6819,6 +6823,18 @@
                                             toggleMenu();
                                             this.lastMenuToggleTime = Date.now();
                                         }
+                                    }
+
+                                    // Right thumbstick click = reset car (drive / race mode only)
+                                    if (!isMenuVisible && cameraMode !== 'fly' && !trackEditorMode &&
+                                        gamepad.buttons && gamepad.buttons[TRACK_EDITOR_VR_BTN_THUMBSTICK_CLICK]) {
+                                        var stickClick = gamepad.buttons[TRACK_EDITOR_VR_BTN_THUMBSTICK_CLICK];
+                                        if (stickClick.pressed && !vrRightStickResetWasPressed) {
+                                            resetCar();
+                                        }
+                                        vrRightStickResetWasPressed = !!stickClick.pressed;
+                                    } else {
+                                        vrRightStickResetWasPressed = false;
                                     }
 
                                     // Right thumbstick = horizontal movement (fast while right grip held; suppressed while editing)
