@@ -1854,14 +1854,7 @@
             }
 
             function keyup(e) {
-                if (keysActions[e.code]) {
-                    actions[keysActions[e.code]] = false;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    return false;
-                }
-                
-                // Desktop fly camera Q/E key release
+                // Desktop fly camera Q/E before generic key map (KeyE is also 'interact')
                 if (cameraMode === 'fly' && !renderer.xr.isPresenting) {
                     if (e.code === 'KeyQ') {
                         actions['flyDown'] = false;
@@ -1875,6 +1868,12 @@
                         e.stopPropagation();
                         return false;
                     }
+                }
+                if (keysActions[e.code]) {
+                    actions[keysActions[e.code]] = false;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
                 }
                 if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
                     actions['flyBoost'] = false;
@@ -1892,11 +1891,20 @@
                     actions['flyBoost'] = true;
                 }
 
-                if (isTrackSystemEnabled() && e.code === 'KeyT') {
-                    toggleTrackEditor();
-                    e.preventDefault();
-                    e.stopPropagation();
-                    return false;
+                // Desktop fly camera Q/E before generic key map (KeyE is also 'interact')
+                if (cameraMode === 'fly' && !renderer.xr.isPresenting) {
+                    if (e.code === 'KeyQ') {
+                        actions['flyDown'] = true;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                    }
+                    if (e.code === 'KeyE') {
+                        actions['flyUp'] = true;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                    }
                 }
 
                 if (keysActions[e.code]) {
@@ -2028,22 +2036,6 @@
                     e.preventDefault();
                     e.stopPropagation();
                     return false;
-                }
-                
-                // Desktop fly camera Q/E for up/down (only in fly mode)
-                if (cameraMode === 'fly' && !renderer.xr.isPresenting) {
-                    if (e.code === 'KeyQ') {
-                        actions['flyDown'] = true;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return false;
-                    }
-                    if (e.code === 'KeyE') {
-                        actions['flyUp'] = true;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return false;
-                    }
                 }
             }
             
@@ -7546,7 +7538,7 @@
                         }
                     }
 
-                    if (gtavrFoot && actions['interact']) {
+                    if (gtavrFoot && actions['interact'] && cameraMode !== 'fly') {
                         var interactPos = new THREE.Vector3();
                         cameraRig.getWorldPosition(interactPos);
                         var doorHandled = false;

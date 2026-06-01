@@ -98,6 +98,11 @@ const _glbHullDirs = [
 const _glbOrigin = new THREE.Vector3();
 const _glbNormal = new THREE.Vector3();
 const _glbNormalMatrix = new THREE.Matrix3();
+const GLB_RIG_SAMPLE_Y = [0.4, 0.9, 1.3, 1.65];
+const _sweepFrom = new THREE.Vector3();
+const _sweepDir = new THREE.Vector3();
+const _sweepHit = { t: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(), object: null };
+const _sweepBlockNormal = new THREE.Vector3();
 
 /**
  * Push player out of GLB model meshes using BVH-accelerated rays (BattleVR-style:
@@ -118,11 +123,10 @@ export function resolveGlbMeshCollisions(rigPos, radius, outVel = null) {
   const effR = radius * rMul;
   _glbRaycaster.firstHitOnly = true;
   _glbRaycaster.far = effR * 3;
-  const sampleYs = [0.4, 0.9, 1.3, 1.65];
   /* One **closest** penetrating hit per sample height (BattleVR `checkBVHMeshCollision`),
    * not a sum over all rays — summing caused uphill stutter and killed long ramp climbs. */
-  for (let sy = 0; sy < sampleYs.length; sy++) {
-    _glbOrigin.set(rigPos.x, rigPos.y + sampleYs[sy] * yMul, rigPos.z);
+  for (let sy = 0; sy < GLB_RIG_SAMPLE_Y.length; sy++) {
+    _glbOrigin.set(rigPos.x, rigPos.y + GLB_RIG_SAMPLE_Y[sy] * yMul, rigPos.z);
     let closestDist = Infinity;
     /** @type {{ hit: THREE.Intersection, rayDir: THREE.Vector3 } | null} */
     let best = null;
@@ -155,6 +159,98 @@ export function resolveGlbMeshCollisions(rigPos, radius, outVel = null) {
       if (vn < -0.02) outVel.addScaledVector(_glbNormal, -vn);
     }
   }
+}
+
+/**
+ * Swept capsule check along a rig motion segment — stops tunneling through thin BVH
+ * geometry at glide / terminal fall speeds.
+ * @param {THREE.Vector3} fromPos
+ * @param {THREE.Vector3} toPos — mutated when blocked
+ * @param {number} radius
+ * @param {THREE.Vector3 | null} [outVel]
+ * @returns {boolean} true if motion was shortened
+ */
+export function clampRigMotionAgainstGlbMeshes(fromPos, toPos, radius, outVel = null) {
+  if (glbCollisionMeshes_.length === 0) return false;
+  _sweepDir.subVectors(toPos, fromPos);
+  const moveLen = _sweepDir.length();
+  if (moveLen < 1e-6) return false;
+  _sweepDir.multiplyScalar(1 / moveLen);
+
+  const yMul = getRigSampleHeightMul();
+  const rMul = getRunnerRadiusMul();
+  const effR = radius * rMul;
+  const skin = 0.015;
+  let minTravel = moveLen;
+  let blocked = false;
+  _sweepBlockNormal.set(0, 0, 0);
+
+  for (let sy = 0; sy < GLB_RIG_SAMPLE_Y.length; sy++) {
+    const yOff = GLB_RIG_SAMPLE_Y[sy] * yMul;
+    _sweepFrom.set(fromPos.x, fromPos.y + yOff, fromPos.z);
+    const maxDist = moveLen + effR + skin;
+    const t = rayCastRunnerGlbMeshes(_sweepFrom, _sweepDir, maxDist, _sweepHit);
+    if (t >= maxDist) continue;
+    if (_sweepDir.y < -0.45 && _sweepHit.normal.y > 0.92) continue;
+    const allowed = t - effR - skin;
+    if (allowed < minTravel) {
+      minTravel = allowed;
+      _sweepBlockNormal.copy(_sweepHit.normal);
+      blocked = true;
+    }
+  }
+
+  if (!blocked || minTravel >= moveLen - 1e-4) return false;
+  if (minTravel < 0) minTravel = 0;
+  toPos.copy(fromPos).addScaledVector(_sweepDir, minTravel);
+  if (outVel && _sweepBlockNormal.lengthSq() > 1e-6) {
+    const vn = outVel.dot(_sweepBlockNormal);
+    if (vn < -0.02) outVel.addScaledVector(_sweepBlockNormal, -vn);
+  }
+  return true;
+}
+
+/**
+ * BVH closest-point recovery when hull rays miss (already inside thin geometry).
+ * @param {THREE.Vector3} rigPos
+ * @param {number} radius
+ * @param {THREE.Vector3 | null} [outVel]
+ */
+export function recoverRigFromGlbPenetration(rigPos, radius, outVel = null) {
+  if (glbCollisionMeshes_.length === 0) return false;
+  const yMul = getRigSampleHeightMul();
+  const rMul = getRunnerRadiusMul();
+  const effR = radius * rMul;
+  let any = false;
+  for (let iter = 0; iter < 3; iter++) {
+    let iterMoved = false;
+    for (let sy = 0; sy < GLB_RIG_SAMPLE_Y.length; sy++) {
+      const yOff = GLB_RIG_SAMPLE_Y[sy] * yMul;
+      _sweepFrom.set(rigPos.x, rigPos.y + yOff, rigPos.z);
+      const ox = _sweepFrom.x;
+      const oy = _sweepFrom.y;
+      const oz = _sweepFrom.z;
+      if (!pushWorldPointOutOfRunnerGlbMeshes(_sweepFrom, effR, null)) continue;
+      const dx = _sweepFrom.x - ox;
+      const dy = _sweepFrom.y - oy;
+      const dz = _sweepFrom.z - oz;
+      rigPos.x += dx;
+      rigPos.y += dy;
+      rigPos.z += dz;
+      iterMoved = true;
+      any = true;
+      if (outVel) {
+        _glbPushOut.set(dx, dy, dz);
+        const lenSq = _glbPushOut.lengthSq();
+        if (lenSq > 1e-8) {
+          const vn = outVel.dot(_glbPushOut) / lenSq;
+          if (vn < 0) outVel.addScaledVector(_glbPushOut, -vn);
+        }
+      }
+    }
+    if (!iterMoved) break;
+  }
+  return any;
 }
 
 /** World-space minimum face normal Y to count as walkable (steep ramps). */

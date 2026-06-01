@@ -10,6 +10,8 @@ import {
   getRigSampleHeightMul,
   getRunnerRadiusMul,
   resolveGlbMeshCollisions,
+  clampRigMotionAgainstGlbMeshes,
+  recoverRigFromGlbPenetration,
   getGlbFloorSupport,
   getGlbFloorY,
   getSandboxGlbCollisionMeshes,
@@ -204,6 +206,14 @@ let parkourJumpGlideBlockSec_ = 0;
 let prevGrappleHookActive_ = false;
 let grapplePostWinchCarrySec_ = 0;
 const rigVelocity = new THREE.Vector3();
+const PLAYER_RADIUS = 0.3;
+/** Max rig travel per collision substep (m) — prevents BVH tunneling at glide speed. */
+const COLLISION_MOTION_STEP = 0.16;
+const _rigMovePrev = new THREE.Vector3();
+const _rigMoveDelta = new THREE.Vector3();
+const _rigMoveStep = new THREE.Vector3();
+const _deltaHoriz = new THREE.Vector3();
+const _deltaProj = new THREE.Vector3();
 /** Merged OBB slab + GLB mesh support for snapping, grounding, and slope locomotion. */
 const groundMerged = {
   valid: false,
@@ -214,8 +224,46 @@ const groundMerged = {
   fromGlb: false,
 };
 const _ghTmp = { y: 0, point: new THREE.Vector3(), normal: new THREE.Vector3() };
-const _deltaHoriz = new THREE.Vector3();
-const _deltaProj = new THREE.Vector3();
+function runGlbCollisionPasses() {
+  resolveGlbMeshCollisions(cameraRig.position, PLAYER_RADIUS, rigVelocity);
+  resolveGlbMeshCollisions(cameraRig.position, PLAYER_RADIUS, rigVelocity);
+  recoverRigFromGlbPenetration(cameraRig.position, PLAYER_RADIUS, rigVelocity);
+}
+
+/**
+ * Integrate rig velocity in small steps with swept BVH checks so fast falls / glides
+ * cannot skip through city wall geometry in a single frame.
+ */
+function integrateRigMotionWithCollision(dtSec) {
+  _rigMoveDelta.set(rigVelocity.x * dtSec, rigVelocity.y * dtSec, rigVelocity.z * dtSec);
+  const moveLen = _rigMoveDelta.length();
+  if (moveLen < 1e-8) return;
+  const steps = Math.max(1, Math.ceil(moveLen / COLLISION_MOTION_STEP));
+  const inv = 1 / steps;
+  _rigMoveStep.copy(_rigMoveDelta).multiplyScalar(inv);
+  for (let s = 0; s < steps; s++) {
+    _rigMovePrev.copy(cameraRig.position);
+    cameraRig.position.add(_rigMoveStep);
+    clampRigMotionAgainstGlbMeshes(_rigMovePrev, cameraRig.position, PLAYER_RADIUS, rigVelocity);
+    resolveAllCollisions(cameraRig.position);
+    runGlbCollisionPasses();
+  }
+}
+
+function moveRigHorizWithCollision(delta) {
+  const horizLen = delta.length();
+  if (horizLen < 1e-8) return;
+  const steps = Math.max(1, Math.ceil(horizLen / COLLISION_MOTION_STEP));
+  const inv = 1 / steps;
+  _rigMoveStep.copy(delta).multiplyScalar(inv);
+  for (let s = 0; s < steps; s++) {
+    _rigMovePrev.copy(cameraRig.position);
+    cameraRig.position.add(_rigMoveStep);
+    clampRigMotionAgainstGlbMeshes(_rigMovePrev, cameraRig.position, PLAYER_RADIUS, rigVelocity);
+    resolveAllCollisions(cameraRig.position);
+    runGlbCollisionPasses();
+  }
+}
 const _vTan = new THREE.Vector3();
 /** Ground normal nearly vertical → flat floors (OBB + subtle slopes use old friction path). */
 const SLOPE_FLAT_NY = 0.988;
@@ -266,7 +314,6 @@ const grabState = {
 };
 
 /* ── OBB collision ────────────────────────────────────────────────────── */
-const PLAYER_RADIUS = 0.3;
 const HEAD_MARGIN = 0.15;
 const RIG_SAMPLE_YS = [0.2, 0.6, 1.0, 1.4, 1.75];
 const _headW = new THREE.Vector3();
@@ -1131,9 +1178,7 @@ function updatePhysicsMovement(dt, xrCamera) {
     rigVelocity.y = upCap;
   }
 
-  cameraRig.position.x += rigVelocity.x * dt;
-  cameraRig.position.y += rigVelocity.y * dt;
-  cameraRig.position.z += rigVelocity.z * dt;
+  integrateRigMotionWithCollision(dt);
 
   const grounded = isGrounded();
   const groundFlat =
@@ -1224,7 +1269,7 @@ function updatePhysicsMovement(dt, xrCamera) {
         direction.z * moveY - strafe.z * moveX,
       ).multiplyScalar(moveSpeed * dt);
       if (groundFlat) {
-        cameraRig.position.add(_deltaHoriz);
+        moveRigHorizWithCollision(_deltaHoriz);
       } else if (groundMerged.valid) {
         const nn = groundMerged.normal;
         _deltaProj.copy(_deltaHoriz).addScaledVector(nn, -nn.dot(_deltaHoriz));
@@ -1234,7 +1279,7 @@ function updatePhysicsMovement(dt, xrCamera) {
           rampBoost = 1.12 + Math.min(0.48, (SLOPE_FLAT_NY - nn.y) * 6.5);
         }
         _deltaProj.multiplyScalar(rampBoost);
-        cameraRig.position.add(_deltaProj);
+        moveRigHorizWithCollision(_deltaProj);
       }
     }
   }
@@ -1321,10 +1366,8 @@ function tickRunnerCollisionIntegration(headSourceCamera, dtSec) {
     cameraRig.position, rigVelocity, _headW.x, _headW.y, _headW.z,
   );
   resolveAllCollisions(cameraRig.position);
-  /* Two passes: one closest-hit per height can miss stacked penetration after a
-   * large dt or stick step — second pass matches common “solver iterations” cheaply. */
-  resolveGlbMeshCollisions(cameraRig.position, 0.35, rigVelocity);
-  resolveGlbMeshCollisions(cameraRig.position, 0.35, rigVelocity);
+  /* Final depenetrate pass after stick / snap moves in the same frame. */
+  runGlbCollisionPasses();
   /* Floor snap *after* OBB push so wall pushes can't shove us off the slab. */
   snapRigToFloor(dtSec);
   tryRunnerPitFallReset();
