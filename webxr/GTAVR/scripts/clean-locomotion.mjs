@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const file = path.join(__dirname, '../../VRrunner/js/playerLocomotion.js');
+const file = path.join(__dirname, '../js/vrrunner/playerLocomotion.js');
 let src = fs.readFileSync(file, 'utf8');
 
 // Remove duplicate locomotionMode declaration inside factory body

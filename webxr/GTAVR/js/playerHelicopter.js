@@ -3,8 +3,8 @@
  */
 
 import * as THREE from 'three';
-import { setBowEquipped, pulseControllerHaptic } from '../../VRrunner/js/bots.js';
-import { RUNNER_STANDING_EYE_Y } from '../../VRrunner/js/runnerLevel.js';
+import { setBowEquipped, pulseControllerHaptic } from './vrrunner/bots.js';
+import { RUNNER_STANDING_EYE_Y } from './vrrunner/runnerLevel.js';
 
 const MODE_HELICOPTER = 'helicopter';
 

@@ -4,12 +4,12 @@
  */
 
 import * as THREE from 'three';
-import { createPlayerLocomotion } from '../../VRrunner/js/playerLocomotion.js';
+import { createPlayerLocomotion } from './vrrunner/playerLocomotion.js';
 import {
     registerSandboxGlbCollisionMeshes,
     setRunnerGlassSceneRef,
     RUNNER_STANDING_EYE_Y,
-} from '../../VRrunner/js/runnerLevel.js';
+} from './vrrunner/runnerLevel.js';
 import {
     initBots,
     updateBots,
@@ -19,7 +19,7 @@ import {
     setBowEquipped,
     toggleBowOnHand,
     pulseControllerHaptic,
-} from '../../VRrunner/js/bots.js';
+} from './vrrunner/bots.js';
 
 const MODE_FOOT = 'foot';
 const MODE_VEHICLE = 'vehicle';

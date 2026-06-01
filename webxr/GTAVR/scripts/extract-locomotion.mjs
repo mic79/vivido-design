@@ -3,8 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const mainPath = path.join(__dirname, '../../VRrunner/js/main.js');
-const outPath = path.join(__dirname, '../../VRrunner/js/playerLocomotion.js');
+const mainPath = path.join(__dirname, '../../../VRrunner/js/main.js');
+const outPath = path.join(__dirname, '../js/vrrunner/playerLocomotion.js');
 
 const lines = fs.readFileSync(mainPath, 'utf8').split(/\r?\n/);
 const start = lines.findIndex((l) => l.includes('const vrInput ='));
@@ -46,7 +46,7 @@ import {
   getSandboxGlbCollisionMeshes,
   tryShatterRunnerGlassPlayer,
 } from './runnerLevel.js';
-import { getPairedXRControllerGrips } from './sandboxSectorEditor.js';
+import { getPairedXRControllerGrips } from './xrControllerPair.js';
 import {
   applyGrappleWinchStep,
   isGrappleHookActive,
