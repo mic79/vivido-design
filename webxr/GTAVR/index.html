@@ -5,6 +5,25 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
+        :root {
+            --gtavr-logo-magenta: #e91e9c;
+            --gtavr-logo-pink: #ff4fd8;
+            --gtavr-logo-cyan: #00d9ff;
+            --gtavr-logo-grad-v: linear-gradient(
+                180deg,
+                var(--gtavr-logo-magenta) 0%,
+                var(--gtavr-logo-pink) 48%,
+                var(--gtavr-logo-cyan) 100%
+            );
+            --gtavr-logo-grad-h: linear-gradient(
+                90deg,
+                var(--gtavr-logo-magenta) 0%,
+                var(--gtavr-logo-pink) 42%,
+                var(--gtavr-logo-cyan) 100%
+            );
+            --gtavr-logo-outline: 2px solid #000;
+        }
+
         body {
             color: #61443e;
             font-family: Monospace;
@@ -36,15 +55,30 @@
             position: fixed;
             bottom: 20px;
             right: 20px;
-            z-index: 1000;
-            background: #333;
-            color: white;
-            padding: 10px 15px;
-            border: none;
-            border-radius: 5px;
+            z-index: 10001;
+            padding: 12px 22px;
+            border: 3px solid #000;
+            border-radius: 4px;
             cursor: pointer;
-            font-family: Arial;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
             font-size: 14px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #fff;
+            background: var(--gtavr-logo-grad-v);
+            box-shadow: 0 4px 0 #000, 0 6px 18px rgba(0, 0, 0, 0.35);
+            text-shadow:
+                1px 1px 0 #000,
+                -1px -1px 0 #000;
+        }
+
+        #vrButton:hover {
+            filter: brightness(1.08) saturate(1.05);
+        }
+
+        body.vr-mode #vrButton {
+            display: none !important;
         }
 
         a {
@@ -260,11 +294,192 @@
             /* .vr-mode #gameMenu {
                 display: none;
             } */
+
+        /* GTAVR intro splash (shown until player taps Start) */
+        #gtavr-splash {
+            position: fixed;
+            inset: 0;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+            overflow: hidden;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            color: #fff;
+            transition: opacity 0.45s ease, visibility 0.45s ease;
+        }
+
+        #gtavr-splash.gtavr-splash--hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .gtavr-splash-bg {
+            position: absolute;
+            inset: -8%;
+            background: #f4f4f4 url("GTAVR-intro-bg.jpg") center 38% / cover no-repeat;
+        }
+
+        .gtavr-splash-logo {
+            position: absolute;
+            left: 50%;
+            top: 36%;
+            transform: translate(-50%, -50%);
+            width: min(90vw, 680px);
+            height: auto;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .gtavr-splash-vignette {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(
+                to bottom,
+                rgba(0, 0, 0, 0.15) 0%,
+                rgba(0, 0, 0, 0.05) 42%,
+                rgba(0, 0, 0, 0.55) 72%,
+                rgba(0, 0, 0, 0.88) 100%
+            );
+            pointer-events: none;
+        }
+
+        .gtavr-splash-ui {
+            position: relative;
+            z-index: 2;
+            width: min(92vw, 520px);
+            padding: 0 20px 8vh;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        .gtavr-splash-loader-track {
+            width: 100%;
+            height: 8px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.45);
+            overflow: hidden;
+            border: var(--gtavr-logo-outline);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+        }
+
+        .gtavr-splash-loader-fill {
+            width: 0%;
+            height: 100%;
+            border-radius: 0;
+            background: var(--gtavr-logo-grad-h);
+            transition: width 0.25s ease-out;
+        }
+
+        #gtavr-splash-status {
+            margin: 12px 0 0;
+            font-size: 0.9rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            color: #fff;
+            text-shadow:
+                1px 1px 0 #000,
+                -1px -1px 0 #000,
+                1px -1px 0 #000,
+                -1px 1px 0 #000;
+            min-height: 1.25em;
+        }
+
+        .gtavr-splash-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 14px;
+            margin-top: 22px;
+        }
+
+        #gtavr-splash-start {
+            margin-top: 0;
+            min-width: 200px;
+            padding: 14px 36px;
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: #fff;
+            background: var(--gtavr-logo-grad-v);
+            border: 3px solid #000;
+            border-radius: 4px;
+            cursor: pointer;
+            box-shadow: 0 4px 0 #000, 0 6px 20px rgba(233, 30, 156, 0.35);
+            text-shadow:
+                2px 2px 0 #000,
+                -1px -1px 0 #000,
+                1px -1px 0 #000,
+                -1px 1px 0 #000;
+            transition: transform 0.15s ease, opacity 0.2s ease, filter 0.2s ease, box-shadow 0.15s ease;
+        }
+
+        #gtavr-splash-start:disabled {
+            opacity: 0.48;
+            cursor: not-allowed;
+            box-shadow: 0 3px 0 rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        #gtavr-splash-start:not(:disabled):hover {
+            transform: translateY(-2px);
+            filter: brightness(1.08) saturate(1.05);
+            box-shadow: 0 6px 0 #000, 0 10px 28px rgba(0, 217, 255, 0.4);
+        }
+
+        #gtavr-splash-start:not(:disabled):active {
+            transform: translateY(1px);
+            box-shadow: 0 2px 0 #000, 0 4px 14px rgba(233, 30, 156, 0.35);
+        }
+
+        /* On splash: sit beside Start; after dismiss: fixed bottom-right */
+        body:not(.gtavr-game-started) #vrButton {
+            position: static;
+            margin: 0;
+            min-width: 160px;
+        }
+
+        body.gtavr-game-started #vrButton {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+        }
+
+        body:not(.gtavr-game-started) #container,
+        body:not(.gtavr-game-started) #speedometer,
+        body:not(.gtavr-game-started) #desktopHUD,
+        body:not(.gtavr-game-started) #versionDisplay,
+        body:not(.gtavr-game-started) #multiplayerStatus,
+        body:not(.gtavr-game-started) #rearviewMirrorUI {
+            visibility: hidden;
+        }
+
     </style>
 </head>
 
 <body>
-    <div id="container"><br /><br /><br /><br /><br />Loading...</div>
+    <div id="gtavr-splash" role="dialog" aria-label="GTAVR loading">
+        <div class="gtavr-splash-bg" aria-hidden="true"></div>
+        <img class="gtavr-splash-logo" src="GTAVR-intro-logo.png" alt="" aria-hidden="true">
+        <div class="gtavr-splash-vignette" aria-hidden="true"></div>
+        <div class="gtavr-splash-ui">
+            <div class="gtavr-splash-loader" aria-live="polite">
+                <div class="gtavr-splash-loader-track">
+                    <div class="gtavr-splash-loader-fill" id="gtavr-splash-progress"></div>
+                </div>
+                <p id="gtavr-splash-status">Starting…</p>
+            </div>
+            <div class="gtavr-splash-actions">
+                <button type="button" id="gtavr-splash-start" disabled>Start</button>
+                <button type="button" id="vrButton" style="display: none;">Enter VR</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="container"></div>
     <div id="speedometer">0.0 km/h</div>
     
     <!-- Desktop HUD for non-VR users -->
@@ -335,7 +550,7 @@
                 <div class="menu-section">
                     <div class="bot-controls">
                         <span>Music:</span>
-                        <button id="musicToggle" class="menu-button active">ON</button>
+                        <button id="musicToggle" class="menu-button">OFF</button>
                         <span id="musicStatus">(Background)</span>
                     </div>
                 </div>
@@ -346,7 +561,6 @@
         </div>
     </div>
     <div id="info">GTAVR — VRrunner city · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> reset · <b>T</b> / VR <b>left X</b> track editor · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car</div>
-    <button id="vrButton" style="display: none;">Enter VR</button>
     
     <!-- Background Music -->
     <audio id="backgroundMusic" loop preload="auto">
@@ -415,6 +629,20 @@
     import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
     import { PlayerFoot } from './js/playerFoot.js';
     import { PlayerHelicopter } from './js/playerHelicopter.js';
+    import {
+        initMultiplayerSync,
+        handleCombatEvent,
+        sendCombatEvent,
+        raycastRemotePlayerVehicles,
+        applyMinigunHitToNetworkVehicle,
+        setupRemoteAvatarArchery,
+        syncRemoteArcheryFromState,
+        updateRemoteArcheryFromNetworkStates,
+        requestOccupancy,
+        releaseOccupancy,
+        clearOccupancyForPlayer,
+    } from './js/multiplayerSync.js';
+    import { getArcheryNetworkState, setArrowCombatSegmentHitCallback } from './js/vrrunner/bots.js';
 
     /* ESM namespace is sealed — use a plain object so legacy code can use THREE.GLTFLoader etc. */
     const THREE = Object.assign({}, THREE_NS);
@@ -476,6 +704,21 @@
     window.__driveVrChasePerf = ChasePerf;
     window.__gtavrPlayerFoot = PlayerFoot;
     window.__gtavrPlayerHelicopter = PlayerHelicopter;
+    window.__gtavrGetArcheryNetworkState = getArcheryNetworkState;
+    window.__gtavrSetArrowCombatSegmentHitCallback = setArrowCombatSegmentHitCallback;
+    window.__gtavrMultiplayerSync = {
+        initMultiplayerSync,
+        handleCombatEvent,
+        sendCombatEvent,
+        raycastRemotePlayerVehicles,
+        applyMinigunHitToNetworkVehicle,
+        setupRemoteAvatarArchery,
+        syncRemoteArcheryFromState,
+        updateRemoteArcheryFromNetworkStates,
+        requestOccupancy,
+        releaseOccupancy,
+        clearOccupancyForPlayer,
+    };
     window.__driveVrLighting = {
         setRadialFogParams: setRadialFogParams,
         setRadialFogColorHex: setRadialFogColorHex,
@@ -490,6 +733,81 @@
     </script>
 
     <script>
+        (function initGtavrSplash() {
+            var splash = document.getElementById('gtavr-splash');
+            var progressEl = document.getElementById('gtavr-splash-progress');
+            var statusEl = document.getElementById('gtavr-splash-status');
+            var startBtn = document.getElementById('gtavr-splash-start');
+            var ready = false;
+            var progress = 0;
+
+            function clampPct(p) {
+                return Math.max(0, Math.min(100, p));
+            }
+
+            function setProgress(p, msg) {
+                progress = clampPct(p);
+                if (progressEl) progressEl.style.width = progress + '%';
+                if (msg && statusEl) statusEl.textContent = msg;
+            }
+
+            function markReady(msg) {
+                ready = true;
+                setProgress(100, msg || 'Ready');
+                if (startBtn) startBtn.disabled = false;
+            }
+
+            function mountVrButtonForSplash() {
+                var vrBtn = document.getElementById('vrButton');
+                var actions = document.querySelector('.gtavr-splash-actions');
+                if (vrBtn && actions && vrBtn.parentNode !== actions) {
+                    actions.appendChild(vrBtn);
+                }
+            }
+
+            function hideSplash() {
+                if (!splash) return;
+                splash.classList.add('gtavr-splash--hidden');
+                document.body.classList.add('gtavr-game-started');
+                if (typeof window.__gtavrHideVRIntro === 'function') {
+                    window.__gtavrHideVRIntro();
+                }
+                var vrBtn = document.getElementById('vrButton');
+                if (vrBtn && vrBtn.parentNode && vrBtn.parentNode.classList.contains('gtavr-splash-actions')) {
+                    document.body.appendChild(vrBtn);
+                }
+                window.setTimeout(function() {
+                    if (splash.parentNode) splash.style.display = 'none';
+                }, 480);
+            }
+
+            mountVrButtonForSplash();
+
+            if (startBtn) {
+                startBtn.addEventListener('click', function() {
+                    if (!ready) return;
+                    hideSplash();
+                    if (typeof window.__gtavrOnSplashStart === 'function') {
+                        window.__gtavrOnSplashStart();
+                    }
+                });
+            }
+
+            setProgress(2, 'Loading engine…');
+
+            window.__gtavrSplash = {
+                setProgress: setProgress,
+                markReady: markReady,
+                hide: hideSplash,
+                isReady: function() { return ready; },
+                getProgress: function() { return progress; }
+            };
+
+            window.addEventListener('drivevr-three-ready', function() {
+                setProgress(8, 'Engine ready…');
+            }, { once: true });
+        })();
+
         function bootGTAVR() {
         if (window.__gtavrBooted || window.__gtavrBooting) {
             return;
@@ -510,7 +828,12 @@
             console.error('playerFoot module not loaded — check js/playerFoot.js');
             return;
         }
+        if (!window.__gtavrMultiplayerSync) {
+            console.error('multiplayerSync module not loaded — check js/multiplayerSync.js');
+            return;
+        }
         window.__gtavrBooting = true;
+        if (window.__gtavrSplash) window.__gtavrSplash.setProgress(12, 'Loading physics…');
         Ammo().then(function (Ammo) {
             if (window.__gtavrBooted) {
                 return;
@@ -525,6 +848,20 @@
             var getPhysicsMaxSubsteps = cw.getPhysicsMaxSubsteps;
             var shouldRunUnitTick = cw.shouldRunUnitTick;
             var horizDistSq = cw.horizDistSq;
+
+            var MP = window.__gtavrMultiplayerSync;
+            var initMultiplayerSync = MP.initMultiplayerSync;
+            var handleCombatEvent = MP.handleCombatEvent;
+            var sendCombatEvent = MP.sendCombatEvent;
+            var raycastRemotePlayerVehicles = MP.raycastRemotePlayerVehicles;
+            var applyMinigunHitToNetworkVehicle = MP.applyMinigunHitToNetworkVehicle;
+            var setupRemoteAvatarArchery = MP.setupRemoteAvatarArchery;
+            var syncRemoteArcheryFromState = MP.syncRemoteArcheryFromState;
+            var updateRemoteArcheryFromNetworkStates = MP.updateRemoteArcheryFromNetworkStates;
+            var requestOccupancy = MP.requestOccupancy;
+            var releaseOccupancy = MP.releaseOccupancy;
+            var clearOccupancyForPlayer = MP.clearOccupancyForPlayer;
+            var getArcheryNetworkState = window.__gtavrGetArcheryNetworkState;
 
             let isMultiplayer = false;
             let isHost = false;
@@ -541,7 +878,7 @@
             let connectionState = 'disconnected';
             let multiplayerStatus = 'Disconnected';
             let botEnabled = false;
-            let musicEnabled = true;
+            let musicEnabled = false;
             let vrAudioStarted = false;
             var chaseCollisionBroadphase = new ChaseCollisionBroadphase(ChasePerf.spatialCellSizeM);
             var chaseSimFrameId = 0;
@@ -578,6 +915,8 @@
 
             // - Global variables -
             var DISABLE_DEACTIVATION = 4;
+            var DISABLE_SIMULATION = 5;
+            var MAX_PHYSICS_STEP_SEC = 1 / 60;
             var TRANSFORM_AUX = new Ammo.btTransform();
             var ZERO_QUATERNION = new THREE.Quaternion(0, 0, 0, 1);
 
@@ -685,6 +1024,8 @@
             
             // VR HUD elements
             var vrHUD = null;
+            var vrIntroPanel = null;
+            var vrIntroShell = null;
             var lapNumberText = null;
             var currentTimeText = null;
             var bestTimeText = null;
@@ -728,6 +1069,7 @@
             /** Offset from car spawn: right (+) and forward (+) in spawn-facing frame. */
             var HELICOPTER_SPAWN_OFFSET_RIGHT_M = 14;
             var HELICOPTER_SPAWN_OFFSET_FORWARD_M = 6;
+            var MULTIPLAYER_SLOT_SPACING_M = 18;
             var startHelicopterRoot = null;
             var pendingStartHelicopterFloor = false;
             var trackEditorUrlDebounceId = null;
@@ -927,6 +1269,8 @@
             var vrRunnerCityRoot = null;
             var vrRunnerCityCollisionMeshes = [];
             var vrRunnerCityReady = false;
+            var vrRunnerCityBvhTotal = 0;
+            var vrRunnerCityPhysicsTotal = 0;
             var vrRunnerCityBvhPending = [];
             var vrRunnerCityBvhBuilding = false;
             var driveFallbackGroundAdded = false;
@@ -986,6 +1330,24 @@
             var activeBotSync = null;
             var lastCarDropPosition = new THREE.Vector3();
             var hasLastCarDropPosition = false;
+            var VEHICLE_MAX_DAMAGE = 100;
+            var VEHICLE_MINIGUN_DAMAGE = 2;
+            var CHASE_VEHICLE_MAX_DAMAGE = 100;
+            var CHASE_ARROW_DAMAGE = 14;
+            var ARROW_VEHICLE_DAMAGE = 14;
+            var VEHICLE_RESPAWN_DELAY_SEC = 5;
+            var VEHICLE_DAMAGE_NET_MIN_INTERVAL_MS = 90;
+            var lastPlayerVehicleDamageNetMs = 0;
+            var pendingClientMinigunVehicleDamage = 0;
+            var vehicleExplosionFx = [];
+            var playerVehicleRespawnTimeoutId = null;
+            var playerVehicleRespawnGen = 0;
+            var _vehicleZeroVel = null;
+            var _vehicleExplodePos = new THREE.Vector3();
+            var FOOT_EYE_Y = 2.0;
+            var CITY_VOID_FLOOR_MARGIN_M = 3.5;
+            var CITY_VOID_RECOVERY_COOLDOWN_MS = 2200;
+            var lastCityVoidRecoveryMs = 0;
             var flyNavGoalActive = false;
             var playerCityPathWaypoints = [];
             var playerCityBasePathPoints = [];
@@ -1336,6 +1698,9 @@
             }
 
             function initGraphics() {
+                if (window.__gtavrSplash) {
+                    window.__gtavrSplash.setProgress(26, 'Initializing graphics…');
+                }
 
                 container = document.getElementById('container');
                 speedometer = document.getElementById('speedometer');
@@ -1516,8 +1881,8 @@
                 if (navigator.xr) {
                     navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
                         if (supported) {
-                            vrButton.style.display = 'block';
-                            vrButton.style.background = '#006600';
+                            vrButton.style.display = 'inline-block';
+                            vrButton.style.visibility = 'visible';
                             console.log('VR supported');
                         }
                     });
@@ -1543,6 +1908,8 @@
                             // Set up VR HUD when VR starts
                             console.log('🥽 Setting up VR HUD...');
                             setupVRHUD();
+                            setupVRIntroPanel();
+                            updateVRIntroPanel();
                             
                             // Set up VR controllers
                             console.log('🥽 Setting up VR controllers...');
@@ -1604,6 +1971,9 @@
             }
 
             function initPhysics() {
+                if (window.__gtavrSplash) {
+                    window.__gtavrSplash.setProgress(34, 'Initializing physics…');
+                }
                 // Physics configuration
                 collisionConfiguration = new Ammo.btDefaultCollisionConfiguration();
                 dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration);
@@ -1759,8 +2129,14 @@
                 // Add player state sending to sync list (only once)
                 if (!this.playerStateSyncAdded) {
                     syncList.push(sendPlayerState);
+                    syncList.push(syncRemotePlayerHelicopters);
+                    syncList.push(function() {
+                        if (isMultiplayer && activePlayers.size > 1) {
+                            updateRemoteArcheryFromNetworkStates(remotePlayerStates, myPlayerId);
+                        }
+                    });
                     this.playerStateSyncAdded = true;
-                    console.log('🔄 Added player state sending to sync list');
+                    console.log('🔄 Added player state + remote helicopter/archery sync to sync list');
                 }
                 
                 // Add vehicle collision detection to sync list (only once)
@@ -1785,10 +2161,13 @@
                     for (var i = 0; i < syncList.length; i++)
                         syncList[i](dt);
                     chaseSimFrameId++;
-                    physicsWorld.stepSimulation(dt, 10);
+                    var physicsDt = dt > MAX_PHYSICS_STEP_SEC ? MAX_PHYSICS_STEP_SEC : dt;
+                    physicsWorld.stepSimulation(physicsDt, 10);
                     // City BVH hull push after physics — pre-step teleport caused snap/spin on buildings.
                     if (vrRunnerCityReady) {
-                        resolveVehicleCityCollisions(vehicleRef, dt);
+                        if (vehicleRef && !vehicleRef.destroyed) {
+                            resolveVehicleCityCollisions(vehicleRef, dt);
+                        }
                         if (botVehicleRef && !trackEditorMode) {
                             resolveVehicleCityCollisions(botVehicleRef, dt);
                         }
@@ -1815,6 +2194,8 @@
                         }
                     }
 
+                    checkCityVoidRecovery();
+
                     updateChaseVehicles(dt);
 
                     if (pendingInitialCitySpawn && vrRunnerCityReady && isCityDrivePhysicsReady()) {
@@ -1836,13 +2217,19 @@
                     updateDriveCompassRibbon();
                     updateCityNavMinimap();
                     updateRearviewMirror();
+                    if (typeof updateGtavrSplashLoadProgress === 'function') {
+                        updateGtavrSplashLoadProgress();
+                    }
 
                     if (cityMode === 'vrrunner') {
                         updateVrRunnerSunAndFog();
                     }
 
                     if (renderer.xr.isPresenting) {
-                        updateVRHUD();
+                        updateVRIntroPanel();
+                        if (!vrIntroPanel || !vrIntroPanel.visible) {
+                            updateVRHUD();
+                        }
                     } else {
                         updateDesktopHUD();
                     }
@@ -2109,6 +2496,9 @@
                         console.log('Controller grip', i, 'disconnected');
                         controllerGrip.userData.xrInputSource = null;
                         releaseVRWheelGrab(i);
+                        if (window.__gtavrPlayerHelicopter && window.__gtavrPlayerHelicopter.releaseVRCyclicGrab) {
+                            window.__gtavrPlayerHelicopter.releaseVRCyclicGrab(i);
+                        }
                         while (this.children.length) this.remove(this.children[0]);
                         vrHandMeshes[i] = null;
                     });
@@ -2208,7 +2598,7 @@
             }
             
             function onSelectEnd(event) {
-                // Handle controller trigger release
+                if (window.__gtavrTryVRIntroStart && window.__gtavrTryVRIntroStart()) return;
                 console.log('Controller select end');
             }
             
@@ -2234,15 +2624,19 @@
                     controllerGrip.visible = showHands || showLasers;
 
                     var wheelSlot = vrWheelGrabSlots[index];
-                    if (wheelSlot) {
-                        // Hand is parented to the wheel — hide any grip-attached duplicate
+                    var gtavrHeliHands = window.__gtavrPlayerHelicopter;
+                    var cyclicSlot = gtavrHeliHands && gtavrHeliHands.getVRCyclicGrabSlot
+                        ? gtavrHeliHands.getVRCyclicGrabSlot(index) : null;
+                    var grabSlot = wheelSlot || cyclicSlot;
+                    if (grabSlot) {
+                        // Hand is parented to wheel/cyclic — hide any grip-attached duplicate
                         controllerGrip.children.forEach(function(child) {
                             if (child.userData && child.userData.isVRHand) {
                                 child.visible = false;
                             }
                         });
-                        if (wheelSlot.hand) {
-                            wheelSlot.hand.visible = showHands;
+                        if (grabSlot.hand) {
+                            grabSlot.hand.visible = showHands;
                         }
                         return;
                     }
@@ -2311,6 +2705,188 @@
                 
                 console.log('🥽 VR HUD created');
             }
+
+            function isPhysicsWireframeDebugVisible() {
+                return !!(showPhysicsDebug && physicsDebugGroup && physicsDebugGroup.visible);
+            }
+
+            function setPlayerPhysicsWireframeVisible(visible) {
+                if (vehicleRef && vehicleRef.physicsWireframe) {
+                    vehicleRef.physicsWireframe.visible = visible;
+                }
+            }
+
+            /**
+             * Head-locked VR intro (DOM splash is monitor-only; WebXR renders the canvas).
+             * Semi-opaque white inner sphere blocks the live scene; logo + loader at different depths.
+             */
+            function setupVRIntroPanel() {
+                if (vrIntroPanel || !cameraRig) return;
+
+                var introMatOpts = { depthTest: false, depthWrite: false, toneMapped: false };
+                var texLoader = new THREE.TextureLoader();
+                var logoScale = 0.8;
+
+                vrIntroShell = new THREE.Mesh(
+                    new THREE.SphereGeometry(50, 40, 24),
+                    new THREE.MeshBasicMaterial({
+                        color: 0xffffff,
+                        side: THREE.BackSide,
+                        transparent: true,
+                        opacity: 0.9,
+                        depthTest: false,
+                        depthWrite: false
+                    })
+                );
+                vrIntroShell.name = 'GtavrVRIntroShell';
+                vrIntroShell.renderOrder = 8998;
+                vrIntroShell.visible = false;
+                cameraRig.add(vrIntroShell);
+
+                vrIntroPanel = new THREE.Group();
+                vrIntroPanel.name = 'GtavrVRIntro';
+
+                var panelDist = 1.05;
+
+                var logoMesh = new THREE.Mesh(
+                    new THREE.PlaneGeometry(1.0 * logoScale, 0.38 * logoScale),
+                    new THREE.MeshBasicMaterial(Object.assign({
+                        transparent: true,
+                        alphaTest: 0.02
+                    }, introMatOpts))
+                );
+                logoMesh.position.set(0, 0.06, 0.42);
+                logoMesh.renderOrder = 9001;
+
+                texLoader.load('GTAVR-intro-logo.png', function(logoTex) {
+                    logoTex.colorSpace = THREE.SRGBColorSpace;
+                    logoTex.minFilter = THREE.LinearFilter;
+                    logoTex.magFilter = THREE.LinearFilter;
+                    logoMesh.material.map = logoTex;
+                    logoMesh.material.needsUpdate = true;
+                    var img = logoTex.image;
+                    if (img && img.width && img.height) {
+                        var aspect = img.width / img.height;
+                        var logoW = 1.02 * logoScale;
+                        logoMesh.geometry.dispose();
+                        logoMesh.geometry = new THREE.PlaneGeometry(logoW, logoW / aspect);
+                    }
+                });
+
+                var uiCanvas = document.createElement('canvas');
+                uiCanvas.width = 320;
+                uiCanvas.height = 72;
+                var uiCtx = uiCanvas.getContext('2d');
+                var uiTex = new THREE.CanvasTexture(uiCanvas);
+                uiTex.colorSpace = THREE.SRGBColorSpace;
+                var uiMesh = new THREE.Mesh(
+                    new THREE.PlaneGeometry(0.52, 0.115),
+                    new THREE.MeshBasicMaterial(Object.assign({
+                        map: uiTex,
+                        transparent: true,
+                        opacity: 0.98
+                    }, introMatOpts))
+                );
+                uiMesh.position.set(0, -0.38, 0.48);
+                uiMesh.renderOrder = 9002;
+
+                vrIntroPanel.add(logoMesh);
+                vrIntroPanel.add(uiMesh);
+                vrIntroPanel.position.set(0, 1.28, -panelDist);
+                cameraRig.add(vrIntroPanel);
+                vrIntroPanel.visible = false;
+
+                vrIntroPanel.userData = {
+                    canvas: uiCanvas,
+                    context: uiCtx,
+                    texture: uiTex
+                };
+                console.log('🥽 VR intro panel ready (white shell + logo)');
+            }
+
+            function hideVRIntroPanel() {
+                if (vrIntroShell) vrIntroShell.visible = false;
+                if (!vrIntroPanel) return;
+                vrIntroPanel.visible = false;
+                if (vrHUD) vrHUD.visible = true;
+                setPlayerPhysicsWireframeVisible(isPhysicsWireframeDebugVisible());
+                if (renderer && cityMode === 'vrrunner') {
+                    renderer.setClearColor(VRRUNNER_SKY_HEX);
+                }
+            }
+            window.__gtavrHideVRIntro = hideVRIntroPanel;
+
+            function updateVRIntroPanel() {
+                if (!vrIntroPanel || !vrIntroPanel.userData) return;
+                var show = renderer.xr.isPresenting
+                    && !document.body.classList.contains('gtavr-game-started');
+                if (vrIntroShell) vrIntroShell.visible = show;
+                vrIntroPanel.visible = show;
+                if (vrHUD) vrHUD.visible = !show;
+
+                if (!show) {
+                    if (renderer && cityMode === 'vrrunner') {
+                        renderer.setClearColor(VRRUNNER_SKY_HEX);
+                    }
+                    return;
+                }
+
+                setPlayerPhysicsWireframeVisible(false);
+
+                if (renderer) {
+                    renderer.setClearColor(0xffffff);
+                }
+
+                var splash = window.__gtavrSplash;
+                var pct = splash && splash.getProgress ? splash.getProgress() : 0;
+                var ready = splash && splash.isReady && splash.isReady();
+                var canvas = vrIntroPanel.userData.canvas;
+                var ctx = vrIntroPanel.userData.context;
+                var tex = vrIntroPanel.userData.texture;
+                var w = canvas.width;
+                var h = canvas.height;
+                var padX = 28;
+                var trackY = 38;
+                var trackH = 8;
+
+                ctx.clearRect(0, 0, w, h);
+                ctx.fillStyle = 'rgba(255,255,255,0.4)';
+                ctx.fillRect(padX, trackY, w - padX * 2, trackH);
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(padX, trackY, w - padX * 2, trackH);
+                var fillW = (w - padX * 2) * (pct / 100);
+                var grad = ctx.createLinearGradient(padX, 0, padX + fillW, 0);
+                grad.addColorStop(0, '#e91e9c');
+                grad.addColorStop(0.5, '#ff4fd8');
+                grad.addColorStop(1, '#00d9ff');
+                ctx.fillStyle = grad;
+                ctx.fillRect(padX, trackY, fillW, trackH);
+
+                ctx.font = '600 13px system-ui, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillStyle = '#fff';
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 3;
+                var status = ready ? 'Pull trigger to start' : 'Loading…';
+                ctx.strokeText(status, w / 2, 22);
+                ctx.fillText(status, w / 2, 22);
+
+                tex.needsUpdate = true;
+            }
+
+            function tryVRIntroStartFromVR() {
+                if (!renderer.xr.isPresenting) return false;
+                if (document.body.classList.contains('gtavr-game-started')) return false;
+                if (!window.__gtavrSplash || !window.__gtavrSplash.isReady()) return false;
+                window.__gtavrSplash.hide();
+                if (typeof window.__gtavrOnSplashStart === 'function') {
+                    window.__gtavrOnSplashStart();
+                }
+                console.log('🥽 VR intro dismissed — game started');
+                return true;
+            }
+            window.__gtavrTryVRIntroStart = tryVRIntroStartFromVR;
             
             // Spatial audio: HRTF panners + listener follows camera/head
             class SpatialAudioManager {
@@ -3326,14 +3902,40 @@
                     yPos += lineHeight;
                     context.fillText('ALT: ' + gtavrHeliHud.getAltitudeM().toFixed(1) + ' m', 20, yPos);
                     yPos += lineHeight;
+                    if (vehicleRef) {
+                        if (vehicleRef.destroyed && vehicleRef.respawnAtMs > performance.now()) {
+                            context.fillStyle = '#ff8866';
+                            context.fillText('CAR: respawn '
+                                + Math.ceil((vehicleRef.respawnAtMs - performance.now()) / 1000) + 's', 20, yPos);
+                        } else if (!vehicleRef.destroyed) {
+                            var heliMaxDmg = vehicleRef.maxDamage || VEHICLE_MAX_DAMAGE;
+                            context.fillStyle = vehicleRef.damage <= heliMaxDmg * 0.25 ? '#ff8866' : '#aaffaa';
+                            context.fillText('CAR DMG: ' + Math.round(vehicleRef.damage) + '/' + heliMaxDmg, 20, yPos);
+                        }
+                        yPos += lineHeight;
+                    }
                     context.fillStyle = '#ffffff';
                 } else {
                     var currentSpeed = 0;
-                    if (vehicleRef && vehicleRef.vehicle) {
+                    if (vehicleRef && vehicleRef.vehicle && !vehicleRef.destroyed) {
                         currentSpeed = Math.abs(vehicleRef.vehicle.getCurrentSpeedKmHour());
                     }
                     context.fillText('SPEED: ' + Math.round(currentSpeed) + ' km/h', 20, yPos);
                     yPos += lineHeight;
+                    if (vehicleRef) {
+                        if (vehicleRef.destroyed && vehicleRef.respawnAtMs > performance.now()) {
+                            context.fillStyle = '#ff8866';
+                            context.fillText('CAR: respawn '
+                                + Math.ceil((vehicleRef.respawnAtMs - performance.now()) / 1000) + 's', 20, yPos);
+                        } else {
+                            var maxDmg = vehicleRef.maxDamage || VEHICLE_MAX_DAMAGE;
+                            var dmgPct = Math.round((vehicleRef.damage / maxDmg) * 100);
+                            context.fillStyle = dmgPct <= 25 ? '#ff8866' : '#aaffaa';
+                            context.fillText('DAMAGE: ' + Math.round(vehicleRef.damage) + '/' + maxDmg, 20, yPos);
+                        }
+                        context.fillStyle = '#ffffff';
+                        yPos += lineHeight;
+                    }
                 }
 
                 if (trackEditorMode && trackEditorControlPoints.length) {
@@ -3535,7 +4137,7 @@
                 const musicGroup = new THREE.Group();
                 musicGroup.position.set(0, -0.23, 0);
                 const musicLabel = createVRText('Music:', -0.2, 0, 0.3);
-                const musicToggle = createVRButton('ON', 0, 0, 0.12, 0.06, '#00aa00', 'music-toggle');
+                const musicToggle = createVRButton('OFF', 0, 0, 0.12, 0.06, '#333333', 'music-toggle');
                 musicGroup.add(musicLabel, musicToggle);
                 vrMenuButtons.push(musicToggle);
                 vrMenu.add(musicGroup);
@@ -4251,9 +4853,10 @@
                         multiplayerStatus = `Host - Lobby ${lobbyNumber} (1/4)`;
                         myPlayerId = 'player_0';
                         activePlayers.set(myPlayerId, { isConnected: true, isHost: true });
+                        resetAuthoritativeVehicleDamage(myPlayerId);
                         
-                        // Host uses physics car, not slot system
-                        console.log('🏠 Host uses physics car, not slot system');
+                        applyMultiplayerSlotSpawn();
+                        console.log('🏠 Host assigned player_0 with slot spawn');
                         
                         updateMenuDisplay();
                         resolve();
@@ -4266,6 +4869,8 @@
                         
                         conn.on("open", function() {
                             activePlayers.set(playerId, { isConnected: true, isHost: false });
+                            resetAuthoritativeVehicleDamage(playerId);
+                            ensureMultiplayerCombatReady();
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
                             updateMenuDisplay();
                             updateVRMenuDisplay();
@@ -4310,6 +4915,8 @@
                                     console.log(`Hidden remote car for ${playerId}`);
                                 }
                             }
+                            hideRemotePlayerHelicopter(playerIndex);
+                            clearOccupancyForPlayer(playerId);
                             
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
                             updateMenuDisplay();
@@ -4399,6 +5006,7 @@
                                     
                                     console.log(`Hidden remote car ${index}`);
                                 }
+                                hideRemotePlayerHelicopter(index);
                             });
                             
                             updateMenuDisplay();
@@ -4424,6 +5032,9 @@
                     case 'player-assignment':
                         myPlayerId = data.playerId;
                         console.log('Assigned player ID:', myPlayerId);
+                        resetAuthoritativeVehicleDamage(myPlayerId);
+                        applyMultiplayerSlotSpawn();
+                        ensureMultiplayerCombatReady();
                         break;
                         
                     case 'player-list':
@@ -4439,6 +5050,7 @@
                         updateMenuDisplay();
                         updateVRMenuDisplay();
                         console.log('Updated player list, total players:', activePlayers.size);
+                        if (activePlayers.size > 1) ensureMultiplayerCombatReady();
                         break;
                         
                     case 'car-state':
@@ -4467,6 +5079,23 @@
                             updateRemoteBotState(data.botState);
                         }
                         break;
+
+                    case 'combat-event':
+                        if (isHost) {
+                            if (data.event === 'vehicle-hit' ||
+                                data.event === 'occupancy-claim' ||
+                                data.event === 'occupancy-release') {
+                                handleCombatEvent(data, data.playerId || fromPlayerId);
+                            } else if (data.playerId !== myPlayerId) {
+                                handleCombatEvent(data, data.playerId || fromPlayerId);
+                                if (data.event !== 'occupancy-granted' && data.event !== 'occupancy-kick') {
+                                    sendToAllPlayers(data);
+                                }
+                            }
+                        } else {
+                            handleCombatEvent(data, data.playerId || fromPlayerId);
+                        }
+                        break;
                         
                     case 'chat-message':
                         console.log(`Chat from ${fromPlayerId}: ${data.message}`);
@@ -4483,6 +5112,139 @@
                         conn.send(data);
                     }
                 });
+            }
+
+            function sendToHost(data) {
+                var hostConn = connections.get('host');
+                if (hostConn && hostConn.open) {
+                    hostConn.send(data);
+                    return true;
+                }
+                connections.forEach(function(conn) {
+                    if (conn && conn.open) conn.send(data);
+                });
+                return true;
+            }
+
+            function sendToPlayer(playerId, data) {
+                if (isHost) {
+                    var conn = connections.get(playerId);
+                    if (conn && conn.open) conn.send(data);
+                } else if (playerId === 'player_0') {
+                    sendToHost(data);
+                }
+            }
+
+            function findNearestCarDoorTarget(worldPos) {
+                if (!worldPos) return null;
+                var PF = window.__gtavrPlayerFoot;
+                if (!PF || !PF.distanceToCarDoors) return null;
+                var best = null;
+                var mySlot = getMyPlayerSlotIndex();
+
+                if (vehicleRef && !vehicleRef.destroyed && vehicleRef.chassisMesh) {
+                    var ownDist = PF.distanceToCarDoors(vehicleRef.chassisMesh, worldPos);
+                    if (ownDist < Infinity) {
+                        best = { kind: 'car', slot: mySlot, distance: ownDist, carMesh: vehicleRef.chassisMesh };
+                    }
+                }
+
+                for (var i = 0; i < remotePlayerCars.length; i++) {
+                    if (i === mySlot) continue;
+                    var car = remotePlayerCars[i];
+                    if (!car || !car.mesh || car.destroyed) continue;
+                    var dist = PF.distanceToCarDoors(car.mesh, worldPos);
+                    if (!best || dist < best.distance) {
+                        best = { kind: 'car', slot: i, distance: dist, carMesh: car.mesh };
+                    }
+                }
+                return best;
+            }
+
+            function findNearestHeliDoorTarget(worldPos) {
+                if (!worldPos) return null;
+                var PH = window.__gtavrPlayerHelicopter;
+                if (!PH || !PH.distanceToHeliRootDoors) return null;
+                var best = null;
+                var mySlot = getMyPlayerSlotIndex();
+
+                if (startHelicopterRoot) {
+                    var ownDist = PH.distanceToHeliRootDoors(startHelicopterRoot, worldPos);
+                    if (ownDist < Infinity) {
+                        best = { kind: 'heli', slot: mySlot, distance: ownDist };
+                    }
+                }
+
+                for (var i = 0; i < remotePlayerHelicopters.length; i++) {
+                    if (i === mySlot) continue;
+                    var heliSlot = remotePlayerHelicopters[i];
+                    if (!heliSlot || !heliSlot.root) continue;
+                    var dist = PH.distanceToHeliRootDoors(heliSlot.root, worldPos);
+                    if (!best || dist < best.distance) {
+                        best = { kind: 'heli', slot: i, distance: dist };
+                    }
+                }
+                return best;
+            }
+
+            function teleportVehicleToSlot(slot) {
+                if (!vehicleRef || !vehicleRef.vehicleBody || slot == null) return;
+                if (slot === getMyPlayerSlotIndex()) return;
+
+                var targetPos = null;
+                var targetQuat = null;
+                var remote = remotePlayerCars[slot];
+                if (remote && remote.mesh) {
+                    targetPos = remote.mesh.position.clone();
+                    targetQuat = remote.mesh.quaternion.clone();
+                } else {
+                    var pose = getPlayerCitySpawnPose(slot);
+                    targetPos = pose.position.clone();
+                    targetPos.y += WHEEL_AXIS_Y + WHEEL_RADIUS + VEHICLE_SUSPENSION_REST_LENGTH;
+                    targetQuat = pose.rotation;
+                }
+
+                var spawnTransform = new Ammo.btTransform();
+                spawnTransform.setIdentity();
+                spawnTransform.setOrigin(new Ammo.btVector3(targetPos.x, targetPos.y, targetPos.z));
+                spawnTransform.setRotation(new Ammo.btQuaternion(
+                    targetQuat.x, targetQuat.y, targetQuat.z, targetQuat.w
+                ));
+                vehicleRef.vehicleBody.setWorldTransform(spawnTransform);
+                vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                vehicleRef.vehicle.resetSuspension();
+                syncPlayerChassisFromPhysics();
+            }
+
+            function repositionHelicopterToOccupiedSlot(slot) {
+                if (!startHelicopterRoot || slot == null) return;
+                if (slot === getMyPlayerSlotIndex()) {
+                    repositionLocalHelicopterForSlot(slot);
+                    return;
+                }
+                var remote = remotePlayerHelicopters[slot];
+                if (remote && remote.root) {
+                    startHelicopterRoot.position.copy(remote.root.position);
+                    startHelicopterRoot.rotation.copy(remote.root.rotation);
+                } else {
+                    repositionLocalHelicopterForSlot(slot);
+                }
+            }
+
+            function forceExitOccupiedAsset(payload) {
+                if (!payload || payload.kind == null || payload.slot == null) return;
+                var foot = window.__gtavrPlayerFoot;
+                var heli = window.__gtavrPlayerHelicopter;
+                if (payload.kind === 'car' && foot && foot.isVehicleMode()) {
+                    if (foot.getOccupiedVehicleSlot() === payload.slot) {
+                        foot.forceExitVehicle();
+                    }
+                } else if (payload.kind === 'heli' && heli && heli.isHelicopterMode()) {
+                    if (heli.getOccupiedHeliSlot() === payload.slot) {
+                        heli.forceExitHelicopter();
+                    }
+                }
             }
             
             function broadcastPlayerList() {
@@ -4505,6 +5267,10 @@
 
             // Remote player cars (simple Three.js objects like reference project)
             let remotePlayerCars = [];
+            let remotePlayerHelicopters = [];
+            var playerStateSendAcc = 0;
+            var PLAYER_STATE_SEND_INTERVAL = 1 / 15;
+            var authoritativeVehicleDamage = {};
 
             function createRemotePlayerCars() {
                 console.log('🏗️ Creating remote player cars with physics...');
@@ -4544,7 +5310,11 @@
                     
                     const startTransform = new Ammo.btTransform();
                     startTransform.setIdentity();
-                    startTransform.setOrigin(new Ammo.btVector3(-22 + (i * 2), 1.0, 40));
+                    startTransform.setOrigin(new Ammo.btVector3(
+                        getPlayerCitySpawnPose(i).position.x,
+                        getPlayerCitySpawnPose(i).position.y + 0.3,
+                        getPlayerCitySpawnPose(i).position.z
+                    ));
                     
                     const motionState = new Ammo.btDefaultMotionState(startTransform);
                     const rbInfo = new Ammo.btRigidBodyConstructionInfo(chassisMass, motionState, chassisShape, chassisLocalInertia);
@@ -4566,7 +5336,8 @@
                     // Don't add to physics world initially - will be added when player connects
                     
                     // Set initial position
-                    carGroup.position.set(-22 + (i * 2), 1.0, 40);
+                    carGroup.position.copy(getPlayerCitySpawnPose(i).position);
+                    carGroup.position.y += 0.3;
                     carGroup.visible = false; // Hidden by default
                     
                     // Store both mesh and physics body
@@ -4574,7 +5345,11 @@
                         mesh: carGroup,
                         rigidBody: rigidBody,
                         playerId: null,
-                        inPhysicsWorld: false // Track if physics body is in world
+                        inPhysicsWorld: false,
+                        damage: VEHICLE_MAX_DAMAGE,
+                        maxDamage: VEHICLE_MAX_DAMAGE,
+                        destroyed: false,
+                        respawnTimer: 0
                     };
                     scene.add(carGroup);
                     
@@ -4582,6 +5357,90 @@
                 }
                 
                 console.log(`🎮 Created ${remotePlayerCars.length} remote player cars with physics`);
+            }
+
+            function createRemotePlayerHelicopters() {
+                console.log('🚁 Creating remote player helicopter proxies...');
+                for (var hi = 0; hi < 4; hi++) {
+                    remotePlayerHelicopters[hi] = {
+                        root: null,
+                        mesh: null,
+                        playerId: null,
+                        slotIndex: hi
+                    };
+                }
+                getSharedGltfLoader().load(
+                    HELICOPTER_GLTF_URL,
+                    function(gltf) {
+                        for (var hi = 0; hi < 4; hi++) {
+                            var heli = gltf.scene.clone(true);
+                            heli.name = 'RemoteHelicopter_' + hi;
+                            prepareHelicopterModel(heli);
+                            var group = new THREE.Group();
+                            group.name = 'RemoteHelicopterRoot_' + hi;
+                            group.add(heli);
+                            var heliPose = getHelicopterSpawnPoseForSlot(hi);
+                            group.position.copy(heliPose.position);
+                            group.rotation.set(0, heliPose.yaw, 0);
+                            patchVrRunnerRadialFog(group);
+                            group.visible = false;
+                            scene.add(group);
+                            if (vrRunnerCityReady && vrRunnerCityCollisionMeshes.length) {
+                                var floorY = getCityWalkableFloorY(
+                                    group.position.x, group.position.z, group.position.y, vrRunnerCityCollisionMeshes
+                                );
+                                if (floorY !== null) group.position.y = floorY;
+                            }
+                            var slot = remotePlayerHelicopters[hi];
+                            if (window.__gtavrPlayerHelicopter && window.__gtavrPlayerHelicopter.registerRemoteHelicopter) {
+                                window.__gtavrPlayerHelicopter.registerRemoteHelicopter(slot, group, gltf);
+                            } else {
+                                slot.root = group;
+                                slot.mesh = heli;
+                            }
+                        }
+                        console.log('🚁 Remote player helicopter proxies ready (4 slots)');
+                    },
+                    undefined,
+                    function(err) {
+                        console.warn('🚁 Remote helicopter GLTF failed:', err);
+                    }
+                );
+            }
+
+            function hideRemotePlayerHelicopter(playerIndex) {
+                var slot = remotePlayerHelicopters[playerIndex];
+                if (!slot) return;
+                slot.playerId = null;
+                if (window.__gtavrPlayerHelicopter && window.__gtavrPlayerHelicopter.hideRemoteHelicopter) {
+                    window.__gtavrPlayerHelicopter.hideRemoteHelicopter(slot);
+                } else if (slot.root) {
+                    slot.root.visible = false;
+                }
+            }
+
+            function syncRemotePlayerHelicopters(dt) {
+                if (!isMultiplayer || activePlayers.size <= 1) return;
+                for (var hi = 0; hi < remotePlayerHelicopters.length; hi++) {
+                    hideRemotePlayerHelicopter(hi);
+                }
+                remotePlayerStates.forEach(function(state, playerId) {
+                    if (playerId === myPlayerId || !state || state.mode !== 'helicopter') return;
+                    var playerIndex = parseInt(playerId.split('_')[1], 10);
+                    if (!isFinite(playerIndex) || playerIndex < 0) return;
+                    var driveSlot = state.slot != null ? state.slot : playerIndex;
+                    if (driveSlot < 0 || driveSlot >= remotePlayerHelicopters.length) return;
+                    var slot = remotePlayerHelicopters[driveSlot];
+                    if (!slot || !slot.root) return;
+                    slot.playerId = playerId;
+                    if (window.__gtavrPlayerHelicopter && window.__gtavrPlayerHelicopter.updateRemoteHelicopter) {
+                        window.__gtavrPlayerHelicopter.updateRemoteHelicopter(slot, state, dt);
+                    } else {
+                        slot.root.visible = true;
+                        slot.root.position.set(state.x, state.y, state.z);
+                        slot.root.rotation.set(state.rx || 0, state.ry || 0, state.rz || 0);
+                    }
+                });
             }
 
             function updateRemoteCarPhysicsBody(remoteCarData, state) {
@@ -4670,8 +5529,11 @@
                 };
             }
 
-            function sendPlayerState() {
+            function sendPlayerState(dt) {
                 if (!isMultiplayer || activePlayers.size <= 1) return;
+                playerStateSendAcc += dt || 0;
+                if (playerStateSendAcc < PLAYER_STATE_SEND_INTERVAL) return;
+                playerStateSendAcc = 0;
 
                 var playerState = window.__gtavrPlayerFoot
                     ? window.__gtavrPlayerFoot.getNetworkState()
@@ -4855,6 +5717,9 @@
                 if (vehicleRef && vehicleRef.physicsWireframe) {
                     vehicleRef.physicsWireframe.visible = visible;
                 }
+                if (window.__gtavrPlayerHelicopter && window.__gtavrPlayerHelicopter.setHeliColliderDebugVisible) {
+                    window.__gtavrPlayerHelicopter.setHeliColliderDebugVisible(visible);
+                }
                 if (botVehicleRef && botVehicleRef.physicsWireframe) {
                     botVehicleRef.physicsWireframe.visible = visible;
                 }
@@ -4982,18 +5847,68 @@
                 return fwd;
             }
 
-            function getDefaultPlayerCitySpawnPose() {
+            function getMyPlayerSlotIndex() {
+                if (!myPlayerId) return 0;
+                var idx = parseInt(myPlayerId.split('_')[1], 10);
+                return (isFinite(idx) && idx >= 0) ? idx : 0;
+            }
+
+            function getMultiplayerSlotWorldOffset(slotIndex, out) {
+                out = out || new THREE.Vector3();
+                out.set(0, 0, 0);
+                if (!slotIndex) return out;
+                var yaw = DEFAULT_PLAYER_CITY_SPAWN_YAW_DEG * Math.PI / 180;
+                out.set(Math.cos(yaw), 0, -Math.sin(yaw)).multiplyScalar(slotIndex * MULTIPLAYER_SLOT_SPACING_M);
+                return out;
+            }
+
+            function getPlayerCitySpawnPose(slotIndex) {
                 var pos = new THREE.Vector3(
                     DEFAULT_PLAYER_CITY_SPAWN_X,
                     DEFAULT_PLAYER_CITY_SPAWN_Y,
                     DEFAULT_PLAYER_CITY_SPAWN_Z
                 );
+                if (slotIndex > 0) {
+                    pos.add(getMultiplayerSlotWorldOffset(slotIndex));
+                }
                 var rot = new THREE.Quaternion();
                 rot.setFromAxisAngle(
                     new THREE.Vector3(0, 1, 0),
                     DEFAULT_PLAYER_CITY_SPAWN_YAW_DEG * Math.PI / 180
                 );
                 return { position: pos, rotation: rot };
+            }
+
+            function getHelicopterSpawnPoseForSlot(slotIndex) {
+                var cityPose = getPlayerCitySpawnPose(slotIndex);
+                var fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(cityPose.rotation);
+                var right = new THREE.Vector3(1, 0, 0).applyQuaternion(cityPose.rotation);
+                var pos = cityPose.position.clone()
+                    .addScaledVector(right, HELICOPTER_SPAWN_OFFSET_RIGHT_M)
+                    .addScaledVector(fwd, HELICOPTER_SPAWN_OFFSET_FORWARD_M);
+                var yaw = Math.atan2(fwd.x, fwd.z);
+                return { position: pos, yaw: yaw };
+            }
+
+            function repositionLocalHelicopterForSlot(slotIndex) {
+                if (!startHelicopterRoot) return;
+                var heliPose = getHelicopterSpawnPoseForSlot(slotIndex);
+                startHelicopterRoot.position.copy(heliPose.position);
+                startHelicopterRoot.rotation.set(0, heliPose.yaw, 0);
+                applyStartHelicopterFloorY();
+            }
+
+            function applyMultiplayerSlotSpawn() {
+                if (!isMultiplayer || !myPlayerId) return;
+                applyDefaultPlayerCitySpawn();
+                repositionLocalHelicopterForSlot(getMyPlayerSlotIndex());
+            }
+
+            function getDefaultPlayerCitySpawnPose() {
+                if (isMultiplayer && myPlayerId) {
+                    return getPlayerCitySpawnPose(getMyPlayerSlotIndex());
+                }
+                return getPlayerCitySpawnPose(0);
             }
 
             /** Default VRrunner city spawn (streets near nav-map play area). */
@@ -5792,7 +6707,10 @@
                     var nearWheel = distanceGripToSteeringWheel(ci) <= (STEER_WHEEL_GRAB_RADIUS * 1.35);
                     if (PF.isVehicleMode() && (vrWheelGrabSlots[ci] || nearWheel)) continue;
                     vrControllerModels[ci].getWorldPosition(_steerGripWorld);
-                    if (PF.distanceToDoor(_steerGripWorld) > PF.DOOR_GRAB_RADIUS) continue;
+                    var carTarget = findNearestCarDoorTarget(_steerGripWorld);
+                    var carDoorDist = carTarget ? carTarget.distance : PF.distanceToDoor(_steerGripWorld);
+                    if (PF.isFootMode() && carDoorDist > PF.DOOR_GRAB_RADIUS) continue;
+                    if (PF.isVehicleMode() && PF.distanceToDoor(_steerGripWorld) > PF.DOOR_GRAB_RADIUS) continue;
                     if (PF.tryDoorInteract(_steerGripWorld, true)) {
                         releaseVRWheelGrab(ci);
                     }
@@ -5902,10 +6820,10 @@
 
                         var fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(startPose.rotation);
                         var right = new THREE.Vector3(1, 0, 0).applyQuaternion(startPose.rotation);
-                        group.position.copy(startPose.position)
-                            .addScaledVector(right, HELICOPTER_SPAWN_OFFSET_RIGHT_M)
-                            .addScaledVector(fwd, HELICOPTER_SPAWN_OFFSET_FORWARD_M);
-                        group.rotation.set(0, Math.atan2(fwd.x, fwd.z), 0);
+                        var slotIndex = (isMultiplayer && myPlayerId) ? getMyPlayerSlotIndex() : 0;
+                        var heliPose = getHelicopterSpawnPoseForSlot(slotIndex);
+                        group.position.copy(heliPose.position);
+                        group.rotation.set(0, heliPose.yaw, 0);
 
                         patchVrRunnerRadialFog(group);
                         scene.add(group);
@@ -6254,6 +7172,9 @@
                     botRef.maxCornerSpeed = VEHICLE_AI_MAX_TARGET_SPEED_KMH;
                     botRef.brakingDistance = 32;
                     botRef.avoidanceRayLength = 20;
+                    botRef.damage = CHASE_VEHICLE_MAX_DAMAGE;
+                    botRef.maxDamage = CHASE_VEHICLE_MAX_DAMAGE;
+                    botRef.destroyed = false;
                 }
 
                 // Wheels
@@ -6323,6 +7244,7 @@
                 // Bot AI sync function
                 function botSync(dt) {
                     if (trackEditorMode) return;
+                    if (botRef.destroyed) return;
                     if (!botRef.chaseMode && (!botVehicleRef || botVehicleRef !== botRef)) return;
                     var botMaxEngine = botRef.maxEngineForce || maxEngineForce;
                     botRef.debugCounter++;
@@ -7195,6 +8117,7 @@
                 scene.add(chassisMesh);
 
                 var physicsWireframe = addVehicleChassisWireframe(pos, quat, chassisCollision);
+                physicsWireframe.visible = showPhysicsDebug;
 
                 // Raycast Vehicle
                 var engineForce = 0;
@@ -7221,6 +8144,16 @@
                     steeringWheelMesh: null,
                     physicsWireframe: physicsWireframe,
                     chassisCollision: chassisCollision,
+                    damage: VEHICLE_MAX_DAMAGE,
+                    maxDamage: VEHICLE_MAX_DAMAGE,
+                    destroyed: false,
+                    respawnTimer: 0,
+                    respawnAtMs: 0,
+                    respawnChassisPos: null,
+                    explodePosition: null,
+                    _driveSuspended: false,
+                    _bodyInPhysicsWorld: true,
+                    spawnProtectedUntil: 0,
                     cityNavMode: false,
                     currentWaypointIndex: 0,
                     waypointReachDistance: 8,
@@ -7297,10 +8230,26 @@
                 addWheel(false, new Ammo.btVector3(wheelHalfTrackBack, wheelAxisHeightBack, wheelAxisPositionBack), wheelRadiusBack, wheelWidthBack, BACK_LEFT);
                 addWheel(false, new Ammo.btVector3(-wheelHalfTrackBack, wheelAxisHeightBack, wheelAxisPositionBack), wheelRadiusBack, wheelWidthBack, BACK_RIGHT);
 
+                vehicleRef.wheelMeshes = wheelMeshes;
+
                 attachCameraRigToVehicle();
 
                 // Sync keyboard/VR actions and physics and graphics
                 function sync(dt) {
+                    updateCarExplosionFx(dt);
+                    if (vehicleRef && vehicleRef.destroyed) {
+                        if (speedometer && vehicleRef.respawnAtMs > 0) {
+                            var respawnLeftMs = Math.max(0, vehicleRef.respawnAtMs - performance.now());
+                            speedometer.innerHTML = 'Car destroyed — respawn '
+                                + Math.ceil(respawnLeftMs / 1000) + 's';
+                        }
+                        if (vehicleRef.respawnAtMs > 0
+                            && performance.now() >= vehicleRef.respawnAtMs) {
+                            respawnPlayerVehicle();
+                        }
+                        return;
+                    }
+
                     var speed = vehicle.getCurrentSpeedKmHour();
                     var gtavrFoot = window.__gtavrPlayerFoot;
                     var gtavrHeli = window.__gtavrPlayerHelicopter;
@@ -7376,8 +8325,9 @@
                                         vrBraking = 0;
                                     }
                                     
-                                    // A button (index 4) for camera switching (not on foot — A is archery there)
-                                    if (!isMenuVisible && !trackEditorMode && !onFoot && gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
+                                    // A button (index 4) for camera switching (not on foot or in helicopter)
+                                    if (!isMenuVisible && !trackEditorMode && !onFoot && !onHeli
+                                        && gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
                                         // Prevent rapid switching with a simple debounce
                                         if (!this.lastCameraSwitchTime || (Date.now() - this.lastCameraSwitchTime) > 500) {
                                             switchCamera();
@@ -7542,10 +8492,23 @@
                         var interactPos = new THREE.Vector3();
                         cameraRig.getWorldPosition(interactPos);
                         var doorHandled = false;
-                        if (gtavrHeli && (gtavrFoot.isFootMode() || gtavrHeli.isHelicopterMode())) {
+                        if (gtavrFoot && gtavrFoot.isFootMode() && gtavrHeli) {
+                            var carDoor = findNearestCarDoorTarget(interactPos);
+                            var heliDoor = findNearestHeliDoorTarget(interactPos);
+                            var carOk = carDoor && carDoor.distance <= gtavrFoot.DOOR_GRAB_RADIUS;
+                            var heliOk = heliDoor && heliDoor.distance <= gtavrHeli.DOOR_GRAB_RADIUS;
+                            if (heliOk && (!carOk || heliDoor.distance <= carDoor.distance)) {
+                                doorHandled = gtavrHeli.tryDoorInteract(interactPos, true);
+                            } else if (carOk) {
+                                doorHandled = gtavrFoot.tryDoorInteract(interactPos, true);
+                            }
+                        } else if (gtavrHeli && gtavrHeli.isHelicopterMode()) {
                             doorHandled = gtavrHeli.tryDoorInteract(interactPos, true);
                         }
-                        if (!doorHandled) {
+                        if (!doorHandled && gtavrFoot && !gtavrFoot.isFootMode()) {
+                            doorHandled = gtavrFoot.tryDoorInteract(interactPos, true);
+                        }
+                        if (!doorHandled && gtavrFoot && gtavrFoot.isFootMode()) {
                             gtavrFoot.tryDoorInteract(interactPos, true);
                         }
                     } else if (!renderer.xr.isPresenting) {
@@ -7569,7 +8532,9 @@
                         vrSteering = 0;
                         vrAcceleration = 0;
                         vrBraking = 0;
-                        zeroVehicleVelocity();
+                        if (!vehicleRef || !vehicleRef.destroyed) {
+                            zeroVehicleVelocity();
+                        }
                         if (gtavrHeli && renderer.xr.isPresenting) {
                             var heliSession = renderer.xr.getSession();
                             gtavrHeli.updateFlight(dt, heliSession);
@@ -7578,6 +8543,10 @@
                         }
                     } else if (gtavrHeli && gtavrHeli.updateAutonomousFlight) {
                         gtavrHeli.updateAutonomousFlight(dt);
+                    }
+
+                    if (vehicleRef && vehicleRef.destroyed) {
+                        return;
                     }
 
                     if (onFoot && !onHeli && gtavrFoot) {
@@ -9779,6 +10748,7 @@
 
             function queueCityWalkablePhysicsBuild(meshes) {
                 if (!physicsWorld || !meshes || !meshes.length) return;
+                vrRunnerCityPhysicsTotal = meshes.length;
                 for (var i = 0; i < meshes.length; i++) {
                     vrRunnerCityPhysicsPending.push(meshes[i]);
                 }
@@ -9792,6 +10762,30 @@
                 if (vrRunnerCityPhysicsBuilding) return false;
                 if (vrRunnerCityPhysicsPending.length) return false;
                 return vrRunnerCityPhysicsBodies.length > 0;
+            }
+
+            function updateGtavrSplashLoadProgress() {
+                if (!window.__gtavrSplash || window.__gtavrSplash.isReady()) return;
+                if (vrRunnerCityReady && isCityDrivePhysicsReady()) {
+                    window.__gtavrSplash.markReady('Ready — tap Start');
+                    return;
+                }
+                var pct = 44;
+                var msg = 'Loading world…';
+                if (vrRunnerCityBvhTotal > 0) {
+                    var bvhDone = vrRunnerCityBvhTotal - vrRunnerCityBvhPending.length;
+                    pct = 48 + Math.floor(34 * bvhDone / vrRunnerCityBvhTotal);
+                    msg = 'Building city collision…';
+                }
+                if (vrRunnerCityReady) {
+                    pct = Math.max(pct, 84);
+                    msg = 'Preparing streets…';
+                    if (vrRunnerCityPhysicsTotal > 0) {
+                        var physDone = vrRunnerCityPhysicsTotal - vrRunnerCityPhysicsPending.length;
+                        pct = 84 + Math.floor(14 * physDone / vrRunnerCityPhysicsTotal);
+                    }
+                }
+                window.__gtavrSplash.setProgress(pct, msg);
             }
 
             /** Up-facing city tris → static Bullet meshes so wheel rays get traction (not just BVH snap). */
@@ -9879,6 +10873,7 @@
                             removeDriveFallbackGroundPhysics();
                         }
                     }
+                    updateGtavrSplashLoadProgress();
                     return;
                 }
                 vrRunnerCityPhysicsBuilding = true;
@@ -9893,6 +10888,7 @@
                 if (addedTris > 0 && (vrRunnerCityPhysicsBodies.length & 31) === 0) {
                     console.log('🔧 City drive physics…', vrRunnerCityPhysicsBodies.length, 'bodies');
                 }
+                updateGtavrSplashLoadProgress();
                 requestAnimationFrame(processCityWalkablePhysicsQueue);
             }
 
@@ -9931,6 +10927,208 @@
                 }
                 _cityRaycaster.firstHitOnly = true;
                 return found ? bestY : null;
+            }
+
+            /** Single-probe floor lookup for respawn — avoids multi-probe BVH scan hitch. */
+            function getCityWalkableFloorYFast(x, z, refY, meshes) {
+                if (!meshes || !meshes.length) return null;
+                if (!_cityRaycaster) _cityRaycaster = new THREE.Raycaster();
+                _cityOrigin.set(x, refY + 2.8, z);
+                _cityRaycaster.set(_cityOrigin, new THREE.Vector3(0, -1, 0));
+                _cityRaycaster.far = 42;
+                _cityRaycaster.firstHitOnly = true;
+                var hits = _cityRaycaster.intersectObjects(meshes, false);
+                for (var hi = 0; hi < hits.length; hi++) {
+                    var hit = hits[hi];
+                    if (!hit.face) continue;
+                    _cityNormalMatrix.getNormalMatrix(hit.object.matrixWorld);
+                    _cityNormal.copy(hit.face.normal).applyMatrix3(_cityNormalMatrix).normalize();
+                    if (_cityNormal.y < 0.26) continue;
+                    return hit.point.y;
+                }
+                return null;
+            }
+
+            function getCityVoidAbsoluteKillY() {
+                return cityNavMapMinGroundY - 12;
+            }
+
+            function getVehicleMinBodyYOnFloor(floorY) {
+                return floorY + WHEEL_AXIS_Y + WHEEL_RADIUS + VEHICLE_SUSPENSION_REST_LENGTH - 0.2;
+            }
+
+            function getSafeCityRecoveryFootPose(preferX, preferZ, refY, yawHint) {
+                var floorY = vrRunnerCityCollisionMeshes.length
+                    ? getCityWalkableFloorY(preferX, preferZ, refY, vrRunnerCityCollisionMeshes)
+                    : null;
+                if (floorY !== null) {
+                    return {
+                        position: new THREE.Vector3(preferX, floorY + FOOT_EYE_Y, preferZ),
+                        yaw: yawHint != null ? yawHint : 0
+                    };
+                }
+                var spawn = getDefaultPlayerCitySpawnPose();
+                var sx = spawn.position.x;
+                var sz = spawn.position.z;
+                floorY = vrRunnerCityCollisionMeshes.length
+                    ? getCityWalkableFloorY(sx, sz, spawn.position.y, vrRunnerCityCollisionMeshes)
+                    : null;
+                var y = floorY !== null ? floorY + FOOT_EYE_Y : spawn.position.y + 1.5;
+                var yaw = yawHint != null ? yawHint : Math.atan2(
+                    Math.sin(DEFAULT_PLAYER_CITY_SPAWN_YAW_DEG * Math.PI / 180),
+                    Math.cos(DEFAULT_PLAYER_CITY_SPAWN_YAW_DEG * Math.PI / 180)
+                );
+                return { position: new THREE.Vector3(sx, y, sz), yaw: yaw };
+            }
+
+            function recoverFootFromCityVoid() {
+                var PF = window.__gtavrPlayerFoot;
+                if (!PF || !cameraRig || !PF.isFootMode()) return false;
+                var pos = new THREE.Vector3();
+                cameraRig.getWorldPosition(pos);
+                var yaw = cameraRig.rotation.y - Math.PI;
+                var safe = getSafeCityRecoveryFootPose(pos.x, pos.z, pos.y, yaw);
+                PF.resetFootAt(safe.position, safe.yaw, null);
+                if (PF.ensureFootLocomotionReady) PF.ensureFootLocomotionReady();
+                console.warn('🛟 Foot void recovery @', safe.position.x.toFixed(1), safe.position.y.toFixed(1), safe.position.z.toFixed(1));
+                return true;
+            }
+
+            function recoverVehicleFromCityVoid() {
+                if (!vehicleRef || vehicleRef.destroyed || !vehicleRef.vehicle || !vehicleRef.vehicleBody) {
+                    return false;
+                }
+                var tm = vehicleRef.vehicle.getChassisWorldTransform();
+                var px = tm.getOrigin().x();
+                var py = tm.getOrigin().y();
+                var pz = tm.getOrigin().z();
+                var floorY = vrRunnerCityCollisionMeshes.length
+                    ? getCityWalkableFloorY(px, pz, py, vrRunnerCityCollisionMeshes)
+                    : null;
+                var spawnPos;
+                if (floorY !== null) {
+                    spawnPos = new THREE.Vector3(px, getVehicleMinBodyYOnFloor(floorY), pz);
+                } else if (hasLastCarDropPosition) {
+                    spawnPos = lastCarDropPosition.clone();
+                } else {
+                    spawnPos = getDefaultPlayerCitySpawnPose().position.clone();
+                    if (vrRunnerCityCollisionMeshes.length) {
+                        var fy = getCityWalkableFloorY(spawnPos.x, spawnPos.z, spawnPos.y, vrRunnerCityCollisionMeshes);
+                        if (fy !== null) spawnPos.y = getVehicleMinBodyYOnFloor(fy);
+                    }
+                }
+                var spawnRot = vehicleRef.chassisMesh
+                    ? vehicleRef.chassisMesh.quaternion.clone()
+                    : getDefaultPlayerCitySpawnPose().rotation;
+                var spawnTransform = new Ammo.btTransform();
+                spawnTransform.setIdentity();
+                spawnTransform.setOrigin(new Ammo.btVector3(spawnPos.x, spawnPos.y, spawnPos.z));
+                spawnTransform.setRotation(new Ammo.btQuaternion(spawnRot.x, spawnRot.y, spawnRot.z, spawnRot.w));
+                vehicleRef.vehicleBody.setWorldTransform(spawnTransform);
+                vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                vehicleRef.vehicle.resetSuspension();
+                syncPlayerChassisFromPhysics();
+                attachCameraRigToVehicle();
+                recordLastCarDropPosition(spawnPos);
+                console.warn('🛟 Vehicle void recovery @', spawnPos.x.toFixed(1), spawnPos.y.toFixed(1), spawnPos.z.toFixed(1));
+                return true;
+            }
+
+            function recoverFlyCameraFromCityVoid() {
+                if (!cameraRig || cameraMode !== 'fly') return false;
+                var pos = new THREE.Vector3();
+                cameraRig.getWorldPosition(pos);
+                var safe = getSafeCityRecoveryFootPose(pos.x, pos.z, pos.y, cameraRig.rotation.y);
+                safe.position.y += 6;
+                cameraRig.position.copy(safe.position);
+                console.warn('🛟 Fly camera void recovery');
+                return true;
+            }
+
+            function isFootInCityVoid(eyeX, eyeY, eyeZ) {
+                if (eyeY < getCityVoidAbsoluteKillY()) return true;
+                if (!vrRunnerCityReady || !vrRunnerCityCollisionMeshes.length) {
+                    return eyeY < cityNavMapMinGroundY - 4;
+                }
+                var floorY = getCityWalkableFloorY(eyeX, eyeZ, eyeY, vrRunnerCityCollisionMeshes);
+                if (floorY === null) return eyeY < cityNavMapMinGroundY - 4;
+                return eyeY < floorY + FOOT_EYE_Y - CITY_VOID_FLOOR_MARGIN_M;
+            }
+
+            function isVehicleInCityVoid(px, py, pz) {
+                if (py < getCityVoidAbsoluteKillY()) return true;
+                if (!vrRunnerCityReady || !vrRunnerCityCollisionMeshes.length) {
+                    return py < cityNavMapMinGroundY - 4;
+                }
+                var floorY = getCityWalkableFloorY(px, pz, py, vrRunnerCityCollisionMeshes);
+                if (floorY === null) return py < cityNavMapMinGroundY - 4;
+                return py < getVehicleMinBodyYOnFloor(floorY) - CITY_VOID_FLOOR_MARGIN_M;
+            }
+
+            function isHelicopterInCityVoid(hx, hy, hz) {
+                if (hy < getCityVoidAbsoluteKillY()) return true;
+                if (!vrRunnerCityReady || !vrRunnerCityCollisionMeshes.length) {
+                    return hy < cityNavMapMinGroundY - 4;
+                }
+                var floorY = getCityWalkableFloorY(hx, hz, hy + 2.5, vrRunnerCityCollisionMeshes);
+                if (floorY === null) return hy < cityNavMapMinGroundY - 4;
+                return hy < floorY - CITY_VOID_FLOOR_MARGIN_M + 0.15;
+            }
+
+            function checkCityVoidRecovery() {
+                if (trackEditorMode || isMenuVisible) return;
+                var now = performance.now();
+                if (now - lastCityVoidRecoveryMs < CITY_VOID_RECOVERY_COOLDOWN_MS) return;
+
+                var PF = window.__gtavrPlayerFoot;
+                var PH = window.__gtavrPlayerHelicopter;
+                var onFoot = PF && PF.isFootMode();
+                var onHeli = PH && PH.isHelicopterMode && PH.isHelicopterMode();
+                var recovered = false;
+
+                if (onHeli && startHelicopterRoot && isHelicopterInCityVoid(
+                    startHelicopterRoot.position.x,
+                    startHelicopterRoot.position.y,
+                    startHelicopterRoot.position.z
+                ) && PH && PH.recoverFromCityVoid) {
+                    recovered = PH.recoverFromCityVoid();
+                } else if (!onHeli && !onFoot && startHelicopterRoot && PH && PH.isHelicopterAutonomous && PH.isHelicopterAutonomous()) {
+                    if (isHelicopterInCityVoid(
+                        startHelicopterRoot.position.x,
+                        startHelicopterRoot.position.y,
+                        startHelicopterRoot.position.z
+                    ) && PH.recoverFromCityVoid) {
+                        recovered = PH.recoverFromCityVoid();
+                    }
+                } else if (onFoot && cameraRig) {
+                    var eyePos = new THREE.Vector3();
+                    cameraRig.getWorldPosition(eyePos);
+                    if (isFootInCityVoid(eyePos.x, eyePos.y, eyePos.z)) {
+                        recovered = recoverFootFromCityVoid();
+                    }
+                } else if (cameraMode === 'fly' && cameraRig) {
+                    var flyPos = new THREE.Vector3();
+                    cameraRig.getWorldPosition(flyPos);
+                    if (isFootInCityVoid(flyPos.x, flyPos.y, flyPos.z) || flyPos.y < getCityVoidAbsoluteKillY()) {
+                        recovered = recoverFlyCameraFromCityVoid();
+                    }
+                }
+
+                if (!recovered && vehicleRef && !vehicleRef.destroyed && vehicleRef.vehicle
+                    && vrRunnerCityReady && isCityDrivePhysicsReady()) {
+                    var vtm = vehicleRef.vehicle.getChassisWorldTransform();
+                    var vpx = vtm.getOrigin().x();
+                    var vpy = vtm.getOrigin().y();
+                    var vpz = vtm.getOrigin().z();
+                    if (isVehicleInCityVoid(vpx, vpy, vpz)) {
+                        recovered = recoverVehicleFromCityVoid();
+                    }
+                }
+
+                if (recovered) {
+                    lastCityVoidRecoveryMs = now;
+                }
             }
 
             /** Street topography: lowest up-facing land hit (not roof). */
@@ -10550,6 +11748,620 @@
                     if (hit.distance < maxDist - 0.05) return hit.distance;
                 }
                 return maxDist;
+            }
+
+            function updateCarExplosionFx(dt) {
+                for (var ei = vehicleExplosionFx.length - 1; ei >= 0; ei--) {
+                    var fx = vehicleExplosionFx[ei];
+                    fx.t += dt;
+                    var s = 1 + fx.t * 5.5;
+                    fx.mesh.scale.set(s, s, s);
+                    if (fx.mesh.material) {
+                        fx.mesh.material.opacity = Math.max(0, 0.92 * (1 - fx.t / fx.ttl));
+                    }
+                    if (fx.t >= fx.ttl) {
+                        scene.remove(fx.mesh);
+                        fx.mesh.geometry.dispose();
+                        fx.mesh.material.dispose();
+                        vehicleExplosionFx.splice(ei, 1);
+                    }
+                }
+            }
+
+            function spawnCarExplosionFx(worldPos) {
+                if (!worldPos) return;
+                if (window.impactSound) {
+                    window.impactSound.playImpact(2.4, worldPos.x, worldPos.y, worldPos.z);
+                }
+            }
+
+            function raycastMeshSegment(origin, dirUnit, segLen, mesh, recursive) {
+                if (!mesh || segLen < 1e-5) return null;
+                if (!_cityRaycaster) _cityRaycaster = new THREE.Raycaster();
+                _cityRaycaster.firstHitOnly = true;
+                _cityRaycaster.near = 0.08;
+                _cityRaycaster.far = segLen;
+                _cityRaycaster.set(origin, dirUnit);
+                var hits = _cityRaycaster.intersectObject(mesh, !!recursive);
+                for (var hi = 0; hi < hits.length; hi++) {
+                    if (hits[hi].face) return hits[hi];
+                }
+                return null;
+            }
+
+            function findChaseEntryIndexByRef(ref) {
+                if (!ref || !chaseVehicles.length) return -1;
+                for (var i = 0; i < chaseVehicles.length; i++) {
+                    if (chaseVehicles[i].ref === ref) return i;
+                }
+                return -1;
+            }
+
+            function killChaseVehicleRef(ref, hitPoint) {
+                if (!ref || ref.destroyed) return;
+                ref.destroyed = true;
+                ref.damage = 0;
+                var fxPos = hitPoint;
+                if (!fxPos) {
+                    fxPos = getVehicleChassisWorldOrigin(ref, _chaseTargetPos);
+                }
+                if (fxPos) spawnCarExplosionFx(fxPos);
+                var idx = findChaseEntryIndexByRef(ref);
+                if (idx >= 0) {
+                    removeChaseVehicleEntry(chaseVehicles[idx]);
+                    chaseVehicles.splice(idx, 1);
+                }
+                chaseActive = chaseVehicles.length > 0 || chaseSpawnQueue > 0;
+                console.log('🚔 Chase vehicle destroyed —', chaseVehicles.length, 'remaining');
+            }
+
+            function applyChaseVehicleCombatDamage(ref, amount, hitPoint, instantKill) {
+                if (!ref || ref.destroyed) return;
+                if (instantKill) {
+                    killChaseVehicleRef(ref, hitPoint);
+                    return;
+                }
+                ref.damage = Math.max(0, (ref.damage != null ? ref.damage : CHASE_VEHICLE_MAX_DAMAGE) - amount);
+                if (ref.damage <= 0) {
+                    killChaseVehicleRef(ref, hitPoint);
+                }
+            }
+
+            function raycastChaseVehiclesSegment(origin, dirUnit, segLen) {
+                if (!chaseActive || !chaseVehicles.length) return null;
+                var bestT = Infinity;
+                var bestRef = null;
+                var bestPoint = null;
+                for (var ci = 0; ci < chaseVehicles.length; ci++) {
+                    var ref = chaseVehicles[ci].ref;
+                    if (!ref || ref.destroyed) continue;
+                    var mesh = ref.physicsWireframe || ref.chassisMesh;
+                    var hit = raycastMeshSegment(origin, dirUnit, segLen, mesh, false);
+                    if (!hit) continue;
+                    if (hit.distance < bestT) {
+                        bestT = hit.distance;
+                        bestRef = ref;
+                        bestPoint = hit.point;
+                    }
+                }
+                if (!bestRef) return null;
+                return { t: bestT, point: bestPoint, ref: bestRef };
+            }
+
+            function raycastChaseVehiclesForHeli(origin, direction, far) {
+                var seg = raycastChaseVehiclesSegment(origin, direction, far != null ? far : 900);
+                if (!seg) return null;
+                return {
+                    distance: seg.t,
+                    point: seg.point,
+                    face: { normal: new THREE.Vector3(0, 1, 0) },
+                    object: seg.ref.chassisMesh || seg.ref.physicsWireframe,
+                    isChaseVehicle: true,
+                    chaseRef: seg.ref
+                };
+            }
+
+            function raycastPlayerVehicleForHeli(origin, direction, far) {
+                if (!vehicleRef || vehicleRef.destroyed) return null;
+                var hitMesh = vehicleRef.physicsWireframe || vehicleRef.chassisMesh;
+                if (!hitMesh) return null;
+                var hit = raycastMeshSegment(origin, direction, far != null ? far : 900, hitMesh, false);
+                if (!hit) return null;
+                hit.isPlayerVehicle = true;
+                return hit;
+            }
+
+            function arrowCombatSegmentHit(prev, dirUnit, segLen, opts) {
+                var explosive = !!(opts && opts.explosive);
+                var bestT = Infinity;
+                var best = null;
+
+                var chaseHit = raycastChaseVehiclesSegment(prev, dirUnit, segLen);
+                if (chaseHit && chaseHit.t < bestT) {
+                    bestT = chaseHit.t;
+                    best = { kind: 'chase', t: chaseHit.t, point: chaseHit.point, ref: chaseHit.ref };
+                }
+
+                var PH = window.__gtavrPlayerHelicopter;
+                if (PH && PH.raycastCombatSegment
+                    && !(PH.isHelicopterMode && PH.isHelicopterMode())) {
+                    var heliHit = PH.raycastCombatSegment(prev, dirUnit, segLen);
+                    if (heliHit && heliHit.t < bestT) {
+                        bestT = heliHit.t;
+                        best = { kind: 'helicopter', t: heliHit.t, point: heliHit.point };
+                    }
+                }
+
+                var PF = window.__gtavrPlayerFoot;
+                var skipOwnCar = PF && PF.isVehicleMode && PF.isVehicleMode();
+                if (!skipOwnCar && vehicleRef && !vehicleRef.destroyed) {
+                    var carMesh = vehicleRef.physicsWireframe || vehicleRef.chassisMesh;
+                    var carHit = raycastMeshSegment(prev, dirUnit, segLen, carMesh, false);
+                    if (carHit && carHit.distance < bestT) {
+                        bestT = carHit.distance;
+                        best = { kind: 'playerVehicle', t: carHit.distance, point: carHit.point };
+                    }
+                }
+
+                if (!best) return null;
+
+                var hitPoint = best.point ? best.point.clone() : null;
+                return {
+                    t: best.t,
+                    point: hitPoint,
+                    onNormalHit: function() {
+                        if (best.kind === 'chase') {
+                            applyChaseVehicleCombatDamage(best.ref, CHASE_ARROW_DAMAGE, hitPoint, false);
+                        } else if (best.kind === 'helicopter' && PH && PH.applyCombatDamage) {
+                            PH.applyCombatDamage(ARROW_VEHICLE_DAMAGE, hitPoint, false);
+                        } else if (best.kind === 'playerVehicle') {
+                            vehicleRef.damage = Math.max(0, vehicleRef.damage - ARROW_VEHICLE_DAMAGE);
+                            if (vehicleRef.damage <= 0) explodePlayerVehicle(hitPoint);
+                        }
+                    },
+                    onExplosiveHit: function() {
+                        if (best.kind === 'chase') {
+                            applyChaseVehicleCombatDamage(best.ref, CHASE_VEHICLE_MAX_DAMAGE, hitPoint, true);
+                        } else if (best.kind === 'helicopter' && PH && PH.applyCombatDamage) {
+                            PH.applyCombatDamage(0, hitPoint, true);
+                        } else if (best.kind === 'playerVehicle') {
+                            explodePlayerVehicle(hitPoint);
+                        }
+                    }
+                };
+            }
+
+            function setupGtavrArrowCombatHits() {
+                var setCb = window.__gtavrSetArrowCombatSegmentHitCallback;
+                if (typeof setCb !== 'function') {
+                    console.warn('Arrow combat callback not loaded — vehicle arrow hits disabled');
+                    return;
+                }
+                setCb(arrowCombatSegmentHit);
+            }
+
+            function getAuthoritativeVehicleDamage(playerId, damageDelta) {
+                if (!authoritativeVehicleDamage[playerId]) {
+                    authoritativeVehicleDamage[playerId] = VEHICLE_MAX_DAMAGE;
+                }
+                if (damageDelta > 0) {
+                    authoritativeVehicleDamage[playerId] = Math.max(
+                        0,
+                        authoritativeVehicleDamage[playerId] - damageDelta
+                    );
+                }
+                return authoritativeVehicleDamage[playerId];
+            }
+
+            function resetAuthoritativeVehicleDamage(playerId) {
+                if (playerId) authoritativeVehicleDamage[playerId] = VEHICLE_MAX_DAMAGE;
+            }
+
+            function syncRemotePlayerVehicleDamage(payload) {
+                if (!payload || !payload.targetId || payload.targetId === myPlayerId) return;
+                var idx = parseInt(payload.targetId.split('_')[1], 10);
+                if (!isFinite(idx) || idx < 0 || idx >= remotePlayerCars.length) return;
+                var car = remotePlayerCars[idx];
+                if (!car || !car.mesh) return;
+
+                car.damage = payload.damage != null ? payload.damage : (car.damage || VEHICLE_MAX_DAMAGE);
+                car.maxDamage = payload.maxDamage || VEHICLE_MAX_DAMAGE;
+
+                if (payload.hitPoint && payload.destroyed && !car.destroyed) {
+                    var fxPt = new THREE.Vector3(payload.hitPoint.x, payload.hitPoint.y, payload.hitPoint.z);
+                    spawnCarExplosionFx(fxPt);
+                }
+
+                if (payload.destroyed && !car.destroyed) {
+                    car.destroyed = true;
+                    car.respawnTimer = VEHICLE_RESPAWN_DELAY_SEC;
+                    car.mesh.visible = false;
+                    if (car.inPhysicsWorld && car.rigidBody) {
+                        physicsWorld.removeRigidBody(car.rigidBody);
+                        car.inPhysicsWorld = false;
+                    }
+                } else if (payload.destroyed === false && car.destroyed) {
+                    car.destroyed = false;
+                    car.respawnTimer = 0;
+                    car.mesh.visible = true;
+                    var slotPose = getPlayerCitySpawnPose(idx);
+                    car.mesh.position.copy(slotPose.position);
+                    car.mesh.position.y += 0.3;
+                    car.mesh.quaternion.copy(slotPose.rotation);
+                    if (car.rigidBody && !car.inPhysicsWorld) {
+                        physicsWorld.addRigidBody(car.rigidBody);
+                        car.inPhysicsWorld = true;
+                    }
+                    if (car.rigidBody) {
+                        var respawnEuler = new THREE.Euler().setFromQuaternion(slotPose.rotation, 'YXZ');
+                        updateRemoteCarPhysicsBody(car, {
+                            x: car.mesh.position.x,
+                            y: car.mesh.position.y,
+                            z: car.mesh.position.z,
+                            rx: respawnEuler.x,
+                            ry: respawnEuler.y,
+                            rz: respawnEuler.z
+                        });
+                    }
+                }
+            }
+
+            function ensureMultiplayerCombatReady() {
+                var foot = window.__gtavrPlayerFoot;
+                if (foot && foot.ensureFootLocomotionReady) foot.ensureFootLocomotionReady();
+            }
+
+            function broadcastLocalVehicleRespawn() {
+                if (!isMultiplayer || activePlayers.size <= 1) return;
+                if (isHost) {
+                    resetAuthoritativeVehicleDamage(myPlayerId);
+                    sendToAllPlayers({
+                        type: 'combat-event',
+                        event: 'vehicle-damage',
+                        playerId: myPlayerId,
+                        payload: {
+                            targetId: myPlayerId,
+                            damage: VEHICLE_MAX_DAMAGE,
+                            maxDamage: VEHICLE_MAX_DAMAGE,
+                            destroyed: false
+                        }
+                    });
+                } else {
+                    sendCombatEvent('vehicle-respawn', {});
+                }
+            }
+
+            function applyLocalVehicleDamageFromNetwork(damage, destroyed, hitPoint) {
+                if (!vehicleRef || vehicleRef.destroyed) return;
+                vehicleRef.damage = Math.max(0, damage);
+                if (destroyed && vehicleRef.damage <= 0) {
+                    var pt = hitPoint
+                        ? new THREE.Vector3(hitPoint.x, hitPoint.y, hitPoint.z)
+                        : null;
+                    explodePlayerVehicle(pt);
+                }
+            }
+
+            function broadcastPlayerVehicleDamageState(hitPoint, force) {
+                if (!isMultiplayer || activePlayers.size <= 1) return;
+                var now = performance.now();
+                if (!force && now - lastPlayerVehicleDamageNetMs < VEHICLE_DAMAGE_NET_MIN_INTERVAL_MS) {
+                    return;
+                }
+                lastPlayerVehicleDamageNetMs = now;
+                var payload = {
+                    targetId: myPlayerId,
+                    damage: vehicleRef.damage,
+                    maxDamage: vehicleRef.maxDamage || VEHICLE_MAX_DAMAGE,
+                    hitPoint: hitPoint ? { x: hitPoint.x, y: hitPoint.y, z: hitPoint.z } : null,
+                    destroyed: !!vehicleRef.destroyed,
+                    explosive: !!vehicleRef.destroyed
+                };
+                authoritativeVehicleDamage[myPlayerId] = vehicleRef.damage;
+                sendToAllPlayers({
+                    type: 'combat-event',
+                    event: 'vehicle-damage',
+                    playerId: myPlayerId,
+                    payload: payload
+                });
+            }
+
+            function applyLocalPlayerVehicleMinigunDamage(hitPoint) {
+                if (!vehicleRef || vehicleRef.destroyed) return;
+                if (vehicleRef.spawnProtectedUntil
+                    && performance.now() < vehicleRef.spawnProtectedUntil) {
+                    return;
+                }
+                vehicleRef.damage = Math.max(0, vehicleRef.damage - VEHICLE_MINIGUN_DAMAGE);
+                if (vehicleRef.damage <= 0) {
+                    explodePlayerVehicle(hitPoint);
+                    if (isHost) broadcastPlayerVehicleDamageState(hitPoint, true);
+                    return;
+                }
+                if (isHost) broadcastPlayerVehicleDamageState(hitPoint, false);
+            }
+
+            function applyMinigunHitToPlayerVehicle(point, normal, hit) {
+                if (hit && hit.isChaseVehicle && hit.chaseRef) {
+                    applyChaseVehicleCombatDamage(hit.chaseRef, VEHICLE_MINIGUN_DAMAGE, point, false);
+                    return;
+                }
+                if (hit && hit.isParkedHelicopter) {
+                    var PHg = window.__gtavrPlayerHelicopter;
+                    if (PHg && PHg.applyCombatDamage) {
+                        PHg.applyCombatDamage(VEHICLE_MINIGUN_DAMAGE, point, false);
+                    }
+                    return;
+                }
+                if (hit && hit.isRemotePlayerVehicle && hit.remotePlayerId) {
+                    applyMinigunHitToNetworkVehicle(hit);
+                    return;
+                }
+                if (!vehicleRef || vehicleRef.destroyed) return;
+                if (isMultiplayer && activePlayers.size > 1 && !isHost) {
+                    applyLocalPlayerVehicleMinigunDamage(point);
+                    pendingClientMinigunVehicleDamage += VEHICLE_MINIGUN_DAMAGE;
+                    var now = performance.now();
+                    if (vehicleRef.destroyed || now - lastPlayerVehicleDamageNetMs >= VEHICLE_DAMAGE_NET_MIN_INTERVAL_MS) {
+                        sendCombatEvent('vehicle-hit', {
+                            targetId: myPlayerId,
+                            damage: pendingClientMinigunVehicleDamage,
+                            point: point ? { x: point.x, y: point.y, z: point.z } : null,
+                            source: 'minigun-self'
+                        });
+                        pendingClientMinigunVehicleDamage = 0;
+                        lastPlayerVehicleDamageNetMs = now;
+                    }
+                    return;
+                }
+                applyLocalPlayerVehicleMinigunDamage(point);
+            }
+
+            function cancelPlayerVehicleRespawnSchedule() {
+                playerVehicleRespawnGen++;
+                if (playerVehicleRespawnTimeoutId != null) {
+                    clearTimeout(playerVehicleRespawnTimeoutId);
+                    playerVehicleRespawnTimeoutId = null;
+                }
+                if (vehicleRef) vehicleRef.respawnAtMs = 0;
+            }
+
+            function schedulePlayerVehicleRespawn() {
+                cancelPlayerVehicleRespawnSchedule();
+                vehicleRef.respawnAtMs = performance.now() + VEHICLE_RESPAWN_DELAY_SEC * 1000;
+            }
+
+            function capturePlayerCarRespawnPose(outPos) {
+                if (vehicleRef.chassisMesh) {
+                    vehicleRef.chassisMesh.updateMatrixWorld(true);
+                    vehicleRef.chassisMesh.getWorldPosition(outPos);
+                } else if (hasLastCarDropPosition) {
+                    outPos.copy(lastCarDropPosition);
+                } else {
+                    outPos.copy(getDefaultPlayerCitySpawnPose().position);
+                }
+                if (outPos.y < 0.35) {
+                    if (hasLastCarDropPosition && lastCarDropPosition.y >= 0.35) {
+                        outPos.copy(lastCarDropPosition);
+                    } else {
+                        outPos.copy(getDefaultPlayerCitySpawnPose().position);
+                    }
+                }
+            }
+
+            function getVehicleZeroVel() {
+                if (!_vehicleZeroVel) _vehicleZeroVel = new Ammo.btVector3(0, 0, 0);
+                else {
+                    _vehicleZeroVel.setValue(0, 0, 0);
+                }
+                return _vehicleZeroVel;
+            }
+
+            /** Drop raycast vehicle + rigid body from Bullet (same pattern as destroyChaseVehicleRef). */
+            function detachPlayerVehiclePhysicsImmediate() {
+                if (!vehicleRef || !vehicleRef.vehicle || !physicsWorld) return;
+                if (!vehicleRef._driveSuspended) {
+                    physicsWorld.removeAction(vehicleRef.vehicle);
+                    vehicleRef._driveSuspended = true;
+                }
+                if (vehicleRef.vehicleBody) {
+                    var zv = getVehicleZeroVel();
+                    vehicleRef.vehicleBody.setActivationState(DISABLE_SIMULATION);
+                    vehicleRef.vehicleBody.setLinearVelocity(zv);
+                    vehicleRef.vehicleBody.setAngularVelocity(zv);
+                    if (vehicleRef._bodyInPhysicsWorld !== false) {
+                        physicsWorld.removeRigidBody(vehicleRef.vehicleBody);
+                        vehicleRef._bodyInPhysicsWorld = false;
+                    }
+                }
+            }
+
+            function restorePlayerVehiclePhysicsDeferred() {
+                if (!vehicleRef || !vehicleRef.vehicle || !vehicleRef.vehicleBody || !physicsWorld) {
+                    return;
+                }
+                if (vehicleRef._pendingSpawnTransform) {
+                    vehicleRef.vehicleBody.setWorldTransform(vehicleRef._pendingSpawnTransform);
+                    vehicleRef._pendingSpawnTransform = null;
+                }
+                if (vehicleRef._bodyInPhysicsWorld === false) {
+                    physicsWorld.addRigidBody(vehicleRef.vehicleBody);
+                    vehicleRef._bodyInPhysicsWorld = true;
+                }
+                vehicleRef.vehicleBody.setActivationState(DISABLE_DEACTIVATION);
+                var zv = getVehicleZeroVel();
+                vehicleRef.vehicleBody.setLinearVelocity(zv);
+                vehicleRef.vehicleBody.setAngularVelocity(zv);
+                if (vehicleRef._driveSuspended) {
+                    physicsWorld.addAction(vehicleRef.vehicle);
+                    vehicleRef._driveSuspended = false;
+                }
+                vehicleRef.vehicle.resetSuspension();
+                syncPlayerChassisFromPhysics();
+            }
+
+            function explodePlayerVehicle(hitPoint) {
+                if (!vehicleRef || vehicleRef.destroyed) return;
+                cancelPlayerVehicleRespawnSchedule();
+                detachPlayerVehiclePhysicsImmediate();
+
+                if (!vehicleRef.respawnChassisPos) {
+                    vehicleRef.respawnChassisPos = new THREE.Vector3();
+                }
+                capturePlayerCarRespawnPose(vehicleRef.respawnChassisPos);
+
+                vehicleRef.destroyed = true;
+                vehicleRef.respawnTimer = VEHICLE_RESPAWN_DELAY_SEC;
+                vehicleRef.damage = 0;
+
+                if (hitPoint) {
+                    _vehicleExplodePos.copy(hitPoint);
+                } else {
+                    _vehicleExplodePos.copy(vehicleRef.respawnChassisPos);
+                }
+                vehicleRef.explodePosition = vehicleRef.respawnChassisPos.clone();
+
+                if (vehicleRef.chassisMesh) vehicleRef.chassisMesh.visible = false;
+                if (vehicleRef.wheelMeshes) {
+                    for (var wi = 0; wi < vehicleRef.wheelMeshes.length; wi++) {
+                        if (vehicleRef.wheelMeshes[wi]) vehicleRef.wheelMeshes[wi].visible = false;
+                    }
+                }
+                if (vehicleRef.physicsWireframe) vehicleRef.physicsWireframe.visible = false;
+
+                spawnCarExplosionFx(_vehicleExplodePos);
+                schedulePlayerVehicleRespawn();
+
+                var PF = window.__gtavrPlayerFoot;
+                if (PF && PF.isVehicleMode && PF.isVehicleMode()) {
+                    PF.spawnOnFootBesideCar();
+                }
+
+                recordLastCarDropPosition(vehicleRef.respawnChassisPos);
+                var destroyMs = performance.now();
+                vehicleRef._destroyPerfMs = destroyMs;
+                console.log(
+                    '💥 Player vehicle destroyed — respawn in', VEHICLE_RESPAWN_DELAY_SEC, 's @',
+                    vehicleRef.respawnChassisPos.x.toFixed(1),
+                    vehicleRef.respawnChassisPos.y.toFixed(1),
+                    vehicleRef.respawnChassisPos.z.toFixed(1),
+                    '(t=' + Math.round(destroyMs) + ')'
+                );
+            }
+
+            function respawnPlayerVehicle() {
+                if (!vehicleRef || !vehicleRef.vehicle || !vehicleRef.vehicleBody) return;
+                if (!vehicleRef.destroyed) return;
+                cancelPlayerVehicleRespawnSchedule();
+
+                var spawnPos = vehicleRef.respawnChassisPos
+                    ? vehicleRef.respawnChassisPos.clone()
+                    : getDefaultPlayerCitySpawnPose().position.clone();
+                var spawnRot = vehicleRef.chassisMesh
+                    ? vehicleRef.chassisMesh.quaternion.clone()
+                    : getDefaultPlayerCitySpawnPose().rotation;
+
+                vehicleRef.destroyed = false;
+                vehicleRef.damage = vehicleRef.maxDamage || VEHICLE_MAX_DAMAGE;
+                vehicleRef.respawnTimer = 0;
+                vehicleRef.respawnAtMs = 0;
+                vehicleRef.spawnProtectedUntil = performance.now() + 1500;
+                vehicleRef.explodePosition = spawnPos.clone();
+                resetAuthoritativeVehicleDamage(myPlayerId);
+
+                if (vehicleRef.chassisMesh) vehicleRef.chassisMesh.visible = true;
+                if (vehicleRef.wheelMeshes) {
+                    for (var wi = 0; wi < vehicleRef.wheelMeshes.length; wi++) {
+                        if (vehicleRef.wheelMeshes[wi]) vehicleRef.wheelMeshes[wi].visible = true;
+                    }
+                }
+                if (vehicleRef.physicsWireframe) {
+                    vehicleRef.physicsWireframe.visible = isPhysicsWireframeDebugVisible();
+                }
+
+                var spawnTransform = new Ammo.btTransform();
+                spawnTransform.setIdentity();
+                spawnTransform.setOrigin(new Ammo.btVector3(spawnPos.x, spawnPos.y, spawnPos.z));
+                spawnTransform.setRotation(new Ammo.btQuaternion(spawnRot.x, spawnRot.y, spawnRot.z, spawnRot.w));
+                vehicleRef._pendingSpawnTransform = spawnTransform;
+                if (vehicleRef.chassisMesh) {
+                    vehicleRef.chassisMesh.position.set(spawnPos.x, spawnPos.y, spawnPos.z);
+                    vehicleRef.chassisMesh.quaternion.copy(spawnRot);
+                }
+
+                recordLastCarDropPosition(spawnPos);
+                var respawnMs = performance.now();
+                var sinceDestroy = vehicleRef._destroyPerfMs
+                    ? Math.round(respawnMs - vehicleRef._destroyPerfMs) : -1;
+                console.log(
+                    '🚗 Player vehicle respawned @',
+                    spawnPos.x.toFixed(1), spawnPos.y.toFixed(1), spawnPos.z.toFixed(1),
+                    '(t=' + Math.round(respawnMs)
+                        + (sinceDestroy >= 0 ? ', +' + sinceDestroy + 'ms' : '') + ')'
+                );
+
+                requestAnimationFrame(function() {
+                    if (!vehicleRef || vehicleRef.destroyed) return;
+                    restorePlayerVehiclePhysicsDeferred();
+                    broadcastLocalVehicleRespawn();
+                });
+            }
+
+            /** Minigun ray: chase cars, parked heli, player car, remotes, then city. */
+            function raycastMinigunForHeli(origin, direction, far) {
+                var chaseHit = raycastChaseVehiclesForHeli(origin, direction, far);
+                if (chaseHit) return chaseHit;
+                var PHm = window.__gtavrPlayerHelicopter;
+                if (PHm && PHm.raycastCombatSegment
+                    && !(PHm.isHelicopterMode && PHm.isHelicopterMode())) {
+                    var heliSeg = PHm.raycastCombatSegment(origin, direction, far != null ? far : 900);
+                    if (heliSeg) {
+                        return {
+                            distance: heliSeg.t,
+                            point: heliSeg.point,
+                            face: { normal: new THREE.Vector3(0, 1, 0) },
+                            object: startHelicopterRoot,
+                            isParkedHelicopter: true
+                        };
+                    }
+                }
+                if (vehicleRef && vehicleRef.destroyed) {
+                    return raycastCityForHeli(origin, direction, far);
+                }
+                var vehicleHit = raycastPlayerVehicleForHeli(origin, direction, far);
+                if (vehicleHit) return vehicleHit;
+                var remoteHit = raycastRemotePlayerVehicles(origin, direction, far);
+                if (remoteHit) return remoteHit;
+                return raycastCityForHeli(origin, direction, far);
+            }
+
+            /** Horizontal BVH ray for helicopter miniguns (same meshes / raycaster as nav). */
+            function raycastCityForHeli(origin, direction, far) {
+                if (!vrRunnerCityCollisionMeshes.length) return null;
+                if (!_cityRaycaster) _cityRaycaster = new THREE.Raycaster();
+                _cityRaycaster.firstHitOnly = true;
+                _cityRaycaster.near = 0.08;
+                _cityRaycaster.far = far != null ? far : 900;
+                _cityRaycaster.set(origin, direction);
+                var hits = _cityRaycaster.intersectObjects(vrRunnerCityCollisionMeshes, false);
+                for (var hi = 0; hi < hits.length; hi++) {
+                    var hit = hits[hi];
+                    if (!hit.face) continue;
+                    if (startHelicopterRoot) {
+                        var node = hit.object;
+                        var skipHeli = false;
+                        while (node) {
+                            if (node === startHelicopterRoot) {
+                                skipHeli = true;
+                                break;
+                            }
+                            node = node.parent;
+                        }
+                        if (skipHeli) continue;
+                    }
+                    return hit;
+                }
+                return null;
             }
 
             /**
@@ -13860,11 +15672,23 @@
 
             function getChaseTargetWorldPos(out) {
                 out = out || new THREE.Vector3();
-                if (getChasePlayerCarPose(out, _chaseQuat)) {
-                    return out;
+                var PF = window.__gtavrPlayerFoot;
+                var PH = window.__gtavrPlayerHelicopter;
+                if (PF && PF.isVehicleMode && PF.isVehicleMode()) {
+                    if (getChasePlayerCarPose(out, _chaseQuat)) {
+                        return out;
+                    }
+                }
+                if (PH && PH.isHelicopterMode && PH.isHelicopterMode()) {
+                    if (PH.getChaseWorldPos && PH.getChaseWorldPos(out, _chaseQuat)) {
+                        return out;
+                    }
                 }
                 if (cameraRig) {
                     cameraRig.getWorldPosition(out);
+                    if (cameraRig.getWorldQuaternion) {
+                        cameraRig.getWorldQuaternion(_chaseQuat);
+                    }
                 }
                 return out;
             }
@@ -13935,11 +15759,13 @@
                 return 180;
             }
 
-            /** Player travel direction: velocity when moving, else chassis forward. */
+            /** Player travel direction: velocity when moving, else facing. */
             function getChasePlayerTravelForward(out) {
-                out.set(0, 0, 1).applyQuaternion(_chaseQuat);
-                out.y = 0;
-                if (vehicleRef && vehicleRef.vehicle) {
+                var PF = window.__gtavrPlayerFoot;
+                var PH = window.__gtavrPlayerHelicopter;
+                if (PF && PF.isVehicleMode && PF.isVehicleMode() && vehicleRef && vehicleRef.vehicle) {
+                    out.set(0, 0, 1).applyQuaternion(_chaseQuat);
+                    out.y = 0;
                     var body = vehicleRef.vehicle.getRigidBody();
                     if (body) {
                         var vel = body.getLinearVelocity();
@@ -13950,21 +15776,42 @@
                             return out;
                         }
                     }
+                    if (out.lengthSq() < 1e-8) {
+                        out.set(0, 0, 1);
+                    } else {
+                        out.normalize();
+                    }
+                    return out;
                 }
-                if (out.lengthSq() < 1e-8) {
-                    out.set(0, 0, 1);
-                } else {
-                    out.normalize();
+                if (PH && PH.isHelicopterMode && PH.isHelicopterMode()
+                    && PH.getTravelForward) {
+                    return PH.getTravelForward(out);
                 }
+                if (cameraRig && cameraRig.getWorldQuaternion) {
+                    cameraRig.getWorldQuaternion(_chaseQuat);
+                    out.set(0, 0, 1).applyQuaternion(_chaseQuat);
+                    out.y = 0;
+                    if (out.lengthSq() < 1e-8) {
+                        out.set(0, 0, 1);
+                    } else {
+                        out.normalize();
+                    }
+                    return out;
+                }
+                out.set(0, 0, 1);
                 return out;
             }
 
-            /** World pose behind the player car — nav used only for minor Y/XZ nudge within CHASE_MAX_NAV_SNAP_M. */
+            /** World pose behind the player — nav used only for minor Y/XZ nudge within CHASE_MAX_NAV_SNAP_M. */
             function pickChaseSpawnBehindPlayerCar(grid, slotIndex, slotCount) {
-                if (!getChasePlayerCarPose(_chaseTargetPos, _chaseQuat)) {
-                    return null;
+                getChaseTargetWorldPos(_chaseTargetPos);
+                var PF = window.__gtavrPlayerFoot;
+                if (PF && PF.isVehicleMode && PF.isVehicleMode()) {
+                    getChasePlayerCarPose(_chaseTargetPos, _chaseQuat);
+                } else if (cameraRig && cameraRig.getWorldQuaternion) {
+                    cameraRig.getWorldQuaternion(_chaseQuat);
                 }
-                var fwd = _chaseFwd.set(0, 0, 1).applyQuaternion(_chaseQuat);
+                var fwd = getChasePlayerTravelForward(_chaseFwd);
                 fwd.y = 0;
                 if (fwd.lengthSq() < 1e-8) {
                     fwd.set(0, 0, 1);
@@ -13998,8 +15845,12 @@
 
             /** Recover spawn: ahead on player's heading at minimap edge, facing the player. */
             function pickChaseSpawnAheadAtMinimapEdge(grid, slotIndex, slotCount) {
-                if (!getChasePlayerCarPose(_chaseTargetPos, _chaseQuat)) {
-                    return null;
+                getChaseTargetWorldPos(_chaseTargetPos);
+                var PF = window.__gtavrPlayerFoot;
+                if (PF && PF.isVehicleMode && PF.isVehicleMode()) {
+                    getChasePlayerCarPose(_chaseTargetPos, _chaseQuat);
+                } else if (cameraRig && cameraRig.getWorldQuaternion) {
+                    cameraRig.getWorldQuaternion(_chaseQuat);
                 }
                 var fwd = getChasePlayerTravelForward(_chaseFwd);
                 var right = _chaseRight.set(-fwd.z, 0, fwd.x);
@@ -14063,7 +15914,7 @@
             function prewarmChasePathOnEnable() {
                 if (chasePathPrewarmDone || isMultiplayer) return;
                 var grid = getCityNavGrid();
-                if (!grid || !vehicleRef || !vehicleRef.vehicle) return;
+                if (!grid) return;
                 chasePathPrewarmDone = true;
                 scheduleCityNavBuildTick(function() {
                     var p = getChaseTargetWorldPos(_chaseTargetPos);
@@ -14557,7 +16408,7 @@
             }
 
             function updateChasePursuerLod() {
-                if (!chaseActive || !chaseVehicles.length || !vehicleRef) return;
+                if (!chaseActive || !chaseVehicles.length) return;
                 var playerPos = getChaseTargetWorldPos(_chaseTargetPos);
                 var parkR2 = ChasePerf.lodParkRadiusM * ChasePerf.lodParkRadiusM;
                 var wakeR2 = ChasePerf.liteSimRadiusM * ChasePerf.liteSimRadiusM;
@@ -14584,7 +16435,7 @@
                 updateChasePursuerLod();
                 updateAllChasePoliceLights();
                 var grid = getCityNavGrid();
-                if (chasePendingSpawn && grid && physicsWorld && vehicleRef && vehicleRef.vehicle) {
+                if (chasePendingSpawn && grid && physicsWorld) {
                     spawnChaseVehicles();
                 }
                 if (!chaseVehicles.length) return;
@@ -16296,9 +18147,11 @@
             }
 
             function queueCityMeshBvhRegistration(meshes) {
+                vrRunnerCityBvhTotal = meshes.length;
                 for (var i = 0; i < meshes.length; i++) {
                     vrRunnerCityBvhPending.push(meshes[i]);
                 }
+                updateGtavrSplashLoadProgress();
                 if (!vrRunnerCityBvhBuilding) {
                     processCityMeshBvhQueue();
                 }
@@ -16321,6 +18174,7 @@
                         queueCityWalkablePhysicsBuild(vrRunnerCityCollisionMeshes);
                         onCityNavMapReady();
                         resumePendingPlayerNavBake();
+                        updateGtavrSplashLoadProgress();
                     }
                     return;
                 }
@@ -16344,11 +18198,15 @@
                         vrRunnerCityCollisionMeshes.push(mesh);
                     }
                 }
+                updateGtavrSplashLoadProgress();
                 requestAnimationFrame(processCityMeshBvhQueue);
             }
 
             function loadVrRunnerCityEnvironment() {
                 console.log('🏙️ Loading VRrunner city:', VRRUNNER_CITY_URL, '(scale', VRRUNNER_CITY_SCALE + '×)');
+                if (window.__gtavrSplash) {
+                    window.__gtavrSplash.setProgress(46, 'Loading city…');
+                }
                 whenCityBvhReady(function() {
                     var loader = new THREE.GLTFLoader();
                     loader.load(
@@ -16377,6 +18235,9 @@
                             vrRunnerCityRoot = city;
                             applyVrRunnerAtmosphere();
 
+                            if (window.__gtavrSplash) {
+                                window.__gtavrSplash.setProgress(50, 'City model loaded…');
+                            }
                             queueCityMeshBvhRegistration(meshes);
                             console.log(
                                 '🏙️ VRrunner city loaded (bbox min→0) —', meshes.length,
@@ -16633,7 +18494,7 @@
             function checkVehicleCollisions(dt) {
                 if (!physicsWorld) return;
                 if (!chaseActive && !isMultiplayer && !botEnabled) return;
-                if (!vehicleRef || !vehicleRef.vehicleBody) return;
+                if (!vehicleRef || !vehicleRef.vehicleBody || vehicleRef.destroyed) return;
 
                 var playerPos = getChaseTargetWorldPos(_chaseTargetPos);
                 chaseCollisionBroadphase.clear();
@@ -17169,6 +19030,9 @@
             }
             
             function createObjects() {
+                if (window.__gtavrSplash) {
+                    window.__gtavrSplash.setProgress(40, 'Spawning vehicles…');
+                }
                 console.log('🏙️ GTAVR — VRrunner city chase');
                 console.log('🗺️ Nav: bundled opt.bin · minimap HUD auto · N=full-city overlay · Shift+N=rebuild');
 
@@ -17185,6 +19049,7 @@
                 pendingInitialCitySpawn = true;
 
                 createRemotePlayerCars();
+                createRemotePlayerHelicopters();
 
                 if (window.__gtavrPlayerFoot) {
                     window.__gtavrPlayerFoot.init({
@@ -17218,15 +19083,60 @@
                         getRemoteCarData: function(i) { return remotePlayerCars[i]; },
                         getMyPlayerId: function() { return myPlayerId; },
                         updateRemoteCarPhysics: updateRemoteCarPhysicsBody,
+                        hideRemoteHelicopter: hideRemotePlayerHelicopter,
+                        getHelicopterNetworkState: function() {
+                            var PH = window.__gtavrPlayerHelicopter;
+                            return PH && PH.getNetworkState ? PH.getNetworkState() : null;
+                        },
+                        getArcheryNetworkState: getArcheryNetworkState,
+                        setupRemoteAvatarArchery: setupRemoteAvatarArchery,
+                        syncRemoteArcheryFromState: syncRemoteArcheryFromState,
                         getAudioContext: function() { return audioContext; },
                         startAudio: startEngineAudio,
                         releaseAllVRWheelGrabs: function() {
                             releaseVRWheelGrab(0);
                             releaseVRWheelGrab(1);
-                        }
+                        },
+                        getMyPlayerSlotIndex: getMyPlayerSlotIndex,
+                        findNearestCarDoorTarget: findNearestCarDoorTarget,
+                        requestOccupancyClaim: requestOccupancy,
+                        releaseOccupancyClaim: releaseOccupancy,
+                        teleportVehicleToSlot: teleportVehicleToSlot
                     });
                     console.log('🚶 PlayerFoot initialized (VRrunner locomotion + archery + door enter/exit)');
                 }
+
+                setupGtavrArrowCombatHits();
+
+                initMultiplayerSync({
+                    isMultiplayerActive: function() {
+                        return isMultiplayer && activePlayers.size > 1;
+                    },
+                    isHost: function() { return isHost; },
+                    getMyPlayerId: function() { return myPlayerId; },
+                    sendToAllPlayers: sendToAllPlayers,
+                    sendToHost: sendToHost,
+                    sendToPlayer: sendToPlayer,
+                    ensureArcheryReady: ensureMultiplayerCombatReady,
+                    forceExitOccupiedAsset: forceExitOccupiedAsset,
+                    getRemotePlayerCars: function() { return remotePlayerCars; },
+                    getCityRaycaster: function() {
+                        if (!_cityRaycaster) _cityRaycaster = new THREE.Raycaster();
+                        return _cityRaycaster;
+                    },
+                    getVehicleMaxDamage: function() { return VEHICLE_MAX_DAMAGE; },
+                    getAuthoritativeVehicleDamage: getAuthoritativeVehicleDamage,
+                    resetAuthoritativeVehicleDamage: resetAuthoritativeVehicleDamage,
+                    syncRemotePlayerVehicleDamage: syncRemotePlayerVehicleDamage,
+                    applyLocalVehicleDamage: function(dmg, hitPoint) {
+                        if (!vehicleRef || vehicleRef.destroyed) return;
+                        vehicleRef.damage = Math.max(0, vehicleRef.damage - dmg);
+                        if (vehicleRef.damage <= 0) explodePlayerVehicle(hitPoint);
+                    },
+                    syncLocalVehicleDamage: applyLocalVehicleDamageFromNetwork,
+                    spawnExplosionAt: spawnCarExplosionFx
+                });
+                console.log('🌐 Multiplayer combat sync initialized (arrows, bow visuals, vehicle damage)');
 
                 if (window.__gtavrPlayerHelicopter) {
                     var gtavrFootRef = window.__gtavrPlayerFoot;
@@ -17261,17 +19171,47 @@
                             return getCityWalkableFloorY(x, z, refY, vrRunnerCityCollisionMeshes);
                         },
                         getCityCollisionMeshes: function() { return vrRunnerCityCollisionMeshes; },
+                        getCityRoot: function() { return vrRunnerCityRoot; },
+                        getScene: function() { return scene; },
+                        raycastCity: raycastMinigunForHeli,
+                        isPlayerVehicleDestroyed: function() {
+                            return !!(vehicleRef && vehicleRef.destroyed);
+                        },
+                        applyVehicleMinigunHit: applyMinigunHitToPlayerVehicle,
+                        spawnExplosionAt: spawnCarExplosionFx,
                         getAudioContext: function() { return audioContext; },
                         startAudio: startEngineAudio,
-                        setCameraModeFirstPerson: function() { cameraMode = 'firstperson'; }
+                        getSpatialAudio: function() { return spatialAudio; },
+                        setCameraModeFirstPerson: function() { cameraMode = 'firstperson'; },
+                        getVRHandMesh: function(i) { return vrHandMeshes[i]; },
+                        setVRHandMesh: function(i, mesh) { vrHandMeshes[i] = mesh; },
+                        buildVRHandMesh: buildVRHandMesh,
+                        isMenuVisible: function() { return isMenuVisible; },
+                        isFlyMode: function() { return cameraMode === 'fly'; },
+                        renderer: renderer,
+                        getMyPlayerSlotIndex: getMyPlayerSlotIndex,
+                        findNearestHeliDoorTarget: findNearestHeliDoorTarget,
+                        requestOccupancyClaim: requestOccupancy,
+                        releaseOccupancyClaim: releaseOccupancy,
+                        repositionHelicopterToOccupiedSlot: repositionHelicopterToOccupiedSlot,
+                        repositionLocalHelicopterForSlot: repositionLocalHelicopterForSlot
                     });
                     console.log('🚁 PlayerHelicopter initialized (door enter/exit + rotor flight)');
                 }
 
                 initAudioSystem();
+                window.__gtavrOnSplashStart = function() {
+                    if (!vrAudioStarted) {
+                        startEngineAudio();
+                        vrAudioStarted = true;
+                    }
+                };
             }
 
             try {
+                if (window.__gtavrSplash) {
+                    window.__gtavrSplash.setProgress(18, 'Starting game…');
+                }
                 initGraphics();
                 initPhysics();
                 createObjects();
@@ -17291,6 +19231,9 @@
         }).catch(function (ammoErr) {
             window.__gtavrBooting = false;
             console.error('Ammo failed to load:', ammoErr);
+            if (window.__gtavrSplash) {
+                window.__gtavrSplash.setProgress(0, 'Physics failed to load — refresh the page');
+            }
         });
         }
 

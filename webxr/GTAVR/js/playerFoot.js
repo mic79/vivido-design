@@ -9,6 +9,7 @@ import {
     registerSandboxGlbCollisionMeshes,
     setRunnerGlassSceneRef,
     RUNNER_STANDING_EYE_Y,
+    recoverRigFromGlbPenetration,
 } from './vrrunner/runnerLevel.js';
 import {
     initBots,
@@ -23,6 +24,7 @@ import {
 
 const MODE_FOOT = 'foot';
 const MODE_VEHICLE = 'vehicle';
+const MODE_HELICOPTER = 'helicopter';
 
 const DOOR_HOTSPOT_RADIUS = 0.09;
 /** SFX/haptics — matches visible sphere plus a few cm slack. */
@@ -56,6 +58,7 @@ let botsReady = false;
 let cityMeshesRegistered = false;
 let doorInteractLatch = false;
 let lastDoorIndex = 0;
+let occupiedVehicleSlot = null;
 let backHolsterGroup = null;
 let triggerAudioBuffer = null;
 let triggerAudioLoadPromise = null;
@@ -83,8 +86,8 @@ function getChassis() {
     return deps && deps.getVehicleRef && deps.getVehicleRef().chassisMesh;
 }
 
-function worldDoorPointByIndex(out, index) {
-    const chassis = getChassis();
+function worldDoorPointByIndex(out, index, chassisOverride) {
+    const chassis = chassisOverride || getChassis();
     if (!chassis) return null;
     const i = Math.max(0, Math.min(DOOR_LOCALS.length - 1, index | 0));
     out.copy(DOOR_LOCALS[i]);
@@ -92,15 +95,22 @@ function worldDoorPointByIndex(out, index) {
     return out;
 }
 
-function distanceToDoor(worldPos) {
+function distanceToCarDoors(carMesh, worldPos) {
+    if (!carMesh || !worldPos) return Infinity;
     let best = Infinity;
     for (let i = 0; i < DOOR_LOCALS.length; i++) {
-        const p = worldDoorPointByIndex(_v1, i);
+        const p = worldDoorPointByIndex(_v1, i, carMesh);
         if (!p) continue;
         const d = worldPos.distanceTo(p);
         if (d < best) best = d;
     }
     return best;
+}
+
+function distanceToDoor(worldPos) {
+    const chassis = getChassis();
+    if (!chassis) return Infinity;
+    return distanceToCarDoors(chassis, worldPos);
 }
 
 function getTriggerAudioContext() {
@@ -257,12 +267,12 @@ function updateVRProximityTriggers(session) {
     }
 }
 
-function getNearestDoorIndex(worldPos) {
+function getNearestDoorIndex(worldPos, chassisOverride) {
     if (!worldPos) return 0;
     let best = 0;
     let bestDist = Infinity;
     for (let i = 0; i < DOOR_LOCALS.length; i++) {
-        const p = worldDoorPointByIndex(_v1, i);
+        const p = worldDoorPointByIndex(_v1, i, chassisOverride);
         if (!p) continue;
         const d = worldPos.distanceTo(p);
         if (d < bestDist) {
@@ -432,10 +442,24 @@ function computeExitSpawn() {
     return { position: spawn, yaw: Math.atan2(_v1.x, _v1.z) };
 }
 
-function enterVehicle() {
+function getDefaultVehicleSlot() {
+    if (deps && deps.getMyPlayerSlotIndex) return deps.getMyPlayerSlotIndex();
+    return 0;
+}
+
+function getOccupiedVehicleSlot() {
+    return occupiedVehicleSlot != null ? occupiedVehicleSlot : getDefaultVehicleSlot();
+}
+
+function enterVehicleAtSlot(slot) {
     if (!deps || mode !== MODE_FOOT) return false;
     const ref = deps.getVehicleRef && deps.getVehicleRef();
-    if (!ref || !ref.chassisMesh) return false;
+    if (!ref || !ref.chassisMesh || ref.destroyed) return false;
+    const targetSlot = slot != null ? slot : getDefaultVehicleSlot();
+    occupiedVehicleSlot = targetSlot;
+    if (targetSlot !== getDefaultVehicleSlot() && deps.teleportVehicleToSlot) {
+        deps.teleportVehicleToSlot(targetSlot);
+    }
     setBowEquipped(false);
     mode = MODE_VEHICLE;
     updateDoorVisibility();
@@ -443,8 +467,20 @@ function enterVehicle() {
     if (deps.attachCameraRigToVehicle) deps.attachCameraRigToVehicle();
     if (deps.syncPlayerChassisFromPhysics) deps.syncPlayerChassisFromPhysics();
     if (deps.setCameraModeFirstPerson) deps.setCameraModeFirstPerson();
-    console.log('🚪 Entered vehicle');
+    console.log('🚪 Entered vehicle (slot', targetSlot + ')');
     return true;
+}
+
+function enterVehicle() {
+    return enterVehicleAtSlot(getDefaultVehicleSlot());
+}
+
+function releaseVehicleOccupancy() {
+    if (occupiedVehicleSlot == null) return;
+    if (deps && deps.releaseOccupancyClaim) {
+        deps.releaseOccupancyClaim('car', occupiedVehicleSlot);
+    }
+    occupiedVehicleSlot = null;
 }
 
 function exitVehicle() {
@@ -463,9 +499,37 @@ function exitVehicle() {
     locomotion.resetRigAt(exit.position, exit.yaw);
 
     mode = MODE_FOOT;
+    releaseVehicleOccupancy();
     updateDoorVisibility();
     console.log('🚪 Exited vehicle — VRrunner locomotion active');
     return true;
+}
+
+function forceExitVehicle() {
+    if (mode !== MODE_VEHICLE) return false;
+    return exitVehicle();
+}
+
+function tryEnterVehicleAtNearestDoor(worldPos) {
+    let target = null;
+    if (deps && deps.findNearestCarDoorTarget) {
+        target = deps.findNearestCarDoorTarget(worldPos);
+    }
+    const slot = target ? target.slot : getDefaultVehicleSlot();
+    const dist = target ? target.distance : distanceToDoor(worldPos);
+    if (dist > DOOR_GRAB_RADIUS) return false;
+
+    if (target && target.carMesh) {
+        lastDoorIndex = getNearestDoorIndex(worldPos, target.carMesh);
+    }
+
+    if (deps && deps.requestOccupancyClaim) {
+        deps.requestOccupancyClaim('car', slot, function(granted) {
+            if (granted) enterVehicleAtSlot(slot);
+        });
+        return true;
+    }
+    return enterVehicleAtSlot(slot);
 }
 
 function tryDoorInteract(worldPos, pressed) {
@@ -474,10 +538,14 @@ function tryDoorInteract(worldPos, pressed) {
         return false;
     }
     if (doorInteractLatch) return false;
+    if (mode === MODE_FOOT) {
+        var entered = tryEnterVehicleAtNearestDoor(worldPos);
+        if (entered) doorInteractLatch = true;
+        return entered;
+    }
     if (distanceToDoor(worldPos) > DOOR_GRAB_RADIUS) return false;
     lastDoorIndex = getNearestDoorIndex(worldPos);
     doorInteractLatch = true;
-    if (mode === MODE_FOOT) return enterVehicle();
     if (mode === MODE_VEHICLE) return exitVehicle();
     return false;
 }
@@ -512,6 +580,9 @@ function updateFootLocomotion(dt, input) {
         applyDesktopStickFromKeys(input.keys);
         locomotion.updateFootDesktop(dt, deps.camera);
     }
+    if (locomotion && deps.cameraRig) {
+        recoverRigFromGlbPenetration(deps.cameraRig.position, 0.3, locomotion.getRigVelocity());
+    }
 }
 
 function spawnOnFootBesideCar() {
@@ -526,18 +597,23 @@ function spawnOnFootBesideCar() {
     ensureBots();
     locomotion.resetRigAt(exit.position, exit.yaw);
     mode = MODE_FOOT;
+    releaseVehicleOccupancy();
     updateDoorVisibility();
 }
 
 function startInVehicle() {
     mode = MODE_VEHICLE;
     updateDoorVisibility();
-    if (deps.resetFootViewOffset) deps.resetFootViewOffset();
-    if (deps.attachCameraRigToVehicle) deps.attachCameraRigToVehicle();
+    if (deps && deps.resetFootViewOffset) deps.resetFootViewOffset();
+    if (deps && deps.attachCameraRigToVehicle) deps.attachCameraRigToVehicle();
 }
 
 function getNetworkState() {
     if (!deps) return null;
+    if (deps.getHelicopterNetworkState) {
+        const heliState = deps.getHelicopterNetworkState();
+        if (heliState) return heliState;
+    }
     if (mode === MODE_VEHICLE) {
         const ref = deps.getVehicleRef && deps.getVehicleRef();
         if (!ref || !ref.chassisMesh) return null;
@@ -545,17 +621,23 @@ function getNetworkState() {
         const r = ref.chassisMesh.rotation;
         return {
             mode: MODE_VEHICLE,
+            slot: getOccupiedVehicleSlot(),
             x: p.x, y: p.y, z: p.z,
             rx: r.x, ry: r.y, rz: r.z
         };
     }
     const rig = deps.cameraRig;
     if (!rig) return null;
-    return {
+    const state = {
         mode: MODE_FOOT,
         x: rig.position.x, y: rig.position.y, z: rig.position.z,
         rx: rig.rotation.x, ry: rig.rotation.y, rz: rig.rotation.z
     };
+    if (deps.getArcheryNetworkState) {
+        const archery = deps.getArcheryNetworkState();
+        if (archery) state.archery = archery;
+    }
+    return state;
 }
 
 function createRemoteAvatars(scene, colors) {
@@ -581,22 +663,48 @@ function applyRemotePlayerState(playerIndex, playerId, state) {
     if (!state) return;
 
     const foot = state.mode === MODE_FOOT;
-    av.mode = foot ? MODE_FOOT : MODE_VEHICLE;
+    const heli = state.mode === MODE_HELICOPTER;
+    av.mode = foot ? MODE_FOOT : (heli ? MODE_HELICOPTER : MODE_VEHICLE);
     av.playerId = playerId;
+
+    if (deps.hideRemoteHelicopter && !heli) deps.hideRemoteHelicopter(playerIndex);
+    if (deps.syncRemoteArcheryFromState && !foot) {
+        deps.syncRemoteArcheryFromState(playerIndex, { eq: 0 });
+    }
 
     if (foot) {
         av.mesh.position.set(state.x, state.y - RUNNER_STANDING_EYE_Y + 0.95, state.z);
         av.mesh.rotation.set(state.rx || 0, state.ry || 0, state.rz || 0);
         av.mesh.visible = true;
         if (carData && carData.mesh) carData.mesh.visible = false;
+        if (deps.syncRemoteArcheryFromState) {
+            deps.syncRemoteArcheryFromState(playerIndex, state.archery || { eq: 0 });
+        }
+    } else if (heli) {
+        av.mesh.visible = false;
+        if (carData && carData.mesh) carData.mesh.visible = false;
     } else {
         av.mesh.visible = false;
+        const driveSlot = state.slot != null ? state.slot : playerIndex;
         if (carData && carData.mesh && playerId !== deps.getMyPlayerId()) {
-            carData.mesh.position.set(state.x, state.y, state.z);
-            carData.mesh.rotation.set(state.rx || 0, state.ry || 0, state.rz || 0);
-            carData.mesh.visible = true;
-            if (carData.rigidBody && deps.updateRemoteCarPhysics) {
-                deps.updateRemoteCarPhysics(carData, state);
+            carData.mesh.visible = !carData.destroyed && driveSlot === playerIndex;
+            if (driveSlot === playerIndex) {
+                carData.mesh.position.set(state.x, state.y, state.z);
+                carData.mesh.rotation.set(state.rx || 0, state.ry || 0, state.rz || 0);
+                if (!carData.destroyed && carData.rigidBody && deps.updateRemoteCarPhysics) {
+                    deps.updateRemoteCarPhysics(carData, state);
+                }
+            }
+        }
+        if (driveSlot !== playerIndex && deps.getRemoteCarData) {
+            const drivenCar = deps.getRemoteCarData(driveSlot);
+            if (drivenCar && drivenCar.mesh && playerId !== deps.getMyPlayerId()) {
+                drivenCar.mesh.position.set(state.x, state.y, state.z);
+                drivenCar.mesh.rotation.set(state.rx || 0, state.ry || 0, state.rz || 0);
+                drivenCar.mesh.visible = !drivenCar.destroyed;
+                if (!drivenCar.destroyed && drivenCar.rigidBody && deps.updateRemoteCarPhysics) {
+                    deps.updateRemoteCarPhysics(drivenCar, state);
+                }
             }
         }
     }
@@ -622,6 +730,9 @@ function init(options) {
     deps = options;
     if (options.scene && options.avatarColors) {
         createRemoteAvatars(options.scene, options.avatarColors);
+        if (options.setupRemoteAvatarArchery) {
+            options.setupRemoteAvatarArchery(remoteAvatars);
+        }
     }
     if (options.scene) {
         setRunnerGlassSceneRef(options.scene);
@@ -634,6 +745,7 @@ function init(options) {
 export const PlayerFoot = {
     MODE_FOOT,
     MODE_VEHICLE,
+    MODE_HELICOPTER,
     init,
     setupDoorHandles,
     updateDoorVisibility,
@@ -641,7 +753,10 @@ export const PlayerFoot = {
     isVehicleMode,
     getMode,
     enterVehicle,
+    enterVehicleAtSlot,
     exitVehicle,
+    forceExitVehicle,
+    getOccupiedVehicleSlot,
     tryDoorInteract,
     updateFootLocomotion,
     updateVRProximityTriggers,
@@ -652,6 +767,7 @@ export const PlayerFoot = {
     getNetworkState,
     applyRemotePlayerState,
     distanceToDoor,
+    distanceToCarDoors,
     registerCityCollisionMeshes,
     DOOR_HOTSPOT_RADIUS,
     DOOR_PROXIMITY_RADIUS,

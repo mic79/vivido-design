@@ -698,7 +698,7 @@ const MUSIC_CALM_VOLUME = 0.22;
 const MUSIC_BATTLE_VOLUME = 0.38;
 const MUSIC_CROSSFADE_S = 2.0;        // calm ↔ battle
 const MUSIC_DUCK_S = 0.6;             // music toggle off / on
-let musicEnabled_ = true;             // user toggle
+let musicEnabled_ = false;             // user toggle
 let musicInited_ = false;             // set once after first user gesture
 let musicBtn_ = null;
 let musicCalmEl_ = null;              // HTMLAudioElement
@@ -5317,6 +5317,7 @@ function _spawnExplosionFx(worldPos) {
 /** World point for explosive-arrow VFX + `_detonateAOE` (damage still
  *  uses this offset centre). `surfaceNormal` may be null (air burst). */
 function _finalizeExplosiveArrowFxWorldPos(out, anchor, surfaceNormal, segDirUnit) {
+  if (!anchor) return out;
   out.copy(anchor);
   if (surfaceNormal && surfaceNormal.lengthSq() > 1e-12) {
     _expFxN.copy(surfaceNormal).normalize();
@@ -5627,6 +5628,10 @@ let drawT_ = 0;                         // seconds the trigger has been held thi
 let prevDrawTrigger_ = false;
 let prevAButton_ = false;
 let archeryFireCooldown_ = 0;
+let localArrowFiredCb_ = null;
+let multiplayerArrowHitCb_ = null;
+/** @type {((prev: THREE.Vector3, dirUnit: THREE.Vector3, segLen: number, opts: { explosive?: boolean }) => { t: number, point?: THREE.Vector3, onNormalHit?: () => void, onExplosiveHit?: () => void } | null) | null} */
+let arrowCombatSegmentHit_ = null;
 const arrows_ = [];                     // in-flight: { mesh, vel, ttl, prev, explosive?, grapple? }
 const stuckArrows_ = [];                // FIFO of stuck arrows (in scene or under drone groups)
 /** Bow-hand trigger held this frame — used for grapple winch (continuous). */
@@ -6047,6 +6052,20 @@ function _releaseDraw() {
   archeryFireCooldown_ = ARCHERY_FIRE_INTERVAL;
   drawT_ = 0;
 
+  if (localArrowFiredCb_) {
+    localArrowFiredCb_({
+      ox: _bowWorld.x,
+      oy: _bowWorld.y,
+      oz: _bowWorld.z,
+      dx: _arrowDir.x,
+      dy: _arrowDir.y,
+      dz: _arrowDir.z,
+      speed: speed,
+      explosive: isExplosive,
+      grapple: isGrapple,
+    });
+  }
+
   /* Release SFX: random pick from the swoosh variants (or the
    * procedural twang if neither has loaded yet). Head-locked because
    * the release happens at the player's hands — no spatialisation
@@ -6374,16 +6393,35 @@ function updateArrows(dt) {
     if (segLen >= 1e-5) {
       _arrowTmp2.divideScalar(segLen);
 
+      if (multiplayerArrowHitCb_) {
+        const mpHit = multiplayerArrowHitCb_(a, a.prev, _arrowTmp2, segLen);
+        if (mpHit && mpHit.consumed) {
+          if (a.mesh.parent) scene_.remove(a.mesh);
+          arrows_.splice(i, 1);
+          continue;
+        }
+      }
+
       const hasWallHit = rayHitWorldRich(a.prev, _arrowTmp2, segLen, _arrowWallHit);
       const wallT = hasWallHit ? _arrowWallHit.t : Infinity;
 
       let ragdollT = Infinity;
       let ragdollPoint = null;
-      if (arrowRagdollSegmentHit_) {
+      if (!a.remoteOwner && arrowRagdollSegmentHit_) {
         const rh = arrowRagdollSegmentHit_(a.prev, _arrowTmp2, segLen, a.vel.length());
         if (rh && typeof rh.t === "number" && rh.t >= 0 && rh.t <= segLen) {
           ragdollT = rh.t;
           ragdollPoint = rh.point || null;
+        }
+      }
+
+      let combatT = Infinity;
+      let combatHit = null;
+      if (!a.remoteOwner && arrowCombatSegmentHit_) {
+        const ch = arrowCombatSegmentHit_(a.prev, _arrowTmp2, segLen, { explosive: !!a.explosive });
+        if (ch && typeof ch.t === "number" && ch.t >= 0 && ch.t <= segLen) {
+          combatT = ch.t;
+          combatHit = ch;
         }
       }
 
@@ -6392,6 +6430,9 @@ function updateArrows(dt) {
       let bestDist = Infinity;
       let bestHit = null;
       let bestKind = null;        // "drone" | "antiair"
+      let bestMissileIdx = -1;
+      let bestMissileT = Infinity;
+      if (!a.remoteOwner) {
       for (const d of drones_) {
         if (d.dead) continue;
         const hits = _arrowRaycaster.intersectObject(d.group, true);
@@ -6419,8 +6460,8 @@ function updateArrows(dt) {
        * aamissile, find closest point on the arrow's segment to the
        * missile's centre, hit if within MISSILE_HIT_R. */
       const MISSILE_HIT_R = 0.35;
-      let bestMissileIdx = -1;
-      let bestMissileT = Infinity;
+      bestMissileIdx = -1;
+      bestMissileT = Infinity;
       for (let pi = 0; pi < projectiles_.length; pi++) {
         const p = projectiles_[pi];
         if (!p || (p.kind !== "aamissile" && p.kind !== "aaartillery" && p.kind !== "aamg")) continue;
@@ -6436,18 +6477,24 @@ function updateArrows(dt) {
           bestMissileIdx = pi;
         }
       }
+      }
 
       /* Pick the closest of the three hit candidates. The missile
        * uses tAlong (segment-projected distance) which lives in the
        * same units as `bestDist`. */
-      const hasDroneOrAA = bestHit && bestDist <= Math.min(wallT, bestMissileT, ragdollT);
-      const hasMissile   = bestMissileIdx >= 0 && bestMissileT < Math.min(wallT, bestDist, ragdollT);
+      const hitMinOther = Math.min(wallT, bestMissileT, ragdollT, combatT);
+      const hasDroneOrAA = bestHit && bestDist <= hitMinOther;
+      const hasMissile   = bestMissileIdx >= 0 && bestMissileT < Math.min(wallT, bestDist, ragdollT, combatT);
       const hasWallFinal = hasWallHit
-        && wallT < Math.min(bestDist, bestMissileT, ragdollT);
-      const hasRagdoll = ragdollT < Math.min(wallT, bestDist, bestMissileT);
+        && wallT < Math.min(bestDist, bestMissileT, ragdollT, combatT);
+      const hasRagdoll = ragdollT < Math.min(wallT, bestDist, bestMissileT, combatT);
+      const hasCombat = combatHit && combatT < Math.min(wallT, bestDist, bestMissileT, ragdollT);
 
       /* Explosive arrow detonates on FIRST contact (anything). */
-      if (a.explosive && (hasDroneOrAA || hasMissile || hasWallFinal || hasRagdoll)) {
+      if (a.explosive && (hasDroneOrAA || hasMissile || hasWallFinal || hasRagdoll || hasCombat)) {
+        if (hasCombat && combatHit.onExplosiveHit) {
+          combatHit.onExplosiveHit();
+        }
         if (hasWallFinal) {
           shatterRunnerGlassIfHit_?.(
             _arrowWallHit.box,
@@ -6463,7 +6510,7 @@ function updateArrows(dt) {
         } else if (hasRagdoll) {
           _arrowTmp1.copy(a.prev).addScaledVector(_arrowTmp2, ragdollT);
           if (ragdollPoint) _arrowTmp1.copy(ragdollPoint);
-          _finalizeExplosiveArrowFxWorldPos(_arrowTmp1, null, _arrowTmp2);
+          _finalizeExplosiveArrowFxWorldPos(_arrowTmp1, _arrowTmp1, null, _arrowTmp2);
         } else if (hasDroneOrAA) {
           if (bestHit.face && bestHit.face.normal) {
             _missileNorm.copy(bestHit.face.normal)
@@ -6474,6 +6521,10 @@ function updateArrows(dt) {
           _finalizeExplosiveArrowFxWorldPos(
             _arrowTmp1, bestHit.point, blastN, _arrowTmp2,
           );
+        } else if (hasCombat) {
+          _arrowTmp1.copy(a.prev).addScaledVector(_arrowTmp2, combatT);
+          if (combatHit.point) _arrowTmp1.copy(combatHit.point);
+          _finalizeExplosiveArrowFxWorldPos(_arrowTmp1, _arrowTmp1, null, _arrowTmp2);
         } else {
           blastN = _arrowWallHit.normal;
           _finalizeExplosiveArrowFxWorldPos(
@@ -6517,6 +6568,18 @@ function updateArrows(dt) {
       }
 
       /* Normal arrow: existing per-target-type handling. */
+      if (hasCombat) {
+        if (combatHit.onNormalHit) combatHit.onNormalHit();
+        _arrowTmp1.copy(a.prev).addScaledVector(_arrowTmp2, combatT);
+        if (combatHit.point) _arrowTmp1.copy(combatHit.point);
+        _missileNorm.copy(_arrowTmp2).negate();
+        spawnMetalImpactSparks(_arrowTmp1, _missileNorm);
+        _stickArrowOnWorld(a, _arrowTmp1);
+        _clearGrappleRopeIfMesh(a.mesh);
+        scene_.remove(a.mesh);
+        arrows_.splice(i, 1);
+        continue;
+      }
       if (hasRagdoll) {
         _arrowTmp1.copy(a.prev).addScaledVector(_arrowTmp2, ragdollT);
         if (ragdollPoint) _arrowTmp1.copy(ragdollPoint);
@@ -9642,6 +9705,20 @@ function tickDecalCleanup(nowMs) {
   }
 }
 
+/** World impact FX shared by archery and helicopter miniguns (decal + chips + sparks). */
+export function spawnWorldSurfaceImpact(point, normal) {
+  if (!initDone_ || !scene_) return;
+  spawnSurfaceImpact(point, normal);
+  spawnMetalImpactSparks(point, normal);
+}
+
+/** Animate impact debris/sparks; decals are static but need sector cleanup. */
+export function tickWorldSurfaceImpactFx(dt) {
+  if (!initDone_) return;
+  updateDebris(dt);
+  tickDecalCleanup(typeof performance !== "undefined" ? performance.now() : Date.now());
+}
+
 /* ── Player damage / respawn ──────────────────────────────────────────── */
 
 function playerDead() {
@@ -11694,7 +11771,7 @@ function _pickBowSwoosh() {
  *  the three sampled variants (so repeated hits don't sound identical).
  *  Falls back to the procedural `hit` buffer if no samples are loaded
  *  yet — that way the first few hits in a fresh session still register. */
-function playMetalHitAt(worldPos, opts) {
+export function playMetalHitAt(worldPos, opts) {
   const variants = audioBuffers_.metalHits;
   let buf;
   if (variants && variants.length > 0) {
@@ -11971,8 +12048,8 @@ export function initBots(opts) {
     musicBtn_ = document.createElement("button");
     musicBtn_.type = "button";
     musicBtn_.id = "musicBtn";
-    musicBtn_.textContent = "Music: ON";
-    musicBtn_.style.background = "#3a6a8a";
+    musicBtn_.textContent = "Music: OFF";
+    musicBtn_.style.background = "#333";
     musicBtn_.style.color = "#fff";
     musicBtn_.style.display = "block";
     musicBtn_.style.width = "100%";
@@ -11982,14 +12059,12 @@ export function initBots(opts) {
     musicBtn_.style.border = "none";
     musicBtn_.style.borderRadius = "4px";
     musicBtn_.style.fontSize = "12px";
-    /* First click is the user-gesture that boots the music system —
-     * we treat it as "start the music (preference is ON by default)"
-     * rather than a toggle, so the button label always matches what
-     * the player can audibly hear from this point on. Subsequent
-     * clicks then toggle preference normally. */
+    /* First click boots the music system (user gesture) and turns music on;
+     * subsequent clicks toggle the preference. */
     musicBtn_.addEventListener("click", () => {
       if (!musicInited_) {
         ensureMusicInited();
+        setMusicEnabled(true);
         return;
       }
       setMusicEnabled(!musicEnabled_);
@@ -12361,10 +12436,10 @@ export function spawnSpecificDrone(type) {
  * one frame later. */
 export function ensureMusicStarted() {
   if (!initDone_) return;
-  /* Make sure the user-facing toggle is ON; it is by default but a
-   * previous combat session may have flipped it. */
-  setMusicEnabled(true);
-  ensureMusicInited();
+  if (musicEnabled_) {
+    ensureMusicInited();
+    setMusicEnabled(true);
+  }
 }
 
 /** Runtime switch for the minimap orientation. "north" = static map
@@ -12466,8 +12541,80 @@ export function visitInFlightArrows(fn) {
       pos: a.mesh.position,
       vel: a.vel,
       speed: a.vel.length(),
+      explosive: !!a.explosive,
+      arrow: a,
     });
   }
+}
+
+export function setLocalArrowFiredCallback(cb) {
+  localArrowFiredCb_ = typeof cb === "function" ? cb : null;
+}
+
+export function setMultiplayerArrowHitCallback(cb) {
+  multiplayerArrowHitCb_ = typeof cb === "function" ? cb : null;
+}
+
+/** Vehicles / helicopters (GTAVR chase police, player car, heli). */
+export function setArrowCombatSegmentHitCallback(cb) {
+  arrowCombatSegmentHit_ = typeof cb === "function" ? cb : null;
+}
+
+export function getArcheryNetworkState() {
+  if (!ARCHERY_ENABLED || !initDone_) return null;
+  if (!bowEquipped_) return { eq: 0 };
+  return {
+    eq: 1,
+    hand: bowHandedness_ === "left" ? 0 : 1,
+    type: arrowType_,
+    draw: drawing_ ? Math.min(1, drawT_ / 0.75) : 0,
+  };
+}
+
+export function buildRemoteBowVisual() {
+  if (!initDone_) return null;
+  _ensureBowResources();
+  const bow = _buildBowVisual();
+  bow.scale.setScalar(2.0);
+  bow.rotation.set(-Math.PI / 2, Math.PI, 0);
+  bow.visible = false;
+  return bow;
+}
+
+export function updateRemoteBowVisual(bowGroup, archeryState, leftHand, rightHand) {
+  if (!bowGroup) return;
+  if (!archeryState || !archeryState.eq) {
+    bowGroup.visible = false;
+    return;
+  }
+  const onLeft = archeryState.hand === 0;
+  const parent = onLeft ? leftHand : rightHand;
+  if (parent && bowGroup.parent !== parent) {
+    if (bowGroup.parent) bowGroup.parent.remove(bowGroup);
+    parent.add(bowGroup);
+  }
+  bowGroup.visible = true;
+  bowGroup.rotation.set(-Math.PI / 2, Math.PI, 0);
+  bowGroup.position.set(0, 0, 0);
+  const draw = Math.max(0, Math.min(1, archeryState.draw || 0));
+  bowGroup.position.z = -0.04 - draw * 0.12;
+}
+
+export function spawnRemoteNetworkArrow(payload) {
+  if (!initDone_ || !scene_ || !payload) return;
+  _arrowDir.set(payload.dx || 0, payload.dy || 0, payload.dz || 1).normalize();
+  _bowWorld.set(payload.ox || 0, payload.oy || 0, payload.oz || 0);
+  const speed = payload.speed || ARROW_MIN_SPEED;
+  _spawnFlightArrow(
+    _bowWorld,
+    _arrowDir,
+    speed,
+    !!payload.explosive,
+    !!payload.grapple
+  );
+  const a = arrows_[arrows_.length - 1];
+  if (a) a.remoteOwner = payload.ownerId || "?";
+  playOneShotAt(_pickBowSwoosh(), _bowWorld, { volume: 0.62, refDistance: 1.1, maxDistance: 80 });
 }
 
 function pollVRInputsArchery() {
