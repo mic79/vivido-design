@@ -680,6 +680,11 @@ let audioListener_ = null;
 const audioBuffers_ = {};
 let audioReady_ = false;
 
+/** Resolve GTAVR/audio/ from this module (not page-relative paths). */
+function gtavrAudioUrl(filename) {
+  return new URL(`../../audio/${filename}`, import.meta.url).href;
+}
+
 /* Music — DodgeVR-style calm-vs-battle crossfading background tracks.
  * Uses HTML5 <audio> elements piped through Web Audio for streaming
  * playback (MP3s are ~11 MB calm + ~3-4 MB battle, so we don't want to
@@ -687,11 +692,11 @@ let audioReady_ = false;
  * element is set as the MediaElementSource on a THREE.Audio so volume
  * runs through the same listener gain graph as the rest of the SFX. */
 const MUSIC_FILES = {
-  calm: "audio/alexgrohl-the-futuristic-ambience-everything-is-one-179395.mp3",
+  calm: gtavrAudioUrl("alexgrohl-the-futuristic-ambience-everything-is-one-179395.mp3"),
   /* Two battle tracks — pick one randomly per session for variety. */
   battle: [
-    "audio/amaksi-clanabogan-beast-phonk-148615.mp3",
-    "audio/amaksi-unleashed-fury-173854.mp3",
+    gtavrAudioUrl("amaksi-clanabogan-beast-phonk-148615.mp3"),
+    gtavrAudioUrl("amaksi-unleashed-fury-173854.mp3"),
   ],
 };
 const MUSIC_CALM_VOLUME = 0.22;
@@ -5629,6 +5634,7 @@ let prevDrawTrigger_ = false;
 let prevAButton_ = false;
 let archeryFireCooldown_ = 0;
 let localArrowFiredCb_ = null;
+let localArcheryStateCb_ = null;
 let multiplayerArrowHitCb_ = null;
 /** @type {((prev: THREE.Vector3, dirUnit: THREE.Vector3, segLen: number, opts: { explosive?: boolean }) => { t: number, point?: THREE.Vector3, onNormalHit?: () => void, onExplosiveHit?: () => void } | null) | null} */
 let arrowCombatSegmentHit_ = null;
@@ -5938,6 +5944,7 @@ function _toggleBowHand() {
   prevDrawTrigger_ = true;
   prevTriggerL_ = true;
   prevTriggerR_ = true;
+  if (bowEquipped_) _notifyArcheryNetworkState();
   console.info(`[brutalistVR8] bow hand → ${bowHandedness_}`);
 }
 
@@ -5977,6 +5984,7 @@ function _startDraw() {
   nockedArrow_.rotation.set(0, 0, 0);
   drawing_ = true;
   drawT_ = 0;
+  _notifyArcheryNetworkState();
   /* Single short pulse on draw start so the player feels the string
    * grab. Ramping during the draw was tried but the actuator API on
    * Quest doesn't gracefully handle rapid back-to-back pulses — they
@@ -5995,6 +6003,7 @@ function _cancelDraw() {
     bowStringPositions_.setXYZ(1, _bowStringRest.x, _bowStringRest.y, _bowStringRest.z);
     bowStringPositions_.needsUpdate = true;
   }
+  _notifyArcheryNetworkState();
 }
 
 function _releaseDraw() {
@@ -6065,6 +6074,7 @@ function _releaseDraw() {
       grapple: isGrapple,
     });
   }
+  _notifyArcheryNetworkState();
 
   /* Release SFX: random pick from the swoosh variants (or the
    * procedural twang if neither has loaded yet). Head-locked because
@@ -6856,10 +6866,17 @@ export function toggleBowHand() {
 
 export function isBowEquipped() { return bowEquipped_; }
 
+function _notifyArcheryNetworkState() {
+  if (!localArcheryStateCb_) return;
+  const state = getArcheryNetworkState();
+  if (state) localArcheryStateCb_(state);
+}
+
 export function setBowEquipped(v) {
   bowEquipped_ = !!v;
   if (!bowEquipped_) stowBow();
   else _ensureArcherySetup();
+  _notifyArcheryNetworkState();
   return bowEquipped_;
 }
 
@@ -6874,6 +6891,7 @@ export function stowBow() {
   prevDrawTrigger_ = true;
   prevTriggerL_ = true;
   prevTriggerR_ = true;
+  _notifyArcheryNetworkState();
 }
 
 /** Equip bow on the given hand (holster grab). */
@@ -6901,9 +6919,11 @@ export function equipBowToHand(hand) {
 export function toggleBowOnHand(hand) {
   if (bowEquipped_ && bowHandedness_ === hand && bowGroup_?.parent) {
     stowBow();
+    _notifyArcheryNetworkState();
     return false;
   }
   equipBowToHand(hand);
+  _notifyArcheryNetworkState();
   return true;
 }
 
@@ -6979,6 +6999,7 @@ export function setArrowType(t) {
   }
   /* Brief click on the bow hand for tactile feedback. */
   pulseHapticActuator(bowHandedness_, 0.4, 35);
+  if (bowEquipped_) _notifyArcheryNetworkState();
   return arrowType_;
 }
 export function getArrowType() { return arrowType_; }
@@ -11699,26 +11720,22 @@ async function loadAudioBufferFromUrl(url) {
 }
 
 const SAMPLED_SFX = {
-  rifleFire: "audio/freesound_community-sniper-rifle-5989.mp3",
-  healthPickup: "audio/submarine-sonar-38243-once.mp3",
-  explosionImpact: "audio/sound-design-elements-impact-sfx-ps-084-353199.mp3",
+  rifleFire: gtavrAudioUrl("freesound_community-sniper-rifle-5989.mp3"),
+  healthPickup: gtavrAudioUrl("submarine-sonar-38243-once.mp3"),
+  explosionImpact: gtavrAudioUrl("sound-design-elements-impact-sfx-ps-084-353199.mp3"),
   metalHits: [
-    "audio/metal-hit-92-200420.mp3",
-    "audio/metal-hit-94-200422.mp3",
-    "audio/metal-hit-95-200424.mp3",
+    gtavrAudioUrl("metal-hit-92-200420.mp3"),
+    gtavrAudioUrl("metal-hit-94-200422.mp3"),
+    gtavrAudioUrl("metal-hit-95-200424.mp3"),
   ],
   /* Drone destruction — heavy crash impact, sells the structural
    * collapse of the drone breaking apart. Played from the drone's
    * world position so the player can locate the kill. */
-  droneDeath: "audio/dragon-studio-car-crash-sound-effect-376874.mp3",
-  /* Arrow release / flight — two variants are picked from at random
-   * so consecutive shots don't sound mechanically identical. Either
-   * file failing to load is silently OK (loadAudioBufferFromUrl
-   * returns null), and if the array ends up empty the release falls
-   * back to the procedural twang `bowReleaseProc`. */
+  droneDeath: gtavrAudioUrl("dragon-studio-car-crash-sound-effect-376874.mp3"),
+  /* Arrow release / flight — same samples as VRrunner (GTAVR/audio/). */
   bowSwooshes: [
-    "audio/arrow-swoosh.mp3",
-    "audio/arrow-swoosh2.mp3",
+    gtavrAudioUrl("arrow-swoosh.mp3"),
+    gtavrAudioUrl("arrow-swoosh2.mp3"),
   ],
 };
 
@@ -12551,6 +12568,17 @@ export function setLocalArrowFiredCallback(cb) {
   localArrowFiredCb_ = typeof cb === "function" ? cb : null;
 }
 
+let archeryDrawNotifyLastMs_ = 0;
+
+/** Called each frame while drawing so MP can sync pull amount (~30 Hz). */
+export function tickArcheryDrawNetworkNotify() {
+  if (!ARCHERY_ENABLED || !bowEquipped_ || !drawing_ || !localArcheryStateCb_) return;
+  const now = performance.now();
+  if (now - archeryDrawNotifyLastMs_ < 33) return;
+  archeryDrawNotifyLastMs_ = now;
+  _notifyArcheryNetworkState();
+}
+
 export function setMultiplayerArrowHitCallback(cb) {
   multiplayerArrowHitCb_ = typeof cb === "function" ? cb : null;
 }
@@ -12561,7 +12589,8 @@ export function setArrowCombatSegmentHitCallback(cb) {
 }
 
 export function getArcheryNetworkState() {
-  if (!ARCHERY_ENABLED || !initDone_) return null;
+  if (!ARCHERY_ENABLED) return { eq: 0 };
+  if (!initDone_) return { eq: bowEquipped_ ? 1 : 0, hand: bowHandedness_ === "left" ? 0 : 1, type: arrowType_, draw: 0 };
   if (!bowEquipped_) return { eq: 0 };
   return {
     eq: 1,
@@ -12571,20 +12600,78 @@ export function getArcheryNetworkState() {
   };
 }
 
+/** Remote bow mesh (own string buffer — safe before initBots). */
+function _buildRemoteBowMesh() {
+  const { limbGeo, limbMat, gripGeo, gripMat, stringMat } = _ensureBowResources();
+  const root = new THREE.Group();
+  root.userData.kind = "remoteBowVisual";
+
+  root.add(new THREE.Mesh(limbGeo, limbMat));
+  const grip = new THREE.Mesh(gripGeo, gripMat);
+  grip.position.set(0, 0, 0.005);
+  root.add(grip);
+
+  const stringGeo = new THREE.BufferGeometry();
+  const stringPositions = new THREE.Float32BufferAttribute(new Float32Array(9), 3);
+  stringPositions.setUsage(THREE.DynamicDrawUsage);
+  stringPositions.setXYZ(0, _bowAnchorTop.x, _bowAnchorTop.y, _bowAnchorTop.z);
+  stringPositions.setXYZ(1, _bowStringRest.x, _bowStringRest.y, _bowStringRest.z);
+  stringPositions.setXYZ(2, _bowAnchorBot.x, _bowAnchorBot.y, _bowAnchorBot.z);
+  stringGeo.setAttribute("position", stringPositions);
+  const stringLine = new THREE.Line(stringGeo, stringMat);
+  stringLine.frustumCulled = false;
+  root.add(stringLine);
+  root.userData.remoteStringPositions = stringPositions;
+
+  root.position.set(0, 0, 0);
+  return root;
+}
+
 export function buildRemoteBowVisual() {
-  if (!initDone_) return null;
-  _ensureBowResources();
-  const bow = _buildBowVisual();
+  const bow = _buildRemoteBowMesh();
   bow.scale.setScalar(2.0);
   bow.rotation.set(-Math.PI / 2, Math.PI, 0);
   bow.visible = false;
   return bow;
 }
 
+function _ensureRemoteNockedArrow(bowGroup, archeryState) {
+  let nock = bowGroup.userData.remoteNockedArrow;
+  const draw = Math.max(0, Math.min(1, archeryState.draw || 0));
+  const show = draw > 0.02;
+  if (!show) {
+    if (nock) nock.visible = false;
+    return;
+  }
+  const isGrapple = archeryState.type === ARROW_TYPE_GRAPPLE;
+  const isExplosive = archeryState.type === ARROW_TYPE_EXPLOSIVE && !isGrapple;
+  if (!nock) {
+    nock = _buildArrowMesh(isExplosive, isGrapple);
+    nock.scale.setScalar(0.92);
+    bowGroup.add(nock);
+    bowGroup.userData.remoteNockedArrow = nock;
+  } else {
+    const wantGrapple = isGrapple;
+    const wantExplosive = isExplosive;
+    if (nock.userData.grapple !== wantGrapple || nock.userData.explosive !== wantExplosive) {
+      bowGroup.remove(nock);
+      nock = _buildArrowMesh(wantExplosive, wantGrapple);
+      nock.scale.setScalar(0.92);
+      bowGroup.add(nock);
+      bowGroup.userData.remoteNockedArrow = nock;
+    }
+  }
+  nock.visible = true;
+  nock.rotation.set(Math.PI / 2, 0, 0);
+  nock.position.set(0, 0, -0.08 - draw * 0.35);
+}
+
 export function updateRemoteBowVisual(bowGroup, archeryState, leftHand, rightHand) {
   if (!bowGroup) return;
   if (!archeryState || !archeryState.eq) {
     bowGroup.visible = false;
+    const nock = bowGroup.userData.remoteNockedArrow;
+    if (nock) nock.visible = false;
     return;
   }
   const onLeft = archeryState.hand === 0;
@@ -12595,9 +12682,25 @@ export function updateRemoteBowVisual(bowGroup, archeryState, leftHand, rightHan
   }
   bowGroup.visible = true;
   bowGroup.rotation.set(-Math.PI / 2, Math.PI, 0);
-  bowGroup.position.set(0, 0, 0);
   const draw = Math.max(0, Math.min(1, archeryState.draw || 0));
-  bowGroup.position.z = -0.04 - draw * 0.12;
+  bowGroup.position.set(0, 0, -0.04 - draw * 0.12);
+
+  const stringPositions = bowGroup.userData.remoteStringPositions;
+  if (stringPositions) {
+    const pull = draw * 0.42;
+    stringPositions.setXYZ(
+      1,
+      _bowStringRest.x,
+      _bowStringRest.y,
+      _bowStringRest.z - pull,
+    );
+    stringPositions.needsUpdate = true;
+  }
+  _ensureRemoteNockedArrow(bowGroup, archeryState);
+}
+
+export function setLocalArcheryStateCallback(cb) {
+  localArcheryStateCb_ = typeof cb === "function" ? cb : null;
 }
 
 export function spawnRemoteNetworkArrow(payload) {

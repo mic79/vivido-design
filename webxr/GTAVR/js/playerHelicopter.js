@@ -152,6 +152,7 @@ let occupiedHeliSlot = null;
 const vrCyclicGrabSlots = [null, null];
 let rotorAudio = null;
 let rotorGain = null;
+let rotorPanner = null;
 let rotorAudioBuffer = null;
 let rotorAudioLoadPromise = null;
 let triggerAudioBuffer = null;
@@ -161,6 +162,11 @@ let minigunCycleElapsed = 0;
 const minigunAudioSlots = [null, null];
 const minigunShotAcc = [0, 0];
 const minigunTracers = [];
+/** @type {Array<{m:number,ox:number,oy:number,oz:number,dx:number,dy:number,dz:number}>} */
+let minigunShotBatch = [];
+let minigunShotBatchTimer = 0;
+/** @type {Map<string,{cycleT:number,active:boolean,audioSlot:object|null}>} */
+const remoteMinigunSimByPlayer = new Map();
 const doorHotspotInside = [false, false];
 
 function computeHeliNoseDir(out) {
@@ -317,14 +323,49 @@ function playTriggerSonar(volumeScale) {
     });
 }
 
+function stopRotorAudioLoop() {
+    if (rotorAudio) {
+        try { rotorAudio.stop(); } catch (e) { /* already stopped */ }
+        try { rotorAudio.disconnect(); } catch (e) { /* noop */ }
+    }
+    rotorAudio = null;
+    if (rotorGain) {
+        try { rotorGain.disconnect(); } catch (e) { /* noop */ }
+    }
+    rotorGain = null;
+    if (rotorPanner) {
+        try { rotorPanner.disconnect(); } catch (e) { /* noop */ }
+    }
+    rotorPanner = null;
+}
+
+/** Rotor loop only while piloting or heli is spooling down after a bailout. */
+function isRotorAudioActive() {
+    if (isHelicopterMode()) return true;
+    return !!(heliAutonomousFlight && (rotorSpin > 0.04 || collective > 0.04));
+}
+
 function ensureRotorAudioLoop() {
     var ctx = getTriggerAudioContext();
     if (!ctx || rotorAudio) return;
     ensureAudioBuffer(ROTOR_SFX_URL, _rotorBuf, _rotorLoad).then(function(buf) {
         if (!buf || !ctx || rotorAudio) return;
+        resumeAudioContext();
         rotorGain = ctx.createGain();
         rotorGain.gain.value = 0;
-        rotorGain.connect(ctx.destination);
+        var spatial = deps && deps.getSpatialAudio ? deps.getSpatialAudio() : null;
+        if (spatial) {
+            rotorPanner = spatial.createPanner({
+                refDistance: 3,
+                maxDistance: 200,
+                rolloffFactor: 1.15
+            });
+            rotorGain.connect(rotorPanner);
+        } else if (typeof window !== 'undefined' && window.spatialBusGain) {
+            rotorGain.connect(window.spatialBusGain);
+        } else {
+            rotorGain.connect(ctx.destination);
+        }
         rotorAudio = ctx.createBufferSource();
         rotorAudio.buffer = buf;
         rotorAudio.loop = true;
@@ -336,7 +377,19 @@ function ensureRotorAudioLoop() {
 function updateRotorAudioVolume() {
     if (!rotorGain) return;
     var rpmNorm = Math.min(1, rotorSpin * 0.45 + collective * 0.55);
-    rotorGain.gain.value = rpmNorm * rpmNorm * 0.55;
+    if (!isRotorAudioActive() || rpmNorm < 0.02) {
+        rotorGain.gain.value = 0;
+        if (!isHelicopterMode()) stopRotorAudioLoop();
+        return;
+    }
+    if (rotorPanner && heliRoot) {
+        heliRoot.updateMatrixWorld(true);
+        heliRoot.getWorldPosition(_v0);
+        var spatial = deps && deps.getSpatialAudio ? deps.getSpatialAudio() : null;
+        if (spatial) spatial.setPannerPosition(rotorPanner, _v0.x, _v0.y, _v0.z);
+    }
+    var inCockpit = isHelicopterMode();
+    rotorGain.gain.value = rpmNorm * rpmNorm * (inCockpit ? 0.55 : 0.4);
 }
 
 function ensureMetalHitBuffers() {
@@ -536,6 +589,45 @@ function raycastMinigunShot(origin, dir) {
     return null;
 }
 
+function isMinigunInFireWindow() {
+    return minigunActive
+        && minigunCycleElapsed >= MINIGUN_SPOOL_SEC
+        && minigunCycleElapsed < MINIGUN_SPOOL_SEC + MINIGUN_FIRE_SEC;
+}
+
+function sendMinigunCombatEvent(event, payload) {
+    if (!deps || !deps.sendCombatEvent) return;
+    deps.sendCombatEvent(event, payload || {});
+}
+
+function flushMinigunShotBatch() {
+    minigunShotBatchTimer = 0;
+    if (!minigunShotBatch.length) return;
+    var shots = minigunShotBatch;
+    minigunShotBatch = [];
+    sendMinigunCombatEvent('minigun-shots', {
+        slot: getOccupiedHeliSlot(),
+        shots: shots
+    });
+}
+
+function queueMinigunShotNetworkSync(mountIndex, origin, dir, hitDist) {
+    if (!deps || !deps.sendCombatEvent) return;
+    minigunShotBatch.push({
+        m: mountIndex,
+        ox: origin.x,
+        oy: origin.y,
+        oz: origin.z,
+        dx: dir.x,
+        dy: dir.y,
+        dz: dir.z,
+        hd: hitDist != null ? hitDist : null
+    });
+    if (!minigunShotBatchTimer) {
+        minigunShotBatchTimer = setTimeout(flushMinigunShotBatch, 48);
+    }
+}
+
 function fireMinigunRay(mountIndex) {
     if (!heliRoot) return;
     if (deps && deps.isPlayerVehicleDestroyed && deps.isPlayerVehicleDestroyed()) return;
@@ -554,6 +646,7 @@ function fireMinigunRay(mountIndex) {
         }
     }
     spawnMinigunTracer(_v0, _v1, hitDist);
+    queueMinigunShotNetworkSync(mountIndex, _v0, _v1, hitDist);
 }
 
 function disconnectMinigunAudioSlot(slot) {
@@ -578,10 +671,16 @@ function updateMinigunAudioPositions() {
 }
 
 function stopMinigunBurst() {
+    if (minigunActive) {
+        sendMinigunCombatEvent('minigun-burst-stop', {
+            slot: getOccupiedHeliSlot()
+        });
+    }
     minigunActive = false;
     minigunCycleElapsed = 0;
     minigunShotAcc[0] = 0;
     minigunShotAcc[1] = 0;
+    if (minigunShotBatch.length) flushMinigunShotBatch();
     for (var ai = 0; ai < 2; ai++) {
         disconnectMinigunAudioSlot(minigunAudioSlots[ai]);
         minigunAudioSlots[ai] = null;
@@ -651,6 +750,15 @@ function beginMinigunCycle() {
     minigunShotAcc[0] = 0;
     minigunShotAcc[1] = 0;
     playMinigunBurstSound();
+    if (heliRoot) {
+        sendMinigunCombatEvent('minigun-burst-start', {
+            slot: getOccupiedHeliSlot(),
+            x: heliRoot.position.x,
+            y: heliRoot.position.y,
+            z: heliRoot.position.z,
+            ry: heliRoot.rotation.y
+        });
+    }
 }
 
 function updateMinigunShots(dt) {
@@ -1855,7 +1963,6 @@ function exitHelicopter() {
     mode = null;
     releaseHeliOccupancy();
     restoreHeliHomeSlotIfNeeded();
-    updateRotorAudioVolume();
     updateDoorVisibility();
     if (window.__gtavrPlayerFoot && window.__gtavrPlayerFoot.updateDoorVisibility) {
         window.__gtavrPlayerFoot.updateDoorVisibility();
@@ -1863,6 +1970,7 @@ function exitHelicopter() {
 
     if (exit.airborne) {
         heliAutonomousFlight = true;
+        updateRotorAudioVolume();
         console.log('🚁 Bailed out — falling; helicopter descending');
         return true;
     }
@@ -1880,6 +1988,7 @@ function exitHelicopter() {
     resetCyclicVisual();
     releaseAllVRCyclicGrabs();
     if (rotorAction) rotorAction.timeScale = 0;
+    stopRotorAudioLoop();
     console.log('🚁 Exited helicopter');
     return true;
 }
@@ -2134,6 +2243,7 @@ function getNetworkState() {
         rz: heliRoot.rotation.z,
         rs: rotorSpin,
         mg: minigunActive ? 1 : 0,
+        mgf: isMinigunInFireWindow() ? 1 : 0,
         mgt: minigunCycleElapsed
     };
 }
@@ -2164,33 +2274,33 @@ function hideRemoteHelicopter(remoteData) {
     remoteData.root.visible = false;
     remoteData.shotAcc[0] = 0;
     remoteData.shotAcc[1] = 0;
+    if (remoteData.playerId) stopRemoteMinigunSim(remoteData.playerId);
     if (remoteData.remoteMinigunAudio) {
-        disconnectMinigunAudioSlot(remoteData.remoteMinigunAudio);
+        disconnectMinigunAudioSlot(remoteData.remoteMinigunAudio.audioSlot);
         remoteData.remoteMinigunAudio = null;
     }
 }
 
-function ensureRemoteMinigunAudio(remoteData) {
-    if (remoteData.remoteMinigunAudio) return;
+function startMinigunAudioAtWorld(pos, targetHolder) {
     var ctx = getTriggerAudioContext();
-    if (!ctx || !remoteData.root) return;
+    if (!ctx) return;
     resumeAudioContext();
     ensureAudioBuffer(MINIGUN_SFX_URL, _minigunBuf, _minigunLoad).then(function(buf) {
-        if (!buf || !ctx || !remoteData.root || !remoteData.root.visible) return;
-        remoteData.root.getWorldPosition(_v0);
+        if (!buf || !ctx) return;
+        _v0.copy(pos);
         var slot = {
             src: ctx.createBufferSource(),
             gain: ctx.createGain(),
             panner: null
         };
         slot.src.buffer = buf;
-        slot.gain.gain.value = 0.28;
+        slot.gain.gain.value = 0.34;
         slot.src.connect(slot.gain);
         var spatial = deps && deps.getSpatialAudio ? deps.getSpatialAudio() : null;
         if (spatial) {
             slot.panner = spatial.createPanner({
                 refDistance: 1.2,
-                maxDistance: 140,
+                maxDistance: 160,
                 rolloffFactor: 1.15
             });
             spatial.setPannerPosition(slot.panner, _v0.x, _v0.y, _v0.z);
@@ -2201,8 +2311,75 @@ function ensureRemoteMinigunAudio(remoteData) {
             slot.gain.connect(ctx.destination);
         }
         slot.src.start(0);
-        remoteData.remoteMinigunAudio = slot;
+        if (targetHolder) {
+            disconnectMinigunAudioSlot(targetHolder.audioSlot);
+            targetHolder.audioSlot = slot;
+        }
     });
+}
+
+function ensureRemoteMinigunAudio(remoteData) {
+    if (!remoteData || !remoteData.root) return;
+    if (!remoteData.remoteMinigunAudio) {
+        remoteData.remoteMinigunAudio = { audioSlot: null };
+    }
+    if (remoteData.remoteMinigunAudio.audioSlot) return;
+    remoteData.root.getWorldPosition(_v0);
+    startMinigunAudioAtWorld(_v0, remoteData.remoteMinigunAudio);
+}
+
+function playNetworkMinigunShots(shots) {
+    if (!shots || !shots.length) return;
+    for (var i = 0; i < shots.length; i++) {
+        var s = shots[i];
+        _v0.set(s.ox, s.oy, s.oz);
+        _v1.set(s.dx, s.dy, s.dz);
+        spawnMinigunTracer(_v0, _v1, s.hd != null ? s.hd : null);
+    }
+}
+
+function getRemoteMinigunSim(playerId) {
+    if (!playerId) return null;
+    var sim = remoteMinigunSimByPlayer.get(playerId);
+    if (!sim) {
+        sim = { cycleT: 0, active: false, audioSlot: null };
+        remoteMinigunSimByPlayer.set(playerId, sim);
+    }
+    return sim;
+}
+
+function stopRemoteMinigunSim(playerId) {
+    var sim = remoteMinigunSimByPlayer.get(playerId);
+    if (!sim) return;
+    sim.active = false;
+    sim.cycleT = 0;
+    disconnectMinigunAudioSlot(sim.audioSlot);
+    sim.audioSlot = null;
+}
+
+function onRemoteMinigunBurstStart(playerId, payload) {
+    var sim = getRemoteMinigunSim(playerId);
+    sim.active = true;
+    sim.cycleT = 0;
+    if (payload && payload.x != null) {
+        _v0.set(payload.x, payload.y, payload.z);
+    }
+    startMinigunAudioAtWorld(_v0, sim);
+}
+
+function onRemoteMinigunBurstStop(playerId) {
+    stopRemoteMinigunSim(playerId);
+}
+
+function handleRemoteMinigunCombatEvent(event, payload, fromPlayerId) {
+    if (!fromPlayerId || !event) return;
+    if (event === 'minigun-burst-start') {
+        onRemoteMinigunBurstStart(fromPlayerId, payload);
+    } else if (event === 'minigun-burst-stop') {
+        onRemoteMinigunBurstStop(fromPlayerId);
+    } else if (event === 'minigun-shots' && payload && payload.shots) {
+        playNetworkMinigunShots(payload.shots);
+    }
 }
 
 function updateRemoteHelicopter(remoteData, state, dt) {
@@ -2219,14 +2396,48 @@ function updateRemoteHelicopter(remoteData, state, dt) {
         remoteData.rotorAction.timeScale = Math.max(0.05, rs * ROTOR_ANIM_BASE_SPEED * 2.5);
     }
 
-    var firing = state.mg && state.mgt >= MINIGUN_SPOOL_SEC
-        && state.mgt < MINIGUN_SPOOL_SEC + MINIGUN_FIRE_SEC;
+    var playerId = remoteData.playerId;
+    var sim = playerId ? getRemoteMinigunSim(playerId) : null;
+    if (sim) {
+        if (state.mg) {
+            if (!sim.active) {
+                sim.active = true;
+                sim.cycleT = state.mgt != null ? state.mgt : 0;
+                remoteData.root.getWorldPosition(_v0);
+                startMinigunAudioAtWorld(_v0, sim);
+            } else if (state.mgt != null) {
+                var snap = state.mgt;
+                if (Math.abs(snap - sim.cycleT) > 0.45) sim.cycleT = snap;
+            }
+            sim.cycleT += dt;
+            while (sim.cycleT >= MINIGUN_CYCLE_SEC) {
+                sim.cycleT -= MINIGUN_CYCLE_SEC;
+                remoteData.root.getWorldPosition(_v0);
+                startMinigunAudioAtWorld(_v0, sim);
+            }
+        } else {
+            stopRemoteMinigunSim(playerId);
+        }
+    }
+
+    var cycleT = sim && sim.active ? sim.cycleT : (state.mgt != null ? state.mgt : 0);
+    var firing = !!(state.mg && (
+        state.mgf
+        || (cycleT >= MINIGUN_SPOOL_SEC && cycleT < MINIGUN_SPOOL_SEC + MINIGUN_FIRE_SEC)
+    ));
     if (firing) {
         ensureRemoteMinigunAudio(remoteData);
-        if (remoteData.remoteMinigunAudio && remoteData.remoteMinigunAudio.panner) {
+        var audioSlot = remoteData.remoteMinigunAudio
+            && remoteData.remoteMinigunAudio.audioSlot;
+        if (audioSlot && audioSlot.panner) {
             remoteData.root.getWorldPosition(_v0);
             var spatial = deps && deps.getSpatialAudio ? deps.getSpatialAudio() : null;
-            if (spatial) spatial.setPannerPosition(remoteData.remoteMinigunAudio.panner, _v0.x, _v0.y, _v0.z);
+            if (spatial) spatial.setPannerPosition(audioSlot.panner, _v0.x, _v0.y, _v0.z);
+        }
+        if (sim && sim.audioSlot && sim.audioSlot.panner) {
+            remoteData.root.getWorldPosition(_v0);
+            var spatialSim = deps && deps.getSpatialAudio ? deps.getSpatialAudio() : null;
+            if (spatialSim) spatialSim.setPannerPosition(sim.audioSlot.panner, _v0.x, _v0.y, _v0.z);
         }
         for (var gi = 0; gi < 2; gi++) {
             remoteData.shotAcc[gi] += dt * MINIGUN_ROF;
@@ -2237,7 +2448,7 @@ function updateRemoteHelicopter(remoteData, state, dt) {
             }
         }
     } else if (remoteData.remoteMinigunAudio) {
-        disconnectMinigunAudioSlot(remoteData.remoteMinigunAudio);
+        disconnectMinigunAudioSlot(remoteData.remoteMinigunAudio.audioSlot);
         remoteData.remoteMinigunAudio = null;
         remoteData.shotAcc[0] = 0;
         remoteData.shotAcc[1] = 0;
@@ -2276,6 +2487,7 @@ export const PlayerHelicopter = {
     registerRemoteHelicopter,
     updateRemoteHelicopter,
     hideRemoteHelicopter,
+    handleRemoteMinigunCombatEvent,
     getNetworkState,
     updateDoorVisibility,
     isHelicopterMode,

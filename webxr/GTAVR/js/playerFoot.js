@@ -667,7 +667,7 @@ function applyRemotePlayerState(playerIndex, playerId, state) {
     av.mode = foot ? MODE_FOOT : (heli ? MODE_HELICOPTER : MODE_VEHICLE);
     av.playerId = playerId;
 
-    if (deps.hideRemoteHelicopter && !heli) deps.hideRemoteHelicopter(playerIndex);
+    if (deps.hideRemoteHelicopter && !heli) deps.hideRemoteHelicopter(playerId || playerIndex);
     if (deps.syncRemoteArcheryFromState && !foot) {
         deps.syncRemoteArcheryFromState(playerIndex, { eq: 0 });
     }
@@ -724,6 +724,9 @@ function resetFootAt(position, yaw, velocity) {
 function ensureFootLocomotionReady() {
     ensureLocomotion();
     ensureBots();
+    if (deps && deps.setupRemoteAvatarArchery) {
+        deps.setupRemoteAvatarArchery(remoteAvatars);
+    }
 }
 
 function init(options) {

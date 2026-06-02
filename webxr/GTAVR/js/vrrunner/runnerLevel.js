@@ -491,7 +491,7 @@ export function setRunnerGlassDecalRemoval(fn) {
 }
 
 const GLASS_BREAK_AUDIO_URL = new URL(
-  "../audio/dragon-studio-glass-breaking-504033.mp3",
+  "../../audio/dragon-studio-glass-breaking-504033.mp3",
   import.meta.url,
 ).href;
 

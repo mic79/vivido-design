@@ -635,6 +635,7 @@
         sendCombatEvent,
         raycastRemotePlayerVehicles,
         applyMinigunHitToNetworkVehicle,
+        relayCombatEventFromHost,
         setupRemoteAvatarArchery,
         syncRemoteArcheryFromState,
         updateRemoteArcheryFromNetworkStates,
@@ -642,7 +643,11 @@
         releaseOccupancy,
         clearOccupancyForPlayer,
     } from './js/multiplayerSync.js';
-    import { getArcheryNetworkState, setArrowCombatSegmentHitCallback } from './js/vrrunner/bots.js';
+    import {
+        getArcheryNetworkState,
+        setArrowCombatSegmentHitCallback,
+        tickArcheryDrawNetworkNotify,
+    } from './js/vrrunner/bots.js';
 
     /* ESM namespace is sealed — use a plain object so legacy code can use THREE.GLTFLoader etc. */
     const THREE = Object.assign({}, THREE_NS);
@@ -705,6 +710,7 @@
     window.__gtavrPlayerFoot = PlayerFoot;
     window.__gtavrPlayerHelicopter = PlayerHelicopter;
     window.__gtavrGetArcheryNetworkState = getArcheryNetworkState;
+    window.__gtavrTickArcheryDrawNetworkNotify = tickArcheryDrawNetworkNotify;
     window.__gtavrSetArrowCombatSegmentHitCallback = setArrowCombatSegmentHitCallback;
     window.__gtavrMultiplayerSync = {
         initMultiplayerSync,
@@ -712,6 +718,7 @@
         sendCombatEvent,
         raycastRemotePlayerVehicles,
         applyMinigunHitToNetworkVehicle,
+        relayCombatEventFromHost,
         setupRemoteAvatarArchery,
         syncRemoteArcheryFromState,
         updateRemoteArcheryFromNetworkStates,
@@ -855,6 +862,7 @@
             var sendCombatEvent = MP.sendCombatEvent;
             var raycastRemotePlayerVehicles = MP.raycastRemotePlayerVehicles;
             var applyMinigunHitToNetworkVehicle = MP.applyMinigunHitToNetworkVehicle;
+            var relayCombatEventFromHost = MP.relayCombatEventFromHost;
             var setupRemoteAvatarArchery = MP.setupRemoteAvatarArchery;
             var syncRemoteArcheryFromState = MP.syncRemoteArcheryFromState;
             var updateRemoteArcheryFromNetworkStates = MP.updateRemoteArcheryFromNetworkStates;
@@ -862,6 +870,7 @@
             var releaseOccupancy = MP.releaseOccupancy;
             var clearOccupancyForPlayer = MP.clearOccupancyForPlayer;
             var getArcheryNetworkState = window.__gtavrGetArcheryNetworkState;
+            var tickArcheryDrawNetworkNotify = window.__gtavrTickArcheryDrawNetworkNotify;
 
             let isMultiplayer = false;
             let isHost = false;
@@ -2133,6 +2142,11 @@
                     syncList.push(function() {
                         if (isMultiplayer && activePlayers.size > 1) {
                             updateRemoteArcheryFromNetworkStates(remotePlayerStates, myPlayerId);
+                        }
+                    });
+                    syncList.push(function() {
+                        if (isMultiplayer && activePlayers.size > 1) {
+                            tickArcheryDrawNetworkNotify();
                         }
                     });
                     this.playerStateSyncAdded = true;
@@ -4863,36 +4877,53 @@
                     });
                     
                     peer.on("connection", function(conn) {
-                        const playerId = `player_${activePlayers.size}`;
-                        connections.set(playerId, conn);
-                        connectionToPlayer.set(conn, playerId);
-                        
+                        if (activePlayers.size >= 4) {
+                            console.warn('Lobby full (4/4) — rejecting connection');
+                            conn.close();
+                            return;
+                        }
+
+                        var assignedPlayerId = null;
+
                         conn.on("open", function() {
-                            activePlayers.set(playerId, { isConnected: true, isHost: false });
-                            resetAuthoritativeVehicleDamage(playerId);
+                            if (activePlayers.size >= 4) {
+                                conn.close();
+                                return;
+                            }
+                            assignedPlayerId = allocateHostClientPlayerId();
+                            if (!assignedPlayerId) {
+                                console.warn('No free player slot — closing connection');
+                                conn.close();
+                                return;
+                            }
+                            connections.set(assignedPlayerId, conn);
+                            connectionToPlayer.set(conn, assignedPlayerId);
+
+                            activePlayers.set(assignedPlayerId, { isConnected: true, isHost: false });
+                            resetAuthoritativeVehicleDamage(assignedPlayerId);
                             ensureMultiplayerCombatReady();
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
                             updateMenuDisplay();
                             updateVRMenuDisplay();
-                            
-                            // Send welcome message to new player
+
                             conn.send({
                                 type: 'player-assignment',
-                                playerId: playerId,
+                                playerId: assignedPlayerId,
                                 isHost: false
                             });
-                            
-                            // Broadcast updated player list to all clients
+
                             broadcastPlayerList();
-                            
-                            console.log('Player connected:', playerId);
+
+                            console.log('Player connected:', assignedPlayerId, '(' + activePlayers.size + '/4)');
                         });
-                        
+
                         conn.on("data", function(data) {
-                            handleMultiplayerMessage(data, playerId);
+                            handleMultiplayerMessage(data, assignedPlayerId || connectionToPlayer.get(conn));
                         });
-                        
+
                         conn.on("close", function() {
+                            var playerId = assignedPlayerId || connectionToPlayer.get(conn);
+                            if (!playerId) return;
                             activePlayers.delete(playerId);
                             connections.delete(playerId);
                             connectionToPlayer.delete(conn);
@@ -4915,7 +4946,8 @@
                                     console.log(`Hidden remote car for ${playerId}`);
                                 }
                             }
-                            hideRemotePlayerHelicopter(playerIndex);
+                            hideRemotePlayerHelicopter(playerId);
+                            remotePlayerStates.delete(playerId);
                             clearOccupancyForPlayer(playerId);
                             
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
@@ -5087,10 +5119,7 @@
                                 data.event === 'occupancy-release') {
                                 handleCombatEvent(data, data.playerId || fromPlayerId);
                             } else if (data.playerId !== myPlayerId) {
-                                handleCombatEvent(data, data.playerId || fromPlayerId);
-                                if (data.event !== 'occupancy-granted' && data.event !== 'occupancy-kick') {
-                                    sendToAllPlayers(data);
-                                }
+                                relayCombatEventFromHost(data, data.playerId || fromPlayerId);
                             }
                         } else {
                             handleCombatEvent(data, data.playerId || fromPlayerId);
@@ -5112,6 +5141,22 @@
                         conn.send(data);
                     }
                 });
+            }
+
+            /** Relay to every connected peer except one player id (4-player lobby star topology). */
+            function sendToAllOtherPlayers(data, exceptPlayerId) {
+                connections.forEach(function(conn, connectionKey) {
+                    if (exceptPlayerId && connectionKey === exceptPlayerId) return;
+                    if (conn && conn.open) conn.send(data);
+                });
+            }
+
+            function allocateHostClientPlayerId() {
+                for (var i = 1; i < 4; i++) {
+                    var id = 'player_' + i;
+                    if (!activePlayers.has(id) && !connections.has(id)) return id;
+                }
+                return null;
             }
 
             function sendToHost(data) {
@@ -5270,6 +5315,8 @@
             let remotePlayerHelicopters = [];
             var playerStateSendAcc = 0;
             var PLAYER_STATE_SEND_INTERVAL = 1 / 15;
+            var PLAYER_STATE_SEND_INTERVAL_MINIGUN = 1 / 30;
+            var PLAYER_STATE_SEND_INTERVAL_ARCHERY = 1 / 30;
             var authoritativeVehicleDamage = {};
 
             function createRemotePlayerCars() {
@@ -5408,15 +5455,25 @@
                 );
             }
 
-            function hideRemotePlayerHelicopter(playerIndex) {
-                var slot = remotePlayerHelicopters[playerIndex];
-                if (!slot) return;
-                slot.playerId = null;
-                if (window.__gtavrPlayerHelicopter && window.__gtavrPlayerHelicopter.hideRemoteHelicopter) {
-                    window.__gtavrPlayerHelicopter.hideRemoteHelicopter(slot);
-                } else if (slot.root) {
-                    slot.root.visible = false;
+            function hideRemotePlayerHelicopter(playerIndexOrPlayerId) {
+                var hideSlot = function(slot) {
+                    if (!slot) return;
+                    slot.playerId = null;
+                    if (window.__gtavrPlayerHelicopter && window.__gtavrPlayerHelicopter.hideRemoteHelicopter) {
+                        window.__gtavrPlayerHelicopter.hideRemoteHelicopter(slot);
+                    } else if (slot.root) {
+                        slot.root.visible = false;
+                    }
+                };
+                if (typeof playerIndexOrPlayerId === 'string' && playerIndexOrPlayerId.indexOf('player_') === 0) {
+                    for (var hi = 0; hi < remotePlayerHelicopters.length; hi++) {
+                        var s = remotePlayerHelicopters[hi];
+                        if (s && s.playerId === playerIndexOrPlayerId) hideSlot(s);
+                    }
+                    return;
                 }
+                var idx = playerIndexOrPlayerId;
+                hideSlot(remotePlayerHelicopters[idx]);
             }
 
             function syncRemotePlayerHelicopters(dt) {
@@ -5486,17 +5543,13 @@
                 
                 remotePlayerStates.set(data.playerId, data.state);
                 
-                // CRITICAL: Host forwards player states to other clients (like reference)
-                if (isHost && isMultiplayer && activePlayers.size > 1) {
-                    connections.forEach((conn, connectionKey) => {
-                        if (conn && conn.open) {
-                            conn.send({
-                                type: 'player-state',
-                                state: data.state,
-                                playerId: data.playerId
-                            });
-                        }
-                    });
+                // Host relays pose to the other clients (up to 3 peers in a 4-player lobby).
+                if (isHost && isMultiplayer && activePlayers.size > 1 && data.playerId) {
+                    sendToAllOtherPlayers({
+                        type: 'player-state',
+                        state: data.state,
+                        playerId: data.playerId
+                    }, data.playerId);
                 }
                 
                 // Update remote player pose (foot avatar or vehicle)
@@ -5531,13 +5584,20 @@
 
             function sendPlayerState(dt) {
                 if (!isMultiplayer || activePlayers.size <= 1) return;
-                playerStateSendAcc += dt || 0;
-                if (playerStateSendAcc < PLAYER_STATE_SEND_INTERVAL) return;
-                playerStateSendAcc = 0;
-
                 var playerState = window.__gtavrPlayerFoot
                     ? window.__gtavrPlayerFoot.getNetworkState()
                     : sendPlayerStateLegacy();
+                var sendInterval = PLAYER_STATE_SEND_INTERVAL;
+                if (playerState && playerState.mode === 'helicopter' && playerState.mg) {
+                    sendInterval = PLAYER_STATE_SEND_INTERVAL_MINIGUN;
+                } else if (playerState && playerState.mode === 'foot' &&
+                    playerState.archery && playerState.archery.eq) {
+                    sendInterval = PLAYER_STATE_SEND_INTERVAL_ARCHERY;
+                }
+                playerStateSendAcc += dt || 0;
+                if (playerStateSendAcc < sendInterval) return;
+                playerStateSendAcc = 0;
+
                 if (!playerState) return;
 
                 const data = {
@@ -19110,11 +19170,18 @@
 
                 initMultiplayerSync({
                     isMultiplayerActive: function() {
-                        return isMultiplayer && activePlayers.size > 1;
+                        if (!isMultiplayer) return false;
+                        if (activePlayers.size >= 2) return true;
+                        var peerCount = 0;
+                        remotePlayerStates.forEach(function(state, pid) {
+                            if (pid && pid !== myPlayerId && state) peerCount++;
+                        });
+                        return peerCount >= 1;
                     },
                     isHost: function() { return isHost; },
                     getMyPlayerId: function() { return myPlayerId; },
                     sendToAllPlayers: sendToAllPlayers,
+                    sendToAllOtherPlayers: sendToAllOtherPlayers,
                     sendToHost: sendToHost,
                     sendToPlayer: sendToPlayer,
                     ensureArcheryReady: ensureMultiplayerCombatReady,
@@ -19136,7 +19203,7 @@
                     syncLocalVehicleDamage: applyLocalVehicleDamageFromNetwork,
                     spawnExplosionAt: spawnCarExplosionFx
                 });
-                console.log('🌐 Multiplayer combat sync initialized (arrows, bow visuals, vehicle damage)');
+                console.log('🌐 Multiplayer combat sync initialized (arrows, bow, vehicle damage, heli minigun)');
 
                 if (window.__gtavrPlayerHelicopter) {
                     var gtavrFootRef = window.__gtavrPlayerFoot;
@@ -19194,9 +19261,14 @@
                         requestOccupancyClaim: requestOccupancy,
                         releaseOccupancyClaim: releaseOccupancy,
                         repositionHelicopterToOccupiedSlot: repositionHelicopterToOccupiedSlot,
-                        repositionLocalHelicopterForSlot: repositionLocalHelicopterForSlot
+                        repositionLocalHelicopterForSlot: repositionLocalHelicopterForSlot,
+                        sendCombatEvent: function(event, payload) {
+                            if (typeof sendCombatEvent === 'function') {
+                                sendCombatEvent(event, payload);
+                            }
+                        }
                     });
-                    console.log('🚁 PlayerHelicopter initialized (door enter/exit + rotor flight)');
+                    console.log('🚁 PlayerHelicopter initialized (door enter/exit + rotor flight + MP minigun sync)');
                 }
 
                 initAudioSystem();

@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import {
     setLocalArrowFiredCallback,
+    setLocalArcheryStateCallback,
     setMultiplayerArrowHitCallback,
     spawnRemoteNetworkArrow,
     buildRemoteBowVisual,
@@ -30,12 +31,24 @@ function occupancyKey(kind, slot) {
     return kind + ':' + slot;
 }
 
+let lastArcheryCombatKey_ = '';
+
 export function initMultiplayerSync(options) {
     deps = options;
     if (deps.ensureArcheryReady) deps.ensureArcheryReady();
     setLocalArrowFiredCallback(function(payload) {
         if (!deps || !deps.isMultiplayerActive()) return;
         sendCombatEvent('arrow-fired', payload);
+    });
+    setLocalArcheryStateCallback(function(archeryState) {
+        if (!deps || !deps.isMultiplayerActive() || !archeryState) return;
+        const key = (archeryState.eq ? '1' : '0') + '|' +
+            (archeryState.hand != null ? archeryState.hand : '') + '|' +
+            (archeryState.type || '') + '|' +
+            (archeryState.draw != null ? archeryState.draw.toFixed(3) : '0');
+        if (key === lastArcheryCombatKey_) return;
+        lastArcheryCombatKey_ = key;
+        sendCombatEvent('archery-state', archeryState);
     });
     setMultiplayerArrowHitCallback(function(arrow, prev, dirUnit, segLen) {
         if (!deps || !deps.isMultiplayerActive()) return null;
@@ -48,21 +61,25 @@ export function setupRemoteAvatarArchery(remoteAvatars) {
     for (let i = 0; i < remoteAvatars.length; i++) {
         const av = remoteAvatars[i];
         if (!av.mesh) continue;
-        const leftHand = new THREE.Group();
-        leftHand.name = 'RemoteLeftHand';
-        leftHand.position.set(-0.42, 1.05, -0.12);
-        const rightHand = new THREE.Group();
-        rightHand.name = 'RemoteRightHand';
-        rightHand.position.set(0.42, 1.05, -0.12);
-        av.mesh.add(leftHand);
-        av.mesh.add(rightHand);
-        const bow = buildRemoteBowVisual();
-        if (bow) {
-            av.mesh.add(bow);
+        if (!av.leftHand) {
+            const leftHand = new THREE.Group();
+            leftHand.name = 'RemoteLeftHand';
+            leftHand.position.set(-0.42, 1.05, -0.12);
+            av.mesh.add(leftHand);
+            av.leftHand = leftHand;
         }
-        av.leftHand = leftHand;
-        av.rightHand = rightHand;
-        av.bowGroup = bow;
+        if (!av.rightHand) {
+            const rightHand = new THREE.Group();
+            rightHand.name = 'RemoteRightHand';
+            rightHand.position.set(0.42, 1.05, -0.12);
+            av.mesh.add(rightHand);
+            av.rightHand = rightHand;
+        }
+        if (!av.bowGroup) {
+            const bow = buildRemoteBowVisual();
+            if (bow) av.mesh.add(bow);
+            av.bowGroup = bow;
+        }
         remoteBows[i] = av;
     }
 }
@@ -99,9 +116,20 @@ export function sendCombatEvent(event, payload) {
     };
     if (deps.isHost()) {
         handleCombatEvent(data, deps.getMyPlayerId());
-        deps.sendToAllPlayers(data);
+        if (deps.sendToAllPlayers) deps.sendToAllPlayers(data);
     } else {
         deps.sendToHost(data);
+    }
+}
+
+export function relayCombatEventFromHost(data, fromPlayerId) {
+    if (!deps || !deps.isHost() || !data) return;
+    handleCombatEvent(data, fromPlayerId || data.playerId);
+    if (data.event === 'occupancy-granted' || data.event === 'occupancy-kick') return;
+    if (deps.sendToAllOtherPlayers) {
+        deps.sendToAllOtherPlayers(data, fromPlayerId || data.playerId);
+    } else if (deps.sendToAllPlayers) {
+        deps.sendToAllPlayers(data);
     }
 }
 
@@ -176,6 +204,24 @@ export function handleCombatEvent(data, fromPlayerId) {
             if (deps.forceExitOccupiedAsset) deps.forceExitOccupiedAsset(kick);
             break;
         }
+        case 'minigun-burst-start':
+        case 'minigun-burst-stop':
+        case 'minigun-shots':
+            if (pid !== myId) {
+                const PH = typeof window !== 'undefined' && window.__gtavrPlayerHelicopter;
+                if (PH && PH.handleRemoteMinigunCombatEvent) {
+                    PH.handleRemoteMinigunCombatEvent(data.event, data.payload, pid);
+                }
+            }
+            break;
+        case 'archery-state':
+            if (pid !== myId) {
+                const idx = parseInt(String(pid).split('_')[1], 10);
+                if (isFinite(idx) && idx >= 0) {
+                    syncRemoteArcheryFromState(idx, data.payload || { eq: 0 });
+                }
+            }
+            break;
         default:
             break;
     }
@@ -377,6 +423,10 @@ export function clearOccupancyForPlayer(playerId) {
     Object.keys(hostOccupants).forEach(function(key) {
         if (hostOccupants[key] === playerId) delete hostOccupants[key];
     });
+    const PH = typeof window !== 'undefined' && window.__gtavrPlayerHelicopter;
+    if (PH && PH.handleRemoteMinigunCombatEvent) {
+        PH.handleRemoteMinigunCombatEvent('minigun-burst-stop', {}, playerId);
+    }
 }
 
 export function applyMinigunHitToNetworkVehicle(hit) {
