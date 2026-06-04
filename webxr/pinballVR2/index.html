@@ -929,7 +929,7 @@
             defaultComponent, UndoStack,
             ensureHabitRailPath, syncHabitRailPathFields, buildHabitRailGeometry,
             defaultHabitRailPath, insertHabitRailPoint, removeHabitRailPoint, sampleHabitRailCenterPath,
-            buildHabitRailTubeTrimesh, buildHabitRailTubeSphereColliders,
+            buildHabitRailTubeTrimesh,
             habitRailMinWireRadiusTableUnits, habitRailWireAngles, habitRailWireCount
         } from './js/tableEditorCore.js';
         import { createPinballVrMenu } from './js/pinballVrMenu.js';
@@ -948,19 +948,17 @@
             const isMobile = isMobilePhone();
             const isQuest = isQuestBrowser();
             const perfTier = isMobile ? 'mobile' : (isQuest ? 'quest' : 'desktop');
-            const HR_COLLISION_OPTS = perfTier === 'desktop'
-                ? {}
-                : perfTier === 'quest'
-                    ? { samplesPerSeg: 6, azSteps: 12, sphereStride: 1 }
-                    : { samplesPerSeg: 4, azSteps: 8, sphereStride: 2 };
-            const HR_VIS_BUILD_OPTS = perfTier === 'desktop'
-                ? HR_COLLISION_OPTS
-                : { samplesPerSeg: 4 };
-            const HR_VIS_OPTS = perfTier === 'desktop'
-                ? { cylSegs: 8, torusTube: 8, torusRadial: 24, centerLine: true, rings: true }
-                : { cylSegs: 5, torusTube: 6, torusRadial: 10, centerLine: false, rings: false };
-            const PHYS_DT = perfTier === 'desktop' ? 1 / 240 : 1 / 120;
-            const PHYS_MAX_SUBSTEPS = perfTier === 'desktop' ? 12 : 10;
+            // Habitrail mesh density only — never downgrade core physics or collision type.
+            const HR_COLLISION_OPTS = perfTier === 'mobile'
+                ? { samplesPerSeg: 8, azSteps: 16 }
+                : (perfTier === 'quest' ? { samplesPerSeg: 10, azSteps: 20 } : {});
+            const HR_VIS_OPTS = {
+                cylSegs: 8, torusTube: 8, torusRadial: 24,
+                centerLine: perfTier === 'desktop',
+                rings: true,
+            };
+            const PHYS_DT = 1 / 240;
+            const PHYS_MAX_SUBSTEPS = 12;
             if (isMobile) {
                 document.body.classList.add('mobile-mode');
                 document.getElementById('tableSelector')?.classList.add('mobile-presets-only');
@@ -1020,7 +1018,7 @@
             const world = new CANNON.World();
             world.gravity.set(0, -9.82, 0);
             world.broadphase = new CANNON.SAPBroadphase(world);
-            world.solver.iterations = perfTier === 'desktop' ? 10 : 6;
+            world.solver.iterations = 10;
 
             const matPF = new CANNON.Material('pf');
             const matBall = new CANNON.Material('ball');
@@ -1105,8 +1103,8 @@
             bb.addShape(new CANNON.Sphere(BR));
             bb.linearDamping = 0.05;
             bb.angularDamping = 0.3;
-            bb.ccdSpeedThreshold = 0.5;
-            bb.ccdIterations = 20;
+            bb.ccdSpeedThreshold = 0.05;
+            bb.ccdIterations = 30;
             world.addBody(bb);
 
             const _w2lOff = new CANNON.Vec3();
@@ -1346,18 +1344,10 @@
             function makeHabitRailBodies(data) {
                 syncHabitRailPathFields(data);
                 const built = buildHabitRailGeometry(data, S, FT, BR, HR_COLLISION_OPTS);
+                const { pos, idx } = buildHabitRailTubeTrimesh(built, S, HR_COLLISION_OPTS);
+                if (!idx.length) return [];
                 const b = new CANNON.Body({ mass: 0, material: matHabitRail });
-                if (perfTier === 'desktop') {
-                    const { pos, idx } = buildHabitRailTubeTrimesh(built, S, HR_COLLISION_OPTS);
-                    if (!idx.length) return [];
-                    b.addShape(new CANNON.Trimesh(pos, idx));
-                } else {
-                    const spheres = buildHabitRailTubeSphereColliders(built, S, HR_COLLISION_OPTS);
-                    if (!spheres.length) return [];
-                    for (const sp of spheres) {
-                        b.addShape(new CANNON.Sphere(sp.r), new CANNON.Vec3(sp.x, sp.y, sp.z));
-                    }
-                }
+                b.addShape(new CANNON.Trimesh(pos, idx));
                 b.position.copy(pfBody.position);
                 b.quaternion.copy(pfBody.quaternion);
                 return [b];
@@ -1394,11 +1384,9 @@
 
             function populateHabitRailGroup(g, data, compId) {
                 syncHabitRailPathFields(data);
-                const built = buildHabitRailGeometry(data, S, FT, BR, HR_VIS_BUILD_OPTS);
-                const wireMat = perfTier === 'desktop'
-                    ? new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.92, roughness: 0.18 })
-                    : new THREE.MeshLambertMaterial({ color: 0xcccccc });
-                const ringMat = wireMat.clone ? wireMat.clone() : wireMat;
+                const built = buildHabitRailGeometry(data, S, FT, BR, HR_COLLISION_OPTS);
+                const wireMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.92, roughness: 0.18 });
+                const ringMat = wireMat.clone();
                 let firstMesh = null;
                 if (HR_VIS_OPTS.centerLine && built.centerLine.length >= 6) {
                     const lineGeo = new THREE.BufferGeometry();
@@ -1411,26 +1399,12 @@
                     g.add(line);
                 }
                 const cylGeo = new THREE.CylinderGeometry(1, 1, 1, HR_VIS_OPTS.cylSegs, 1, false);
-                if (perfTier === 'desktop') {
-                    for (const w of built.wires) {
-                        const wire = new THREE.Mesh(cylGeo, wireMat);
-                        alignHrCylinder(wire, w.ax, w.ay, w.az, w.bx, w.by, w.bz, w.radius);
-                        wire.name = 'habitrailWire';
-                        g.add(wire);
-                        if (!firstMesh) firstMesh = wire;
-                    }
-                } else if (built.wires.length) {
-                    const wires = new THREE.InstancedMesh(cylGeo, wireMat, built.wires.length);
-                    wires.name = 'habitrailWires';
-                    built.wires.forEach((w, i) => {
-                        if (habitRailWireTransform(w.ax, w.ay, w.az, w.bx, w.by, w.bz, w.radius, _hrWirePos, _hrWireQuat, _hrWireScale)) {
-                            _hrWireMat.compose(_hrWirePos, _hrWireQuat, _hrWireScale);
-                            wires.setMatrixAt(i, _hrWireMat);
-                        }
-                    });
-                    wires.instanceMatrix.needsUpdate = true;
-                    g.add(wires);
-                    firstMesh = wires;
+                for (const w of built.wires) {
+                    const wire = new THREE.Mesh(cylGeo, wireMat);
+                    alignHrCylinder(wire, w.ax, w.ay, w.az, w.bx, w.by, w.bz, w.radius);
+                    wire.name = 'habitrailWire';
+                    g.add(wire);
+                    if (!firstMesh) firstMesh = wire;
                 }
                 if (HR_VIS_OPTS.rings) {
                     for (const ring of built.rings) {
@@ -2522,15 +2496,15 @@
             }
 
             const ren = new THREE.WebGLRenderer({
-                antialias: perfTier === 'desktop',
+                antialias: true,
                 alpha: true,
                 powerPreference: 'high-performance',
             });
-            const pixelCap = perfTier === 'mobile' ? 1.0 : (perfTier === 'quest' ? 0.85 : 2);
+            const pixelCap = perfTier === 'mobile' ? 1.5 : (perfTier === 'quest' ? 1.0 : 2);
             ren.setPixelRatio(Math.min(devicePixelRatio, pixelCap));
             ren.setSize(innerWidth, innerHeight);
             ren.setClearColor(0x000000, 0);
-            ren.shadowMap.enabled = perfTier === 'desktop';
+            ren.shadowMap.enabled = perfTier !== 'mobile';
             ren.shadowMap.type = THREE.PCFShadowMap;
             ren.toneMapping = THREE.ACESFilmicToneMapping;
             ren.toneMappingExposure = 1.4;
@@ -2544,7 +2518,7 @@
 
             const dirL = new THREE.DirectionalLight(0xffffff, 1.5);
             dirL.position.set(0.5, 3, 1);
-            dirL.castShadow = perfTier === 'desktop';
+            dirL.castShadow = perfTier !== 'mobile';
             dirL.shadow.mapSize.set(perfTier === 'desktop' ? 1024 : 512, perfTier === 'desktop' ? 1024 : 512);
             scene.add(dirL);
 
@@ -2552,24 +2526,22 @@
             const hemiL = new THREE.HemisphereLight(0x4466aa, 0x111122, 0.5);
             scene.add(hemiL);
 
-            // Colored point lights for neon glow (desktop only — costly on mobile GPUs)
-            if (perfTier === 'desktop') {
-                [
-                    [0x00ccff, -0.15, TH + 0.15, -0.2, 4],
-                    [0xff0066, 0.15, TH + 0.15, -0.1, 4],
-                    [0xff8800, 0, TH + 0.1, 0.3, 3],
-                ].forEach(([c, x, y, z, i]) => {
-                    const pl = new THREE.PointLight(c, i, 3, 1);
-                    pl.position.set(x, y, z);
-                    scene.add(pl);
-                });
-            }
+            // Colored point lights for neon glow
+            [
+                [0x00ccff, -0.15, TH + 0.15, -0.2, 4],
+                [0xff0066, 0.15, TH + 0.15, -0.1, 4],
+                [0xff8800, 0, TH + 0.1, 0.3, 3],
+            ].forEach(([c, x, y, z, i]) => {
+                const pl = new THREE.PointLight(c, i, 3, 1);
+                pl.position.set(x, y, z);
+                scene.add(pl);
+            });
 
             // Spotlight from above
-            const spot = new THREE.SpotLight(0xffffff, perfTier === 'desktop' ? 3 : 2, 4, Math.PI / 4, 0.5, 1);
+            const spot = new THREE.SpotLight(0xffffff, 3, 4, Math.PI / 4, 0.5, 1);
             spot.position.set(0, TH + 1.5, 0);
             spot.target.position.set(0, TH, 0);
-            spot.castShadow = perfTier === 'desktop';
+            spot.castShadow = perfTier !== 'mobile';
             scene.add(spot);
             scene.add(spot.target);
 
