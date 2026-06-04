@@ -1165,27 +1165,32 @@
                         const data = TableManager.loadFromPersonalSlot(slot);
                         if (data?.layoutParam) {
                             TableManager.setActivePersonalSlot(slot);
-                            return { layoutParam: data.layoutParam, name: data.name, source: 'personal', slot };
+                            return { layoutParam: data.layoutParam, name: data.name, source: 'personal', slot, presetId: null };
                         }
                     }
                     const table = params.get('table');
                     if (table) {
                         TableManager.setActivePersonalSlot(null);
-                        return { layoutParam: table, name: 'Custom URL', source: 'custom', slot: null };
+                        const preset = TableManager.getPresetById(table);
+                        if (preset) {
+                            return { layoutParam: preset.layoutParam, name: preset.name, source: 'preset', slot: null, presetId: preset.id };
+                        }
+                        return { layoutParam: table, name: 'Custom URL', source: 'custom', slot: null, presetId: null };
                     }
                     const activeSlot = TableManager.getActivePersonalSlot();
                     if (activeSlot) {
                         const data = TableManager.loadFromPersonalSlot(activeSlot);
                         if (data?.layoutParam) {
-                            return { layoutParam: data.layoutParam, name: data.name, source: 'personal', slot: activeSlot };
+                            return { layoutParam: data.layoutParam, name: data.name, source: 'personal', slot: activeSlot, presetId: null };
                         }
                     }
                 } catch (_) { }
                 TableManager.setActivePersonalSlot(null);
-                const def = TableManager.getPresetById('starter');
-                return { layoutParam: def.layoutParam, name: def.name, source: 'preset', slot: null };
+                const def = TableManager.getPresetById('habitrails') || TableManager.getPresetById('starter');
+                return { layoutParam: def.layoutParam, name: def.name, source: 'preset', slot: null, presetId: def.id };
             })();
             let tableLayoutParam = tableInit.layoutParam;
+            let currentPresetId = tableInit.presetId || null;
 
             let tableComponents = ensureTableDefaults(decodeLayoutParam(tableLayoutParam));
             const liveComps = new Map();
@@ -2290,21 +2295,31 @@
                 tableLayoutParam = layoutToParam(tableComponents);
             }
 
-            function updateTableUrl(personalSlot, layoutParam) {
+            /** Max chars for ?table= layout payload (mobile browsers choke on long URLs). */
+            const URL_TABLE_PARAM_MAX = 1200;
+            const URL_TOTAL_MAX = 2000;
+
+            function updateTableUrl({ personalSlot, presetId, layoutParam } = {}) {
                 try {
                     const url = new URL(location.href);
+                    url.searchParams.delete('table');
+                    url.searchParams.delete('slot');
                     if (personalSlot != null) {
                         url.searchParams.set('slot', String(personalSlot));
-                        url.searchParams.delete('table');
-                    } else if (layoutParam) {
+                    } else if (presetId) {
+                        url.searchParams.set('table', presetId);
+                    } else if (layoutParam && layoutParam.length <= URL_TABLE_PARAM_MAX) {
                         url.searchParams.set('table', layoutParam);
-                        url.searchParams.delete('slot');
                     }
+                    const next = url.toString();
+                    if (next.length > URL_TOTAL_MAX) return;
                     history.replaceState(null, '', url);
-                } catch (_) { }
+                } catch (e) {
+                    console.warn('Could not update table URL:', e);
+                }
             }
 
-            function applyTableLayoutParam(param, name, source, skipUndo, personalSlot) {
+            function applyTableLayoutParam(param, name, source, skipUndo, personalSlot, presetId) {
                 if (!skipUndo) pushUndo();
                 tableLayoutParam = param;
                 tableComponents = ensureTableDefaults(decodeLayoutParam(param));
@@ -2312,16 +2327,18 @@
                 rebuildTableComponents();
                 TableManager.currentTableName = name || 'Custom';
                 TableManager.currentTableSource = source || 'custom';
+                currentPresetId = source === 'preset' ? (presetId || null) : null;
                 if (source === 'personal' && personalSlot != null) {
                     TableManager.setActivePersonalSlot(personalSlot);
                 } else if (source === 'preset' || source === 'custom' || source === 'import' || source === 'api') {
                     TableManager.setActivePersonalSlot(null);
                 }
                 updateTableCurrentLabel();
-                updateTableUrl(
-                    source === 'personal' ? personalSlot : null,
-                    source === 'personal' ? null : param
-                );
+                updateTableUrl({
+                    personalSlot: source === 'personal' ? personalSlot : null,
+                    presetId: source === 'preset' ? currentPresetId : null,
+                    layoutParam: (source === 'custom' || source === 'import' || source === 'api') ? param : null,
+                });
             }
 
             tableComponents.forEach(c => {
@@ -2333,7 +2350,16 @@
             TableManager.currentTableSource = tableInit.source;
             TableManager.currentPersonalSlot = tableInit.slot;
             if (tableInit.slot != null) {
-                updateTableUrl(tableInit.slot, null);
+                updateTableUrl({ personalSlot: tableInit.slot });
+            } else if (tableInit.presetId) {
+                updateTableUrl({ presetId: tableInit.presetId });
+            } else {
+                try {
+                    const tableParam = new URLSearchParams(location.search).get('table');
+                    if (tableParam && tableParam.length > URL_TABLE_PARAM_MAX) {
+                        updateTableUrl({});
+                    }
+                } catch (_) { }
             }
 
             world.addEventListener('preStep', () => {
@@ -4177,7 +4203,7 @@
 
             function loadPresetById(id) {
                 const p = TableManager.getPresetById(id);
-                if (p) applyTableLayoutParam(p.layoutParam, p.name, 'preset', true);
+                if (p) applyTableLayoutParam(p.layoutParam, p.name, 'preset', true, null, p.id);
             }
 
             function loadPersonalSlot(slot) {
@@ -4198,7 +4224,7 @@
                 TableManager.currentTableSource = 'personal';
                 TableManager.setActivePersonalSlot(slot);
                 tableLayoutParam = param;
-                updateTableUrl(slot, null);
+                updateTableUrl({ personalSlot: slot });
                 renderTableLists();
                 updateTableCurrentLabel();
                 vrMenu?.updateVRTableSelectorDisplay?.();
@@ -4217,7 +4243,7 @@
                 TableManager.currentTableSource = 'personal';
                 TableManager.setActivePersonalSlot(slot);
                 tableLayoutParam = param;
-                updateTableUrl(slot, null);
+                updateTableUrl({ personalSlot: slot });
                 renderTableLists();
                 updateTableCurrentLabel();
                 vrMenu?.updateVRTableSelectorDisplay?.();

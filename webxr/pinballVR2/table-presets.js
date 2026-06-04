@@ -7,7 +7,7 @@ const TableManager = {
     ACTIVE_SLOT_KEY: 'pinballvr2_active_slot',
     MAX_PERSONAL_SLOTS: 5,
 
-    currentTableName: 'Starter',
+    currentTableName: 'Habitrails',
     currentTableSource: 'preset',
     currentPersonalSlot: null,
 
