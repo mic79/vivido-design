@@ -1141,7 +1141,7 @@
                 pfBody.quaternion.vmult(_launchLocal, _launchWorld);
                 bb.velocity.copy(_launchWorld);
                 if (isMobile && navigator.vibrate) {
-                    try { navigator.vibrate(30); } catch (_) { /* unsupported */ }
+                    mobileVibrate(30);
                 }
             }
 
@@ -2482,9 +2482,14 @@
                 }
             }
 
+            function mobileVibrate(ms) {
+                if (!isMobile || !navigator.vibrate) return;
+                try { navigator.vibrate(ms); } catch (_) { /* unsupported or blocked */ }
+            }
+
             function pulseFlipperHaptic(rightHand) {
                 if (isMobile && navigator.vibrate) {
-                    try { navigator.vibrate(35); } catch (_) { /* unsupported */ }
+                    mobileVibrate(35);
                     return;
                 }
                 pulseVrHaptic(rightHand ? 'right' : 'left', 0.85, 50);
@@ -5005,6 +5010,7 @@
                     unlockAudio();
                     setKey(true);
                     btn.classList.add('active');
+                    mobileVibrate(35);
                 };
                 const release = e => {
                     e.preventDefault();
