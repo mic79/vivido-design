@@ -929,7 +929,7 @@
             defaultComponent, UndoStack,
             ensureHabitRailPath, syncHabitRailPathFields, buildHabitRailGeometry,
             defaultHabitRailPath, insertHabitRailPoint, removeHabitRailPoint, sampleHabitRailCenterPath,
-            buildHabitRailTubeTrimesh,
+            buildHabitRailTubeTrimesh, buildHabitRailTubeSphereColliders,
             habitRailMinWireRadiusTableUnits, habitRailWireAngles, habitRailWireCount
         } from './js/tableEditorCore.js';
         import { createPinballVrMenu } from './js/pinballVrMenu.js';
@@ -937,12 +937,35 @@
         try { main(); } catch (e) { console.error('Init error:', e); }
 
         function main() {
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
-                || (navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) <= 900);
+            function isQuestBrowser() {
+                return /Quest|OculusBrowser|Oculus/i.test(navigator.userAgent);
+            }
+            function isMobilePhone() {
+                if (isQuestBrowser()) return false;
+                return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+                    && navigator.maxTouchPoints > 0;
+            }
+            const isMobile = isMobilePhone();
+            const isQuest = isQuestBrowser();
+            const perfTier = isMobile ? 'mobile' : (isQuest ? 'quest' : 'desktop');
+            const HR_COLLISION_OPTS = perfTier === 'desktop'
+                ? {}
+                : perfTier === 'quest'
+                    ? { samplesPerSeg: 6, azSteps: 12, sphereStride: 1 }
+                    : { samplesPerSeg: 4, azSteps: 8, sphereStride: 2 };
+            const HR_VIS_BUILD_OPTS = perfTier === 'desktop'
+                ? HR_COLLISION_OPTS
+                : { samplesPerSeg: 4 };
+            const HR_VIS_OPTS = perfTier === 'desktop'
+                ? { cylSegs: 8, torusTube: 8, torusRadial: 24, centerLine: true, rings: true }
+                : { cylSegs: 5, torusTube: 6, torusRadial: 10, centerLine: false, rings: false };
+            const PHYS_DT = perfTier === 'desktop' ? 1 / 240 : 1 / 120;
+            const PHYS_MAX_SUBSTEPS = perfTier === 'desktop' ? 12 : 10;
             if (isMobile) {
                 document.body.classList.add('mobile-mode');
                 document.getElementById('tableSelector')?.classList.add('mobile-presets-only');
             }
+            if (isQuest) document.body.classList.add('quest-browser');
 
             // ============================================================
             // CONSTANTS
@@ -997,7 +1020,7 @@
             const world = new CANNON.World();
             world.gravity.set(0, -9.82, 0);
             world.broadphase = new CANNON.SAPBroadphase(world);
-            world.solver.iterations = 10;
+            world.solver.iterations = perfTier === 'desktop' ? 10 : 6;
 
             const matPF = new CANNON.Material('pf');
             const matBall = new CANNON.Material('ball');
@@ -1074,7 +1097,6 @@
             addW(0.01168 / 2, WH / 2, slWallLen / 2, slWallX, wy, 2.5 * S);
             addW(0.06424 / 2, WH / 2, WT / 2, 4.95 * S, wy, 10.25 * S);
 
-            const FIXED_DT = 1 / 480;
 
             // ============================================================
             // BALL
@@ -1296,6 +1318,10 @@
 
             const _hrWireUp = new THREE.Vector3(0, 1, 0);
             const _hrWireDir = new THREE.Vector3();
+            const _hrWirePos = new THREE.Vector3();
+            const _hrWireScale = new THREE.Vector3();
+            const _hrWireQuat = new THREE.Quaternion();
+            const _hrWireMat = new THREE.Matrix4();
             const _hrRingNorm = new THREE.Vector3();
             const _hrAlignQ = new THREE.Quaternion();
             const _hrYawQ = new THREE.Quaternion();
@@ -1304,7 +1330,7 @@
             function habitRailPointLocal(data, index, built) {
                 const p = ensureHabitRailPath(data)[index];
                 if (!p) return null;
-                const b = built || buildHabitRailGeometry(data, S, FT, BR);
+                const b = built || buildHabitRailGeometry(data, S, FT, BR, HR_COLLISION_OPTS);
                 return {
                     x: compX(p.x),
                     y: b.floorOff + p.y * S,
@@ -1319,11 +1345,19 @@
 
             function makeHabitRailBodies(data) {
                 syncHabitRailPathFields(data);
-                const built = buildHabitRailGeometry(data, S, FT, BR);
-                const { pos, idx } = buildHabitRailTubeTrimesh(built, S);
-                if (!idx.length) return [];
+                const built = buildHabitRailGeometry(data, S, FT, BR, HR_COLLISION_OPTS);
                 const b = new CANNON.Body({ mass: 0, material: matHabitRail });
-                b.addShape(new CANNON.Trimesh(pos, idx));
+                if (perfTier === 'desktop') {
+                    const { pos, idx } = buildHabitRailTubeTrimesh(built, S, HR_COLLISION_OPTS);
+                    if (!idx.length) return [];
+                    b.addShape(new CANNON.Trimesh(pos, idx));
+                } else {
+                    const spheres = buildHabitRailTubeSphereColliders(built, S, HR_COLLISION_OPTS);
+                    if (!spheres.length) return [];
+                    for (const sp of spheres) {
+                        b.addShape(new CANNON.Sphere(sp.r), new CANNON.Vec3(sp.x, sp.y, sp.z));
+                    }
+                }
                 b.position.copy(pfBody.position);
                 b.quaternion.copy(pfBody.quaternion);
                 return [b];
@@ -1343,23 +1377,30 @@
                 else if (lc.body) world.removeBody(lc.body);
             }
 
-            function alignHrCylinder(mesh, ax, ay, az, bx, by, bz, radius) {
+            function habitRailWireTransform(ax, ay, az, bx, by, bz, radius, outPos, outQuat, outScale) {
                 const dx = bx - ax, dy = by - ay, dz = bz - az;
                 const len = Math.hypot(dx, dy, dz);
-                if (len < 1e-6) return;
-                mesh.position.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+                if (len < 1e-6) return false;
+                outPos.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
                 _hrWireDir.set(dx / len, dy / len, dz / len);
-                mesh.quaternion.setFromUnitVectors(_hrWireUp, _hrWireDir);
-                mesh.scale.set(radius, len, radius);
+                outQuat.setFromUnitVectors(_hrWireUp, _hrWireDir);
+                outScale.set(radius, len, radius);
+                return true;
+            }
+
+            function alignHrCylinder(mesh, ax, ay, az, bx, by, bz, radius) {
+                if (!habitRailWireTransform(ax, ay, az, bx, by, bz, radius, mesh.position, mesh.quaternion, mesh.scale)) return;
             }
 
             function populateHabitRailGroup(g, data, compId) {
                 syncHabitRailPathFields(data);
-                const built = buildHabitRailGeometry(data, S, FT, BR);
-                const wireMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.92, roughness: 0.18 });
-                const ringMat = wireMat.clone();
+                const built = buildHabitRailGeometry(data, S, FT, BR, HR_VIS_BUILD_OPTS);
+                const wireMat = perfTier === 'desktop'
+                    ? new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.92, roughness: 0.18 })
+                    : new THREE.MeshLambertMaterial({ color: 0xcccccc });
+                const ringMat = wireMat.clone ? wireMat.clone() : wireMat;
                 let firstMesh = null;
-                if (built.centerLine.length >= 6) {
+                if (HR_VIS_OPTS.centerLine && built.centerLine.length >= 6) {
                     const lineGeo = new THREE.BufferGeometry();
                     lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(built.centerLine, 3));
                     const line = new THREE.Line(
@@ -1369,27 +1410,43 @@
                     line.name = 'habitrailCenter';
                     g.add(line);
                 }
-                const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 8, 1, false);
-                for (const w of built.wires) {
-                    const wire = new THREE.Mesh(cylGeo, wireMat);
-                    alignHrCylinder(wire, w.ax, w.ay, w.az, w.bx, w.by, w.bz, w.radius);
-                    wire.name = 'habitrailWire';
-                    g.add(wire);
-                    if (!firstMesh) firstMesh = wire;
+                const cylGeo = new THREE.CylinderGeometry(1, 1, 1, HR_VIS_OPTS.cylSegs, 1, false);
+                if (perfTier === 'desktop') {
+                    for (const w of built.wires) {
+                        const wire = new THREE.Mesh(cylGeo, wireMat);
+                        alignHrCylinder(wire, w.ax, w.ay, w.az, w.bx, w.by, w.bz, w.radius);
+                        wire.name = 'habitrailWire';
+                        g.add(wire);
+                        if (!firstMesh) firstMesh = wire;
+                    }
+                } else if (built.wires.length) {
+                    const wires = new THREE.InstancedMesh(cylGeo, wireMat, built.wires.length);
+                    wires.name = 'habitrailWires';
+                    built.wires.forEach((w, i) => {
+                        if (habitRailWireTransform(w.ax, w.ay, w.az, w.bx, w.by, w.bz, w.radius, _hrWirePos, _hrWireQuat, _hrWireScale)) {
+                            _hrWireMat.compose(_hrWirePos, _hrWireQuat, _hrWireScale);
+                            wires.setMatrixAt(i, _hrWireMat);
+                        }
+                    });
+                    wires.instanceMatrix.needsUpdate = true;
+                    g.add(wires);
+                    firstMesh = wires;
                 }
-                for (const ring of built.rings) {
-                    const torus = new THREE.Mesh(
-                        new THREE.TorusGeometry(ring.radius, ring.tube, 8, 24),
-                        ringMat
-                    );
-                    torus.position.set(ring.x, ring.y, ring.z);
-                    _hrRingNorm.set(ring.tx, ring.ty, ring.tz).normalize();
-                    _hrAlignQ.setFromUnitVectors(new THREE.Vector3(0, 0, 1), _hrRingNorm);
-                    _hrYawQ.setFromAxisAngle(_hrYAxis, THREE.MathUtils.degToRad(ring.rot || 0));
-                    torus.quaternion.copy(_hrYawQ).multiply(_hrAlignQ);
-                    torus.name = 'habitrailRing';
-                    g.add(torus);
-                    if (!firstMesh) firstMesh = torus;
+                if (HR_VIS_OPTS.rings) {
+                    for (const ring of built.rings) {
+                        const torus = new THREE.Mesh(
+                            new THREE.TorusGeometry(ring.radius, ring.tube, HR_VIS_OPTS.torusTube, HR_VIS_OPTS.torusRadial),
+                            ringMat
+                        );
+                        torus.position.set(ring.x, ring.y, ring.z);
+                        _hrRingNorm.set(ring.tx, ring.ty, ring.tz).normalize();
+                        _hrAlignQ.setFromUnitVectors(new THREE.Vector3(0, 0, 1), _hrRingNorm);
+                        _hrYawQ.setFromAxisAngle(_hrYAxis, THREE.MathUtils.degToRad(ring.rot || 0));
+                        torus.quaternion.copy(_hrYawQ).multiply(_hrAlignQ);
+                        torus.name = 'habitrailRing';
+                        g.add(torus);
+                        if (!firstMesh) firstMesh = torus;
+                    }
                 }
                 g.traverse(o => {
                     if (o.isMesh || o.isLine) o.userData.componentId = compId;
@@ -2312,7 +2369,7 @@
                     const active = btn === 'l' ? (keys.l || vrIn.rt) : (keys.a || vrIn.lt);
                     if (active && !lc.flipper.wasActive) onFlipperTriggered(lc, btn);
                     lc.flipper.wasActive = active;
-                    lc.flipper.step(FIXED_DT, active);
+                    lc.flipper.step(PHYS_DT, active);
                 });
                 prepareBallGatesPreStep();
             });
@@ -2464,11 +2521,16 @@
                 if (ren.xr.isPresenting) pulseFlipperHaptic(btn === 'l');
             }
 
-            const ren = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            ren.setPixelRatio(Math.min(devicePixelRatio, 2));
+            const ren = new THREE.WebGLRenderer({
+                antialias: perfTier === 'desktop',
+                alpha: true,
+                powerPreference: 'high-performance',
+            });
+            const pixelCap = perfTier === 'mobile' ? 1.0 : (perfTier === 'quest' ? 0.85 : 2);
+            ren.setPixelRatio(Math.min(devicePixelRatio, pixelCap));
             ren.setSize(innerWidth, innerHeight);
             ren.setClearColor(0x000000, 0);
-            ren.shadowMap.enabled = true;
+            ren.shadowMap.enabled = perfTier === 'desktop';
             ren.shadowMap.type = THREE.PCFShadowMap;
             ren.toneMapping = THREE.ACESFilmicToneMapping;
             ren.toneMappingExposure = 1.4;
@@ -2482,30 +2544,32 @@
 
             const dirL = new THREE.DirectionalLight(0xffffff, 1.5);
             dirL.position.set(0.5, 3, 1);
-            dirL.castShadow = true;
-            dirL.shadow.mapSize.set(1024, 1024);
+            dirL.castShadow = perfTier === 'desktop';
+            dirL.shadow.mapSize.set(perfTier === 'desktop' ? 1024 : 512, perfTier === 'desktop' ? 1024 : 512);
             scene.add(dirL);
 
             // Hemisphere light for soft fill
             const hemiL = new THREE.HemisphereLight(0x4466aa, 0x111122, 0.5);
             scene.add(hemiL);
 
-            // Colored point lights for neon glow
-            [
-                [0x00ccff, -0.15, TH + 0.15, -0.2, 4],
-                [0xff0066, 0.15, TH + 0.15, -0.1, 4],
-                [0xff8800, 0, TH + 0.1, 0.3, 3],
-            ].forEach(([c, x, y, z, i]) => {
-                const pl = new THREE.PointLight(c, i, 3, 1);
-                pl.position.set(x, y, z);
-                scene.add(pl);
-            });
+            // Colored point lights for neon glow (desktop only — costly on mobile GPUs)
+            if (perfTier === 'desktop') {
+                [
+                    [0x00ccff, -0.15, TH + 0.15, -0.2, 4],
+                    [0xff0066, 0.15, TH + 0.15, -0.1, 4],
+                    [0xff8800, 0, TH + 0.1, 0.3, 3],
+                ].forEach(([c, x, y, z, i]) => {
+                    const pl = new THREE.PointLight(c, i, 3, 1);
+                    pl.position.set(x, y, z);
+                    scene.add(pl);
+                });
+            }
 
             // Spotlight from above
-            const spot = new THREE.SpotLight(0xffffff, 3, 4, Math.PI / 4, 0.5, 1);
+            const spot = new THREE.SpotLight(0xffffff, perfTier === 'desktop' ? 3 : 2, 4, Math.PI / 4, 0.5, 1);
             spot.position.set(0, TH + 1.5, 0);
             spot.target.position.set(0, TH, 0);
-            spot.castShadow = true;
+            spot.castShadow = perfTier === 'desktop';
             scene.add(spot);
             scene.add(spot.target);
 
@@ -2615,7 +2679,7 @@
                     bx.fillStyle = '#ff8800'; bx.font = '24px sans-serif';
                     bx.fillText('BALLS: ' + '\u25CF'.repeat(ballsLeft) + '\u25CB'.repeat(Math.max(0, 3 - ballsLeft)), 256, 200);
                 }
-                if (currentFps > 0) {
+                if (currentFps > 0 && perfTier === 'desktop') {
                     bx.fillStyle = '#0f0'; bx.font = 'bold 18px monospace'; bx.textAlign = 'right';
                     bx.fillText(currentFps + ' FPS', 500, 240);
                 }
@@ -5085,7 +5149,10 @@
             // ============================================================
             const clock = new THREE.Clock();
             const fpsEl = document.getElementById('fps-display');
-            let fpsFrames = 0, fpsTime = performance.now(), currentFps = 0;
+            let fpsSampleT = 0;
+            let fpsSampleN = 0;
+            let currentFps = 0;
+            let lastFpsUiUpdate = 0;
 
             function animate() {
                 const dt = Math.min(clock.getDelta(), 0.05);
@@ -5104,7 +5171,7 @@
                         stopPlayTest();
                     }
 
-                    world.step(FIXED_DT, dt, 10);
+                    world.step(PHYS_DT, dt, PHYS_MAX_SUBSTEPS);
 
                     // Spinner animation + magnet pull
                     liveComps.forEach(lc => {
@@ -5115,8 +5182,9 @@
                         }
                         if (lc.data.type === 'magnet' && ballIn) {
                             bb.position.vsub(lc.body.position, _magDir);
-                            const dist = _magDir.length();
-                            if (dist < 0.25 && dist > 0.02) {
+                            const distSq = _magDir.lengthSquared();
+                            if (distSq < 0.0625 && distSq > 0.0004) {
+                                const dist = Math.sqrt(distSq);
                                 const pull = (lc.data.magnetStrength || 8) * dt * 0.15 / dist;
                                 bb.velocity.x += _magDir.x * pull;
                                 bb.velocity.y += _magDir.y * pull * 0.2;
@@ -5149,13 +5217,20 @@
                     cam.position.set(OX + Math.sin(oA) * Math.cos(oP) * oD, TH + Math.sin(oP) * oD, Math.cos(oA) * Math.cos(oP) * oD);
                     cam.lookAt(OX, TH, 0);
                 }
-                fpsFrames++;
+                fpsSampleT += dt;
+                fpsSampleN++;
                 const fpsNow = performance.now();
-                if (fpsNow - fpsTime >= 500) {
-                    currentFps = Math.round(fpsFrames * 1000 / (fpsNow - fpsTime));
-                    fpsEl.textContent = currentFps + ' FPS';
-                    fpsFrames = 0; fpsTime = fpsNow;
-                    drawBB();
+                if (fpsSampleT >= 0.5) {
+                    currentFps = Math.round(fpsSampleN / fpsSampleT);
+                    fpsSampleT = 0;
+                    fpsSampleN = 0;
+                    if (fpsEl && !isMobile) {
+                        fpsEl.textContent = currentFps + ' FPS';
+                    }
+                    if (perfTier === 'desktop' && fpsNow - lastFpsUiUpdate > 900) {
+                        lastFpsUiUpdate = fpsNow;
+                        drawBB();
+                    }
                 }
                 updateBallGatePassArrows();
                 ren.render(scene, cam);
@@ -5163,11 +5238,16 @@
             ren.setAnimationLoop(animate);
 
             // Resize
-            addEventListener('resize', () => { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); ren.setSize(innerWidth, innerHeight); });
+            addEventListener('resize', () => {
+                cam.aspect = innerWidth / innerHeight;
+                cam.updateProjectionMatrix();
+                ren.setPixelRatio(Math.min(devicePixelRatio, pixelCap));
+                ren.setSize(innerWidth, innerHeight);
+            });
 
             // Init
             drawBB(); spawn();
-            console.log('Pinball VR ready! Table at y=' + TH);
+            console.log('Pinball VR ready! tier=' + perfTier + ' mobile=' + isMobile + ' quest=' + isQuest + ' table y=' + TH);
             window.PinballVR2 = {
                 toggleEditor: toggleEditorMode,
                 toggleMenu: () => vrMenu?.toggleMenu(),

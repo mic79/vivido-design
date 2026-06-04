@@ -294,7 +294,8 @@ function wireUnitOffset(frame, baseAngDeg, rotDeg) {
 }
 
 /** Table-local mesh + wire collision data for a habitrail (meters, playfield-local). */
-export function buildHabitRailGeometry(data, s, ft, ballRadiusM) {
+export function buildHabitRailGeometry(data, s, ft, ballRadiusM, opts) {
+    opts = opts || {};
     s = s || 0.0584;
     ft = ft != null ? ft : 0.002;
     const path = ensureHabitRailPath(data);
@@ -308,7 +309,9 @@ export function buildHabitRailGeometry(data, s, ft, ballRadiusM) {
     const wireAngles = habitRailWireAngles(wireRadius, ballRadiusM, wireRad);
     const wireCount = wireAngles.length;
     const floorOff = ft / 2 + 0.002;
-    const samplesPerSeg = Math.max(6, Math.min(16, +(data.segments) || 10));
+    const samplesPerSeg = opts.samplesPerSeg != null
+        ? opts.samplesPerSeg
+        : Math.max(6, Math.min(16, +(data.segments) || 10));
     const centerPath = sampleHabitRailCenterPath(path, samplesPerSeg);
     const wires = [];
     const rings = [];
@@ -388,14 +391,17 @@ export function buildHabitRailGeometry(data, s, ft, ballRadiusM) {
 }
 
 /** Single tube collision mesh (inner wall). Ball stays inside; open at both ends. */
-export function buildHabitRailTubeTrimesh(built, s) {
+export function buildHabitRailTubeTrimesh(built, s, opts) {
+    opts = opts || {};
     const path = built.centerPath;
     if (!path || path.length < 2) return { pos: [], idx: [] };
     s = s || 0.0584;
     const floorOff = built.floorOff;
     const tubeR = Math.max(built.wireRad * 2, built.wireRadius - built.wireRad);
     // Finer cross-section than visual wires — reduces facet snagging on the trimesh.
-    const azSteps = Math.max(24, (built.wireCount || 8) * 2);
+    const azSteps = opts.azSteps != null
+        ? opts.azSteps
+        : Math.max(24, (built.wireCount || 8) * 2);
     const pos = [];
     const idx = [];
 
@@ -445,6 +451,33 @@ export function buildHabitRailTubeTrimesh(built, s) {
     }
 
     return { pos, idx, tubeRadius: tubeR };
+}
+
+/** Lightweight tube collision: sphere chain along center path (mobile / Quest). */
+export function buildHabitRailTubeSphereColliders(built, s, opts) {
+    opts = opts || {};
+    const path = built.centerPath;
+    if (!path || path.length < 2) return [];
+    s = s || 0.0584;
+    const floorOff = built.floorOff;
+    const tubeR = Math.max(built.wireRad * 2, built.wireRadius - built.wireRad);
+    const stride = Math.max(1, opts.sphereStride != null ? opts.sphereStride : 2);
+    const spheres = [];
+
+    function toLocal(p) {
+        return { x: p.x * s, y: floorOff + p.y * s, z: p.z * s };
+    }
+
+    for (let i = 0; i < path.length; i += stride) {
+        const loc = toLocal(path[i]);
+        spheres.push({ x: loc.x, y: loc.y, z: loc.z, r: tubeR });
+    }
+    const lastLoc = toLocal(path[path.length - 1]);
+    const tail = spheres[spheres.length - 1];
+    if (!tail || tail.x !== lastLoc.x || tail.y !== lastLoc.y || tail.z !== lastLoc.z) {
+        spheres.push({ x: lastLoc.x, y: lastLoc.y, z: lastLoc.z, r: tubeR });
+    }
+    return spheres;
 }
 
 /** Add standard left/right flippers when a layout has none (playable table). */
