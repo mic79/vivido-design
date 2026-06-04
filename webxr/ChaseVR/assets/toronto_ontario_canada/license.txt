@@ -1,0 +1,11 @@
+Model Information:
+* title:	Toronto, Ontario, Canada
+* source:	https://sketchfab.com/3d-models/toronto-ontario-canada-4213466397b749bab17c990ae063f347
+* author:	jack.simmons (https://sketchfab.com/jack.simmons)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Toronto, Ontario, Canada" (https://sketchfab.com/3d-models/toronto-ontario-canada-4213466397b749bab17c990ae063f347) by jack.simmons (https://sketchfab.com/jack.simmons) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

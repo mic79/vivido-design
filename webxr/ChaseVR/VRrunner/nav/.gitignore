@@ -1,0 +1,5 @@
+# Legacy bloated nav exports — ship only vrrunner-city.nav.opt.bin (fmt=4)
+vrrunner-city.nav.bin
+vrrunner-city.nav.binBAK*
+vrrunner-city.nav.opt.bin.new
+*.nav.binBAK*
