@@ -1,0 +1,3057 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>WebXR - VR Body (Rigged Mixamo) - Leg IK</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.173.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.173.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+      import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+      window.BodyRiggedLoaders = { GLTFLoader, FBXLoader, ready: true };
+    </script>
+    <style>
+      body { margin: 0; overflow: hidden; }
+      #ui {
+        position: fixed; top: 10px; left: 10px;
+        background: rgba(0, 0, 0, 0.8); color: white;
+        padding: 15px; border-radius: 5px;
+        font-family: monospace; z-index: 1000; max-width: 400px;
+      }
+      #ui h3 { margin-top: 0; color: #4CAF50; }
+      .info { font-size: 11px; color: #888; margin-top: 10px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div id="ui">
+      <h3>🦴 VR Body (Mixamo + Leg IK)</h3>
+      <div class="info">
+        <strong>Model:</strong> character.glb (Mixamo + Walk/Idle) · <span id="model-height-info">height: measuring…</span><br>
+        <strong>Leg IK:</strong> <a href="https://github.com/Aditya02git/Leg-IK_In_ThreeJS_With_Rapier" target="_blank">Leg-IK + Rapier</a><br>
+        <strong>Controls:</strong> WASD/arrows or left thumbstick = walk, right thumbstick = rotate mirror<br>
+        <strong>VR calibration:</strong> Camera height = floor · Body depth/side = your FP body position · Calibrate = height + scale<br>
+        <strong>Status:</strong> <span id="status">Loading...</span>
+      </div>
+      <div id="height-cal" style="margin-top:10px;border-top:1px solid #444;padding-top:8px;font-size:12px;">
+        <strong>VR calibration (saved automatically)</strong>
+        <div id="eye-height-status" style="font-size:11px;color:#9cf;margin-top:6px;line-height:1.4;">
+          Camera offset: — · Effective height: — · Crouch baseline: —<br>
+          <span style="color:#888;">Stand on floor → Camera ▲/▼ → Calibrate → Body tune feet.</span>
+        </div>
+      </div>
+      <div id="legdebug" style="margin-top:8px;font:11px monospace;color:#9ee;white-space:pre-wrap;">legIK: waiting…</div>
+    </div>
+
+    <a-scene background="color: #87CEEB" leg-ik-world scene-shadows webxr="referenceSpaceType: local-floor" renderer="colorManagement: true; physicallyCorrectLights: true; shadow: true; shadowMapType: PCFSoft">
+      <!-- Local Player Body (child of rig so it shares the VR reference frame) -->
+      <a-entity id="rig" position="0 0 0" vr-locomotion rapier-locomotion>
+        <!-- Vertical offset vs local-floor Y=0 (VR height calibration — does not move world floor). -->
+        <a-entity id="vr-player-offset" position="0 0 0">
+          <a-entity id="camera" camera look-controls="touchEnabled: false" position="0 1.6 0"></a-entity>
+          <a-entity id="left-hand"
+            hand-controls="hand: left; handModelStyle: lowPoly"
+            laser-controls="hand: left"
+            raycaster="objects: .clickable; far: 5; showLine: true; lineColor: #4CAF50; lineOpacity: 0.85">
+          </a-entity>
+          <a-entity id="right-hand"
+            hand-controls="hand: right; handModelStyle: lowPoly"
+            laser-controls="hand: right"
+            raycaster="objects: .clickable; far: 5; showLine: true; lineColor: #4CAF50; lineOpacity: 0.85">
+          </a-entity>
+          <a-entity id="local-body" mixamo-body="isMirror: false"></a-entity>
+        </a-entity>
+      </a-entity>
+
+      <!-- Mirror Body - STATIC position 2m ahead -->
+      <a-entity id="mirror-body" mixamo-body="isMirror: true; color: #66BB6A" position="0 0 -2"></a-entity>
+
+      <a-plane id="ground-plane" floor-grid="cellSize: 0.1; size: 40" position="0 0.001 0" rotation="-90 0 0" width="40" height="40"
+        material="shader: standard; color: #ffffff; roughness: 0.92; metalness: 0; receiveShadow: true"></a-plane>
+
+      <!-- Laser-clickable VR calibration panel (in front of mirror) -->
+      <a-entity id="vr-height-panel" position="0 1.5 -1.55">
+        <a-plane width="0.92" height="1.38" rotation="0 0 0" color="#1a1a1a" opacity="0.88" material="shader: standard; side: double; transparent: true; roughness: 0.9; metalness: 0; receiveShadow: true"></a-plane>
+        <a-text value="VR Calibration" align="center" position="0 0.54 0.01" width="1.1" color="#ffffff"></a-text>
+        <a-text value="Stand straight · laser + trigger" align="center" position="0 0.46 0.01" width="0.85" color="#888888"></a-text>
+
+        <!-- Camera height vs local-floor (Y=0) — shifts tracked view + avatar in the scene -->
+        <a-text value="Camera height" align="right" position="-0.38 0.32 0.01" width="0.62" color="#cccccc"></a-text>
+        <a-text id="vr-val-offset" value="+0.00 m" align="center" position="0 0.32 0.01" width="0.55" color="#ffffff"></a-text>
+        <a-plane class="clickable" vr-height-btn="target: camera; direction: -1" vr-height-btn-hover rotation="0 0 0" position="-0.32 0.32 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▼" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+        <a-plane class="clickable" vr-height-btn="target: camera; direction: 1" vr-height-btn-hover rotation="0 0 0" position="0.32 0.32 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▲" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+
+        <!-- Body fine-tune (feet vs floor without changing crouch baseline) -->
+        <a-text value="Body height" align="right" position="-0.38 0.20 0.01" width="0.62" color="#cccccc"></a-text>
+        <a-text id="vr-val-body" value="+0.00 m" align="center" position="0 0.20 0.01" width="0.55" color="#ffffff"></a-text>
+        <a-plane class="clickable" vr-height-btn="target: body; direction: -1" vr-height-btn-hover rotation="0 0 0" position="-0.32 0.20 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▼" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+        <a-plane class="clickable" vr-height-btn="target: body; direction: 1" vr-height-btn-hover rotation="0 0 0" position="0.32 0.20 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▲" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+
+        <!-- Manual local-body depth (+ = back toward you, − = forward) -->
+        <a-text value="Body depth" align="right" position="-0.38 0.08 0.01" width="0.62" color="#cccccc"></a-text>
+        <a-text id="vr-val-forward" value="+0.00 m" align="center" position="0 0.08 0.01" width="0.55" color="#ffffff"></a-text>
+        <a-plane class="clickable" vr-height-btn="target: forward; direction: -1" vr-height-btn-hover rotation="0 0 0" position="-0.32 0.08 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="Fwd" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+        <a-plane class="clickable" vr-height-btn="target: forward; direction: 1" vr-height-btn-hover rotation="0 0 0" position="0.32 0.08 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="Back" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+
+        <!-- Manual local-body lateral (+ = right) -->
+        <a-text value="Body side" align="right" position="-0.38 -0.04 0.01" width="0.62" color="#cccccc"></a-text>
+        <a-text id="vr-val-lateral" value="+0.00 m" align="center" position="0 -0.04 0.01" width="0.55" color="#ffffff"></a-text>
+        <a-plane class="clickable" vr-height-btn="target: lateral; direction: -1" vr-height-btn-hover rotation="0 0 0" position="-0.32 -0.04 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="◀" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+        <a-plane class="clickable" vr-height-btn="target: lateral; direction: 1" vr-height-btn-hover rotation="0 0 0" position="0.32 -0.04 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▶" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+
+        <!-- Model vertical scale (character height vs you) -->
+        <a-text value="Model scale" align="right" position="-0.38 -0.28 0.01" width="0.62" color="#cccccc"></a-text>
+        <a-text id="vr-val-scale" value="1.00×" align="center" position="0 -0.28 0.01" width="0.55" color="#ffffff"></a-text>
+        <a-plane class="clickable" vr-height-btn="target: scale; direction: -1" vr-height-btn-hover rotation="0 0 0" position="-0.32 -0.28 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▼" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+        <a-plane class="clickable" vr-height-btn="target: scale; direction: 1" vr-height-btn-hover rotation="0 0 0" position="0.32 -0.28 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▲" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+
+        <!-- Standing eye baseline — match tracked while straight = no crouch -->
+        <a-text value="Stand posture" align="right" position="-0.38 -0.40 0.01" width="0.62" color="#cccccc"></a-text>
+        <a-text id="vr-val-stand" value="1.60 m" align="center" position="0 -0.40 0.01" width="0.55" color="#ffffff"></a-text>
+        <a-plane class="clickable" vr-height-btn="target: stand; direction: -1" vr-height-btn-hover rotation="0 0 0" position="-0.32 -0.40 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▼" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+        <a-plane class="clickable" vr-height-btn="target: stand; direction: 1" vr-height-btn-hover rotation="0 0 0" position="0.32 -0.40 0.015"
+          width="0.11" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text value="▲" align="center" position="0 0 0.01" width="0.35" color="#ffffff"></a-text>
+        </a-plane>
+
+        <a-text value="Tracked eye" align="right" position="-0.38 -0.52 0.01" width="0.62" color="#888888"></a-text>
+        <a-text id="vr-val-cam" value="—" align="center" position="0 -0.52 0.01" width="0.55" color="#9cf"></a-text>
+
+        <a-plane class="clickable" vr-height-btn="target: calibrate; direction: 0" vr-height-btn-hover="hoverColor: #2e7d32" rotation="0 0 0" position="0 -0.64 0.015"
+          width="0.72" height="0.09" color="#388E3C" material="shader: flat; side: double">
+          <a-text value="Snap posture + scale to tracked" align="center" position="0 0 0.01" width="0.9" color="#ffffff"></a-text>
+        </a-plane>
+      </a-entity>
+
+      <a-text value="Your Body Mirror" position="0 2.5 -2" align="center" color="#333" width="4"></a-text>
+      <a-text value="Ramp (Problem_1)" position="4 1.2 -5" align="center" color="#333" width="3"></a-text>
+      <a-text value="Stairs (Problem_2)" position="7 1.2 -5" align="center" color="#333" width="3"></a-text>
+      
+      <a-entity light="type: ambient; intensity: 0.35; color: #c8dce8"></a-entity>
+      <a-entity id="sun-light" fixed-sun-light light="type: directional; castShadow: true; intensity: 0.95; color: #fff8ee; shadowMapWidth: 2048; shadowMapHeight: 2048; shadowCameraLeft: -22; shadowCameraRight: 22; shadowCameraTop: 22; shadowCameraBottom: -22; shadowCameraNear: 0.5; shadowCameraFar: 60; shadowBias: -0.0002" position="10 18 8"></a-entity>
+    </a-scene>
+
+    <script src="leg-ik-mixamo.js"></script>
+    <script>
+      AFRAME.registerComponent('scene-shadows', {
+        init: function () {
+          const enable = () => {
+            const renderer = this.el.renderer;
+            if (!renderer) return;
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+          };
+          if (this.el.hasLoaded) enable();
+          else this.el.addEventListener('loaded', enable);
+        }
+      });
+
+      AFRAME.registerComponent('floor-grid', {
+        schema: {
+          cellSize: { default: 0.1 },
+          size: { default: 40 },
+          majorEvery: { default: 10 }
+        },
+        init: function () {
+          const cellSize = this.data.cellSize;
+          const majorEvery = this.data.majorEvery;
+          const blockM = cellSize * majorEvery;
+          const cells = majorEvery;
+          const res = 512;
+          const canvas = document.createElement('canvas');
+          canvas.width = res;
+          canvas.height = res;
+          const ctx = canvas.getContext('2d');
+          const step = res / cells;
+
+          ctx.fillStyle = '#6EB892';
+          ctx.fillRect(0, 0, res, res);
+
+          for (let i = 0; i <= cells; i++) {
+            const p = Math.round(i * step) + 0.5;
+            const major = i === 0 || i === cells;
+            ctx.strokeStyle = major ? 'rgba(25, 65, 45, 0.55)' : 'rgba(255, 255, 255, 0.32)';
+            ctx.lineWidth = major ? 2 : 1;
+            ctx.beginPath();
+            ctx.moveTo(p, 0);
+            ctx.lineTo(p, res);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(0, p);
+            ctx.lineTo(res, p);
+            ctx.stroke();
+          }
+
+          const tex = new THREE.CanvasTexture(canvas);
+          tex.wrapS = THREE.RepeatWrapping;
+          tex.wrapT = THREE.RepeatWrapping;
+          tex.repeat.set(this.data.size / blockM, this.data.size / blockM);
+          tex.anisotropy = 8;
+          this._gridTexture = tex;
+
+          const apply = () => {
+            const mesh = this.el.getObject3D('mesh');
+            if (!mesh?.material) return;
+            mesh.material.map = tex;
+            mesh.material.color.set('#ffffff');
+            mesh.material.roughness = 0.92;
+            mesh.material.metalness = 0;
+            mesh.material.receiveShadow = true;
+            mesh.receiveShadow = true;
+          };
+          if (this.el.getObject3D('mesh')) apply();
+          else this.el.addEventListener('object3dset', apply, { once: true });
+        },
+        remove: function () {
+          this._gridTexture?.dispose();
+        }
+      });
+
+      AFRAME.registerComponent('fixed-sun-light', {
+        init: function () {
+          const light = this.el.getObject3D('light');
+          if (!light?.castShadow) return;
+          light.shadow.normalBias = 0.02;
+          // Aim at a fixed point in the scene — sun direction must NOT follow the player
+          // or static props (stairs/ramp) will cast sliding shadows on the floor.
+          light.target.position.set(0, 0, 0);
+          light.target.updateMatrixWorld();
+        }
+      });
+
+      (function initHeightStatusUI() {
+        const statusEl = document.getElementById('eye-height-status');
+        const sceneEl = document.querySelector('a-scene');
+
+        function refreshStatus() {
+          const w = sceneEl?.legIkWorld;
+          if (!statusEl || !w) return;
+          const body = w.playerHeightAdjustM ?? 0;
+          const offset = w.cameraFloorOffsetM ?? 0;
+          const stand = w.standingEyeLocalY ?? 1.6;
+          const forward = w.bodyForwardOffsetM ?? 0;
+          const lateral = w.bodyLateralOffsetM ?? 0;
+          const scale = w.modelVerticalScale ?? 1;
+          const modelH = w.modelStandingHeightM;
+          const legIk = sceneEl?.components?.['leg-ik-world'];
+          const tracked = sceneEl?.is('vr-mode') && legIk ? legIk._getTrackedEyeLocalY() : null;
+          const crouch = w.crouchAmount ?? 0;
+          statusEl.innerHTML =
+            (modelH != null ? 'Model ~' + modelH.toFixed(2) + ' m · scale ' + scale.toFixed(2) + '× · ' : '') +
+            'Camera offset: ' + (offset >= 0 ? '+' : '') + offset.toFixed(2) + ' m · Tracked eye: ' +
+            (tracked != null ? tracked.toFixed(2) + ' m' : '—') +
+            ' · Stand posture: ' + stand.toFixed(2) + ' m · Crouch: ' + (crouch * 100).toFixed(0) + '%<br>' +
+            '<span style="color:#888;">Partial crouch? Lower Stand posture toward Tracked eye · Scale ▲ for taller · Snap to auto-set both.</span>';
+        }
+
+        sceneEl?.addEventListener('model-dimensions-measured', refreshStatus);
+        sceneEl?.addEventListener('vr-body-position-adjusted', refreshStatus);
+        sceneEl?.addEventListener('vr-model-scaled', refreshStatus);
+        sceneEl?.addEventListener('vr-height-calibrated', refreshStatus);
+        sceneEl?.addEventListener('vr-height-adjusted', refreshStatus);
+        sceneEl?.addEventListener('vr-camera-calibrated', refreshStatus);
+        sceneEl?.addEventListener('loaded', refreshStatus);
+        setInterval(refreshStatus, 1000);
+      })();
+
+      AFRAME.registerComponent('vr-height-btn-hover', {
+        schema: {
+          hoverColor: { type: 'color', default: '#66BB6A' }
+        },
+        init: function () {
+          this.baseColor = this.el.getAttribute('material')?.color || '#555555';
+          this.onEnter = () => this.el.setAttribute('material', 'color', this.data.hoverColor);
+          this.onLeave = () => this.el.setAttribute('material', 'color', this.baseColor);
+          this.el.addEventListener('mouseenter', this.onEnter);
+          this.el.addEventListener('mouseleave', this.onLeave);
+        },
+        remove: function () {
+          this.el.removeEventListener('mouseenter', this.onEnter);
+          this.el.removeEventListener('mouseleave', this.onLeave);
+        }
+      });
+
+      AFRAME.registerComponent('vr-height-btn', {
+        schema: {
+          target: { type: 'string' },
+          direction: { type: 'int', default: 1 }
+        },
+        init: function () {
+          this.onClick = this.onClick.bind(this);
+          this.el.addEventListener('click', this.onClick);
+        },
+        onClick: function () {
+          const legIk = this.el.sceneEl.components['leg-ik-world'];
+          if (!legIk) return;
+          if (this.data.target === 'calibrate') {
+            legIk.calibrateStandingHeight('vr-panel');
+            return;
+          }
+          const steps = { camera: 0.02, body: 0.02, forward: 0.03, lateral: 0.03, scale: 0.02, stand: 0.02 };
+          const step = (steps[this.data.target] || 0.02) * this.data.direction;
+          if (this.data.target === 'camera') legIk.adjustCameraHeight(step);
+          else if (this.data.target === 'body') legIk.adjustBody(step);
+          else if (this.data.target === 'forward') legIk.adjustBodyForward(step);
+          else if (this.data.target === 'lateral') legIk.adjustBodyLateral(step);
+          else if (this.data.target === 'scale') legIk.adjustModelScale(step);
+          else if (this.data.target === 'stand') legIk.adjustStandingBaseline(step);
+        },
+        remove: function () {
+          this.el.removeEventListener('click', this.onClick);
+        }
+      });
+
+      // VR Locomotion component - handles mirror rotation
+      AFRAME.registerComponent('vr-locomotion', {
+        schema: {
+          rotationSpeed: { type: 'number', default: 2.0 }
+        },
+
+        init: function() {
+          this.mirrorRotationY = 0;
+          this.thumbstickRotation = { right: 0 };
+          this.thumbstickMove = { left: { x: 0, y: 0 } };
+          this.mirrorBody = null;
+          this.moveDeadzone = 0.15;
+          
+          setTimeout(() => {
+            this.mirrorBody = document.querySelector('#mirror-body');
+          }, 100);
+          
+          this.el.sceneEl.addEventListener('thumbstickmoved', (evt) => {
+            if (!evt.target || !evt.target.object3D) return;
+            const hand = evt.target;
+            this.handleThumbstick(hand, evt.detail);
+          });
+        },
+        
+        handleThumbstick: function(hand, detail) {
+          const isLeft = hand.id === 'left-hand';
+          const dz = this.moveDeadzone;
+          
+          if (isLeft) {
+            this.thumbstickMove.left.x = Math.abs(detail.x) > dz ? detail.x : 0;
+            this.thumbstickMove.left.y = Math.abs(detail.y) > dz ? detail.y : 0;
+            return;
+          }
+          
+          if (Math.abs(detail.x) > dz) {
+            this.thumbstickRotation.right = -detail.x;
+          } else {
+            this.thumbstickRotation.right = 0;
+          }
+        },
+
+        tick: function(time, deltaTime) {
+          const dt = Math.min(deltaTime / 1000, 0.1);
+          const rotationInput = this.thumbstickRotation.right;
+          
+          if (Math.abs(rotationInput) > 0.1) {
+            this.mirrorRotationY += rotationInput * this.data.rotationSpeed * dt;
+          }
+          
+          if (this.mirrorBody && this.mirrorBody.components['mixamo-body']) {
+            this.mirrorBody.components['mixamo-body'].manualRotationY = this.mirrorRotationY;
+          }
+        }
+      });
+
+      // Mixamo VR Body component
+      AFRAME.registerComponent('mixamo-body', {
+        schema: {
+          isMirror: { type: 'boolean', default: false },
+          color: { type: 'color', default: '#4A90E2' },
+          modelPath: { type: 'string', default: 'character.glb' }
+        },
+
+        init: function() {
+          this.camera = document.querySelector('#camera');
+          this.leftController = document.querySelector('#left-hand');
+          this.rightController = document.querySelector('#right-hand');
+          this.rig = document.querySelector('#rig');
+          
+          this.skeleton = null;
+          this.bones = {};
+          this.model = null;
+          this.modelLoaded = false;
+          this.isGltf = false;
+          this.useAnimatedLocomotion = false;
+          this.modelHipsLocalY = 1.0;
+          this.modelFeetLocalY = 0;
+          
+          // Mixamo bone names
+          this.boneNames = {
+            hips: 'mixamorigHips',
+            spine: 'mixamorigSpine',
+            spine1: 'mixamorigSpine1',
+            spine2: 'mixamorigSpine2',
+            neck: 'mixamorigNeck',
+            head: 'mixamorigHead',
+            headTop: 'mixamorigHeadTop_End',
+            leftShoulder: 'mixamorigLeftShoulder',
+            leftArm: 'mixamorigLeftArm',
+            leftForeArm: 'mixamorigLeftForeArm',
+            leftHand: 'mixamorigLeftHand',
+            rightShoulder: 'mixamorigRightShoulder',
+            rightArm: 'mixamorigRightArm',
+            rightForeArm: 'mixamorigRightForeArm',
+            rightHand: 'mixamorigRightHand',
+            // Finger bones - Left hand
+            leftHandThumb1: 'mixamorigLeftHandThumb1',
+            leftHandThumb2: 'mixamorigLeftHandThumb2',
+            leftHandThumb3: 'mixamorigLeftHandThumb3',
+            leftHandIndex1: 'mixamorigLeftHandIndex1',
+            leftHandIndex2: 'mixamorigLeftHandIndex2',
+            leftHandIndex3: 'mixamorigLeftHandIndex3',
+            leftHandMiddle1: 'mixamorigLeftHandMiddle1',
+            leftHandMiddle2: 'mixamorigLeftHandMiddle2',
+            leftHandMiddle3: 'mixamorigLeftHandMiddle3',
+            leftHandRing1: 'mixamorigLeftHandRing1',
+            leftHandRing2: 'mixamorigLeftHandRing2',
+            leftHandRing3: 'mixamorigLeftHandRing3',
+            leftHandPinky1: 'mixamorigLeftHandPinky1',
+            leftHandPinky2: 'mixamorigLeftHandPinky2',
+            leftHandPinky3: 'mixamorigLeftHandPinky3',
+            // Finger bones - Right hand
+            rightHandThumb1: 'mixamorigRightHandThumb1',
+            rightHandThumb2: 'mixamorigRightHandThumb2',
+            rightHandThumb3: 'mixamorigRightHandThumb3',
+            rightHandIndex1: 'mixamorigRightHandIndex1',
+            rightHandIndex2: 'mixamorigRightHandIndex2',
+            rightHandIndex3: 'mixamorigRightHandIndex3',
+            rightHandMiddle1: 'mixamorigRightHandMiddle1',
+            rightHandMiddle2: 'mixamorigRightHandMiddle2',
+            rightHandMiddle3: 'mixamorigRightHandMiddle3',
+            rightHandRing1: 'mixamorigRightHandRing1',
+            rightHandRing2: 'mixamorigRightHandRing2',
+            rightHandRing3: 'mixamorigRightHandRing3',
+            rightHandPinky1: 'mixamorigRightHandPinky1',
+            rightHandPinky2: 'mixamorigRightHandPinky2',
+            rightHandPinky3: 'mixamorigRightHandPinky3',
+            leftUpLeg: 'mixamorigLeftUpLeg',
+            leftLeg: 'mixamorigLeftLeg',
+            leftFoot: 'mixamorigLeftFoot',
+            rightUpLeg: 'mixamorigRightUpLeg',
+            rightLeg: 'mixamorigRightLeg',
+            rightFoot: 'mixamorigRightFoot'
+          };
+          
+          // IK config (from body.html)
+          this.config = {
+            shoulderWidth: 0.34,
+            shoulderForward: 0.08,
+            upperArmLength: 0.31,
+            lowerArmLength: 0.31,
+            hipHalfWidth: 0.11,
+            upperLegLength: 0.42,
+            lowerLegLength: 0.41,
+            minStepLength: 0.2,
+            maxStepLength: 0.72,
+            stepLengthScale: 0.36,
+            maxStepHeight: 0.13,
+            stanceRatio: 0.62
+          };
+          
+          // Smoothing
+          this.torsoRotation = new THREE.Quaternion();
+          this.bodyTilt = new THREE.Quaternion();
+          this.smoothingFactor = 0.15;
+          this.mirrorDistance = 2.0;
+          this.manualRotationY = 0; // Set by vr-locomotion
+          
+          // Finger curl smoothing (for smooth finger animations)
+          this.targetCurls = {
+            left: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 },
+            right: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 }
+          };
+          this.currentCurls = {
+            left: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 },
+            right: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 }
+          };
+          this.fingerSmoothingFactor = 0.3; // How fast fingers move (0-1, higher = faster)
+          
+          // Breathing animation
+          this.breathingPhase = 0; // Current phase of breathing cycle (0 to 2*PI)
+          this.breathingRate = 0.25; // Breaths per second (15 breaths/min)
+          this.breathingAmount = 0.015; // Chest expansion amount (1.5cm)
+          
+          // Body dynamics for natural movement
+          this.previousHeadPos = new THREE.Vector3();
+          this.previousHeadPosInitialized = false;
+          this.headVelocity = new THREE.Vector3();
+          this._rawMoveDir = new THREE.Vector3();
+          this._smoothedHorizontalSpeed = 0;
+          this.torsoLean = new THREE.Vector3(); // Current torso lean (smoothed)
+          this.torsoLeanVelocity = 0.15; // How fast torso reacts to movement
+          
+          // Leg IK (Leg-IK_In_ThreeJS_With_Rapier)
+          this.legIK = null;
+          this.mixer = null;
+          this.animClips = {};
+          this.currentAnim = null;
+          this.horizontalSpeed = 0;
+          this.lateralSpeed = 0;
+          this.forwardSpeed = 0;
+          this.strafeReferenceSpeed = 1.6;
+          this.moveYawTwist = 0;
+          this._smoothedMoveYawTarget = 0;
+          this._smoothedMoveDir = new THREE.Vector3();
+          this._walkBackSign = 1;
+          this._crouchAnimWeight = 0;
+          this._standingHipsLocalY = null;
+          this._restHeadAboveNeck = 0.14;
+          this._vrHeadDrop = 0;
+          this._modelBaseY = 0.05;
+          this._headEyeOffsetY = 0.06;
+          this._headFacingQuat = new THREE.Quaternion();
+          this._prevHeadYaw = null;
+          this._headTurnRate = 0;
+          this._stableStrafeDir = 0;
+          this._strafePending = 0;
+          this._strafeHoldT = 0;
+          // 2D Blend Space state (per-instance)
+          this._blendSpaceInited = false;
+          this._blendWeights = { idle: 1, walk: 0, run: 0, strafeLeft: 0, strafeRight: 0 };
+          this._blendWeightsTarget = { idle: 1, walk: 0, run: 0, strafeLeft: 0, strafeRight: 0 };
+          this._blendPhase = 0;
+
+          this.walkPhase = 0;
+          this.walkThreshold = 0.08;
+          this.sprintThreshold = 3.5;
+          this.footTargetSmoothing = 0.22;
+          this.footTargets = {
+            left: { current: new THREE.Vector3(), ready: false },
+            right: { current: new THREE.Vector3(), ready: false }
+          };
+          
+          // Enable local clipping in renderer
+          this.el.sceneEl.addEventListener('loaded', () => {
+            const renderer = this.el.sceneEl.renderer;
+            if (renderer) {
+              renderer.localClippingEnabled = true;
+            }
+          });
+          
+          this.el.sceneEl.addEventListener('vr-recenter', () => {
+            this.previousHeadPosInitialized = false;
+            delete this.el.sceneEl._bodyLocomotionState;
+          });
+          this.el.sceneEl.addEventListener('vr-height-calibrated', () => {
+            this._standingHipsLocalY = null;
+            this.previousHeadPosInitialized = false;
+            this._applyModelVerticalScale();
+          });
+          this.el.sceneEl.addEventListener('vr-model-scaled', () => {
+            this._applyModelVerticalScale();
+          });
+          
+          if (!window._bodyRiggedKeys) {
+            window._bodyRiggedKeys = {};
+            window.addEventListener('keydown', (e) => { window._bodyRiggedKeys[e.code] = true; });
+            window.addEventListener('keyup', (e) => { window._bodyRiggedKeys[e.code] = false; });
+          }
+          
+          this._loadModel();
+        },
+
+        _loadModel: function() {
+          const path = this.data.modelPath;
+          const isGlb = /\.glb$/i.test(path);
+          
+          if (isGlb) {
+            const tryGltf = () => {
+              if (!window.BodyRiggedLoaders?.ready) {
+                setTimeout(tryGltf, 50);
+                return;
+              }
+              new window.BodyRiggedLoaders.GLTFLoader().load(
+                path,
+                (gltf) => this.onModelLoaded(gltf.scene, { animations: gltf.animations, isGltf: true }),
+                undefined,
+                (error) => console.error('[Mixamo Body] GLB load error:', error)
+              );
+            };
+            tryGltf();
+            return;
+          }
+          
+          const loader = new THREE.FBXLoader();
+          loader.load(
+            path,
+            (fbx) => this.onModelLoaded(fbx, { animations: fbx.animations, isGltf: false }),
+            undefined,
+            (error) => console.error('[Mixamo Body] FBX load error:', error)
+          );
+        },
+
+        onModelLoaded: function(modelRoot, meta) {
+          this.modelLoaded = true;
+          this.model = modelRoot;
+          this.isGltf = meta.isGltf;
+          
+          if (meta.isGltf) {
+            modelRoot.scale.set(1, 1, 1);
+            modelRoot.position.y = 0.05;
+            modelRoot.rotation.y = Math.PI;
+          } else {
+            modelRoot.scale.set(0.01, 0.01, 0.01);
+            modelRoot.rotation.y = Math.PI;
+          }
+          this._modelBaseY = modelRoot.position.y;
+          
+          this.el.object3D.add(modelRoot);
+          
+          const allMaterials = [];
+          modelRoot.traverse((node) => {
+            if (node.isMesh) {
+              node.castShadow = true;
+            }
+            if (node.isSkinnedMesh && node.skeleton) {
+              this.skeleton = node.skeleton;
+              this.mapBones();
+              this.skinnedMesh = node;
+              node.castShadow = true;
+              node.receiveShadow = true;
+              
+              if (node.material) {
+                node.material = node.material.clone();
+                if (this.data.isMirror && node.material.color) {
+                  node.material.color.set(this.data.color);
+                }
+                allMaterials.push(node.material);
+              }
+            } else if (node.isMesh) {
+              if (node.material) {
+                node.material = node.material.clone();
+                if (this.data.isMirror && node.material.color) {
+                  node.material.color.set(this.data.color);
+                }
+                allMaterials.push(node.material);
+              }
+            }
+          });
+          
+          console.log('[Mixamo Body]', this.data.isMirror ? 'Mirror' : 'Local',
+            '-', meta.isGltf ? 'GLB' : 'FBX', '- materials:', allMaterials.length);
+          
+          this._initAnimations(meta.animations || []);
+          this._measureLegLengths();
+          this._measureBodyOffsets();
+          this._applyModelVerticalScale();
+          
+          document.querySelector('#status').textContent = 'Active';
+          document.querySelector('#status').style.color = '#4CAF50';
+        },
+        
+        _initAnimations: function(animations) {
+          this.useAnimatedLocomotion = false;
+          
+          if (!animations || animations.length === 0) {
+            console.log('[Mixamo Body] No embedded animations — using procedural walk cycle');
+            return;
+          }
+          
+          const aliases = {
+            idle: ['Idle', 'idle', 'T-Pose', 'TPose'],
+            walk: ['Walk', 'walk', 'Walking'],
+            run: ['Sprint', 'Run', 'run', 'Jog']
+          };
+          
+          for (const [slot, names] of Object.entries(aliases)) {
+            for (const name of names) {
+              const clip = THREE.AnimationClip.findByName(animations, name);
+              if (clip) {
+                this.animClips[slot] = clip;
+                break;
+              }
+            }
+          }
+          
+          if (!this.animClips.walk) {
+            console.log('[Mixamo Body] No walk clip — using procedural walk cycle. Found:',
+              animations.map((c) => c.name));
+            return;
+          }
+          
+          this.mixer = new THREE.AnimationMixer(this.model);
+          this.useAnimatedLocomotion = true;
+          
+          if (!this.animClips.idle && animations[0]) {
+            this.animClips.idle = animations[0];
+          }
+          
+          console.log('[Mixamo Body] Animation clips:',
+            Object.fromEntries(Object.entries(this.animClips).map(([k, v]) => [k, v.name])));
+
+          // Start idle immediately so model isn't in T-pose before blend space activates
+          if (this.animClips.idle) {
+            const idleAction = this.mixer.clipAction(this.animClips.idle);
+            idleAction.reset();
+            idleAction.setLoop(THREE.LoopRepeat, Infinity);
+            idleAction.setEffectiveWeight(1);
+            idleAction.play();
+          }
+          this.currentAnim = 'idle';
+
+          this._loadStrafeClip();
+          this._loadCrouchClip();
+        },
+        
+        _loadCrouchClip: function() {
+          const CROUCH_CLIP_CACHE_VERSION = 4;
+          if (window._crouchClipCacheVersion !== CROUCH_CLIP_CACHE_VERSION) {
+            window._crouchClipCache = null;
+            window._crouchClipCacheVersion = CROUCH_CLIP_CACHE_VERSION;
+          }
+          
+          const onClip = (clip) => {
+            if (!clip || !this.mixer) return;
+            this.animClips.crouchStand = this._retargetClipToSkeleton(
+              clip.clone(),
+              'CrouchStand',
+              { mode: 'crouch' }
+            );
+            console.log('[Mixamo Body]', this.data.isMirror ? 'Mirror' : 'Local',
+              '- Crouch clip ready, duration', this.animClips.crouchStand.duration.toFixed(2), 's');
+          };
+          
+          if (window._crouchClipCache) { onClip(window._crouchClipCache); return; }
+          if (window._crouchClipWaiters) { window._crouchClipWaiters.push(onClip); return; }
+          window._crouchClipWaiters = [onClip];
+          
+          const startLoad = () => {
+            const Loaders = window.BodyRiggedLoaders;
+            if (!Loaders?.ready || !Loaders.FBXLoader) {
+              setTimeout(startLoad, 50);
+              return;
+            }
+            new Loaders.FBXLoader().load(
+              'Crouched To Standing.fbx',
+              (fbx) => {
+                const clip = (fbx.animations && fbx.animations[0]) || null;
+                window._crouchClipCache = clip;
+                (window._crouchClipWaiters || []).forEach((fn) => fn(clip));
+                window._crouchClipWaiters = null;
+              },
+              undefined,
+              (err) => {
+                console.warn('[Mixamo Body] Crouch FBX load failed:', err);
+                window._crouchClipWaiters = null;
+              }
+            );
+          };
+          startLoad();
+        },
+        
+        // Load the external strafe FBX once (shared across both bodies), retarget its
+        // tracks to this GLB skeleton, then build right + mirrored-left strafe clips.
+        _loadStrafeClip: function() {
+          const onClip = (clip) => {
+            if (!clip || !this.mixer) return;
+            const right = this._retargetClipToSkeleton(clip.clone(), 'StrafeRight');
+            const left = this._mirrorClip(right, 'StrafeLeft');
+            this.animClips.strafeRight = right;
+            this.animClips.strafeLeft = left;
+            if (!window._strafeReferenceSpeed) {
+              window._strafeReferenceSpeed = this._calibrateStrafeReferenceSpeed(right);
+            }
+            this.strafeReferenceSpeed = window._strafeReferenceSpeed;
+            console.log('[Mixamo Body]', this.data.isMirror ? 'Mirror' : 'Local',
+              '- Strafe clips ready (right + mirrored left), ref speed',
+              this.strafeReferenceSpeed.toFixed(2), 'm/s');
+          };
+          
+          if (window._strafeClipCache) { onClip(window._strafeClipCache); return; }
+          if (window._strafeClipWaiters) { window._strafeClipWaiters.push(onClip); return; }
+          window._strafeClipWaiters = [onClip];
+          
+          const startLoad = () => {
+            const Loaders = window.BodyRiggedLoaders;
+            if (!Loaders?.ready || !Loaders.FBXLoader) {
+              setTimeout(startLoad, 50);
+              return;
+            }
+            new Loaders.FBXLoader().load(
+              'Walk Strafe Right.fbx',
+              (fbx) => {
+                const clip = (fbx.animations && fbx.animations[0]) || null;
+                window._strafeClipCache = clip;
+                (window._strafeClipWaiters || []).forEach((fn) => fn(clip));
+                window._strafeClipWaiters = null;
+              },
+              undefined,
+              (err) => {
+                console.warn('[Mixamo Body] Strafe FBX load failed:', err);
+                window._strafeClipWaiters = null;
+              }
+            );
+          };
+          startLoad();
+        },
+        
+        // Mixamo FBX tracks target "mixamorigXxx" in centimeters; the GLB skeleton uses
+        // "mixamorig:Xxx" in meters. Rename track targets to existing bones and scale
+        // position tracks to meters so the clip applies cleanly.
+        _retargetClipToSkeleton: function(clip, newName, options) {
+          options = options || {};
+          // Build a normalized-name -> actual bone name map (strip "mixamorig", ":",
+          // spaces, underscores; lowercase) so we match regardless of how the FBX
+          // exporter formatted the bone names.
+          // FBX exports the rig as "mixamorig1:Hips" (note the digit); the GLB uses
+          // "mixamorig:Hips". Strip "mixamorig" + optional digits + namespace chars.
+          const normalize = (n) => n.replace(/mixamorig\d*/i, '').replace(/[:_\s|]/g, '').toLowerCase();
+          const boneByNorm = {};
+          this.skeleton.bones.forEach((b) => { boneByNorm[normalize(b.name)] = b.name; });
+          
+          // Detect cm vs m from the hips position track magnitude.
+          let scale = 1;
+          for (const track of clip.tracks) {
+            if (/hips\.position$/i.test(track.name.replace(/[:_\s]/g, ''))) {
+              let maxAbs = 0;
+              for (let i = 0; i < track.values.length; i++) {
+                maxAbs = Math.max(maxAbs, Math.abs(track.values[i]));
+              }
+              if (maxAbs > 10) scale = 0.01;
+              break;
+            }
+          }
+          
+          const originalCount = clip.tracks.length;
+          const keptTracks = [];
+          clip.tracks.forEach((track) => {
+            const dot = track.name.lastIndexOf('.');
+            const node = track.name.substring(0, dot);
+            const prop = track.name.substring(dot + 1);
+            const actual = boneByNorm[normalize(node)];
+            if (!actual) return; // drop tracks that don't map to a real bone
+            track.name = actual + '.' + prop;
+            if (scale !== 1 && prop === 'position') {
+              for (let i = 0; i < track.values.length; i++) track.values[i] *= scale;
+            }
+            keptTracks.push(track);
+          });
+          clip.tracks = keptTracks;
+          clip.name = newName;
+          if (options.mode === 'crouch') {
+            this._sanitizeCrouchClip(clip);
+            this._addIdleHipsHold(clip, { includePosition: true });
+          } else {
+            this._sanitizeStrafeClip(clip);
+            this._addIdleHipsHold(clip);
+          }
+          console.log('[Mixamo Body]', options.mode === 'crouch' ? 'Crouch' : 'Strafe',
+            'retarget:', clip.tracks.length, 'tracks after sanitize (was', originalCount + '); scale', scale);
+          return clip;
+        },
+        
+        // Limb rotations only — no FBX hips translate/rotate (tips body horizontal
+        // and sinks the mesh; leg IK + idle hips hold handle vertical + feet).
+        _sanitizeCrouchClip: function(clip) {
+          const normalize = (n) => n.replace(/mixamorig\d*/i, '').replace(/[:_\s|]/g, '').toLowerCase();
+          clip.tracks = clip.tracks.filter((track) => {
+            const dot = track.name.lastIndexOf('.');
+            const bone = track.name.substring(0, dot);
+            const prop = track.name.substring(dot + 1);
+            const boneKey = normalize(bone);
+            if (prop === 'scale') return false;
+            if (boneKey === 'hips') return false;
+            if (prop === 'position') return false;
+            return prop === 'quaternion' || prop === 'rotation';
+          });
+        },
+        
+        // Hold hips at idle frame-0 pose so external FBX clips stay upright.
+        _addIdleHipsHold: function(clip, options) {
+          options = options || {};
+          const hipsName = this.bones.hips?.name;
+          if (!hipsName || !this.animClips.idle) return;
+          
+          const props = options.includePosition
+            ? ['quaternion', 'rotation', 'position']
+            : ['quaternion', 'rotation'];
+          
+          props.forEach((wantProp) => {
+            const idleTrack = this.animClips.idle.tracks.find((t) => {
+              const prop = t.name.substring(t.name.lastIndexOf('.') + 1);
+              return t.name.startsWith(hipsName + '.') && prop === wantProp;
+            });
+            if (!idleTrack) return;
+            const prop = idleTrack.name.substring(idleTrack.name.lastIndexOf('.') + 1);
+            const TrackCtor = idleTrack.constructor;
+            const valueCount = prop === 'quaternion' ? 4 : 3;
+            clip.tracks.push(new TrackCtor(
+              hipsName + '.' + prop,
+              [0],
+              idleTrack.values.slice(0, valueCount)
+            ));
+          });
+        },
+        
+        // External Mixamo FBX uses a different bind pose (mixamorig1:) than our GLB
+        // (mixamorig:). Hips/root position+rotation from the FBX tip the whole body
+        // onto the floor. Keep rotation-only limb tracks; entity handles facing/move.
+        _sanitizeStrafeClip: function(clip) {
+          const normalize = (n) => n.replace(/mixamorig\d*/i, '').replace(/[:_\s|]/g, '').toLowerCase();
+          clip.tracks = clip.tracks.filter((track) => {
+            const dot = track.name.lastIndexOf('.');
+            const bone = track.name.substring(0, dot);
+            const prop = track.name.substring(dot + 1);
+            const boneKey = normalize(bone);
+            if (boneKey === 'hips') return false;
+            if (prop === 'position' || prop === 'scale') return false;
+            return prop === 'quaternion' || prop === 'rotation';
+          });
+        },
+        
+        // Mirror a clip across the body's sagittal plane: swap Left/Right bone targets,
+        // negate X of positions and the Y/Z of quaternions.
+        _mirrorClip: function(clip, newName) {
+          const tracks = clip.tracks.map((track) => {
+            const dot = track.name.lastIndexOf('.');
+            let node = track.name.substring(0, dot);
+            const prop = track.name.substring(dot + 1);
+            if (/Left/.test(node)) node = node.replace('Left', 'Right');
+            else if (/Right/.test(node)) node = node.replace('Right', 'Left');
+            
+            const values = track.values.slice();
+            if (prop === 'quaternion') {
+              for (let i = 0; i < values.length; i += 4) {
+                values[i + 1] = -values[i + 1];
+                values[i + 2] = -values[i + 2];
+              }
+            } else if (prop === 'position') {
+              for (let i = 0; i < values.length; i += 3) {
+                values[i] = -values[i];
+              }
+            }
+            return new track.constructor(node + '.' + prop, track.times.slice(), values);
+          });
+          // Use the source clip's own constructor so the clip stays the same THREE
+          // flavor as the GLB-loaded clips (the page mixes module + global THREE).
+          return new clip.constructor(newName, clip.duration, tracks);
+        },
+        
+        // Measure how fast the strafe clip moves the foot (m/s at timeScale 1) so playback
+        // can be scaled to match real sideways travel speed.
+        _calibrateStrafeReferenceSpeed: function(clip) {
+          if (!this.mixer || !this.skeleton || !this.model) return 1.6;
+          const foot = this.bones.rightFoot || this.bones.leftFoot;
+          if (!foot) return 1.6;
+          
+          const saved = this.skeleton.bones.map((b) => ({
+            q: b.quaternion.clone(),
+            p: b.position.clone()
+          }));
+          
+          const action = this.mixer.clipAction(clip);
+          action.reset();
+          action.setEffectiveWeight(1);
+          action.play();
+          action.timeScale = 1;
+          
+          let pathLen = 0;
+          const prev = new THREE.Vector3();
+          const steps = 50;
+          
+          action.time = 0;
+          this.mixer.update(0);
+          this.skeleton.update();
+          this.model.updateWorldMatrix(true, true);
+          foot.getWorldPosition(prev);
+          
+          for (let i = 1; i <= steps; i++) {
+            action.time = (i / steps) * clip.duration;
+            this.mixer.update(0);
+            this.skeleton.update();
+            this.model.updateWorldMatrix(true, true);
+            const p = new THREE.Vector3();
+            foot.getWorldPosition(p);
+            pathLen += p.distanceTo(prev);
+            prev.copy(p);
+          }
+          
+          action.stop();
+          action.setEffectiveWeight(0);
+          
+          saved.forEach((s, i) => {
+            this.skeleton.bones[i].quaternion.copy(s.q);
+            this.skeleton.bones[i].position.copy(s.p);
+          });
+          this.skeleton.update();
+          
+          // Foot path is longer than center-of-mass travel; ~2.2x for a strafe cycle.
+          return Math.max(pathLen / (clip.duration * 2.2), 0.4);
+        },
+        
+        _updateSmoothedMoveDir: function(dt) {
+          const raw = this._rawMoveDir;
+          if (raw && raw.lengthSq() > 0.0001) {
+            // Responsive blend — tracks stick input closely for accurate blend space weights
+            const blend = Math.min(1, dt * 14);
+            if (this._smoothedMoveDir.lengthSq() < 0.0001) {
+              this._smoothedMoveDir.copy(raw);
+            } else {
+              this._smoothedMoveDir.lerp(raw, blend);
+            }
+          } else {
+            this._smoothedMoveDir.lerp(new THREE.Vector3(0, 0, 0), Math.min(1, dt * 12));
+          }
+        },
+        
+        _getMoveFacingComponents: function(opts) {
+          opts = opts || {};
+          const moveDir = opts.raw ? this._rawMoveDir : this._smoothedMoveDir;
+          if (!moveDir || moveDir.lengthSq() < 0.0001) return null;
+          
+          const yawQuat = this._getYawQuat();
+          const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(yawQuat);
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yawQuat);
+          return {
+            fwdComp: moveDir.dot(fwd),
+            rightComp: moveDir.dot(right)
+          };
+        },
+
+        _isPureStrafeInput: function(comps) {
+          if (!comps) return false;
+          const absFwd = Math.abs(comps.fwdComp);
+          const absRight = Math.abs(comps.rightComp);
+          return absRight > absFwd * 1.35 && absFwd < 0.28;
+        },
+
+        _resetMoveYawTwist: function() {
+          this.moveYawTwist = 0;
+          this._smoothedMoveYawTarget = 0;
+        },
+        
+        _shortestYawDelta: function(from, to) {
+          let delta = to - from;
+          while (delta > Math.PI) delta -= Math.PI * 2;
+          while (delta < -Math.PI) delta += Math.PI * 2;
+          return delta;
+        },
+
+        _getHeadYaw: function() {
+          const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this._headFacingQuat);
+          fwd.y = 0;
+          if (fwd.lengthSq() < 1e-6) return this._prevHeadYaw ?? 0;
+          fwd.normalize();
+          return Math.atan2(fwd.x, -fwd.z);
+        },
+
+        _getLocomotionStrafeDir: function(speed, dt) {
+          if (!this.animClips.strafeRight || !this.animClips.strafeLeft) return 0;
+          if (speed < this.walkThreshold || speed >= this.sprintThreshold) {
+            this._stableStrafeDir = 0;
+            this._strafePending = 0;
+            this._strafeHoldT = 0;
+            return 0;
+          }
+          
+          // Raw stick intent — smoothed dir lags after fwd/bkw taps and blocks strafe entry.
+          const comps = this._getMoveFacingComponents({ raw: true });
+          if (!comps) return this._stableStrafeDir || 0;
+          
+          if (!this._isPureStrafeInput(comps)) {
+            this._stableStrafeDir = 0;
+            this._strafePending = 0;
+            this._strafeHoldT = 0;
+            return 0;
+          }
+          
+          const candidate = comps.rightComp > 0 ? 1 : -1;
+          
+          // Enter strafe immediately from walk; only debounce left/right flips while strafing.
+          if (this._stableStrafeDir === 0) {
+            this._stableStrafeDir = candidate;
+            this._strafePending = candidate;
+            this._strafeHoldT = 0;
+            return candidate;
+          }
+          
+          if (candidate === this._stableStrafeDir) {
+            this._strafePending = candidate;
+            this._strafeHoldT = 0;
+            return this._stableStrafeDir;
+          }
+          if (candidate === this._strafePending) {
+            this._strafeHoldT += dt || 0.016;
+          } else {
+            this._strafePending = candidate;
+            this._strafeHoldT = 0;
+          }
+          if (this._strafeHoldT > 0.12) {
+            this._stableStrafeDir = candidate;
+          }
+          return this._stableStrafeDir || 0;
+        },
+        
+        _getMoveYawOffset: function(speed, strafeDir) {
+          if (speed < this.walkThreshold || speed >= this.sprintThreshold) return 0;
+          if (this._headTurnRate > 2.5) return 0;
+
+          // No hip twist when strafe animation is active (it handles sideways motion)
+          const strafeBlend = (this._blendWeights.strafeLeft || 0) + (this._blendWeights.strafeRight || 0);
+          if (strafeBlend > 0.5) return 0;
+
+          const comps = this._getMoveFacingComponents({ raw: true })
+            || this._getMoveFacingComponents();
+          if (!comps) return 0;
+          const { fwdComp, rightComp } = comps;
+          const absFwd = Math.abs(fwdComp);
+          const absRight = Math.abs(rightComp);
+
+          const maxTwist = Math.PI * 0.42;
+          const lateralAngle = Math.atan2(rightComp, Math.max(absFwd, 0.08));
+          const signedTwist = fwdComp >= 0 ? -lateralAngle : lateralAngle;
+          const lateralRatio = absRight / Math.max(absFwd, 0.08);
+          const diagonalWeight = lateralRatio >= 0.32
+            ? 1
+            : THREE.MathUtils.smoothstep(0.06, 0.32, lateralRatio);
+          return THREE.MathUtils.clamp(signedTwist * diagonalWeight, -maxTwist, maxTwist);
+        },
+        
+        // Headset yaw is the sole authority for where the rig faces (entity + locomotion frame).
+        _updateHeadFacing: function(headQuat, dt) {
+          const look = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
+          look.y = 0;
+          if (look.lengthSq() < 1e-6) return;
+          look.normalize();
+          
+          const target = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), look);
+          if (this._prevHeadYaw === null) {
+            this._headFacingQuat.copy(target);
+          } else {
+            this._headFacingQuat.slerp(target, Math.min(1, dt * 18));
+          }
+          this.torsoRotation.copy(this._headFacingQuat);
+          
+          const headYaw = Math.atan2(look.x, -look.z);
+          if (this._prevHeadYaw !== null) {
+            let delta = headYaw - this._prevHeadYaw;
+            while (delta > Math.PI) delta -= Math.PI * 2;
+            while (delta < -Math.PI) delta += Math.PI * 2;
+            this._headTurnRate = Math.abs(delta) / Math.max(dt, 0.001);
+          } else {
+            this._headTurnRate = 0;
+          }
+          this._prevHeadYaw = headYaw;
+        },
+        
+        // Lower body only: twist hips (legs follow), counter-rotate spine so torso/head stay on headset.
+        _applyLowerBodyMoveYaw: function(dt, targetOffset) {
+          if (!this.bones.hips) return;
+
+          // When strafe animation is playing, it handles sideways — no hip twist
+          const strafeBlend = (this._blendWeights.strafeLeft || 0) + (this._blendWeights.strafeRight || 0);
+          if (strafeBlend > 0.5) {
+            this._resetMoveYawTwist();
+            return;
+          }
+          
+          const currentTarget = this._smoothedMoveYawTarget || 0;
+          const closing = Math.abs(targetOffset) < Math.abs(currentTarget);
+          this._smoothedMoveYawTarget = THREE.MathUtils.lerp(
+            currentTarget,
+            targetOffset,
+            Math.min(1, dt * (closing ? 5 : 9))
+          );
+          
+          const maxStep = (closing ? 2.2 : 3.4) * dt;
+          const twistDelta = this._shortestYawDelta(this.moveYawTwist, this._smoothedMoveYawTarget);
+          this.moveYawTwist += THREE.MathUtils.clamp(twistDelta, -maxStep, maxStep);
+          
+          if (Math.abs(this.moveYawTwist) < 0.0005 && Math.abs(this._smoothedMoveYawTarget) < 0.0005) {
+            this._resetMoveYawTwist();
+            return;
+          }
+          if (Math.abs(this.moveYawTwist) < 0.0005) return;
+          
+          const yAxis = new THREE.Vector3(0, 1, 0);
+          const twistQuat = new THREE.Quaternion().setFromAxisAngle(yAxis, this.moveYawTwist);
+          const invTwist = twistQuat.clone().invert();
+          
+          // Legs (upLeg → foot) are hip children — they aim toward travel direction.
+          this.bones.hips.quaternion.multiply(twistQuat);
+          
+          // Spine chain sits on hips; undo the yaw there so shoulders/neck/head keep entity forward.
+          // VR head + hand IK run afterward in updateBones().
+          if (this.bones.spine) {
+            this.bones.spine.quaternion.premultiply(invTwist);
+          }
+        },
+        
+        _measureBodyOffsets: function() {
+          if (!this.bones.hips) return;
+          
+          this.el.object3D.position.set(0, 0, 0);
+          this.el.object3D.updateMatrixWorld(true);
+          
+          if (this.mixer && this.animClips.idle) {
+            const idle = this.mixer.clipAction(this.animClips.idle);
+            idle.play();
+            idle.time = 0;
+            this.mixer.update(0);
+          }
+          if (this.skeleton) {
+            this.skeleton.update();
+          }
+          this.model.updateWorldMatrix(true, true);
+          
+          const hipsWorld = new THREE.Vector3();
+          const entityWorld = new THREE.Vector3();
+          this.bones.hips.getWorldPosition(hipsWorld);
+          this.el.object3D.getWorldPosition(entityWorld);
+          this.modelHipsLocalY = hipsWorld.y - entityWorld.y;
+          
+          if (this.bones.leftFoot && this.bones.rightFoot) {
+            const left = new THREE.Vector3();
+            const right = new THREE.Vector3();
+            this.bones.leftFoot.getWorldPosition(left);
+            this.bones.rightFoot.getWorldPosition(right);
+            this.modelFeetLocalY = Math.min(left.y, right.y) - entityWorld.y;
+          } else {
+            const bounds = new THREE.Box3().setFromObject(this.model);
+            this.modelFeetLocalY = bounds.min.y - entityWorld.y;
+          }
+          
+          if (this.bones.head && this.bones.neck) {
+            const headW = new THREE.Vector3();
+            const neckW = new THREE.Vector3();
+            this.bones.head.getWorldPosition(headW);
+            this.bones.neck.getWorldPosition(neckW);
+            this._restHeadAboveNeck = Math.max(0.08, headW.y - neckW.y);
+          }
+          if (this.bones.hips) {
+            this._standingHipsLocalY = this.bones.hips.position.y;
+          }
+          
+          if (this.bones.head) {
+            const headW = new THREE.Vector3();
+            this.bones.head.getWorldPosition(headW);
+            this.modelHeadLocalY = headW.y - entityWorld.y;
+          }
+          if (this.bones.headTop) {
+            const topW = new THREE.Vector3();
+            this.bones.headTop.getWorldPosition(topW);
+            this.modelHeadTopLocalY = topW.y - entityWorld.y;
+          } else if (this.modelHeadLocalY != null) {
+            this.modelHeadTopLocalY = this.modelHeadLocalY + (this._restHeadAboveNeck || 0.1);
+          }
+          this.modelStandingHeightM =
+            (this.modelHeadTopLocalY != null ? this.modelHeadTopLocalY : this.modelHeadLocalY || 0) -
+            this.modelFeetLocalY;
+          this.modelEyeHeightM = (this.modelHeadLocalY || 1.6) - (this._headEyeOffsetY || 0.06);
+          
+          const w = this.el.sceneEl.legIkWorld;
+          if (w) {
+            w.modelStandingHeightM = this.modelStandingHeightM;
+            w.modelEyeHeightM = this.modelEyeHeightM;
+            w.modelFeetLocalY = this.modelFeetLocalY;
+          }
+          this.el.sceneEl.emit('model-dimensions-measured', {
+            standingHeightM: this.modelStandingHeightM,
+            eyeHeightM: this.modelEyeHeightM,
+            feetLocalY: this.modelFeetLocalY
+          });
+          
+          const heightInfo = document.getElementById('model-height-info');
+          if (heightInfo) {
+            heightInfo.textContent =
+              '~' + this.modelStandingHeightM.toFixed(2) + ' m tall · model eye ~' +
+              this.modelEyeHeightM.toFixed(2) + ' m';
+          }
+          
+          console.log('[Mixamo Body] standingHeight:', this.modelStandingHeightM.toFixed(3), 'm',
+            'modelEye:', this.modelEyeHeightM.toFixed(3), 'm',
+            'modelHipsLocalY:', this.modelHipsLocalY.toFixed(3),
+            'modelFeetLocalY:', this.modelFeetLocalY.toFixed(3),
+            'headAboveNeck:', (this._restHeadAboveNeck || 0).toFixed(3));
+        },
+        
+        // Hips sit ~15 cm behind the head; character forward is -Z, so +Z is backward.
+        _getHipsBackOffset: function() {
+          const back = new THREE.Vector3(0, 0, 0.15);
+          back.applyQuaternion(this._getYawQuat());
+          return back;
+        },
+        
+        _getYawQuat: function() {
+          if (this.useAnimatedLocomotion) {
+            return this._headFacingQuat;
+          }
+          const yaw = new THREE.Euler().setFromQuaternion(this.torsoRotation, 'YXZ').y;
+          return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        },
+        
+        // World floor stays at Y=0 (local-floor). Anchor body XZ under the head at physical ground.
+        _isLocalRigChild: function() {
+          if (this.data.isMirror || !this.rig) return false;
+          let node = this.el.object3D;
+          while (node) {
+            if (node === this.rig.object3D) return true;
+            node = node.parent;
+          }
+          return false;
+        },
+
+        _getPhysicalGroundY: function(headWorldX, headWorldZ) {
+          const legIkWorld = this.el.sceneEl.legIkWorld;
+          if (this._isLocalRigChild() && legIkWorld?.playerRootPos) {
+            return legIkWorld.playerRootPos.y;
+          }
+          if (legIkWorld?.terrain) {
+            return legIkWorld.terrain.getHeightAtWorld(headWorldX, headWorldZ);
+          }
+          return 0;
+        },
+
+        _getManualBodyOffsetLocal: function() {
+          const w = this.el.sceneEl.legIkWorld;
+          if (!w || !this._isLocalRigChild()) return new THREE.Vector3();
+          const local = new THREE.Vector3(
+            w.bodyLateralOffsetM || 0,
+            0,
+            w.bodyForwardOffsetM || 0
+          );
+          local.applyQuaternion(this._getYawQuat());
+          return local;
+        },
+
+        _applyModelVerticalScale: function() {
+          if (!this.model) return;
+          const scale = this.el.sceneEl.legIkWorld?.modelVerticalScale ?? 1;
+          this.model.scale.set(1, scale, 1);
+        },
+
+        _getCameraLocalAnchor: function() {
+          const camLocal = this.camera.object3D.position.clone();
+          camLocal.add(this._getManualBodyOffsetLocal());
+          camLocal.y = 0;
+          return camLocal;
+        },
+
+        _getCameraFootWorld: function() {
+          const foot = new THREE.Vector3();
+          this.camera.object3D.getWorldPosition(foot);
+          foot.add(this._getManualBodyOffsetLocal());
+          foot.y = this._getPhysicalGroundY(foot.x, foot.z);
+          return foot;
+        },
+
+        _computeFootRoot: function(headWorldX, headWorldZ) {
+          const groundY = this._getPhysicalGroundY(headWorldX, headWorldZ);
+          return new THREE.Vector3(headWorldX, groundY, headWorldZ);
+        },
+        
+        _anchorBodyAtFeet: function(footRoot) {
+          // Room-scale: camera local XZ changes on the rig — anchor body there, not at rig origin.
+          if (this._isLocalRigChild()) {
+            this.el.object3D.position.copy(this._getCameraLocalAnchor());
+            this.el.object3D.quaternion.copy(this._getYawQuat());
+            return;
+          }
+          this.el.object3D.position.copy(footRoot);
+          this.el.object3D.quaternion.copy(this._getYawQuat());
+        },
+        
+        _getLegIKFootRoot: function(headWorldPos) {
+          if (this._isLocalRigChild()) {
+            return this._getCameraFootWorld();
+          }
+          const back = this._getHipsBackOffset();
+          return this._computeFootRoot(
+            headWorldPos.x + back.x,
+            headWorldPos.z + back.z
+          );
+        },
+        
+        _updateLegDebug: function() {
+          if (this.data.isMirror) return;
+          const ik = this.legIK;
+          const f = (v) => (v === undefined || v === null ? '—' : v.toFixed(3));
+          let line;
+          if (!ik) {
+            line = 'legIK: not initialized';
+          } else {
+            const w = this.el.sceneEl.legIkWorld;
+            const L = ik.feet.left;
+            const R = ik.feet.right;
+            // Live world foot bone heights (what you actually see)
+            const lw = new THREE.Vector3();
+            const rw = new THREE.Vector3();
+            if (this.bones.leftFoot) this.bones.leftFoot.getWorldPosition(lw);
+            if (this.bones.rightFoot) this.bones.rightFoot.getWorldPosition(rw);
+            line =
+              'physics:' + (w?.world ? 'ON' : 'OFF') +
+              ' active:' + ik.isActive +
+              ' blend:' + f(ik._globalIKBlend) +
+              ' spd:' + f(this.horizontalSpeed) +
+              ' vrDrop:' + f(this._vrHeadDrop) +
+              ' bodyAdj:' + f(w?.playerHeightAdjustM) +
+              ' depth:' + f(w?.bodyForwardOffsetM) +
+              ' side:' + f(w?.bodyLateralOffsetM) +
+              ' scale:' + f(w?.modelVerticalScale) +
+              ' camOff:' + f(w?.cameraFloorOffsetM) +
+              ' camY:' + f(this.camera?.object3D?.position?.y) +
+              ' standEye:' + f(w?.standingEyeLocalY) +
+              ' crouch:' + f(w?.crouchAmount) +
+              ' root:' + f(ik._rootPosition.y) +
+              ' | L hit:' + (L.raycastHit ? f(L.raycastHitPoint.y) : 'NO') +
+              ' off:' + f(L.positionOffset) +
+              ' footY:' + f(lw.y) +
+              ' | R hit:' + (R.raycastHit ? f(R.raycastHitPoint.y) : 'NO') +
+              ' off:' + f(R.positionOffset) +
+              ' footY:' + f(rw.y);
+          }
+          
+          const el = document.querySelector('#legdebug');
+          if (el) el.textContent = line;
+          // Console logging disabled now that IK is confirmed working. Re-enable by
+          // setting window._legDebugLog = true in the console if you need it again.
+          if (window._legDebugLog) {
+            this._legDebugCount = (this._legDebugCount || 0) + 1;
+            if (this._legDebugCount % 60 === 0) console.log('[Leg IK]', line);
+          }
+        },
+        
+        _applyLegIKTerrain: function(dt, footRoot) {
+          if (!this.useAnimatedLocomotion) {
+            const hipsInitialPos = this.initialBonePositions[this.bones.hips?.name];
+            if (hipsInitialPos) {
+              this.bones.hips.position.copy(hipsInitialPos);
+            }
+            this.updateLegAnimation(dt, this.horizontalSpeed);
+          }
+          
+          if (!this.legIK) return;
+          
+          const sprint = this._smoothedHorizontalSpeed >= this.sprintThreshold;
+          const crouchAmt = this.el.sceneEl.legIkWorld?.crouchAmount || 0;
+          const crouchWeight = this._crouchAnimWeight || 0;
+          this.legIK.crouchFootPlantMode = crouchWeight > 0.15 && crouchAmt > 0.05;
+          // Do NOT gate IK on Rapier's computedGrounded() — for a kinematic body that
+          // starts on the floor it can read false and silently disable all IK. Keep IK
+          // active whenever not sprinting; the per-foot raycast (raycastLength) already
+          // zeroes the feet when the character is genuinely airborne.
+          this.legIK.isGrounded = true;
+          this.legIK.isMoving = this._smoothedHorizontalSpeed > this.walkThreshold;
+          this.legIK.jumped = false;
+          this.legIK.isActive = !sprint;
+          this.legIK.speed = this._smoothedHorizontalSpeed;
+          
+          this.legIK.update(dt, footRoot);
+          
+          if (this.skeleton) {
+            this.skeleton.update();
+          }
+        },
+        
+        // --- 2D Blend Space Locomotion (UE-style) ---
+        // All locomotion clips play simultaneously; weights interpolated each frame
+        // from the 2D movement vector relative to character facing.
+
+        _initBlendSpace: function() {
+          if (!this.mixer) return;
+          const slots = ['idle', 'walk', 'run', 'strafeLeft', 'strafeRight'];
+          slots.forEach((slot) => {
+            if (!this.animClips[slot]) return;
+            const action = this.mixer.clipAction(this.animClips[slot]);
+            if (!action.isRunning()) {
+              action.reset();
+              action.setLoop(THREE.LoopRepeat, Infinity);
+              action.setEffectiveWeight(slot === 'idle' ? 1 : 0);
+              action.setEffectiveTimeScale(1);
+              action.play();
+            }
+          });
+          this._blendSpaceInited = true;
+        },
+
+        _computeBlendWeights: function(speed, fwdComp, rightComp) {
+          const w = { idle: 0, walk: 0, run: 0, strafeLeft: 0, strafeRight: 0 };
+
+          if (speed < this.walkThreshold) {
+            w.idle = 1;
+            return w;
+          }
+
+          const hasStrafe = !!(this.animClips.strafeLeft && this.animClips.strafeRight);
+          const hasRun = !!this.animClips.run;
+
+          // Pure strafe = lateral input dominates with very little forward.
+          // Diagonals use walk + hip rotation (no strafe blending).
+          const absFwd = Math.abs(fwdComp);
+          const absRight = Math.abs(rightComp);
+          const isPureStrafe = hasStrafe && absRight > absFwd * 1.35 && absFwd < 0.28;
+
+          // Speed zones with smooth ramps
+          const runEntry = this.sprintThreshold * 0.8;
+          const runFull = this.sprintThreshold;
+
+          const locoRamp = THREE.MathUtils.smoothstep(speed, this.walkThreshold, this.walkThreshold + 0.4);
+          let idleBlend = 1 - locoRamp;
+          let locoBlend = locoRamp;
+          let runBlend = 0;
+
+          if (hasRun && speed > runEntry) {
+            const runRamp = THREE.MathUtils.smoothstep(speed, runEntry, runFull);
+            runBlend = runRamp * locoBlend;
+            locoBlend *= (1 - runRamp);
+          }
+
+          w.idle = idleBlend;
+
+          if (isPureStrafe) {
+            // Pure sideways: strafe animation only
+            if (rightComp < 0) {
+              w.strafeLeft = locoBlend + runBlend;
+            } else {
+              w.strafeRight = locoBlend + runBlend;
+            }
+          } else {
+            // Forward, backward, or diagonal: walk/run + hip rotation handles direction
+            w.walk = locoBlend;
+            w.run = runBlend;
+          }
+
+          return w;
+        },
+
+        _updateBlendTimeScales: function(speed) {
+          const walkRef = 2.0;
+          const runRef = 3.5;
+          const strafeRef = this.strafeReferenceSpeed || 1.6;
+
+          const absSpeed = Math.abs(speed);
+          const sign = this._walkBackSign;
+          const moving = absSpeed > this.walkThreshold;
+
+          if (this.animClips.walk) {
+            const walkScale = moving ? THREE.MathUtils.clamp(absSpeed / walkRef, 0.5, 2.5) : 1;
+            this.mixer.clipAction(this.animClips.walk).setEffectiveTimeScale(sign * walkScale);
+          }
+          if (this.animClips.run) {
+            const runScale = moving ? THREE.MathUtils.clamp(absSpeed / runRef, 0.7, 2.5) : 1;
+            this.mixer.clipAction(this.animClips.run).setEffectiveTimeScale(sign * runScale);
+          }
+          if (this.animClips.strafeLeft) {
+            const sScale = moving ? THREE.MathUtils.clamp(absSpeed / strafeRef, 0.4, 3.0) : 1;
+            this.mixer.clipAction(this.animClips.strafeLeft).setEffectiveTimeScale(sScale);
+          }
+          if (this.animClips.strafeRight) {
+            const sScale = moving ? THREE.MathUtils.clamp(absSpeed / strafeRef, 0.4, 3.0) : 1;
+            this.mixer.clipAction(this.animClips.strafeRight).setEffectiveTimeScale(sScale);
+          }
+          if (this.animClips.idle) {
+            this.mixer.clipAction(this.animClips.idle).setEffectiveTimeScale(1);
+          }
+        },
+
+        _applyBlendWeights: function(dt) {
+          const BLEND_SPEED = 12;
+          const alpha = Math.min(1, dt * BLEND_SPEED);
+
+          const slots = ['idle', 'walk', 'run', 'strafeLeft', 'strafeRight'];
+          slots.forEach((slot) => {
+            if (!this.animClips[slot]) {
+              this._blendWeights[slot] = 0;
+              return;
+            }
+            this._blendWeights[slot] = THREE.MathUtils.lerp(
+              this._blendWeights[slot],
+              this._blendWeightsTarget[slot],
+              alpha
+            );
+            this.mixer.clipAction(this.animClips[slot]).setEffectiveWeight(
+              Math.max(this._blendWeights[slot], 0.0001)
+            );
+          });
+        },
+
+        _playAnimation: function(name, fadeTime) {
+          if (!this.mixer || !this.animClips[name]) return;
+          if (this.currentAnim === name) return;
+          this.currentAnim = name;
+        },
+        
+        _updateLocomotionAnimation: function(dt) {
+          if (!this.mixer) return;
+
+          this._initBlendSpace();
+          this._updateSmoothedMoveDir(dt);
+
+          const speed = this._smoothedHorizontalSpeed;
+          const crouchAmt = this.el.sceneEl.legIkWorld?.crouchAmount || 0;
+          const crouching = crouchAmt > 0.12 || (this._crouchAnimWeight || 0) > 0.12;
+
+          // Decompose movement into facing-relative forward/right components
+          let comps = this._getMoveFacingComponents();
+          let fwdComp = 0, rightComp = 0;
+          if (speed >= this.walkThreshold) {
+            if (comps) {
+              fwdComp = comps.fwdComp;
+              rightComp = comps.rightComp;
+            } else {
+              fwdComp = 1;
+            }
+          }
+
+          // Track walk direction for backward playback
+          if (fwdComp < -0.12) this._walkBackSign = -1;
+          else if (fwdComp > 0.08) this._walkBackSign = 1;
+
+          // Compute blend weights from 2D movement vector
+          this._blendWeightsTarget = this._computeBlendWeights(speed, fwdComp, rightComp);
+
+          // Smoothly interpolate weights each frame
+          this._applyBlendWeights(dt);
+
+          // Set timeScale on each clip to match actual travel speed
+          this._updateBlendTimeScales(speed);
+
+          // Crouch overlay
+          this._updateCrouchPose(dt);
+
+          // Advance mixer — all actions play naturally at their timeScale
+          this.mixer.update(dt);
+
+          if (this.bones.hips) {
+            this._animatedHipsLocalY = this.bones.hips.position.y;
+          }
+          if (!this.animClips.crouchStand) {
+            this._applyVRCrouchProcedural();
+          }
+
+          if (crouchAmt < 0.03 && this.bones.hips) {
+            this._standingHipsLocalY = this.bones.hips.position.y;
+          }
+
+          // Lower-body yaw twist for diagonal movement
+          const strafeWeight = (this._blendWeights.strafeLeft || 0) + (this._blendWeights.strafeRight || 0);
+          const isMostlyStrafing = strafeWeight > 0.65;
+          let yawOffset = 0;
+          if (!isMostlyStrafing && speed >= this.walkThreshold) {
+            yawOffset = this._getMoveYawOffset(speed, 0);
+          }
+          const crouchWalking = crouching && speed > this.walkThreshold;
+          this._applyLowerBodyMoveYaw(
+            dt,
+            crouchWalking ? yawOffset * 0.65 : (crouching ? 0 : yawOffset)
+          );
+
+          if (!this.data.isMirror) {
+            this._hideLocalHeadMesh();
+          }
+        },
+        
+        _updateCrouchPose: function(dt) {
+          const target = this.el.sceneEl.legIkWorld?.crouchAmount || 0;
+          const clip = this.animClips.crouchStand;
+
+          if (!clip || !this.mixer) {
+            return;
+          }
+
+          this._crouchAnimWeight = THREE.MathUtils.lerp(
+            this._crouchAnimWeight || 0,
+            target > 0.03 ? 1 : 0,
+            Math.min(1, dt * 10)
+          );
+
+          const speed = this._smoothedHorizontalSpeed || 0;
+          const moving = speed > this.walkThreshold;
+          const moveBlend = moving
+            ? THREE.MathUtils.clamp(
+                (speed - this.walkThreshold) / Math.max(this.sprintThreshold - this.walkThreshold, 0.4),
+                0,
+                1
+              )
+            : 0;
+
+          const action = this.mixer.clipAction(clip);
+          action.setLoop(THREE.LoopOnce, 1);
+          action.clampWhenFinished = true;
+          if (!action.isRunning()) {
+            action.reset();
+            action.play();
+          }
+          action.setEffectiveTimeScale(0);
+          action.time = THREE.MathUtils.clamp((1 - target) * clip.duration, 0, clip.duration);
+
+          const crouchEffective = this._crouchAnimWeight * (
+            moving ? THREE.MathUtils.lerp(1, 0.38, moveBlend) : 1
+          );
+          action.setEffectiveWeight(crouchEffective);
+
+          // When crouching, scale locomotion weights so crouch pose can dominate
+          if (this._crouchAnimWeight > 0.05) {
+            let locoFade;
+            if (moving) {
+              locoFade = THREE.MathUtils.lerp(0.3, 1.0, moveBlend);
+            } else {
+              locoFade = this._crouchAnimWeight > 0.35
+                ? Math.max(0, 1 - this._crouchAnimWeight * 0.98)
+                : 1 - this._crouchAnimWeight * 0.92;
+            }
+
+            ['idle', 'walk', 'run', 'strafeRight', 'strafeLeft'].forEach((slot) => {
+              if (!this.animClips[slot]) return;
+              const locoAction = this.mixer.clipAction(this.animClips[slot]);
+              if (!locoAction.isRunning()) return;
+              locoAction.setEffectiveWeight(
+                Math.max((this._blendWeights[slot] || 0) * locoFade, 0.0001)
+              );
+            });
+          }
+        },
+        
+        _applyWorldDeltaToLocal: function(bone, worldDelta) {
+          if (!bone.parent) {
+            bone.quaternion.premultiply(worldDelta);
+            return;
+          }
+          const parentQ = new THREE.Quaternion();
+          bone.parent.getWorldQuaternion(parentQ);
+          const localDelta = parentQ.clone().invert().multiply(worldDelta).multiply(parentQ);
+          bone.quaternion.premultiply(localDelta);
+        },
+        
+        _getEffectiveEyeLocalY: function() {
+          const comp = this.el.sceneEl.components['leg-ik-world'];
+          if (comp?._getEffectiveEyeLocalY) return comp._getEffectiveEyeLocalY();
+          return this.camera?.object3D?.position?.y ?? 0;
+        },
+
+        _getVRHeadDrop: function() {
+          if (!this.camera || !this.el.sceneEl.is('vr-mode')) return 0;
+          const legIkWorld = this.el.sceneEl.legIkWorld;
+          if (!legIkWorld) return 0;
+          const camY = this.camera.object3D.position.y;
+          if (camY < 0.35 || camY > 2.4) return 0;
+          const standing = legIkWorld.standingEyeLocalY || 1.6;
+          return Math.max(0, standing - camY);
+        },
+        
+        // Shift avatar mesh vs tracked headset. standingEyeLocalY sets standing drop; body tune fine-tunes feet.
+        _applyVRVerticalDrop: function() {
+          if (!this.model) return;
+          const drop = this._getVRHeadDrop();
+          const base = this._modelBaseY ?? 0.05;
+          const adjust = this.el.sceneEl.legIkWorld?.playerHeightAdjustM || 0;
+          const scale = this.el.sceneEl.legIkWorld?.modelVerticalScale ?? 1;
+          const feetLift = (this.modelFeetLocalY || 0) * scale;
+          this.model.position.y = base - drop + adjust - feetLift;
+          this._vrHeadDrop = drop;
+        },
+        
+        // Close the vertical gap between HMD and animated neck each frame.
+        _syncTorsoToHead: function(headWorldPos) {
+          if (!this.bones.hips || !this.bones.neck) return;
+          const crouch = this.el.sceneEl.legIkWorld?.crouchAmount || 0;
+          if (crouch < 0.05) return;
+          
+          this.model.updateWorldMatrix(true, true);
+          
+          const headTarget = headWorldPos.clone();
+          headTarget.y -= this._headEyeOffsetY;
+          
+          const neckWorld = new THREE.Vector3();
+          this.bones.neck.getWorldPosition(neckWorld);
+          const rest = this._restHeadAboveNeck ?? 0.14;
+          let errorY = headTarget.y - (neckWorld.y + rest);
+          
+          if (errorY >= -0.015) return;
+          
+          let compress = -errorY;
+          const hips = this.bones.hips;
+          const hipsWorld = new THREE.Vector3();
+          hips.getWorldPosition(hipsWorld);
+          hipsWorld.y -= compress * 0.68;
+          if (hips.parent) {
+            hips.position.copy(hips.parent.worldToLocal(hipsWorld.clone()));
+          }
+          
+          this.model.updateWorldMatrix(true, true);
+          this.bones.neck.getWorldPosition(neckWorld);
+          errorY = headTarget.y - (neckWorld.y + rest);
+          if (errorY >= -0.015) return;
+          
+          compress = -errorY;
+          const pitch = Math.min(compress * 0.85, 1.05);
+          const bendAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(this._getYawQuat());
+          const spineBones = [this.bones.spine, this.bones.spine1, this.bones.spine2];
+          const weights = [0.22, 0.33, 0.45];
+          spineBones.forEach((bone, i) => {
+            if (!bone) return;
+            const q = new THREE.Quaternion().setFromAxisAngle(bendAxis, pitch * weights[i]);
+            this._applyWorldDeltaToLocal(bone, q);
+          });
+        },
+        
+        _applyVRCrouchFollowUp: function(headWorldPos) {
+          this._applyVRVerticalDrop();
+          this._syncTorsoToHead(headWorldPos);
+        },
+        
+        _applyVRCrouchProcedural: function() {
+          if (this.data.isMirror) return;
+          const crouch = this.el.sceneEl.legIkWorld?.crouchAmount || 0;
+          const hips = this.bones.hips;
+          if (!hips || this._animatedHipsLocalY === undefined) return;
+          
+          if (crouch < 0.001) {
+            hips.position.y = this._animatedHipsLocalY;
+            return;
+          }
+          
+          const drop = crouch * 0.45;
+          hips.position.y = this._animatedHipsLocalY - drop;
+          
+          const lean = crouch * 0.38;
+          const spineBones = [this.bones.spine, this.bones.spine1, this.bones.spine2];
+          spineBones.forEach((bone, i) => {
+            if (!bone) return;
+            bone.quaternion.multiply(
+              new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(1, 0, 0),
+                lean * (0.12 + i * 0.08)
+              )
+            );
+          });
+        },
+
+        mapBones: function() {
+          // Store initial T-pose rotations for reference
+          this.initialBoneRotations = {};
+          this.initialBonePositions = {};
+          this.loggedHandTPose = false;
+          this.skeleton.bones.forEach((bone) => {
+            const name = bone.name;
+            const mixamo = name.replace(/^mixamorig:/, 'mixamorig');
+            
+            this.initialBoneRotations[name] = bone.quaternion.clone();
+            this.initialBonePositions[name] = bone.position.clone();
+            
+            if (mixamo === this.boneNames.hips) {
+              this.bones.hips = bone;
+            }
+            else if (mixamo === this.boneNames.spine) this.bones.spine = bone;
+            else if (mixamo === this.boneNames.spine1) this.bones.spine1 = bone;
+            else if (mixamo === this.boneNames.spine2) this.bones.spine2 = bone;
+            else if (mixamo === this.boneNames.neck) this.bones.neck = bone;
+            else if (mixamo === this.boneNames.head) {
+              this.bones.head = bone;
+            }
+            else if (mixamo === this.boneNames.headTop) {
+              this.bones.headTop = bone;
+            }
+            else if (mixamo === this.boneNames.leftShoulder) this.bones.leftShoulder = bone;
+            else if (mixamo === this.boneNames.leftArm) this.bones.leftUpperArm = bone;
+            else if (mixamo === this.boneNames.leftForeArm) this.bones.leftForearm = bone;
+            else if (mixamo === this.boneNames.leftHand) {
+              this.bones.leftHandBone = bone;
+              console.log('[T-Pose] Left Hand initial quat:', bone.quaternion.toArray());
+            }
+            // Left finger bones
+            else if (mixamo === this.boneNames.leftHandThumb1) this.bones.leftHandThumb1 = bone;
+            else if (mixamo === this.boneNames.leftHandThumb2) this.bones.leftHandThumb2 = bone;
+            else if (mixamo === this.boneNames.leftHandThumb3) this.bones.leftHandThumb3 = bone;
+            else if (mixamo === this.boneNames.leftHandIndex1) this.bones.leftHandIndex1 = bone;
+            else if (mixamo === this.boneNames.leftHandIndex2) this.bones.leftHandIndex2 = bone;
+            else if (mixamo === this.boneNames.leftHandIndex3) this.bones.leftHandIndex3 = bone;
+            else if (mixamo === this.boneNames.leftHandMiddle1) this.bones.leftHandMiddle1 = bone;
+            else if (mixamo === this.boneNames.leftHandMiddle2) this.bones.leftHandMiddle2 = bone;
+            else if (mixamo === this.boneNames.leftHandMiddle3) this.bones.leftHandMiddle3 = bone;
+            else if (mixamo === this.boneNames.leftHandRing1) this.bones.leftHandRing1 = bone;
+            else if (mixamo === this.boneNames.leftHandRing2) this.bones.leftHandRing2 = bone;
+            else if (mixamo === this.boneNames.leftHandRing3) this.bones.leftHandRing3 = bone;
+            else if (mixamo === this.boneNames.leftHandPinky1) this.bones.leftHandPinky1 = bone;
+            else if (mixamo === this.boneNames.leftHandPinky2) this.bones.leftHandPinky2 = bone;
+            else if (mixamo === this.boneNames.leftHandPinky3) this.bones.leftHandPinky3 = bone;
+            else if (mixamo === this.boneNames.rightShoulder) this.bones.rightShoulder = bone;
+            else if (mixamo === this.boneNames.rightArm) this.bones.rightUpperArm = bone;
+            else if (mixamo === this.boneNames.rightForeArm) this.bones.rightForearm = bone;
+            else if (mixamo === this.boneNames.rightHand) {
+              this.bones.rightHandBone = bone;
+              console.log('[T-Pose] Right Hand initial quat:', bone.quaternion.toArray());
+            }
+            // Right finger bones
+            else if (mixamo === this.boneNames.rightHandThumb1) this.bones.rightHandThumb1 = bone;
+            else if (mixamo === this.boneNames.rightHandThumb2) this.bones.rightHandThumb2 = bone;
+            else if (mixamo === this.boneNames.rightHandThumb3) this.bones.rightHandThumb3 = bone;
+            else if (mixamo === this.boneNames.rightHandIndex1) this.bones.rightHandIndex1 = bone;
+            else if (mixamo === this.boneNames.rightHandIndex2) this.bones.rightHandIndex2 = bone;
+            else if (mixamo === this.boneNames.rightHandIndex3) this.bones.rightHandIndex3 = bone;
+            else if (mixamo === this.boneNames.rightHandMiddle1) this.bones.rightHandMiddle1 = bone;
+            else if (mixamo === this.boneNames.rightHandMiddle2) this.bones.rightHandMiddle2 = bone;
+            else if (mixamo === this.boneNames.rightHandMiddle3) this.bones.rightHandMiddle3 = bone;
+            else if (mixamo === this.boneNames.rightHandRing1) this.bones.rightHandRing1 = bone;
+            else if (mixamo === this.boneNames.rightHandRing2) this.bones.rightHandRing2 = bone;
+            else if (mixamo === this.boneNames.rightHandRing3) this.bones.rightHandRing3 = bone;
+            else if (mixamo === this.boneNames.rightHandPinky1) this.bones.rightHandPinky1 = bone;
+            else if (mixamo === this.boneNames.rightHandPinky2) this.bones.rightHandPinky2 = bone;
+            else if (mixamo === this.boneNames.rightHandPinky3) this.bones.rightHandPinky3 = bone;
+            else if (mixamo === this.boneNames.leftUpLeg) this.bones.leftUpLeg = bone;
+            else if (mixamo === this.boneNames.leftLeg) this.bones.leftLeg = bone;
+            else if (mixamo === this.boneNames.leftFoot) this.bones.leftFoot = bone;
+            else if (mixamo === this.boneNames.rightUpLeg) this.bones.rightUpLeg = bone;
+            else if (mixamo === this.boneNames.rightLeg) this.bones.rightLeg = bone;
+            else if (mixamo === this.boneNames.rightFoot) this.bones.rightFoot = bone;
+          });
+          
+          if (!this.data.isMirror) {
+            this._hideLocalHeadMesh();
+          }
+          
+          this._initLegIK();
+        },
+        
+        _hideLocalHeadMesh: function() {
+          // Walk/idle clips animate head scale every frame — must re-apply after mixer.update.
+          const hidden = 0.001;
+          if (this.bones.head) {
+            this.bones.head.scale.set(hidden, hidden, hidden);
+          }
+          if (this.bones.headTop) {
+            this.bones.headTop.scale.set(hidden, hidden, hidden);
+          }
+        },
+        
+        _initLegIK: function() {
+          // IMPORTANT: read the scene's legIkWorld FRESH each retry. The physics code
+          // REPLACES scene.legIkWorld with a new object once Rapier is ready, so a
+          // captured reference would stay ready:false forever and the IK would never
+          // be created (that was the bug: legs never adapted at all).
+          const legIkWorld = this.el.sceneEl.legIkWorld;
+          if (!window.MixamoLegIK || !legIkWorld || !legIkWorld.ready) {
+            setTimeout(() => this._initLegIK(), 50);
+            return;
+          }
+          
+          this.legIK = new window.MixamoLegIK(
+            this.model,
+            legIkWorld.terrain,
+            {
+              raycastHeight: 1.2,
+              raycastLength: 3.5,
+              feetPositionOffsetWeight: 1.0,
+              feetRotationOffsetWeight: 1.0,
+              feetPositionOffsetSmoothing: 0.06,
+              feetRotationOffsetSmoothing: 0.08,
+              bodyPositionOffsetWeight: 1.0,
+              bodyPositionOffsetSmoothing: 0.12,
+              invertBodyPositionOffset: false,
+              // Hold feet at THIS model's natural ankle height above the ground so the
+              // soles rest on the surface (measured at load). The reference's 0.08
+              // sank this model's feet ~7cm into the floor.
+              footSkinOffset: this.modelFeetLocalY > 0.02 ? this.modelFeetLocalY : 0.08,
+              // Keep feet fully adapting through normal walking (player walk speed
+              // ~2.5); only fade IK out at sprint speed so footwork doesn't fight
+              // the run animation.
+              ikWalkEngageSpeed: 3.0,
+              ikRunSuppressSpeed: 4.6
+            },
+            legIkWorld.world,
+            legIkWorld.RAPIER,
+            legIkWorld.playerCollider || null
+          );
+          
+          const legSlots = ['hips', 'leftThigh', 'leftKnee', 'leftFoot', 'rightThigh', 'rightKnee', 'rightFoot'];
+          const missingLeg = legSlots.filter((s) => !this.legIK.bones[s]);
+          console.log('[Mixamo Body]', this.data.isMirror ? 'Mirror' : 'Local', '- Leg IK initialized',
+            missingLeg.length ? { missingBones: missingLeg } : 'all bones resolved');
+        },
+
+        tick: function(time, deltaTime) {
+          if (!this.modelLoaded || !this.skeleton) return;
+          if (!this.camera || !this.leftController || !this.rightController) return;
+          
+          const dt = Math.min(deltaTime / 1000, 0.1);
+          
+          // Headset yaw drives the rig before locomotion/speed math runs this frame.
+          if (this.useAnimatedLocomotion && this.camera && !this.data.isMirror) {
+            const headQuat = new THREE.Quaternion();
+            this.camera.object3D.getWorldQuaternion(headQuat);
+            this._updateHeadFacing(headQuat, dt);
+          }
+          
+          // Update breathing animation phase
+          this.breathingPhase += dt * this.breathingRate * Math.PI * 2;
+          if (this.breathingPhase > Math.PI * 2) {
+            this.breathingPhase -= Math.PI * 2;
+          }
+          
+          this._updateHorizontalSpeed(dt);
+          
+          if (this.data.isMirror) {
+            this.syncPoseFromLocal();
+          } else {
+            this.updateLocalBody(dt);
+            this.updateFingerPoses();
+            this._publishPoseSnapshot();
+          }
+        },
+        
+        _updateHorizontalSpeed: function(dt) {
+          if (this.data.isMirror) {
+            const shared = this.el.sceneEl._bodyLocomotionState;
+            if (!shared) return;
+            this.horizontalSpeed = shared.horizontalSpeed;
+            this._smoothedHorizontalSpeed = shared.smoothedHorizontalSpeed;
+            this._rawMoveDir.copy(shared.rawMoveDir);
+            this.lateralSpeed = shared.lateralSpeed;
+            this.forwardSpeed = shared.forwardSpeed;
+            this.headVelocity.copy(shared.headVelocity);
+            return;
+          }
+          
+          const legIkWorld = this.el.sceneEl.legIkWorld;
+          const invDt = 1 / Math.max(dt, 0.001);
+          
+          // Head world velocity = thumbstick rig motion + room-scale physical walking.
+          const headPos = new THREE.Vector3();
+          this.camera.object3D.getWorldPosition(headPos);
+          if (this.previousHeadPosInitialized) {
+            this.headVelocity.copy(headPos).sub(this.previousHeadPos).multiplyScalar(invDt);
+          } else {
+            this.previousHeadPosInitialized = true;
+            this.headVelocity.set(0, 0, 0);
+          }
+          this.previousHeadPos.copy(headPos);
+          
+          const headHorizontalSpeed = Math.hypot(this.headVelocity.x, this.headVelocity.z);
+          const physicsSpeed = legIkWorld?.playerSpeed || 0;
+          const intentDir = legIkWorld?.playerMoveDir;
+          const hasMoveIntent = intentDir && intentDir.lengthSq() > 0.0001 && physicsSpeed > 0.04;
+          
+          this.horizontalSpeed = Math.max(headHorizontalSpeed, physicsSpeed);
+          this._smoothedHorizontalSpeed = THREE.MathUtils.lerp(
+            this._smoothedHorizontalSpeed,
+            this.horizontalSpeed,
+            Math.min(1, dt * 10)
+          );
+          
+          const yawQuat = this._getYawQuat();
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yawQuat);
+          const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(yawQuat);
+          
+          // Stick/keyboard intent is stable; head velocity jitters frame-to-frame and flips anim choice.
+          if (hasMoveIntent) {
+            this._rawMoveDir.copy(intentDir);
+            this.lateralSpeed = Math.abs(intentDir.dot(right)) * physicsSpeed;
+            this.forwardSpeed = Math.abs(intentDir.dot(fwd)) * physicsSpeed;
+          } else if (headHorizontalSpeed > 0.08) {
+            this._rawMoveDir.set(this.headVelocity.x, 0, this.headVelocity.z).normalize();
+            this.lateralSpeed = Math.abs(this.headVelocity.x * right.x + this.headVelocity.z * right.z);
+            this.forwardSpeed = Math.abs(this.headVelocity.x * fwd.x + this.headVelocity.z * fwd.z);
+          } else {
+            this._rawMoveDir.set(0, 0, 0);
+            this.lateralSpeed = 0;
+            this.forwardSpeed = 0;
+          }
+          
+          this.el.sceneEl._bodyLocomotionState = {
+            horizontalSpeed: this.horizontalSpeed,
+            smoothedHorizontalSpeed: this._smoothedHorizontalSpeed,
+            rawMoveDir: this._rawMoveDir.clone(),
+            lateralSpeed: this.lateralSpeed,
+            forwardSpeed: this.forwardSpeed,
+            headVelocity: this.headVelocity.clone()
+          };
+        },
+        
+        updateFingerPoses: function() {
+          // Get gamepad data
+          const leftGamepad = this.leftController.components['tracked-controls']?.controller?.gamepad;
+          const rightGamepad = this.rightController.components['tracked-controls']?.controller?.gamepad;
+          
+          if (!this.fingerDebugLogged) {
+            console.log('[Finger Tracking] Left gamepad buttons:', leftGamepad?.buttons?.length);
+            if (leftGamepad && leftGamepad.buttons) {
+              console.log('[Finger Tracking] Button details:');
+              leftGamepad.buttons.forEach((btn, i) => {
+                if (btn.touched || btn.pressed) {
+                  console.log(`  Button ${i}: pressed=${btn.pressed}, touched=${btn.touched}, value=${btn.value}`);
+                }
+              });
+              console.log('[Finger Tracking] Touch any button/surface and check console to see which index it is');
+            }
+            this.fingerDebugLogged = true;
+          }
+          
+          // Update target curls for LEFT hand
+          if (leftGamepad && leftGamepad.buttons) {
+            const trigger = leftGamepad.buttons[0]?.value || 0; // Trigger - index finger
+            const grip = leftGamepad.buttons[1]?.value || 0;    // Grip - middle/ring/pinky
+            
+            // Thumb curls when touching ANY touch-sensitive surface:
+            // Button 2: Often grip button or touchpad
+            // Button 3: Thumbstick
+            // Button 4: A/X button (face button lower)
+            // Button 5: B/Y button (face button upper)
+            // Button 6: Sometimes touchpad or additional surface
+            let anyThumbTouch = 0;
+            for (let i = 2; i <= 6; i++) {
+              if (leftGamepad.buttons[i]?.touched) {
+                anyThumbTouch = 1;
+                break;
+              }
+            }
+            
+            this.updateTargetCurls('left', trigger, grip, anyThumbTouch);
+          }
+          
+          // Update target curls for RIGHT hand
+          if (rightGamepad && rightGamepad.buttons) {
+            const trigger = rightGamepad.buttons[0]?.value || 0;
+            const grip = rightGamepad.buttons[1]?.value || 0;
+            
+            let anyThumbTouch = 0;
+            for (let i = 2; i <= 6; i++) {
+              if (rightGamepad.buttons[i]?.touched) {
+                anyThumbTouch = 1;
+                break;
+              }
+            }
+            
+            this.updateTargetCurls('right', trigger, grip, anyThumbTouch);
+          }
+          
+          // Smooth interpolation toward target curls
+          ['left', 'right'].forEach(hand => {
+            ['thumb', 'index', 'middle', 'ring', 'pinky'].forEach(finger => {
+              const current = this.currentCurls[hand][finger];
+              const target = this.targetCurls[hand][finger];
+              this.currentCurls[hand][finger] = current + (target - current) * this.fingerSmoothingFactor;
+            });
+          });
+          
+          // Apply the smoothed curls to bones
+          this.applyFingerCurls('left', this.currentCurls.left);
+          this.applyFingerCurls('right', this.currentCurls.right);
+        },
+        
+        updateTargetCurls: function(hand, trigger, grip, thumbTouch) {
+          // Natural resting pose: fingers have slight curl (0.15-0.25)
+          // This makes the hand look relaxed rather than stiff/straight
+          const restingCurls = {
+            thumb: 0.1,    // Thumb slightly relaxed
+            index: 0.15,   // Index finger slightly curved
+            middle: 0.2,   // Middle finger more curved
+            ring: 0.25,    // Ring finger even more curved
+            pinky: 0.25    // Pinky most curved (natural hand pose)
+          };
+          
+          // Calculate active curl values
+          const activeCurls = {
+            thumb: thumbTouch * 0.8,  // Thumb curls when touching buttons
+            index: trigger,            // Index follows trigger only
+            middle: grip * 1.1,        // Middle curls slightly more than input
+            ring: grip * 1.15,         // Ring curls more (natural grip)
+            pinky: grip * 1.2          // Pinky curls most (anatomically correct)
+          };
+          
+          // When gripping without trigger, keep index straighter
+          // This prevents index from curling too much when only grip is pressed
+          if (grip > 0.1 && trigger < 0.1) {
+            activeCurls.index = 0; // Index stays straight when gripping without trigger
+          }
+          
+          // Combine resting pose with active input (use the greater value)
+          const curls = {
+            thumb: Math.max(restingCurls.thumb, activeCurls.thumb),
+            index: Math.max(restingCurls.index, activeCurls.index),
+            middle: Math.max(restingCurls.middle, activeCurls.middle),
+            ring: Math.max(restingCurls.ring, activeCurls.ring),
+            pinky: Math.max(restingCurls.pinky, activeCurls.pinky)
+          };
+          
+          // Override index finger when gripping without trigger - make it straighter than resting
+          if (grip > 0.1 && trigger < 0.1) {
+            curls.index = 0.05; // Very slight curl, straighter than resting pose
+          };
+          
+          // Special case: "Thumbs up" gesture when grip is pressed but thumb is not on buttons
+          if (grip > 0.5 && thumbTouch < 0.5) {
+            curls.thumb = -0.15; // Extend thumb upward slightly (overrides resting pose, more natural)
+          }
+          
+          this.targetCurls[hand] = curls;
+        },
+        
+        applyFingerCurls: function(hand, curls) {
+          // Apply curl values to finger bones
+          const fingerBones = {
+            thumb: hand === 'left' ? [this.bones.leftHandThumb1, this.bones.leftHandThumb2, this.bones.leftHandThumb3] : 
+                                     [this.bones.rightHandThumb1, this.bones.rightHandThumb2, this.bones.rightHandThumb3],
+            index: hand === 'left' ? [this.bones.leftHandIndex1, this.bones.leftHandIndex2, this.bones.leftHandIndex3] :
+                                     [this.bones.rightHandIndex1, this.bones.rightHandIndex2, this.bones.rightHandIndex3],
+            middle: hand === 'left' ? [this.bones.leftHandMiddle1, this.bones.leftHandMiddle2, this.bones.leftHandMiddle3] :
+                                      [this.bones.rightHandMiddle1, this.bones.rightHandMiddle2, this.bones.rightHandMiddle3],
+            ring: hand === 'left' ? [this.bones.leftHandRing1, this.bones.leftHandRing2, this.bones.leftHandRing3] :
+                                    [this.bones.rightHandRing1, this.bones.rightHandRing2, this.bones.rightHandRing3],
+            pinky: hand === 'left' ? [this.bones.leftHandPinky1, this.bones.leftHandPinky2, this.bones.leftHandPinky3] :
+                                     [this.bones.rightHandPinky1, this.bones.rightHandPinky2, this.bones.rightHandPinky3]
+          };
+          
+          // Apply curls to finger bones
+          Object.keys(fingerBones).forEach(fingerName => {
+            const bones = fingerBones[fingerName];
+            const curl = curls[fingerName];
+            
+            // Thumb uses different axis/sign than other fingers
+            const isThumb = fingerName === 'thumb';
+            const axis = isThumb ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
+            // Left hand: fingers=1, thumb=-1
+            // Right hand: fingers=1 (same as left), thumb=1
+            const sign = isThumb ? (hand === 'left' ? -1 : 1) : 1;
+            
+            bones.forEach((bone, i) => {
+              if (!bone) return;
+              
+              // Reset to T-pose first
+              const initialRot = this.initialBoneRotations[bone.name];
+              if (initialRot) {
+                bone.quaternion.copy(initialRot);
+              }
+              
+              // Apply curl rotation (more curl for distal bones)
+              const curlAmount = curl * (0.5 + i * 0.25); // Progressive curl
+              const curlAngle = curlAmount * Math.PI * 0.6 * sign; // curl angle
+              
+              const curlQuat = new THREE.Quaternion().setFromAxisAngle(axis, curlAngle);
+              
+              bone.quaternion.multiply(curlQuat);
+            });
+          });
+        },
+        
+        applyFingerPose: function(hand, gesture) {
+          // Gesture from hand-controls can be: 'fist', 'point', 'thumbUp', 'pistol', etc.
+          // For now, let's get the actual finger curl values if available
+          
+          const handControls = hand === 'left' ? this.leftController.components['hand-controls'] : this.rightController.components['hand-controls'];
+          
+          // Check if hand tracking is available with finger data
+          if (!handControls || !handControls.mesh || !handControls.mesh.userData) return;
+          
+          // Try to get XR hand data
+          const xrHand = handControls.el.components['hand-tracking'];
+          if (xrHand && xrHand.bones) {
+            // Use actual hand tracking data
+            this.applyXRHandTracking(hand, xrHand.bones);
+          } else {
+            // Fallback: Use gesture-based poses
+            this.applyGesturePose(hand, gesture);
+          }
+        },
+        
+        applyXRHandTracking: function(hand, xrBones) {
+          // Map XR hand bones directly to Mixamo finger bones
+          // This would require mapping each XR joint to corresponding Mixamo bone
+          // For now, we'll use the simpler gesture-based approach
+        },
+        
+        applyGesturePose: function(hand, gesture) {
+          // Apply finger rotations based on gesture
+          // Mixamo finger bones curl on X-axis (local space)
+          
+          const fingerBones = {
+            thumb: hand === 'left' ? [this.bones.leftHandThumb1, this.bones.leftHandThumb2, this.bones.leftHandThumb3] : 
+                                     [this.bones.rightHandThumb1, this.bones.rightHandThumb2, this.bones.rightHandThumb3],
+            index: hand === 'left' ? [this.bones.leftHandIndex1, this.bones.leftHandIndex2, this.bones.leftHandIndex3] :
+                                     [this.bones.rightHandIndex1, this.bones.rightHandIndex2, this.bones.rightHandIndex3],
+            middle: hand === 'left' ? [this.bones.leftHandMiddle1, this.bones.leftHandMiddle2, this.bones.leftHandMiddle3] :
+                                      [this.bones.rightHandMiddle1, this.bones.rightHandMiddle2, this.bones.rightHandMiddle3],
+            ring: hand === 'left' ? [this.bones.leftHandRing1, this.bones.leftHandRing2, this.bones.leftHandRing3] :
+                                    [this.bones.rightHandRing1, this.bones.rightHandRing2, this.bones.rightHandRing3],
+            pinky: hand === 'left' ? [this.bones.leftHandPinky1, this.bones.leftHandPinky2, this.bones.leftHandPinky3] :
+                                     [this.bones.rightHandPinky1, this.bones.rightHandPinky2, this.bones.rightHandPinky3]
+          };
+          
+          // Default curl amounts (0 = straight, 1 = fully curled)
+          let curls = { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 };
+          
+          // Adjust curls based on gesture
+          if (gesture === 'fist') {
+            curls = { thumb: 1, index: 1, middle: 1, ring: 1, pinky: 1 };
+          } else if (gesture === 'point') {
+            curls = { thumb: 0.3, index: 0, middle: 1, ring: 1, pinky: 1 };
+          } else if (gesture === 'thumbUp') {
+            curls = { thumb: 0, index: 1, middle: 1, ring: 1, pinky: 1 };
+          } else if (gesture === 'pistol') {
+            curls = { thumb: 0, index: 0, middle: 0, ring: 1, pinky: 1 };
+          }
+          
+          // Apply curls to finger bones
+          const sign = hand === 'left' ? 1 : -1; // Mirror for right hand
+          
+          Object.keys(fingerBones).forEach(fingerName => {
+            const bones = fingerBones[fingerName];
+            const curl = curls[fingerName];
+            
+            bones.forEach((bone, i) => {
+              if (!bone) return;
+              
+              // Reset to T-pose first
+              const initialRot = this.initialBoneRotations[bone.name];
+              if (initialRot) {
+                bone.quaternion.copy(initialRot);
+              }
+              
+              // Apply curl rotation (more curl for distal bones)
+              const curlAmount = curl * (0.4 + i * 0.3); // Progressive curl
+              const curlAngle = curlAmount * Math.PI * 0.5 * sign; // Up to 90 degrees
+              
+              const curlQuat = new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(1, 0, 0), // X-axis
+                curlAngle
+              );
+              
+              bone.quaternion.multiply(curlQuat);
+            });
+          });
+        },
+
+        updateLocalBody: function(dt) {
+          // Get world positions (from body.html lines 1351-1356)
+          const headWorldPos = new THREE.Vector3();
+          const headWorldQuat = new THREE.Quaternion();
+          const leftHandWorldPos = new THREE.Vector3();
+          const leftHandWorldQuat = new THREE.Quaternion();
+          const rightHandWorldPos = new THREE.Vector3();
+          const rightHandWorldQuat = new THREE.Quaternion();
+          
+          this.camera.object3D.getWorldPosition(headWorldPos);
+          this.camera.object3D.getWorldQuaternion(headWorldQuat);
+          this.leftController.object3D.getWorldPosition(leftHandWorldPos);
+          this.leftController.object3D.getWorldQuaternion(leftHandWorldQuat);
+          this.rightController.object3D.getWorldPosition(rightHandWorldPos);
+          this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
+          
+          // headVelocity updated in tick() via _updateHorizontalSpeed (before this runs).
+          
+          // Rig facing already updated in tick(); keep torso lean helper in sync.
+          if (!this.useAnimatedLocomotion) {
+            this.calculateTorsoOrientation(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos, dt);
+          }
+          this.calculateBodyTilt(headWorldPos, leftHandWorldPos, rightHandWorldPos, dt);
+          
+          // Local body is a rig child — rig tracks physics; we only apply yaw + slight back offset.
+          const footRoot = this._getLegIKFootRoot(headWorldPos);
+          this._anchorBodyAtFeet(footRoot);
+          
+          if (this.useAnimatedLocomotion) {
+            this._updateLocomotionAnimation(dt);
+          } else if (!this.data.isMirror) {
+            this._hideLocalHeadMesh();
+          }
+          
+          this._applyVRCrouchFollowUp(headWorldPos);
+          
+          this._applyLegIKTerrain(dt, footRoot);
+          this._updateLegDebug();
+          
+          this.updateBones(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos, leftHandWorldQuat, rightHandWorldQuat);
+        },
+
+        _publishPoseSnapshot: function() {
+          if (this.data.isMirror || !this.skeleton || !this.model) return;
+          const bones = {};
+          for (let i = 0; i < this.skeleton.bones.length; i++) {
+            const bone = this.skeleton.bones[i];
+            const useRestHeadPos = bone === this.bones.head || bone === this.bones.headTop;
+            bones[bone.name] = {
+              q: bone.quaternion.clone(),
+              p: useRestHeadPos && this.initialBonePositions[bone.name]
+                ? this.initialBonePositions[bone.name].clone()
+                : bone.position.clone(),
+              s: bone.scale.clone()
+            };
+          }
+          this._poseSnapshot = {
+            modelY: this.model.position.y,
+            modelScaleY: this.model.scale.y,
+            headFacingQuat: this._headFacingQuat.clone(),
+            torsoRotation: this.torsoRotation.clone(),
+            entityWorldPos: new THREE.Vector3(),
+            entityWorldQuat: new THREE.Quaternion(),
+            bones
+          };
+          this.el.object3D.getWorldPosition(this._poseSnapshot.entityWorldPos);
+          this.el.object3D.getWorldQuaternion(this._poseSnapshot.entityWorldQuat);
+          this.el.sceneEl._localBodyPoseSnapshot = this._poseSnapshot;
+        },
+
+        // Mirror is a spatial clone of the local skeleton — one pose solve, copied each frame.
+        syncPoseFromLocal: function() {
+          const localEl = document.querySelector('#local-body');
+          const local = localEl?.components['mixamo-body'];
+          const snap = local?._poseSnapshot;
+          if (!local || !snap || !this.skeleton || !this.model) return;
+
+          this.torsoRotation.copy(snap.torsoRotation);
+          this._headFacingQuat.copy(snap.headFacingQuat);
+
+          // Same world placement as the local body, shifted 2 m in scene −Z (not re-derived from head).
+          const mirrorPos = snap.entityWorldPos.clone().add(new THREE.Vector3(0, 0, -this.mirrorDistance));
+          const facing = snap.entityWorldQuat.clone();
+
+          if (this.manualRotationY !== 0) {
+            const headWorldPos = new THREE.Vector3();
+            this.camera.object3D.getWorldPosition(headWorldPos);
+            const mirrorCenter = new THREE.Vector3(
+              headWorldPos.x,
+              headWorldPos.y - 0.3,
+              headWorldPos.z - this.mirrorDistance
+            );
+            const rot = new THREE.Matrix4().makeRotationY(this.manualRotationY);
+            mirrorPos.sub(mirrorCenter).applyMatrix4(rot).add(mirrorCenter);
+            const manualQuat = new THREE.Quaternion().setFromAxisAngle(
+              new THREE.Vector3(0, 1, 0),
+              this.manualRotationY
+            );
+            facing.premultiply(manualQuat);
+          }
+
+          this.el.object3D.position.copy(mirrorPos);
+          this.el.object3D.quaternion.copy(facing);
+
+          this.model.position.y = snap.modelY;
+          this.model.scale.set(1, snap.modelScaleY, 1);
+
+          for (let i = 0; i < this.skeleton.bones.length; i++) {
+            const bone = this.skeleton.bones[i];
+            const src = snap.bones[bone.name];
+            if (!src) continue;
+            bone.quaternion.copy(src.q);
+            bone.position.copy(src.p);
+            if (bone === this.bones.head || bone === this.bones.headTop) {
+              bone.scale.set(1, 1, 1);
+            } else {
+              bone.scale.copy(src.s);
+            }
+          }
+          this.skeleton.update();
+        },
+
+        updateMirrorBody: function(dt) {
+          // Legacy path — mirror now uses syncPoseFromLocal() each frame.
+          this.syncPoseFromLocal();
+        },
+
+        calculateTorsoOrientation: function(headPos, headQuat, leftHandPos, rightHandPos, dt) {
+          const headForwardFlat = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
+          headForwardFlat.y = 0;
+          if (headForwardFlat.lengthSq() < 1e-6) return;
+          headForwardFlat.normalize();
+          
+          // Simplified from body.html lines 1407-1486
+          const shoulderLine = rightHandPos.clone().sub(leftHandPos);
+          shoulderLine.y = 0;
+          const shoulderDist = shoulderLine.length();
+          shoulderLine.normalize();
+          
+          const controllerForward = new THREE.Vector3().crossVectors(shoulderLine, new THREE.Vector3(0, 1, 0));
+          controllerForward.normalize();
+          
+          if (controllerForward.dot(headForwardFlat) < 0) {
+            controllerForward.negate();
+          }
+          
+          // Weight adjustment based on hand distance
+          let controllerWeight = 0.8;
+          if (shoulderDist < 0.25) {
+            controllerWeight = 0.3;
+          } else if (shoulderDist > 0.35) {
+            controllerWeight = 1.0;
+          }
+          
+          const blendedForward = new THREE.Vector3()
+            .addScaledVector(controllerForward, controllerWeight)
+            .addScaledVector(headForwardFlat, 1.0 - controllerWeight)
+            .normalize();
+          
+          const targetRotation = new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(0, 0, -1),
+            blendedForward
+          );
+          
+          if (this.torsoRotation.dot(targetRotation) < 0) {
+            targetRotation.negate();
+          }
+          
+          this.torsoRotation.slerp(targetRotation, this.smoothingFactor);
+        },
+
+        calculateBodyTilt: function(headPos, leftHandPos, rightHandPos, dt) {
+          // Disabled body tilt at entity level to prevent body movement
+          // Spine bending is now handled entirely through individual spine bones
+          this.bodyTilt.identity();
+        },
+
+        updateBones: function(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat) {
+          if (!this.useAnimatedLocomotion) {
+            if (this.bones.hips) this.bones.hips.quaternion.identity();
+            if (this.bones.spine) this.bones.spine.quaternion.identity();
+            if (this.bones.spine1) this.bones.spine1.quaternion.identity();
+            if (this.bones.spine2) this.bones.spine2.quaternion.identity();
+            
+            const bodyCenter = headPos.clone();
+            bodyCenter.y -= 0.5;
+            
+            const leftRelative = leftHandPos.clone().sub(bodyCenter);
+            const rightRelative = rightHandPos.clone().sub(bodyCenter);
+            const avgHandPos = new THREE.Vector3()
+              .addVectors(leftRelative, rightRelative)
+              .multiplyScalar(0.5);
+            
+            const invTorsoRot = this.torsoRotation.clone().invert();
+            avgHandPos.applyQuaternion(invTorsoRot);
+            
+            const handForwardLean = Math.max(-0.08, Math.min(0.05, -avgHandPos.z * 0.08));
+            const handSideLean = Math.max(-0.08, Math.min(0.08, avgHandPos.x * 0.1));
+            
+            const localVelocity = this.headVelocity.clone();
+            localVelocity.applyQuaternion(invTorsoRot);
+            
+            const targetLean = new THREE.Vector3(
+              localVelocity.z * 0.8,
+              0,
+              -localVelocity.x * 0.5
+            );
+            
+            this.torsoLean.lerp(targetLean, this.torsoLeanVelocity);
+            
+            const totalForwardLean = handForwardLean + this.torsoLean.x;
+            const totalSideLean = handSideLean + this.torsoLean.z;
+            const breathingExpansion = Math.sin(this.breathingPhase) * this.breathingAmount;
+            
+            if (this.bones.spine || this.bones.spine1 || this.bones.spine2) {
+              const spineRotations = [
+                { bone: this.bones.spine, amount: 0.25, breathingAmount: 0.3 },
+                { bone: this.bones.spine1, amount: 0.35, breathingAmount: 0.4 },
+                { bone: this.bones.spine2, amount: 0.4, breathingAmount: 0.3 }
+              ];
+              
+              spineRotations.forEach(({ bone, amount, breathingAmount }) => {
+                if (bone) {
+                  const breathingLean = -breathingExpansion * breathingAmount;
+                  const euler = new THREE.Euler(
+                    -totalForwardLean * amount + breathingLean,
+                    0,
+                    -totalSideLean * amount,
+                    'YXZ'
+                  );
+                  bone.quaternion.setFromEuler(euler);
+                }
+              });
+            }
+          }
+          
+          // Arms (with forearm twist)
+          this.solveArmIK('left', leftHandPos, leftHandQuat);
+          this.solveArmIK('right', rightHandPos, rightHandQuat);
+          
+          this._syncVRUpperBodyToHead(headPos, headQuat);
+        },
+        
+        // Snap hidden local head to HMD; neck follows headset orientation.
+        // Mirror keeps animated head on the skeleton — world-space head snap detaches it.
+        _syncVRUpperBodyToHead: function(headWorldPos, headWorldQuat) {
+          if (this.data.isMirror || !this.bones.head) return;
+          
+          this.model.updateWorldMatrix(true, true);
+          
+          const headTarget = headWorldPos.clone();
+          headTarget.y -= this._headEyeOffsetY;
+          
+          const head = this.bones.head;
+          if (head.parent) {
+            head.position.copy(head.parent.worldToLocal(headTarget.clone()));
+          }
+          
+          if (this.bones.neck) {
+            const relativeHeadQuat = headWorldQuat.clone();
+            const invBodyQuat = this.el.object3D.quaternion.clone().invert();
+            relativeHeadQuat.premultiply(invBodyQuat);
+            const euler = new THREE.Euler().setFromQuaternion(relativeHeadQuat, 'YXZ');
+            euler.x = -euler.x;
+            euler.z = -euler.z;
+            this.bones.neck.quaternion.setFromEuler(euler);
+          }
+        },
+
+        _measureLegLengths: function() {
+          const upLeg = this.bones.leftUpLeg;
+          const leg = this.bones.leftLeg;
+          const foot = this.bones.leftFoot;
+          const hips = this.bones.hips;
+          if (!upLeg || !leg || !foot || !hips) return;
+          
+          this.el.object3D.updateMatrixWorld(true);
+          this.model.updateWorldMatrix(true, true);
+          
+          const kneePos = new THREE.Vector3();
+          const footPos = new THREE.Vector3();
+          const hipsPos = new THREE.Vector3();
+          const thighRoot = new THREE.Vector3();
+          
+          upLeg.getWorldPosition(thighRoot);
+          leg.getWorldPosition(kneePos);
+          foot.getWorldPosition(footPos);
+          hips.getWorldPosition(hipsPos);
+          
+          const upper = thighRoot.distanceTo(kneePos);
+          const lower = kneePos.distanceTo(footPos);
+          if (upper > 0.1 && lower > 0.1) {
+            this.config.upperLegLength = upper;
+            this.config.lowerLegLength = lower;
+          }
+          
+          const lateral = new THREE.Vector3().subVectors(thighRoot, hipsPos);
+          lateral.y = 0;
+          const halfWidth = lateral.length();
+          if (halfWidth > 0.05) {
+            this.config.hipHalfWidth = halfWidth;
+          }
+        },
+        
+        getStepParams: function(speed) {
+          const moving = speed > this.walkThreshold;
+          const length = moving
+            ? THREE.MathUtils.clamp(speed * this.config.stepLengthScale, this.config.minStepLength, this.config.maxStepLength)
+            : this.config.minStepLength * 0.55;
+          const height = moving
+            ? THREE.MathUtils.clamp(length * 0.2, 0.035, this.config.maxStepHeight)
+            : 0;
+          return { length, height, moving };
+        },
+        
+        getFootCycleOffset: function(phase, step) {
+          const t = ((phase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
+          const stance = this.config.stanceRatio;
+          
+          if (!step.moving) {
+            return { forward: -step.length * 0.15, height: 0 };
+          }
+          
+          if (t < stance) {
+            const u = t / stance;
+            return {
+              forward: THREE.MathUtils.lerp(step.length * 0.45, -step.length * 0.45, u),
+              height: 0
+            };
+          }
+          
+          const u = (t - stance) / (1 - stance);
+          return {
+            forward: THREE.MathUtils.lerp(-step.length * 0.45, step.length * 0.45, u),
+            height: Math.sin(u * Math.PI) * step.height
+          };
+        },
+        
+        computeFootTargetWorld: function(side, phase, step) {
+          const hipsPos = new THREE.Vector3();
+          this.bones.hips.getWorldPosition(hipsPos);
+          
+          const bodyQuat = this.el.object3D.quaternion;
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(bodyQuat);
+          const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(bodyQuat);
+          const offset = this.getFootCycleOffset(phase, step);
+          const lateral = (side === 'left' ? -1 : 1) * this.config.hipHalfWidth;
+          
+          const target = hipsPos.clone()
+            .addScaledVector(bodyRight, lateral)
+            .addScaledVector(bodyForward, offset.forward);
+          
+          const legReach = this.config.upperLegLength + this.config.lowerLegLength;
+          const groundY = Math.max(0, hipsPos.y - legReach * 0.98);
+          target.y = groundY + offset.height;
+          
+          return target;
+        },
+        
+        smoothFootTarget: function(side, rawTarget, dt) {
+          const store = this.footTargets[side];
+          if (!store.ready) {
+            store.current.copy(rawTarget);
+            store.ready = true;
+            return store.current;
+          }
+          const alpha = Math.min(1, dt / this.footTargetSmoothing);
+          store.current.lerp(rawTarget, alpha);
+          return store.current;
+        },
+        
+        updateLegAnimation: function(dt, horizontalSpeed) {
+          if (this.useAnimatedLocomotion) return;
+          if (!this.bones.hips || !this.bones.leftUpLeg) return;
+          
+          this.el.object3D.updateMatrixWorld(true);
+          this.model.updateWorldMatrix(true, true);
+          
+          const step = this.getStepParams(horizontalSpeed);
+          
+          if (step.moving) {
+            const dist = horizontalSpeed * dt;
+            this.walkPhase += (dist / step.length) * Math.PI;
+          } else {
+            this.walkPhase = THREE.MathUtils.lerp(this.walkPhase, 0, Math.min(1, dt * 6));
+            this.footTargets.left.ready = false;
+            this.footTargets.right.ready = false;
+          }
+          
+          this.solveLegIK('left', this.smoothFootTarget('left', this.computeFootTargetWorld('left', this.walkPhase, step), dt));
+          this.solveLegIK('right', this.smoothFootTarget('right', this.computeFootTargetWorld('right', this.walkPhase + Math.PI, step), dt));
+        },
+        
+        solveLegIK: function(side, footWorldPos) {
+          const upLegBone = this.bones[side + 'UpLeg'];
+          const legBone = this.bones[side + 'Leg'];
+          const footBone = this.bones[side + 'Foot'];
+          if (!upLegBone || !legBone || !footBone) return;
+          
+          const hipWorldPos = new THREE.Vector3();
+          upLegBone.getWorldPosition(hipWorldPos);
+          
+          const hipToFoot = footWorldPos.clone().sub(hipWorldPos);
+          const distance = hipToFoot.length();
+          const maxReach = (this.config.upperLegLength + this.config.lowerLegLength) * 0.999;
+          const minReach = Math.abs(this.config.upperLegLength - this.config.lowerLegLength) * 1.001;
+          
+          let targetFootPos = footWorldPos.clone();
+          if (distance > maxReach) {
+            targetFootPos = hipWorldPos.clone().add(hipToFoot.normalize().multiplyScalar(maxReach));
+          } else if (distance < minReach) {
+            targetFootPos = hipWorldPos.clone().add(hipToFoot.normalize().multiplyScalar(minReach));
+          }
+          
+          const toTarget = targetFootPos.clone().sub(hipWorldPos);
+          const targetDist = toTarget.length();
+          const toTargetDir = toTarget.normalize();
+          
+          const upperSq = this.config.upperLegLength * this.config.upperLegLength;
+          const lowerSq = this.config.lowerLegLength * this.config.lowerLegLength;
+          const distSq = targetDist * targetDist;
+          const cosAngle = (upperSq + distSq - lowerSq) / (2 * this.config.upperLegLength * targetDist);
+          const angle = Math.acos(THREE.MathUtils.clamp(cosAngle, -0.999, 0.999));
+          
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.el.object3D.quaternion);
+          let bendDir = bodyForward.clone().multiplyScalar(0.75);
+          bendDir.addScaledVector(new THREE.Vector3(0, -1, 0), 0.25);
+          bendDir.normalize();
+          bendDir.addScaledVector(toTargetDir, -bendDir.dot(toTargetDir)).normalize();
+          
+          const kneeDir = new THREE.Vector3()
+            .addScaledVector(toTargetDir, Math.cos(angle))
+            .addScaledVector(bendDir, Math.sin(angle))
+            .normalize();
+          
+          let kneeWorldPos = hipWorldPos.clone().addScaledVector(kneeDir, this.config.upperLegLength);
+          
+          const hipToKnee = kneeWorldPos.clone().sub(hipWorldPos);
+          if (Math.abs(hipToKnee.length() - this.config.upperLegLength) > 0.0001) {
+            kneeWorldPos.copy(hipWorldPos).add(hipToKnee.normalize().multiplyScalar(this.config.upperLegLength));
+          }
+          
+          const kneeToFoot = targetFootPos.clone().sub(kneeWorldPos);
+          if (Math.abs(kneeToFoot.length() - this.config.lowerLegLength) > 0.0001) {
+            targetFootPos.copy(kneeWorldPos).add(kneeToFoot.normalize().multiplyScalar(this.config.lowerLegLength));
+          }
+          
+          this.el.object3D.updateMatrixWorld(true);
+          const tPoseDir = new THREE.Vector3(0, -1, 0);
+          
+          upLegBone.parent.updateMatrixWorld(true);
+          const hipInParent = upLegBone.parent.worldToLocal(hipWorldPos.clone());
+          const kneeInParent = upLegBone.parent.worldToLocal(kneeWorldPos.clone());
+          const thighDir = hipInParent.clone().sub(kneeInParent).normalize();
+          upLegBone.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(tPoseDir, thighDir));
+          upLegBone.updateMatrixWorld(true);
+          
+          legBone.parent.updateMatrixWorld(true);
+          const kneeInShinParent = legBone.parent.worldToLocal(kneeWorldPos.clone());
+          const footInShinParent = legBone.parent.worldToLocal(targetFootPos.clone());
+          const shinDir = kneeInShinParent.clone().sub(footInShinParent).normalize();
+          legBone.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(tPoseDir, shinDir));
+          legBone.updateMatrixWorld(true);
+          
+          const groundY = Math.max(0, hipWorldPos.y - (this.config.upperLegLength + this.config.lowerLegLength) * 0.98);
+          const onGround = targetFootPos.y <= groundY + 0.04;
+          if (onGround) {
+            const soleDown = new THREE.Vector3(0, -1, 0);
+            const footParentQuat = new THREE.Quaternion();
+            footBone.parent.getWorldQuaternion(footParentQuat);
+            const localDown = soleDown.applyQuaternion(footParentQuat.clone().invert());
+            const footAlign = new THREE.Quaternion().setFromUnitVectors(tPoseDir, localDown.normalize());
+            footBone.quaternion.copy(footAlign);
+          }
+        },
+        
+        updateClavicleRotation: function(hand, handPos, headPos) {
+          const shoulderBone = this.bones[`${hand}Shoulder`];
+          if (!shoulderBone) return;
+          
+          // Calculate hand height relative to shoulders (shoulders are ~0.2m below head)
+          const shoulderHeight = headPos.y - 0.2;
+          const handHeight = handPos.y;
+          const heightDiff = handHeight - shoulderHeight;
+          
+          // Get hand position relative to body center
+          const bodyCenter = headPos.clone();
+          bodyCenter.y -= 0.5;
+          const handRelative = handPos.clone().sub(bodyCenter);
+          
+          // Convert to body-local space
+          const invTorsoRot = this.torsoRotation.clone().invert();
+          handRelative.applyQuaternion(invTorsoRot);
+          
+          // Calculate rotation amounts - EXTREMELY SUBTLE to prevent visual displacement
+          // Z-rotation: raise clavicle when arm is raised (0 to ~3 degrees)
+          const zRotation = Math.max(0, Math.min(0.05, heightDiff * 0.1)); // Max ~3 degrees
+          
+          // Y-rotation: protract (forward) when reaching forward (0 to ~2 degrees)
+          const yRotation = Math.max(-0.03, Math.min(0.04, -handRelative.z * 0.05)); // Max ~2 degrees
+          
+          // X-rotation: slight inward rotation when arm extends sideways
+          const xRotation = Math.abs(handRelative.x) * 0.015; // Extremely subtle
+          
+          // Apply rotation (different for left/right due to model orientation)
+          const isLeft = (hand === 'left');
+          const euler = new THREE.Euler(
+            xRotation,
+            isLeft ? yRotation : -yRotation,  // Mirror Y for right side
+            isLeft ? zRotation : -zRotation,  // Mirror Z for right side
+            'YXZ'
+          );
+          
+          shoulderBone.quaternion.setFromEuler(euler);
+        },
+
+        solveArmIK: function(hand, handWorldPos, handWorldQuat) {
+          const shoulderBone = this.bones[`${hand}Shoulder`];
+          const upperArmBone = this.bones[`${hand}UpperArm`];
+          const forearmBone = this.bones[`${hand}Forearm`];
+          const handBone = this.bones[`${hand}HandBone`];
+          
+          if (!shoulderBone || !upperArmBone || !forearmBone) {
+            return;
+          }
+          
+          const shoulderWorldPos = new THREE.Vector3();
+          shoulderBone.getWorldPosition(shoulderWorldPos);
+          
+          const adjustedHandPos = handWorldPos.clone();
+          const leftRightOffsetLocal = new THREE.Vector3(hand === 'left' ? 0.1 : -0.1, 0, 0);
+          const leftRightOffsetWorld = leftRightOffsetLocal.applyQuaternion(this.el.object3D.quaternion);
+          adjustedHandPos.add(leftRightOffsetWorld);
+          
+          // Measure reach needed vs natural arm length
+          const shoulderToHand = adjustedHandPos.clone().sub(shoulderWorldPos);
+          const distance = shoulderToHand.length();
+          const naturalMaxReach = this.config.upperArmLength + this.config.lowerArmLength;
+          const minReach = Math.abs(this.config.upperArmLength - this.config.lowerArmLength) * 1.001;
+          
+          // Distributed arm stretch: when controller is beyond natural reach, both
+          // upper arm and forearm extend equally. This keeps the proportional
+          // relationship between segments intact so neither looks obviously longer.
+          // Max ~40% extension total to prevent alien arms.
+          let armScale = 1.0;
+          let effectiveUpperArmLength = this.config.upperArmLength;
+          let effectiveForearmLength = this.config.lowerArmLength;
+          
+          if (distance > naturalMaxReach * 0.97) {
+            armScale = THREE.MathUtils.clamp(
+              distance / (naturalMaxReach * 0.97),
+              1.0,
+              1.4
+            );
+            effectiveUpperArmLength = this.config.upperArmLength * armScale;
+            effectiveForearmLength = this.config.lowerArmLength * armScale;
+          }
+          
+          const effectiveMaxReach = (effectiveUpperArmLength + effectiveForearmLength) * 0.999;
+          
+          // Target hand position: always at the actual controller (no clamping to natural reach)
+          let targetHandPos = adjustedHandPos.clone();
+          if (distance > effectiveMaxReach) {
+            targetHandPos = shoulderWorldPos.clone().add(
+              shoulderToHand.clone().normalize().multiplyScalar(effectiveMaxReach)
+            );
+          } else if (distance < minReach) {
+            targetHandPos = shoulderWorldPos.clone().add(
+              shoulderToHand.clone().normalize().multiplyScalar(minReach)
+            );
+          }
+          
+          // Two-bone IK with effective (possibly stretched) segment lengths
+          const toTarget = targetHandPos.clone().sub(shoulderWorldPos);
+          const targetDist = toTarget.length();
+          const toTargetDir = toTarget.clone().normalize();
+          
+          const upperSq = effectiveUpperArmLength * effectiveUpperArmLength;
+          const lowerSq = effectiveForearmLength * effectiveForearmLength;
+          const distSq = targetDist * targetDist;
+          
+          const cosAngle = (upperSq + distSq - lowerSq) / (2 * effectiveUpperArmLength * targetDist);
+          const clampedCos = Math.max(-0.999, Math.min(0.999, cosAngle));
+          const angle = Math.acos(clampedCos);
+          
+          // Elbow bend direction
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
+          const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.torsoRotation);
+          const bodyOutward = bodyRight.clone().multiplyScalar(hand === 'left' ? -1 : 1);
+          
+          let bendDir = new THREE.Vector3()
+            .addScaledVector(bodyOutward, 0.4)
+            .addScaledVector(new THREE.Vector3(0, -1, 0), 0.4)
+            .normalize();
+          
+          const handUp = new THREE.Vector3(0, 1, 0).applyQuaternion(handWorldQuat);
+          bendDir.addScaledVector(handUp, 0.3);
+          bendDir.normalize();
+          bendDir.addScaledVector(toTargetDir, -bendDir.dot(toTargetDir)).normalize();
+          
+          const elbowDir = new THREE.Vector3()
+            .addScaledVector(toTargetDir, Math.cos(angle))
+            .addScaledVector(bendDir, Math.sin(angle))
+            .normalize();
+          
+          let elbowWorldPos = shoulderWorldPos.clone().add(elbowDir.clone().multiplyScalar(effectiveUpperArmLength));
+          
+          // Enforce effective upper arm length
+          const shoulderToElbow = elbowWorldPos.clone().sub(shoulderWorldPos);
+          if (Math.abs(shoulderToElbow.length() - effectiveUpperArmLength) > 0.0001) {
+            elbowWorldPos.copy(shoulderWorldPos).add(shoulderToElbow.normalize().multiplyScalar(effectiveUpperArmLength));
+          }
+          
+          // Forearm endpoint at effective (possibly extended) length
+          const elbowToHand = targetHandPos.clone().sub(elbowWorldPos);
+          if (Math.abs(elbowToHand.length() - effectiveForearmLength) > 0.0001) {
+            targetHandPos.copy(elbowWorldPos).add(elbowToHand.normalize().multiplyScalar(effectiveForearmLength));
+          }
+          
+          // --- Bone rotations ---
+          this.el.object3D.updateMatrixWorld(true);
+          const tPoseDir = new THREE.Vector3(0, -1, 0);
+          
+          // Upper Arm
+          upperArmBone.parent.updateMatrixWorld(true);
+          const shoulderInParent = upperArmBone.parent.worldToLocal(shoulderWorldPos.clone());
+          const elbowInParent = upperArmBone.parent.worldToLocal(elbowWorldPos.clone());
+          const upperArmParentDir = shoulderInParent.clone().sub(elbowInParent).normalize();
+          const upperArmQuat = new THREE.Quaternion().setFromUnitVectors(tPoseDir, upperArmParentDir);
+          
+          upperArmBone.quaternion.copy(upperArmQuat);
+          upperArmBone.updateMatrixWorld(true);
+          
+          // Forearm rotation
+          forearmBone.parent.updateMatrixWorld(true);
+          const elbowInUpperArm = forearmBone.parent.worldToLocal(elbowWorldPos.clone());
+          const handInUpperArm = forearmBone.parent.worldToLocal(targetHandPos.clone());
+          const forearmParentDir = elbowInUpperArm.clone().sub(handInUpperArm).normalize();
+          const forearmQuat = new THREE.Quaternion().setFromUnitVectors(tPoseDir, forearmParentDir);
+          
+          // Forearm twist (pronation/supination)
+          forearmBone.quaternion.copy(forearmQuat);
+          forearmBone.updateMatrixWorld(true);
+          
+          const forearmWorldQuat = new THREE.Quaternion();
+          forearmBone.getWorldQuaternion(forearmWorldQuat);
+          const handRelativeForearm = handWorldQuat.clone();
+          handRelativeForearm.premultiply(forearmWorldQuat.clone().invert());
+          const handEuler = new THREE.Euler().setFromQuaternion(handRelativeForearm, 'YXZ');
+          const twistAngle = handEuler.y;
+          
+          const forearmTwist = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0),
+            twistAngle * 0.5
+          );
+          forearmBone.quaternion.copy(forearmQuat).multiply(forearmTwist);
+          
+          // Distributed arm stretch: scale both upper arm and forearm along their
+          // bone length axis (Y in Mixamo) so the extension is evenly distributed
+          // and neither segment looks disproportionately longer.
+          // Since forearm inherits upper arm's scale, we counter-scale it so the
+          // forearm segment itself only stretches by armScale (not armScale^2).
+          upperArmBone.scale.set(1, armScale, 1);
+          forearmBone.scale.set(1, 1, 1);
+          
+          forearmBone.updateMatrixWorld(true);
+          
+          // Hand orientation — always at actual controller rotation
+          if (handBone) {
+            const fwq = new THREE.Quaternion();
+            forearmBone.getWorldQuaternion(fwq);
+            
+            let handLocalQuat = handWorldQuat.clone();
+            handLocalQuat.premultiply(fwq.clone().invert());
+            
+            const localXFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+            handLocalQuat.multiply(localXFlip);
+            
+            const rollCorrection = new THREE.Quaternion().setFromAxisAngle(
+              new THREE.Vector3(0, 1, 0),
+              hand === 'left' ? Math.PI / 2 : -Math.PI / 2
+            );
+            handLocalQuat.multiply(rollCorrection);
+            
+            handBone.quaternion.copy(handLocalQuat);
+            
+            // Undo inherited arm stretch on the hand so hand mesh stays normal size.
+            // Upper arm scale propagates through to forearm and hand (armScale).
+            // Forearm scale is 1, so hand inherits only the upper arm's armScale.
+            if (armScale !== 1.0) {
+              handBone.scale.set(1, 1 / armScale, 1);
+            } else {
+              handBone.scale.set(1, 1, 1);
+            }
+          }
+        }
+      });
+    </script>
+  </body>
+</html>
