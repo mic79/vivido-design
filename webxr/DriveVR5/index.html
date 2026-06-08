@@ -320,16 +320,9 @@
                 </div>
                 <div class="menu-section">
                     <div class="bot-controls">
-                        <span>Bot:</span>
-                        <button id="botToggle" class="menu-button">OFF</button>
-                        <span id="botStatus">(Single &amp; Host)</span>
-                    </div>
-                </div>
-                <div class="menu-section">
-                    <div class="bot-controls">
-                        <span>Chase:</span>
-                        <button id="chaseToggle" class="menu-button">OFF</button>
-                        <span id="chaseStatus">(single-player)</span>
+                        <span>Mirror:</span>
+                        <button id="mirrorToggle" class="menu-button active">ON</button>
+                        <span id="mirrorStatus">(Rear view)</span>
                     </div>
                 </div>
                 <div class="menu-section">
@@ -548,6 +541,10 @@
             // VR Controllers
             let vrControllers = [];
             let vrControllerModels = [];
+            let vrHandMeshes = [null, null];
+            var vrWheelGrabSlots = [null, null];
+            var STEER_WHEEL_GRAB_RADIUS = 0.34;
+            var STEER_WHEEL_RIM_RADIUS = 0.17;
             let vrLaserPointers = [];
             
             // App version and FPS
@@ -1577,6 +1574,26 @@
             var WHEEL_AXIS_Z_BACK = -1.3;
             var WHEEL_AXIS_Y = 0.2;
             var WHEEL_RADIUS = 0.5;
+            var STEERING_WHEEL_RATIO = 2.0;
+            /** VR wheel: ignore tiny hand jitter (radians). */
+            var STEER_WHEEL_ANGLE_DEADZONE = 0.012;
+            var STEER_WHEEL_MIN_SPEED_SCALE = 0.38;
+            var STEER_WHEEL_SPEED_SCALE_START_KMH = 35;
+            var STEER_WHEEL_SPEED_SCALE_END_KMH = 110;
+            var EMBEDDED_WHEEL_NODE_NAMES = ['WheelFL', 'WheelFR', 'WheelRL', 'WheelRR'];
+            var _steerHubWorld = new THREE.Vector3();
+            var _steerHubLocal = new THREE.Vector3();
+            var _steerSpinAxis = new THREE.Vector3();
+            var _steerV1 = new THREE.Vector3();
+            var _steerV2 = new THREE.Vector3();
+            var _steerCenter = new THREE.Vector3();
+            var _steerPlaneU = new THREE.Vector3();
+            var _steerPlaneV = new THREE.Vector3();
+            var _steerWorldUp = new THREE.Vector3(0, 1, 0);
+            var _steerGripWorld = new THREE.Vector3();
+            var _steerRimLocal = new THREE.Vector3();
+            var _steerParentLocal = new THREE.Vector3();
+            var _steerParentInv = new THREE.Matrix4();
             /** Midway between axles → ~50/50 static load front/rear on level ground. */
             var CHASSIS_CENTER_OF_MASS_Z = (WHEEL_AXIS_Z_FRONT + WHEEL_AXIS_Z_BACK) * 0.5;
             var VEHICLE_SUSPENSION_STIFFNESS = 48;
@@ -1718,8 +1735,8 @@
                     this.chaseDriveSyncAdded = true;
                 }
                 
-                // Use WebXR-compatible animation loop
-                renderer.setAnimationLoop(() => {
+                // Use WebXR-compatible animation loop (time, frame) for fresh controller poses
+                renderer.setAnimationLoop(function(time, frame) {
                     var dt = clock.getDelta();
                     for (var i = 0; i < syncList.length; i++)
                         syncList[i](dt);
@@ -1775,6 +1792,7 @@
 
                     if (renderer.xr.isPresenting) {
                         updateVRHUD();
+                        processVRMenuPresentation(frame);
                     } else {
                         updateDesktopHUD();
                     }
@@ -2026,11 +2044,14 @@
                     controller.addEventListener('selectend', onSelectEnd);
                     controller.addEventListener('connected', function(event) {
                         console.log('Controller', i, 'connected:', event.data);
+                        controller.userData.xrInputSource = event.data || null;
+                        while (this.children.length) this.remove(this.children[0]);
                         this.add(buildController(event.data));
                     });
                     controller.addEventListener('disconnected', function() {
                         console.log('Controller', i, 'disconnected');
-                        this.remove(this.children[0]);
+                        controller.userData.xrInputSource = null;
+                        while (this.children.length) this.remove(this.children[0]);
                     });
                     cameraRig.add(controller); // Add to cameraRig instead of scene
                     vrControllers.push(controller);
@@ -2039,12 +2060,18 @@
                     const controllerGrip = renderer.xr.getControllerGrip(i);
                     controllerGrip.addEventListener('connected', function(event) {
                         console.log('Controller grip', i, 'connected');
-                        const mesh = buildControllerModel(event.data);
-                        this.add(mesh);
+                        controllerGrip.userData.xrInputSource = event.data || null;
+                        while (this.children.length) this.remove(this.children[0]);
+                        const hand = buildVRHandMesh(event.data && event.data.handedness);
+                        this.add(hand);
+                        vrHandMeshes[i] = hand;
                     });
                     controllerGrip.addEventListener('disconnected', function() {
                         console.log('Controller grip', i, 'disconnected');
-                        this.remove(this.children[0]);
+                        controllerGrip.userData.xrInputSource = null;
+                        releaseVRWheelGrab(i);
+                        while (this.children.length) this.remove(this.children[0]);
+                        vrHandMeshes[i] = null;
                     });
                     cameraRig.add(controllerGrip); // Add to cameraRig instead of scene
                     vrControllerModels.push(controllerGrip);
@@ -2069,23 +2096,31 @@
                         
                         material = new THREE.LineBasicMaterial({
                             color: 0x00ff00,
-                            transparent: false,
+                            transparent: true,
                             opacity: 1.0,
-                            linewidth: 5 // Thick line
+                            depthTest: false,
+                            depthWrite: false
                         });
                         
                         const line = new THREE.Line(geometry, material);
                         line.name = 'laser';
+                        line.renderOrder = 1000;
+                        line.frustumCulled = false;
                         
                         // Also create a cylinder as backup visualization
-                        const cylinderGeometry = new THREE.CylinderGeometry(0.002, 0.002, 5, 8);
+                        const cylinderGeometry = new THREE.CylinderGeometry(0.004, 0.004, 5, 8);
                         const cylinderMaterial = new THREE.MeshBasicMaterial({ 
                             color: 0x00ff00,
-                            transparent: false
+                            transparent: true,
+                            opacity: 0.85,
+                            depthTest: false,
+                            depthWrite: false
                         });
                         const cylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
                         cylinder.position.set(0, 0, -2.5);
                         cylinder.rotation.x = Math.PI / 2;
+                        cylinder.renderOrder = 1000;
+                        cylinder.frustumCulled = false;
                         line.add(cylinder);
                         
                         vrLaserPointers.push(line);
@@ -2110,78 +2145,238 @@
             }
             
             function buildControllerModel(data) {
-                console.log('Building controller model for:', data);
-                
-                // Create a bright, visible controller model
-                const geometry = new THREE.CylinderGeometry(0.02, 0.03, 0.15, 8);
-                const material = new THREE.MeshBasicMaterial({ 
-                    color: 0x0088ff,
-                    transparent: true,
-                    opacity: 0.9
+                return buildVRHandMesh(data && data.handedness);
+            }
+
+            function buildVRHandMesh(handedness) {
+                var group = new THREE.Group();
+                var mat = new THREE.MeshStandardMaterial({
+                    color: 0xffccaa,
+                    roughness: 0.85,
+                    metalness: 0.05
                 });
-                const mesh = new THREE.Mesh(geometry, material);
-                
-                // Add a bright sphere at the tip
-                const tipGeometry = new THREE.SphereGeometry(0.025);
-                const tipMaterial = new THREE.MeshBasicMaterial({ 
-                    color: 0x00ff00,
-                    transparent: true,
-                    opacity: 1.0
-                });
-                const tip = new THREE.Mesh(tipGeometry, tipMaterial);
-                tip.position.set(0, 0.08, 0);
-                mesh.add(tip);
-                
-                console.log('Created controller model with tip');
-                return mesh;
+                var palm = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.035, 0.09), mat);
+                palm.position.set(0, 0, -0.02);
+                group.add(palm);
+                for (var f = 0; f < 4; f++) {
+                    var finger = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.022, 0.055), mat);
+                    finger.position.set(-0.027 + f * 0.018, 0, -0.07);
+                    group.add(finger);
+                }
+                var thumb = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.04), mat);
+                thumb.position.set(handedness === 'left' ? 0.05 : -0.05, -0.01, -0.04);
+                group.add(thumb);
+                group.rotation.x = -Math.PI / 2.2;
+                group.userData.isVRHand = true;
+                return group;
             }
             
+            function getVRControllerIndexForInputSource(inputSource) {
+                if (!inputSource) return -1;
+                if (inputSource.handedness === 'left') return 0;
+                if (inputSource.handedness === 'right') return 1;
+                for (var gi = 0; gi < vrControllerModels.length; gi++) {
+                    var grip = vrControllerModels[gi];
+                    if (grip && grip.userData.xrInputSource === inputSource) return gi;
+                }
+                for (var ci = 0; ci < vrControllers.length; ci++) {
+                    var ctrl = vrControllers[ci];
+                    if (ctrl && ctrl.userData.xrInputSource === inputSource) {
+                        return typeof ctrl.userData.controllerIndex === 'number'
+                            ? ctrl.userData.controllerIndex : ci;
+                    }
+                }
+                return -1;
+            }
+
+            function findVRMenuButtonFromHit(object) {
+                var node = object;
+                while (node) {
+                    if (node.userData && node.userData.type === 'button' && node.userData.id) {
+                        return node;
+                    }
+                    node = node.parent;
+                }
+                return null;
+            }
+
+            function setVRMenuRayFromController(controller) {
+                var tempMatrix = new THREE.Matrix4();
+                tempMatrix.identity().extractRotation(controller.matrixWorld);
+                vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+                vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+            }
+
+            function updateVRControllerPosesFromFrame(frame) {
+                if (!frame || !renderer.xr.isPresenting) return;
+                var session = renderer.xr.getSession();
+                var refSpace = renderer.xr.getReferenceSpace();
+                if (!session || !refSpace || !session.inputSources) return;
+
+                for (var si = 0; si < session.inputSources.length; si++) {
+                    var inputSource = session.inputSources[si];
+                    var ci = getVRControllerIndexForInputSource(inputSource);
+                    if (ci < 0 || ci >= vrControllers.length) continue;
+
+                    var controller = vrControllers[ci];
+                    var raySpace = inputSource.targetRaySpace || inputSource.gripSpace;
+                    if (controller && raySpace) {
+                        var rayPose = frame.getPose(raySpace, refSpace);
+                        if (rayPose) {
+                            controller.matrix.fromArray(rayPose.transform.matrix);
+                            controller.matrix.decompose(
+                                controller.position, controller.quaternion, controller.scale);
+                            controller.matrixWorldNeedsUpdate = true;
+                            controller.updateMatrixWorld(true);
+                        }
+                    }
+
+                    var grip = vrControllerModels[ci];
+                    if (grip && inputSource.gripSpace) {
+                        var gripPose = frame.getPose(inputSource.gripSpace, refSpace);
+                        if (gripPose) {
+                            grip.matrix.fromArray(gripPose.transform.matrix);
+                            grip.matrix.decompose(grip.position, grip.quaternion, grip.scale);
+                            grip.matrixWorldNeedsUpdate = true;
+                            grip.updateMatrixWorld(true);
+                        }
+                    }
+                }
+            }
+
+            function processVRMenuPresentation(frame) {
+                if (!renderer.xr.isPresenting) return;
+                if (frame) {
+                    updateVRControllerPosesFromFrame(frame);
+                }
+                updateLaserPointers();
+                if (isMenuVisible && vrMenu && vrMenu.visible) {
+                    var session = renderer.xr.getSession();
+                    if (session) {
+                        updateVRMenuHoverAll(session);
+                    }
+                }
+            }
+
             function onSelectStart(event) {
-                // Handle controller trigger press
-                console.log('Controller select start');
+                if (!renderer.xr.isPresenting) return;
+                var controller = event.target;
+                var ci = controller && controller.userData
+                    ? controller.userData.controllerIndex : -1;
+                if (isMenuVisible && vrMenu && vrMenu.visible && ci >= 0) {
+                    if (!onSelectStart.lastMenuClickTime) {
+                        onSelectStart.lastMenuClickTime = [0, 0];
+                    }
+                    var now = Date.now();
+                    if (!onSelectStart.lastMenuClickTime[ci]
+                        || (now - onSelectStart.lastMenuClickTime[ci]) > 250) {
+                        handleVRMenuClick(ci);
+                        onSelectStart.lastMenuClickTime[ci] = now;
+                    }
+                }
             }
             
             function onSelectEnd(event) {
-                // Handle controller trigger release
-                console.log('Controller select end');
+                /* trigger release — menu uses selectstart */
             }
             
             function updateLaserPointers() {
-                // Show laser pointers only when menu is visible
-                const showLasers = isMenuVisible && vrMenu && vrMenu.visible;
-                
-                vrLaserPointers.forEach((laser, index) => {
-                    if (laser) {
-                        laser.visible = showLasers;
-                        // Make laser bright and visible when shown
-                        if (laser.material && showLasers) {
-                            laser.material.opacity = 1.0;
-                            laser.material.color.setHex(0x00ff00); // Bright green
+                var showLasers = !!(isMenuVisible && vrMenu && vrMenu.visible);
+                var showHands = renderer.xr.isPresenting
+                    && !showLasers
+                    && cameraMode !== 'fly'
+                    && !trackEditorMode;
+
+                vrLaserPointers.forEach(function(laser, index) {
+                    if (!laser) return;
+                    laser.visible = showLasers;
+                    laser.traverse(function(child) {
+                        if (child.material) {
+                            child.material.opacity = showLasers ? 1.0 : 0;
+                            if (showLasers && child.material.color) {
+                                child.material.color.setHex(0x00ff00);
+                            }
                         }
+                    });
+                    if (showLasers && vrControllers[index]) {
+                        vrControllers[index].updateMatrixWorld(true);
                     }
                 });
-                
-                // Show/hide controller models based on menu visibility
-                vrControllerModels.forEach((controllerGrip, index) => {
-                    if (controllerGrip) {
-                        controllerGrip.visible = showLasers;
-                        
-                        // Add fallback visualization if no controller model loaded (only once)
-                        if (controllerGrip.children.length === 0) {
-                            const fallbackGeometry = new THREE.SphereGeometry(0.05);
-                            const fallbackMaterial = new THREE.MeshBasicMaterial({ 
-                                color: 0xff0000,
-                                transparent: true,
-                                opacity: 1.0
-                            });
-                            const fallbackSphere = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
-                            controllerGrip.add(fallbackSphere);
-                            console.log(`Added fallback visualization for controller ${index}`);
-                        }
+
+                vrControllers.forEach(function(controller) {
+                    if (controller) controller.visible = true;
+                });
+
+                vrControllerModels.forEach(function(controllerGrip, index) {
+                    if (!controllerGrip) return;
+                    controllerGrip.visible = showHands || showLasers;
+
+                    var wheelSlot = vrWheelGrabSlots[index];
+                    if (wheelSlot && showLasers) {
+                        controllerGrip.children.forEach(function(child) {
+                            if (child.userData && child.userData.isVRHand) {
+                                child.visible = false;
+                            }
+                        });
+                        if (wheelSlot.hand) wheelSlot.hand.visible = false;
+                        return;
+                    }
+                    if (wheelSlot) {
+                        controllerGrip.children.forEach(function(child) {
+                            if (child.userData && child.userData.isVRHand) {
+                                child.visible = false;
+                            }
+                        });
+                        if (wheelSlot.hand) wheelSlot.hand.visible = showHands;
+                        return;
+                    }
+
+                    if (controllerGrip.children.length === 0) {
+                        var fallbackHand = buildVRHandMesh(index === 0 ? 'left' : 'right');
+                        controllerGrip.add(fallbackHand);
+                        vrHandMeshes[index] = fallbackHand;
+                    }
+                    var hand = vrHandMeshes[index];
+                    if (hand) hand.visible = showHands;
+                });
+            }
+
+            function updateVRMenuHoverAll(session) {
+                if (!vrMenuRaycaster || !vrMenu || !session || !session.inputSources) return;
+
+                vrMenuButtons.forEach(function(button) {
+                    var material = button.userData.material;
+                    if (!button.userData.active && material) {
+                        material.color.copy(button.userData.originalColor);
+                        material.opacity = 0.8;
                     }
                 });
-                
-                // Debug sphere code removed
+
+                var hoveredButton = null;
+                for (var si = 0; si < session.inputSources.length; si++) {
+                    var ci = getVRControllerIndexForInputSource(session.inputSources[si]);
+                    if (ci < 0 || ci >= vrControllers.length) continue;
+                    var controller = vrControllers[ci];
+                    if (!controller || !controller.matrixWorld) continue;
+
+                    controller.updateMatrixWorld(true);
+                    setVRMenuRayFromController(controller);
+                    var intersects = vrMenuRaycaster.intersectObjects(vrMenuButtons, true);
+                    if (!intersects.length) continue;
+
+                    var btn = findVRMenuButtonFromHit(intersects[0].object);
+                    if (btn && !btn.userData.disabled) {
+                        hoveredButton = btn;
+                    }
+                }
+
+                if (hoveredButton) {
+                    var hoverMat = hoveredButton.userData.material;
+                    if (hoverMat && !hoveredButton.userData.active) {
+                        hoverMat.color.setHex(0xffffff);
+                        hoverMat.opacity = 1.0;
+                    }
+                }
             }
 
             function setupVRHUD() {
@@ -3302,6 +3497,7 @@
                         console.log('Creating new VR menu...');
                         try {
                             createVRMenu();
+                            if (vrMenu) vrMenu.visible = true;
                             console.log('VR Menu created successfully');
                         } catch (error) {
                             console.error('Error creating VR menu:', error);
@@ -3313,6 +3509,11 @@
                         vrHUD.visible = !isMenuVisible;
                         console.log('VR HUD visibility set to:', !isMenuVisible);
                     }
+                    if (isMenuVisible) {
+                        releaseVRWheelGrab(0);
+                        releaseVRWheelGrab(1);
+                    }
+                    updateLaserPointers();
                 } else {
                     // Desktop Mode: Toggle HTML menu
                     const gameMenu = document.getElementById('gameMenu');
@@ -3421,31 +3622,20 @@
                 vrMenuButtons.push(lobbyMinus, lobbyPlus, connectBtn, autoBtn);
                 vrMenu.add(lobbyGroup);
                 
-                const botGroup = new THREE.Group();
-                botGroup.position.set(0, -0.05, 0);
-                const botLabel = createVRText('Bot:', -0.2, 0, 0.3);
-                const botToggle = createVRButton('OFF', 0, 0, 0.12, 0.06, '#00aa00', 'bot-toggle');
-                const botStatus = createVRText('(Single & Host)', 0.25, 0, 0.25);
-                botStatus.userData.type = 'display';
-                botStatus.userData.id = 'bot-status';
-                botGroup.add(botLabel, botToggle, botStatus);
-                vrMenuButtons.push(botToggle);
-                vrMenu.add(botGroup);
-                
-                const chaseGroup = new THREE.Group();
-                chaseGroup.position.set(0, -0.13, 0);
-                chaseGroup.userData = { type: 'chase-section' };
-                const chaseLabel = createVRText('Chase:', -0.2, 0, 0.3);
-                const chaseToggle = createVRButton('OFF', 0, 0, 0.12, 0.06, '#aa4400', 'chase-toggle');
-                const chaseStatus = createVRText('(single)', 0.25, 0, 0.25);
-                chaseStatus.userData.type = 'display';
-                chaseStatus.userData.id = 'chase-status';
-                chaseGroup.add(chaseLabel, chaseToggle, chaseStatus);
-                vrMenuButtons.push(chaseToggle);
-                vrMenu.add(chaseGroup);
+                const mirrorGroup = new THREE.Group();
+                mirrorGroup.position.set(0, -0.05, 0);
+                const mirrorLabel = createVRText('Mirror:', -0.2, 0, 0.3);
+                const mirrorToggle = createVRButton(
+                    rearviewMirrorEnabled ? 'ON' : 'OFF', 0, 0, 0.12, 0.06, '#0088aa', 'mirror-toggle');
+                const mirrorStatus = createVRText('(Rear view)', 0.25, 0, 0.25);
+                mirrorStatus.userData.type = 'display';
+                mirrorStatus.userData.id = 'mirror-status';
+                mirrorGroup.add(mirrorLabel, mirrorToggle, mirrorStatus);
+                vrMenuButtons.push(mirrorToggle);
+                vrMenu.add(mirrorGroup);
                 
                 const musicGroup = new THREE.Group();
-                musicGroup.position.set(0, -0.23, 0);
+                musicGroup.position.set(0, -0.13, 0);
                 const musicLabel = createVRText('Music:', -0.2, 0, 0.3);
                 const musicToggle = createVRButton('ON', 0, 0, 0.12, 0.06, '#00aa00', 'music-toggle');
                 musicGroup.add(musicLabel, musicToggle);
@@ -3463,7 +3653,9 @@
                 
                 // Create raycaster for VR interaction
                 vrMenuRaycaster = new THREE.Raycaster();
+                vrMenuRaycaster.far = 12;
                 
+                vrMenu.visible = isMenuVisible;
                 console.log('VR Menu created with', vrMenuButtons.length, 'buttons');
             }
 
@@ -3571,11 +3763,7 @@
                     
                     if (id === 'singleplayer') active = !isMultiplayer;
                     else if (id === 'multiplayer') active = isMultiplayer;
-                    else if (id === 'bot-toggle') active = botEnabled;
-                    else if (id === 'chase-toggle') {
-                        active = chaseEnabled;
-                        disabled = isMultiplayer;
-                    }
+                    else if (id === 'mirror-toggle') active = rearviewMirrorEnabled;
                     else if (id === 'music-toggle') active = musicEnabled;
                     else if (id === 'connect') {
                         disabled = (connectionState === 'connecting');
@@ -3608,40 +3796,18 @@
                             material.opacity = 0.8;
                         }
                     }
-                    if (id === 'chase-toggle' && button.userData.textCanvas) {
-                        const cctx = button.userData.textCanvas.getContext('2d');
-                        cctx.clearRect(0, 0, 256, 64);
-                        cctx.fillStyle = '#ffffff';
-                        cctx.font = 'bold 24px Arial';
-                        cctx.textAlign = 'center';
-                        cctx.fillText(chaseEnabled ? 'ON' : 'OFF', 128, 40);
+                    if (id === 'mirror-toggle' && button.userData.textCanvas) {
+                        const mctx = button.userData.textCanvas.getContext('2d');
+                        mctx.clearRect(0, 0, 256, 64);
+                        mctx.fillStyle = '#ffffff';
+                        mctx.font = 'bold 24px Arial';
+                        mctx.textAlign = 'center';
+                        mctx.fillText(rearviewMirrorEnabled ? 'ON' : 'OFF', 128, 40);
                         button.userData.textTexture.needsUpdate = true;
                     }
                 });
                 
-                const chaseSection = vrMenu.children.find(child =>
-                    child.userData && child.userData.type === 'chase-section'
-                );
-                if (chaseSection) {
-                    const chaseStatus = chaseSection.children.find(child =>
-                        child.userData && child.userData.id === 'chase-status'
-                    );
-                    if (chaseStatus && chaseStatus.userData.canvas) {
-                        const chaseCtx = chaseStatus.userData.canvas.getContext('2d');
-                        chaseCtx.clearRect(0, 0, 256, 64);
-                        chaseCtx.fillStyle = isMultiplayer ? '#888888' : '#aaaaaa';
-                        chaseCtx.font = '14px Arial';
-                        chaseCtx.textAlign = 'center';
-                        const chaseHint = isMultiplayer ? '(Single only)' :
-                            (chaseActive && chaseStarLevel > 0 ?
-                                formatChaseStarsDisplay(chaseStarLevel) + ' · ' + chaseVehicles.length :
-                                'toggle');
-                        chaseCtx.fillText(chaseHint, 128, 40);
-                        chaseStatus.userData.texture.needsUpdate = true;
-                    }
-                }
-
-                const statusDisplay = vrMenu.children.find(child => 
+                const statusDisplay = vrMenu.children.find(child =>
                     child.userData.type === 'display' && child.userData.id === 'status'
                 );
                 if (statusDisplay && statusDisplay.userData.canvas) {
@@ -3658,22 +3824,17 @@
             function handleVRMenuClick(controllerIndex) {
                 if (!vrMenuRaycaster || !vrMenu || vrControllers.length === 0) return;
                 
-                // Use the specific controller that triggered the click
                 const controller = vrControllers[controllerIndex];
                 if (!controller || !controller.matrixWorld) return;
                 
-                // Set raycaster from controller
-                const tempMatrix = new THREE.Matrix4();
-                tempMatrix.identity().extractRotation(controller.matrixWorld);
+                controller.updateMatrixWorld(true);
+                setVRMenuRayFromController(controller);
                 
-                vrMenuRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-                vrMenuRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-                
-                // Check intersections with menu buttons
                 const intersects = vrMenuRaycaster.intersectObjects(vrMenuButtons, true);
                 
                 if (intersects.length > 0) {
-                    const clickedObject = intersects[0].object.parent;
+                    const clickedObject = findVRMenuButtonFromHit(intersects[0].object);
+                    if (!clickedObject) return;
                     const buttonId = clickedObject.userData.id;
                     
                     // Check if button is disabled
@@ -3712,11 +3873,8 @@
                         case 'auto-connect':
                             autoConnect();
                             break;
-                        case 'bot-toggle':
-                            toggleBot();
-                            break;
-                        case 'chase-toggle':
-                            toggleChase();
+                        case 'mirror-toggle':
+                            toggleRearviewMirror();
                             break;
                         case 'music-toggle':
                             toggleMusic();
@@ -3778,8 +3936,8 @@
                 const lobbySection = document.getElementById('lobbySection');
                 const singleBtn = document.getElementById('singleplayerBtn');
                 const multiBtn = document.getElementById('multiplayerBtn');
-                const botToggle = document.getElementById('botToggle');
-                const botStatus = document.getElementById('botStatus');
+                const mirrorToggle = document.getElementById('mirrorToggle');
+                const mirrorStatus = document.getElementById('mirrorStatus');
                 const musicToggle = document.getElementById('musicToggle');
                 const musicStatus = document.getElementById('musicStatus');
                 const statusText = document.getElementById('statusText');
@@ -3803,45 +3961,16 @@
                     multiBtn.classList.toggle('active', isMultiplayer);
                 }
 
-                if (botToggle && botStatus) {
-                    botToggle.textContent = botEnabled ? 'ON' : 'OFF';
-                    botToggle.classList.toggle('active', botEnabled);
-                    if (isMultiplayer && !isHost) {
-                        botStatus.textContent = '(Host controls bot)';
-                        botToggle.disabled = true;
-                        botToggle.style.opacity = '0.5';
-                    } else {
-                        botStatus.textContent = '(Single & Host)';
-                        botToggle.disabled = false;
-                        botToggle.style.opacity = '1';
-                    }
+                if (mirrorToggle && mirrorStatus) {
+                    mirrorToggle.textContent = rearviewMirrorEnabled ? 'ON' : 'OFF';
+                    mirrorToggle.classList.toggle('active', rearviewMirrorEnabled);
+                    mirrorStatus.textContent = rearviewMirrorEnabled ? '(Rear view)' : '(Hidden)';
                 }
 
                 if (musicToggle && musicStatus) {
                     musicToggle.textContent = musicEnabled ? 'ON' : 'OFF';
                     musicToggle.classList.toggle('active', musicEnabled);
                     musicStatus.textContent = '(Background)';
-                }
-
-                var chaseToggle = document.getElementById('chaseToggle');
-                var chaseStatus = document.getElementById('chaseStatus');
-                if (chaseToggle && chaseStatus) {
-                    chaseToggle.textContent = chaseEnabled ? 'ON' : 'OFF';
-                    chaseToggle.classList.toggle('active', chaseEnabled);
-                    if (isMultiplayer) {
-                        chaseStatus.textContent = '(Single-player only)';
-                        chaseToggle.disabled = true;
-                        chaseToggle.style.opacity = '0.5';
-                    } else {
-                        if (chaseActive && chaseStarLevel > 0) {
-                            chaseStatus.textContent = formatChaseStarsDisplay(chaseStarLevel)
-                                + ' · ' + chaseVehicles.length + ' pursuer(s)';
-                        } else {
-                            chaseStatus.textContent = '(toggle to start)';
-                        }
-                        chaseToggle.disabled = false;
-                        chaseToggle.style.opacity = '1';
-                    }
                 }
 
                 if (statusText) {
@@ -3872,11 +4001,8 @@
                 document.getElementById('autoConnectBtn')?.addEventListener('click', () => {
                     autoConnect();
                 });
-                document.getElementById('botToggle')?.addEventListener('click', () => {
-                    toggleBot();
-                });
-                document.getElementById('chaseToggle')?.addEventListener('click', () => {
-                    toggleChase();
+                document.getElementById('mirrorToggle')?.addEventListener('click', () => {
+                    toggleRearviewMirror();
                 });
                 document.getElementById('musicToggle')?.addEventListener('click', () => {
                     toggleMusic();
@@ -3979,6 +4105,24 @@
                 }
                 
                 console.log('Bot', botEnabled ? 'enabled' : 'disabled');
+            }
+
+            function toggleRearviewMirror() {
+                rearviewMirrorEnabled = !rearviewMirrorEnabled;
+                if (!rearviewMirrorEnabled) {
+                    if (!rearviewMirrorUI) {
+                        rearviewMirrorUI = document.getElementById('rearviewMirrorUI');
+                    }
+                    if (rearviewMirrorUI) {
+                        rearviewMirrorUI.style.display = 'none';
+                    }
+                    if (vrRearviewMirror) {
+                        vrRearviewMirror.visible = false;
+                    }
+                }
+                updateMenuDisplay();
+                updateVRMenuDisplay();
+                console.log('Rearview mirror', rearviewMirrorEnabled ? 'enabled' : 'disabled');
             }
 
             function toggleMusic() {
@@ -5079,6 +5223,8 @@
                         vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
                         vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
                         vehicleRef.vehicle.resetSuspension();
+                        releaseVRWheelGrab(0);
+                        releaseVRWheelGrab(1);
                         attachCameraRigToVehicle();
                         syncPlayerChassisFromPhysics();
                         recordLastCarDropPosition(resetPosition);
@@ -5311,6 +5457,9 @@
                             }
                         }
                     }
+                    if (child.name && EMBEDDED_WHEEL_NODE_NAMES.indexOf(child.name) >= 0) {
+                        child.visible = false;
+                    }
                 });
                 var box = new THREE.Box3().setFromObject(root);
                 var center = box.getCenter(new THREE.Vector3());
@@ -5350,7 +5499,7 @@
                 }
                 _duneBuggyLoadPromise = new Promise(function(resolve, reject) {
                     getSharedGltfLoader().load(
-                        'assets/sportcar017/sportcar.017.gltf',
+                        'assets/sportcar017/sportcar.017-2.gltf',
                         function(gltf) {
                             _duneBuggyTemplate = gltf.scene;
                             prepareDuneBuggyTemplate(_duneBuggyTemplate);
@@ -5364,6 +5513,341 @@
                 return _duneBuggyLoadPromise.then(function() {
                     return cloneDuneBuggyModel(scale);
                 });
+            }
+
+            function computeSteeringWheelSpinAxis(wheel) {
+                var mesh = null;
+                wheel.traverse(function(c) {
+                    if (c.isMesh && c.geometry && c.geometry.attributes.position && !mesh) mesh = c;
+                });
+                if (!mesh) {
+                    return new THREE.Vector3(0, 0, 1);
+                }
+
+                var pos = mesh.geometry.attributes.position;
+                _steerCenter.set(0, 0, 0);
+                for (var i = 0; i < pos.count; i++) {
+                    _steerCenter.x += pos.getX(i);
+                    _steerCenter.y += pos.getY(i);
+                    _steerCenter.z += pos.getZ(i);
+                }
+                _steerCenter.multiplyScalar(1 / pos.count);
+
+                var iTop = 0;
+                var iSide = 0;
+                for (var j = 0; j < pos.count; j++) {
+                    if (pos.getY(j) > pos.getY(iTop)) iTop = j;
+                    if (Math.abs(pos.getX(j)) > Math.abs(pos.getX(iSide))) iSide = j;
+                }
+
+                _steerV1.set(
+                    pos.getX(iTop) - _steerCenter.x,
+                    pos.getY(iTop) - _steerCenter.y,
+                    pos.getZ(iTop) - _steerCenter.z
+                ).normalize();
+
+                _steerV2.set(
+                    pos.getX(iSide) - _steerCenter.x,
+                    pos.getY(iSide) - _steerCenter.y,
+                    pos.getZ(iSide) - _steerCenter.z
+                );
+                _steerV2.addScaledVector(_steerV1, -_steerV2.dot(_steerV1)).normalize();
+
+                _steerSpinAxis.crossVectors(_steerV1, _steerV2).normalize();
+                _steerSpinAxis.transformDirection(mesh.matrix);
+                return _steerSpinAxis.clone();
+            }
+
+            function bindSteeringWheelVisual(root) {
+                if (!root) return null;
+                var wheel = root.getObjectByName('SteeringWheel');
+                if (!wheel) return null;
+                if (wheel.userData.steerPivotBound) {
+                    return wheel.userData.steerPivot;
+                }
+
+                var parent = wheel.parent;
+                if (!parent) return null;
+
+                parent.updateMatrixWorld(true);
+                new THREE.Box3().setFromObject(wheel).getCenter(_steerHubWorld);
+                _steerHubLocal.copy(_steerHubWorld);
+                parent.worldToLocal(_steerHubLocal);
+
+                var pivot = new THREE.Group();
+                pivot.name = 'SteeringWheelPivot';
+                pivot.position.copy(_steerHubLocal);
+
+                var wheelPos = wheel.position.clone();
+                var wheelQuat = wheel.quaternion.clone();
+                parent.remove(wheel);
+                parent.add(pivot);
+                pivot.add(wheel);
+                wheel.position.copy(wheelPos).sub(_steerHubLocal);
+                wheel.quaternion.copy(wheelQuat);
+
+                pivot.userData.steerSpinAxis = computeSteeringWheelSpinAxis(wheel);
+                pivot.userData.steerWheel = wheel;
+
+                wheel.userData.steerPivotBound = true;
+                wheel.userData.steerPivot = pivot;
+                return pivot;
+            }
+
+            function updateSteeringWheelVisual(pivot, steerAngle) {
+                if (!pivot) return;
+                if (pivot.name === 'SteeringWheel') {
+                    pivot = pivot.userData.steerPivot;
+                }
+                if (!pivot || !pivot.userData.steerSpinAxis) return;
+                pivot.quaternion.setFromAxisAngle(
+                    pivot.userData.steerSpinAxis,
+                    -steerAngle * STEERING_WHEEL_RATIO
+                );
+            }
+
+            function getSteeringWheelPivot() {
+                if (!vehicleRef || !vehicleRef.steeringWheelMesh) return null;
+                var pivot = vehicleRef.steeringWheelMesh;
+                if (pivot.name === 'SteeringWheel') pivot = pivot.userData.steerPivot;
+                return pivot || null;
+            }
+
+            function getWorldSteeringSpinAxis(pivot, out) {
+                out.copy(pivot.userData.steerSpinAxis);
+                pivot.parent.updateMatrixWorld(true);
+                out.transformDirection(pivot.parent.matrixWorld).normalize();
+                return out;
+            }
+
+            function buildSteeringPlaneBasisLocal(pivot, outU, outV) {
+                _steerSpinAxis.copy(pivot.userData.steerSpinAxis).normalize();
+                outU.crossVectors(_steerWorldUp, _steerSpinAxis);
+                if (outU.lengthSq() < 1e-6) {
+                    outU.crossVectors(new THREE.Vector3(0, 0, 1), _steerSpinAxis);
+                }
+                outU.normalize();
+                outV.crossVectors(_steerSpinAxis, outU).normalize();
+            }
+
+            function worldPosToChassisLocal(pivot, worldPos, out) {
+                out.copy(worldPos);
+                pivot.parent.updateMatrixWorld(true);
+                _steerParentInv.copy(pivot.parent.matrixWorld).invert();
+                out.applyMatrix4(_steerParentInv);
+            }
+
+            function getLocalSteeringPlaneAngle(localPos, hubLocal, planeU, planeV) {
+                _steerSpinAxis.crossVectors(planeU, planeV).normalize();
+                _steerV1.subVectors(localPos, hubLocal);
+                _steerV1.addScaledVector(_steerSpinAxis, -_steerV1.dot(_steerSpinAxis));
+                if (_steerV1.lengthSq() < 1e-8) return null;
+                return Math.atan2(_steerV1.dot(planeV), _steerV1.dot(planeU));
+            }
+
+            function projectGripOntoWheelRimLocal(pivot, worldPos, outLocal) {
+                pivot.updateMatrixWorld(true);
+                _steerHubWorld.setFromMatrixPosition(pivot.matrixWorld);
+                getWorldSteeringSpinAxis(pivot, _steerSpinAxis);
+                _steerV1.subVectors(worldPos, _steerHubWorld);
+                _steerV1.addScaledVector(_steerSpinAxis, -_steerV1.dot(_steerSpinAxis));
+                if (_steerV1.lengthSq() < 1e-8) {
+                    _steerV1.set(0, 1, 0);
+                }
+                _steerV1.normalize().multiplyScalar(STEER_WHEEL_RIM_RADIUS);
+                _steerGripWorld.copy(_steerHubWorld).add(_steerV1);
+                outLocal.copy(_steerGripWorld);
+                pivot.worldToLocal(outLocal);
+                return outLocal;
+            }
+
+            function getVRInputSourceForControllerIndex(session, controllerIndex) {
+                if (!session || !session.inputSources) return null;
+                var want = controllerIndex === 0 ? 'left' : 'right';
+                for (var i = 0; i < session.inputSources.length; i++) {
+                    if (session.inputSources[i].handedness === want) {
+                        return session.inputSources[i];
+                    }
+                }
+                return session.inputSources[controllerIndex] || null;
+            }
+
+            function isGripPressed(inputSource) {
+                var gp = inputSource && inputSource.gamepad;
+                return !!(gp && gp.buttons && gp.buttons[1] && gp.buttons[1].pressed);
+            }
+
+            function distanceGripToSteeringWheel(controllerIndex) {
+                var pivot = getSteeringWheelPivot();
+                var grip = vrControllerModels[controllerIndex];
+                if (!pivot || !grip) return Infinity;
+                grip.getWorldPosition(_steerGripWorld);
+                pivot.updateMatrixWorld(true);
+                _steerHubWorld.setFromMatrixPosition(pivot.matrixWorld);
+                return _steerGripWorld.distanceTo(_steerHubWorld);
+            }
+
+            function attachVRHandToWheel(controllerIndex, pivot, worldGripPos) {
+                var hand = vrHandMeshes[controllerIndex];
+                var grip = vrControllerModels[controllerIndex];
+                if (!hand || !grip || !pivot) return null;
+
+                var anchor = new THREE.Group();
+                anchor.name = 'SteeringGrab_' + controllerIndex;
+                projectGripOntoWheelRimLocal(pivot, worldGripPos, _steerRimLocal);
+                anchor.position.copy(_steerRimLocal);
+                pivot.add(anchor);
+
+                if (hand.parent) hand.parent.remove(hand);
+                anchor.add(hand);
+                hand.position.set(0, 0, 0);
+                hand.rotation.set(0, 0, 0);
+                hand.visible = true;
+                vrHandMeshes[controllerIndex] = hand;
+
+                buildSteeringPlaneBasisLocal(pivot, _steerPlaneU, _steerPlaneV);
+                worldPosToChassisLocal(pivot, worldGripPos, _steerParentLocal);
+                var grabAngle = getLocalSteeringPlaneAngle(
+                    _steerParentLocal,
+                    pivot.position,
+                    _steerPlaneU,
+                    _steerPlaneV
+                );
+                if (grabAngle === null) grabAngle = 0;
+
+                return {
+                    anchor: anchor,
+                    hand: hand,
+                    grip: grip,
+                    grabAngle: grabAngle,
+                    hubLocal: pivot.position.clone(),
+                    planeU: _steerPlaneU.clone(),
+                    planeV: _steerPlaneV.clone()
+                };
+            }
+
+            function releaseVRWheelGrab(controllerIndex) {
+                var slot = vrWheelGrabSlots[controllerIndex];
+                if (!slot) return;
+                var grip = vrControllerModels[controllerIndex];
+                var hand = slot.hand || vrHandMeshes[controllerIndex];
+                if (hand && slot.anchor) {
+                    slot.anchor.remove(hand);
+                    if (grip) {
+                        grip.add(hand);
+                        hand.position.set(0, 0, 0);
+                        hand.rotation.set(0, 0, 0);
+                    }
+                    vrHandMeshes[controllerIndex] = hand;
+                }
+                if (slot.anchor && slot.anchor.parent) {
+                    slot.anchor.parent.remove(slot.anchor);
+                }
+                vrWheelGrabSlots[controllerIndex] = null;
+            }
+
+            function tryStartVRWheelGrab(controllerIndex, vehicleSteering) {
+                if (vrWheelGrabSlots[controllerIndex]) return true;
+                if (distanceGripToSteeringWheel(controllerIndex) > STEER_WHEEL_GRAB_RADIUS) return false;
+
+                var pivot = getSteeringWheelPivot();
+                var grip = vrControllerModels[controllerIndex];
+                if (!pivot || !grip) return false;
+
+                grip.getWorldPosition(_steerGripWorld);
+                var slot = attachVRHandToWheel(controllerIndex, pivot, _steerGripWorld);
+                if (!slot) return false;
+
+                slot.steerAtGrab = vehicleSteering;
+                slot.active = true;
+                vrWheelGrabSlots[controllerIndex] = slot;
+                return true;
+            }
+
+            function getVRWheelSpeedSteerScale(absSpeedKmh) {
+                var t = (absSpeedKmh - STEER_WHEEL_SPEED_SCALE_START_KMH) /
+                    (STEER_WHEEL_SPEED_SCALE_END_KMH - STEER_WHEEL_SPEED_SCALE_START_KMH);
+                t = Math.max(0, Math.min(1, t));
+                return THREE.MathUtils.lerp(1, STEER_WHEEL_MIN_SPEED_SCALE, t);
+            }
+
+            function stabilizeVRWheelSteering(current, target, dt, absSpeedKmh) {
+                var speedT = Math.max(0, Math.min(1,
+                    (absSpeedKmh - STEER_WHEEL_SPEED_SCALE_START_KMH) /
+                    (STEER_WHEEL_SPEED_SCALE_END_KMH - STEER_WHEEL_SPEED_SCALE_START_KMH)));
+                var smooth = THREE.MathUtils.lerp(0.28, 0.09, speedT);
+                var maxRate = THREE.MathUtils.lerp(2.4, 0.55, speedT);
+                var step = (target - current) * smooth;
+                var maxStep = maxRate * Math.max(dt, 0.001);
+                if (step > maxStep) step = maxStep;
+                if (step < -maxStep) step = -maxStep;
+                return current + step;
+            }
+
+            function wrapAngleRad(a) {
+                while (a > Math.PI) a -= Math.PI * 2;
+                while (a < -Math.PI) a += Math.PI * 2;
+                return a;
+            }
+
+            function updateVRWheelGrabSteering(session, vehicleSteering, steeringClamp, absSpeedKmh) {
+                if (!renderer.xr.isPresenting || !session || isMenuVisible || cameraMode === 'fly' || trackEditorMode) {
+                    releaseVRWheelGrab(0);
+                    releaseVRWheelGrab(1);
+                    return null;
+                }
+
+                var pivot = getSteeringWheelPivot();
+                if (!pivot) return null;
+
+                var driveSteer = null;
+                var grabCount = 0;
+                var speedScale = getVRWheelSpeedSteerScale(absSpeedKmh || 0);
+
+                for (var ci = 0; ci < 2; ci++) {
+                    var inputSource = getVRInputSourceForControllerIndex(session, ci);
+                    var gripping = isGripPressed(inputSource);
+                    var slot = vrWheelGrabSlots[ci];
+
+                    if (!slot && gripping && distanceGripToSteeringWheel(ci) <= STEER_WHEEL_GRAB_RADIUS) {
+                        tryStartVRWheelGrab(ci, vehicleSteering);
+                        slot = vrWheelGrabSlots[ci];
+                    }
+
+                    if (!slot) continue;
+
+                    if (!gripping) {
+                        releaseVRWheelGrab(ci);
+                        continue;
+                    }
+
+                    vrControllerModels[ci].getWorldPosition(_steerGripWorld);
+                    projectGripOntoWheelRimLocal(pivot, _steerGripWorld, slot.anchor.position);
+                    worldPosToChassisLocal(pivot, _steerGripWorld, _steerParentLocal);
+                    var angle = getLocalSteeringPlaneAngle(
+                        _steerParentLocal,
+                        slot.hubLocal,
+                        slot.planeU,
+                        slot.planeV
+                    );
+                    if (angle === null) continue;
+                    var delta = wrapAngleRad(angle - slot.grabAngle);
+                    if (Math.abs(delta) < STEER_WHEEL_ANGLE_DEADZONE) {
+                        delta = 0;
+                    }
+                    driveSteer = (driveSteer || 0) + (slot.steerAtGrab - (delta / STEERING_WHEEL_RATIO) * speedScale);
+                    grabCount++;
+                }
+
+                if (!grabCount) return null;
+                var clamp = (steeringClamp || 0.5) * THREE.MathUtils.lerp(1, 0.72, Math.max(0, Math.min(1,
+                    ((absSpeedKmh || 0) - STEER_WHEEL_SPEED_SCALE_START_KMH) /
+                    (STEER_WHEEL_SPEED_SCALE_END_KMH - STEER_WHEEL_SPEED_SCALE_START_KMH))));
+                return Math.max(-clamp, Math.min(clamp, driveSteer / grabCount));
+            }
+
+            function isVRWheelGrabActive() {
+                return !!(vrWheelGrabSlots[0] || vrWheelGrabSlots[1]);
             }
 
             function getChasePoliceConeGeo() {
@@ -6601,6 +7085,7 @@
                     // Update the vehicle reference
                     if (vehicleRef) {
                         vehicleRef.chassisMesh = chassisMesh;
+                        vehicleRef.steeringWheelMesh = bindSteeringWheelVisual(chassisMesh);
                         attachCameraRigToVehicle();
                         syncPlayerChassisFromPhysics();
                     }
@@ -6642,6 +7127,7 @@
                     vehicleBody: body,
                     chassisMass: massVehicle,
                     chassisMesh: chassisMesh,
+                    steeringWheelMesh: null,
                     physicsWireframe: physicsWireframe,
                     chassisCollision: chassisCollision,
                     cityNavMode: false,
@@ -6756,35 +7242,39 @@
                             for (let i = 0; i < session.inputSources.length; i++) {
                                 const inputSource = session.inputSources[i];
                                 const gamepad = inputSource.gamepad;
-                                
-                                if (gamepad && inputSource.handedness === 'right') {
-                                    // Start audio on first VR controller interaction
-                                    if (!vrAudioStarted && gamepad.buttons) {
-                                        for (let j = 0; j < gamepad.buttons.length; j++) {
-                                            if (gamepad.buttons[j] && gamepad.buttons[j].pressed) {
-                                                startEngineAudio();
-                                                vrAudioStarted = true;
-                                                console.log('🎵 VR audio started via controller button press');
-                                                break;
-                                            }
+
+                                // Start audio on first VR controller interaction (either hand)
+                                if (!vrAudioStarted && gamepad && gamepad.buttons) {
+                                    for (let j = 0; j < gamepad.buttons.length; j++) {
+                                        if (gamepad.buttons[j] && gamepad.buttons[j].pressed) {
+                                            startEngineAudio();
+                                            vrAudioStarted = true;
+                                            console.log('🎵 VR audio started via controller button press');
+                                            break;
                                         }
                                     }
+                                }
+
+                                // B button (index 5) for menu toggle — either hand
+                                if (gamepad && gamepad.buttons && gamepad.buttons[5] && gamepad.buttons[5].pressed) {
+                                    if (!this.lastMenuToggleTime || (Date.now() - this.lastMenuToggleTime) > 500) {
+                                        toggleMenu();
+                                        this.lastMenuToggleTime = Date.now();
+                                    }
+                                }
+                                
+                                if (gamepad && inputSource.handedness === 'right') {
                                     
                                     // Car controls (not in menu, fly mode, or track editor)
                                     if (!isMenuVisible && cameraMode !== 'fly' && !trackEditorMode) {
-                                        // Thumbstick for steering
-                                        if (gamepad.axes && gamepad.axes.length >= 4) {
+                                        // Thumbstick for steering (unless hands are on the wheel)
+                                        if (!isVRWheelGrabActive() && gamepad.axes && gamepad.axes.length >= 4) {
                                             vrSteering = gamepad.axes[2] || 0;
                                         }
                                         
                                         // Trigger for acceleration
                                         if (gamepad.buttons && gamepad.buttons[0]) {
                                             vrAcceleration = gamepad.buttons[0].value || 0;
-                                        }
-                                        
-                                        // Grip for braking
-                                        if (gamepad.buttons && gamepad.buttons[1]) {
-                                            vrBraking = gamepad.buttons[1].value || 0;
                                         }
                                     } else {
                                         // Reset car controls when menu is open or in fly mode
@@ -6801,57 +7291,6 @@
                                             this.lastCameraSwitchTime = Date.now();
                                         }
                                     }
-                                    
-                                    // B button (index 5) for menu toggle
-                                    if (gamepad.buttons && gamepad.buttons[5] && gamepad.buttons[5].pressed) {
-                                        // Prevent rapid toggling with a simple debounce
-                                        if (!this.lastMenuToggleTime || (Date.now() - this.lastMenuToggleTime) > 500) {
-                                            toggleMenu();
-                                            this.lastMenuToggleTime = Date.now();
-                                        }
-                                    }
-                                    
-                    // VR Menu interaction with trigger (index 0)
-                    if (isMenuVisible && vrMenu && vrMenu.visible && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
-                        if (!this.lastMenuClickTime || (Date.now() - this.lastMenuClickTime) > 300) {
-                            // Find which controller this input source belongs to
-                            let controllerIndex = -1;
-                            const session = renderer.xr.getSession();
-                            if (session && session.inputSources) {
-                                for (let i = 0; i < session.inputSources.length; i++) {
-                                    if (session.inputSources[i] === inputSource) {
-                                        controllerIndex = i;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (controllerIndex >= 0) {
-                                handleVRMenuClick(controllerIndex);
-                            }
-                            this.lastMenuClickTime = Date.now();
-                        }
-                    }
-                    
-                    // VR Menu raycasting for hover effects
-                    if (isMenuVisible && vrMenu && vrMenu.visible) {
-                        // Find which controller this input source belongs to
-                        let controllerIndex = -1;
-                        const session = renderer.xr.getSession();
-                        if (session && session.inputSources) {
-                            for (let i = 0; i < session.inputSources.length; i++) {
-                                if (session.inputSources[i] === inputSource) {
-                                    controllerIndex = i;
-                                    break;
-                                }
-                            }
-                        }
-                        if (controllerIndex >= 0) {
-                            updateVRMenuHover(controllerIndex);
-                        }
-                    }
-                    
-                    // Update laser pointer visibility
-                    updateLaserPointers();
                                     
                                     // Thumbstick click (index 3): reset in drive modes, spawn car in fly
                                     if (!isMenuVisible && !trackEditorMode && gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed) {
@@ -6903,9 +7342,12 @@
                                 }
                                 
                                 if (gamepad && inputSource.handedness === 'left') {
-                                    // LEFT CONTROLLER - VR Fly Camera Controls (rotation and up/down)
-                                    // VR controller debug logging removed
-                                    if (cameraMode === 'fly') {
+                                    // Left trigger = brake while driving
+                                    if (!isMenuVisible && cameraMode !== 'fly' && !trackEditorMode) {
+                                        if (gamepad.buttons && gamepad.buttons[0]) {
+                                            vrBraking = gamepad.buttons[0].value || 0;
+                                        }
+                                    } else if (cameraMode === 'fly') {
                                         var flyDelta = dt * vrFlySpeed * (actions['flyBoost'] ? flyBoostMultiplier : 1);
                                         var rotationSpeed = 2.0; // Rotation speed multiplier
                                         
@@ -6959,6 +7401,13 @@
                     
                     // Keep most steering ability at high speeds for arcade feel
                     var dynamicSteeringClamp = steeringClamp * Math.max(0.8, speedFactor);
+
+                    var vrWheelSteering = null;
+                    if (renderer.xr.isPresenting && !trackEditorMode && cameraMode !== 'fly') {
+                        var xrSession = renderer.xr.getSession();
+                        vrWheelSteering = updateVRWheelGrabSteering(
+                            xrSession, vehicleSteering, dynamicSteeringClamp, absSpeed);
+                    }
                     
                     // Calculate dynamic tire friction - Touring car style (more forgiving)
                     var baseFriction = 2.5;
@@ -6993,6 +7442,9 @@
                         engineForce = navDrive.engineForce;
                         breakingForce = navDrive.breakingForce;
                         vehicleSteering = navDrive.vehicleSteering;
+                    } else if (vrWheelSteering !== null) {
+                        vehicleSteering = stabilizeVRWheelSteering(
+                            vehicleSteering, vrWheelSteering, dt, absSpeed);
                     } else {
                         // Improved steering logic with speed-dependent response
                         if (left) {
@@ -7152,6 +7604,7 @@
                         chassisMesh.position.set(p.x(), p.y(), p.z());
                     }
                     chassisMesh.quaternion.set(q.x(), q.y(), q.z(), q.w());
+                    updateSteeringWheelVisual(vehicleRef && vehicleRef.steeringWheelMesh, vehicleSteering);
                     
                     // Update physics wireframe (shows exact physics body position)
                     if (vehicleRef) {
