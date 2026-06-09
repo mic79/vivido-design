@@ -4351,20 +4351,8 @@
                             // Hide remote player car and remove from physics
                             const playerIndex = parseInt(playerId.split('_')[1]);
                             if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
-                                const remoteCarData = remotePlayerCars[playerIndex];
-                                if (remoteCarData) {
-                                    remoteCarData.mesh.visible = false;
-                                    remoteCarData.playerId = null;
-                                    
-                                    // Remove physics body from world
-                                    if (remoteCarData.inPhysicsWorld) {
-                                        physicsWorld.removeRigidBody(remoteCarData.rigidBody);
-                                        remoteCarData.inPhysicsWorld = false;
-                                        // Physics body removal logging removed
-                                    }
-                                    
-                                    console.log(`Hidden remote car for ${playerId}`);
-                                }
+                                hideRemotePlayerCar(remotePlayerCars[playerIndex]);
+                                console.log('Hidden remote car for', playerId);
                             }
                             
                             multiplayerStatus = `Host - Lobby ${lobbyNumber} (${activePlayers.size}/4)`;
@@ -4441,20 +4429,8 @@
                             activePlayers.clear();
                             
                             // Hide all remote player cars and remove from physics
-                            remotePlayerCars.forEach((carData, index) => {
-                                if (carData && carData.mesh) {
-                                    carData.mesh.visible = false;
-                                    carData.playerId = null;
-                                    
-                                    // Remove physics body from world
-                                    if (carData.inPhysicsWorld) {
-                                        physicsWorld.removeRigidBody(carData.rigidBody);
-                                        carData.inPhysicsWorld = false;
-                                        // Physics body removal logging removed
-                                    }
-                                    
-                                    console.log(`Hidden remote car ${index}`);
-                                }
+                            remotePlayerCars.forEach(function(carData) {
+                                hideRemotePlayerCar(carData);
                             });
                             
                             updateMenuDisplay();
@@ -4498,18 +4474,21 @@
                         break;
                         
                     case 'car-state':
-                        // Legacy car-state support - convert to player-state
-                        handlePlayerState({
-                            playerId: data.playerId,
-                            state: {
-                                x: data.state.position.x,
-                                y: data.state.position.y,
-                                z: data.state.position.z,
-                                rx: data.state.quaternion.x,
-                                ry: data.state.quaternion.y,
-                                rz: data.state.quaternion.z
-                            }
-                        });
+                        if (data.state && data.state.position && data.state.quaternion) {
+                            handlePlayerState({
+                                playerId: data.playerId,
+                                state: {
+                                    px: data.state.position.x,
+                                    py: data.state.position.y,
+                                    pz: data.state.position.z,
+                                    qx: data.state.quaternion.x,
+                                    qy: data.state.quaternion.y,
+                                    qz: data.state.quaternion.z,
+                                    qw: data.state.quaternion.w,
+                                    wheels: data.state.wheels || null
+                                }
+                            });
+                        }
                         break;
                         
                     case 'player-state':
@@ -4559,85 +4538,141 @@
                 console.log('Broadcasted player list to all clients:', playerList.length, 'players');
             }
 
-            // Remote player cars (simple Three.js objects like reference project)
+            // Remote player cars — visual replicas synced from physics + wheel transforms
             let remotePlayerCars = [];
 
-            function createRemotePlayerCars() {
-                console.log('🏗️ Creating remote player cars with physics...');
-                
-                const playerColors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00]; // Red, Green, Blue, Yellow
-                
-                for (let i = 0; i < 4; i++) {
-                    const carGroup = new THREE.Group();
-                    
-                    // Load dune buggy model for remote player (async)
-                    loadDuneBuggyModel(1.0).then((model) => {
-                        // Clear any existing children (temporary placeholder)
-                        while (carGroup.children.length > 0) {
-                            carGroup.remove(carGroup.children[0]);
+            function hideRemotePlayerCar(remoteCarData) {
+                if (!remoteCarData) return;
+                if (remoteCarData.chassisMesh) {
+                    remoteCarData.chassisMesh.visible = false;
+                }
+                if (remoteCarData.wheelMeshes) {
+                    for (var wi = 0; wi < remoteCarData.wheelMeshes.length; wi++) {
+                        if (remoteCarData.wheelMeshes[wi]) {
+                            remoteCarData.wheelMeshes[wi].visible = false;
                         }
-                        
-                        // Add the dune buggy model to the group
-                        carGroup.add(model);
-                        console.log(`🏎️ Remote player ${i} dune buggy model loaded`);
-                    }).catch((error) => {
-                        console.error(`❌ Failed to load remote player ${i} dune buggy model:`, error);
-                        // Fallback already handled in loadDuneBuggyModel
-                    });
-                    
-                    // Temporary placeholder until GLTF loads
-                    const tempBodyGeometry = new THREE.BoxGeometry(1.8, 0.6, 4);
-                    const tempBodyMaterial = new THREE.MeshBasicMaterial({ color: playerColors[i], transparent: true, opacity: 0.3 });
-                    const tempBodyMesh = new THREE.Mesh(tempBodyGeometry, tempBodyMaterial);
-                    tempBodyMesh.position.y = 0.3;
-                    carGroup.add(tempBodyMesh);
-                    
-                    // Create physics body for collision
-                    const chassisShape = new Ammo.btBoxShape(new Ammo.btVector3(0.9, 0.3, 2.0)); // Half extents
+                    }
+                }
+                remoteCarData.playerId = null;
+                if (remoteCarData.inPhysicsWorld && remoteCarData.rigidBody) {
+                    physicsWorld.removeRigidBody(remoteCarData.rigidBody);
+                    remoteCarData.inPhysicsWorld = false;
+                }
+            }
+
+            /** Match local quickSyncVehicleChassisVisual + wheel meshes from network physics state. */
+            function applyRemotePlayerVisual(remoteCarData, state) {
+                if (!remoteCarData || !state) return;
+                var chassisMesh = remoteCarData.chassisMesh;
+                if (!chassisMesh) return;
+
+                var px = state.px;
+                var py = state.py;
+                var pz = state.pz;
+                var carQuat = new THREE.Quaternion(state.qx, state.qy, state.qz, state.qw);
+
+                if (chassisMesh.userData && chassisMesh.userData.chassisOffset) {
+                    var offset = getChassisMeshOffset(chassisMesh);
+                    offset.applyQuaternion(carQuat);
+                    chassisMesh.position.set(px + offset.x, py + offset.y, pz + offset.z);
+                } else {
+                    chassisMesh.position.set(px, py, pz);
+                }
+                chassisMesh.quaternion.copy(carQuat);
+                chassisMesh.visible = true;
+
+                if (state.wheels && remoteCarData.wheelMeshes) {
+                    for (var wi = 0; wi < state.wheels.length && wi < remoteCarData.wheelMeshes.length; wi++) {
+                        var wm = remoteCarData.wheelMeshes[wi];
+                        var w = state.wheels[wi];
+                        if (!wm || !w) continue;
+                        wm.position.set(w.x, w.y, w.z);
+                        wm.quaternion.set(w.qx, w.qy, w.qz, w.qw);
+                        wm.visible = true;
+                    }
+                }
+
+                if (remoteCarData.rigidBody) {
+                    if (!remoteCarData.inPhysicsWorld) {
+                        physicsWorld.addRigidBody(remoteCarData.rigidBody);
+                        remoteCarData.inPhysicsWorld = true;
+                    }
+                    var btTransform = new Ammo.btTransform();
+                    btTransform.setIdentity();
+                    btTransform.setOrigin(new Ammo.btVector3(px, py, pz));
+                    btTransform.setRotation(new Ammo.btQuaternion(state.qx, state.qy, state.qz, state.qw));
+                    remoteCarData.rigidBody.setWorldTransform(btTransform);
+                    remoteCarData.rigidBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                    remoteCarData.rigidBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                }
+            }
+
+            function createRemotePlayerCars() {
+                console.log('🏗️ Creating remote player cars (chassis + wheels)...');
+
+                for (let i = 0; i < 4; i++) {
+                    const wheelMeshes = [];
+                    const wheelSides = [false, true, false, true]; // FL, FR, BL, BR
+
+                    for (let w = 0; w < 4; w++) {
+                        wheelMeshes[w] = createWheelMesh(0.5, 0.3);
+                        wheelMeshes[w].visible = false;
+                        (function(slotIndex, wheelIndex, isRightSide) {
+                            loadTireModel(isRightSide, 1.0).then(function(tireModel) {
+                                var carData = remotePlayerCars[slotIndex];
+                                if (!carData || !carData.wheelMeshes) return;
+                                var prev = carData.wheelMeshes[wheelIndex];
+                                if (prev && prev.parent) {
+                                    scene.remove(prev);
+                                }
+                                tireModel.visible = false;
+                                scene.add(tireModel);
+                                carData.wheelMeshes[wheelIndex] = tireModel;
+                            }).catch(function(err) {
+                                console.warn('Remote wheel load failed:', slotIndex, wheelIndex, err);
+                            });
+                        })(i, w, wheelSides[w]);
+                    }
+
+                    const chassisShape = new Ammo.btBoxShape(new Ammo.btVector3(0.9, 0.3, 2.0));
                     const chassisLocalInertia = new Ammo.btVector3(0, 0, 0);
-                    const chassisMass = 1500; // Same as player car for consistent collisions
+                    const chassisMass = 1500;
                     chassisShape.calculateLocalInertia(chassisMass, chassisLocalInertia);
-                    
                     const startTransform = new Ammo.btTransform();
                     startTransform.setIdentity();
                     startTransform.setOrigin(new Ammo.btVector3(-22 + (i * 2), 1.0, 40));
-                    
                     const motionState = new Ammo.btDefaultMotionState(startTransform);
-                    const rbInfo = new Ammo.btRigidBodyConstructionInfo(chassisMass, motionState, chassisShape, chassisLocalInertia);
+                    const rbInfo = new Ammo.btRigidBodyConstructionInfo(
+                        chassisMass, motionState, chassisShape, chassisLocalInertia);
                     const rigidBody = new Ammo.btRigidBody(rbInfo);
-                    
-                    // Make it dynamic but controlled (can collide properly with other dynamic bodies)
-                    rigidBody.setCollisionFlags(0); // Dynamic object (default)
-                    rigidBody.setActivationState(4); // DISABLE_DEACTIVATION
-                    
-                    // Add arcade-style collision properties (same as other vehicles)
-                    rigidBody.setRestitution(0.3); // Some bounciness for fun collisions
-                    rigidBody.setFriction(0.8); // Good grip but not too sticky
-                    
-                    // Disable gravity and damping so it's controlled by remote state
+                    rigidBody.setCollisionFlags(0);
+                    rigidBody.setActivationState(DISABLE_DEACTIVATION);
+                    rigidBody.setRestitution(0.3);
+                    rigidBody.setFriction(0.8);
                     rigidBody.setGravity(new Ammo.btVector3(0, 0, 0));
-                    rigidBody.setLinearFactor(new Ammo.btVector3(1, 1, 1));
-                    rigidBody.setAngularFactor(new Ammo.btVector3(1, 1, 1));
-                    
-                    // Don't add to physics world initially - will be added when player connects
-                    
-                    // Set initial position
-                    carGroup.position.set(-22 + (i * 2), 1.0, 40);
-                    carGroup.visible = false; // Hidden by default
-                    
-                    // Store both mesh and physics body
+                    rigidBody.setLinearFactor(new Ammo.btVector3(0, 0, 0));
+                    rigidBody.setAngularFactor(new Ammo.btVector3(0, 0, 0));
+
                     remotePlayerCars[i] = {
-                        mesh: carGroup,
+                        chassisMesh: null,
+                        wheelMeshes: wheelMeshes,
                         rigidBody: rigidBody,
                         playerId: null,
-                        inPhysicsWorld: false // Track if physics body is in world
+                        inPhysicsWorld: false
                     };
-                    scene.add(carGroup);
-                    
-                    // Remote car creation logging removed
+
+                    loadDuneBuggyModel(1.0).then(function(model) {
+                        var carData = remotePlayerCars[i];
+                        if (!carData) return;
+                        model.visible = false;
+                        carData.chassisMesh = model;
+                        console.log('🏎️ Remote player slot', i, 'dune buggy ready');
+                    }).catch(function(error) {
+                        console.error('❌ Remote player', i, 'chassis load failed:', error);
+                    });
                 }
-                
-                console.log(`🎮 Created ${remotePlayerCars.length} remote player cars with physics`);
+
+                console.log('🎮 Created', remotePlayerCars.length, 'remote player car slots');
             }
 
             function handlePlayerState(data) {
@@ -4662,57 +4697,16 @@
                     });
                 }
                 
-                // Update the corresponding remote player car
                 const playerIndex = parseInt(data.playerId.split('_')[1]);
                 if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
                     const remoteCarData = remotePlayerCars[playerIndex];
-                    if (remoteCarData && data.playerId !== myPlayerId) { // Don't show our own remote car
-                        const remoteCar = remoteCarData.mesh;
-                        const rigidBody = remoteCarData.rigidBody;
-                        
-                        // Update visual mesh
-                        remoteCar.position.set(data.state.x, data.state.y, data.state.z);
-                        remoteCar.rotation.set(data.state.rx, data.state.ry, data.state.rz);
-                        remoteCar.visible = true;
-                        
-                        // Add physics body to world if not already added
-                        if (!remoteCarData.inPhysicsWorld) {
-                            physicsWorld.addRigidBody(rigidBody);
-                            remoteCarData.inPhysicsWorld = true;
-                            // Physics body addition logging removed
-                        }
-                        
-                        // Update physics body position (dynamic body with controlled movement)
-                        const currentTransform = rigidBody.getWorldTransform();
-                        const currentPos = currentTransform.getOrigin();
-                        
-                        // Calculate velocity to move to target position smoothly
-                        const targetPos = new Ammo.btVector3(data.state.x, data.state.y, data.state.z);
-                        const velocity = new Ammo.btVector3(
-                            (targetPos.x() - currentPos.x()) * 10, // Multiply by factor for responsiveness
-                            (targetPos.y() - currentPos.y()) * 10,
-                            (targetPos.z() - currentPos.z()) * 10
-                        );
-                        
-                        // Set velocity instead of direct position for better collision
-                        rigidBody.setLinearVelocity(velocity);
-                        
-                        // Set rotation directly (less critical for collision)
-                        const quaternion = new THREE.Quaternion();
-                        quaternion.setFromEuler(new THREE.Euler(data.state.rx, data.state.ry, data.state.rz));
-                        const newTransform = new Ammo.btTransform();
-                        newTransform.setIdentity();
-                        newTransform.setOrigin(targetPos);
-                        newTransform.setRotation(new Ammo.btQuaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
-                        rigidBody.setWorldTransform(newTransform);
-                        
-                        rigidBody.activate(); // Wake up the physics body
-                        
-                        // Store player ID
+                    if (remoteCarData && data.playerId !== myPlayerId && data.state) {
+                        applyRemotePlayerVisual(remoteCarData, data.state);
                         remoteCarData.playerId = data.playerId;
-                        
+
                         if (!this.lastRemotePlayerUpdateTime || Date.now() - this.lastRemotePlayerUpdateTime > 30000) {
-                            console.log(`🎯 Updated remote player ${data.playerId} at (${data.state.x.toFixed(1)}, ${data.state.y.toFixed(1)}, ${data.state.z.toFixed(1)})`);
+                            console.log('🎯 Remote player', data.playerId,
+                                'physics y=', data.state.py != null ? data.state.py.toFixed(2) : '?');
                             this.lastRemotePlayerUpdateTime = Date.now();
                         }
                     }
@@ -4721,35 +4715,46 @@
 
             function sendPlayerState() {
                 if (!isMultiplayer || activePlayers.size <= 1) return;
-                
-                // Get player car position and rotation (from physics car)
-                if (vehicleRef && vehicleRef.chassisMesh) {
-                    const pos = vehicleRef.chassisMesh.position;
-                    const rot = vehicleRef.chassisMesh.rotation;
-                    
-                    const playerState = {
-                        x: pos.x, y: pos.y, z: pos.z,
-                        rx: rot.x, ry: rot.y, rz: rot.z
-                    };
-                    
-                    const data = {
-                        type: 'player-state',
-                        state: playerState,
-                        playerId: myPlayerId
-                    };
-                    
-                    // Send to all connections
-                    connections.forEach((conn, playerId) => {
-                        if (conn && conn.open) {
-                            conn.send(data);
-                        }
+                if (!vehicleRef || !vehicleRef.vehicle || !vehicleRef.chassisMesh) return;
+
+                var tm = vehicleRef.vehicle.getChassisWorldTransform();
+                var p = tm.getOrigin();
+                var q = tm.getRotation();
+
+                var wheels = [];
+                var n = vehicleRef.vehicle.getNumWheels();
+                for (var wi = 0; wi < n; wi++) {
+                    vehicleRef.vehicle.updateWheelTransform(wi, true);
+                    var wtm = vehicleRef.vehicle.getWheelTransformWS(wi);
+                    var wp = wtm.getOrigin();
+                    var wq = wtm.getRotation();
+                    wheels.push({
+                        x: wp.x(), y: wp.y(), z: wp.z(),
+                        qx: wq.x(), qy: wq.y(), qz: wq.z(), qw: wq.w()
                     });
-                    
-                    // Throttled logging
-                    if (!this.lastPlayerStateSendTime || Date.now() - this.lastPlayerStateSendTime > 2000) {
-                        console.log(`📡 Sending car state from ${myPlayerId} to ${connections.size} players`);
-                        this.lastPlayerStateSendTime = Date.now();
+                }
+
+                var playerState = {
+                    px: p.x(), py: p.y(), pz: p.z(),
+                    qx: q.x(), qy: q.y(), qz: q.z(), qw: q.w(),
+                    wheels: wheels
+                };
+
+                var data = {
+                    type: 'player-state',
+                    state: playerState,
+                    playerId: myPlayerId
+                };
+
+                connections.forEach(function(conn) {
+                    if (conn && conn.open) {
+                        conn.send(data);
                     }
+                });
+
+                if (!this.lastPlayerStateSendTime || Date.now() - this.lastPlayerStateSendTime > 2000) {
+                    console.log('📡 Sending physics car state from', myPlayerId, 'to', connections.size, 'peers');
+                    this.lastPlayerStateSendTime = Date.now();
                 }
             }
 
@@ -4760,22 +4765,22 @@
 
             function cleanupRemotePlayerCars() {
                 console.log('🧹 Cleaning up remote player cars...');
-                remotePlayerCars.forEach((carData, index) => {
-                    if (carData) {
-                        // Remove from scene
-                        if (carData.mesh) {
-                            scene.remove(carData.mesh);
-                        }
-                        
-                        // Remove from physics world
-                        if (carData.rigidBody) {
-                            physicsWorld.removeRigidBody(carData.rigidBody);
-                        }
-                        
-                        console.log(`Cleaned up remote car ${index}`);
+                remotePlayerCars.forEach(function(carData, index) {
+                    if (!carData) return;
+                    hideRemotePlayerCar(carData);
+                    if (carData.chassisMesh && carData.chassisMesh.parent) {
+                        scene.remove(carData.chassisMesh);
                     }
+                    if (carData.wheelMeshes) {
+                        for (var wi = 0; wi < carData.wheelMeshes.length; wi++) {
+                            if (carData.wheelMeshes[wi] && carData.wheelMeshes[wi].parent) {
+                                scene.remove(carData.wheelMeshes[wi]);
+                            }
+                        }
+                    }
+                    console.log('Cleaned up remote car slot', index);
                 });
-                remotePlayerCars.length = 0; // Clear array
+                remotePlayerCars.length = 0;
             }
 
             function detachCameraRigForFly() {
@@ -17518,10 +17523,12 @@
                 }
 
                 if (remotePlayerCars) {
-                    remotePlayerCars.forEach(function (remoteCar) {
+                    remotePlayerCars.forEach(function(remoteCar) {
                         if (!remoteCar || !remoteCar.rigidBody || !remoteCar.inPhysicsWorld) return;
-                        var rp = remoteCar.mesh ? remoteCar.mesh.position : playerPos;
-                        registerUnit(remoteCar.rigidBody, null, 'remote', remoteCar.mesh, rp);
+                        var rp = remoteCar.chassisMesh
+                            ? remoteCar.chassisMesh.position
+                            : playerPos;
+                        registerUnit(remoteCar.rigidBody, null, 'remote', remoteCar.chassisMesh, rp);
                     });
                 }
 
