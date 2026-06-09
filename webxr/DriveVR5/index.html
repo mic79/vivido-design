@@ -521,7 +521,7 @@
                 <div class="menu-section">
                     <div class="bot-controls">
                         <span>Music:</span>
-                        <button id="musicToggle" class="menu-button active">ON</button>
+                        <button id="musicToggle" class="menu-button">OFF</button>
                         <span id="musicStatus">(Background)</span>
                     </div>
                 </div>
@@ -572,7 +572,7 @@
         getMaxPursuers,
         getPhysicsMaxSubsteps,
         getPlayerBvhHullStride,
-        getBvhHullNearbyRadiusSq,
+        getBvhHullProbeMarginM,
         getRearviewMirrorFrameSkip,
         applyWebXRFramebufferScaleBeforeSession,
         onWebXRSessionStarted,
@@ -641,7 +641,7 @@
         getMaxPursuers: getMaxPursuers,
         getPhysicsMaxSubsteps: getPhysicsMaxSubsteps,
         getPlayerBvhHullStride: getPlayerBvhHullStride,
-        getBvhHullNearbyRadiusSq: getBvhHullNearbyRadiusSq,
+        getBvhHullProbeMarginM: getBvhHullProbeMarginM,
         getRearviewMirrorFrameSkip: getRearviewMirrorFrameSkip,
         applyWebXRFramebufferScaleBeforeSession: applyWebXRFramebufferScaleBeforeSession,
         onWebXRSessionStarted: onWebXRSessionStarted,
@@ -812,7 +812,7 @@
             var getMaxPursuers = cw.getMaxPursuers;
             var getPhysicsMaxSubsteps = cw.getPhysicsMaxSubsteps;
             var getPlayerBvhHullStride = cw.getPlayerBvhHullStride;
-            var getBvhHullNearbyRadiusSq = cw.getBvhHullNearbyRadiusSq;
+            var getBvhHullProbeMarginM = cw.getBvhHullProbeMarginM;
             var getRearviewMirrorFrameSkip = cw.getRearviewMirrorFrameSkip;
             var applyWebXRFramebufferScaleBeforeSession = cw.applyWebXRFramebufferScaleBeforeSession;
             var onWebXRSessionStarted = cw.onWebXRSessionStarted;
@@ -836,7 +836,7 @@
             let connectionState = 'disconnected';
             let multiplayerStatus = 'Disconnected';
             let botEnabled = false;
-            let musicEnabled = true;
+            let musicEnabled = false;
             let vrAudioStarted = false;
             var chaseCollisionBroadphase = new ChaseCollisionBroadphase(ChasePerf.spatialCellSizeM);
             var chaseSimFrameId = 0;
@@ -853,6 +853,7 @@
             let vrControllerModels = [];
             let vrHandMeshes = [null, null];
             var vrWheelGrabSlots = [null, null];
+            var vrImpactHapticLastTime = 0;
             var STEER_WHEEL_GRAB_RADIUS = 0.34;
             var STEER_WHEEL_RIM_RADIUS = 0.17;
             let vrLaserPointers = [];
@@ -1212,8 +1213,6 @@
             var _vehHullPush = new THREE.Vector3();
             var _vehHullBestPen = 0;
             var _vehHullChassisBox = new THREE.Box3();
-            var _vehHullChassisPos = new THREE.Vector3();
-            var _vehHullMeshCenter = new THREE.Vector3();
             var cityNavMapGroup = null;
             /** Nav data for chase/pathfinding without building the full-grid overlay texture. */
             var cityNavRuntimeGrid = null;
@@ -2107,14 +2106,14 @@
                         physicsWorld.stepSimulation(dt, getPhysicsMaxSubsteps(inXR));
                     }
                     if (vrRunnerCityReady && ENVIRONMENT_BVH_HULL_ENABLED) {
-                        var hullNearbyR2 = getBvhHullNearbyRadiusSq(inXR);
+                        var hullProbeMargin = getBvhHullProbeMarginM(inXR);
                         var playerHullStride = getPlayerBvhHullStride(inXR);
                         var runPlayerHull = playerHullStride <= 1 || (chaseSimFrameId % playerHullStride) === 0;
                         if (runPlayerHull) {
-                            resolveVehicleEnvironmentBvhCollisions(vehicleRef, dt, hullNearbyR2);
+                            resolveVehicleEnvironmentBvhCollisions(vehicleRef, dt, hullProbeMargin);
                         }
                         if (botVehicleRef && !trackEditorMode) {
-                            resolveVehicleEnvironmentBvhCollisions(botVehicleRef, dt, hullNearbyR2);
+                            resolveVehicleEnvironmentBvhCollisions(botVehicleRef, dt, hullProbeMargin);
                         }
                         if (chaseActive && chaseVehicles.length) {
                             var fullSimR2 = ChasePerf.fullSimRadiusM * ChasePerf.fullSimRadiusM;
@@ -2132,7 +2131,7 @@
                                     continue;
                                 }
                                 if (!shouldRunUnitTick(ci, chaseSimFrameId, cityStride)) continue;
-                                resolveVehicleEnvironmentBvhCollisions(cRef, dt, hullNearbyR2);
+                                resolveVehicleEnvironmentBvhCollisions(cRef, dt, hullProbeMargin);
                             }
                         }
                     }
@@ -4004,7 +4003,7 @@
                 const musicGroup = new THREE.Group();
                 musicGroup.position.set(0, -0.13, 0);
                 const musicLabel = createVRText('Music:', -0.2, 0, 0.3);
-                const musicToggle = createVRButton('ON', 0, 0, 0.12, 0.06, '#00aa00', 'music-toggle');
+                const musicToggle = createVRButton('OFF', 0, 0, 0.12, 0.06, '#00aa00', 'music-toggle');
                 musicGroup.add(musicLabel, musicToggle);
                 vrMenuButtons.push(musicToggle);
                 vrMenu.add(musicGroup);
@@ -6275,6 +6274,66 @@
                 return session.inputSources[controllerIndex] || null;
             }
 
+            function applyVRStickDeadzone(value, deadzone) {
+                deadzone = deadzone !== undefined ? deadzone : 0.08;
+                if (Math.abs(value) < deadzone) return 0;
+                var sign = value < 0 ? -1 : 1;
+                return sign * (Math.abs(value) - deadzone) / (1 - deadzone);
+            }
+
+            /** Meta Quest Touch — GamepadHapticActuator pulse (DodgeVR-style). */
+            function pulseVRControllerHaptic(session, handedness, intensity, durationMs) {
+                if (!session || !renderer.xr.isPresenting) return;
+                intensity = THREE.MathUtils.clamp(intensity || 0, 0, 1);
+                durationMs = durationMs > 0 ? durationMs : 20;
+                for (var hi = 0; hi < session.inputSources.length; hi++) {
+                    var src = session.inputSources[hi];
+                    if (handedness && src.handedness !== handedness) continue;
+                    var actuators = src.gamepad && src.gamepad.hapticActuators;
+                    if (!actuators || !actuators.length) continue;
+                    try {
+                        actuators[0].pulse(intensity, durationMs);
+                    } catch (e) { /* unsupported */ }
+                    if (handedness) return;
+                }
+            }
+
+            function pulseVRBothControllersHaptic(session, intensity, durationMs) {
+                pulseVRControllerHaptic(session, 'left', intensity, durationMs);
+                pulseVRControllerHaptic(session, 'right', intensity, durationMs);
+            }
+
+            function pulseVRImpactHaptic(session, strength) {
+                if (!session) return;
+                var now = performance.now();
+                if (vrImpactHapticLastTime && now - vrImpactHapticLastTime < 120) return;
+                vrImpactHapticLastTime = now;
+                strength = THREE.MathUtils.clamp(strength, 0.2, 1);
+                pulseVRBothControllersHaptic(session, strength, Math.round(60 + strength * 140));
+            }
+
+            function checkPlayerWorldImpactHaptics(session) {
+                if (!session || !renderer.xr.isPresenting || !vehicleRef || !vehicleRef.vehicleBody || !physicsWorld) {
+                    return;
+                }
+                var playerBody = vehicleRef.vehicleBody;
+                var maxImpulse = 0;
+                var numManifolds = physicsWorld.getDispatcher().getNumManifolds();
+                for (var i = 0; i < numManifolds; i++) {
+                    var manifold = physicsWorld.getDispatcher().getManifoldByIndexInternal(i);
+                    var b0 = Ammo.castObject(manifold.getBody0(), Ammo.btRigidBody);
+                    var b1 = Ammo.castObject(manifold.getBody1(), Ammo.btRigidBody);
+                    if (b0 !== playerBody && b1 !== playerBody) continue;
+                    var contacts = manifold.getNumContacts();
+                    for (var c = 0; c < contacts; c++) {
+                        maxImpulse = Math.max(maxImpulse, manifold.getContactPoint(c).getAppliedImpulse());
+                    }
+                }
+                if (maxImpulse > 100) {
+                    pulseVRImpactHaptic(session, THREE.MathUtils.clamp(maxImpulse / 650, 0.25, 1));
+                }
+            }
+
             function isGripPressed(inputSource) {
                 var gp = inputSource && inputSource.gamepad;
                 return !!(gp && gp.buttons && gp.buttons[1] && gp.buttons[1].pressed);
@@ -6437,6 +6496,14 @@
                     var delta = wrapAngleRad(angle - slot.grabAngle);
                     if (Math.abs(delta) < STEER_WHEEL_ANGLE_DEADZONE) {
                         delta = 0;
+                    } else if (dt > 0) {
+                        var wheelRotSpeed = Math.abs(delta) / Math.max(dt, 0.001);
+                        var hapticIntensity = THREE.MathUtils.clamp(
+                            (wheelRotSpeed - 0.4) / (5.5 - 0.4),
+                            0.03,
+                            0.42
+                        );
+                        pulseVRControllerHaptic(session, ci === 0 ? 'left' : 'right', hapticIntensity, 20);
                     }
                     driveSteer = (driveSteer || 0) + (slot.steerAtGrab - (delta / STEERING_WHEEL_RATIO) * speedScale);
                     grabCount++;
@@ -7823,12 +7890,11 @@
                     
                     // Update player engine sound with realistic parameters
                     if (playerEngineSound) {
-                        var throttleInput = Math.abs(engineForce) / maxEngineForce; // Normalize throttle (0-1)
-                        var brakeInput = Math.abs(breakingForce) / maxBreakingForce; // Normalize braking (0-1)
+                        var throttleInputNorm = Math.abs(engineForce) / maxEngineForce;
+                        var brakeInputNorm = Math.abs(breakingForce) / maxBreakingForce;
                         var speedKmh = Math.abs(speed);
-                        var isAccelerating = acceleration ? 1 : 0;
-                        
-                        playerEngineSound.updateEngine(speedKmh, throttleInput, isAccelerating, brakeInput);
+                        var isAccelerating = Math.abs(engineForce) > 0 ? 1 : 0;
+                        playerEngineSound.updateEngine(speedKmh, throttleInputNorm, isAccelerating, brakeInputNorm);
                     }
 
                     breakingForce = 0;
@@ -7872,7 +7938,7 @@
                                     if (!isMenuVisible && cameraMode !== 'fly' && !trackEditorMode) {
                                         // Thumbstick for steering (unless hands are on the wheel)
                                         if (!isVRWheelGrabActive() && gamepad.axes && gamepad.axes.length >= 4) {
-                                            vrSteering = gamepad.axes[2] || 0;
+                                            vrSteering = applyVRStickDeadzone(gamepad.axes[2] || 0, 0.08);
                                         }
                                         
                                         // Trigger for acceleration
@@ -7986,16 +8052,26 @@
                             if (!isMenuVisible) {
                                 handleTrackEditorVRInput(session, dt);
                             }
+                            if (cameraMode !== 'fly' && !trackEditorMode) {
+                                checkPlayerWorldImpactHaptics(session);
+                            }
                         }
                     }
 
                     // Combine keyboard and VR input (but disable car controls in desktop fly mode)
                     var isDesktopFlyMode = (cameraMode === 'fly' && !renderer.xr.isPresenting);
                     var driveDisabled = isDesktopFlyMode || trackEditorMode;
-                    var acceleration = (driveDisabled ? false : actions.acceleration) || (vrAcceleration > 0.1);
-                    var braking = (driveDisabled ? false : actions.braking) || (vrBraking > 0.1);
-                    var left = (driveDisabled ? false : actions.left) || (vrSteering < -0.1);
-                    var right = (driveDisabled ? false : actions.right) || (vrSteering > 0.1);
+                    var throttleInput = 0;
+                    var brakeInput = 0;
+                    if (!driveDisabled) {
+                        if (actions.acceleration) throttleInput = 1;
+                        if (actions.braking) brakeInput = 1;
+                        if (vrAcceleration > throttleInput) throttleInput = vrAcceleration;
+                        if (vrBraking > brakeInput) brakeInput = vrBraking;
+                    }
+                    var left = driveDisabled ? false : actions.left;
+                    var right = driveDisabled ? false : actions.right;
+                    var vrSteerAnalog = driveDisabled ? 0 : vrSteering;
 
                     // Arcade-style steering - more responsive and forgiving
                     var absSpeed = Math.abs(speed);
@@ -8018,26 +8094,23 @@
                     var steeringGripFactor = Math.max(0.8, 1.0 - (Math.abs(vehicleSteering) * 0.4)); // Less penalty for steering
                     var dynamicFriction = baseFriction * speedGripFactor * steeringGripFactor;
 
-                    if (acceleration) {
-                        if (speed < -1)
-                            breakingForce = maxBreakingForce;
-                        else {
-                            // Reduce engine force when tires are slipping (low grip)
-                            var gripFactor = dynamicFriction / baseFriction; // How much grip we have
-                            var adjustedEngineForce = maxEngineForce;
-                            
-                            // Light traction control - only kick in when really sliding
+                    if (brakeInput > 0.02) {
+                        if (speed > 1) {
+                            breakingForce = maxBreakingForce * brakeInput;
+                        } else {
+                            engineForce = -maxEngineForce * 0.5 * brakeInput;
+                        }
+                    } else if (throttleInput > 0.02) {
+                        if (speed < -1) {
+                            breakingForce = maxBreakingForce * throttleInput;
+                        } else {
+                            var gripFactor = dynamicFriction / baseFriction;
+                            var adjustedEngineForce = maxEngineForce * throttleInput;
                             if (gripFactor < 0.5 && Math.abs(speed) > 40) {
-                                adjustedEngineForce *= (0.8 + gripFactor * 0.2); // Gentle power reduction
+                                adjustedEngineForce *= (0.8 + gripFactor * 0.2);
                             }
-                            
                             engineForce = adjustedEngineForce;
                         }
-                    }
-                    if (braking) {
-                        if (speed > 1)
-                            breakingForce = maxBreakingForce;
-                        else engineForce = -maxEngineForce / 2;
                     }
                     
                     var navDrive = applyPlayerCityNavDrive(speed, maxEngineForce, maxBreakingForce);
@@ -8048,6 +8121,12 @@
                     } else if (vrWheelSteering !== null) {
                         vehicleSteering = stabilizeVRWheelSteering(
                             vehicleSteering, vrWheelSteering, dt, absSpeed);
+                    } else if (Math.abs(vrSteerAnalog) > 0.05) {
+                        vehicleSteering = THREE.MathUtils.clamp(
+                            -vrSteerAnalog * dynamicSteeringClamp,
+                            -dynamicSteeringClamp,
+                            dynamicSteeringClamp
+                        );
                     } else {
                         // Improved steering logic with speed-dependent response
                         if (left) {
@@ -8120,7 +8199,7 @@
                             }
                             
                             // Hard braking while turning
-                            if (braking && Math.abs(vehicleSteering) > 0.3 && Math.abs(speed) > 40) {
+                            if (brakeInput > 0.1 && Math.abs(vehicleSteering) > 0.3 && Math.abs(speed) > 40) {
                                 isDrifting = true;
                                 driftIntensity = Math.max(driftIntensity, brakeInput * 0.8);
                             }
@@ -11705,6 +11784,34 @@
                 return _vehHullChassisBox.intersectsBox(_cityNavTriBox);
             }
 
+            function getVehicleChassisWorldProbeBox(vehicleData, marginM, outBox) {
+                outBox.makeEmpty();
+                if (!vehicleData || !vehicleData.chassisCollision || !vehicleData.vehicle) return outBox;
+                var cc = vehicleData.chassisCollision;
+                var hw = cc.debugWidth * 0.5;
+                var hh = cc.debugHeight * 0.5;
+                var hl = cc.debugLength * 0.5;
+                var lift = cc.liftY != null ? cc.liftY : 0.325;
+                var tm = vehicleData.vehicle.getChassisWorldTransform();
+                var p = tm.getOrigin();
+                var q = tm.getRotation();
+                _vehHullQuat.set(q.x(), q.y(), q.z(), q.w());
+                var ox = [-hw, hw, -hw, hw, -hw, hw, -hw, hw];
+                var oy = [lift - hh, lift - hh, lift + hh, lift + hh, lift - hh, lift - hh, lift + hh, lift + hh];
+                var oz = [-hl, -hl, -hl, -hl, hl, hl, hl, hl];
+                for (var i = 0; i < 8; i++) {
+                    _vehHullCorner.set(ox[i], oy[i], oz[i]).applyQuaternion(_vehHullQuat);
+                    _vehHullCorner.x += p.x();
+                    _vehHullCorner.y += p.y();
+                    _vehHullCorner.z += p.z();
+                    outBox.expandByPoint(_vehHullCorner);
+                }
+                if (marginM > 0) {
+                    outBox.expandByScalar(marginM);
+                }
+                return outBox;
+            }
+
             function getVehicleChassisBoundsInMeshLocalSpace(vehicleData, mesh, outBox) {
                 outBox.makeEmpty();
                 if (!vehicleData || !vehicleData.chassisCollision || !mesh) return outBox;
@@ -11801,7 +11908,7 @@
             }
 
             /** Magenta BVH meshes — chassis OBB shapecast, impulse only (no teleport). */
-            function resolveVehicleEnvironmentBvhCollisions(vehicleData, dt, nearbyRadiusSq) {
+            function resolveVehicleEnvironmentBvhCollisions(vehicleData, dt, probeMarginM) {
                 if (!ENVIRONMENT_BVH_HULL_ENABLED) return;
                 if (!vehicleData || !vehicleData.vehicle || !vehicleData.vehicleBody ||
                     !vrRunnerCityCollisionMeshes.length) {
@@ -11811,27 +11918,21 @@
                 var body = vehicleData.vehicleBody;
                 _vehHullBestPen = 0;
                 _vehHullPush.set(0, 0, 0);
-                var cullR2 = nearbyRadiusSq > 0 ? nearbyRadiusSq : 0;
-                if (cullR2 > 0 && vehicleData.chassisMesh) {
-                    vehicleData.chassisMesh.getWorldPosition(_vehHullChassisPos);
+                var useProbe = probeMarginM > 0;
+                if (useProbe) {
+                    getVehicleChassisWorldProbeBox(vehicleData, probeMarginM, _cityNavBox);
                 }
 
                 for (var mi = 0; mi < vrRunnerCityCollisionMeshes.length; mi++) {
                     var mesh = vrRunnerCityCollisionMeshes[mi];
                     if (meshPhysicsRegistrationDisabled(mesh)) continue;
                     if (isEnvironmentSolidObstacleMesh(mesh)) continue;
-                    if (cullR2 > 0) {
+                    if (useProbe) {
                         var geo = mesh.geometry;
                         if (geo) {
-                            if (!geo.boundingSphere) geo.computeBoundingSphere();
-                            _vehHullMeshCenter.copy(geo.boundingSphere.center).applyMatrix4(mesh.matrixWorld);
-                            var meshR = geo.boundingSphere.radius * Math.max(
-                                mesh.scale.x, mesh.scale.y, mesh.scale.z
-                            );
-                            var dx = _vehHullChassisPos.x - _vehHullMeshCenter.x;
-                            var dz = _vehHullChassisPos.z - _vehHullMeshCenter.z;
-                            var reach = Math.sqrt(cullR2) + meshR + 4;
-                            if (dx * dx + dz * dz > reach * reach) continue;
+                            if (!geo.boundingBox) geo.computeBoundingBox();
+                            _cityNavTriBox.copy(geo.boundingBox).applyMatrix4(mesh.matrixWorld);
+                            if (!_cityNavBox.intersectsBox(_cityNavTriBox)) continue;
                         }
                     }
                     var bvh = mesh.geometry && mesh.geometry.boundsTree;
@@ -11879,6 +11980,15 @@
                 }
                 body.setLinearVelocity(new Ammo.btVector3(velVec.x, velVec.y, velVec.z));
                 body.activate(true);
+
+                if (vehicleRef && vehicleData === vehicleRef && _vehHullBestPen > 0.015 &&
+                    renderer.xr && renderer.xr.isPresenting) {
+                    var hullSession = renderer.xr.getSession();
+                    if (hullSession) {
+                        var hullHit = THREE.MathUtils.clamp(_vehHullBestPen * 6 + pushLen * 0.8, 0.2, 1);
+                        pulseVRImpactHaptic(hullSession, hullHit * 0.75);
+                    }
+                }
             }
 
             /** BVH box = cube containing the path-bake sphere (not the flat nav-grid car slab). */
@@ -18304,13 +18414,21 @@
                 if (window.impactSound && finalForce > 1.5) {
                     var now = performance.now();
                     if (!window._lastImpactSoundMs) window._lastImpactSoundMs = 0;
-                    if (now - window._lastImpactSoundMs < 120) return;
-                    window._lastImpactSoundMs = now;
-                    var impactPos = contactPoint.get_m_positionWorldOnB();
-                    window.impactSound.playImpact(
-                        Math.min(finalForce / 5, 1),
-                        impactPos.x(), impactPos.y(), impactPos.z()
-                    );
+                    if (now - window._lastImpactSoundMs >= 120) {
+                        window._lastImpactSoundMs = now;
+                        var impactPos = contactPoint.get_m_positionWorldOnB();
+                        window.impactSound.playImpact(
+                            Math.min(finalForce / 5, 1),
+                            impactPos.x(), impactPos.y(), impactPos.z()
+                        );
+                    }
+                }
+                if (renderer.xr && renderer.xr.isPresenting &&
+                    (vehicle1.type === 'player' || vehicle2.type === 'player')) {
+                    var impactSession = renderer.xr.getSession();
+                    if (impactSession && finalForce > 1.2) {
+                        pulseVRImpactHaptic(impactSession, Math.min(finalForce / 5, 1));
+                    }
                 }
                 if (finalForce > 4 && !window._lastVehicleCollisionLogMs) {
                     window._lastVehicleCollisionLogMs = 0;

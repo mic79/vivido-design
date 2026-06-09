@@ -32,8 +32,8 @@ export const ChasePerf = {
     questVRDefaultFrameRate: 90,
     /** Player chassis BVH hull depenetrate stride while in Quest VR. */
     playerBvhHullStrideQuestVR: 2,
-    /** Skip magenta-mesh shapecasts farther than this (m) from chassis in Quest VR. */
-    bvhHullNearbyRadiusMQuestVR: 88,
+    /** Player BVH hull: only shapecast meshes whose world bbox touches chassis AABB + this margin (m). */
+    bvhHullProbeMarginM: 3,
     rearviewMirrorFrameSkipQuestVR: 4,
     /** Max chase↔player collision pair checks per frame (after spatial filter). */
     collisionPairBudget: 48,
@@ -76,13 +76,14 @@ export function getPlayerBvhHullStride(inXR) {
     return 1;
 }
 
-/** @returns {number} 0 = no horizontal culling */
-export function getBvhHullNearbyRadiusSq(inXR) {
-    if (detectQuest() && inXR) {
-        var r = ChasePerf.bvhHullNearbyRadiusMQuestVR;
-        return r > 0 ? r * r : 0;
-    }
-    return 0;
+/** @returns {number} metres expanded around chassis world AABB; 0 = no mesh pre-cull */
+export function getBvhHullProbeMarginM(inXR) {
+    try {
+        var p = new URLSearchParams(window.location.search);
+        var v = parseFloat(p.get('hullMargin') || p.get('hullRadius') || '');
+        if (isFinite(v) && v >= 0 && v <= 32) return v;
+    } catch (e) { /* noop */ }
+    return ChasePerf.bvhHullProbeMarginM;
 }
 
 export function getRearviewMirrorFrameSkip(inXR) {
