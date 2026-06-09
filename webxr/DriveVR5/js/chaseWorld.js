@@ -297,7 +297,7 @@ export class ChaseCollisionBroadphase {
                 var b = other.payload;
                 if (!b) return;
                 if (skipChaseChase && a.type === 'chase' && b.type === 'chase') return;
-                if (a.type === 'remote' || b.type === 'remote') return;
+                if (a.type === 'remote' && b.type === 'remote') return;
                 pairFn(a, b);
                 checked++;
             });

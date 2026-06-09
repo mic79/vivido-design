@@ -1929,6 +1929,8 @@
             var STEERING_WHEEL_RATIO = 2.0;
             /** VR wheel: ignore tiny hand jitter (radians). */
             var STEER_WHEEL_ANGLE_DEADZONE = 0.012;
+            var STEER_WHEEL_HAPTIC_MIN_SPEED = 0.25;
+            var STEER_WHEEL_HAPTIC_MAX_SPEED = 4.5;
             var STEER_WHEEL_MIN_SPEED_SCALE = 0.38;
             var STEER_WHEEL_SPEED_SCALE_START_KMH = 35;
             var STEER_WHEEL_SPEED_SCALE_END_KMH = 110;
@@ -4909,7 +4911,7 @@
                 console.log('Broadcasted player list to all clients:', playerList.length, 'players');
             }
 
-            // Remote player cars — visual replicas synced from physics + wheel transforms
+            // Remote player cars — visual replicas + ghost physics bodies for local collisions
             let remotePlayerCars = [];
 
             function hideRemotePlayerCar(remoteCarData) {
@@ -4924,7 +4926,63 @@
                         }
                     }
                 }
+                if (remoteCarData.inPhysicsWorld && remoteCarData.rigidBody && physicsWorld) {
+                    physicsWorld.removeRigidBody(remoteCarData.rigidBody);
+                    remoteCarData.inPhysicsWorld = false;
+                }
                 remoteCarData.playerId = null;
+            }
+
+            function createRemotePlayerRigidBody() {
+                var chassisWidth = 1.95;
+                var chassisHeight = CHASSIS_COLLIDER_HEIGHT;
+                var chassisLength = 4;
+                var massVehicle = 1500;
+                var chassisCollision = createVehicleChassisShape(
+                    chassisWidth * 0.5, chassisHeight * 0.5, chassisLength * 0.5
+                );
+                var startTransform = new Ammo.btTransform();
+                startTransform.setIdentity();
+                startTransform.setOrigin(new Ammo.btVector3(0, -1000, 0));
+                var motionState = new Ammo.btDefaultMotionState(startTransform);
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                chassisCollision.shape.calculateLocalInertia(massVehicle, localInertia);
+                var rbInfo = new Ammo.btRigidBodyConstructionInfo(
+                    massVehicle, motionState, chassisCollision.shape, localInertia
+                );
+                var rigidBody = new Ammo.btRigidBody(rbInfo);
+                rigidBody.setActivationState(DISABLE_DEACTIVATION);
+                rigidBody.setRestitution(0.3);
+                rigidBody.setFriction(0.8);
+                rigidBody.setGravity(new Ammo.btVector3(0, 0, 0));
+                return rigidBody;
+            }
+
+            /** Ghost chassis body — follows network physics pose for local player collisions. */
+            function syncRemotePlayerPhysicsBody(remoteCarData, state) {
+                state = normalizeRemotePlayerState(state);
+                if (!remoteCarData || !state || !remoteCarData.rigidBody || state.px == null) return;
+                var rigidBody = remoteCarData.rigidBody;
+                if (!remoteCarData.inPhysicsWorld) {
+                    if (!physicsWorld) return;
+                    physicsWorld.addRigidBody(rigidBody);
+                    remoteCarData.inPhysicsWorld = true;
+                }
+                var currentTransform = rigidBody.getWorldTransform();
+                var currentPos = currentTransform.getOrigin();
+                var targetPos = new Ammo.btVector3(state.px, state.py, state.pz);
+                var followGain = 10;
+                rigidBody.setLinearVelocity(new Ammo.btVector3(
+                    (targetPos.x() - currentPos.x()) * followGain,
+                    (targetPos.y() - currentPos.y()) * followGain,
+                    (targetPos.z() - currentPos.z()) * followGain
+                ));
+                var newTransform = new Ammo.btTransform();
+                newTransform.setIdentity();
+                newTransform.setOrigin(targetPos);
+                newTransform.setRotation(new Ammo.btQuaternion(state.qx, state.qy, state.qz, state.qw));
+                rigidBody.setWorldTransform(newTransform);
+                rigidBody.activate();
             }
 
             /** Accept physics quat, visual world matrix, or legacy euler mesh pose. */
@@ -4955,6 +5013,7 @@
             function applyRemotePlayerVisual(remoteCarData, state) {
                 state = normalizeRemotePlayerState(state);
                 if (!remoteCarData || !state) return;
+                syncRemotePlayerPhysicsBody(remoteCarData, state);
                 var chassisMesh = remoteCarData.chassisMesh;
                 if (!chassisMesh) return;
 
@@ -5000,7 +5059,7 @@
             }
 
             function createRemotePlayerCars() {
-                console.log('🏗️ Creating remote player cars (chassis + wheels)...');
+                console.log('🏗️ Creating remote player cars (chassis + wheels + collision)...');
 
                 for (let i = 0; i < 4; i++) {
                     const wheelMeshes = [];
@@ -5029,6 +5088,8 @@
                     remotePlayerCars[i] = {
                         chassisMesh: null,
                         wheelMeshes: wheelMeshes,
+                        rigidBody: createRemotePlayerRigidBody(),
+                        inPhysicsWorld: false,
                         playerId: null
                     };
 
@@ -5148,6 +5209,10 @@
                 remotePlayerCars.forEach(function(carData, index) {
                     if (!carData) return;
                     hideRemotePlayerCar(carData);
+                    if (carData.rigidBody && physicsWorld && carData.inPhysicsWorld) {
+                        physicsWorld.removeRigidBody(carData.rigidBody);
+                        carData.inPhysicsWorld = false;
+                    }
                     if (carData.chassisMesh && carData.chassisMesh.parent) {
                         scene.remove(carData.chassisMesh);
                     }
@@ -6382,6 +6447,7 @@
                     hand: hand,
                     grip: grip,
                     grabAngle: grabAngle,
+                    lastWheelAngle: grabAngle,
                     hubLocal: pivot.position.clone(),
                     planeU: _steerPlaneU.clone(),
                     planeV: _steerPlaneV.clone()
@@ -6472,7 +6538,9 @@
                     var slot = vrWheelGrabSlots[ci];
 
                     if (!slot && gripping && distanceGripToSteeringWheel(ci) <= STEER_WHEEL_GRAB_RADIUS) {
-                        tryStartVRWheelGrab(ci, vehicleSteering);
+                        if (tryStartVRWheelGrab(ci, vehicleSteering)) {
+                            pulseVRControllerHaptic(session, ci === 0 ? 'left' : 'right', 0.22, 35);
+                        }
                         slot = vrWheelGrabSlots[ci];
                     }
 
@@ -6493,17 +6561,24 @@
                         slot.planeV
                     );
                     if (angle === null) continue;
+                    var angleDelta = wrapAngleRad(angle - (slot.lastWheelAngle != null ? slot.lastWheelAngle : angle));
+                    slot.lastWheelAngle = angle;
                     var delta = wrapAngleRad(angle - slot.grabAngle);
                     if (Math.abs(delta) < STEER_WHEEL_ANGLE_DEADZONE) {
                         delta = 0;
-                    } else if (dt > 0) {
-                        var wheelRotSpeed = Math.abs(delta) / Math.max(dt, 0.001);
-                        var hapticIntensity = THREE.MathUtils.clamp(
-                            (wheelRotSpeed - 0.4) / (5.5 - 0.4),
-                            0.03,
-                            0.42
-                        );
-                        pulseVRControllerHaptic(session, ci === 0 ? 'left' : 'right', hapticIntensity, 20);
+                    }
+                    if (dt > 0) {
+                        var wheelRotSpeed = Math.abs(angleDelta) / Math.max(dt, 0.001);
+                        if (wheelRotSpeed >= STEER_WHEEL_HAPTIC_MIN_SPEED) {
+                            var hapticIntensity = THREE.MathUtils.clamp(
+                                (wheelRotSpeed - STEER_WHEEL_HAPTIC_MIN_SPEED) /
+                                (STEER_WHEEL_HAPTIC_MAX_SPEED - STEER_WHEEL_HAPTIC_MIN_SPEED),
+                                0.05,
+                                0.5
+                            );
+                            var hapticDuration = Math.round(THREE.MathUtils.lerp(12, 28, hapticIntensity));
+                            pulseVRControllerHaptic(session, ci === 0 ? 'left' : 'right', hapticIntensity, hapticDuration);
+                        }
                     }
                     driveSteer = (driveSteer || 0) + (slot.steerAtGrab - (delta / STEERING_WHEEL_RATIO) * speedScale);
                     grabCount++;
@@ -18345,6 +18420,17 @@
                         registerUnit(ref.vehicleBody, ref.vehicle, 'chase', ref.chassisMesh,
                             { x: bp.x(), y: bp.y(), z: bp.z() });
                     }
+                }
+
+                if (isMultiplayer && remotePlayerCars.length) {
+                    remotePlayerCars.forEach(function(remoteCarData) {
+                        if (!remoteCarData || !remoteCarData.rigidBody || !remoteCarData.inPhysicsWorld) return;
+                        var rbTm = remoteCarData.rigidBody.getWorldTransform();
+                        var rbOrigin = rbTm.getOrigin();
+                        registerUnit(remoteCarData.rigidBody, null, 'remote', remoteCarData.chassisMesh, {
+                            x: rbOrigin.x(), y: rbOrigin.y(), z: rbOrigin.z()
+                        });
+                    });
                 }
 
                 chaseCollisionBroadphase.forEachPairNear(
