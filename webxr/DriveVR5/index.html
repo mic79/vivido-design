@@ -6452,7 +6452,7 @@
                 return a;
             }
 
-            function updateVRWheelGrabSteering(session, vehicleSteering, steeringClamp, absSpeedKmh) {
+            function updateVRWheelGrabSteering(session, vehicleSteering, steeringClamp, absSpeedKmh, dt) {
                 if (!renderer.xr.isPresenting || !session || isMenuVisible || cameraMode === 'fly' || trackEditorMode) {
                     releaseVRWheelGrab(0);
                     releaseVRWheelGrab(1);
@@ -8085,7 +8085,7 @@
                     if (renderer.xr.isPresenting && !trackEditorMode && cameraMode !== 'fly') {
                         var xrSession = renderer.xr.getSession();
                         vrWheelSteering = updateVRWheelGrabSteering(
-                            xrSession, vehicleSteering, dynamicSteeringClamp, absSpeed);
+                            xrSession, vehicleSteering, dynamicSteeringClamp, absSpeed, dt);
                     }
                     
                     // Calculate dynamic tire friction - Touring car style (more forgiving)
