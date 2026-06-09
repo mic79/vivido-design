@@ -401,6 +401,11 @@
             box-shadow: 0 4px 0 #333;
         }
 
+        #vrButton:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
         #drivevr-splash-start:not(:disabled):hover {
             filter: brightness(1.08);
         }
@@ -566,6 +571,12 @@
         getMaxActiveUnits,
         getMaxPursuers,
         getPhysicsMaxSubsteps,
+        getPlayerBvhHullStride,
+        getBvhHullNearbyRadiusSq,
+        getRearviewMirrorFrameSkip,
+        shouldSkipStatsInQuestVR,
+        configureQuestWebXRSession,
+        restoreQuestWebXRRenderState,
         shouldRunUnitTick,
         horizDistSq,
     } from './js/chaseWorld.js';
@@ -626,6 +637,12 @@
         getMaxActiveUnits: getMaxActiveUnits,
         getMaxPursuers: getMaxPursuers,
         getPhysicsMaxSubsteps: getPhysicsMaxSubsteps,
+        getPlayerBvhHullStride: getPlayerBvhHullStride,
+        getBvhHullNearbyRadiusSq: getBvhHullNearbyRadiusSq,
+        getRearviewMirrorFrameSkip: getRearviewMirrorFrameSkip,
+        shouldSkipStatsInQuestVR: shouldSkipStatsInQuestVR,
+        configureQuestWebXRSession: configureQuestWebXRSession,
+        restoreQuestWebXRRenderState: restoreQuestWebXRRenderState,
         shouldRunUnitTick: shouldRunUnitTick,
         horizDistSq: horizDistSq,
     };
@@ -690,6 +707,21 @@
                 ready = true;
                 setProgress(100, msg || 'Ready');
                 if (startBtn) startBtn.disabled = false;
+                var vrBtn = document.getElementById('vrButton');
+                if (vrBtn) vrBtn.disabled = false;
+            }
+
+            /** Same path as the Start button — hide splash and notify the game boot hook. */
+            function beginGameIfReady() {
+                if (document.body.classList.contains('drivevr-game-started')) {
+                    return true;
+                }
+                if (!ready) return false;
+                hideSplash();
+                if (typeof window.__driveVrOnSplashStart === 'function') {
+                    window.__driveVrOnSplashStart();
+                }
+                return true;
             }
 
             function mountVrButtonForSplash() {
@@ -717,13 +749,12 @@
 
             if (startBtn) {
                 startBtn.addEventListener('click', function() {
-                    if (!ready) return;
-                    hideSplash();
-                    if (typeof window.__driveVrOnSplashStart === 'function') {
-                        window.__driveVrOnSplashStart();
-                    }
+                    beginGameIfReady();
                 });
             }
+
+            var vrBtnInit = document.getElementById('vrButton');
+            if (vrBtnInit) vrBtnInit.disabled = true;
 
             setProgress(2, 'Loading engine…');
 
@@ -731,6 +762,7 @@
                 setProgress: setProgress,
                 markReady: markReady,
                 hide: hideSplash,
+                beginGameIfReady: beginGameIfReady,
                 isReady: function() { return ready; },
                 getProgress: function() { return progress; }
             };
@@ -775,6 +807,12 @@
             var getMaxActiveUnits = cw.getMaxActiveUnits;
             var getMaxPursuers = cw.getMaxPursuers;
             var getPhysicsMaxSubsteps = cw.getPhysicsMaxSubsteps;
+            var getPlayerBvhHullStride = cw.getPlayerBvhHullStride;
+            var getBvhHullNearbyRadiusSq = cw.getBvhHullNearbyRadiusSq;
+            var getRearviewMirrorFrameSkip = cw.getRearviewMirrorFrameSkip;
+            var shouldSkipStatsInQuestVR = cw.shouldSkipStatsInQuestVR;
+            var configureQuestWebXRSession = cw.configureQuestWebXRSession;
+            var restoreQuestWebXRRenderState = cw.restoreQuestWebXRRenderState;
             var shouldRunUnitTick = cw.shouldRunUnitTick;
             var horizDistSq = cw.horizDistSq;
 
@@ -1129,11 +1167,13 @@
                 var v = parseFloat(p.get('navmini'));
                 return isFinite(v) && v >= 40 && v <= 640 ? v : 192;
             })();
-            /** Rearview mirror (desktop HUD + VR panel on stats HUD). ?mirror=0 to disable. */
+            /** Rearview mirror (desktop HUD + VR panel on stats HUD). ?mirror=1 to enable on Quest. */
             var rearviewMirrorEnabled = (function() {
                 var p = new URLSearchParams(window.location.search);
                 var raw = (p.get('mirror') || '').toLowerCase();
-                return raw !== '0' && raw !== 'off' && raw !== 'false';
+                if (raw === '0' || raw === 'off' || raw === 'false') return false;
+                if (raw === '1' || raw === 'on' || raw === 'true') return true;
+                return !detectQuest();
             })();
             var REARVIEW_MIRROR_UI_W = 320;
             var REARVIEW_MIRROR_UI_H = 120;
@@ -1167,6 +1207,8 @@
             var _vehHullPush = new THREE.Vector3();
             var _vehHullBestPen = 0;
             var _vehHullChassisBox = new THREE.Box3();
+            var _vehHullChassisPos = new THREE.Vector3();
+            var _vehHullMeshCenter = new THREE.Vector3();
             var cityNavMapGroup = null;
             /** Nav data for chase/pathfinding without building the full-grid overlay texture. */
             var cityNavRuntimeGrid = null;
@@ -1219,6 +1261,18 @@
             })();
             var VRRUNNER_FOG_NEAR = detectQuest() ? 55 : 75;
             var VRRUNNER_FOG_FAR = detectQuest() ? 260 : 380;
+            /**
+             * Scene + radial fog — visual horizon blend only; GPU still draws all in-frustum meshes.
+             * Radial fog fixes VR “swimming” vs stock Three.Fog but adds per-pixel length() in every
+             * forest material. Off on Quest for FPS; ?fog=1 to force on, ?fog=0 to force off.
+             */
+            var DRIVE_ATMOSPHERE_FOG_ENABLED = (function() {
+                var p = new URLSearchParams(window.location.search);
+                var raw = (p.get('fog') || '').toLowerCase();
+                if (raw === '1' || raw === 'on' || raw === 'true') return true;
+                if (raw === '0' || raw === 'off' || raw === 'false') return false;
+                return !detectQuest();
+            })();
             var VRRUNNER_CAMERA_FAR = detectQuest() ? 420 : 650;
             var VRRUNNER_CAMERA_FAR_VR = detectQuest() ? 320 : 520;
             var VRRUNNER_ENV_INTENSITY = 0.12;
@@ -1762,12 +1816,17 @@
                     if (renderer.xr.isPresenting) {
                         renderer.xr.getSession().end();
                     } else {
+                        if (!ensureDriveGameStarted()) {
+                            console.warn('⏳ Still loading — wait for Ready before entering VR');
+                            return;
+                        }
                         try {
                             // Request minimal VR session for Quest 3 compatibility
                             const session = await navigator.xr.requestSession('immersive-vr', {
-                                optionalFeatures: ['local-floor'] // Minimal features for Quest compatibility
+                                optionalFeatures: ['local-floor']
                             });
-                            renderer.xr.setSession(session);
+                            await renderer.xr.setSession(session);
+                            await configureQuestWebXRSession(session, renderer);
                             console.log('🥽 VR session started - Quest 3 compatibility mode');
                             console.log('🥽 Session details:', {
                                 inputSources: session.inputSources.length,
@@ -1792,6 +1851,9 @@
                                 firstPersonCamera.far = VRRUNNER_CAMERA_FAR_VR;
                                 firstPersonCamera.updateProjectionMatrix();
                             }
+                            if (stats && stats.domElement) {
+                                stats.domElement.style.display = detectQuest() ? 'none' : '';
+                            }
                             
                             // Start audio in VR session (VR counts as user interaction)
                             // Add a small delay to ensure audio system is ready
@@ -1813,6 +1875,10 @@
                                 console.log('VR session ended');
                                 document.body.classList.remove('vr-mode');
                                 vrAudioStarted = false;
+                                restoreQuestWebXRRenderState(renderer);
+                                if (stats && stats.domElement) {
+                                    stats.domElement.style.display = '';
+                                }
                                 if (firstPersonCamera) {
                                     firstPersonCamera.far = VRRUNNER_CAMERA_FAR;
                                     firstPersonCamera.updateProjectionMatrix();
@@ -2017,6 +2083,7 @@
                 // Use WebXR-compatible animation loop (time, frame) for fresh controller poses
                 renderer.setAnimationLoop(function(time, frame) {
                     var dt = clock.getDelta();
+                    var inXR = renderer.xr.isPresenting;
                     for (var i = 0; i < syncList.length; i++)
                         syncList[i](dt);
                     chaseSimFrameId++;
@@ -2031,12 +2098,17 @@
                         }
                     }
                     if (driveGameStarted) {
-                        physicsWorld.stepSimulation(dt, 10);
+                        physicsWorld.stepSimulation(dt, getPhysicsMaxSubsteps(inXR));
                     }
                     if (vrRunnerCityReady && ENVIRONMENT_BVH_HULL_ENABLED) {
-                        resolveVehicleEnvironmentBvhCollisions(vehicleRef, dt);
+                        var hullNearbyR2 = getBvhHullNearbyRadiusSq(inXR);
+                        var playerHullStride = getPlayerBvhHullStride(inXR);
+                        var runPlayerHull = playerHullStride <= 1 || (chaseSimFrameId % playerHullStride) === 0;
+                        if (runPlayerHull) {
+                            resolveVehicleEnvironmentBvhCollisions(vehicleRef, dt, hullNearbyR2);
+                        }
                         if (botVehicleRef && !trackEditorMode) {
-                            resolveVehicleEnvironmentBvhCollisions(botVehicleRef, dt);
+                            resolveVehicleEnvironmentBvhCollisions(botVehicleRef, dt, hullNearbyR2);
                         }
                         if (chaseActive && chaseVehicles.length) {
                             var fullSimR2 = ChasePerf.fullSimRadiusM * ChasePerf.fullSimRadiusM;
@@ -2054,7 +2126,7 @@
                                     continue;
                                 }
                                 if (!shouldRunUnitTick(ci, chaseSimFrameId, cityStride)) continue;
-                                resolveVehicleEnvironmentBvhCollisions(cRef, dt);
+                                resolveVehicleEnvironmentBvhCollisions(cRef, dt, hullNearbyR2);
                             }
                         }
                     }
@@ -2086,7 +2158,9 @@
                     
                     renderer.render(scene, camera);
                     time += dt;
-                    stats.update();
+                    if (!shouldSkipStatsInQuestVR(renderer) && stats) {
+                        stats.update();
+                    }
                 });
             }
 
@@ -5591,6 +5665,19 @@
                 });
                 loadTireModel(false, 1.0).catch(function() {});
                 loadTireModel(true, 1.0).catch(function() {});
+            }
+
+            function ensureDriveGameStarted() {
+                if (driveGameStarted) return true;
+                if (window.__driveVrSplash && typeof window.__driveVrSplash.beginGameIfReady === 'function') {
+                    return window.__driveVrSplash.beginGameIfReady();
+                }
+                driveGameStarted = true;
+                trySpawnPlayerVehicleOnRoad();
+                if (isMultiplayer) {
+                    ensureRemotePlayerCars();
+                }
+                return true;
             }
 
             window.__driveVrOnSplashStart = function() {
@@ -9325,7 +9412,7 @@
                     side: THREE.DoubleSide,
                     transparent: false,
                     wireframe: false,
-                    fog: usesDriveAtmosphere()
+                    fog: usesDriveAtmosphere() && DRIVE_ATMOSPHERE_FOG_ENABLED
                 });
                 
                 // Create road mesh and add to scene
@@ -9842,6 +9929,7 @@
             }
 
             function patchVrRunnerRadialFog(root) {
+                if (!DRIVE_ATMOSPHERE_FOG_ENABLED) return;
                 if (!window.__driveVrLighting || !root) return;
                 enforceVrRunnerMaterialFog(root);
                 window.__driveVrLighting.patchRadialFogOntoObjectTree(root);
@@ -9864,10 +9952,15 @@
             function applyVrRunnerAtmosphere() {
                 if (!scene || !renderer || !usesDriveAtmosphere()) return;
                 scene.background = new THREE.Color(VRRUNNER_SKY_HEX);
-                scene.fog = new THREE.Fog(VRRUNNER_SKY_HEX, VRRUNNER_FOG_NEAR, VRRUNNER_FOG_FAR);
                 renderer.setClearColor(VRRUNNER_SKY_HEX);
-                if (window.__driveVrLighting) {
-                    window.__driveVrLighting.setRadialFogParams(VRRUNNER_FOG_NEAR, VRRUNNER_FOG_FAR, VRRUNNER_SKY_HEX);
+                if (DRIVE_ATMOSPHERE_FOG_ENABLED) {
+                    scene.fog = new THREE.Fog(VRRUNNER_SKY_HEX, VRRUNNER_FOG_NEAR, VRRUNNER_FOG_FAR);
+                    if (window.__driveVrLighting) {
+                        window.__driveVrLighting.setRadialFogParams(VRRUNNER_FOG_NEAR, VRRUNNER_FOG_FAR, VRRUNNER_SKY_HEX);
+                    }
+                    patchVrRunnerRadialFog(scene);
+                } else {
+                    scene.fog = null;
                 }
                 if (driveAmbientLight) {
                     var isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
@@ -9889,11 +9982,13 @@
                     orbitCamera.far = VRRUNNER_CAMERA_FAR;
                     orbitCamera.updateProjectionMatrix();
                 }
-                patchVrRunnerRadialFog(scene);
                 loadVrRunnerExrEnvironment();
                 console.log(
-                    '🌫️ Forest atmosphere: radial fog', VRRUNNER_FOG_NEAR, '–', VRRUNNER_FOG_FAR,
-                    'm, sky #', VRRUNNER_SKY_HEX.toString(16).padStart(6, '0'), ', sun ×2.6, cameraFar', VRRUNNER_CAMERA_FAR
+                    DRIVE_ATMOSPHERE_FOG_ENABLED
+                        ? ('🌫️ Forest atmosphere: radial fog ' + VRRUNNER_FOG_NEAR + '–' + VRRUNNER_FOG_FAR + ' m')
+                        : '🌫️ Forest atmosphere: fog OFF (Quest perf — ?fog=1 to enable)',
+                    ', sky #', VRRUNNER_SKY_HEX.toString(16).padStart(6, '0'),
+                    ', sun ×2.6, cameraFar', VRRUNNER_CAMERA_FAR
                 );
             }
 
@@ -9908,7 +10003,7 @@
             }
 
             function updateVrRunnerSunAndFog() {
-                if ((vrRunnerRadialFogScanFrame++ & 31) === 0) {
+                if (DRIVE_ATMOSPHERE_FOG_ENABLED && (vrRunnerRadialFogScanFrame++ & 31) === 0) {
                     patchVrRunnerRadialFog(scene);
                 }
                 if (!driveDirLight || !driveSunLightTarget) return;
@@ -11700,7 +11795,7 @@
             }
 
             /** Magenta BVH meshes — chassis OBB shapecast, impulse only (no teleport). */
-            function resolveVehicleEnvironmentBvhCollisions(vehicleData, dt) {
+            function resolveVehicleEnvironmentBvhCollisions(vehicleData, dt, nearbyRadiusSq) {
                 if (!ENVIRONMENT_BVH_HULL_ENABLED) return;
                 if (!vehicleData || !vehicleData.vehicle || !vehicleData.vehicleBody ||
                     !vrRunnerCityCollisionMeshes.length) {
@@ -11710,11 +11805,29 @@
                 var body = vehicleData.vehicleBody;
                 _vehHullBestPen = 0;
                 _vehHullPush.set(0, 0, 0);
+                var cullR2 = nearbyRadiusSq > 0 ? nearbyRadiusSq : 0;
+                if (cullR2 > 0 && vehicleData.chassisMesh) {
+                    vehicleData.chassisMesh.getWorldPosition(_vehHullChassisPos);
+                }
 
                 for (var mi = 0; mi < vrRunnerCityCollisionMeshes.length; mi++) {
                     var mesh = vrRunnerCityCollisionMeshes[mi];
                     if (meshPhysicsRegistrationDisabled(mesh)) continue;
                     if (isEnvironmentSolidObstacleMesh(mesh)) continue;
+                    if (cullR2 > 0) {
+                        var geo = mesh.geometry;
+                        if (geo) {
+                            if (!geo.boundingSphere) geo.computeBoundingSphere();
+                            _vehHullMeshCenter.copy(geo.boundingSphere.center).applyMatrix4(mesh.matrixWorld);
+                            var meshR = geo.boundingSphere.radius * Math.max(
+                                mesh.scale.x, mesh.scale.y, mesh.scale.z
+                            );
+                            var dx = _vehHullChassisPos.x - _vehHullMeshCenter.x;
+                            var dz = _vehHullChassisPos.z - _vehHullMeshCenter.z;
+                            var reach = Math.sqrt(cullR2) + meshR + 4;
+                            if (dx * dx + dz * dz > reach * reach) continue;
+                        }
+                    }
                     var bvh = mesh.geometry && mesh.geometry.boundsTree;
                     if (!bvh || !bvh.shapecast) continue;
                     getVehicleChassisBoundsInMeshLocalSpace(vehicleData, mesh, _cityNavLocalBox);
@@ -13963,6 +14076,10 @@
                 if (driveCompassRibbonMesh) {
                     driveCompassRibbonMesh.visible = true;
                 }
+                if (detectQuest() && renderer && renderer.xr && renderer.xr.isPresenting &&
+                    (chaseSimFrameId & 1) !== 0) {
+                    return;
+                }
                 drawDriveCompassRibbon();
             }
 
@@ -14440,7 +14557,8 @@
                 if (!rearviewCamera || !rearviewRenderer) return;
                 updateRearviewMirrorCamera();
                 rearviewMirrorFrame++;
-                if (detectQuest() && rearviewMirrorFrame % 2 !== 0) return;
+                var mirrorSkip = getRearviewMirrorFrameSkip(inXR);
+                if (mirrorSkip > 1 && rearviewMirrorFrame % mirrorSkip !== 0) return;
 
                 rearviewRenderer.render(scene, rearviewCamera);
 

@@ -19,9 +19,22 @@ export const ChasePerf = {
     /** Beyond this: remove raycast vehicle action until player approaches. */
     lodParkRadiusM: 220,
     physicsMaxSubstepsDesktop: 6,
-    /** Match DriveVR2/3 — low substeps make wheel rays miss streets on Quest. */
+    /** Match DriveVR2/3 — low substeps make wheel rays miss streets on Quest (flat / browser). */
     physicsMaxSubstepsQuest: 10,
+    /** In-headset: fewer substeps — dt is ~11 ms at 90 Hz; 10 substeps × Bullet is a major CPU spike. */
+    physicsMaxSubstepsQuestVR: 6,
     physicsMaxSubstepsXR: 10,
+    /** Eye-buffer resolution scale in WebXR (Three.js setFramebufferScaleFactor). */
+    questVRFramebufferScale: 0.72,
+    /** Canvas pixel ratio while presenting on Quest (in addition to framebuffer scale). */
+    questVRPixelRatio: 0.65,
+    /** Default XR refresh to request on Quest (90 = stable; use ?vrFps=120 when headroom allows). */
+    questVRDefaultFrameRate: 90,
+    /** Player chassis BVH hull depenetrate stride while in Quest VR. */
+    playerBvhHullStrideQuestVR: 2,
+    /** Skip magenta-mesh shapecasts farther than this (m) from chassis in Quest VR. */
+    bvhHullNearbyRadiusMQuestVR: 88,
+    rearviewMirrorFrameSkipQuestVR: 4,
     /** Max chase↔player collision pair checks per frame (after spatial filter). */
     collisionPairBudget: 48,
     /** Max pursuers getting replan/LOS work per frame. */
@@ -52,8 +65,104 @@ export function getMaxActiveUnits() {
 }
 
 export function getPhysicsMaxSubsteps(inXR) {
-    if (detectQuest()) return ChasePerf.physicsMaxSubstepsQuest;
+    if (detectQuest()) {
+        return inXR ? ChasePerf.physicsMaxSubstepsQuestVR : ChasePerf.physicsMaxSubstepsQuest;
+    }
     return inXR ? ChasePerf.physicsMaxSubstepsXR : ChasePerf.physicsMaxSubstepsDesktop;
+}
+
+export function getPlayerBvhHullStride(inXR) {
+    if (detectQuest() && inXR) return ChasePerf.playerBvhHullStrideQuestVR;
+    return 1;
+}
+
+/** @returns {number} 0 = no horizontal culling */
+export function getBvhHullNearbyRadiusSq(inXR) {
+    if (detectQuest() && inXR) {
+        var r = ChasePerf.bvhHullNearbyRadiusMQuestVR;
+        return r > 0 ? r * r : 0;
+    }
+    return 0;
+}
+
+export function getRearviewMirrorFrameSkip(inXR) {
+    if (detectQuest()) {
+        return inXR ? ChasePerf.rearviewMirrorFrameSkipQuestVR : ChasePerf.rearviewMirrorFrameSkipQuest;
+    }
+    return ChasePerf.rearviewMirrorFrameSkipDesktop;
+}
+
+export function shouldSkipStatsInQuestVR(renderer) {
+    return detectQuest() && renderer && renderer.xr && renderer.xr.isPresenting;
+}
+
+export function getQuestXRTargetFrameRate() {
+    try {
+        var p = new URLSearchParams(window.location.search);
+        var v = parseInt(p.get('vrFps') || p.get('vrfps') || '', 10);
+        if (v === 72 || v === 90 || v === 120) return v;
+    } catch (e) { /* noop */ }
+    return ChasePerf.questVRDefaultFrameRate;
+}
+
+export function getQuestVRFramebufferScale() {
+    try {
+        var p = new URLSearchParams(window.location.search);
+        var v = parseFloat(p.get('fbScale') || p.get('fbscale') || '');
+        if (isFinite(v) && v >= 0.5 && v <= 1) return v;
+    } catch (e) { /* noop */ }
+    return ChasePerf.questVRFramebufferScale;
+}
+
+/**
+ * Lower eye-buffer resolution, pixel ratio, and request 90/120 Hz on Quest Browser.
+ * @param {XRSession} session
+ * @param {import('three').WebGLRenderer} renderer
+ */
+export async function configureQuestWebXRSession(session, renderer) {
+    if (!detectQuest() || !session || !renderer) return;
+    renderer.__questVRSavedRenderState = {
+        pixelRatio: typeof renderer.getPixelRatio === 'function' ? renderer.getPixelRatio() : 1,
+    };
+    var fbScale = getQuestVRFramebufferScale();
+    if (renderer.xr && typeof renderer.xr.setFramebufferScaleFactor === 'function') {
+        renderer.xr.setFramebufferScaleFactor(fbScale);
+    }
+    var pr = ChasePerf.questVRPixelRatio;
+    if (pr > 0 && pr <= 1) {
+        renderer.setPixelRatio(pr);
+    }
+    if (typeof session.updateTargetFrameRate === 'function' && session.supportedFrameRates) {
+        var want = getQuestXRTargetFrameRate();
+        var rates = session.supportedFrameRates;
+        var pick = rates[0];
+        if (rates.includes(want)) pick = want;
+        else if (rates.includes(90)) pick = 90;
+        else pick = Math.max.apply(null, rates);
+        try {
+            await session.updateTargetFrameRate(pick);
+            console.log(
+                '🎯 Quest XR frame rate:', session.frameRate, 'Hz',
+                '(requested', pick + ', supported:', rates.join(', ') + ')'
+            );
+        } catch (err) {
+            console.warn('Quest XR updateTargetFrameRate failed:', err);
+        }
+    }
+    console.log('🎯 Quest VR render budget: fbScale', fbScale, 'pixelRatio', pr);
+}
+
+/** @param {import('three').WebGLRenderer} renderer */
+export function restoreQuestWebXRRenderState(renderer) {
+    if (!renderer || !renderer.__questVRSavedRenderState) return;
+    var saved = renderer.__questVRSavedRenderState;
+    if (renderer.xr && typeof renderer.xr.setFramebufferScaleFactor === 'function') {
+        renderer.xr.setFramebufferScaleFactor(1);
+    }
+    if (saved.pixelRatio > 0) {
+        renderer.setPixelRatio(saved.pixelRatio);
+    }
+    delete renderer.__questVRSavedRenderState;
 }
 
 /** Uniform grid on XZ for broadphase — O(n) insert, O(k) neighbor queries. */
