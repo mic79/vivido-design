@@ -260,10 +260,198 @@
             /* .vr-mode #gameMenu {
                 display: none;
             } */
+
+        /* DriveVR5 intro splash — hides broken in-game load state */
+        #drivevr-splash {
+            position: fixed;
+            inset: 0;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+            overflow: hidden;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            color: #fff;
+            transition: opacity 0.45s ease, visibility 0.45s ease;
+        }
+
+        #drivevr-splash.drivevr-splash--hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .drivevr-splash-bg {
+            position: absolute;
+            inset: -8%;
+            background:
+                linear-gradient(165deg, rgba(12, 28, 18, 0.55) 0%, rgba(8, 16, 32, 0.75) 100%),
+                radial-gradient(ellipse 80% 60% at 50% 20%, rgba(120, 180, 140, 0.35), transparent 70%),
+                #1a2e24;
+        }
+
+        .drivevr-splash-title {
+            position: absolute;
+            left: 50%;
+            top: 34%;
+            transform: translate(-50%, -50%);
+            width: min(92vw, 640px);
+            text-align: center;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .drivevr-splash-title h1 {
+            margin: 0;
+            font-size: clamp(2.2rem, 8vw, 3.6rem);
+            font-weight: 900;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #fff;
+            text-shadow: 0 4px 0 #000, 0 0 40px rgba(100, 200, 120, 0.45);
+        }
+
+        .drivevr-splash-title p {
+            margin: 0.6em 0 0;
+            font-size: 0.95rem;
+            font-weight: 600;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: rgba(200, 230, 210, 0.9);
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+        }
+
+        .drivevr-splash-vignette {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(
+                to bottom,
+                rgba(0, 0, 0, 0.1) 0%,
+                rgba(0, 0, 0, 0.05) 40%,
+                rgba(0, 0, 0, 0.55) 72%,
+                rgba(0, 0, 0, 0.9) 100%
+            );
+            pointer-events: none;
+        }
+
+        .drivevr-splash-ui {
+            position: relative;
+            z-index: 2;
+            width: min(92vw, 520px);
+            padding: 0 20px 8vh;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        .drivevr-splash-loader-track {
+            width: 100%;
+            height: 8px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.35);
+            overflow: hidden;
+            border: 2px solid rgba(0, 0, 0, 0.85);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+        }
+
+        .drivevr-splash-loader-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #3a8f5c, #7fd4a0, #c8f0d8);
+            transition: width 0.25s ease-out;
+        }
+
+        #drivevr-splash-status {
+            margin: 12px 0 0;
+            font-size: 0.9rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            color: #fff;
+            text-shadow: 1px 1px 0 #000, -1px -1px 0 #000;
+            min-height: 1.25em;
+        }
+
+        .drivevr-splash-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 14px;
+            margin-top: 22px;
+        }
+
+        #drivevr-splash-start {
+            min-width: 200px;
+            padding: 14px 36px;
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: #fff;
+            background: linear-gradient(180deg, #4caf70, #2d7a48);
+            border: 3px solid #000;
+            border-radius: 4px;
+            cursor: pointer;
+            box-shadow: 0 4px 0 #000, 0 6px 20px rgba(60, 160, 90, 0.35);
+        }
+
+        #drivevr-splash-start:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            box-shadow: 0 4px 0 #333;
+        }
+
+        #drivevr-splash-start:not(:disabled):hover {
+            filter: brightness(1.08);
+        }
+
+        body:not(.drivevr-game-started) #container,
+        body:not(.drivevr-game-started) #speedometer,
+        body:not(.drivevr-game-started) #desktopHUD,
+        body:not(.drivevr-game-started) #versionDisplay,
+        body:not(.drivevr-game-started) #multiplayerStatus,
+        body:not(.drivevr-game-started) #rearviewMirrorUI,
+        body:not(.drivevr-game-started) #playerNavRayHUD,
+        body:not(.drivevr-game-started) #info {
+            visibility: hidden;
+        }
+
+        body:not(.drivevr-game-started) #vrButton {
+            position: static;
+            margin: 0;
+            min-width: 160px;
+        }
+
+        body.drivevr-game-started #vrButton {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+        }
     </style>
 </head>
 
 <body>
+    <div id="drivevr-splash" role="dialog" aria-label="DriveVR5 loading">
+        <div class="drivevr-splash-bg" aria-hidden="true"></div>
+        <div class="drivevr-splash-title" aria-hidden="true">
+            <h1>DriveVR5</h1>
+            <p>Forest road</p>
+        </div>
+        <div class="drivevr-splash-vignette" aria-hidden="true"></div>
+        <div class="drivevr-splash-ui">
+            <div class="drivevr-splash-loader" aria-live="polite">
+                <div class="drivevr-splash-loader-track">
+                    <div class="drivevr-splash-loader-fill" id="drivevr-splash-progress"></div>
+                </div>
+                <p id="drivevr-splash-status">Starting…</p>
+            </div>
+            <div class="drivevr-splash-actions">
+                <button type="button" id="drivevr-splash-start" disabled>Start</button>
+                <button type="button" id="vrButton" style="display: none;">Enter VR</button>
+            </div>
+        </div>
+    </div>
+
     <div id="container"><br /><br /><br /><br /><br />Loading...</div>
     <div id="speedometer">0.0 km/h</div>
     
@@ -339,7 +527,6 @@
         </div>
     </div>
     <div id="info">DriveVR5 — forest dirt road · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> reset · <b>T</b> / VR <b>left X</b> track editor · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car</div>
-    <button id="vrButton" style="display: none;">Enter VR</button>
     
     <!-- Background Music -->
     <audio id="backgroundMusic" loop preload="auto">
@@ -406,6 +593,7 @@
         sparseSetLandCell,
     } from './js/navOptimized.js';
     import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+    import * as EnvCollisionCache from './js/envCollisionCache.js';
 
     /* ESM namespace is sealed — use a plain object so legacy code can use THREE.GLTFLoader etc. */
     const THREE = Object.assign({}, THREE_NS);
@@ -471,6 +659,7 @@
         patchRadialFogOntoObjectTree: patchRadialFogOntoObjectTree,
         loadEnvironmentMap: loadVrRunnerEnvironmentMap,
     };
+    window.__driveVrEnvCache = EnvCollisionCache;
     window.__driveVrThreeReady = true;
     window.__driveVrCityBvhReady = true;
     window.dispatchEvent(new Event('drivevr-three-ready'));
@@ -479,6 +668,78 @@
     </script>
 
     <script>
+        (function initDriveVrSplash() {
+            var splash = document.getElementById('drivevr-splash');
+            var progressEl = document.getElementById('drivevr-splash-progress');
+            var statusEl = document.getElementById('drivevr-splash-status');
+            var startBtn = document.getElementById('drivevr-splash-start');
+            var ready = false;
+            var progress = 0;
+
+            function clampPct(p) {
+                return Math.max(0, Math.min(100, p));
+            }
+
+            function setProgress(p, msg) {
+                progress = clampPct(p);
+                if (progressEl) progressEl.style.width = progress + '%';
+                if (msg && statusEl) statusEl.textContent = msg;
+            }
+
+            function markReady(msg) {
+                ready = true;
+                setProgress(100, msg || 'Ready');
+                if (startBtn) startBtn.disabled = false;
+            }
+
+            function mountVrButtonForSplash() {
+                var vrBtn = document.getElementById('vrButton');
+                var actions = document.querySelector('.drivevr-splash-actions');
+                if (vrBtn && actions && vrBtn.parentNode !== actions) {
+                    actions.appendChild(vrBtn);
+                }
+            }
+
+            function hideSplash() {
+                if (!splash) return;
+                splash.classList.add('drivevr-splash--hidden');
+                document.body.classList.add('drivevr-game-started');
+                var vrBtn = document.getElementById('vrButton');
+                if (vrBtn && vrBtn.parentNode && vrBtn.parentNode.classList.contains('drivevr-splash-actions')) {
+                    document.body.appendChild(vrBtn);
+                }
+                window.setTimeout(function() {
+                    if (splash.parentNode) splash.style.display = 'none';
+                }, 480);
+            }
+
+            mountVrButtonForSplash();
+
+            if (startBtn) {
+                startBtn.addEventListener('click', function() {
+                    if (!ready) return;
+                    hideSplash();
+                    if (typeof window.__driveVrOnSplashStart === 'function') {
+                        window.__driveVrOnSplashStart();
+                    }
+                });
+            }
+
+            setProgress(2, 'Loading engine…');
+
+            window.__driveVrSplash = {
+                setProgress: setProgress,
+                markReady: markReady,
+                hide: hideSplash,
+                isReady: function() { return ready; },
+                getProgress: function() { return progress; }
+            };
+
+            window.addEventListener('drivevr-three-ready', function() {
+                setProgress(8, 'Engine ready…');
+            }, { once: true });
+        })();
+
         function bootDriveVR5() {
         if (window.__driveVr5Booted || window.__driveVr5Booting) {
             return;
@@ -496,7 +757,13 @@
             return;
         }
         window.__driveVr5Booting = true;
+        if (window.__driveVrSplash) {
+            window.__driveVrSplash.setProgress(10, 'Loading physics…');
+        }
         Ammo().then(function (Ammo) {
+            if (window.__driveVrSplash) {
+                window.__driveVrSplash.setProgress(18, 'Physics ready…');
+            }
             if (window.__driveVr5Booted) {
                 return;
             }
@@ -703,6 +970,16 @@
             var trackEditorEditIndex = 0;
             var pendingInitialTrackSpawn = false;
             var pendingInitialCitySpawn = false;
+            var spawnFloorProbeWarned = false;
+            var playerVehicleSpawnLockFrames = 0;
+            var driveGameStarted = false;
+            var driveEnvironmentReady = false;
+            var driveVehicleAssetsReady = false;
+            var remotePlayerCarsCreated = false;
+            var envBvhBuildTotal = 0;
+            var envBvhBuildDone = 0;
+            var envWalkableBuildTotal = 0;
+            var envWalkableBuildDone = 0;
             var DEFAULT_PLAYER_CITY_SPAWN_X = 122.1;
             var DEFAULT_PLAYER_CITY_SPAWN_Y = 78.1;
             var DEFAULT_PLAYER_CITY_SPAWN_Z = -5.0;
@@ -1060,6 +1337,10 @@
             var _sharedGltfLoader = null;
             var _sharedDracoLoader = null;
             var DUNE_CHASSIS_OFFSET = new THREE.Vector3(0, -0.45, -0.2);
+            var _remoteVisPos = new THREE.Vector3();
+            var _remoteVisQuat = new THREE.Quaternion();
+            var _remotePhysQuat = new THREE.Quaternion();
+            var _remoteOffset = new THREE.Vector3();
             var CHASE_REPLAN_INTERVAL_MS = 2000;
             var CHASE_RECOVER_INTERVAL_MS = 2500;
             var CHASE_RECOVER_PLAYER_DIST_M = 200;
@@ -1712,13 +1993,7 @@
             }
 
             function tick() {
-                // Add player state sending to sync list (only once)
-                if (!this.playerStateSyncAdded) {
-                    syncList.push(sendPlayerState);
-                    this.playerStateSyncAdded = true;
-                    console.log('🔄 Added player state sending to sync list');
-                }
-                
+                // Vehicle sync() calls sendPlayerState() after updating local mesh pose.
                 // Add vehicle collision detection to sync list (only once)
                 if (!this.vehicleCollisionSyncAdded) {
                     syncList.push(checkVehicleCollisions);
@@ -1729,6 +2004,10 @@
                 if (!this.spatialAudioSyncAdded) {
                     syncList.push(syncSpatialAudio);
                     this.spatialAudioSyncAdded = true;
+                }
+                if (!this.remotePlayerVisualSyncAdded) {
+                    syncList.push(syncRemotePlayerCarsVisuals);
+                    this.remotePlayerVisualSyncAdded = true;
                 }
                 if (!this.chaseDriveSyncAdded) {
                     syncList.push(syncChaseVehiclesDrive);
@@ -1741,7 +2020,19 @@
                     for (var i = 0; i < syncList.length; i++)
                         syncList[i](dt);
                     chaseSimFrameId++;
-                    physicsWorld.stepSimulation(dt, 10);
+                    if (pendingInitialCitySpawn && driveGameStarted && spawnDirtRoadReady && isCityDrivePhysicsReady()) {
+                        trySpawnPlayerVehicleOnRoad();
+                    }
+                    if (playerVehicleSpawnLockFrames > 0 && vehicleRef && vehicleRef.vehicleBody) {
+                        applyDefaultPlayerCitySpawn(true);
+                        playerVehicleSpawnLockFrames--;
+                        if (playerVehicleSpawnLockFrames === 0) {
+                            maybeRemoveDriveFallbackGroundAfterSpawn();
+                        }
+                    }
+                    if (driveGameStarted) {
+                        physicsWorld.stepSimulation(dt, 10);
+                    }
                     if (vrRunnerCityReady && ENVIRONMENT_BVH_HULL_ENABLED) {
                         resolveVehicleEnvironmentBvhCollisions(vehicleRef, dt);
                         if (botVehicleRef && !trackEditorMode) {
@@ -1770,10 +2061,6 @@
 
                     updateChaseVehicles(dt);
 
-                    if (pendingInitialCitySpawn && spawnDirtRoadReady && isCityDrivePhysicsReady()) {
-                        pendingInitialCitySpawn = false;
-                        applyDefaultPlayerCitySpawn();
-                    }
                     // Only update orbit controls when in orbit mode
                     if (cameraMode === 'orbit') {
                         controls.update(dt);
@@ -4284,6 +4571,7 @@
 
             // ========== PEERJS MULTIPLAYER FUNCTIONS ==========
             async function setupHost(lobbyNumber) {
+                ensureRemotePlayerCars();
                 return new Promise((resolve, reject) => {
                     isMultiplayer = true;
                     isHost = true;
@@ -4347,9 +4635,10 @@
                             activePlayers.delete(playerId);
                             connections.delete(playerId);
                             connectionToPlayer.delete(conn);
+                            remotePlayerStates.delete(playerId);
                             
-                            // Hide remote player car and remove from physics
-                            const playerIndex = parseInt(playerId.split('_')[1]);
+                            // Hide remote player car
+                            const playerIndex = parseInt(playerId.split('_')[1], 10);
                             if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
                                 hideRemotePlayerCar(remotePlayerCars[playerIndex]);
                                 console.log('Hidden remote car for', playerId);
@@ -4381,6 +4670,7 @@
             }
 
             async function setupPeer(lobbyNumber) {
+                ensureRemotePlayerCars();
                 return new Promise((resolve, reject) => {
                     isMultiplayer = true;
                     isHost = false;
@@ -4475,16 +4765,18 @@
                         
                     case 'car-state':
                         if (data.state && data.state.position && data.state.quaternion) {
+                            var cq = data.state.quaternion;
                             handlePlayerState({
                                 playerId: data.playerId,
                                 state: {
+                                    mx: data.state.position.x,
+                                    my: data.state.position.y,
+                                    mz: data.state.position.z,
+                                    mqx: cq.x, mqy: cq.y, mqz: cq.z, mqw: cq.w,
                                     px: data.state.position.x,
                                     py: data.state.position.y,
                                     pz: data.state.position.z,
-                                    qx: data.state.quaternion.x,
-                                    qy: data.state.quaternion.y,
-                                    qz: data.state.quaternion.z,
-                                    qw: data.state.quaternion.w,
+                                    qx: cq.x, qy: cq.y, qz: cq.z, qw: cq.w,
                                     wheels: data.state.wheels || null
                                 }
                             });
@@ -4554,31 +4846,53 @@
                     }
                 }
                 remoteCarData.playerId = null;
-                if (remoteCarData.inPhysicsWorld && remoteCarData.rigidBody) {
-                    physicsWorld.removeRigidBody(remoteCarData.rigidBody);
-                    remoteCarData.inPhysicsWorld = false;
-                }
             }
 
-            /** Match local quickSyncVehicleChassisVisual + wheel meshes from network physics state. */
+            /** Accept physics quat, visual world matrix, or legacy euler mesh pose. */
+            function normalizeRemotePlayerState(state) {
+                if (!state) return null;
+                if (state.mx != null && state.mqx != null && state.mqw != null) {
+                    return state;
+                }
+                if (state.px != null && state.qx != null && state.qw != null) {
+                    return state;
+                }
+                if (state.x != null && state.rx != null) {
+                    _remotePhysQuat.setFromEuler(new THREE.Euler(state.rx, state.ry || 0, state.rz || 0, 'XYZ'));
+                    return {
+                        mx: state.x, my: state.y, mz: state.z,
+                        mqx: _remotePhysQuat.x, mqy: _remotePhysQuat.y,
+                        mqz: _remotePhysQuat.z, mqw: _remotePhysQuat.w,
+                        px: state.x, py: state.y, pz: state.z,
+                        qx: _remotePhysQuat.x, qy: _remotePhysQuat.y,
+                        qz: _remotePhysQuat.z, qw: _remotePhysQuat.w,
+                        wheels: state.wheels || null
+                    };
+                }
+                return null;
+            }
+
+            /** Apply sender's visual pose + wheel physics transforms (same as local screen). */
             function applyRemotePlayerVisual(remoteCarData, state) {
+                state = normalizeRemotePlayerState(state);
                 if (!remoteCarData || !state) return;
                 var chassisMesh = remoteCarData.chassisMesh;
                 if (!chassisMesh) return;
 
-                var px = state.px;
-                var py = state.py;
-                var pz = state.pz;
-                var carQuat = new THREE.Quaternion(state.qx, state.qy, state.qz, state.qw);
-
-                if (chassisMesh.userData && chassisMesh.userData.chassisOffset) {
-                    var offset = getChassisMeshOffset(chassisMesh);
-                    offset.applyQuaternion(carQuat);
-                    chassisMesh.position.set(px + offset.x, py + offset.y, pz + offset.z);
-                } else {
-                    chassisMesh.position.set(px, py, pz);
+                if (state.mx != null) {
+                    chassisMesh.position.set(state.mx, state.my, state.mz);
+                    chassisMesh.quaternion.set(state.mqx, state.mqy, state.mqz, state.mqw).normalize();
+                } else if (state.px != null && state.qx != null) {
+                    _remotePhysQuat.set(state.qx, state.qy, state.qz, state.qw).normalize();
+                    _remoteOffset.copy(getChassisMeshOffset(chassisMesh));
+                    _remoteOffset.applyQuaternion(_remotePhysQuat);
+                    chassisMesh.position.set(
+                        state.px + _remoteOffset.x,
+                        state.py + _remoteOffset.y,
+                        state.pz + _remoteOffset.z
+                    );
+                    chassisMesh.quaternion.copy(_remotePhysQuat);
                 }
-                chassisMesh.quaternion.copy(carQuat);
                 chassisMesh.visible = true;
 
                 if (state.wheels && remoteCarData.wheelMeshes) {
@@ -4587,24 +4901,23 @@
                         var w = state.wheels[wi];
                         if (!wm || !w) continue;
                         wm.position.set(w.x, w.y, w.z);
-                        wm.quaternion.set(w.qx, w.qy, w.qz, w.qw);
+                        wm.quaternion.set(w.qx, w.qy, w.qz, w.qw).normalize();
                         wm.visible = true;
                     }
                 }
+            }
 
-                if (remoteCarData.rigidBody) {
-                    if (!remoteCarData.inPhysicsWorld) {
-                        physicsWorld.addRigidBody(remoteCarData.rigidBody);
-                        remoteCarData.inPhysicsWorld = true;
-                    }
-                    var btTransform = new Ammo.btTransform();
-                    btTransform.setIdentity();
-                    btTransform.setOrigin(new Ammo.btVector3(px, py, pz));
-                    btTransform.setRotation(new Ammo.btQuaternion(state.qx, state.qy, state.qz, state.qw));
-                    remoteCarData.rigidBody.setWorldTransform(btTransform);
-                    remoteCarData.rigidBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
-                    remoteCarData.rigidBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
-                }
+            /** Re-apply cached network poses every frame (handles async GLTF load + smooth display). */
+            function syncRemotePlayerCarsVisuals() {
+                if (!isMultiplayer || activePlayers.size <= 1 || !remotePlayerStates.size) return;
+                remotePlayerStates.forEach(function(state, playerId) {
+                    if (playerId === myPlayerId || !state) return;
+                    var playerIndex = parseInt(playerId.split('_')[1], 10);
+                    if (!isFinite(playerIndex) || playerIndex < 0 || playerIndex >= remotePlayerCars.length) return;
+                    var remoteCarData = remotePlayerCars[playerIndex];
+                    if (!remoteCarData || !remoteCarData.chassisMesh) return;
+                    applyRemotePlayerVisual(remoteCarData, state);
+                });
             }
 
             function createRemotePlayerCars() {
@@ -4634,31 +4947,10 @@
                         })(i, w, wheelSides[w]);
                     }
 
-                    const chassisShape = new Ammo.btBoxShape(new Ammo.btVector3(0.9, 0.3, 2.0));
-                    const chassisLocalInertia = new Ammo.btVector3(0, 0, 0);
-                    const chassisMass = 1500;
-                    chassisShape.calculateLocalInertia(chassisMass, chassisLocalInertia);
-                    const startTransform = new Ammo.btTransform();
-                    startTransform.setIdentity();
-                    startTransform.setOrigin(new Ammo.btVector3(-22 + (i * 2), 1.0, 40));
-                    const motionState = new Ammo.btDefaultMotionState(startTransform);
-                    const rbInfo = new Ammo.btRigidBodyConstructionInfo(
-                        chassisMass, motionState, chassisShape, chassisLocalInertia);
-                    const rigidBody = new Ammo.btRigidBody(rbInfo);
-                    rigidBody.setCollisionFlags(0);
-                    rigidBody.setActivationState(DISABLE_DEACTIVATION);
-                    rigidBody.setRestitution(0.3);
-                    rigidBody.setFriction(0.8);
-                    rigidBody.setGravity(new Ammo.btVector3(0, 0, 0));
-                    rigidBody.setLinearFactor(new Ammo.btVector3(0, 0, 0));
-                    rigidBody.setAngularFactor(new Ammo.btVector3(0, 0, 0));
-
                     remotePlayerCars[i] = {
                         chassisMesh: null,
                         wheelMeshes: wheelMeshes,
-                        rigidBody: rigidBody,
-                        playerId: null,
-                        inPhysicsWorld: false
+                        playerId: null
                     };
 
                     loadDuneBuggyModel(1.0).then(function(model) {
@@ -4684,9 +4976,10 @@
                 
                 remotePlayerStates.set(data.playerId, data.state);
                 
-                // CRITICAL: Host forwards player states to other clients (like reference)
-                if (isHost && isMultiplayer && activePlayers.size > 1) {
-                    connections.forEach((conn, connectionKey) => {
+                // Host relays pose to other clients (skip sender to avoid echo).
+                if (isHost && isMultiplayer && activePlayers.size > 1 && data.playerId) {
+                    connections.forEach(function(conn, connectionKey) {
+                        if (connectionKey === data.playerId) return;
                         if (conn && conn.open) {
                             conn.send({
                                 type: 'player-state',
@@ -4697,16 +4990,16 @@
                     });
                 }
                 
-                const playerIndex = parseInt(data.playerId.split('_')[1]);
+                const playerIndex = parseInt(data.playerId.split('_')[1], 10);
                 if (playerIndex >= 0 && playerIndex < remotePlayerCars.length) {
                     const remoteCarData = remotePlayerCars[playerIndex];
                     if (remoteCarData && data.playerId !== myPlayerId && data.state) {
-                        applyRemotePlayerVisual(remoteCarData, data.state);
                         remoteCarData.playerId = data.playerId;
 
                         if (!this.lastRemotePlayerUpdateTime || Date.now() - this.lastRemotePlayerUpdateTime > 30000) {
+                            var st = normalizeRemotePlayerState(data.state);
                             console.log('🎯 Remote player', data.playerId,
-                                'physics y=', data.state.py != null ? data.state.py.toFixed(2) : '?');
+                                'visual y=', st && st.my != null ? st.my.toFixed(2) : '?');
                             this.lastRemotePlayerUpdateTime = Date.now();
                         }
                     }
@@ -4720,6 +5013,11 @@
                 var tm = vehicleRef.vehicle.getChassisWorldTransform();
                 var p = tm.getOrigin();
                 var q = tm.getRotation();
+
+                var mesh = vehicleRef.chassisMesh;
+                mesh.updateMatrixWorld(true);
+                mesh.getWorldPosition(_remoteVisPos);
+                mesh.getWorldQuaternion(_remoteVisQuat);
 
                 var wheels = [];
                 var n = vehicleRef.vehicle.getNumWheels();
@@ -4737,6 +5035,9 @@
                 var playerState = {
                     px: p.x(), py: p.y(), pz: p.z(),
                     qx: q.x(), qy: q.y(), qz: q.z(), qw: q.w(),
+                    mx: _remoteVisPos.x, my: _remoteVisPos.y, mz: _remoteVisPos.z,
+                    mqx: _remoteVisQuat.x, mqy: _remoteVisQuat.y,
+                    mqz: _remoteVisQuat.z, mqw: _remoteVisQuat.w,
                     wheels: wheels
                 };
 
@@ -5057,24 +5358,170 @@
                 return { position: pos, rotation: rot };
             }
 
-            /** Default spawn on the dirt road (origin after placement). */
-            function applyDefaultPlayerCitySpawn() {
-                if (!vehicleRef || !vehicleRef.vehicle || !vehicleRef.vehicleBody) {
-                    return;
+            function getSpawnFloorProbeMeshes() {
+                if (vrRunnerCityCollisionMeshes.length) {
+                    return vrRunnerCityCollisionMeshes;
                 }
+                return spawnDirtRoadEnvironmentMeshes || [];
+            }
+
+            /** Downward Bullet ray — matches actual drive collision after walkable bodies are built. */
+            function raycastPhysicsWalkableFloorY(x, z) {
+                if (!physicsWorld || !isCityDrivePhysicsReady()) return null;
+                var box = vrRunnerCityWorldBox;
+                if (spawnDirtRoadRoot) {
+                    spawnDirtRoadRoot.updateMatrixWorld(true);
+                    box = new THREE.Box3().setFromObject(spawnDirtRoadRoot);
+                }
+                var topY = (box && isFinite(box.max.y) ? box.max.y : DEFAULT_PLAYER_CITY_SPAWN_Y) + 8;
+                var botY = (box && isFinite(box.min.y) ? box.min.y : 0) - 5;
+                var probeRx = [0, 0.35, -0.35, 0.28, -0.28];
+                var probeRz = [0, 0, 0, 0.32, -0.32];
+                var bestY = -Infinity;
+                var found = false;
+                for (var p = 0; p < probeRx.length; p++) {
+                    var px = x + probeRx[p];
+                    var pz = z + probeRz[p];
+                    var rayStart = new Ammo.btVector3(px, topY, pz);
+                    var rayEnd = new Ammo.btVector3(px, botY, pz);
+                    var cb = new Ammo.ClosestRayResultCallback(rayStart, rayEnd);
+                    physicsWorld.rayTest(rayStart, rayEnd, cb);
+                    if (cb.hasHit()) {
+                        var hy = cb.get_m_hitPointWorld().y();
+                        if (hy > bestY) {
+                            bestY = hy;
+                            found = true;
+                        }
+                    }
+                    Ammo.destroy(cb);
+                }
+                return found ? bestY : null;
+            }
+
+            /** Full-height mesh ray — highest up-facing hit (for BVH visual meshes). */
+            function probeMeshWalkableFloorYFromSky(x, z, meshes) {
+                if (!meshes || !meshes.length) return null;
+                if (!_cityRaycaster) _cityRaycaster = new THREE.Raycaster();
+                var box = vrRunnerCityWorldBox;
+                if (spawnDirtRoadRoot) {
+                    spawnDirtRoadRoot.updateMatrixWorld(true);
+                    box = new THREE.Box3().setFromObject(spawnDirtRoadRoot);
+                }
+                var rayOriginY = (box && isFinite(box.max.y) ? box.max.y : 120) + 5;
+                var rayLen = rayOriginY - (box && isFinite(box.min.y) ? box.min.y : 0) + 15;
+                var down = new THREE.Vector3(0, -1, 0);
+                var floorMinNy = 0.26;
+                var probeRx = [0, 0.35, -0.35, 0.28, -0.28];
+                var probeRz = [0, 0, 0, 0.32, -0.32];
+                var bestY = -Infinity;
+                var found = false;
+                for (var p = 0; p < probeRx.length; p++) {
+                    _cityOrigin.set(x + probeRx[p], rayOriginY, z + probeRz[p]);
+                    _cityRaycaster.set(_cityOrigin, down);
+                    _cityRaycaster.far = rayLen;
+                    _cityRaycaster.firstHitOnly = false;
+                    var hits = _cityRaycaster.intersectObjects(meshes, false);
+                    for (var hi = 0; hi < hits.length; hi++) {
+                        var hit = hits[hi];
+                        var hy = hit.point.y;
+                        if (!hit.face) continue;
+                        _cityNormalMatrix.getNormalMatrix(hit.object.matrixWorld);
+                        _cityNormal.copy(hit.face.normal).applyMatrix3(_cityNormalMatrix).normalize();
+                        if (_cityNormal.y < floorMinNy) continue;
+                        if (hy > bestY) {
+                            bestY = hy;
+                            found = true;
+                        }
+                    }
+                }
+                _cityRaycaster.firstHitOnly = true;
+                return found ? bestY : null;
+            }
+
+            function findPlayerSpawnFloorY(x, z) {
+                var meshes = getSpawnFloorProbeMeshes();
+                var floorY = raycastPhysicsWalkableFloorY(x, z);
+                if (floorY !== null) return floorY;
+                floorY = probeMeshWalkableFloorYFromSky(x, z, meshes);
+                if (floorY !== null) return floorY;
+                floorY = getCityWalkableFloorY(x, z, DEFAULT_PLAYER_CITY_SPAWN_Y, meshes);
+                if (floorY !== null) return floorY;
+                return getCityWalkableFloorY(x, z, DEFAULT_PLAYER_CITY_SPAWN_Y + 35, meshes);
+            }
+
+            function chassisYFromFloorY(floorY) {
+                return floorY + WHEEL_AXIS_Y + WHEEL_RADIUS + VEHICLE_SUSPENSION_REST_LENGTH;
+            }
+
+            /** Snap spawn Y — Bullet physics ray first, then BVH mesh probes. */
+            function snapSpawnYToWalkableRoad(spawnPos) {
+                var floorY = findPlayerSpawnFloorY(spawnPos.x, spawnPos.z);
+                if (floorY !== null) {
+                    spawnPos.y = chassisYFromFloorY(floorY);
+                    return true;
+                }
+                if (!spawnFloorProbeWarned) {
+                    spawnFloorProbeWarned = true;
+                    console.warn(
+                        '⚠️ Floor probe missed at spawn XZ — using default chassis Y',
+                        spawnPos.x.toFixed(1), spawnPos.z.toFixed(1), DEFAULT_PLAYER_CITY_SPAWN_Y.toFixed(1)
+                    );
+                }
+                spawnPos.y = DEFAULT_PLAYER_CITY_SPAWN_Y;
+                return false;
+            }
+
+            /** Default XZ/yaw with Y from walkable road probe (falls back to DEFAULT_PLAYER_CITY_SPAWN_Y). */
+            function computeDefaultPlayerCitySpawnPoseOnRoad() {
                 var cityPose = getDefaultPlayerCitySpawnPose();
                 var spawnPos = cityPose.position.clone();
                 var spawnRot = cityPose.rotation;
-                var faceDir = new THREE.Vector3(0, 0, 1).applyQuaternion(spawnRot);
+                snapSpawnYToWalkableRoad(spawnPos);
+                return { position: spawnPos, rotation: spawnRot };
+            }
 
-                if (vrRunnerCityReady && vrRunnerCityCollisionMeshes.length) {
-                    var floorY = getCityWalkableFloorY(
-                        spawnPos.x, spawnPos.z, spawnPos.y, vrRunnerCityCollisionMeshes
-                    );
-                    if (floorY !== null) {
-                        spawnPos.y = floorY + WHEEL_AXIS_Y + WHEEL_RADIUS + VEHICLE_SUSPENSION_REST_LENGTH;
-                    }
+            /** Create player car on road, or reposition if it already exists. */
+            function trySpawnPlayerVehicleOnRoad() {
+                if (!driveGameStarted) return false;
+                if (!spawnDirtRoadReady || !isCityDrivePhysicsReady()) {
+                    pendingInitialCitySpawn = true;
+                    return false;
                 }
+                pendingInitialCitySpawn = false;
+
+                var pose = computeDefaultPlayerCitySpawnPoseOnRoad();
+                var faceDir = new THREE.Vector3(0, 0, 1).applyQuaternion(pose.rotation);
+
+                if (!vehicleRef) {
+                    createVehicle(pose.position, pose.rotation);
+                    applyDefaultPlayerCitySpawn(true);
+                    playerVehicleSpawnLockFrames = 8;
+                    attachCameraRigToVehicle();
+                } else {
+                    applyDefaultPlayerCitySpawn();
+                    return true;
+                }
+
+                recordLastCarDropPosition(pose.position);
+                var floorY = findPlayerSpawnFloorY(pose.position.x, pose.position.z);
+                console.log(
+                    '🚗 Car spawned at default road pose:',
+                    pose.position.x.toFixed(1), pose.position.y.toFixed(1), pose.position.z.toFixed(1),
+                    'yaw', (Math.atan2(faceDir.x, faceDir.z) * 180 / Math.PI).toFixed(0) + '°',
+                    floorY !== null ? ('floorY ' + floorY.toFixed(1)) : 'floor probe fallback'
+                );
+                return true;
+            }
+
+            /** Default spawn on the dirt road at DEFAULT_PLAYER_CITY_SPAWN_* constants. */
+            function applyDefaultPlayerCitySpawn(silent) {
+                if (!vehicleRef || !vehicleRef.vehicle || !vehicleRef.vehicleBody) {
+                    return;
+                }
+                var pose = computeDefaultPlayerCitySpawnPoseOnRoad();
+                var spawnPos = pose.position;
+                var spawnRot = pose.rotation;
+                var faceDir = new THREE.Vector3(0, 0, 1).applyQuaternion(spawnRot);
 
                 var spawnTransform = new Ammo.btTransform();
                 spawnTransform.setIdentity();
@@ -5085,14 +5532,74 @@
                 vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
                 vehicleRef.vehicle.resetSuspension();
                 syncPlayerChassisFromPhysics();
-                attachCameraRigToVehicle();
+                if (!silent) {
+                    attachCameraRigToVehicle();
+                }
                 recordLastCarDropPosition(spawnPos);
-                console.log(
-                    '🚗 Car spawned at default road pose:',
-                    spawnPos.x.toFixed(1), spawnPos.y.toFixed(1), spawnPos.z.toFixed(1),
-                    'yaw', (Math.atan2(faceDir.x, faceDir.z) * 180 / Math.PI).toFixed(0) + '°'
-                );
+                if (!silent) {
+                    console.log(
+                        '🚗 Car spawned at default road pose:',
+                        spawnPos.x.toFixed(1), spawnPos.y.toFixed(1), spawnPos.z.toFixed(1),
+                        'yaw', (Math.atan2(faceDir.x, faceDir.z) * 180 / Math.PI).toFixed(0) + '°'
+                    );
+                }
             }
+
+            function driveSplashProgress(pct, msg) {
+                if (window.__driveVrSplash) {
+                    window.__driveVrSplash.setProgress(pct, msg);
+                }
+            }
+
+            function driveCheckBootReady() {
+                if (!driveEnvironmentReady || !driveVehicleAssetsReady) return;
+                driveSplashProgress(100, 'Ready — tap Start');
+                if (window.__driveVrSplash) {
+                    window.__driveVrSplash.markReady('Ready — tap Start');
+                }
+            }
+
+            function onDriveEnvironmentReady() {
+                if (driveEnvironmentReady) return;
+                driveEnvironmentReady = true;
+                driveSplashProgress(96, 'Forest road ready…');
+                driveCheckBootReady();
+            }
+
+            function ensureRemotePlayerCars() {
+                if (remotePlayerCarsCreated) return;
+                remotePlayerCarsCreated = true;
+                createRemotePlayerCars();
+            }
+
+            function preloadVehicleAssets() {
+                driveSplashProgress(28, 'Loading vehicle models…');
+                var done = function() {
+                    if (driveVehicleAssetsReady) return;
+                    driveVehicleAssetsReady = true;
+                    driveSplashProgress(92, 'Vehicle models ready…');
+                    driveCheckBootReady();
+                };
+                loadDuneBuggyModel(1.0).then(function(clone) {
+                    if (clone && clone.parent) {
+                        scene.remove(clone);
+                    }
+                    done();
+                }).catch(function(err) {
+                    console.warn('Vehicle preload failed:', err);
+                    done();
+                });
+                loadTireModel(false, 1.0).catch(function() {});
+                loadTireModel(true, 1.0).catch(function() {});
+            }
+
+            window.__driveVrOnSplashStart = function() {
+                driveGameStarted = true;
+                trySpawnPlayerVehicleOnRoad();
+                if (isMultiplayer) {
+                    ensureRemotePlayerCars();
+                }
+            };
 
             /** Place the car at the current fly-camera position and heading (Key J, fly mode). */
             function spawnCarAtFlyCamera() {
@@ -5111,11 +5618,9 @@
                 spawnRot.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(faceDir.x, faceDir.z));
 
                 if (vrRunnerCityReady && vrRunnerCityCollisionMeshes.length) {
-                    var floorY = getCityWalkableFloorY(
-                        spawnPos.x, spawnPos.z, spawnPos.y, vrRunnerCityCollisionMeshes
-                    );
+                    var floorY = findPlayerSpawnFloorY(spawnPos.x, spawnPos.z);
                     if (floorY !== null) {
-                        spawnPos.y = floorY + WHEEL_AXIS_Y + WHEEL_RADIUS + VEHICLE_SUSPENSION_REST_LENGTH;
+                        spawnPos.y = chassisYFromFloorY(floorY);
                     }
                 } else {
                     var roadY = getRoadSurfaceElevation(spawnPos.x, spawnPos.z);
@@ -7736,6 +8241,10 @@
                         }
                         // Desktop orbit camera is handled by OrbitControls
                     }
+
+                if (driveGameStarted) {
+                    sendPlayerState();
+                }
                 }
 
                 syncList.push(sync);
@@ -9536,11 +10045,23 @@
                 console.log('🔧 Removed fallback ground — city mesh drive physics active');
             }
 
+            function maybeRemoveDriveFallbackGroundAfterSpawn() {
+                if (driveFallbackGroundBody &&
+                    vrRunnerCityPhysicsBodies.length >= 8 &&
+                    vrRunnerCityCollisionMeshes.length >= 8 &&
+                    driveGameStarted && vehicleRef) {
+                    removeDriveFallbackGroundPhysics();
+                }
+            }
+
             function queueCityWalkablePhysicsBuild(meshes) {
                 if (!physicsWorld || !meshes || !meshes.length) return;
+                envWalkableBuildTotal = 0;
                 for (var i = 0; i < meshes.length; i++) {
                     vrRunnerCityPhysicsPending.push(meshes[i]);
+                    envWalkableBuildTotal++;
                 }
+                envWalkableBuildDone = 0;
                 if (!vrRunnerCityPhysicsBuilding) {
                     processCityWalkablePhysicsQueue();
                 }
@@ -10427,20 +10948,31 @@
                         if (driveFallbackGroundBody &&
                             vrRunnerCityPhysicsBodies.length >= 8 &&
                             vrRunnerCityCollisionMeshes.length >= 8) {
-                            removeDriveFallbackGroundPhysics();
+                            maybeRemoveDriveFallbackGroundAfterSpawn();
                         }
                     }
                     finishCityDrivePhysicsBuild();
+                    if (isCityDrivePhysicsReady()) {
+                        onDriveEnvironmentReady();
+                    }
                     return;
                 }
                 vrRunnerCityPhysicsBuilding = true;
                 var isQuest = detectQuest();
-                var perFrame = isQuest ? 12 : 6;
+                var loadingSplash = !driveGameStarted;
+                var perFrame = loadingSplash
+                    ? (isQuest ? 24 : 48)
+                    : (isQuest ? 12 : 6);
                 var end = Math.min(perFrame, vrRunnerCityPhysicsPending.length);
                 var addedTris = 0;
                 for (var i = 0; i < end; i++) {
                     var mesh = vrRunnerCityPhysicsPending.shift();
                     addedTris += addCityMeshWalkablePhysics(mesh);
+                    envWalkableBuildDone++;
+                }
+                if (envWalkableBuildTotal > 0) {
+                    var walkPct = 76 + Math.round((envWalkableBuildDone / envWalkableBuildTotal) * 18);
+                    driveSplashProgress(walkPct, 'Road physics… ' + envWalkableBuildDone + '/' + envWalkableBuildTotal);
                 }
                 if (addedTris > 0 && (vrRunnerCityPhysicsBodies.length & 31) === 0) {
                     console.log('🔧 City drive physics…', vrRunnerCityPhysicsBodies.length, 'bodies');
@@ -17144,7 +17676,7 @@
                 }
             }
 
-            function queueCityMeshBvhRegistration(meshes) {
+            function queueCityMeshBvhRegistration(meshes, deferStart) {
                 var skippedNoColl = 0;
                 var skippedShared = 0;
                 var solidQueued = 0;
@@ -17176,9 +17708,48 @@
                 if (solidQueued) {
                     console.log('🪵 Solid obstacles queued for BVH + Bullet —', solidQueued, '(both scene roots)');
                 }
-                if (!vrRunnerCityBvhBuilding) {
+                if (!deferStart && !vrRunnerCityBvhBuilding) {
                     processCityMeshBvhQueue();
                 }
+            }
+
+            function beginEnvironmentCollisionBuild(meshes) {
+                function startBvhQueue() {
+                    envBvhBuildTotal = vrRunnerCityBvhPending.length + envBvhBuildDone;
+                    if (!vrRunnerCityBvhBuilding) {
+                        processCityMeshBvhQueue();
+                    }
+                }
+                var cache = window.__driveVrEnvCache;
+                if (!cache || !cache.restoreBvhForMeshes) {
+                    envBvhBuildDone = 0;
+                    envBvhBuildTotal = vrRunnerCityBvhPending.length;
+                    startBvhQueue();
+                    return;
+                }
+                driveSplashProgress(38, 'Checking collision cache…');
+                cache.restoreBvhForMeshes(SPAWN_DIRT_ROAD_URL, meshes).then(function(result) {
+                    for (var i = vrRunnerCityBvhPending.length - 1; i >= 0; i--) {
+                        var m = vrRunnerCityBvhPending[i];
+                        if (m && m.geometry && m.geometry.boundsTree) {
+                            if (vrRunnerCityCollisionMeshes.indexOf(m) < 0) {
+                                vrRunnerCityCollisionMeshes.push(m);
+                            }
+                            vrRunnerCityBvhPending.splice(i, 1);
+                        }
+                    }
+                    envBvhBuildDone = result.restored || 0;
+                    if (envBvhBuildDone) {
+                        driveSplashProgress(
+                            40 + Math.min(34, Math.round(envBvhBuildDone * 2)),
+                            'Restored ' + envBvhBuildDone + ' cached collision mesh(es)…'
+                        );
+                    }
+                    startBvhQueue();
+                }).catch(function() {
+                    envBvhBuildDone = 0;
+                    startBvhQueue();
+                });
             }
 
             function markSpawnDirtRoadReadyWhenBvhDone() {
@@ -17229,7 +17800,10 @@
                 }
                 vrRunnerCityBvhBuilding = true;
                 var isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
-                var perFrame = isQuest ? 20 : 40;
+                var loadingSplash = !driveGameStarted;
+                var perFrame = loadingSplash
+                    ? (isQuest ? 48 : 120)
+                    : (isQuest ? 20 : 40);
                 var end = Math.min(perFrame, vrRunnerCityBvhPending.length);
                 for (var i = 0; i < end; i++) {
                     var mesh = vrRunnerCityBvhPending.shift();
@@ -17243,10 +17817,18 @@
                             strategy: 0
                         });
                         mesh.geometry.computeBoundingSphere();
+                        if (window.__driveVrEnvCache && window.__driveVrEnvCache.saveMeshBvhToCache) {
+                            window.__driveVrEnvCache.saveMeshBvhToCache(SPAWN_DIRT_ROAD_URL, mesh);
+                        }
                     }
                     if (vrRunnerCityCollisionMeshes.indexOf(mesh) < 0) {
                         vrRunnerCityCollisionMeshes.push(mesh);
                     }
+                    envBvhBuildDone++;
+                }
+                if (envBvhBuildTotal > 0) {
+                    var bvhPct = 40 + Math.round((envBvhBuildDone / envBvhBuildTotal) * 35);
+                    driveSplashProgress(bvhPct, 'Building road collision… ' + envBvhBuildDone + '/' + envBvhBuildTotal);
                 }
                 requestAnimationFrame(processCityMeshBvhQueue);
             }
@@ -17313,6 +17895,7 @@
             /** Forest dirt road — BVH + Bullet walkable tris for drive physics. */
             function loadSpawnDirtRoadEnvironment() {
                 console.log('🛤️ Loading dirt road:', SPAWN_DIRT_ROAD_URL);
+                driveSplashProgress(30, 'Downloading forest road…');
                 getSharedGltfLoader().load(
                     SPAWN_DIRT_ROAD_URL,
                     function(gltf) {
@@ -17326,16 +17909,24 @@
                         spawnDirtRoadEnvironmentMeshes = meshes;
                         scene.add(road);
                         spawnDirtRoadRoot = road;
-                        queueCityMeshBvhRegistration(meshes);
+                        envBvhBuildDone = 0;
+                        queueCityMeshBvhRegistration(meshes, true);
+                        beginEnvironmentCollisionBuild(meshes);
                         var box = new THREE.Box3().setFromObject(road);
                         console.log(
                             '🛤️ Dirt road loaded —', meshes.length, 'meshes · centered at origin',
                             '· Y [', box.min.y.toFixed(2), ',', box.max.y.toFixed(2), '] · building BVH…'
                         );
                     },
-                    undefined,
+                    function(xhr) {
+                        if (xhr.lengthComputable && xhr.total > 0) {
+                            var dl = 30 + Math.round((xhr.loaded / xhr.total) * 8);
+                            driveSplashProgress(dl, 'Downloading forest road…');
+                        }
+                    },
                     function(err) {
                         spawnDirtRoadReady = true;
+                        onDriveEnvironmentReady();
                         console.warn('⚠️ Dirt road load failed:', err);
                     }
                 );
@@ -17522,16 +18113,6 @@
                     }
                 }
 
-                if (remotePlayerCars) {
-                    remotePlayerCars.forEach(function(remoteCar) {
-                        if (!remoteCar || !remoteCar.rigidBody || !remoteCar.inPhysicsWorld) return;
-                        var rp = remoteCar.chassisMesh
-                            ? remoteCar.chassisMesh.position
-                            : playerPos;
-                        registerUnit(remoteCar.rigidBody, null, 'remote', remoteCar.chassisMesh, rp);
-                    });
-                }
-
                 chaseCollisionBroadphase.forEachPairNear(
                     playerPos,
                     function (a, b) {
@@ -17652,6 +18233,7 @@
                 createSimplifiedCityPhysics();
                 
                 console.log('✅ Performance-optimized cityscape created');
+                onDriveEnvironmentReady();
             }
             
             function createOptimizedCityTextures() {
@@ -18017,22 +18599,12 @@
                 console.log('🗺️ City nav disabled — use track editor or free roam on the road');
 
                 initEnvironment();
-
-                var startPose = getDefaultPlayerCitySpawnPose();
-                var playerStartPosition = startPose.position;
-                var startRotation = startPose.rotation;
-                console.log('🚗 Player spawn:', playerStartPosition.x.toFixed(1), playerStartPosition.y.toFixed(1), playerStartPosition.z.toFixed(1));
-
-                console.log('Creating player car...');
-                createVehicle(playerStartPosition, startRotation);
-                pendingInitialCitySpawn = true;
-
-                createRemotePlayerCars();
-
+                preloadVehicleAssets();
                 initAudioSystem();
             }
 
             try {
+                driveSplashProgress(22, 'Starting graphics…');
                 initGraphics();
                 initPhysics();
                 createObjects();
