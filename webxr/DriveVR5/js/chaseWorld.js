@@ -105,34 +105,67 @@ export function getQuestXRTargetFrameRate() {
     return ChasePerf.questVRDefaultFrameRate;
 }
 
-export function getQuestVRFramebufferScale() {
+export function getUrlFramebufferScaleParam() {
     try {
         var p = new URLSearchParams(window.location.search);
         var v = parseFloat(p.get('fbScale') || p.get('fbscale') || '');
-        if (isFinite(v) && v >= 0.5 && v <= 1) return v;
+        if (isFinite(v) && v >= 0.1 && v <= 1) return v;
     } catch (e) { /* noop */ }
+    return null;
+}
+
+export function getQuestVRFramebufferScale() {
+    var url = getUrlFramebufferScaleParam();
+    if (url !== null) return url;
     return ChasePerf.questVRFramebufferScale;
 }
 
 /**
- * Lower eye-buffer resolution, pixel ratio, and request 90/120 Hz on Quest Browser.
+ * Must run BEFORE renderer.xr.setSession().
+ * Three.js reads framebufferScaleFactor only when creating the XRWebGLLayer — calling
+ * setFramebufferScaleFactor after setSession has no effect (layer already allocated).
+ * @param {import('three').WebGLRenderer} renderer
+ * @returns {number} scale applied
+ */
+export function applyWebXRFramebufferScaleBeforeSession(renderer) {
+    if (!renderer || !renderer.xr) return 1;
+    var fbScale = getQuestVRFramebufferScale();
+    if (typeof renderer.xr.setFramebufferScaleFactor === 'function') {
+        renderer.xr.setFramebufferScaleFactor(fbScale);
+    }
+    return fbScale;
+}
+
+/** @param {import('three').WebGLRenderer} renderer @param {XRSession} session */
+export function logWebXREyeBufferSize(renderer, session, requestedScale) {
+    if (!renderer || !renderer.xr) return;
+    var layer = typeof renderer.xr.getBaseLayer === 'function' ? renderer.xr.getBaseLayer() : null;
+    var w = 0;
+    var h = 0;
+    if (layer) {
+        w = layer.framebufferWidth || layer.textureWidth || 0;
+        h = layer.framebufferHeight || layer.textureHeight || 0;
+    }
+    console.log(
+        '🎯 XR eye buffer:', w + '×' + h,
+        'px · fbScale requested', requestedScale,
+        '(must be set before setSession — compare sizes when tuning ?fbScale=)'
+    );
+}
+
+/**
+ * Post-session: frame-rate request (Quest) + log actual eye-buffer dimensions.
  * @param {XRSession} session
  * @param {import('three').WebGLRenderer} renderer
+ * @param {number} requestedFbScale
  */
-export async function configureQuestWebXRSession(session, renderer) {
-    if (!detectQuest() || !session || !renderer) return;
+export async function onWebXRSessionStarted(session, renderer, requestedFbScale) {
+    if (!session || !renderer) return;
     renderer.__questVRSavedRenderState = {
         pixelRatio: typeof renderer.getPixelRatio === 'function' ? renderer.getPixelRatio() : 1,
     };
-    var fbScale = getQuestVRFramebufferScale();
-    if (renderer.xr && typeof renderer.xr.setFramebufferScaleFactor === 'function') {
-        renderer.xr.setFramebufferScaleFactor(fbScale);
-    }
-    var pr = ChasePerf.questVRPixelRatio;
-    if (pr > 0 && pr <= 1) {
-        renderer.setPixelRatio(pr);
-    }
-    if (typeof session.updateTargetFrameRate === 'function' && session.supportedFrameRates) {
+    logWebXREyeBufferSize(renderer, session, requestedFbScale);
+    if (detectQuest() && typeof session.updateTargetFrameRate === 'function' && session.supportedFrameRates) {
         var want = getQuestXRTargetFrameRate();
         var rates = session.supportedFrameRates;
         var pick = rates[0];
@@ -149,8 +182,16 @@ export async function configureQuestWebXRSession(session, renderer) {
             console.warn('Quest XR updateTargetFrameRate failed:', err);
         }
     }
-    console.log('🎯 Quest VR render budget: fbScale', fbScale, 'pixelRatio', pr);
 }
+
+/** @deprecated — use applyWebXRFramebufferScaleBeforeSession + onWebXRSessionStarted */
+export async function configureWebXRRenderBudget(session, renderer) {
+    console.warn('configureWebXRRenderBudget called after setSession — fbScale may already be too late');
+    await onWebXRSessionStarted(session, renderer, getQuestVRFramebufferScale());
+}
+
+/** @deprecated alias */
+export const configureQuestWebXRSession = configureWebXRRenderBudget;
 
 /** @param {import('three').WebGLRenderer} renderer */
 export function restoreQuestWebXRRenderState(renderer) {

@@ -574,7 +574,10 @@
         getPlayerBvhHullStride,
         getBvhHullNearbyRadiusSq,
         getRearviewMirrorFrameSkip,
+        applyWebXRFramebufferScaleBeforeSession,
+        onWebXRSessionStarted,
         shouldSkipStatsInQuestVR,
+        configureWebXRRenderBudget,
         configureQuestWebXRSession,
         restoreQuestWebXRRenderState,
         shouldRunUnitTick,
@@ -640,8 +643,9 @@
         getPlayerBvhHullStride: getPlayerBvhHullStride,
         getBvhHullNearbyRadiusSq: getBvhHullNearbyRadiusSq,
         getRearviewMirrorFrameSkip: getRearviewMirrorFrameSkip,
+        applyWebXRFramebufferScaleBeforeSession: applyWebXRFramebufferScaleBeforeSession,
+        onWebXRSessionStarted: onWebXRSessionStarted,
         shouldSkipStatsInQuestVR: shouldSkipStatsInQuestVR,
-        configureQuestWebXRSession: configureQuestWebXRSession,
         restoreQuestWebXRRenderState: restoreQuestWebXRRenderState,
         shouldRunUnitTick: shouldRunUnitTick,
         horizDistSq: horizDistSq,
@@ -810,8 +814,9 @@
             var getPlayerBvhHullStride = cw.getPlayerBvhHullStride;
             var getBvhHullNearbyRadiusSq = cw.getBvhHullNearbyRadiusSq;
             var getRearviewMirrorFrameSkip = cw.getRearviewMirrorFrameSkip;
+            var applyWebXRFramebufferScaleBeforeSession = cw.applyWebXRFramebufferScaleBeforeSession;
+            var onWebXRSessionStarted = cw.onWebXRSessionStarted;
             var shouldSkipStatsInQuestVR = cw.shouldSkipStatsInQuestVR;
-            var configureQuestWebXRSession = cw.configureQuestWebXRSession;
             var restoreQuestWebXRRenderState = cw.restoreQuestWebXRRenderState;
             var shouldRunUnitTick = cw.shouldRunUnitTick;
             var horizDistSq = cw.horizDistSq;
@@ -1718,7 +1723,7 @@
                     renderer.outputColorSpace = THREE.SRGBColorSpace;
                 }
                 
-                // Very conservative pixel ratio for Quest
+                // Very conservative pixel ratio for Quest (flat screen only — XR uses eye-buffer scale)
                 const pixelRatio = isQuest ? 0.8 : window.devicePixelRatio;
                 renderer.setPixelRatio(pixelRatio);
                 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1825,8 +1830,9 @@
                             const session = await navigator.xr.requestSession('immersive-vr', {
                                 optionalFeatures: ['local-floor']
                             });
+                            var requestedFbScale = applyWebXRFramebufferScaleBeforeSession(renderer);
                             await renderer.xr.setSession(session);
-                            await configureQuestWebXRSession(session, renderer);
+                            await onWebXRSessionStarted(session, renderer, requestedFbScale);
                             console.log('🥽 VR session started - Quest 3 compatibility mode');
                             console.log('🥽 Session details:', {
                                 inputSources: session.inputSources.length,
