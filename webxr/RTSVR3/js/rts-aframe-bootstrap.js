@@ -15,7 +15,7 @@ function loadScript(src) {
     s.src = src;
     s.async = false;
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error(`RTSVR2 bootstrap: failed to load ${src}`));
+    s.onerror = () => reject(new Error(`RTSVR3 bootstrap: failed to load ${src}`));
     document.head.appendChild(s);
   });
 }

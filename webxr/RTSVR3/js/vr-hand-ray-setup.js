@@ -1,6 +1,6 @@
 /**
  * laser-controls always attaches raycaster + cursor to the hand entity. We use a child
- * (rotation -90 X, RTSVR-style) for the visible ray and hits; this keeps the parent ray off.
+ * (rotation -90 X, RTSVR3-style) for the visible ray and hits; this keeps the parent ray off.
  */
 (function () {
   /**

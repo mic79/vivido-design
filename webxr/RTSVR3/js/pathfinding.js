@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Pathfinding
+// RTSVR3 — Pathfinding
 // 1. `grid` walkability mask (debug overlay, slope, buildings) — source of truth.
 // 2. `findPath` uses grid A* only (`findPathNavMesh` / three-pathfinding zone is not used at runtime).
 // 3. Terrain slope + rim blocking is baked once into `staticTerrainMask`; building place/destroy only reapplies footprints.
@@ -49,7 +49,7 @@ function ensureAstarBuffers() {
   }
 }
 
-const NAV_ZONE = 'rtsvr2_battlefield';
+const NAV_ZONE = 'RTSVR3_battlefield';
 /** @type {InstanceType<typeof import('three-pathfinding').Pathfinding> | null} */
 let pathfindingEngine = null;
 let navMeshReady = false;

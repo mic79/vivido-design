@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Input System
+// RTSVR3 — Input System
 // VR controllers + keyboard/mouse fallback
 // ========================================
 
@@ -110,7 +110,7 @@ const FLAT_CAM_PITCH_ZOOMED_OUT = -62;
 /** At full zoom-in, pitch rotates this many degrees toward the horizon (less downward look). */
 const FLAT_CAM_PITCH_ZOOM_IN_EXTRA = 38;
 
-// VR controller state (grip pan matches original RTSVR rts-controller: rig-local deltas + rotY)
+// VR controller state (grip pan matches RTSVR3 rts-controller: rig-local deltas + rotY)
 const vrLeft = {
   grip: false, trigger: false, thumbX: 0, thumbY: 0,
   gripPanInited: false,
@@ -121,7 +121,7 @@ const vrRight = {
   gripPanInited: false,
   _gripRef: null,
 };
-/** Both grips: pinch height like RTSVR (world hand distance delta). */
+/** Both grips: pinch height like RTSVR3 (world hand distance delta). */
 const vrPinch = { active: false, lastDist: 0 };
 let lastTriggerTime = 0;
 /** While exactly one controller trigger is held, hide the other hand's aim line so only the active laser is visible. */
@@ -165,7 +165,7 @@ const _pinchR = new THREE.Vector3();
 const _localDelta = new THREE.Vector3();
 const _worldDelta = new THREE.Vector3();
 const _handLocal = new THREE.Vector3();
-/** Child [data-vr-aim-ray] uses RTSVR-style -90° X so local -Z is forward from the grip. */
+/** Child [data-vr-aim-ray] uses RTSVR3-style -90° X so local -Z is forward from the grip. */
 function setVrAimRayFromController(controllerEl, origin, direction) {
   const child = controllerEl.querySelector('[data-vr-aim-ray]');
   if (child && child.object3D) {
@@ -521,7 +521,7 @@ function tryVrUiClickFromChildRay(controllerElRaw) {
       return true;
     }
   } catch (err) {
-    console.warn('[RTSVR2] VR UI click handler failed', err);
+    console.warn('[RTSVR3] VR UI click handler failed', err);
   }
 
   if (t.id === 'vr-btn-app-start' && typeof window._dismissAppStartGate === 'function') {
@@ -533,7 +533,7 @@ function tryVrUiClickFromChildRay(controllerElRaw) {
   try {
     t.emit('click', fakeEvt.detail, true);
   } catch (err2) {
-    console.warn('[RTSVR2] VR UI click emit failed', err2);
+    console.warn('[RTSVR3] VR UI click emit failed', err2);
     return false;
   }
   tryVrControllerPulse('right', 0.44, 34);
@@ -1191,7 +1191,7 @@ export function updateInput(dt) {
     if (keys['e']) cameraRig.rotY -= 1.5 * dt;
   }
 
-  // VR camera controls (RTSVR rts-controller semantics: local hand motion under #cameraRig)
+  // VR camera controls (RTSVR3 rts-controller semantics: local hand motion under #cameraRig)
   if (isVR && State.gameSession.gameStarted) {
     const rigEl = document.getElementById('cameraRig');
     const lh = document.getElementById('leftHand');

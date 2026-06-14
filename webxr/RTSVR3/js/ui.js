@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — UI System
+// RTSVR3 — UI System
 // HUD, menus, build panel, production, minimap
 // ========================================
 
@@ -653,7 +653,7 @@ function createHUD() {
       "></div>
       <div id="hud-version-fps" style="
         margin-top: 4px; font-size: 11px; color: #8ab0aa; letter-spacing: 0.02em;
-      ">RTSVR2 …</div>
+      ">RTSVR3 …</div>
     </div>
     <div id="hud-flat-actions" class="hud" style="
       display: none; position: fixed; top: 8px; right: 8px; z-index: 126;
@@ -762,16 +762,14 @@ function createMinimap() {
     const rect = minimapCanvas.getBoundingClientRect();
     const lx = e.clientX - rect.left;
     const lz = e.clientY - rect.top;
-
-    // Match drawMinimapToContext mirror (translate + scale -1): corner bases read as lower-right on widget.
-    const lx2 = rect.width - lx;
-    const lz2 = rect.height - lz;
     const span =
       typeof window.__rtsMinimapWorldSpanM === 'number'
         ? window.__rtsMinimapWorldSpanM
         : Pathfinding.getNavGridSpec().planeSpanM;
-    let wx = (lx2 / rect.width) * span - span * 0.5;
-    let wz = (lz2 / rect.height) * span - span * 0.5;
+
+    // World X → right, world +Z → down (matches default NE spawn at bottom-right of widget).
+    let wx = (lx / rect.width) * span - span * 0.5;
+    let wz = (lz / rect.height) * span - span * 0.5;
 
     if (e.button === 2 || isMoveOnly) {
       if (State.gameSession.mpSessionPaused) return;
@@ -868,7 +866,7 @@ function createMenu() {
     min-width: 320px; pointer-events: auto;
   `;
   menuEl.innerHTML = `
-    <h2 style="color: #0f0; margin: 0 0 20px 0; font-size: 28px; letter-spacing: 0.1em;">RTS VR II</h2>
+    <h2 style="color: #0f0; margin: 0 0 20px 0; font-size: 28px; letter-spacing: 0.1em;">RTS VR III</h2>
     <button id="btn-start-1v1" style="${btnStyle('#0a0')}" onclick="window._startGame('1v1')">⚔️ 1v1 vs Bot</button>
     <button id="btn-start-2v2" style="${btnStyle('#06a')}" onclick="window._startGame('2v2')">🤝 2v2 Co-op vs Bots</button>
     <button id="btn-start-ffa" style="${btnStyle('#a60')}" onclick="window._startGame('ffa')">👑 FFA (4 Players)</button>
@@ -1409,8 +1407,7 @@ function drawMinimapToContext(ctx, w, h) {
   const isSpyMode = State.gameSession.debugFog;
 
   ctx.save();
-  ctx.translate(w, h);
-  ctx.scale(-1, -1);
+  // +X right, +Z down — NE corner bases sit bottom-right (toward center = up-left on map).
   ctx.beginPath();
   if (typeof ctx.ellipse === 'function') {
     ctx.ellipse(

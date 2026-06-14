@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Network System
+// RTSVR3 — Network System
 // PeerJS host-authoritative state sync
 // ========================================
 
@@ -53,7 +53,7 @@ let clientRejoinTimerId = null;
 let clientAutoRejoinAttempts = 0;
 let hostPauseAutoResumeTimerId = null;
 
-/** BattleVR-style: host id is `rtsvr2-host-{N}` so joiners only pick lobby 1–4 (no pasted PeerJS id). */
+/** BattleVR-style: host id is `RTSVR3-host-{N}` so joiners only pick lobby 1–4 (no pasted PeerJS id). */
 export const MAX_LOBBIES = 4;
 let selectedLobby = 1;
 let lastSnapshotTime = 0;
@@ -64,7 +64,7 @@ let lastClientSnapshotSeq = -1;
 let lastClientPauseSigFromSnap = '';
 
 function hostSessionId() {
-  return `rtsvr2-host-${selectedLobby}`;
+  return `RTSVR3-host-${selectedLobby}`;
 }
 
 function clearHostPauseAutoResumeTimer() {
@@ -383,7 +383,7 @@ export async function startHosting() {
     });
 
     peer.on('disconnected', () => {
-      console.warn('[RTSVR2] PeerJS server disconnected (host)');
+      console.warn('[RTSVR3] PeerJS server disconnected (host)');
       setLobbyMenuStatus(
         'Signalling link dropped — if remotes freeze, stop Hosting and Host again (same lobby #).'
       );
@@ -532,7 +532,7 @@ export async function joinGame() {
   syncMpPauseUi();
 
   const hostId = hostSessionId();
-  const clientId = `rtsvr2-client-${Date.now().toString(36)}`;
+  const clientId = `RTSVR3-client-${Date.now().toString(36)}`;
 
   try {
     const iceServers = await getPeerIceServers();
@@ -668,7 +668,7 @@ export async function joinGame() {
     });
 
     peer.on('disconnected', () => {
-      console.warn('[RTSVR2] PeerJS server disconnected (client)');
+      console.warn('[RTSVR3] PeerJS server disconnected (client)');
       setLobbyMenuStatus(
         `Signalling link dropped — lobby ${selectedLobby}. Try Join again if the match does not recover.`
       );
@@ -708,7 +708,7 @@ function handleClientData(data, fromPlayerId) {
     try {
       result = executeCommand(data, fromPlayerId);
     } catch (err) {
-      console.error('[RTSVR2] Host command execution error', err);
+      console.error('[RTSVR3] Host command execution error', err);
       result = { ok: false, code: 'unknown_action' };
     }
     const cmdId = data.cmdId;
@@ -792,7 +792,7 @@ function handleHostData(data) {
          */
         applySnapshot(snap);
       } catch (err) {
-        console.error('[RTSVR2] applySnapshot failed', err);
+        console.error('[RTSVR3] applySnapshot failed', err);
       }
       break;
     }
@@ -940,7 +940,7 @@ function handleHostData(data) {
       break;
 
     default:
-      if (data.type) console.warn('[RTSVR2] Unknown message from host:', data.type);
+      if (data.type) console.warn('[RTSVR3] Unknown message from host:', data.type);
       break;
   }
 }
@@ -1313,7 +1313,7 @@ export function broadcastData(data) {
         if (now - netBackpressureLastWarnMs > 5000) {
           netBackpressureLastWarnMs = now;
           console.warn(
-            `[RTSVR2 net] backpressure: peer ${conn.peer || '?'} buffered=${buffered} bytes ` +
+            `[RTSVR3 net] backpressure: peer ${conn.peer || '?'} buffered=${buffered} bytes ` +
             `(>${NET_PEER_BACKPRESSURE_BYTES}) — dropped ${netBackpressureSkippedCount} snapshots so far`
           );
         }
@@ -1329,7 +1329,7 @@ export function broadcastData(data) {
           const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
           if (now - netBackpressureLastWarnMs > 5000) {
             netBackpressureLastWarnMs = now;
-            console.warn(`[RTSVR2 net] conn.send rejected for peer ${conn.peer || '?'}:`, err);
+            console.warn(`[RTSVR3 net] conn.send rejected for peer ${conn.peer || '?'}:`, err);
           }
         });
       }
@@ -1337,7 +1337,7 @@ export function broadcastData(data) {
       const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
       if (now - netBackpressureLastWarnMs > 5000) {
         netBackpressureLastWarnMs = now;
-        console.warn(`[RTSVR2 net] conn.send threw for peer ${conn.peer || '?'}:`, err);
+        console.warn(`[RTSVR3 net] conn.send threw for peer ${conn.peer || '?'}:`, err);
       }
     }
   });
@@ -1498,7 +1498,7 @@ export function updateNetwork(time) {
       let peerBuf = 0;
       connections.forEach(conn => { peerBuf += getPeerBufferedBytes(conn); });
       console.log(
-        `[RTSVR2 net] snap=${bytes}B units=${snapshot.units.length} ` +
+        `[RTSVR3 net] snap=${bytes}B units=${snapshot.units.length} ` +
         `bldgs=${snapshot.buildings.length} fx=${fxList.length} ` +
         `peers=${peerCount} bufferedTotal=${peerBuf}B`
       );
@@ -1611,7 +1611,7 @@ function applySnapshot(snapshot) {
     !Array.isArray(snapshot.units) ||
     !Array.isArray(snapshot.buildings)
   ) {
-    console.warn('[RTSVR2] applySnapshot: invalid snapshot shape (expected players/units/buildings arrays)');
+    console.warn('[RTSVR3] applySnapshot: invalid snapshot shape (expected players/units/buildings arrays)');
     return;
   }
   const isNetClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
@@ -1635,7 +1635,7 @@ function applySnapshot(snapshot) {
      * died, or got buried under WebRTC backpressure (see `NET_PEER_BACKPRESSURE_BYTES`).
      */
     if (gap > 1000) {
-      console.warn(`[RTSVR2 net] snapshot gap ${Math.round(gap)} ms (seq ${snapSeq})`);
+      console.warn(`[RTSVR3 net] snapshot gap ${Math.round(gap)} ms (seq ${snapSeq})`);
     }
   }
   lastClientSnapWallMs = wall;
@@ -1644,7 +1644,7 @@ function applySnapshot(snapshot) {
     if (wall - clientSnapLastLogMs > 5000) {
       clientSnapLastLogMs = wall;
       console.log(
-        `[RTSVR2 net] client applied ${clientSnapAppliedCount} snapshots (last seq=${snapSeq}, ` +
+        `[RTSVR3 net] client applied ${clientSnapAppliedCount} snapshots (last seq=${snapSeq}, ` +
         `+${snapSeq - clientSnapLastSeqLogged} since last log)`
       );
       clientSnapLastSeqLogged = snapSeq;

@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Game Loop
+// RTSVR3 — Game Loop
 // Central fixed-timestep update
 // ========================================
 // Runs on the A-Frame scene tick so logic keeps advancing during immersive WebXR

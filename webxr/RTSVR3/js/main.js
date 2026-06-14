@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Main Entry Point
+// RTSVR3 — Main Entry Point
 // Initialization and game setup
 // ========================================
 
@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function initializeGame(sceneEl) {
-  console.log('🎮 RTSVR2 Initializing...');
+  console.log('🎮 RTSVR3 Initializing...');
 
   Input.applyImmersiveVrEntryToScene(sceneEl);
 
@@ -157,7 +157,7 @@ function initializeGame(sceneEl) {
     UI.updateMenuVisibility();
     UI.hideBootLoadingScreen();
 
-    console.log('✅ RTSVR2 Ready');
+    console.log('✅ RTSVR3 Ready');
   }, 500);
 }
 
@@ -165,7 +165,7 @@ function initializeGame(sceneEl) {
 function onStartGame(mode) {
   /** Only the host may run a full local match bootstrap — clients mirror the host via `game-start` + snapshots. */
   if (State.gameSession.isMultiplayer && !State.gameSession.isHost) {
-    console.warn('[RTSVR2] Ignoring startGame on multiplayer client (host starts the match).');
+    console.warn('[RTSVR3] Ignoring startGame on multiplayer client (host starts the match).');
     UI.showStatus('Only the host can start a match from this device.');
     return;
   }

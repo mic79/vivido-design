@@ -8,7 +8,7 @@
  * `window.RTS_HDR_EQUIRECT_MAX_LONG_EDGE = 8192` before the module loads (~512 MB).
  */
 
-/** Same path as on disk: `RTSVR2/assets/earthlike_planet.hdr` when served from the RTSVR2 root. */
+/** Same path as on disk: `RTSVR3/assets/earthlike_planet.hdr` when served from the RTSVR3 root. */
 const DEFAULT_HDR_REL = 'assets/earthlike_planet.hdr';
 
 const HDR_EQUIRECT_MAX_LONG_EDGE_DEFAULT = 4096;
@@ -306,7 +306,7 @@ export async function applyHdrSkyEnvironment(sceneEl, relativePath = DEFAULT_HDR
   const renderer = sceneEl && sceneEl.renderer;
   const scene = sceneEl && sceneEl.object3D;
   if (!THREE || !renderer || !scene || !THREE.PMREMGenerator) {
-    console.warn('RTSVR2: HDR sky skipped (THREE / renderer / PMREM missing)');
+    console.warn('RTSVR3: HDR sky skipped (THREE / renderer / PMREM missing)');
     return;
   }
 
@@ -314,7 +314,7 @@ export async function applyHdrSkyEnvironment(sceneEl, relativePath = DEFAULT_HDR
   try {
     buffer = await fetchFirstBuffer(assetUrlCandidates(relativePath));
   } catch (e) {
-    console.warn('RTSVR2: HDR fetch failed', relativePath, e);
+    console.warn('RTSVR3: HDR fetch failed', relativePath, e);
     return;
   }
 
@@ -322,7 +322,7 @@ export async function applyHdrSkyEnvironment(sceneEl, relativePath = DEFAULT_HDR
   try {
     parsed = parseRGBEToFloatRgba(buffer);
   } catch (e) {
-    console.warn('RTSVR2: HDR parse failed', e);
+    console.warn('RTSVR3: HDR parse failed', e);
     return;
   }
 
@@ -362,7 +362,7 @@ export async function applyHdrSkyEnvironment(sceneEl, relativePath = DEFAULT_HDR
   try {
     envMap = pmrem.fromEquirectangular(eq).texture;
   } catch (e) {
-    console.warn('RTSVR2: PMREM from HDR failed', e);
+    console.warn('RTSVR3: PMREM from HDR failed', e);
     eq.dispose();
     pmrem.dispose();
     return;

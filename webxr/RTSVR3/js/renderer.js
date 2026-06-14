@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Renderer
+// RTSVR3 — Renderer
 // InstancedMesh management for all game objects
 // ========================================
 
@@ -21,10 +21,10 @@ let scene3D = null;  // THREE.Scene reference
 const unitMeshes = {};     // unitType -> InstancedMesh
 const buildingMeshes = {}; // buildingType -> InstancedMesh
 
-/** Bundled with the game under RTSVR2/ (copied from BattleVR lunar lander). */
+/** Bundled with the game under RTSVR3/ (copied from BattleVR lunar lander). */
 const HQ_GLB_URL = 'assets/lunar-lander/lunar_lander.glb';
 
-/** Infantry visual (place file under RTSVR2/assets/). */
+/** Infantry visual (place file under RTSVR3/assets/). */
 const INFANTRY_GLB_URL = 'assets/Meshy_AI_Apollo_astronaut_with_0416105251_texture.glb';
 
 /** Barracks roster = all infantry unit types in this build. */
@@ -599,7 +599,7 @@ async function tryReplaceHqWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, HQ_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] HQ lunar lander GLB load failed (keeping box).', err);
+    console.warn('[RTSVR3] HQ lunar lander GLB load failed (keeping box).', err);
     return;
   }
 
@@ -646,7 +646,7 @@ async function tryReplaceRefineryWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, REFINERY_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Refinery GLB load failed (keeping box).', err);
+    console.warn('[RTSVR3] Refinery GLB load failed (keeping box).', err);
     return;
   }
 
@@ -693,7 +693,7 @@ async function tryReplaceBarracksWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, BARRACKS_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Barracks GLB load failed (keeping box).', err);
+    console.warn('[RTSVR3] Barracks GLB load failed (keeping box).', err);
     return;
   }
 
@@ -740,7 +740,7 @@ async function tryReplaceWarFactoryWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, WAR_FACTORY_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] War factory GLB load failed (keeping box).', err);
+    console.warn('[RTSVR3] War factory GLB load failed (keeping box).', err);
     return;
   }
 
@@ -929,7 +929,7 @@ async function tryReplaceInfantryWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, INFANTRY_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Infantry GLB load failed (keeping cylinders).', err);
+    console.warn('[RTSVR3] Infantry GLB load failed (keeping cylinders).', err);
     return;
   }
 
@@ -944,7 +944,7 @@ async function tryReplaceInfantryWithGltfModel(sceneEl) {
       replaceUnitInstancedMesh(type, geometry, material, THREE_w);
     }
   } catch (err) {
-    console.warn('[RTSVR2] Infantry GLB apply failed (keeping cylinders).', err);
+    console.warn('[RTSVR3] Infantry GLB apply failed (keeping cylinders).', err);
   }
 
   disposeObject3DGeometryOnly(loadedRoot);
@@ -960,7 +960,7 @@ async function tryReplaceHarvesterWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, HARVESTER_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Harvester GLB load failed (keeping box).', err);
+    console.warn('[RTSVR3] Harvester GLB load failed (keeping box).', err);
     return;
   }
 
@@ -985,7 +985,7 @@ async function tryReplaceHarvesterWithGltfModel(sceneEl) {
     replaceUnitInstancedMesh('harvester', geometry, material, THREE_w);
     harvesterGltfActive = true;
   } catch (err) {
-    console.warn('[RTSVR2] Harvester GLB apply failed (keeping box).', err);
+    console.warn('[RTSVR3] Harvester GLB apply failed (keeping box).', err);
     harvesterGltfActive = false;
   }
 
@@ -1002,7 +1002,7 @@ async function tryReplaceLightTankWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, LIGHT_TANK_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Light tank GLB load failed (keeping hull+barrel mesh).', err);
+    console.warn('[RTSVR3] Light tank GLB load failed (keeping hull+barrel mesh).', err);
     return;
   }
 
@@ -1027,7 +1027,7 @@ async function tryReplaceLightTankWithGltfModel(sceneEl) {
     replaceUnitInstancedMesh('lightTank', geometry, material, THREE_w);
     lightTankGltfActive = true;
   } catch (err) {
-    console.warn('[RTSVR2] Light tank GLB apply failed (keeping hull+barrel mesh).', err);
+    console.warn('[RTSVR3] Light tank GLB apply failed (keeping hull+barrel mesh).', err);
     lightTankGltfActive = false;
   }
 
@@ -1044,7 +1044,7 @@ async function tryReplaceHeavyTankWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, HEAVY_TANK_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Heavy tank GLB load failed (keeping hull+barrel mesh).', err);
+    console.warn('[RTSVR3] Heavy tank GLB load failed (keeping hull+barrel mesh).', err);
     return;
   }
 
@@ -1068,7 +1068,7 @@ async function tryReplaceHeavyTankWithGltfModel(sceneEl) {
     replaceUnitInstancedMesh('heavyTank', geometry, material, THREE_w);
     heavyTankGltfActive = true;
   } catch (err) {
-    console.warn('[RTSVR2] Heavy tank GLB apply failed (keeping hull+barrel mesh).', err);
+    console.warn('[RTSVR3] Heavy tank GLB apply failed (keeping hull+barrel mesh).', err);
     heavyTankGltfActive = false;
   }
 
@@ -1085,7 +1085,7 @@ async function tryReplaceMobileHqWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, MOBILE_HQ_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Mobile HQ GLB load failed (keeping box).', err);
+    console.warn('[RTSVR3] Mobile HQ GLB load failed (keeping box).', err);
     return;
   }
 
@@ -1109,7 +1109,7 @@ async function tryReplaceMobileHqWithGltfModel(sceneEl) {
     replaceUnitInstancedMesh('mobileHq', geometry, material, THREE_w);
     mobileHqGltfActive = true;
   } catch (err) {
-    console.warn('[RTSVR2] Mobile HQ GLB apply failed (keeping box).', err);
+    console.warn('[RTSVR3] Mobile HQ GLB apply failed (keeping box).', err);
     mobileHqGltfActive = false;
   }
 
@@ -1126,7 +1126,7 @@ async function tryReplaceScoutBikeWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, SCOUT_BIKE_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Scout buggy GLB load failed (keeping box).', err);
+    console.warn('[RTSVR3] Scout buggy GLB load failed (keeping box).', err);
     return;
   }
 
@@ -1150,7 +1150,7 @@ async function tryReplaceScoutBikeWithGltfModel(sceneEl) {
     replaceUnitInstancedMesh('scoutBike', geometry, material, THREE_w);
     scoutBikeGltfActive = true;
   } catch (err) {
-    console.warn('[RTSVR2] Scout buggy GLB apply failed (keeping box).', err);
+    console.warn('[RTSVR3] Scout buggy GLB apply failed (keeping box).', err);
     scoutBikeGltfActive = false;
   }
 
@@ -1167,7 +1167,7 @@ async function tryReplaceArtilleryWithGltfModel(sceneEl) {
   try {
     loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, ARTILLERY_GLB_URL);
   } catch (err) {
-    console.warn('[RTSVR2] Artillery GLB load failed (keeping hull+barrel mesh).', err);
+    console.warn('[RTSVR3] Artillery GLB load failed (keeping hull+barrel mesh).', err);
     return;
   }
 
@@ -1191,7 +1191,7 @@ async function tryReplaceArtilleryWithGltfModel(sceneEl) {
     replaceUnitInstancedMesh('artillery', geometry, material, THREE_w);
     artilleryGltfActive = true;
   } catch (err) {
-    console.warn('[RTSVR2] Artillery GLB apply failed (keeping hull+barrel mesh).', err);
+    console.warn('[RTSVR3] Artillery GLB apply failed (keeping hull+barrel mesh).', err);
     artilleryGltfActive = false;
   }
 

@@ -212,7 +212,7 @@ console.log('  UV u,v =', u.toFixed(4), v.toFixed(4));
 console.log('  direction (Three-like Y-up):', dir.x.toFixed(3), dir.y.toFixed(3), dir.z.toFixed(3));
 console.log('  azimuth atan2(x,z) deg:', azDeg.toFixed(1), '  elevation asin(y) deg:', elDeg.toFixed(1));
 
-console.log('\n--- VR / desktop start view (RTSVR2 index.html) ---');
+console.log('\n--- VR / desktop start view (RTSVR3 index.html) ---');
 console.log('cameraRig position: (0, 40, 0), camera rotation: -75° X (pitch down toward map).');
 console.log(
   'Approx. camera forward in world (Y-up, default A-Frame camera looks -Z, then Rx(-75°)):'

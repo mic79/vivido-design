@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Nav walkability debug (world overlay + texture refresh)
+// RTSVR3 — Nav walkability debug (world overlay + texture refresh)
 // Toggle: N key (in match, menu closed), or `?navDebug=1` / `window.RTS_NAV_DEBUG = true` before load.
 // ========================================
 

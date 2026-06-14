@@ -83,9 +83,9 @@
       const half = span / 2;
       const u = uv.x;
       const v = uv.y;
-      // Match flat minimap (ui.js handleMinimapClick): wx mirrors U; WZ uses V upward (Three UV v=0 bottom)
-      let wx = (1 - u) * span - half;
-      let wz = v * span - half;
+      // Match flat minimap: +X → texture U right, +Z → canvas down (Three v=0 = south/+Z).
+      let wx = u * span - half;
+      let wz = (1 - v) * span - half;
       const playR =
         typeof window.__rtsMapUnitNavRadius === 'number' && window.__rtsMapUnitNavRadius > 0
           ? window.__rtsMapUnitNavRadius

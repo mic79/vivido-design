@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Game Configuration
+// RTSVR3 — Game Configuration
 // All constants, stats, and tuning values
 // ========================================
 

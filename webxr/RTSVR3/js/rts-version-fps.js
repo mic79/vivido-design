@@ -42,7 +42,7 @@
       );
       this.fps = avgFPS;
 
-      var label = 'RTSVR2 ' + this.version + ' | ' + this.fps + ' FPS';
+      var label = 'RTSVR3 ' + this.version + ' | ' + this.fps + ' FPS';
 
       var htmlEl = document.getElementById('hud-version-fps');
       if (htmlEl) htmlEl.textContent = label;

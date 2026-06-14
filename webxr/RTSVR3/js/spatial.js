@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Spatial Hash Grid
+// RTSVR3 — Spatial Hash Grid
 // O(1) neighbor queries for units/buildings
 // ========================================
 

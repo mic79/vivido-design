@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Fog of War
+// RTSVR3 — Fog of War
 // Grid-based per-team visibility
 // ========================================
 

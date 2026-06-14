@@ -1,5 +1,5 @@
 // ========================================
-// RTSVR2 — Effects System
+// RTSVR3 — Effects System
 // Particle pools for explosions and impacts
 // ========================================
 
