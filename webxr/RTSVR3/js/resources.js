@@ -18,6 +18,27 @@ const HARVESTER_ARRIVE_RADIUS = 12;
 /** Max distance from crystal / refinery while harvesting or depositing (arrival + drift slack). */
 const HARVESTER_WORK_RADIUS = HARVESTER_ARRIVE_RADIUS + 5;
 
+const PATH_REQUERY_MS = 400;
+const PATH_BLOCKED_STREAK_REPATH = 12;
+
+function harvesterCanPathfind(unit) {
+  return performance.now() >= (unit._pathRetryAt || 0);
+}
+
+function harvesterSchedulePathRetry(unit, ms = PATH_REQUERY_MS) {
+  unit._pathRetryAt = performance.now() + ms;
+}
+
+function harvesterNotePathBlocked(unit) {
+  unit._pathBlockedStreak = (unit._pathBlockedStreak || 0) + 1;
+  if (unit._pathBlockedStreak >= PATH_BLOCKED_STREAK_REPATH) {
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._pathBlockedStreak = 0;
+    harvesterSchedulePathRetry(unit);
+  }
+}
+
 // --- Harvester state machine ---
 // States: idle -> movingToField -> harvesting -> movingToRefinery -> depositing -> (repeat)
 
@@ -321,6 +342,13 @@ function deposit(unit, dt) {
 function moveAlongPathSimple(unit, dt) {
   if (!unit.path || unit.path.length === 0 || unit.pathIndex >= unit.path.length) {
     if (!unit.targetPos) return;
+    if (!harvesterCanPathfind(unit)) return;
+    if (!Pathfinding.canTakePathfindSlot(false)) {
+      harvesterSchedulePathRetry(unit, 40);
+      return;
+    }
+
+    Pathfinding.notePathfindSlot(false);
     const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z);
     
     // If we've reached the closest point to destination but can't proceed,
@@ -373,10 +401,12 @@ function moveAlongPathSimple(unit, dt) {
     if (!Pathfinding.isPathValidOnGrid(path)) {
       unit.path = null;
       unit.pathIndex = 0;
+      harvesterSchedulePathRetry(unit);
       return;
     }
     unit.path = Pathfinding.trimPathFromUnit(path, unit.x, unit.z);
     unit.pathIndex = 0;
+    unit._pathBlockedStreak = 0;
   }
 
   while (unit.pathIndex < unit.path.length - 1) {
@@ -410,12 +440,12 @@ function moveAlongPathSimple(unit, dt) {
   const nz = unit.z + dz * ratio;
   const res = Pathfinding.resolveNavMotion(unit.x, unit.z, nx, nz);
   if (res.blocked) {
-    unit.path = null;
-    unit.pathIndex = 0;
+    harvesterNotePathBlocked(unit);
     return;
   }
   unit.x = res.x;
   unit.z = res.z;
+  unit._pathBlockedStreak = 0;
   const ox = unit.x;
   const oz = unit.z;
   const clamped = clampWorldToPlayableDisk(unit.x, unit.z, 0);

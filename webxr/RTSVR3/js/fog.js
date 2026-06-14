@@ -9,6 +9,10 @@ import {
   MAP_NAV_PLANE_HALF_M,
 } from './config.js';
 import * as State from './state.js';
+import { unitGrid, buildingGrid } from './spatial.js';
+
+/** Max unit/building vision (m) + margin for spatial queries in `isVisibleToTeam`. */
+const VISION_QUERY_RADIUS = 40;
 
 // Per-team visibility grids
 // 0 = never seen, 1 = previously seen (grey), 2 = currently visible
@@ -131,35 +135,31 @@ export function isVisibleToTeam(team, wx, wz) {
   // reveal caused enemies beside your army to vanish and far-corner cell false positives.
   if (!Number.isFinite(wx) || !Number.isFinite(wz)) return false;
 
-  const allyIds = State.unitsByTeam.get(team);
-  if (allyIds) {
-    for (const id of allyIds) {
-      const unit = State.units.get(id);
-      if (!unit || unit.hp <= 0) continue;
-      const r =
-        unit.visionRange != null && Number.isFinite(unit.visionRange)
-          ? unit.visionRange
-          : (unit.range != null && Number.isFinite(unit.range) ? unit.range : 18);
-      const dx = wx - unit.x;
-      const dz = wz - unit.z;
-      if (dx * dx + dz * dz <= r * r) return true;
-    }
-  }
-
-  for (const building of State.buildings.values()) {
-    if (building.hp <= 0) continue;
-    const owner = State.players[building.ownerId];
-    if (!owner || owner.team !== team) continue;
+  const allies = unitGrid.queryRadiusFiltered(wx, wz, VISION_QUERY_RADIUS, e => {
+    if (e.team !== team || e.hp <= 0) return false;
     const r =
-      building.visionRange != null && Number.isFinite(building.visionRange)
-        ? building.visionRange
-        : 12;
-    const dx = wx - building.x;
-    const dz = wz - building.z;
-    if (dx * dx + dz * dz <= r * r) return true;
-  }
+      e.visionRange != null && Number.isFinite(e.visionRange)
+        ? e.visionRange
+        : (e.range != null && Number.isFinite(e.range) ? e.range : 18);
+    const dx = wx - e.x;
+    const dz = wz - e.z;
+    return dx * dx + dz * dz <= r * r;
+  });
+  if (allies.length > 0) return true;
 
-  return false;
+  const structures = buildingGrid.queryRadiusFiltered(wx, wz, VISION_QUERY_RADIUS, b => {
+    if (b.hp <= 0) return false;
+    const owner = State.players[b.ownerId];
+    if (!owner || owner.team !== team) return false;
+    const r =
+      b.visionRange != null && Number.isFinite(b.visionRange)
+        ? b.visionRange
+        : 12;
+    const dx = wx - b.x;
+    const dz = wz - b.z;
+    return dx * dx + dz * dz <= r * r;
+  });
+  return structures.length > 0;
 }
 
 export function wasExploredByTeam(team, wx, wz) {

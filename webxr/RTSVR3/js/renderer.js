@@ -13,7 +13,7 @@ import {
 import * as State from './state.js';
 import * as Fog from './fog.js';
 import * as UI from './ui.js';
-import { sampleMoonTerrainWorldY } from './moon-environment.js';
+import { sampleMoonTerrainWorldY, sampleMoonTerrainWorldYCached } from './moon-environment.js';
 
 const RESOURCE_FIELD_LAYOUT = getResourceFieldPositions();
 
@@ -1416,7 +1416,17 @@ function updateWorldFogOverlay() {
 // UPDATE FUNCTIONS (called each frame)
 // ==========================================
 
+let renderFogFrame = 0;
+
+function unitVisibleToPlayer(unit, myPid) {
+  if (unit._visF === renderFogFrame) return unit._visM;
+  unit._visF = renderFogFrame;
+  unit._visM = Fog.isUnitVisibleToPlayer(unit, myPid);
+  return unit._visM;
+}
+
 export function updateRendering() {
+  renderFogFrame++;
   updateUnitInstances();
   updateBuildingInstances();
   updateHealthBars();
@@ -1432,7 +1442,7 @@ function unitInstanceSortKey(unit, myPid) {
   let k = 0;
   if (State.selectedUnits.has(unit.id)) k += 4000;
   if (unit.ownerId === myPid) k += 1000;
-  if (Fog.isUnitVisibleToPlayer(unit, myPid)) k += 100;
+  if (unitVisibleToPlayer(unit, myPid)) k += 100;
   return k;
 }
 
@@ -1477,7 +1487,7 @@ function updateUnitInstances() {
         continue;
       }
 
-      const fogVis = Fog.isUnitVisibleToPlayer(unit, myPid);
+      const fogVis = unitVisibleToPlayer(unit, myPid);
       const visible =
         fogVis
         || (State.selectedUnits.has(unit.id) && unit.ownerId === myPid);
@@ -1485,7 +1495,7 @@ function updateUnitInstances() {
       if (visible) {
         _euler.set(0, unit.rotation || 0, 0);
         _quat.setFromEuler(_euler);
-        const gY = sampleMoonTerrainWorldY(unit.x, unit.z);
+        const gY = sampleMoonTerrainWorldYCached(unit, unit.x, unit.z);
         _mat4.compose(
           _pos.set(unit.x, gY, unit.z),
           _quat,
@@ -1643,7 +1653,7 @@ function updateBuildingInstances() {
       const scaleY = Math.max(0.1, building.constructionProgress || 1);
       _euler.set(0, building.rotation || 0, 0);
       _quat.setFromEuler(_euler);
-      const gY = sampleMoonTerrainWorldY(building.x, building.z);
+      const gY = sampleMoonTerrainWorldYCached(building, building.x, building.z);
       _mat4.compose(
         _pos.set(building.x, gY, building.z),
         _quat,
@@ -1779,7 +1789,7 @@ function updateHealthBars() {
     if (unit.hp <= 0) return;
     const hpPct = unit.hp / unit.maxHp;
     if (hpPct >= 1) return; // Don't show bar when full HP
-    const uGY = sampleMoonTerrainWorldY(unit.x, unit.z);
+    const uGY = sampleMoonTerrainWorldYCached(unit, unit.x, unit.z);
     addBar(unit.x, uGY + HEALTH_BAR_Y_OFFSET, unit.z, hpPct, unit._renderVisible);
   });
 
@@ -1788,7 +1798,7 @@ function updateHealthBars() {
     if (building.hp <= 0) return;
     const hpPct = building.hp / building.maxHp;
     if (hpPct >= 1) return;
-    const bGY = sampleMoonTerrainWorldY(building.x, building.z);
+    const bGY = sampleMoonTerrainWorldYCached(building, building.x, building.z);
     addBar(building.x, bGY + buildingHudHeight(building.type) + 0.5, building.z, hpPct, building._renderVisible);
   });
 
@@ -1847,7 +1857,7 @@ function updateSelectionRings() {
     if (!unit.followLeadId && countSquadFollowersForRing(unit.id) > 0) {
       s *= 1.12;
     }
-    const uGY = sampleMoonTerrainWorldY(unit.x, unit.z);
+    const uGY = sampleMoonTerrainWorldYCached(unit, unit.x, unit.z);
     _mat4.compose(
       _pos.set(unit.x, uGY + 0.15, unit.z),
       _quat.identity(),
@@ -1869,7 +1879,7 @@ function updateSelectionRings() {
       if (!lead || lead.hp <= 0 || lead.ownerId !== myPid) return;
       if (countSquadFollowersForRing(leadId) === 0) return;
       const s = selectionRingScaleForUnitType(lead.type) * 1.12;
-      const uGY = sampleMoonTerrainWorldY(lead.x, lead.z);
+      const uGY = sampleMoonTerrainWorldYCached(lead, lead.x, lead.z);
       _mat4.compose(
         _pos.set(lead.x, uGY + 0.15, lead.z),
         _quat.identity(),
@@ -1892,7 +1902,7 @@ function updateSelectionRings() {
       if (building.type === 'warFactory' && warFactoryTexturedMode) {
         bSize *= WAR_FACTORY_GLB_VISUAL_SCALE;
       }
-      const bGY = sampleMoonTerrainWorldY(building.x, building.z);
+      const bGY = sampleMoonTerrainWorldYCached(building, building.x, building.z);
       _mat4.compose(
         _pos.set(building.x, bGY + 0.15, building.z),
         _quat.identity(),
@@ -1949,7 +1959,7 @@ function updateResourceFields() {
     const explored = Fog.wasExploredByTeam(myTeam, field.x, field.z);
 
     if (explored) {
-      const fGY = sampleMoonTerrainWorldY(field.x, field.z);
+      const fGY = sampleMoonTerrainWorldYCached(field, field.x, field.z);
       _mat4.compose(
         _pos.set(field.x, fGY + 2.5 * scale, field.z),
         _quat.identity(),
@@ -2070,14 +2080,14 @@ export function pickScreenNdcErrorForUnit(unit, pickNdc) {
   const shape = UNIT_SHAPES[unit.type];
   if (!shape) return Infinity;
   const centerY = shape.height * 0.5;
-  const gY = sampleMoonTerrainWorldY(unit.x, unit.z);
+  const gY = sampleMoonTerrainWorldYCached(unit, unit.x, unit.z);
   return pickScreenNdcError(unit.x, gY + centerY, unit.z, pickNdc);
 }
 
 export function pickScreenNdcErrorForBuilding(building, pickNdc) {
   if (!building || !pickNdc) return Infinity;
   const { centerY } = buildingPickVerticalAndRadius(building.type);
-  const gY = sampleMoonTerrainWorldY(building.x, building.z);
+  const gY = sampleMoonTerrainWorldYCached(building, building.x, building.z);
   return pickScreenNdcError(building.x, gY + centerY, building.z, pickNdc);
 }
 
@@ -2214,7 +2224,7 @@ export function raycastUnits(origin, direction, maxDist = 200, radiusBoost = 0, 
       Math.max(shape.radiusBottom, shape.radiusTop) + 0.3 + boost :
       Math.max(shape.width, shape.depth) * 0.5 + 0.3 + boost;
     const centerY = (shape.type === 'cylinder' ? shape.height : shape.height) * 0.5;
-    const gY = sampleMoonTerrainWorldY(unit.x, unit.z);
+    const gY = sampleMoonTerrainWorldYCached(unit, unit.x, unit.z);
 
     _pos.set(unit.x, gY + centerY, unit.z);
     considerSpherePick(origin, direction, _pos, radius, maxDist, state, unit, pickNdc);
@@ -2232,7 +2242,7 @@ export function raycastBuildings(origin, direction, maxDist = 200, radiusBoost =
 
     const { centerY, radius: baseRadius } = buildingPickVerticalAndRadius(building.type);
     const radius = baseRadius + boost;
-    const gY = sampleMoonTerrainWorldY(building.x, building.z);
+    const gY = sampleMoonTerrainWorldYCached(building, building.x, building.z);
 
     _pos.set(building.x, gY + centerY, building.z);
     considerSpherePick(origin, direction, _pos, radius, maxDist, state, building, pickNdc);

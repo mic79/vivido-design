@@ -162,8 +162,8 @@ export function tryDeployMobileHq(unit) {
   if (player && player.stats) player.stats.buildingsBuilt++;
 
   Pathfinding.rebuildNavMesh();
-  Audio.playBuildCompleteSound();
-  State.pushHostFx({ kind: 'build_complete' });
+  Audio.playBuildCompleteSound(x, z);
+  State.pushHostFx({ kind: 'build_complete', x, z });
   console.log(`🏕️ P${ownerId} deployed Mobile HQ → HQ at (${x.toFixed(0)}, ${z.toFixed(0)})`);
   return true;
 }
@@ -202,8 +202,8 @@ export function updateConstruction(dt) {
       building.constructionProgress = 1;
       building.isBuilt = true;
       if (player && player.stats) player.stats.buildingsBuilt++;
-      Audio.playBuildCompleteSound();
-      State.pushHostFx({ kind: 'build_complete' });
+      Audio.playBuildCompleteSound(building.x, building.z);
+      State.pushHostFx({ kind: 'build_complete', x: building.x, z: building.z });
       console.log(`✅ Building ${building.type} complete for P${building.ownerId}`);
 
       // Spawn free unit if applicable (e.g., Refinery comes with free Harvester)
@@ -310,10 +310,10 @@ export function updateProduction(dt) {
         // Move to rally point
         const rally = building.rallyPoint;
         if (rally && (Math.abs(rally.x - spawnPos.x) > 2 || Math.abs(rally.z - spawnPos.z) > 2)) {
-          Units.commandMove([unit.id], rally.x, rally.z);
+          Units.commandMove([unit.id], rally.x, rally.z, { playerCommanded: false });
         }
-        Audio.playUnitReadySound();
-        State.pushHostFx({ kind: 'unit_ready' });
+        Audio.playUnitReadySound(spawnPos.x, spawnPos.z);
+        State.pushHostFx({ kind: 'unit_ready', x: spawnPos.x, z: spawnPos.z });
       }
     }
   });
@@ -322,10 +322,10 @@ export function updateProduction(dt) {
 function getSpawnPosition(building) {
   const shape = BUILDING_SHAPES[building.type];
   const offset = (shape?.depth || 4) / 2 + 2;
-  return {
-    x: building.x + (Math.random() - 0.5) * 4,
-    z: building.z + offset,
-  };
+  const rawX = building.x + (Math.random() - 0.5) * 4;
+  const rawZ = building.z + offset;
+  const safe = Pathfinding.pushOutOfObstacle(rawX, rawZ);
+  return { x: safe.x, z: safe.z };
 }
 
 // --- Income ---
@@ -385,10 +385,12 @@ export function sellBuilding(buildingId, actingPlayerId) {
   Units.clearUnitsTargetingBuilding(buildingId);
   if (player) player.credits += refund;
 
+  const bx = building.x;
+  const bz = building.z;
   State.removeBuilding(buildingId);
   Pathfinding.rebuildNavMesh();
-  Audio.playUnitReadySound();
-  State.pushHostFx({ kind: 'sell_complete' });
+  Audio.playUnitReadySound(bx, bz);
+  State.pushHostFx({ kind: 'sell_complete', x: bx, z: bz });
   Units.checkWinCondition();
   return null;
 }

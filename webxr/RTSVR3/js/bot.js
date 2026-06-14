@@ -67,7 +67,7 @@ function commandBotEngageEnemyUnits(unitIds, enemyRef) {
   }
 
   const reach =
-    Pathfinding.findNearestReachable(ax, az, tgt.x, tgt.z, 80) ||
+    Pathfinding.findNearestReachable(ax, az, tgt.x, tgt.z, 44) ||
     clampWorldToPlayableDisk(tgt.x, tgt.z, 2);
 
   Units.commandAttackMove(
@@ -533,7 +533,7 @@ function manageRetaliation(player, idleUnits) {
         az = po.z;
       }
       targetPos =
-        Pathfinding.findNearestReachable(ax, az, rawTx, rawTz, 96) ||
+        Pathfinding.findNearestReachable(ax, az, rawTx, rawTz, 52) ||
         clampWorldToPlayableDisk(rawTx, rawTz, 2);
     } else {
       targetPos = clampWorldToPlayableDisk(rawTx, rawTz, 2);

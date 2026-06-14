@@ -13,6 +13,8 @@ import {
   ENGINEER_REPAIR_RANGE,
   OBSTACLE_BUFFER,
   VEHICLE_SELL_WAR_FACTORY_RANGE,
+  GUARD_CHASE_LEASH_MULT,
+  GUARD_CHASE_LEASH_PAD_M,
 } from './config.js';
 import * as State from './state.js';
 import * as Pathfinding from './pathfinding.js';
@@ -22,7 +24,108 @@ import * as Fog from './fog.js';
 import * as Effects from './effects.js';
 import { unitGrid } from './spatial.js';
 
-/** Shortest XZ distance from a point to the building's square footprint (half = size/2). */
+/** Min ms between A* requests for the same unit (stuck / crowded movers). */
+const PATH_REQUERY_MS = 400;
+/** Long bot hauls (explore / rally) back off longer so path queues don't saturate. */
+const PATH_REQUERY_LONG_MS = 650;
+/** Blocked steps on the same waypoint before discarding path and waiting PATH_REQUERY_MS. */
+const PATH_BLOCKED_STREAK_REPATH = 12;
+
+function pathRetryNotBefore(unit) {
+  return unit._pathRetryAt || 0;
+}
+
+function pathRetryDelayMs(unit, overrideMs) {
+  if (overrideMs != null) return overrideMs;
+  if (unitHasPlayerPathPriority(unit)) return PATH_REQUERY_MS;
+  if (unit.targetPos) {
+    const d = Pathfinding.getDistance(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z);
+    if (d > 55) return PATH_REQUERY_LONG_MS;
+  }
+  return PATH_REQUERY_MS;
+}
+
+function schedulePathRetry(unit, ms) {
+  unit._pathRetryAt = performance.now() + pathRetryDelayMs(unit, ms);
+}
+
+function notePathStepBlocked(unit) {
+  unit._pathBlockedStreak = (unit._pathBlockedStreak || 0) + 1;
+  if (unit._pathBlockedStreak >= PATH_BLOCKED_STREAK_REPATH) {
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._pathBlockedStreak = 0;
+    schedulePathRetry(unit);
+  }
+}
+
+function clearPathBlockStreak(unit) {
+  unit._pathBlockedStreak = 0;
+}
+
+function unitHasAttackOrder(unit) {
+  return unit.state === 'attacking' && (unit.targetUnitId != null || unit.targetBuildingId != null);
+}
+
+function unitHasPlayerMoveGoal(unit) {
+  return unit.state === 'moving' && unit.playerCommanded && unit.targetPos != null;
+}
+
+function unitShouldKeepMoveGoal(unit) {
+  return unitHasAttackOrder(unit) || unitHasPlayerMoveGoal(unit);
+}
+
+function unitHasPlayerPathPriority(unit) {
+  return unit.playerCommanded && (unit.targetPos != null || unitHasAttackOrder(unit));
+}
+
+/** Player/bot attack or move orders should path immediately, not wait on crowd-retry backoff. */
+function resetUnitPathThrottle(unit) {
+  unit._pathRetryAt = 0;
+  unit._reachRetryAt = 0;
+  unit._pathBlockedStreak = 0;
+}
+
+function canRunPathfindNow(unit) {
+  if (unitHasPlayerPathPriority(unit)) return true;
+  return performance.now() >= pathRetryNotBefore(unit);
+}
+
+function canTakePathfindSlot(unit) {
+  return Pathfinding.canTakePathfindSlot(unitHasPlayerPathPriority(unit));
+}
+
+function notePathfindSlotUsed(unit) {
+  Pathfinding.notePathfindSlot(unitHasPlayerPathPriority(unit));
+}
+
+/** Max distance from guardPos for auto-acquire / chase (not explicit player attack orders). */
+function getGuardEngageLeash(unit) {
+  const visionR = unit.visionRange != null ? unit.visionRange : unit.range;
+  const weaponR = unit.range > 0 ? unit.range : 1.5;
+  const reach = Math.max(visionR, Math.min(weaponR, visionR + 10));
+  return reach * GUARD_CHASE_LEASH_MULT + GUARD_CHASE_LEASH_PAD_M;
+}
+
+function isAutoDefendHold(unit) {
+  return !unit.playerCommanded && unit.guardPos != null;
+}
+
+function distFromGuard(unit, wx, wz) {
+  return Pathfinding.getDistance(unit.guardPos.x, unit.guardPos.z, wx, wz);
+}
+
+function exceedsGuardLeash(unit, wx, wz) {
+  if (!isAutoDefendHold(unit)) return false;
+  return distFromGuard(unit, wx, wz) > getGuardEngageLeash(unit);
+}
+
+function disengageToGuard(unit) {
+  unit.targetUnitId = null;
+  unit.targetBuildingId = null;
+  if (resumeFollowAfterEscort(unit)) return;
+  startMoveToGuardPos(unit);
+}
 function distancePointToBuildingHull(ux, uz, building) {
   const h = (building.size || 4) * 0.5;
   const bx = building.x;
@@ -59,7 +162,7 @@ function approachPointOutsideBuilding(fromX, fromZ, building) {
   if (Pathfinding.isPositionWalkable(snap.x, snap.z)) {
     return { x: snap.x, z: snap.z };
   }
-  const reach = Pathfinding.findNearestReachable(fromX, fromZ, ax, az, 56);
+  const reach = Pathfinding.findNearestReachable(fromX, fromZ, ax, az, 40);
   return reach || { x: ax, z: az };
 }
 
@@ -298,13 +401,22 @@ function unitSkipsCrowdSeparation(unit) {
 }
 
 export function updateMovement(dt) {
+  const movers = [];
   State.units.forEach(unit => {
     if (unit.hp <= 0) return;
-
     if (unit.state === 'moving' || (unit.state === 'attacking' && unit.targetPos)) {
-      moveAlongPath(unit, dt);
+      movers.push(unit);
     }
   });
+  // Player-ordered units path first so factory spawns respond on the first click.
+  movers.sort((a, b) => {
+    const ap = unitHasPlayerPathPriority(a) ? 0 : 1;
+    const bp = unitHasPlayerPathPriority(b) ? 0 : 1;
+    return ap - bp;
+  });
+  for (const unit of movers) {
+    moveAlongPath(unit, dt);
+  }
 
   // Rebuild after moves so separation queries current positions (enemy-only; allies don’t shove).
   rebuildUnitSpatialIndex();
@@ -340,18 +452,44 @@ function moveAlongPath(unit, dt) {
       return;
     }
 
+    if (!canRunPathfindNow(unit)) return;
+    if (!canTakePathfindSlot(unit)) {
+      schedulePathRetry(unit, unitHasPlayerPathPriority(unit) ? 16 : 50);
+      return;
+    }
+
+    notePathfindSlotUsed(unit);
     let path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z);
     if (!path || path.length === 0) {
-      const reachable = Pathfinding.findNearestReachable(
-        unit.x, unit.z, unit.targetPos.x, unit.targetPos.z,
-        52,
-      );
-      if (reachable) {
-        unit.targetPos = { x: reachable.x, z: reachable.z };
-        path = Pathfinding.findPath(unit.x, unit.z, reachable.x, reachable.z);
+      const reachAt = unit._reachRetryAt || 0;
+      if (performance.now() < reachAt) {
+        schedulePathRetry(unit, Math.max(unitHasPlayerPathPriority(unit) ? 16 : 50, reachAt - performance.now()));
+        return;
+      }
+      unit._reachRetryAt = performance.now() + (unitHasPlayerPathPriority(unit) ? 280 : 900);
+      if (canTakePathfindSlot(unit)) {
+        notePathfindSlotUsed(unit);
+        const reachable = Pathfinding.findNearestReachable(
+          unit.x, unit.z, unit.targetPos.x, unit.targetPos.z,
+          unitHasPlayerPathPriority(unit) ? 44 : 36,
+        );
+        if (reachable) {
+          unit.targetPos = { x: reachable.x, z: reachable.z };
+          if (canTakePathfindSlot(unit)) {
+            notePathfindSlotUsed(unit);
+            path = Pathfinding.findPath(unit.x, unit.z, reachable.x, reachable.z);
+          }
+        }
+      } else {
+        schedulePathRetry(unit, unitHasPlayerPathPriority(unit) ? 16 : 80);
+        return;
       }
     }
     if (!path || path.length === 0) {
+      if (unitShouldKeepMoveGoal(unit)) {
+        schedulePathRetry(unit, unitHasPlayerPathPriority(unit) ? 60 : 120);
+        return;
+      }
       unit.targetPos = null;
       unit.path = null;
       unit.pathIndex = 0;
@@ -368,11 +506,13 @@ function moveAlongPath(unit, dt) {
       }
       unit.path = null;
       unit.pathIndex = 0;
+      schedulePathRetry(unit, unitHasPlayerPathPriority(unit) ? 40 : PATH_REQUERY_MS);
       return;
     }
 
     unit.path = Pathfinding.trimPathFromUnit(path, unit.x, unit.z);
     unit.pathIndex = 0;
+    clearPathBlockStreak(unit);
 
     if (typeof window !== 'undefined' && window.RTS_PATH_DEBUG) {
       console.log(
@@ -405,12 +545,14 @@ function moveAlongPath(unit, dt) {
   if (dist < 1.0) {
     unit.pathIndex++;
     if (unit.pathIndex >= unit.path.length) {
-      unit.targetPos = null;
       unit.path = null;
+      unit.pathIndex = 0;
       if (unit.state === 'moving') {
+        unit.targetPos = null;
         unit.state = 'idle';
         unit.playerCommanded = false;
       }
+      // attacking: keep targetPos — enemy may still be out of range; chase continues in combat
     }
     return;
   }
@@ -421,12 +563,12 @@ function moveAlongPath(unit, dt) {
   const nz = unit.z + dz * ratio;
   const res = Pathfinding.resolveNavMotion(unit.x, unit.z, nx, nz);
   if (res.blocked) {
-    unit.path = null;
-    unit.pathIndex = 0;
+    notePathStepBlocked(unit);
     return;
   }
   unit.x = res.x;
   unit.z = res.z;
+  clearPathBlockStreak(unit);
 
   const ox = unit.x;
   const oz = unit.z;
@@ -545,6 +687,112 @@ function startMoveToGuardPos(unit) {
   unit.playerCommanded = false;
 }
 
+function beginEngagingUnit(unit, enemy) {
+  if (!enemy || enemy.hp <= 0) return false;
+  unit.state = 'attacking';
+  unit.targetUnitId = enemy.id;
+  unit.targetBuildingId = null;
+  unit.targetPos = { x: enemy.x, z: enemy.z };
+  unit.path = null;
+  unit.pathIndex = 0;
+  unit._lastPathTime = 0;
+  unit._losLastSeen = performance.now();
+  resetUnitPathThrottle(unit);
+  return true;
+}
+
+/** Harvesters / unarmed units / passive building targets — yield to combat threats. */
+function isLowPriorityUnitTarget(target) {
+  if (!target || target.hp <= 0) return true;
+  if (target.damage <= 0) return true;
+  return target.type === 'harvester' || target.type === 'mobileHq' || target.type === 'engineer';
+}
+
+function isEnemyCombatUnit(enemy) {
+  return enemy && enemy.hp > 0 && enemy.damage > 0 && enemy.category;
+}
+
+function enemyIsAttackingUnit(enemy, victim) {
+  return enemy.state === 'attacking' && enemy.targetUnitId === victim.id;
+}
+
+function shouldPrioritizeAttackerOverCurrentTarget(unit, attacker) {
+  if (!isEnemyCombatUnit(attacker) || attacker.team === unit.team) return false;
+
+  if (unit.targetBuildingId) return true;
+
+  const cur = unit.targetUnitId ? State.units.get(unit.targetUnitId) : null;
+  if (!cur || isLowPriorityUnitTarget(cur)) return true;
+
+  if (enemyIsAttackingUnit(cur, unit)) return false;
+
+  return enemyIsAttackingUnit(attacker, unit);
+}
+
+/** While chewing on a soft target, scan for visible combat units that are shooting us. */
+function tryRetargetForImmediateThreat(unit) {
+  if (unit.state !== 'attacking' || (unit.damage <= 0 && unit.type !== 'engineer')) return false;
+
+  const cur = unit.targetUnitId ? State.units.get(unit.targetUnitId) : null;
+  const softTarget = unit.targetBuildingId != null || isLowPriorityUnitTarget(cur);
+  if (!softTarget) return false;
+
+  const visionR = (unit.visionRange != null ? unit.visionRange : unit.range) * 1.05;
+  let best = null;
+  let bestScore = -Infinity;
+
+  const nearby = unitGrid.queryRadiusFiltered(unit.x, unit.z, visionR, e => {
+    if (!isEnemyCombatUnit(e) || e.team === unit.team) return false;
+    if (!Fog.isVisibleToTeam(unit.team, e.x, e.z)) return false;
+    return Pathfinding.getDistance(unit.x, unit.z, e.x, e.z) <= visionR;
+  });
+
+  for (const e of nearby) {
+    const d = Pathfinding.getDistance(unit.x, unit.z, e.x, e.z);
+    let score = e.damage;
+    if (enemyIsAttackingUnit(e, unit)) score += 500;
+    const weaponR = e.range > 0 ? e.range : 0;
+    if (d <= weaponR * 1.05) score += 120;
+    score -= d * 0.4;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = e;
+    }
+  }
+
+  if (!best || best.id === unit.targetUnitId) return false;
+  if (!enemyIsAttackingUnit(best, unit) && bestScore < 80) return false;
+
+  return beginEngagingUnit(unit, best);
+}
+
+/**
+ * Move orders skip broad auto-acquire, but units must fight back when blocked or in weapon range.
+ */
+function tryEngageWhileOnMoveOrder(unit) {
+  if (!unit.playerCommanded || unit.state !== 'moving') return false;
+  if (unit.damage <= 0 && unit.type !== 'engineer') return false;
+
+  const weaponR = unit.range > 0 ? unit.range : 1.5;
+  const visionR = unit.visionRange != null ? unit.visionRange : unit.range;
+  const scanR = Math.min(Math.max(weaponR, 2.5) * 1.08, visionR * 1.05);
+
+  const enemy = unitGrid.findNearest(unit.x, unit.z, scanR, e => {
+    if (e.team === unit.team || e.hp <= 0 || e.damage <= 0) return false;
+    if (!Fog.isVisibleToTeam(unit.team, e.x, e.z)) return false;
+    return Pathfinding.getDistance(unit.x, unit.z, e.x, e.z) <= scanR;
+  });
+  if (!enemy) return false;
+
+  const dist = Pathfinding.getDistance(unit.x, unit.z, enemy.x, enemy.z);
+  const inWeaponRange = dist <= weaponR * 1.05;
+  const pathBlocked = (unit._pathBlockedStreak || 0) >= 3;
+  if (!inWeaponRange && !pathBlocked) return false;
+
+  return beginEngagingUnit(unit, enemy);
+}
+
 /** Idle units drift from separation or post-fight; march home when no threat in acquisition range. */
 function tryReturnToGuardPosition(unit) {
   if (unit.type === 'engineer') return false;
@@ -585,6 +833,8 @@ export function updateCombat(time, dt) {
       if (!tryReturnToGuardPosition(unit)) {
         autoAcquireTarget(unit);
       }
+    } else if (unit.state === 'moving' && unit.playerCommanded) {
+      tryEngageWhileOnMoveOrder(unit);
     } else if (unit.state === 'moving' && !unit.playerCommanded) {
       autoAcquireTarget(unit);
     }
@@ -663,6 +913,8 @@ function resumeFollowAfterEscort(unit) {
 }
 
 function handleAttackState(unit, time, dt) {
+  if (tryRetargetForImmediateThreat(unit)) return;
+
   let target = null;
 
   // Get the target
@@ -732,8 +984,16 @@ function handleAttackState(unit, time, dt) {
     unit._losLastSeen = time;
   }
 
-  // 1. LOS Chase Expiry: If we can't see the target for 2.5s, give up.
-  if (!canSee && (time - (unit._losLastSeen || 0) > 2500)) {
+  // 1. LOS chase expiry — only after we have actually seen the target once.
+  // (Undefined _losLastSeen used to compare against performance.now() → instant cancel for far units.)
+  const playerExplicitAttack =
+    unit.playerCommanded && (unit.targetUnitId != null || unit.targetBuildingId != null);
+  if (
+    !playerExplicitAttack &&
+    !canSee &&
+    unit._losLastSeen != null &&
+    time - unit._losLastSeen > 2500
+  ) {
     unit.targetUnitId = null;
     unit.targetBuildingId = null;
     if (resumeFollowAfterEscort(unit)) return;
@@ -741,22 +1001,22 @@ function handleAttackState(unit, time, dt) {
     return;
   }
 
-  // 2. Defensive Tethering: Don't stray too far from home base if not player-commanded
-  if (!unit.playerCommanded && unit.guardPos) {
-    const distFromHome = Pathfinding.getDistance(unit.x, unit.z, unit.guardPos.x, unit.guardPos.z);
-    if (distFromHome > 50) { // Hard tether of 50 units
-      unit.targetUnitId = null;
-      unit.targetBuildingId = null;
-      unit.targetPos = { x: unit.guardPos.x, z: unit.guardPos.z };
-      unit.state = 'moving';
-      unit.path = null;
+  // 2. Defensive leash: auto-defenders stay near guardPos; don't hunt fleeing enemies across the map.
+  if (isAutoDefendHold(unit)) {
+    const targetWx = target.x;
+    const targetWz = target.z;
+    if (exceedsGuardLeash(unit, unit.x, unit.z) || exceedsGuardLeash(unit, targetWx, targetWz)) {
+      disengageToGuard(unit);
       return;
     }
   }
 
   if (dist > maxEngageRange) {
-    // Only recalculate path every 500ms when chasing to prevent stutter
-    if (time - (unit._lastPathTime || 0) > 500 || !unit.path) {
+    const staleChase =
+      !unit.targetPos ||
+      !unit.path ||
+      time - (unit._lastPathTime || 0) > 500;
+    if (staleChase) {
       if (unit.targetBuildingId && !target.category) {
         unit.targetPos = approachPointOutsideBuilding(unit.x, unit.z, target);
       } else {
@@ -764,6 +1024,7 @@ function handleAttackState(unit, time, dt) {
       }
       unit.path = null;
       unit._lastPathTime = time;
+      if (unit.playerCommanded) resetUnitPathThrottle(unit);
     }
   } else if (canSee) {
     // In range and can see — stop and fire (or capture)
@@ -795,13 +1056,21 @@ function handleAttackState(unit, time, dt) {
       }
     }
   } else {
-    // Can't see target — move to last known position
-    if (unit.targetBuildingId && !target.category) {
-      unit.targetPos = approachPointOutsideBuilding(unit.x, unit.z, target);
-    } else {
-      unit.targetPos = { x: target.x, z: target.z };
+    // In weapon range but not currently visible — keep chasing last known position.
+    const staleChase =
+      !unit.targetPos ||
+      !unit.path ||
+      time - (unit._lastPathTime || 0) > 500;
+    if (staleChase) {
+      if (unit.targetBuildingId && !target.category) {
+        unit.targetPos = approachPointOutsideBuilding(unit.x, unit.z, target);
+      } else {
+        unit.targetPos = { x: target.x, z: target.z };
+      }
+      unit.path = null;
+      unit._lastPathTime = time;
+      if (unit.playerCommanded) resetUnitPathThrottle(unit);
     }
-    unit.path = null;
   }
 }
 
@@ -853,7 +1122,8 @@ function fireAtTarget(unit, target, time) {
     if (unit.aoe > 0) {
       const cnt = Math.max(4, Math.round(unit.aoe / 2));
       Effects.spawnExplosion(target.x, 0.5, target.z, cnt);
-      State.pushHostFx({ kind: 'aoe_impact', x: target.x, z: target.z, count: cnt });
+      Audio.playExplosionSound(0.22, target.x, target.z);
+      State.pushHostFx({ kind: 'aoe_impact', x: target.x, z: target.z, count: cnt, volume: 0.22 });
     }
   };
 
@@ -872,7 +1142,7 @@ function fireAtTarget(unit, target, time) {
       duration,
       onHit // Passed as 9th argument
     );
-    Audio.playShotSound(unit.type);
+    Audio.playShotSound(unit.type, unit.x, unit.z);
   }
 
   State.pushHostFx({
@@ -907,11 +1177,12 @@ function applyDamage(target, damage, attacker = null) {
         target.path = null;
         target.state = 'moving';
       }
-    } else if (target.damage > 0 && target.state === 'idle') {
-      // Idle combat units should turn and fight back
-      target.state = 'attacking';
-      target.targetUnitId = attacker.id;
-      target.playerCommanded = false;
+    } else if (target.damage > 0 && attacker && State.units.has(attacker.id)) {
+      if (target.state === 'idle' || target.state === 'moving') {
+        beginEngagingUnit(target, attacker);
+      } else if (target.state === 'attacking' && shouldPrioritizeAttackerOverCurrentTarget(target, attacker)) {
+        beginEngagingUnit(target, attacker);
+      }
     }
   } else if (target.category && !attacker) {
     // Taking damage from unseen source (e.g. sniper in fog)
@@ -955,8 +1226,8 @@ function advanceEngineerCapture(building, engineer, dt) {
     building.team = engineer.team;
     State.moveBuildingBetweenPlayers(building.id, prevOwnerId, engineer.ownerId);
     clearUnitsTargetingBuilding(building.id);
-    Audio.playUnitReadySound();
-    State.pushHostFx({ kind: 'capture_complete' });
+    Audio.playUnitReadySound(engineer.x, engineer.z);
+    State.pushHostFx({ kind: 'capture_complete', x: engineer.x, z: engineer.z });
     console.log(`Engineer captured building ${building.type}!`);
     destroyUnit(engineer);
     checkWinCondition();
@@ -964,8 +1235,8 @@ function advanceEngineerCapture(building, engineer, dt) {
   }
 
   if (timeSince(engineer, '_capSoundTime', 0.45, dt)) {
-    Audio.playCaptureTickSound();
-    State.pushHostFx({ kind: 'capture_tick' });
+    Audio.playCaptureTickSound(engineer.x, engineer.z);
+    State.pushHostFx({ kind: 'capture_tick', x: engineer.x, z: engineer.z });
   }
 }
 
@@ -1029,9 +1300,15 @@ export function sellVehiclesForPlayer(unitIds, actingPlayerId) {
     return { ok: false, code: 'no_units' };
   }
   let sold = 0;
+  let sellX;
+  let sellZ;
   for (let i = 0; i < unitIds.length; i++) {
     const u = State.units.get(unitIds[i]);
     if (getSellVehicleFailureCodeForUnit(u, actingPlayerId)) continue;
+    if (sellX == null) {
+      sellX = u.x;
+      sellZ = u.z;
+    }
     const cost = UNIT_TYPES[u.type]?.cost ?? 0;
     const owner = State.players[u.ownerId];
     if (owner) owner.credits += cost;
@@ -1040,9 +1317,9 @@ export function sellVehiclesForPlayer(unitIds, actingPlayerId) {
   }
   if (sold === 0) return { ok: false, code: 'no_sellable_vehicles' };
   if (!State.gameSession.isMultiplayer || State.gameSession.isHost) {
-    Audio.playUnitReadySound();
+    Audio.playUnitReadySound(sellX, sellZ);
   }
-  State.pushHostFx({ kind: 'sell_complete' });
+  State.pushHostFx({ kind: 'sell_complete', x: sellX, z: sellZ });
   return { ok: true, sold };
 }
 
@@ -1124,7 +1401,7 @@ export function destroyUnit(unit, attacker = null, opts = {}) {
   State.removeUnit(unit.id);
   State.selectedUnits.delete(unit.id);
   if (!sold) {
-    Audio.playExplosionSound(0.3);
+    Audio.playExplosionSound(0.3, dx, dz);
     Effects.spawnExplosion(dx, 0.5, dz, 8);
     State.pushHostFx({ kind: 'unit_death', x: dx, z: dz, volume: 0.3, particles: 8 });
   }
@@ -1142,7 +1419,7 @@ function destroyBuilding(building) {
   if (player && player.stats) player.stats.buildingsLost++;
 
   State.removeBuilding(building.id);
-  Audio.playExplosionSound(0.5);
+  Audio.playExplosionSound(0.5, bx, bz);
   Effects.spawnExplosion(bx, 0.5, bz, 12);
   State.pushHostFx({ kind: 'building_death', x: bx, z: bz, volume: 0.5 });
 
@@ -1156,6 +1433,12 @@ function autoAcquireTarget(unit) {
   const visionR = unit.visionRange != null ? unit.visionRange : unit.range;
   /** Auto-pick targets only inside personal vision (same cap as weapon fire). */
   const scanRange = visionR * 1.05;
+  const guardLeash = isAutoDefendHold(unit) ? getGuardEngageLeash(unit) : null;
+
+  const withinGuardLeash = (wx, wz) => {
+    if (guardLeash == null) return true;
+    return distFromGuard(unit, wx, wz) <= guardLeash;
+  };
 
   // Engineers deal no weapon damage — only capture buildings; never chase enemy units here.
   if (unit.type === 'engineer' && unit.damage <= 0) {
@@ -1167,6 +1450,7 @@ function autoAcquireTarget(unit) {
       if (b.team === unit.team) return;
       const dist = Pathfinding.getDistance(unit.x, unit.z, b.x, b.z);
       if (dist >= engScan) return;
+      if (!withinGuardLeash(b.x, b.z)) return;
       if (!Fog.wasExploredByTeam(unit.team, b.x, b.z)) return;
       if (dist < nearestBldgDist) {
         nearestBldgDist = dist;
@@ -1196,7 +1480,8 @@ function autoAcquireTarget(unit) {
         const dJoin = Pathfinding.getDistance(unit.x, unit.z, highestPriorityTarget.x, highestPriorityTarget.z);
         if (
           dJoin <= visionR * 1.05 &&
-          Fog.isVisibleToTeam(unit.team, highestPriorityTarget.x, highestPriorityTarget.z)
+          Fog.isVisibleToTeam(unit.team, highestPriorityTarget.x, highestPriorityTarget.z) &&
+          withinGuardLeash(highestPriorityTarget.x, highestPriorityTarget.z)
         ) {
           targetToJoin = highestPriorityTarget;
         }
@@ -1214,6 +1499,7 @@ function autoAcquireTarget(unit) {
   const enemy = unitGrid.findNearest(unit.x, unit.z, scanRange, e => {
     if (e.team === unit.team || e.hp <= 0) return false;
     if (!Fog.isVisibleToTeam(unit.team, e.x, e.z)) return false;
+    if (!withinGuardLeash(e.x, e.z)) return false;
     return Pathfinding.getDistance(unit.x, unit.z, e.x, e.z) <= visionR * 1.05;
   });
 
@@ -1232,6 +1518,7 @@ function autoAcquireTarget(unit) {
     if (b.team === unit.team) return;
     const dist = Pathfinding.getDistance(unit.x, unit.z, b.x, b.z);
     if (dist > visionR * 1.05) return;
+    if (!withinGuardLeash(b.x, b.z)) return;
     if (!Fog.isVisibleToTeam(unit.team, b.x, b.z)) return;
     if (dist < nearestBldgDist) {
       nearestBldgDist = dist;
@@ -1272,7 +1559,8 @@ export function checkWinCondition() {
 }
 
 // --- Player commands ---
-export function commandMove(unitIds, targetX, targetZ) {
+export function commandMove(unitIds, targetX, targetZ, options = {}) {
+  const playerCommanded = options.playerCommanded !== false;
   const original = new Set(unitIds);
   const allIds = extendUnitIdsWithSquadFollowers(unitIds);
   const unitsArray = allIds.map(id => State.units.get(id)).filter(u => u && u.hp > 0);
@@ -1306,7 +1594,8 @@ export function commandMove(unitIds, targetX, targetZ) {
     }
     unit.path = null;
     unit.pathIndex = 0;
-    unit.playerCommanded = true;
+    unit.playerCommanded = playerCommanded;
+    if (playerCommanded) resetUnitPathThrottle(unit);
   });
 }
 
@@ -1345,7 +1634,11 @@ export function commandAttackUnit(unitIds, targetUnitId) {
     }
     unit.targetPos = { x: target.x, z: target.z };
     unit.path = null;
+    unit.pathIndex = 0;
+    unit._lastPathTime = 0;
+    unit._losLastSeen = performance.now();
     unit.playerCommanded = true;
+    resetUnitPathThrottle(unit);
   });
 }
 
@@ -1373,7 +1666,11 @@ export function commandAttackBuilding(unitIds, targetBuildingId) {
     }
     unit.targetPos = approachPointOutsideBuilding(unit.x, unit.z, target);
     unit.path = null;
+    unit.pathIndex = 0;
+    unit._lastPathTime = 0;
+    unit._losLastSeen = performance.now();
     unit.playerCommanded = true;
+    resetUnitPathThrottle(unit);
   });
 }
 

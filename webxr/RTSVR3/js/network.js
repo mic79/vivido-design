@@ -1521,37 +1521,43 @@ function applyHostFxEventsForClient(fxList) {
           typeof ev.color === 'number' ? ev.color : 0xffffff,
           dur
         );
-        if (ev.unitType) Audio.playShotSound(ev.unitType);
+        if (ev.unitType) Audio.playShotSound(ev.unitType, ev.x, ev.z);
         break;
       }
       case 'unit_death': {
         const n = typeof ev.particles === 'number' ? ev.particles : 8;
         Effects.spawnExplosion(ev.x, 0.5, ev.z, n);
-        Audio.playExplosionSound(typeof ev.volume === 'number' ? ev.volume : 0.3);
+        Audio.playExplosionSound(typeof ev.volume === 'number' ? ev.volume : 0.3, ev.x, ev.z);
         break;
       }
       case 'building_death': {
         Effects.spawnExplosion(ev.x, 0.5, ev.z, 12);
-        Audio.playExplosionSound(typeof ev.volume === 'number' ? ev.volume : 0.5);
+        Audio.playExplosionSound(typeof ev.volume === 'number' ? ev.volume : 0.5, ev.x, ev.z);
         break;
       }
-      case 'aoe_impact':
+      case 'aoe_impact': {
         Effects.spawnExplosion(ev.x, 0.5, ev.z, typeof ev.count === 'number' ? ev.count : 8);
+        Audio.playExplosionSound(
+          typeof ev.volume === 'number' ? ev.volume : 0.22,
+          ev.x,
+          ev.z,
+        );
         break;
+      }
       case 'build_complete':
-        Audio.playBuildCompleteSound();
+        Audio.playBuildCompleteSound(ev.x, ev.z);
         break;
       case 'unit_ready':
-        Audio.playUnitReadySound();
+        Audio.playUnitReadySound(ev.x, ev.z);
         break;
       case 'capture_tick':
-        Audio.playCaptureTickSound();
+        Audio.playCaptureTickSound(ev.x, ev.z);
         break;
       case 'capture_complete':
-        Audio.playUnitReadySound();
+        Audio.playUnitReadySound(ev.x, ev.z);
         break;
       case 'sell_complete':
-        Audio.playUnitReadySound();
+        Audio.playUnitReadySound(ev.x, ev.z);
         break;
       default:
         break;

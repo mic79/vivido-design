@@ -16,6 +16,8 @@ import * as Fog from './fog.js';
 import * as Input from './input.js';
 import * as UI from './ui.js';
 import * as Network from './network.js';
+import * as Pathfinding from './pathfinding.js';
+import * as Audio from './audio.js';
 import { unitGrid, buildingGrid } from './spatial.js';
 
 export const FIXED_DT = 1 / 60;  // 60Hz logic timestep
@@ -41,6 +43,7 @@ function registerEngineLoopComponentOnce() {
       let rawDt = typeof dtMs === 'number' && dtMs > 0 ? dtMs / 1000 : (timestamp - lastTime) / 1000;
       lastTime = timestamp;
       if (rawDt > 1.0) rawDt = 1.0;
+      if (rawDt > MAX_DT) rawDt = MAX_DT;
       if (rawDt <= 0) rawDt = FIXED_DT;
 
       engineStep(timestamp, rawDt);
@@ -101,6 +104,7 @@ function engineStep(timestamp, rawDt) {
   }
 
   Renderer.updateRendering();
+  Audio.updateListenerFromCamera();
   Effects.updateEffects(rawDt);
   UI.updateUI();
 }
@@ -130,6 +134,7 @@ function legacyRafTick(timestamp) {
   let rawDt = (timestamp - lastTime) / 1000;
   lastTime = timestamp;
   if (rawDt > 1.0) rawDt = 1.0;
+  if (rawDt > MAX_DT) rawDt = MAX_DT;
 
   engineStep(timestamp, rawDt);
 }
@@ -197,16 +202,12 @@ function gameUpdate(dt, time) {
   // 6. Passive income
   Buildings.updateIncome(dt);
 
-  // 7. Harvester logic
-  Resources.updateHarvesters(dt);
-
-  // 8. Squad followers mirror leader orders (then pathing runs on everyone)
+  // 7–8. Pathfinding budget: combat movers first, then harvesters (shared A* cap per tick).
   Units.syncSquadFollowersFromLeaders();
-  // 8a. Engineers following damaged friendly vehicles must close into repair range (squad idle mirror alone does not).
   Units.syncEngineerRepairApproach();
-
-  // 8b. Unit movement
+  Pathfinding.resetPathfindBudgetForTick();
   Units.updateMovement(dt);
+  Resources.updateHarvesters(dt);
 
   // 9. Combat
   Units.updateCombat(time, dt);

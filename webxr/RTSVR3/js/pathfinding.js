@@ -10,6 +10,9 @@ import {
   MAP_SIZE,
   NAV_MAX_TRAVERSABLE_SLOPE_DEG,
   OBSTACLE_BUFFER,
+  PATHFIND_SIM_PER_TICK,
+  PATHFIND_PLAYER_PER_TICK,
+  PATHFIND_SPIRAL_MAX_ATTEMPTS,
 } from './config.js';
 import {
   getCraterRimNavLift,
@@ -29,12 +32,48 @@ const navPlateHeightCache = new Float32Array(COLS * ROWS);
 /** Terrain/resources/border/dilation only — copied then building rects applied (fast rebuild). */
 let staticTerrainMask = null;
 
+const GRID_CELLS = COLS * ROWS;
+let astarG = null;
+let astarFrom = null;
+let astarClosed = null;
+let astarStamp = null;
+let astarGen = 1;
+const astarVisited = [];
+
+function ensureAstarBuffers() {
+  if (!astarG || astarG.length !== GRID_CELLS) {
+    astarG = new Float32Array(GRID_CELLS);
+    astarFrom = new Int32Array(GRID_CELLS);
+    astarClosed = new Uint32Array(GRID_CELLS);
+    astarStamp = new Uint32Array(GRID_CELLS);
+  }
+}
+
 const NAV_ZONE = 'rtsvr2_battlefield';
 /** @type {InstanceType<typeof import('three-pathfinding').Pathfinding> | null} */
 let pathfindingEngine = null;
 let navMeshReady = false;
 
 let navRebuildPending = false;
+
+/** Per simulation tick — shared by combat units, harvesters, and reachability spirals. */
+let simPathfindUsed = 0;
+let playerPathfindUsed = 0;
+
+export function resetPathfindBudgetForTick() {
+  simPathfindUsed = 0;
+  playerPathfindUsed = 0;
+}
+
+export function canTakePathfindSlot(playerPriority = false) {
+  if (playerPriority) return playerPathfindUsed < PATHFIND_PLAYER_PER_TICK;
+  return simPathfindUsed < PATHFIND_SIM_PER_TICK;
+}
+
+export function notePathfindSlot(playerPriority = false) {
+  if (playerPriority) playerPathfindUsed++;
+  else simPathfindUsed++;
+}
 
 function worldToCol(wx) { return Math.floor((wx + NAV_GRID_HALF) / CELL); }
 function worldToRow(wz) { return Math.floor((wz + NAV_GRID_HALF) / CELL); }
@@ -412,39 +451,50 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
     return [{ x: colToWorld(ec), z: rowToWorld(er) }];
   }
 
+  ensureAstarBuffers();
+  if (++astarGen === 0xffffffff) {
+    astarStamp.fill(0);
+    astarGen = 1;
+  }
+  const stamp = astarGen;
+  astarVisited.length = 0;
+
   const startKey = sr * COLS + sc;
   const endKey = er * COLS + ec;
 
-  const gScore = new Map();
-  const cameFrom = new Map();
-  gScore.set(startKey, 0);
+  astarG[startKey] = 0;
+  astarFrom[startKey] = -1;
+  astarStamp[startKey] = stamp;
+  astarVisited.push(startKey);
 
   const open = [[heuristic(sc, sr, ec, er), startKey]];
-  const closed = new Set();
 
   const dirs = [
     [-1, 0, 1], [1, 0, 1], [0, -1, 1], [0, 1, 1],
   ];
 
   let iterations = 0;
-  const MAX_ITER = Math.min(COLS * ROWS, 200000);
+  const cellDist = Math.abs(sc - ec) + Math.abs(sr - er);
+  const MAX_ITER = Math.min(
+    GRID_CELLS,
+    Math.max(1200, Math.min(16000, 600 + cellDist * 90)),
+  );
 
   while (open.length > 0) {
     if (++iterations > MAX_ITER) break;
 
     const [, currentKey] = heapPop(open);
-    if (closed.has(currentKey)) continue;
+    if (astarClosed[currentKey] === stamp) continue;
 
     if (currentKey === endKey) {
-      return reconstructPath(cameFrom, endKey);
+      return reconstructPathArray(endKey);
     }
 
-    closed.add(currentKey);
+    astarClosed[currentKey] = stamp;
 
     const cr = Math.floor(currentKey / COLS);
     const cc = currentKey % COLS;
-    const currentG = gScore.get(currentKey);
-    if (currentG === undefined) continue;
+    const currentG = astarG[currentKey];
 
     for (const [dc, dr, cost] of dirs) {
       const nc = cc + dc;
@@ -453,21 +503,23 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
       if (!isWalkable(nc, nr)) continue;
 
       const nKey = nr * COLS + nc;
-      if (closed.has(nKey)) continue;
+      if (astarClosed[nKey] === stamp) continue;
 
       const tentativeG = currentG + cost;
-      const prevG = gScore.get(nKey);
+      const prevG = astarStamp[nKey] === stamp ? astarG[nKey] : Infinity;
 
-      if (prevG === undefined || tentativeG < prevG) {
-        gScore.set(nKey, tentativeG);
-        cameFrom.set(nKey, currentKey);
+      if (tentativeG < prevG) {
+        astarG[nKey] = tentativeG;
+        astarFrom[nKey] = currentKey;
+        astarStamp[nKey] = stamp;
+        astarVisited.push(nKey);
         const f = tentativeG + heuristic(nc, nr, ec, er);
         heapPush(open, [f, nKey]);
       }
     }
   }
 
-  return findPartialPath(cameFrom, gScore, ec, er);
+  return findPartialPathArray(ec, er);
 }
 
 /** three-pathfinding: getGroup + findPath on the nav mesh zone (see library README). */
@@ -629,6 +681,36 @@ export function snapWorldXZToWalkable(wx, wz) {
   const n = findNearestWalkable(c, r);
   if (n) return { x: colToWorld(n.c), z: rowToWorld(n.r) };
   return { x: wx, z: wz };
+}
+
+function reconstructPathArray(endKey) {
+  const path = [];
+  let key = endKey;
+  while (key >= 0) {
+    const r = Math.floor(key / COLS);
+    const c = key % COLS;
+    path.push({ x: colToWorld(c), z: rowToWorld(r) });
+    key = astarFrom[key];
+  }
+  path.reverse();
+  return path;
+}
+
+function findPartialPathArray(targetC, targetR) {
+  let bestKey = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < astarVisited.length; i++) {
+    const key = astarVisited[i];
+    const r = Math.floor(key / COLS);
+    const c = key % COLS;
+    const dist = heuristic(c, r, targetC, targetR);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestKey = key;
+    }
+  }
+  if (bestKey >= 0) return reconstructPathArray(bestKey);
+  return null;
 }
 
 function reconstructPath(cameFrom, endKey) {
@@ -835,9 +917,11 @@ export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius =
   }
 
   const step = CELL * 0.5;
+  let attempts = 0;
   for (let radius = step; radius <= maxRadius; radius += step) {
     const n = Math.max(16, Math.ceil(radius * 2));
     for (let i = 0; i < n; i++) {
+      if (++attempts > PATHFIND_SPIRAL_MAX_ATTEMPTS) return null;
       const angle = (i / n) * Math.PI * 2;
       const tx = targetX + Math.cos(angle) * radius;
       const tz = targetZ + Math.sin(angle) * radius;

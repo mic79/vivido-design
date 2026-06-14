@@ -468,6 +468,19 @@ export function sampleMoonTerrainWorldY(wx, wz) {
   return sampleMoonTerrainWorldYVisual(wx, wz);
 }
 
+/** Per-entity terrain Y cache (2 m cells) — avoids FBM noise every render frame off the central plate. */
+export function sampleMoonTerrainWorldYCached(entity, wx, wz) {
+  const gx = Math.round(wx * 0.5);
+  const gz = Math.round(wz * 0.5);
+  if (entity._tGx === gx && entity._tGz === gz && entity._tY != null) {
+    return entity._tY;
+  }
+  entity._tGx = gx;
+  entity._tGz = gz;
+  entity._tY = sampleMoonTerrainWorldY(wx, wz);
+  return entity._tY;
+}
+
 /** Same noise + sag as the mesh, but **uncapped** world XZ so skirts continue FBM past the playable disk. */
 function sampleMoonTerrainWorldYVisual(wx, wz) {
   if (!Number.isFinite(wx) || !Number.isFinite(wz)) return 0;

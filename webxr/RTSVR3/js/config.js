@@ -479,6 +479,15 @@ export const BOT_SECOND_WARFACTORY_CREDITS = 1150;
 export const BOT_RETALIATION_ENEMY_MULT = 1.25; // Required locals vs logged enemy strength
 export const BOT_DEFEND_RADIUS = 30;
 export const BOT_DEFENSE_RELEASE_SCOUT_DIST = 44; // HQ→threat: farther than this, keep scouts on exploration
+/** Auto-defend leash from guardPos (hold point): scaled per unit vision/range in units.js */
+export const GUARD_CHASE_LEASH_MULT = 1.1;
+export const GUARD_CHASE_LEASH_PAD_M = 4;
+/** Shared synchronous A* budget per 60 Hz sim tick (combat + harvesters). */
+export const PATHFIND_SIM_PER_TICK = 10;
+/** Extra budget for player-issued move/attack orders so clicks stay responsive. */
+export const PATHFIND_PLAYER_PER_TICK = 20;
+/** Cap findPath probes inside findNearestReachable spirals (bot retaliation used to fire hundreds). */
+export const PATHFIND_SPIRAL_MAX_ATTEMPTS = 12;
 export const BOT_HARVESTER_EXPLORE_PER_TICK = 6;
 export const BOT_HARVESTER_EXPLORE_THROTTLE_SEC = 2.2;
 export const BOT_EXPLORE_MIN_SEP = 22;           // Min distance between parallel explore targets (world units)
@@ -523,6 +532,10 @@ export const NET_HOST_PAUSE_AUTO_RESUME_MS = 30000;
 // - submarine sonar = building construction complete + unit production ready
 // - metal-hit-* reserved for future real armor/ricochet hits only (not wired for capture/build)
 export const AUDIO_BASE_PATH = './audio/';
+/** Web Audio PannerNode — world units (m). */
+export const AUDIO_SPATIAL_REF_DISTANCE = 14;
+export const AUDIO_SPATIAL_MAX_DISTANCE = 160;
+export const AUDIO_SPATIAL_ROLLOFF = 1.15;
 export const SOUND_EFFECTS = {
   rifleShot:   'blaster-shot-229313.mp3',
   rocketShot:  'burst-128424-shorter.mp3',
