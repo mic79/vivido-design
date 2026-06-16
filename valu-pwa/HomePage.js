@@ -696,12 +696,19 @@ export default {
 
     const yearlyBalanceTable = computed(() => {
       const year = balanceTableYear.value;
-      const activeAccounts = (props.accounts || [])
-        .filter(a => a.discontinued !== 'true')
+      const accountIdsWithHistoryInYear = new Set(
+        balanceHistory.value.filter(h => h.year === year).map(h => h.accountId)
+      );
+
+      const tableAccounts = (props.accounts || [])
+        .filter(a => {
+          if (a.discontinued !== 'true') return true;
+          return accountIdsWithHistoryInYear.has(a.id);
+        })
         .slice()
         .sort((a, b) => (parseInt(a.order) || 0) - (parseInt(b.order) || 0));
 
-      const rows = activeAccounts.map(acc => {
+      const rows = tableAccounts.map(acc => {
         const months = [];
         for (let m = 1; m <= 12; m++) {
           const entry = balanceHistory.value.find(
@@ -709,7 +716,12 @@ export default {
           );
           months.push(entry !== undefined ? entry.balance : null);
         }
-        return { id: acc.id, name: acc.name, currency: acc.currency || baseCurrency.value, months };
+        return {
+          id: acc.id,
+          name: formatAccountDisplayName(acc),
+          currency: acc.currency || baseCurrency.value,
+          months,
+        };
       });
 
       const totals = [];
