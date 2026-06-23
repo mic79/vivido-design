@@ -4316,6 +4316,7 @@ function setGameplayHUD(isPlaying) {
           if (!this.rig) return;
           
           const dt = Math.min(deltaTime / 1000, 0.033); // Cap at 30fps for stability
+          this._tetherDt = dt; // shared with the player-grab rigid anchor
           
           // Check if stunned and disable controls
           if (this.isStunned) {
@@ -4541,13 +4542,22 @@ function setGameplayHUD(isPlaying) {
             
             // Don't add to physics world - we'll handle this manually
             
+            // Capture the rigid anchor: the hand's offset from the grabbed body AT GRAB TIME.
+            // Each frame we keep this exact offset, so the grabbed point stays glued under the hand
+            // with zero spring lag (the grabber rides along with the target).
+            const grabbedPos0 = new THREE.Vector3(grabbedBody.position.x, grabbedBody.position.y, grabbedBody.position.z);
+            const anchorOffset = handPos.clone().sub(grabbedPos0);
+
             // Store constraint and hand body for cleanup
             this.playerGrabConstraints[handKey] = {
               constraint: constraint,
               handBody: handBody,
               grabbedBody: grabbedBody,
               playerId: playerId,
-              handKey: handKey // Store hand key for tether break functionality
+              handKey: handKey, // Store hand key for tether break functionality
+              anchorOffset: anchorOffset,
+              prevGrabbedPos: grabbedPos0.clone(),
+              targetEl: playerTarget // exact collider grabbed (markers share a data-player-id)
             };
           }
           
@@ -4627,7 +4637,17 @@ function setGameplayHUD(isPlaying) {
         },
         
         updatePlayerGrabConstraints: function() {
-          // Update physics constraints to follow hand movement
+          // Count active rigid tethers so two-handed grabs split the correction (avoids doubling).
+          let activeCount = 0;
+          ['left', 'right'].forEach(handKey => {
+            const ci = this.playerGrabConstraints[handKey];
+            if (ci && ci.handBody && ci.constraint && ci.constraint.type === 'custom-tether') activeCount++;
+          });
+
+          // Measure the rig's true velocity across the frame so a throw on release carries the
+          // momentum you actually built up (riding along + your own hand/body motion).
+          const rigBefore = activeCount ? this.rig.object3D.position.clone() : null;
+
           ['left', 'right'].forEach(handKey => {
             const constraintInfo = this.playerGrabConstraints[handKey];
             if (constraintInfo && constraintInfo.handBody) {
@@ -4638,92 +4658,79 @@ function setGameplayHUD(isPlaying) {
                 hand.object3D.getWorldPosition(handPos);
                 constraintInfo.handBody.position.set(handPos.x, handPos.y, handPos.z);
                 
-                // Handle custom tether system for bot grabs
+                // Handle custom tether system for bot/player grabs
                 if (constraintInfo.constraint.type === 'custom-tether') {
-                  this.updateCustomTether(constraintInfo, handPos);
+                  this.updateCustomTether(constraintInfo, handPos, activeCount || 1);
                 }
               }
             }
           });
-        },
-        
-        updateCustomTether: function(constraintInfo, handPos) {
-          const grabbedBody = constraintInfo.grabbedBody;
-          const playerId = constraintInfo.playerId;
-          
-          // Store previous position for velocity calculation
-          if (!constraintInfo.prevGrabbedPos) {
-            constraintInfo.prevGrabbedPos = new THREE.Vector3();
-          }
-          const prevGrabbedPos = constraintInfo.prevGrabbedPos.clone();
-          
-          // Update physics body position to match the actual player/bot position
-          let grabbedVelocity = new THREE.Vector3();
-          if (playerId.startsWith('bot_')) {
-            // For bots, get velocity from physics body
-            if (grabbedBody.velocity) {
-              grabbedVelocity.set(grabbedBody.velocity.x, grabbedBody.velocity.y, grabbedBody.velocity.z);
+
+          if (rigBefore) {
+            // velocity = how far the rig actually moved this frame / dt, lightly smoothed against jitter.
+            const dt = Math.max(this._tetherDt || (1 / 72), 1e-3);
+            const measured = this.rig.object3D.position.clone().sub(rigBefore).divideScalar(dt);
+            if (measured.length() < 50) {
+              this.velocity.lerp(measured, 0.5); // this.velocity is what release inherits as the throw
+            }
+
+            // The rigid anchor just moved the rig to follow the target, which can drive the head into a
+            // wall. Re-resolve environment collision at full strength so the world still blocks the
+            // grabber while held (otherwise body-vs-environment collision appears disabled).
+            const camera = document.querySelector('[camera]');
+            if (camera) {
+              const headPos = new THREE.Vector3();
+              camera.object3D.getWorldPosition(headPos);
+              const pushOut = this.checkPointCollision(headPos, 0.25, 'head');
+              if (pushOut.length() > 0) {
+                this.rig.object3D.position.add(pushOut);
+                const n = pushOut.clone().normalize();
+                this.velocity.sub(this.velocity.clone().projectOnVector(n)); // kill velocity into the wall
+              }
             }
           } else {
-            // For human players, update the temporary physics body to match remote player position
-            const playerTarget = document.querySelector(`[data-player-id="${playerId}"]`);
-            if (playerTarget) {
+            this._grabRigPrevPos = null;
+          }
+        },
+        
+        // Rigid kinematic anchor: keep the grabbed point glued under the hand with the offset captured
+        // at grab time. No spring/oscillation/lag — the grabber rides along with the target. O(1) math.
+        updateCustomTether: function(constraintInfo, handPos, weight) {
+          const grabbedBody = constraintInfo.grabbedBody;
+          const playerId = constraintInfo.playerId;
+
+          // Keep the grabbed body's position synced to the live source.
+          // Bots: their CANNON body is already the live position. Remote players: follow the exact
+          // collider that was grabbed (markers share a data-player-id, so use the stored element).
+          if (!playerId.startsWith('bot_')) {
+            const playerTarget = constraintInfo.targetEl || document.querySelector(`[data-player-id="${playerId}"]`);
+            if (playerTarget && playerTarget.object3D) {
               const currentPos = new THREE.Vector3();
               playerTarget.object3D.getWorldPosition(currentPos);
               grabbedBody.position.set(currentPos.x, currentPos.y, currentPos.z);
-              
-              // Calculate grabbed player's velocity from position change
-              if (constraintInfo.prevGrabbedPos.length() > 0) {
-                const deltaTime = 1/60; // Assume 60fps for velocity calculation
-                grabbedVelocity.subVectors(currentPos, prevGrabbedPos).divideScalar(deltaTime);
-              }
-              constraintInfo.prevGrabbedPos.copy(currentPos);
             }
           }
-          
+
           const grabbedPos = new THREE.Vector3(grabbedBody.position.x, grabbedBody.position.y, grabbedBody.position.z);
-          const distance = handPos.distanceTo(grabbedPos);
-          
-          // Improved tether system with damping and velocity matching
-          const targetDistance = 0.15; // Desired distance to maintain (15cm)
-          const maxTetherDistance = 1.5; // Maximum allowed distance before breaking
-          
-          if (distance > targetDistance) {
-            const direction = new THREE.Vector3().subVectors(grabbedPos, handPos).normalize();
-            const distanceError = distance - targetDistance;
-            
-            // Break tether if too far (prevents infinite stretching)
-            if (distance > maxTetherDistance) {
-              // Force release the grab
-              const handKey = constraintInfo.handKey || 'left'; // Fallback
-              this.releasePlayerGrab(handKey);
-              return;
-            }
-            
-            // Calculate desired velocity to reach target position
-            const springForce = Math.min(distanceError * 8.0, 15.0); // Capped spring force
-            const targetVelocity = direction.clone().multiplyScalar(springForce);
-            
-            // Add the grabbed player's velocity for smooth following
-            targetVelocity.add(grabbedVelocity.clone().multiplyScalar(0.8));
-            
-            // Apply damping to current velocity to reduce oscillation
-            const dampingFactor = 0.85; // Reduce existing velocity by 15%
-            this.velocity.multiplyScalar(dampingFactor);
-            
-            // Smoothly blend toward target velocity instead of adding force
-            const blendFactor = 0.3; // How quickly to adjust velocity
-            const velocityCorrection = targetVelocity.clone().sub(this.velocity).multiplyScalar(blendFactor);
-            
-            // Apply the smooth velocity correction
-            this.velocity.add(velocityCorrection);
-            
-            // Limit maximum tether velocity to prevent extreme movements
-            const maxTetherVelocity = 20.0; // m/s
-            if (this.velocity.length() > maxTetherVelocity) {
-              this.velocity.normalize().multiplyScalar(maxTetherVelocity);
-            }
+
+          // Where the hand should be to keep the original anchor offset on the target.
+          const desiredHandPos = grabbedPos.clone().add(constraintInfo.anchorOffset);
+          const correction = desiredHandPos.sub(handPos);
+
+          // Detach if the grabber is being held away from the anchor by significant force — e.g. an
+          // environment wall (resolved just before this) stops the grabber while the target keeps moving,
+          // so the required correction grows. Mirrors the static-surface force-break behavior.
+          const maxTetherDistance = 0.5;
+          if (correction.length() > maxTetherDistance) {
+            const handEl = constraintInfo.handKey === 'right' ? this.rightHand : this.leftHand;
+            this.velocity.multiplyScalar(0.8);
+            if (handEl) { this.releasePlayerGrab(handEl); this.playHapticFeedback(handEl, 0.15, 80); }
+            return;
           }
+
+          // Move the rig rigidly so the grabbed anchor stays exactly under the hand (split if two-handed).
+          // The rig's resulting motion is measured in updatePlayerGrabConstraints to produce release momentum.
+          this.rig.object3D.position.add(correction.multiplyScalar(1 / (weight || 1)));
         },
         
         sendPlayerGrabMessage: function(targetPlayerId, isGrabbing) {
@@ -4919,9 +4926,11 @@ function setGameplayHUD(isPlaying) {
           
           // Apply collision response by moving rig and dampening velocity
           if (totalCollisionResponse.length() > 0) {
-            // NEW: Smart collision response based on grab context
-            const leftGrabbing = this.isGrabbing.left && this.grabInfo.left && !this.grabInfo.left.isBall;
-            const rightGrabbing = this.isGrabbing.right && this.grabInfo.right && !this.grabInfo.right.isBall;
+            // NEW: Smart collision response based on grab context.
+            // Player grabs are excluded here: the environment must still fully collide with the grabber
+            // while they ride a bot/player (this reduction is only meant for static-surface grabs).
+            const leftGrabbing = this.isGrabbing.left && this.grabInfo.left && !this.grabInfo.left.isBall && !this.grabInfo.left.isPlayer;
+            const rightGrabbing = this.isGrabbing.right && this.grabInfo.right && !this.grabInfo.right.isBall && !this.grabInfo.right.isPlayer;
             const totalStaticGrabs = (leftGrabbing ? 1 : 0) + (rightGrabbing ? 1 : 0);
             
             let collisionStrength = 1.0;
@@ -6292,6 +6301,226 @@ function setGameplayHUD(isPlaying) {
         }
       });
 
+      // Distance Grid Component - adds a subtle world-space 10cm grid onto an object's
+      // surface. Unlike the wireframe-overlay contour lines (flat/emissive), these lines
+      // are baked into the lit MeshStandardMaterial via onBeforeCompile, so they are only
+      // faintly visible from ambient light by default and brighten as they catch / reflect
+      // the point lights from the glowing balls.
+      AFRAME.registerComponent('distance-grid', {
+        schema: {
+          spacing:   { type: 'number', default: 1.0 },        // grid spacing in meters (1m)
+          thickness: { type: 'number', default: 0.01 },       // line width in METERS (world-space, so
+                                                              // lines shrink with perspective at range)
+          color:     { type: 'color',  default: '#eaf2ff' },  // subtle cool light-grey
+          strength:  { type: 'number', default: 0.1 },        // line brightness: fraction of the direct
+                                                              // light the grid lines reflect (0..1)
+          emissive:  { type: 'number', default: 0.01 },      // faint self-lit baseline so lines stay
+                                                              // slightly visible on dark surfaces (far
+                                                              // weaker than the emissive contour lines)
+          surfaceLight: { type: 'number', default: 0.0 },     // how much the NON-grid surface reflects
+                                                              // light: 0 = matte/black off the lines so
+                                                              // only the grid lines catch the light
+          dotSize:    { type: 'number', default: 0.05 },      // filled dot diameter in meters (world-space)
+          dotSpacing: { type: 'number', default: 0.10 },      // dot centre-to-centre spacing in meters
+                                                              // (0.05 dot + 0.05 gap). Dots are reflective
+                                                              // only, like the lines (never emissive).
+          dotStrength: { type: 'number', default: 0.35 },     // dot brightness as a fraction of the line
+                                                              // brightness (lower = subtler dots)
+          dotFade:    { type: 'number', default: 2.5 }        // distance falloff exponent for dots: higher
+                                                              // makes far-away dots dissolve much sooner
+        },
+
+        init: function() {
+          this.hooked = [];                                   // uniform sets for live updates
+          this.ensureHooks = this.ensureHooks.bind(this);
+          this._acc = 0;
+          this.ensureHooks();
+          this.el.addEventListener('object3dset', this.ensureHooks);
+          this.el.addEventListener('componentchanged', (e) => {
+            if (e.detail && e.detail.name === 'material') this.ensureHooks();
+          });
+        },
+
+        // All grid parameters are uniforms, so runtime tweaks apply live without recompiling.
+        update: function() {
+          const c = new THREE.Color(this.data.color);
+          this.hooked.forEach((u) => {
+            u.uGridSpacing.value = this.data.spacing;
+            u.uGridThickness.value = this.data.thickness;
+            u.uGridColor.value.copy(c);
+            u.uGridStrength.value = this.data.strength;
+            u.uGridEmissive.value = this.data.emissive;
+            u.uGridSurfaceLight.value = this.data.surfaceLight;
+            u.uDotSize.value = this.data.dotSize;
+            u.uDotSpacing.value = this.data.dotSpacing;
+            u.uDotStrength.value = this.data.dotStrength;
+            u.uDotFade.value = this.data.dotFade;
+          });
+        },
+
+        // Self-healing: A-Frame's material system re-creates / resets material.onBeforeCompile
+        // (back to an empty default) AFTER we install ours, which silently dropped the grid. So
+        // we re-verify the hook every so often and re-install it whenever it has been clobbered.
+        tick: function(t, dt) {
+          this._acc += (dt || 0);
+          if (this._acc < 400) return;   // ~2.5x/sec is plenty; the check is cheap
+          this._acc = 0;
+          this.ensureHooks();
+        },
+
+        buildHook: function(u) {
+          return function(shader) {
+            Object.assign(shader.uniforms, u);
+            shader.vertexShader = shader.vertexShader
+              .replace('#include <common>',
+                '#include <common>\nvarying vec3 vGridWorldPos;\nvarying vec3 vGridWorldNormal;')
+              .replace('#include <begin_vertex>',
+                '#include <begin_vertex>\n  vGridWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;')
+              .replace('#include <beginnormal_vertex>',
+                '#include <beginnormal_vertex>\n  vGridWorldNormal = mat3(modelMatrix) * objectNormal;');
+            shader.fragmentShader = shader.fragmentShader
+              .replace('#include <common>',
+                '#include <common>\n' +
+                'varying vec3 vGridWorldPos;\n' +
+                'varying vec3 vGridWorldNormal;\n' +
+                'uniform float uGridSpacing;\n' +
+                'uniform float uGridThickness;\n' +
+                'uniform vec3 uGridColor;\n' +
+                'uniform float uGridStrength;\n' +
+                'uniform float uGridEmissive;\n' +
+                'uniform float uGridSurfaceLight;\n' +
+                'uniform float uDotSize;\n' +
+                'uniform float uDotSpacing;\n' +
+                'uniform float uDotStrength;\n' +
+                'uniform float uDotFade;\n' +
+                'float gridPlane(vec2 uv, float widthUv) {\n' +
+                '  // World-space line width: widthUv is the line thickness in grid-cell units, so the\n' +
+                '  // line keeps a fixed REAL-WORLD size and shrinks with perspective when far away\n' +
+                '  // (instead of staying a constant screen-pixel width and looking fatter at range).\n' +
+                '  vec2 fw = fwidth(uv) + 1e-6;\n' +
+                '  vec2 d = abs(fract(uv - 0.5) - 0.5);\n' +     // distance to nearest line, in cells
+                '  float h = widthUv * 0.5;\n' +                 // half line width, in cells
+                '  vec2 cov2 = vec2(1.0) - smoothstep(vec2(h), vec2(h) + fw, d);\n' +
+                '  float cov = max(cov2.x, cov2.y);\n' +         // union of the two axis lines
+                '  // Once a line is thinner than a pixel (far away) fade it out rather than clamping\n' +
+                '  // it to a 1px-wide line, so distant lines dissolve cleanly and never look fatter.\n' +
+                '  float fade = clamp(h / max(fw.x, fw.y), 0.0, 1.0);\n' +
+                '  return cov * fade;\n' +
+                '}\n' +
+                'float boltGrid(vec3 p, vec3 n) {\n' +
+                '  vec3 c = p / uGridSpacing;\n' +
+                '  float widthUv = uGridThickness / uGridSpacing;\n' +   // world metres -> cell units
+                '  vec3 w = pow(abs(normalize(n)), vec3(4.0));\n' +
+                '  w /= max(w.x + w.y + w.z, 1e-5);\n' +
+                '  float gx = gridPlane(c.yz, widthUv);\n' +
+                '  float gy = gridPlane(c.xz, widthUv);\n' +
+                '  float gz = gridPlane(c.xy, widthUv);\n' +
+                '  return clamp(w.x * gx + w.y * gy + w.z * gz, 0.0, 1.0);\n' +
+                '}\n' +
+                'float dotPlane(vec2 uv, float radiusCells) {\n' +
+                '  // Filled circle (no outline) centred in each cell, constant REAL-WORLD radius so it\n' +
+                '  // shrinks with perspective.\n' +
+                '  vec2 fw = fwidth(uv) + 1e-6;\n' +
+                '  float aa = max(fw.x, fw.y);\n' +
+                '  float dist = length(fract(uv) - 0.5);\n' +       // distance from cell centre, in cells
+                '  // ~1px anti-aliased edge centred ON the radius, so the dot keeps its true size and\n' +
+                '  // never blooms outward to merge with its neighbours.\n' +
+                '  float cov = clamp((radiusCells - dist) / aa + 0.5, 0.0, 1.0);\n' +
+                '  // Distance falloff: once a dot drops below a pixel it fades out. Raising it to\n' +
+                '  // uDotFade makes far-away dots dissolve much sooner so they do not pack into a\n' +
+                '  // bright field at range.\n' +
+                '  float fade = pow(clamp(radiusCells / aa, 0.0, 1.0), uDotFade);\n' +
+                '  return cov * fade;\n' +
+                '}\n' +
+                'float boltDots(vec3 p, vec3 n) {\n' +
+                '  // Project the dots in the surface own plane (a tangent frame from the face normal)\n' +
+                '  // so they are ONE set of round dots on every face. Triplanar summing instead drew\n' +
+                '  // three differently-angled grids at once on slanted faces -> overlapping ovals.\n' +
+                '  vec3 N = normalize(n);\n' +
+                '  vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n' +
+                '  vec3 T = normalize(cross(up, N));\n' +
+                '  vec3 B = cross(N, T);\n' +
+                '  vec2 uv = vec2(dot(p, T), dot(p, B)) / uDotSpacing;\n' +
+                '  float r = (uDotSize * 0.5) / uDotSpacing;\n' +   // dot radius in cell units
+                '  return dotPlane(uv, r);\n' +
+                '}\n')
+              .replace('#include <color_fragment>',
+                '#include <color_fragment>\n' +
+                '  float boltG = boltGrid(vGridWorldPos, vGridWorldNormal);\n' +
+                '  float boltD = boltDots(vGridWorldPos, vGridWorldNormal) * uDotStrength;\n' +
+                '  float boltMask = clamp(max(boltG, boltD), 0.0, 1.0);\n' +
+                '  diffuseColor.rgb = mix(diffuseColor.rgb, uGridColor, boltMask);\n')
+              .replace('#include <emissivemap_fragment>',
+                '#include <emissivemap_fragment>\n' +
+                '  totalEmissiveRadiance += uGridColor * (boltG * uGridEmissive);\n')
+              // Gate the surface's reflected light by grid coverage: the bare faces reflect only
+              // uGridSurfaceLight (0 = matte/non-reflective) while the grid lines reflect fully, so
+              // only the lines catch the light from the glowing balls.
+              .replace('#include <lights_fragment_end>',
+                '#include <lights_fragment_end>\n' +
+                '  // Brightness control. The bare faces reflect uGridSurfaceLight (0 = matte black)\n' +
+                '  // and the grid lines reflect uGridStrength of the DIRECT light (the glowing balls\n' +
+                '  // + scene light). Indirect/ambient light is uniform everywhere, so it is gated the\n' +
+                '  // same as the bare surface to stop the lines from glowing evenly across the arena.\n' +
+                '  float gridLit = mix(uGridSurfaceLight, uGridStrength, boltMask);\n' +
+                '  reflectedLight.directDiffuse    *= gridLit;\n' +
+                '  reflectedLight.directSpecular   *= gridLit;\n' +
+                '  reflectedLight.indirectDiffuse  *= uGridSurfaceLight;\n' +
+                '  reflectedLight.indirectSpecular *= uGridSurfaceLight;\n');
+          };
+        },
+
+        ensureHooks: function() {
+          const mesh = this.el.getObject3D('mesh');
+          if (!mesh) return;
+          const data = this.data;
+          mesh.traverse((node) => {
+            if (!node.isMesh || !node.material) return;
+            const materials = Array.isArray(node.material) ? node.material : [node.material];
+            materials.forEach((mat) => {
+              if (!mat) return;
+
+              // ROOT CAUSE of the grid never appearing: A-Frame clones these materials during
+              // setup, and THREE.Material.copy() clones userData via JSON.parse(JSON.stringify()).
+              // That silently DROPS our hook function and corrupts the THREE.Color uniforms into
+              // {} on the clone, so the live material ended up with broken uniforms and no hook.
+              // Detect our setup by whether gridHook is still an actual function (functions don't
+              // survive the JSON clone) and rebuild everything fresh whenever it's been lost.
+              if (typeof mat.userData.gridHook !== 'function') {
+                const u = {
+                  uGridSpacing:   { value: data.spacing },
+                  uGridThickness: { value: data.thickness },
+                  uGridColor:     { value: new THREE.Color(data.color) },
+                  uGridStrength:  { value: data.strength },
+                  uGridEmissive:  { value: data.emissive },
+                  uGridSurfaceLight: { value: data.surfaceLight },
+                  uDotSize:       { value: data.dotSize },
+                  uDotSpacing:    { value: data.dotSpacing },
+                  uDotStrength:   { value: data.dotStrength },
+                  uDotFade:       { value: data.dotFade }
+                };
+                mat.userData.gridUniforms = u;
+                mat.userData.gridHook = this.buildHook(u);
+                mat.userData.gridKey = 'distance-grid-' + (AFRAME.__gridProgramId = (AFRAME.__gridProgramId || 0) + 1);
+                mat.userData.gridReHooks = 0;
+                this.hooked.push(u);
+              }
+
+              // Install our hook and force a recompile whenever it isn't currently active (fresh or
+              // clobbered material). Capped so a pathological reset loop can't recompile forever.
+              const hook = mat.userData.gridHook;
+              if (mat.onBeforeCompile !== hook && mat.userData.gridReHooks < 30) {
+                mat.onBeforeCompile = hook;
+                const key = mat.userData.gridKey;
+                mat.customProgramCacheKey = function() { return key; };
+                mat.needsUpdate = true;
+                mat.userData.gridReHooks++;
+              }
+            });
+          });
+        }
+      });
+
       // Zero-G Bot Component - AI opponent for singleplayer
       AFRAME.registerComponent('zerog-bot', {
         schema: {
@@ -6352,6 +6581,32 @@ function setGameplayHUD(isPlaying) {
           this.isGrabbingBall = false; // Track if bot is currently grabbing the ball
           this.ballStealTimeout = null; // Timeout after ball is stolen from bot
           this.lastStealTime = 0; // Track when bot last stole a ball (to prevent rapid stealing)
+
+          // Boost system (mirrors the player's speed boost): a periodic forward burst the bot
+          // fires only when it's far (>10m) from its current target, to close long gaps faster.
+          this._targetDistance = 0;        // distance to current target, refreshed by navigation
+          this.boostMinDistance = 10;      // only boost when target is farther than this (meters)
+          this.boostChaseDistance = 5;     // lower threshold when chasing an opponent who holds the ball
+          this.boostForce = 5;             // impulse strength, same as the player's speedBoostForce
+          this.boostSpeedMult = 1.75;      // temporary speed-cap multiplier so the burst isn't clamped
+          this.boostCooldown = 4000;       // ms between boosts
+          this.lastBoostTime = 0;          // when the bot last boosted
+          this.boostUntil = 0;             // raised speed-cap window end time
+
+          // Air-brake system: when closing in on the ball, kill sideways/orbiting momentum so the bot
+          // settles onto it directly instead of circling past it with leftover speed.
+          this.brakeRange = 2.0;           // start braking within this distance of the ball (meters)
+
+          // Team play: support positioning + passing.
+          this.supportStandoff = 3.0;      // hold this far in front of the opponent goal while supporting
+          this.supportArrive = 1.5;        // consider "in position" within this distance of the support spot
+          this.passAdvantage = 3.0;        // only pass if a teammate is this much closer to the goal (m)
+          this.minPassDistance = 2.0;      // don't pass to a teammate basically on top of us (m)
+          this.maxPassDistance = 30.0;     // don't attempt passes longer than this (m)
+          this.passInterval = 1200;        // min ms between pass attempts
+          this._lastPassTime = 0;
+          this.passEvalInterval = 300;     // throttle the (somewhat costly) pass evaluation/LOS check
+          this._lastPassEval = 0;
           
           // Create physics body for the bot
           const shape = new CANNON.Sphere(0.2);
@@ -6374,8 +6629,8 @@ function setGameplayHUD(isPlaying) {
           // Store reference
           this.body.el = this.el;
           
-          // Create direction indicator for debugging (2m forward-facing line)
-          this.createDirectionIndicator();
+          // Direction indicator (2m forward-facing line) disabled per request.
+          // this.createDirectionIndicator();
           
           // Initialize position
           this.generateNewTargetPosition();
@@ -6615,12 +6870,22 @@ function setGameplayHUD(isPlaying) {
           // CRITICAL FIX: Add to PERSISTENT velocity (same as humans)
           if (totalThrust.length() > 0) {
             this.velocity.add(totalThrust); // Add to persistent velocity accumulator
-            
-            // Cap maximum velocity (reduced when carrying ball)
-            const maxSpeed = this.isGrabbingBall ? this.data.maxSpeed * 0.8 : this.data.maxSpeed; // 80% max speed when carrying
-            if (this.velocity.length() > maxSpeed) {
-              this.velocity.normalize().multiplyScalar(maxSpeed);
-            }
+          }
+          
+          // Cheap stuck-escape: if thrusting toward the target without progress, strafe sideways briefly.
+          this.maybeEscapeStuck(dt);
+
+          // Boost when far from the target: a periodic forward burst to close long gaps faster.
+          this.maybeBoost();
+
+          // Air-brake when near the ball: shed orbiting momentum so the bot approaches directly.
+          this.maybeBrake(dt);
+
+          // Cap maximum velocity (reduced when carrying ball, raised briefly while boosting)
+          let maxSpeed = this.isGrabbingBall ? this.data.maxSpeed * 0.8 : this.data.maxSpeed; // 80% max speed when carrying
+          if (Date.now() < this.boostUntil) maxSpeed *= this.boostSpeedMult; // let the boost burst persist
+          if (this.velocity.length() > maxSpeed) {
+            this.velocity.normalize().multiplyScalar(maxSpeed);
           }
           
           // Apply damping to persistent velocity (same as humans)
@@ -6637,6 +6902,136 @@ function setGameplayHUD(isPlaying) {
           
           // CRITICAL: Add custom collision detection for surfaces (same as player system)
           this.checkCustomCollisionWithSurfaces();
+        },
+
+        // Periodic forward boost, mirroring the player's speed boost. Fires only when the bot is far
+        // (> boostMinDistance) from its current target and actively heading toward it, on a cooldown.
+        // The boost is an additive impulse along the target direction; the speed cap is temporarily
+        // raised (see applyThrusterForces) so the burst isn't immediately clamped back to maxSpeed.
+        maybeBoost: function() {
+          if (!this.body) return;
+          // Don't boost while carrying the capture ball (mirrors the player's restriction).
+          if (this.isGrabbingBall) return;
+          // Only boost while actively thrusting toward the target.
+          if (!(this.thrusterActive.left || this.thrusterActive.right)) return;
+          if (this.targetDirection.lengthSq() === 0) return;
+          const now = Date.now();
+          if (now - this.lastBoostTime < this.boostCooldown) return; // gate the DOM lookup below by cooldown
+
+          // Use a closer threshold when chasing an opponent who currently holds the ball, so the bot
+          // boosts to catch up sooner instead of waiting until it's 10m behind.
+          let minDist = this.boostMinDistance;
+          const captureBall = document.querySelector('#capture-ball');
+          if (captureBall && captureBall.components['zerog-ball'] && captureBall.components['zerog-ball'].isGrabbed) {
+            minDist = this.boostChaseDistance;
+          }
+          if (this._targetDistance <= minDist) return;
+
+          this.velocity.add(this.targetDirection.clone().normalize().multiplyScalar(this.boostForce));
+          this.lastBoostTime = now;
+          this.boostUntil = now + 1500; // raised speed-cap window so the burst carries
+        },
+
+        // Air-brake near the ball. When a bot builds momentum toward the ball but just misses, leftover
+        // SIDEWAYS speed makes it orbit/circle past the ball. Within brakeRange we split the velocity
+        // into a toward-ball part and a sideways part, and brake ONLY the sideways (circling) part.
+        // The toward-ball momentum is left fully intact, so the bot still approaches a stationary ball
+        // at full speed and can keep pace with a moving ball it's chasing. Only active while chasing.
+        maybeBrake: function(dt) {
+          if (this.isGrabbingBall) return;
+          if (this._targetDistance <= 0 || this._targetDistance > this.brakeRange) return;
+          if (this.targetDirection.lengthSq() === 0) return;
+          if (this.velocity.length() < 0.05) return;
+
+          const fwd = this.targetDirection.clone().normalize();
+          const forwardVec = fwd.multiplyScalar(this.velocity.dot(fwd)); // toward the ball
+          const lateralVec = this.velocity.clone().sub(forwardVec);      // sideways / orbiting
+
+          // Brake only the sideways component; stronger the closer we are. t: 1 at brakeRange -> 0 at ball.
+          const t = THREE.MathUtils.clamp(this._targetDistance / this.brakeRange, 0, 1);
+          const lateralBrake = Math.pow(THREE.MathUtils.lerp(0.6, 1.0, t), dt * 60);
+          lateralVec.multiplyScalar(lateralBrake);
+
+          this.velocity.copy(forwardVec).add(lateralVec);
+        },
+
+        // Cheap, raycast-free obstacle escape. If the bot is actively thrusting toward its target but
+        // barely moving (blocked by an object), strafe perpendicular (left/right/up/down) for a short
+        // burst to slide around it, then normal navigation resumes. O(1) per frame.
+        maybeEscapeStuck: function(dt) {
+          if (!this.body) return;
+          const now = Date.now();
+          if (!this._stuck) {
+            this._stuck = {
+              lastPos: new THREE.Vector3().copy(this.body.position),
+              lastSample: now,
+              escaping: false,
+              escapeStartPos: new THREE.Vector3(),
+              escapeStartTime: 0,
+              clearedUntil: 0,
+              dir: new THREE.Vector3(),
+              lastDir: new THREE.Vector3()
+            };
+          }
+          const s = this._stuck;
+
+          // --- Actively escaping: commit to the chosen direction until we've cleared the obstacle. ---
+          if (s.escaping) {
+            // Stop ramming the obstacle: cancel most of the velocity heading toward the target,
+            // so the strafe actually produces sideways travel instead of being pulled back.
+            if (this.targetDirection && this.targetDirection.length() > 0) {
+              const fwd = this.targetDirection.clone().normalize();
+              const into = this.velocity.dot(fwd);
+              if (into > 0) this.velocity.addScaledVector(fwd, -into * 0.85);
+            }
+            // Strong, sustained perpendicular strafe.
+            this.velocity.add(s.dir.clone().multiplyScalar(this.data.thrusterForce * dt * 2.5));
+
+            // End the escape once we've moved well clear of where we got stuck (or after a safety timeout).
+            const cleared = this.body.position.distanceTo(s.escapeStartPos);
+            if (cleared > 1.2 || now - s.escapeStartTime > 1800) {
+              s.escaping = false;
+              s.lastDir.copy(s.dir);
+              s.lastPos.copy(this.body.position);
+              s.lastSample = now;
+              s.clearedUntil = now + 700; // brief grace so it can re-aim and head for the target
+            }
+            return;
+          }
+
+          // Grace period right after an escape: let the bot re-aim before re-evaluating stuck-ness.
+          if (now < s.clearedUntil) { s.lastPos.copy(this.body.position); s.lastSample = now; return; }
+
+          // Only evaluate while actively trying to move (otherwise idle bots would "escape" for no reason).
+          const trying = this.thrusterActive.left || this.thrusterActive.right;
+          if (!trying) { s.lastPos.copy(this.body.position); s.lastSample = now; return; }
+
+          // Sample progress every 400ms.
+          if (now - s.lastSample < 400) return;
+          const moved = this.body.position.distanceTo(s.lastPos);
+          s.lastSample = now;
+          s.lastPos.copy(this.body.position);
+
+          // Moved < 15cm in 400ms while thrusting => stuck on something. Pick a perpendicular escape dir.
+          if (moved < 0.15) {
+            const fwd = (this.targetDirection && this.targetDirection.length() > 0)
+              ? this.targetDirection.clone().normalize()
+              : new THREE.Vector3(0, 0, 1).applyQuaternion(this.el.object3D.quaternion);
+            const up = new THREE.Vector3(0, 1, 0);
+            let right = new THREE.Vector3().crossVectors(fwd, up);
+            if (right.length() < 0.001) right.set(1, 0, 0); // target dir nearly vertical
+            right.normalize();
+            const realUp = new THREE.Vector3().crossVectors(right, fwd).normalize();
+            let choices = [right, right.clone().negate(), realUp, realUp.clone().negate()];
+            // Avoid immediately reversing the previous escape (the cause of back-and-forth oscillation).
+            if (s.lastDir.lengthSq() > 0) {
+              choices = choices.filter(c => c.dot(s.lastDir) > -0.9);
+            }
+            s.dir.copy(choices[Math.floor(Math.random() * choices.length)]);
+            s.escaping = true;
+            s.escapeStartPos.copy(this.body.position);
+            s.escapeStartTime = now;
+          }
         },
         
         checkCustomCollisionWithSurfaces: function() {
@@ -6863,6 +7258,7 @@ function setGameplayHUD(isPlaying) {
           
           // Predict ball position based on velocity and distance
           const distanceToBall = botPos.distanceTo(ballPos);
+          this._targetDistance = distanceToBall; // feed the boost system
           const timeToReach = distanceToBall / this.data.maxSpeed; // Rough estimate
           const predictedBallPos = ballPos.clone().add(ballVelocity.clone().multiplyScalar(timeToReach * 0.5)); // Conservative prediction
           
@@ -6875,7 +7271,22 @@ function setGameplayHUD(isPlaying) {
           
           // Update target direction
           this.targetDirection.copy(directionToPredicted);
-          
+
+          // Team play: if a TEAMMATE is holding the ball (and we're not), don't chase it. Instead push
+          // ahead and get into a supporting position in front of the opponent's goal, ready to receive.
+          const ballComp = captureBall.components['zerog-ball'];
+          let ballOwner = ballComp ? ballComp.currentOwner : null;
+          // In singleplayer the local human's id (myPlayerId) is often null, so a human-held capture ball
+          // can have no recorded owner. If it's grabbed but ownerless, treat the local human as the holder.
+          if (!ballOwner && ballComp && ballComp.isGrabbed) {
+            ballOwner = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+          }
+          const myOwnerId = this.getMyOwnerId();
+          if (!this.isGrabbingBall && ballOwner && ballOwner !== myOwnerId && areTeammates(myOwnerId, ballOwner)) {
+            this.supportNavigation(dt);
+            return;
+          }
+
           // State machine for intelligent navigation
           switch (this.navigationState) {
             case 'idle':
@@ -6951,6 +7362,7 @@ function setGameplayHUD(isPlaying) {
                 
                 // Calculate direction to goal
           const botPos = new THREE.Vector3().copy(this.body.position);
+                this._targetDistance = botPos.distanceTo(goalPos); // feed the boost system
                 this.targetDirection = new THREE.Vector3().subVectors(goalPos, botPos).normalize();
                 
                 // Rotate toward goal and thrust (slower when carrying ball)
@@ -7275,10 +7687,14 @@ function setGameplayHUD(isPlaying) {
                   ballOffset.applyQuaternion(botQuat);
                   const ballPos = botPos.clone().add(ballOffset);
                   
-                  // Directly set ball position and rotation (like human players)
-                  captureBall.object3D.position.copy(ballPos);
+                  // Keep the carried ball out of walls/objects, exactly like the human-held ball.
+                  const carriedRadius = ballComponent.isCaptureBall ? 0.2 : 0.1;
+                  const safeBallPos = ballComponent.checkBallCollisionWithFeedback(ballPos, carriedRadius).position;
+                  
+                  // Set the collision-corrected ball position and rotation
+                  captureBall.object3D.position.copy(safeBallPos);
                   captureBall.object3D.quaternion.copy(botQuat);
-                  ballComponent.body.position.copy(ballPos);
+                  ballComponent.body.position.copy(safeBallPos);
                   ballComponent.body.quaternion.copy(botQuat);
                   ballComponent.body.velocity.set(0, 0, 0);
                   ballComponent.body.angularVelocity.set(0, 0, 0);
@@ -7291,7 +7707,12 @@ function setGameplayHUD(isPlaying) {
               }
             }
           }
-          
+
+          // Team play: while carrying, pass to a teammate who's closer to the opponent's goal.
+          if (this.isGrabbingBall) {
+            this.maybePassBall(time);
+          }
+
           // Throwing logic - only when match is active
           const gameManager = this.el.sceneEl.querySelector('#game-manager');
           const isMatchActive = gameManager && gameManager.components['game-manager'] && 
@@ -7443,6 +7864,231 @@ function setGameplayHUD(isPlaying) {
             }
           }
           return null;
+        },
+
+        // Canonical ball-owner id for this bot (matches the ids used in ballComponent.currentOwner).
+        getMyOwnerId: function() {
+          if (this.el.id === 'zerog-bot-red') return 'bot-red';
+          if (this.el.id === 'zerog-bot-blue') return 'bot-blue';
+          if (this.el.id === 'zerog-bot-green') return 'bot-green';
+          return this.data.team === 'red' ? 'bot-red' : (this.data.team === 'blue' ? 'bot-blue' : 'bot-green');
+        },
+
+        // Collect this bot's teammates (human player + other bots on the same team), with positions.
+        getTeammates: function() {
+          const myId = this.getMyOwnerId();
+          const list = [];
+
+          // Human player (use the head target, like findBestTarget does).
+          const playerTarget = document.querySelector('#player-target');
+          if (playerTarget) {
+            const pid = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+            if (pid !== myId && areTeammates(myId, pid)) {
+              const pos = new THREE.Vector3();
+              playerTarget.object3D.getWorldPosition(pos);
+              const vel = new THREE.Vector3();
+              const zerogPlayer = document.querySelector('[zerog-player]');
+              if (zerogPlayer && zerogPlayer.components['zerog-player'] && zerogPlayer.components['zerog-player'].velocity) {
+                vel.copy(zerogPlayer.components['zerog-player'].velocity);
+              }
+              list.push({ id: pid, position: pos, velocity: vel });
+            }
+          }
+
+          // Other bots.
+          const bots = document.querySelectorAll('[zerog-bot]');
+          bots.forEach((b) => {
+            const comp = b.components['zerog-bot'];
+            if (!comp || comp === this || !comp.body) return;
+            if (!b.getAttribute('visible')) return;
+            const oid = comp.getMyOwnerId();
+            if (oid === myId || !areTeammates(myId, oid)) return;
+            list.push({
+              id: oid,
+              position: new THREE.Vector3().copy(comp.body.position),
+              velocity: new THREE.Vector3().copy(comp.body.velocity)
+            });
+          });
+
+          return list;
+        },
+
+        // Support positioning: a teammate has the ball, so push ahead and wait just in front of the
+        // opponent's goal, ready to receive a pass and tap it in. Drives targetDirection/thrusters
+        // (and feeds _targetDistance so the boost/brake systems keep working).
+        supportNavigation: function(dt) {
+          const opponentGoal = this.findOpponentGoal();
+          if (!opponentGoal) { this.thrusterActive.left = false; this.thrusterActive.right = false; return; }
+
+          const goalPos = new THREE.Vector3();
+          opponentGoal.object3D.getWorldPosition(goalPos);
+          const botPos = new THREE.Vector3().copy(this.body.position);
+
+          // Stand a few meters in front of the goal (pulled back toward field center).
+          const toCenter = new THREE.Vector3(0, goalPos.y, 0).sub(goalPos);
+          if (toCenter.lengthSq() < 0.001) toCenter.set(0, 0, 1);
+          toCenter.normalize();
+          const supportPos = goalPos.clone().add(toCenter.multiplyScalar(this.supportStandoff));
+
+          const toSupport = new THREE.Vector3().subVectors(supportPos, botPos);
+          const dist = toSupport.length();
+          this._targetDistance = dist;
+          if (dist > 0.0001) this.targetDirection.copy(toSupport.normalize());
+
+          if (dist < this.supportArrive) {
+            // In position: hold and let momentum bleed off so it's ready to react.
+            this.thrusterActive.left = false;
+            this.thrusterActive.right = false;
+            this.navigationState = 'idle';
+          } else {
+            const rotationComplete = this.rotateTowards(this.targetDirection, dt);
+            this.thrusterActive.left = rotationComplete;
+            this.thrusterActive.right = rotationComplete;
+            this.navigationState = 'thrusting';
+          }
+        },
+
+        // While carrying the ball, pass to a teammate who is meaningfully closer to the opponent's goal.
+        maybePassBall: function(time) {
+          if (!this.isGrabbingBall || gameMode !== 'capture') return;
+          // Throttle the evaluation (it walks the pass line for a line-of-sight test).
+          if (time - this._lastPassEval < this.passEvalInterval) return;
+          this._lastPassEval = time;
+          if (time - this._lastPassTime < this.passInterval) return;
+
+          const opponentGoal = this.findOpponentGoal();
+          if (!opponentGoal) return;
+          const goalPos = new THREE.Vector3();
+          opponentGoal.object3D.getWorldPosition(goalPos);
+
+          const botPos = new THREE.Vector3().copy(this.body.position);
+          const myGoalDist = botPos.distanceTo(goalPos);
+
+          // Pick the teammate closest to the goal.
+          let best = null, bestGoalDist = Infinity;
+          for (const m of this.getTeammates()) {
+            const d = m.position.distanceTo(goalPos);
+            if (d < bestGoalDist) { bestGoalDist = d; best = m; }
+          }
+          if (!best) return;
+
+          // Only pass forward: the teammate must be clearly closer to the goal than we are.
+          if (bestGoalDist > myGoalDist - this.passAdvantage) return;
+
+          // Keep passes within a sensible range.
+          const passDist = botPos.distanceTo(best.position);
+          if (passDist < this.minPassDistance || passDist > this.maxPassDistance) return;
+
+          this.passBallToTeammate(best, time);
+        },
+
+        passBallToTeammate: function(target, time) {
+          const captureBall = document.querySelector('#capture-ball');
+          if (!captureBall || !captureBall.components['zerog-ball']) return;
+          const ballComponent = captureBall.components['zerog-ball'];
+
+          const botPos = new THREE.Vector3().copy(this.body.position);
+          const passDist = botPos.distanceTo(target.position);
+          if (passDist < 0.0001) return;
+
+          // Choose a throw speed based on the current gap (harder for longer passes), then LEAD the
+          // teammate: in zero-G the ball flies straight at constant speed, so we solve for the time t
+          // when the ball meets the moving teammate and aim at that future point.
+          const speed = THREE.MathUtils.clamp(passDist * 1.2, this.data.minThrowForce, this.data.maxThrowForce + 4);
+          const aimPos = this.computeInterceptPoint(botPos, target.position, target.velocity, speed);
+          const dir = new THREE.Vector3().subVectors(aimPos, botPos);
+          if (dir.lengthSq() < 0.0001) return;
+          dir.normalize();
+
+          // Don't pass through walls/objects: require a clear path along the ball's flight line.
+          if (!this.hasLineOfSight(botPos, aimPos)) return;
+
+          // Release ownership cleanly (bots don't have hand velocity history, so set velocity ourselves).
+          this.isGrabbingBall = false;
+          ballComponent.isGrabbed = false;
+          ballComponent.currentOwner = null;
+          ballComponent.lastOwnerChangeTime = Date.now();
+          ballComponent.body.gravity.set(0, 0, 0);
+          ballComponent.body.velocity.set(dir.x * speed, dir.y * speed, dir.z * speed);
+          ballComponent.body.angularVelocity.set(
+            (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6
+          );
+
+          // Don't immediately chase/re-grab our own pass; reset to normal navigation.
+          this.ballStealTimeout = Date.now() + 1500;
+          this.navigationState = 'idle';
+          this.lastCloseTime = Date.now();
+          this._lastPassTime = time;
+          this.lastThrowTime = time;
+          console.log(`🤖 Bot ${this.el.id} passed the ball to ${target.id}`);
+        },
+
+        // Lead a moving target. In zero-G the ball travels straight at constant speed, so we solve for
+        // the meet-up time t in |(targetPos - shooterPos) + targetVel*t| = projSpeed*t (a quadratic in
+        // t), then return the predicted future position targetPos + targetVel*t. Falls back to the
+        // target's current position if no valid interception exists (e.g. it's moving away too fast).
+        computeInterceptPoint: function(shooterPos, targetPos, targetVel, projSpeed) {
+          const R = new THREE.Vector3().subVectors(targetPos, shooterPos);
+          const v = targetVel ? targetVel.clone() : new THREE.Vector3();
+          const a = v.dot(v) - projSpeed * projSpeed;
+          const b = 2 * R.dot(v);
+          const c = R.dot(R);
+
+          let t = -1;
+          if (Math.abs(a) < 1e-4) {
+            if (Math.abs(b) > 1e-6) t = -c / b; // near-linear case
+          } else {
+            const disc = b * b - 4 * a * c;
+            if (disc >= 0) {
+              const sq = Math.sqrt(disc);
+              const t1 = (-b - sq) / (2 * a);
+              const t2 = (-b + sq) / (2 * a);
+              t = Math.min(t1, t2);
+              if (t < 0) t = Math.max(t1, t2); // prefer the smallest positive root
+            }
+          }
+
+          if (!(t > 0) || !isFinite(t)) return targetPos.clone();
+          t = Math.min(t, 3.0); // don't aim at wild far-future positions
+          return targetPos.clone().add(v.multiplyScalar(t));
+        },
+
+        // Clear-path test between two points: march a ball-sized sphere along the segment and reject if
+        // it would intersect any arena surface. Reuses the same getCollisionResponse() the bot already
+        // uses for movement collisions. Uses the full surface list (not the bot-local culled set) since
+        // the pass line can span the arena. Called only on throttled pass attempts, so cost is bounded.
+        hasLineOfSight: function(fromPos, toPos) {
+          const seg = new THREE.Vector3().subVectors(toPos, fromPos);
+          const dist = seg.length();
+          if (dist < 0.001) return true;
+          const dirStep = seg.multiplyScalar(1 / dist);
+
+          const ballRadius = 0.2; // capture ball radius
+          const step = 0.5;       // sample spacing along the line
+
+          // Snapshot the surfaces once (geometry + world position).
+          const surfList = [];
+          document.querySelectorAll('[grab-surface]').forEach((surface) => {
+            if (surface.hasAttribute('data-visual-only') || surface.classList.contains('wireframe-visual-only')) return;
+            const geometry = surface.getAttribute('geometry');
+            if (!geometry) return;
+            const sp = new THREE.Vector3();
+            surface.object3D.getWorldPosition(sp);
+            surfList.push({ surface, geometry, sp });
+          });
+
+          // March along the line, skipping the endpoints (near the players themselves).
+          const p = new THREE.Vector3();
+          for (let d = step; d < dist; d += step) {
+            p.copy(fromPos).addScaledVector(dirStep, d);
+            for (let i = 0; i < surfList.length; i++) {
+              const s = surfList[i];
+              if (this.getCollisionResponse(p, ballRadius, s.sp, s.geometry, s.surface).length() > 0) {
+                return false; // blocked
+              }
+            }
+          }
+          return true;
         },
         
         remove: function() {
@@ -7767,23 +8413,101 @@ function setGameplayHUD(isPlaying) {
           intensity: {default: 1.0}
         },
         init: function () {
-          this.el.addEventListener('object3dset', this.update.bind(this));
-          this.el.addEventListener('material-loaded', this.update.bind(this));
+          this.apply = this.apply.bind(this);
+          this.el.addEventListener('object3dset', this.apply);
+          this.el.addEventListener('material-loaded', this.apply);
+          // A-Frame's material system re-applies the material (from the `color` shorthand, with no
+          // emissive) AFTER glow runs, which silently reset emissive back to black so the ball stopped
+          // looking self-lit. Re-assert emissive whenever the material changes (and once on a delay to
+          // win the initial race) so the ball always reads as emissive to players.
+          this.el.addEventListener('componentchanged', (e) => {
+            if (e.detail && e.detail.name === 'material') this.apply();
+          });
+          setTimeout(this.apply, 0);
         },
-        update: function () {
+        update: function () { this.apply(); },
+        apply: function () {
           const data = this.data;
           if (!this.el.object3D) return;
-          
+          const col = new THREE.Color(data.color);
           this.el.object3D.traverse(function (node) {
             if (node.isMesh && node.material) {
-              if (!node.material.emissive) {
-                node.material.emissive = new THREE.Color(data.color);
-              } else {
-                node.material.emissive.copy(new THREE.Color(data.color));
-              }
-              node.material.emissiveIntensity = data.intensity;
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach(function (mat) {
+                // Only materials that NATIVELY support emissive (standard/phong/lambert/toon) have an
+                // emissive uniform. Adding emissive to a MeshBasicMaterial (A-Frame `shader: flat`)
+                // breaks Three.js's uniform refresh (undefined uniform.value), so skip those.
+                if (!mat.emissive || !mat.emissive.isColor) return;
+                mat.emissive.copy(col);
+                mat.emissiveIntensity = data.intensity;
+                mat.needsUpdate = true;
+              });
             }
           });
+        }
+      });
+
+      // See-through CONTOUR: draws only the silhouette rim of a sphere (a fresnel edge where the
+      // surface is edge-on to the camera), with depth testing off so the outline is always visible
+      // THROUGH other objects. This shows just the ball's contour ring, not a solid sphere.
+      AFRAME.registerComponent('xray-contour', {
+        schema: {
+          radius:      { default: 0.21 },
+          color:       { type: 'color', default: '#ffffff' },
+          power:       { default: 6.0 },     // higher = thinner/tighter contour ring
+          opacity:     { default: 1.0 },
+          renderOrder: { default: 9999 }
+        },
+        init: function () {
+          const d = this.data;
+          this.material = new THREE.ShaderMaterial({
+            transparent: true,
+            depthTest: false,    // visible through walls
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+            uniforms: {
+              uColor:   { value: new THREE.Color(d.color) },
+              uPower:   { value: d.power },
+              uOpacity: { value: d.opacity }
+            },
+            vertexShader:
+              'varying vec3 vWorldNormal;\n' +
+              'varying vec3 vWorldPos;\n' +
+              'void main() {\n' +
+              '  vec4 wp = modelMatrix * vec4(position, 1.0);\n' +
+              '  vWorldPos = wp.xyz;\n' +
+              '  vWorldNormal = normalize(mat3(modelMatrix) * normal);\n' +
+              '  gl_Position = projectionMatrix * viewMatrix * wp;\n' +
+              '}',
+            fragmentShader:
+              'uniform vec3 uColor;\n' +
+              'uniform float uPower;\n' +
+              'uniform float uOpacity;\n' +
+              'varying vec3 vWorldNormal;\n' +
+              'varying vec3 vWorldPos;\n' +
+              'void main() {\n' +
+              '  vec3 V = normalize(cameraPosition - vWorldPos);\n' +
+              '  float rim = 1.0 - abs(dot(normalize(vWorldNormal), V));\n' +
+              '  rim = pow(clamp(rim, 0.0, 1.0), uPower);\n' +     // only the edge survives
+              '  if (rim < 0.02) discard;\n' +
+              '  gl_FragColor = vec4(uColor, rim * uOpacity);\n' +
+              '}'
+          });
+          const geo = new THREE.SphereGeometry(d.radius, 32, 24);
+          const mesh = new THREE.Mesh(geo, this.material);
+          mesh.renderOrder = d.renderOrder;
+          mesh.frustumCulled = false;
+          this.el.setObject3D('mesh', mesh);
+        },
+        update: function () {
+          if (!this.material) return;
+          this.material.uniforms.uColor.value.set(this.data.color);
+          this.material.uniforms.uPower.value = this.data.power;
+          this.material.uniforms.uOpacity.value = this.data.opacity;
+        },
+        remove: function () {
+          if (this.el.getObject3D('mesh')) this.el.removeObject3D('mesh');
         }
       });
 
@@ -10080,19 +10804,22 @@ function setGameplayHUD(isPlaying) {
               if (localBody && localBody.components['mixamo-body-avatar']) {
                 const bodyComponent = localBody.components['mixamo-body-avatar'];
                 
-                // Get body position and rotation
-                const bodyPos = localBody.object3D.position;
-                const bodyQuat = localBody.object3D.quaternion;
-                
                 // Get velocity for leg animation
                 const velocity = bodyComponent.headVelocity;
                 
+                // CRITICAL FIX: Use rig position as body root to prevent "orbiting" during rotation
+                // When player rotates via thumbstick, body should rotate around rig center, not orbit
+                const bodyBasePos = rig ? rig.object3D.getWorldPosition(new THREE.Vector3()) : localBody.object3D.getWorldPosition(new THREE.Vector3());
+                
+                // Get body's actual quaternion (includes torso orientation + body tilt)
+                const bodyQuat = localBody.object3D.quaternion;
+                
                 // Compile body pose data
                 playerState.bodyPose = {
-                  // Body transform
-                  bodyX: bodyPos.x,
-                  bodyY: bodyPos.y,
-                  bodyZ: bodyPos.z,
+                  // Body transform (use rig position as anchor point)
+                  bodyX: bodyBasePos.x,
+                  bodyY: bodyBasePos.y,
+                  bodyZ: bodyBasePos.z,
                   bodyQX: bodyQuat.x,
                   bodyQY: bodyQuat.y,
                   bodyQZ: bodyQuat.z,
@@ -10549,6 +11276,8 @@ function setGameplayHUD(isPlaying) {
         },
         
         resetPosition: function() {
+          // A held-ball bonk must not teleport the ball away from the hand.
+          if (this._heldHitActive) return;
           // Capture ball always resets to center
           if (this.isCaptureBall) {
             const resetPos = { x: 0, y: 2, z: 0 };
@@ -10722,8 +11451,10 @@ function setGameplayHUD(isPlaying) {
           // Ball reset to position
         },
         
-        checkTargetHit: function() {
-          if (this.isGrabbed || !this.body) return;
+        checkTargetHit: function(heldMode) {
+          if (!this.body) return;
+          // Thrown balls only run this when not grabbed; held balls run it via heldMode (a bonk).
+          if (this.isGrabbed && !heldMode) return;
 
           // Per-ball cooldown to prevent double hits
           const now = Date.now();
@@ -10732,7 +11463,14 @@ function setGameplayHUD(isPlaying) {
 
           const ballPos = new THREE.Vector3().copy(this.body.position);
           const ballVelocity = this.body.velocity.length();
-          if (ballVelocity < 0.5) return;
+          if (!heldMode && ballVelocity < 0.5) return;
+          if (heldMode) {
+            // While held the body velocity is forced to 0, so require a deliberate swing of the hand
+            // (not just resting the ball against someone's head) to count as a bonk.
+            const vh = this.velocityHistory;
+            const handSpeed = (vh && vh.length) ? vh[vh.length - 1].length() : 0;
+            if (handSpeed < 1.0) return;
+          }
           
           // Skip capture ball from hitting players
           if (this.isCaptureBall) return;
@@ -10754,7 +11492,7 @@ function setGameplayHUD(isPlaying) {
               if (redBotTarget) {
                 const targetPos = new THREE.Vector3();
                 redBotTarget.object3D.getWorldPosition(targetPos);
-                if (ballPos.distanceTo(targetPos) < 0.3) {
+                if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
                   if (gameMode === 'capture') {
                     // Check if ball should affect red bot based on team rules
                     if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-red')) {
@@ -10785,7 +11523,7 @@ function setGameplayHUD(isPlaying) {
               if (blueBotTarget) {
                 const targetPos = new THREE.Vector3();
                 blueBotTarget.object3D.getWorldPosition(targetPos);
-                if (ballPos.distanceTo(targetPos) < 0.3) {
+                if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
                   if (gameMode === 'capture') {
                     // Check if ball should affect blue bot based on team rules
                     if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-blue')) {
@@ -10817,7 +11555,7 @@ function setGameplayHUD(isPlaying) {
               if (greenBotTarget) {
                 const targetPos = new THREE.Vector3();
                 greenBotTarget.object3D.getWorldPosition(targetPos);
-                if (ballPos.distanceTo(targetPos) < 0.3) {
+                if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
                   if (gameMode === 'capture') {
                     // Check if ball should affect green bot based on team rules
                     if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-green')) {
@@ -10850,7 +11588,7 @@ function setGameplayHUD(isPlaying) {
               if (playerTarget) {
                 const targetPos = new THREE.Vector3();
                 playerTarget.object3D.getWorldPosition(targetPos);
-                if (ballPos.distanceTo(targetPos) < 0.3) {
+                if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
                   // Play explosion/sound on player
                   const impactEffect = playerTarget.components['impact-effect'];
                   if (impactEffect) impactEffect.playEffect();
@@ -10884,7 +11622,7 @@ function setGameplayHUD(isPlaying) {
               if (playerTarget) {
                 const targetPos = new THREE.Vector3();
                 playerTarget.object3D.getWorldPosition(targetPos);
-                if (ballPos.distanceTo(targetPos) < 0.3) {
+                if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
                   // Play explosion/sound on player
                   const impactEffect = playerTarget.components['impact-effect'];
                   if (impactEffect) impactEffect.playEffect();
@@ -10942,7 +11680,7 @@ function setGameplayHUD(isPlaying) {
             }
             const targetPos = new THREE.Vector3();
             targetEntity.object3D.getWorldPosition(targetPos);
-            if (ballPos.distanceTo(targetPos) < 0.3) {
+            if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
               // Play explosion/sound on hit target
               const impactEffect = targetEntity.components['impact-effect'];
               if (impactEffect) {
@@ -10997,7 +11735,7 @@ function setGameplayHUD(isPlaying) {
           if (redBotTarget) {
             const targetPos = new THREE.Vector3();
             redBotTarget.object3D.getWorldPosition(targetPos);
-            if (ballPos.distanceTo(targetPos) < 0.3) {
+            if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
               if (gameMode === 'capture') {
                 // Check if ball should affect red bot based on team rules
                 if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-red')) {
@@ -11028,7 +11766,7 @@ function setGameplayHUD(isPlaying) {
           if (blueBotTarget) {
             const targetPos = new THREE.Vector3();
             blueBotTarget.object3D.getWorldPosition(targetPos);
-            if (ballPos.distanceTo(targetPos) < 0.3) {
+            if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
               if (gameMode === 'capture') {
                 // Check if ball should affect blue bot based on team rules
                 if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-blue')) {
@@ -11059,7 +11797,7 @@ function setGameplayHUD(isPlaying) {
           if (greenBotTarget) {
             const targetPos = new THREE.Vector3();
             greenBotTarget.object3D.getWorldPosition(targetPos);
-            if (ballPos.distanceTo(targetPos) < 0.3) {
+            if (ballPos.distanceTo(targetPos) < 0.2) { // head-only hit radius
               if (gameMode === 'capture') {
                 // Check if ball should affect green bot based on team rules
                 if (!shouldBallAffectTarget(ballPlayerIndex, 'bot-green')) {
@@ -11672,6 +12410,12 @@ function setGameplayHUD(isPlaying) {
               this.lastPosition.copy(handPos);
               this.lastRotation = handQuat.clone();
               this.lastPositionTime = currentTime;
+
+              // Held ball can hit an opponent's head on contact (a bonk), using the same
+              // mode/team/score pipeline as a thrown hit but without losing the ball.
+              this._heldHitActive = true;
+              this.checkTargetHit(true);
+              this._heldHitActive = false;
             } else {
               // When not grabbed, update visual position from physics
               // BUT: Don't override if this is a remote ball that was manually updated
@@ -12351,6 +13095,8 @@ function setGameplayHUD(isPlaying) {
         
         // NEW: Start auto-return mode (called when ball hits target)
         startAutoReturn: function() {
+          // A held-ball bonk must not pull the ball out of the hand.
+          if (this._heldHitActive) return;
           // Determine which ball belongs to the current player
           let currentPlayerBall = 'player2'; // Default for singleplayer
           if (isMultiplayer && myPlayerId) {
@@ -16373,6 +17119,89 @@ function setGameplayHUD(isPlaying) {
           if (!this.data.isRemote && !this.data.isBot) {
             this.updateFingerPoses();
           }
+
+          // Bots & remote players: keep the head-hit point on the head bone and the
+          // full-body grab colliders glued to their bones (local player is handled by the camera).
+          if (this.data.isBot || this.data.isRemote) {
+            this.updateGrabColliders();
+          }
+        },
+
+        // Lazily build invisible grab colliders on the avatar's bones plus a head hit-point reference.
+        // Each marker is a real DOM entity (class grabbable-player + data-player-id) so the existing
+        // grab scan picks it up anywhere on the body; the head hit-point reuses the existing target.
+        ensureGrabColliders: function() {
+          if (this.grabCollidersBuilt) return;
+          if (!this.bones || !this.bones.head) return;
+
+          let pid = this.data.playerId;
+          let hitTargetSel = null;
+          if (this.data.isBot) {
+            // Bot hit-target ids are irregular: red uses #bot-target, the others #bot-<team>-target.
+            const botTargetMap = { bot_red: '#bot-target', bot_blue: '#bot-blue-target', bot_green: '#bot-green-target' };
+            hitTargetSel = botTargetMap[pid] || ('#' + pid.replace('_', '-') + '-target');
+          } else if (this.data.isRemote) {
+            // player_0 -> #remote-target-0
+            const idx = pid.split('_')[1];
+            hitTargetSel = '#remote-target-' + idx;
+          } else {
+            return;
+          }
+
+          this.hitTargetEl = document.querySelector(hitTargetSel);
+
+          // [boneKey, grab radius] — covers torso, arms and legs so any body part is grabbable.
+          const parts = [
+            ['spine2', 0.18], ['hips', 0.18],
+            ['leftUpperArm', 0.11], ['rightUpperArm', 0.11],
+            ['leftForearm', 0.10], ['rightForearm', 0.10],
+            ['leftHandBone', 0.12], ['rightHandBone', 0.12],
+            ['leftUpLeg', 0.12], ['rightUpLeg', 0.12],
+            ['leftLeg', 0.10], ['rightLeg', 0.10],
+            ['leftFoot', 0.10], ['rightFoot', 0.10]
+          ];
+
+          this.grabMarkers = [];
+          parts.forEach((p) => {
+            const bone = this.bones[p[0]];
+            if (!bone) return;
+            const marker = document.createElement('a-entity');
+            marker.classList.add('grabbable-player');
+            marker.setAttribute('data-player-id', pid);
+            marker.setAttribute('radius', p[1]);
+            marker.setAttribute('data-body-collider', 'true');
+            this.el.appendChild(marker); // parentElement = this avatar -> visibility tracks active state
+            this.grabMarkers.push({ marker: marker, bone: bone });
+          });
+
+          this._colliderTmp = new THREE.Vector3();
+          this.grabCollidersBuilt = true;
+        },
+
+        updateGrabColliders: function() {
+          this.ensureGrabColliders();
+          if (!this.grabCollidersBuilt) return;
+          const tmp = this._colliderTmp;
+
+          // Head-only hit: snap the existing hit/grab target onto the head bone.
+          // The target lives in a different subtree, so refresh its parent's world matrix first.
+          if (this.hitTargetEl && this.hitTargetEl.object3D && this.bones.head) {
+            this.bones.head.getWorldPosition(tmp);
+            const parent = this.hitTargetEl.object3D.parent;
+            if (parent) {
+              parent.updateWorldMatrix(true, false);
+              this.hitTargetEl.object3D.position.copy(parent.worldToLocal(tmp.clone()));
+            }
+          }
+
+          // Body grab markers ride their bones.
+          for (let i = 0; i < this.grabMarkers.length; i++) {
+            const gm = this.grabMarkers[i];
+            if (!gm.marker.object3D) continue;
+            gm.bone.getWorldPosition(tmp);
+            const parent = gm.marker.object3D.parent;
+            if (parent) gm.marker.object3D.position.copy(parent.worldToLocal(tmp.clone()));
+          }
         },
 
         updateLocalBody: function(dt) {
@@ -16484,7 +17313,16 @@ function setGameplayHUD(isPlaying) {
           
           const data = this.remotePoseData;
           
-          // Set body position and rotation
+          // CRITICAL: For remote players, position body at their rig position to avoid "orbiting" effect
+          // When a player rotates via thumbstick, their rig rotates around its center
+          // We want the body to stay at the rig center, not follow the head's orbit
+          
+          // Check if we have rig data (from playerState.rig)
+          // Note: rig data is in data.state.rig, but bodyPose is in data.state.bodyPose
+          // We need to check the parent data structure
+          
+          // For now, use the body position data as-is since it's already correctly calculated
+          // The body position should represent where the player's torso actually is
           this.el.object3D.position.set(data.bodyX, data.bodyY, data.bodyZ);
           this.el.object3D.quaternion.set(data.bodyQX, data.bodyQY, data.bodyQZ, data.bodyQW);
           
@@ -16549,7 +17387,10 @@ function setGameplayHUD(isPlaying) {
           }
           
           const botWorldPos = new THREE.Vector3();
-          botTarget.object3D.getWorldPosition(botWorldPos);
+          // Use the bot ENTITY position, not the target sphere. The head-only-hit system moves the
+          // target sphere onto the head bone each frame; reading it here would feed back and launch
+          // the avatar upward. The target starts at the entity origin, so this is behavior-preserving.
+          botEntity.object3D.getWorldPosition(botWorldPos);
           
           // Calculate bot velocity from position changes with smoothing
           if (!this.previousBotPos) {
@@ -17533,6 +18374,7 @@ function setGameplayHUD(isPlaying) {
              depth="80" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
+             distance-grid
              grab-surface="type: static">
       </a-box>
 
@@ -17543,6 +18385,7 @@ function setGameplayHUD(isPlaying) {
              depth="80" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
+             distance-grid
              grab-surface="type: static">
       </a-box>
 
@@ -17551,8 +18394,9 @@ function setGameplayHUD(isPlaying) {
              width="1.0" 
              height="20" 
              depth="80" 
-             src="#panelAlbedo"
-             material="repeat: 20 5; ambientOcclusionMap: #panelAo; ambientOcclusionTextureRepeat: 20 5; color: #ffffff; displacementMap: #panelHeightmap; displacementScale: 0; displacementBias: 0; displacementTextureRepeat: 20 5; metalness: 0.5; metalnessMap: #panelMetallic; metalnessTextureRepeat: 20 5; normalMap: #panelNormal; normalScale: -1 1; normalTextureRepeat: 20 5; roughness: 1; roughnessMap: #panelRoughness; roughnessTextureRepeat: 20 5"
+             color="#444444"
+             material="shader: standard; metalness: 0.8; roughness: 0.2"
+             distance-grid
              grab-surface=""
              class="grabbable-surface">
       </a-box>
@@ -17562,8 +18406,9 @@ function setGameplayHUD(isPlaying) {
              width="1.0" 
              height="20" 
              depth="80" 
-             src="#panelAlbedo"
-             material="repeat: 20 5; ambientOcclusionMap: #panelAo; ambientOcclusionTextureRepeat: 20 5; color: #ffffff; displacementMap: #panelHeightmap; displacementScale: 0; displacementBias: 0; displacementTextureRepeat: 20 5; metalness: 0.5; metalnessMap: #panelMetallic; metalnessTextureRepeat: 20 5; normalMap: #panelNormal; normalScale: -1 1; normalTextureRepeat: 20 5; roughness: 1; roughnessMap: #panelRoughness; roughnessTextureRepeat: 20 5"
+             color="#444444"
+             material="shader: standard; metalness: 0.8; roughness: 0.2"
+             distance-grid
              grab-surface=""
              class="grabbable-surface">
       </a-box>
@@ -17575,6 +18420,7 @@ function setGameplayHUD(isPlaying) {
              depth="1.0" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
+             distance-grid
              grab-surface="type: static">
       </a-box>
       
@@ -17585,6 +18431,7 @@ function setGameplayHUD(isPlaying) {
              depth="1.0" 
              color="#444444"
              material="shader: standard; metalness: 0.8; roughness: 0.2"
+             distance-grid
              grab-surface="type: static">
       </a-box>
 
@@ -17715,7 +18562,8 @@ function setGameplayHUD(isPlaying) {
                color="#888888"
                material="shader: standard; metalness: 0.7; roughness: 0.3"
                grab-surface="type: static"
-               wireframe-overlay>
+               wireframe-overlay
+               distance-grid>
         </a-octahedron>
       
       <!-- Duplicate octahedron at floor corner -->
@@ -17724,7 +18572,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Center left wall octahedrons -->
@@ -17733,7 +18582,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <a-octahedron position="-15 -10 0" 
@@ -17741,7 +18591,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Blue side left wall - vertically centered octahedron -->
@@ -17750,7 +18601,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Red side back wall corner octahedrons -->
@@ -17759,7 +18611,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <a-octahedron position="-15 -10 -40" 
@@ -17767,7 +18620,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Right wall octahedrons (mirroring left wall) -->
@@ -17778,7 +18632,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <a-octahedron position="15 -10 40" 
@@ -17786,7 +18641,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Center right wall octahedrons -->
@@ -17795,7 +18651,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <a-octahedron position="15 -10 0" 
@@ -17803,7 +18660,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Red side corner (back wall) -->
@@ -17812,7 +18670,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <a-octahedron position="15 -10 -40" 
@@ -17820,7 +18679,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Blue side right wall - vertically centered octahedron -->
@@ -17829,7 +18689,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Red side left wall - vertically centered octahedron -->
@@ -17838,7 +18699,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- Red side right wall - vertically centered octahedron -->
@@ -17847,7 +18709,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <!-- TEST: Small octahedron at center for debugging edge alignment -->
@@ -17856,7 +18719,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-octahedron>
       
       <a-tetrahedron position="3 0 0" 
@@ -17864,7 +18728,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-tetrahedron>
       
       <!-- Tetrahedron rotated 90 degrees (yaw) for gap filling -->
@@ -17874,7 +18739,8 @@ function setGameplayHUD(isPlaying) {
              color="#888888"
              material="shader: standard; metalness: 0.7; roughness: 0.3"
              grab-surface="type: static"
-             wireframe-overlay>
+             wireframe-overlay
+             distance-grid>
       </a-tetrahedron>
 
       <!-- DEBUG: Grid visualization container (generated dynamically) -->
@@ -18031,6 +18897,8 @@ function setGameplayHUD(isPlaying) {
                   position="0 0 0">
         </a-entity>
         <a-sphere radius="0.2" color="#ffffff" material="wireframe: true; color: #ffffff; opacity: 0.3"></a-sphere>
+        <!-- See-through contour (silhouette rim only) so the game ball is always visible through objects -->
+        <a-entity xray-contour="radius: 0.21; color: #ffffff; power: 6.0"></a-entity>
         <a-entity id="white-ball-hum" sound="src: url(audio/electric-hum.wav); 
                         autoplay: false; 
                         loop: true; 
@@ -18088,7 +18956,8 @@ function setGameplayHUD(isPlaying) {
                            visible="false"
                            fix-model-exposure>
               </a-gltf-model>
-              <a-entity light="type: point; color: #888888; intensity: 1; distance: 3"></a-entity>
+              <!-- TEMP: white player light disabled (intensity was 1) -->
+              <a-entity light="type: point; color: #888888; intensity: 0; distance: 3"></a-entity>
               <!-- Impact sphere with animation component -->
               <a-sphere id="player-impact" radius="0.1" color="#888888" opacity="0" visible="false" material="side: double; transparent: true"
                 animation__grow="property: radius; from: 0.1; to: 1.5; dur: 1000; easing: easeOutQuad; startEvents: impact; dir: normal; autoplay: false;"
@@ -19222,10 +20091,12 @@ function setGameplayHUD(isPlaying) {
       </a-entity>
 
       <!-- Ambient space lighting -->
-      <a-entity light="type: ambient; color: #404040; intensity: 0.75"></a-entity>
+      <!-- TEMP: white arena lights disabled (intensity was 0.75) -->
+      <a-entity light="type: ambient; color: #404040; intensity: 0"></a-entity>
       
       <!-- Directional light simulating distant star -->
-      <a-entity light="type: directional; color: #ffffff; intensity: 0.8" position="5 5 5"></a-entity>
+      <!-- TEMP: white arena lights disabled (intensity was 0.8) -->
+      <a-entity light="type: directional; color: #ffffff; intensity: 0" position="5 5 5"></a-entity>
 
       <!-- Add impact sound entities -->
       <a-entity id="impact-sound" sound="src: url(audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); 

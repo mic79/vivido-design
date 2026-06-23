@@ -359,6 +359,14 @@ function applyArenaObjectData(entity, data) {
   if (tagName === 'a-octahedron' || tagName === 'a-tetrahedron') {
     entity.setAttribute('wireframe-overlay', '');
   }
+
+  // AUTOMATIC: Add the reflective distance-grid + dots to every dynamically loaded arena surface.
+  // The static objects in index.html have this hardcoded; arenas loaded from JSON create fresh
+  // objects that otherwise miss it, which is why the grid/dots vanished after switching arenas.
+  // Only add it when the data didn't already specify one (so saved overrides are preserved).
+  if (!entity.hasAttribute('distance-grid')) {
+    entity.setAttribute('distance-grid', '');
+  }
 }
 
 /**
