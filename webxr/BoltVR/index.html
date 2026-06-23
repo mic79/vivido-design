@@ -89,6 +89,30 @@
         botLogicEnabled: true,
         glowEnabled: true
       };
+
+      // Gridline visibility levels (line reflectivity + faint self-lit baseline). "Med" matches the
+      // distance-grid component defaults (strength 0.1 / emissive 0.01). The distance-grid component
+      // reads gridConfigOverride live, so this applies to existing and dynamically created grids.
+      const GRID_LEVELS = [
+        { label: 'Off',  strength: 0.0,  emissive: 0.0   },
+        { label: 'Low',  strength: 0.05, emissive: 0.005 },
+        { label: 'Med',  strength: 0.1,  emissive: 0.01  },
+        { label: 'High', strength: 0.2,  emissive: 0.02  },
+        { label: 'Max',  strength: 0.4,  emissive: 0.04  }
+      ];
+      let gridStrengthIndex = 2;          // default "Med"
+      let gridConfigOverride = null;      // { strength, emissive } applied to every distance-grid
+      (function loadGridPref() {
+        try {
+          const saved = localStorage.getItem('boltGridStrengthIndex');
+          if (saved !== null) {
+            const i = parseInt(saved, 10);
+            if (!isNaN(i) && i >= 0 && i < GRID_LEVELS.length) gridStrengthIndex = i;
+          }
+        } catch (e) { /* localStorage unavailable */ }
+        const lvl = GRID_LEVELS[gridStrengthIndex];
+        gridConfigOverride = { strength: lvl.strength, emissive: lvl.emissive };
+      })();
       
       // Store original textures for restoration
       let originalWallTextures = new Map();
@@ -6344,12 +6368,18 @@ function setGameplayHUD(isPlaying) {
         // All grid parameters are uniforms, so runtime tweaks apply live without recompiling.
         update: function() {
           const c = new THREE.Color(this.data.color);
+          // Global visibility override (set from the Config menu / localStorage) wins when present, so
+          // one setting controls every grid in the arena, including dynamically loaded objects.
+          const strength = (typeof gridConfigOverride !== 'undefined' && gridConfigOverride)
+            ? gridConfigOverride.strength : this.data.strength;
+          const emissive = (typeof gridConfigOverride !== 'undefined' && gridConfigOverride)
+            ? gridConfigOverride.emissive : this.data.emissive;
           this.hooked.forEach((u) => {
             u.uGridSpacing.value = this.data.spacing;
             u.uGridThickness.value = this.data.thickness;
             u.uGridColor.value.copy(c);
-            u.uGridStrength.value = this.data.strength;
-            u.uGridEmissive.value = this.data.emissive;
+            u.uGridStrength.value = strength;
+            u.uGridEmissive.value = emissive;
             u.uGridSurfaceLight.value = this.data.surfaceLight;
             u.uDotSize.value = this.data.dotSize;
             u.uDotSpacing.value = this.data.dotSpacing;
@@ -6518,6 +6548,9 @@ function setGameplayHUD(isPlaying) {
               }
             });
           });
+          // Re-apply current values so the visibility override (and any live tweaks) survive a fresh or
+          // self-healed re-hook, where new uniforms are seeded from the component defaults.
+          this.update();
         }
       });
 
@@ -9885,6 +9918,24 @@ function setGameplayHUD(isPlaying) {
         updateConfigDisplay();
       }
       
+      // Re-apply the current grid visibility to every distance-grid in the scene (live, no reload).
+      function applyGridStrength() {
+        document.querySelectorAll('[distance-grid]').forEach((el) => {
+          const comp = el.components && el.components['distance-grid'];
+          if (comp && typeof comp.update === 'function') comp.update();
+        });
+      }
+
+      function cycleGridStrength() {
+        gridStrengthIndex = (gridStrengthIndex + 1) % GRID_LEVELS.length;
+        const lvl = GRID_LEVELS[gridStrengthIndex];
+        gridConfigOverride = { strength: lvl.strength, emissive: lvl.emissive };
+        try { localStorage.setItem('boltGridStrengthIndex', String(gridStrengthIndex)); } catch (e) {}
+        console.log(`▦ Gridlines: ${lvl.label} (strength ${lvl.strength})`);
+        applyGridStrength();
+        updateConfigDisplay();
+      }
+
       function toggleDebugCollision() {
         const sceneEl = document.querySelector('a-scene');
         const collisionCulling = sceneEl ? sceneEl.components['collision-culling'] : null;
@@ -9922,6 +9973,7 @@ function setGameplayHUD(isPlaying) {
         updateButton('config-ccd', `CCD: ${perfConfig.ccdIterations}`);
         updateButton('config-bots', `Bots: ${perfConfig.botLogicEnabled ? 'ON' : 'OFF'}`);
         updateButton('config-glow', `Glow: ${perfConfig.glowEnabled ? 'ON' : 'OFF'}`);
+        updateButton('config-grid', `Gridlines: ${GRID_LEVELS[gridStrengthIndex].label}`);
         
         // Update debug collision button
         const sceneEl = document.querySelector('a-scene');
@@ -13668,6 +13720,8 @@ function setGameplayHUD(isPlaying) {
             toggleBotLogic();
           } else if (id === 'config-glow') {
             toggleGlow();
+          } else if (id === 'config-grid') {
+            cycleGridStrength();
           } else if (id === 'config-debug-collision') {
             toggleDebugCollision();
           } else if (id === 'arena-selector-close') {
@@ -19186,6 +19240,14 @@ function setGameplayHUD(isPlaying) {
                 <a-text value="CCD: 10" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
               </a-entity>
               
+              <a-entity id="config-grid" position="0 0 0"
+                        geometry="primitive: plane; width: 0.5; height: 0.06"
+                        material="color: #006644; transparent: true; opacity: 0.8"
+                        cursor-listener
+                        class="clickable">
+                <a-text value="Gridlines: Med" position="0 0 0.01" align="center" width="1" color="#ffffff"></a-text>
+              </a-entity>
+
               <a-entity id="config-bots" position="0 -0.08 0"
                         geometry="primitive: plane; width: 0.5; height: 0.06"
                         material="color: #006644; transparent: true; opacity: 0.8"
