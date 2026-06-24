@@ -59,6 +59,90 @@
         { name: 'Player 2', color: '#ff00ff', position: '-2 0 2', rotation: '0 135 0' },
         { name: 'Player 3', color: '#ffff00', position: '2 0 2', rotation: '0 -135 0' }
       ];
+
+      // Capture-mode spawns: each player/bot starts right beside their OWN team's goal (about 1m to the
+      // side), facing the field. Goals live at #red-goal (z = -38.8) and #blue-goal (z = +38.8).
+      const TEAM_GOAL_Z = { red: -38.8, blue: 38.8 };
+      const SPAWN_GOAL_STANDOFF = 1;                    // meters in front of own goal (clear of back wall)
+      const SPAWN_LATERAL_OFFSETS = [2, -2, 3.5, -3.5]; // ~1m to the side of the 1m-radius goal; flank it
+      const SPAWN_HEIGHT = 2;
+
+      // Spawn point for a team member: in front of its own goal, offset sideways by slot index, and
+      // facing toward field center (red faces +z, blue faces -z).
+      function getTeamSpawnPosition(team, idx) {
+        const goalZ = (TEAM_GOAL_Z[team] !== undefined) ? TEAM_GOAL_Z[team] : -38.8;
+        const towardCenter = goalZ < 0 ? 1 : -1;
+        const z = goalZ + towardCenter * SPAWN_GOAL_STANDOFF;
+        const x = SPAWN_LATERAL_OFFSETS[idx % SPAWN_LATERAL_OFFSETS.length];
+        const rotY = goalZ < 0 ? 180 : 0; // A-Frame forward is -z; red must turn 180° to face +z
+        return { x, y: SPAWN_HEIGHT, z, rotY };
+      }
+
+      // Capture-ball spawn 3m in front of a given goal (used after a goal is scored).
+      function getBallSpawnInFrontOfGoal(goalTeam) {
+        const goalZ = (TEAM_GOAL_Z[goalTeam] !== undefined) ? TEAM_GOAL_Z[goalTeam] : 0;
+        const towardCenter = goalZ < 0 ? 1 : -1;
+        return { x: 0, y: SPAWN_HEIGHT, z: goalZ + towardCenter * 3 };
+      }
+
+      // Place the local human and all bots at their team's start positions (next to their own goal).
+      // Bots are only moved by the authority (singleplayer or host) to avoid client/host conflicts.
+      function spawnAllPlayersAtStartPositions() {
+        if (gameMode !== 'capture') return; // team goals only exist in capture mode
+        const counters = { red: 0, blue: 0 };
+        const nextSpawn = (team) => getTeamSpawnPosition(team, counters[team] !== undefined ? counters[team]++ : 0);
+
+        // Local human rig. NOTE: #rig is nested under an offset parent, so its LOCAL position is not
+        // world space (bots use world-space physics bodies). Convert the world spawn target into the
+        // rig's parent frame, otherwise the human lands several meters off from the bots.
+        const localId = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+        const localTeam = (typeof playerTeams !== 'undefined' && playerTeams.get(localId)) || 'red';
+        const rig = document.querySelector('#rig');
+        if (rig) {
+          const s = nextSpawn(localTeam);
+          const desiredWorld = new THREE.Vector3(s.x, s.y, s.z);
+          let local = desiredWorld.clone();
+          const parent = rig.object3D.parent;
+          if (parent) {
+            parent.updateMatrixWorld(true);
+            local = parent.worldToLocal(desiredWorld.clone());
+          }
+          rig.setAttribute('position', `${local.x} ${local.y} ${local.z}`);
+          const zp = document.querySelector('[zerog-player]');
+          if (zp && zp.components['zerog-player']) {
+            const pc = zp.components['zerog-player'];
+            if (pc.velocity) pc.velocity.set(0, 0, 0);
+            // The player owns its yaw (it writes rig.rotation.y from rotationY every frame), so set
+            // that state directly instead of the rig attribute, which would be overwritten next tick.
+            if (typeof pc.rotationY === 'number') pc.rotationY = THREE.MathUtils.degToRad(s.rotY);
+            rig.object3D.rotation.y = THREE.MathUtils.degToRad(s.rotY);
+          }
+        }
+
+        // Bots (host/singleplayer only).
+        const canMoveBots = (typeof isMultiplayer === 'undefined') || !isMultiplayer || isHost;
+        if (canMoveBots) {
+          ['red', 'blue', 'green'].forEach((color) => {
+            const botEl = document.querySelector(`#zerog-bot-${color}`);
+            if (!botEl || !botEl.components['zerog-bot']) return;
+            const bot = botEl.components['zerog-bot'];
+            const team = bot.data.team || (color === 'red' ? 'red' : 'blue');
+            const s = nextSpawn(team);
+            if (bot.body) {
+              bot.body.position.set(s.x, s.y, s.z);
+              bot.body.velocity.set(0, 0, 0);
+              bot.body.angularVelocity.set(0, 0, 0);
+            }
+            botEl.setAttribute('position', `${s.x} ${s.y} ${s.z}`);
+            // Clear AI state so the bot doesn't keep chasing/holding from before the reset.
+            bot.isGrabbingBall = false;
+            bot.navigationState = 'idle';
+            if (bot.velocity) bot.velocity.set(0, 0, 0);
+            bot._noRegrabUntil = 0;
+            bot.ballStealTimeout = null;
+          });
+        }
+      }
       let sessionID = null;
       let multiplayerSlot = null;
       let myPlayerId = null;
@@ -417,6 +501,46 @@
       function getPlayerIdFromBallIndex(ballPlayerIndex) {
         // CRITICAL FIX: Use the same dynamic logic as getBallOwnerId
         return getBallOwnerId(ballPlayerIndex) || 'player_0'; // fallback
+      }
+
+      // Helper: resolve an owner id to its body avatar component (mixamo-body-avatar).
+      // The local player's own visible body is always #local-body (even in multiplayer, where
+      // #remote-body-N is the hidden network twin); remotes use #remote-body-N, bots #bot-*-body.
+      function getOwnerBodyAvatar(ownerId) {
+        if (!ownerId) return null;
+        const localId = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+        let el = null;
+        if (ownerId === localId || ownerId === 'player_0') {
+          el = document.querySelector('#local-body');
+        } else if (ownerId.startsWith('player_')) {
+          el = document.querySelector(`#remote-body-${ownerId.split('_')[1]}`);
+        } else if (ownerId.startsWith('bot-')) {
+          el = document.querySelector(`#bot-${ownerId.split('-')[1]}-body`);
+        }
+        return (el && el.components) ? el.components['mixamo-body-avatar'] : null;
+      }
+
+      // Helper: the spine2 (chest) bone Object3D for an owner, or null if not loaded yet.
+      function getOwnerChestBone(ownerId) {
+        const avatar = getOwnerBodyAvatar(ownerId);
+        return (avatar && avatar.bones && avatar.bones.spine2) ? avatar.bones.spine2 : null;
+      }
+
+      // Helper: write an owner's chest-slot world transform into outPos/outQuat (a spot just in
+      // front of the torso where the player ball docks). Uses the spine2 (chest) bone position
+      // and the body's facing for the forward offset. Returns false if not resolvable yet.
+      function getOwnerChestTransform(ownerId, outPos, outQuat) {
+        const avatar = getOwnerBodyAvatar(ownerId);
+        if (!avatar || !avatar.bones || !avatar.bones.spine2 || !avatar.el || !avatar.el.object3D) return false;
+        avatar.bones.spine2.getWorldPosition(outPos);
+        // Use the avatar ENTITY's facing (not the bone's bind orientation, whose local axes do
+        // not line up with the body's forward) so the offset points out from the chest.
+        avatar.el.object3D.getWorldQuaternion(outQuat);
+        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(outQuat);
+        fwd.y = 0;
+        if (fwd.lengthSq() < 1e-4) { fwd.set(0, 0, -1); } else { fwd.normalize(); }
+        outPos.add(fwd.multiplyScalar(0.18));
+        return true;
       }
       
       // Update local player color and ensure proper visibility
@@ -2119,8 +2243,9 @@
             console.log('✅ CLIENT: Speed boost re-enabled - ball reset by host authority');
           }
           
-          // Apply the authoritative reset
-          ballComponent.resetPosition();
+          // Apply the authoritative reset (use the host-supplied position, e.g. 3m in front of the
+          // scored goal, falling back to center if none was provided).
+          ballComponent.resetPosition(data.position || null);
           console.log('✅ CLIENT: Ball reset applied from host authority');
         }
       }
@@ -2304,8 +2429,8 @@
           handleGoalNotification(goalData);
         }
         
-        // Force ball reset after goal processing
-        resetCaptureBallAfterGoal();
+        // Force ball reset after goal processing (3m in front of the goal that was scored in).
+        resetCaptureBallAfterGoal(goalTeam);
       }
       
       function updateScoreDisplays() {
@@ -2382,11 +2507,14 @@
         }, 2000); // 2 second delay after goal message
       }
       
-      function resetCaptureBallAfterGoal() {
+      function resetCaptureBallAfterGoal(goalTeam) {
         const captureBall = document.querySelector('#capture-ball');
         if (!captureBall || !captureBall.components['zerog-ball']) return;
         
         const ballComponent = captureBall.components['zerog-ball'];
+        
+        // Ball respawns 3m in front of the goal that was just scored in (falls back to center).
+        const ballSpawn = goalTeam ? getBallSpawnInFrontOfGoal(goalTeam) : { x: 0, y: 2, z: 0 };
         
         console.log('🎯 RESETTING CAPTURE BALL AFTER GOAL');
         
@@ -2431,7 +2559,7 @@
         if (isHost && isMultiplayer && activePlayers.size > 1) {
           const resetData = {
             type: 'capture-ball-reset',
-            position: { x: 0, y: 2, z: 0 },
+            position: { x: ballSpawn.x, y: ballSpawn.y, z: ballSpawn.z },
             timestamp: Date.now(),
             forceReset: true, // Flag for emergency reset
             clearAllSystems: true // Flag to clear all control systems
@@ -2447,10 +2575,13 @@
         
         // CRITICAL: Wait a moment for network messages to propagate, then reset locally
         setTimeout(() => {
-          // Reset ball position and clear ownership
-          ballComponent.resetPosition();
-          console.log('🏆 Ball reset to center position after goal');
+          // Reset ball position (3m in front of the scored goal) and clear ownership.
+          ballComponent.resetPosition(ballSpawn);
+          console.log(`🏆 Ball reset to [${ballSpawn.x}, ${ballSpawn.y}, ${ballSpawn.z}] after goal`);
         }, 50); // Small delay to ensure network sync
+
+        // Send all players back to their team start positions (next to their own goal).
+        spawnAllPlayersAtStartPositions();
       }
       
       function handleBallShieldState(data) {
@@ -4205,8 +4336,9 @@ function setGameplayHUD(isPlaying) {
             if (grabInfo.isBall && grabInfo.surface.components['zerog-ball']) {
               grabInfo.surface.components['zerog-ball'].onRelease();
             } else if (!grabInfo.isBall) {
-              // For static surfaces, apply velocity clamping to prevent explosive release
-              const maxReleaseVelocity = 2.5; // Reduced from 3.0 for safer release
+              // For static surfaces, clamp the launch velocity. Raised to 7.5 (was 2.5) so pushing/
+              // flinging off objects gives a much stronger launch, per request.
+              const maxReleaseVelocity = 7.5;
               if (this.velocity.length() > maxReleaseVelocity) {
                 // Smooth the velocity reduction instead of hard clamping
                 const reductionFactor = maxReleaseVelocity / this.velocity.length();
@@ -5634,9 +5766,10 @@ function setGameplayHUD(isPlaying) {
             // NEW: Realistic grab strength that can't exceed natural human movement speeds
             const baseMovementStrength = activeGrabs.length > 1 ? 45.0 : 55.0; // Much more realistic
             
-            // Scale down strength based on current velocity to prevent runaway acceleration
+            // Scale down strength based on current velocity to prevent runaway acceleration. Threshold
+            // raised to 9 so the push keeps building toward the higher release cap instead of choking ~4.
             const currentSpeed = this.velocity.length();
-            const speedRatio = Math.max(0.1, Math.min(1.0, (4.0 - currentSpeed) / 4.0)); // Reduce strength as speed increases
+            const speedRatio = Math.max(0.1, Math.min(1.0, (9.0 - currentSpeed) / 9.0)); // Reduce strength as speed increases
             const adjustedStrength = baseMovementStrength * speedRatio;
             
             const finalVelocityChange = totalVelocityChange.multiplyScalar(adjustedStrength / dt);
@@ -5648,16 +5781,17 @@ function setGameplayHUD(isPlaying) {
             const timeSinceCollision = Date.now() - this.lastCollisionTime;
             const isNearCollision = timeSinceCollision < 100;
             
-            // NEW: Realistic grab velocity limits based on human movement capabilities
+            // Grab velocity limits. Raised so a fling off a static object can build to the ~7.5 release
+            // cap (the near-collision case is the one active while still touching the object you push).
             let maxVelocity;
             if (activeGrabs.length > 1 && isNearCollision) {
-              maxVelocity = 2.5; // Very conservative for dual grabs near collision
+              maxVelocity = 6.0; // dual grabs near collision
             } else if (isNearCollision) {
-              maxVelocity = 3.0; // Conservative for single grab near collision  
+              maxVelocity = 8.0; // single grab near collision (push-off off the object)
             } else if (activeGrabs.length > 1) {
-              maxVelocity = 3.5; // Realistic for dual grabs (human arm speed)
+              maxVelocity = 6.0; // dual grabs
             } else {
-              maxVelocity = 4.5; // Realistic for single grab (fast human arm movement)
+              maxVelocity = 8.0; // single grab (fast human arm movement)
             }
             
             // Allow higher speeds only for thruster-based movement, not grab-based
@@ -5831,7 +5965,25 @@ function setGameplayHUD(isPlaying) {
           let nearestBall = null;
           let minDistance = Infinity;
           
+          // Player (chest-slot) balls use a tight center-to-center grab radius so you have to
+          // reach right up to the ball; the capture/game ball keeps the looser surface grab.
+          const PLAYER_BALL_GRAB_RADIUS = 0.13; // hand-centre to ball-centre (m)
           balls.forEach(ball => {
+            // A ball that is despawning (shrinking to 0 after a hit or end of life) can't be grabbed.
+            const ballComp = ball.components && ball.components['zerog-ball'];
+            if (ballComp && ballComp.ballState === 'DESPAWNING') return;
+
+            if (ballComp && !ballComp.isCaptureBall) {
+              const ballPos = new THREE.Vector3();
+              ball.object3D.getWorldPosition(ballPos);
+              const centerDist = handPos.distanceTo(ballPos);
+              if (centerDist <= PLAYER_BALL_GRAB_RADIUS && centerDist < minDistance) {
+                minDistance = centerDist;
+                nearestBall = ball;
+              }
+              return;
+            }
+
             const distance = this.getDistanceToSurface(handPos, handRadius, ball);
             
             // If hand is touching or very close to ball (within 10cm for easier grabbing)
@@ -6640,6 +6792,11 @@ function setGameplayHUD(isPlaying) {
           this._lastPassTime = 0;
           this.passEvalInterval = 300;     // throttle the (somewhat costly) pass evaluation/LOS check
           this._lastPassEval = 0;
+          this._supportPos = null;         // cached open support spot (clear passing lane from carrier)
+          this._lastSupportEval = 0;
+          this.supportEvalInterval = 500;  // recompute the open lane at most ~2x/sec (LOS is costly)
+          this._noRegrabUntil = 0;         // after WE release the ball (pass/shot), don't let US re-grab
+                                            // or re-chase our own loose pass for a moment (give-and-go)
           
           // Create physics body for the bot
           const shape = new CANNON.Sphere(0.2);
@@ -6680,13 +6837,26 @@ function setGameplayHUD(isPlaying) {
           if (this.data.difficulty === 'easy') {
             this.data.throwInterval = 6000;  // 6 seconds between throws
             this.data.accuracy = 0.5;        // 50% accuracy
+            this.catchRadius = 0.7;          // smaller catch window
+            this.catchSpeedThreshold = 4.0;  // only reacts to clearly-fast passes
+            this.shootRange = 5.0;           // shoots only from close
           } else if (this.data.difficulty === 'medium') {
             this.data.throwInterval = 4000;  // 4 seconds between throws  
             this.data.accuracy = 0.7;        // 70% accuracy
+            this.catchRadius = 1.0;
+            this.catchSpeedThreshold = 2.5;
+            this.shootRange = 7.0;
           } else if (this.data.difficulty === 'hard') {
             this.data.throwInterval = 3000;  // 3 seconds between throws
             this.data.accuracy = 0.9;        // 90% accuracy
+            this.catchRadius = 1.3;          // bigger catch window, snappier
+            this.catchSpeedThreshold = 1.5;  // reacts to even gentle passes
+            this.shootRange = 9.0;           // can finish from range
           }
+          // Defaults in case difficulty is an unexpected value.
+          if (this.catchRadius == null) this.catchRadius = 1.0;
+          if (this.catchSpeedThreshold == null) this.catchSpeedThreshold = 2.5;
+          if (this.shootRange == null) this.shootRange = 7.0;
         },
         
         updateBallAssignment: function() {
@@ -6949,17 +7119,10 @@ function setGameplayHUD(isPlaying) {
           if (!(this.thrusterActive.left || this.thrusterActive.right)) return;
           if (this.targetDirection.lengthSq() === 0) return;
           const now = Date.now();
-          if (now - this.lastBoostTime < this.boostCooldown) return; // gate the DOM lookup below by cooldown
+          if (now - this.lastBoostTime < this.boostCooldown) return; // gate by cooldown so it doesn't spam
 
-          // Use a closer threshold when chasing an opponent who currently holds the ball, so the bot
-          // boosts to catch up sooner instead of waiting until it's 10m behind.
-          let minDist = this.boostMinDistance;
-          const captureBall = document.querySelector('#capture-ball');
-          if (captureBall && captureBall.components['zerog-ball'] && captureBall.components['zerog-ball'].isGrabbed) {
-            minDist = this.boostChaseDistance;
-          }
-          if (this._targetDistance <= minDist) return;
-
+          // Distance-to-target restriction removed per request: the bot boosts whenever it's actively
+          // thrusting toward its target (subject only to the cooldown), regardless of how far it is.
           this.velocity.add(this.targetDirection.clone().normalize().multiplyScalar(this.boostForce));
           this.lastBoostTime = now;
           this.boostUntil = now + 1500; // raised speed-cap window so the burst carries
@@ -7289,14 +7452,16 @@ function setGameplayHUD(isPlaying) {
             ballVelocity.set(captureBall.body.velocity.x, captureBall.body.velocity.y, captureBall.body.velocity.z);
           }
           
-          // Predict ball position based on velocity and distance
+          // Aim at a true INTERCEPTION point (where the bot can actually meet the moving ball) instead
+          // of a rough fraction of the lead. computeInterceptPoint solves for the meet-up time given the
+          // bot's own speed, so the bot heads to where the ball WILL be rather than trailing behind it.
           const distanceToBall = botPos.distanceTo(ballPos);
           this._targetDistance = distanceToBall; // feed the boost system
-          const timeToReach = distanceToBall / this.data.maxSpeed; // Rough estimate
-          const predictedBallPos = ballPos.clone().add(ballVelocity.clone().multiplyScalar(timeToReach * 0.5)); // Conservative prediction
+          const ballSpeed = ballVelocity.length();
+          const interceptPos = this.computeInterceptPoint(botPos, ballPos, ballVelocity, this.data.maxSpeed * 0.9);
           
-          // Calculate direction to predicted position
-          const directionToPredicted = new THREE.Vector3().subVectors(predictedBallPos, botPos).normalize();
+          // Calculate direction to the interception point
+          const directionToPredicted = new THREE.Vector3().subVectors(interceptPos, botPos).normalize();
           
           // Check if ball direction has changed significantly
           const directionChange = this.targetDirection.length() > 0 ? 
@@ -7320,8 +7485,46 @@ function setGameplayHUD(isPlaying) {
             return;
           }
 
-          // State machine for intelligent navigation
-          switch (this.navigationState) {
+          // Incoming loose pass: the ball is flying free and fast. Intercept it directly, thrusting
+          // toward the meet-up point every frame, instead of the rotate/drift state machine which
+          // stalls its thrust whenever the bearing to a fast ball shifts and so keeps missing the catch.
+          // Just after we passed/shot, don't chase our own loose ball. Push toward the opponent goal
+          // instead (give-and-go) so the intended receiver has room to take it.
+          if (Date.now() < this._noRegrabUntil) {
+            const oppGoal = this.findOpponentGoal();
+            if (oppGoal) {
+              const gp = new THREE.Vector3();
+              oppGoal.object3D.getWorldPosition(gp);
+              const toGoal = new THREE.Vector3().subVectors(gp, this.body.position);
+              this._targetDistance = toGoal.length();
+              if (toGoal.lengthSq() > 0.0001) {
+                toGoal.normalize();
+                this.targetDirection.copy(toGoal);
+                const ready = this.rotateTowards(toGoal, dt);
+                this.thrusterActive.left = ready;
+                this.thrusterActive.right = ready;
+                this.navigationState = 'thrusting';
+              }
+              return;
+            }
+          }
+
+          this._catching = false;
+          const ballLoose = ballComp && !ballComp.isGrabbed && !ballOwner;
+          if (!this.isGrabbingBall && ballLoose && ballSpeed > this.catchSpeedThreshold && distanceToBall < 25) {
+            this._catching = true;
+            this.rotateTowards(this.targetDirection, dt);   // turn toward the intercept...
+            this.thrusterActive.left = true;                // ...while always thrusting (no drift-stall)
+            this.thrusterActive.right = true;
+            this.navigationState = 'thrusting';
+            // Steering assist: nudge velocity straight toward the intercept point regardless of which
+            // way the bot is currently facing, so it can slide sideways onto an off-angle pass instead
+            // of having to finish a slow turn first. applyThrusterForces still caps total speed.
+            this.velocity.addScaledVector(this.targetDirection, this.data.thrusterForce * dt * 3.0);
+          }
+
+          // State machine for intelligent navigation (skipped while actively catching a pass)
+          if (!this._catching) switch (this.navigationState) {
             case 'idle':
               // Check cooldown period and minimum distance before starting new navigation
               const timeSinceClose = Date.now() - this.lastCloseTime;
@@ -7423,15 +7626,22 @@ function setGameplayHUD(isPlaying) {
               break;
           }
           
-          // Try to grab ball if very close - BUT ONLY if not already carrying the ball
-          // Use smaller distance (0.3m) if ball is already grabbed by someone else (for stealing)
-          const requiredDistance = (captureBall.components['zerog-ball'].isGrabbed) ? 0.3 : this.closeDistance;
+          // Try to grab ball if very close - BUT ONLY if not already carrying the ball.
+          // 0.3m to steal a held ball, a wider reach (1.0m) while catching a fast pass so a ball
+          // whizzing past is still snagged, otherwise the normal close distance.
+          const ballIsGrabbed = captureBall.components['zerog-ball'].isGrabbed;
+          const requiredDistance = ballIsGrabbed ? 0.3 : (this._catching ? this.catchRadius : this.closeDistance);
           if (distanceToBall < requiredDistance && !this.isGrabbingBall) {
             this.thrusterActive.left = false;
             this.thrusterActive.right = false;
             
-            // Try to grab the ball if not already grabbing and not in timeout
-            if (!this.ballStealTimeout || Date.now() > this.ballStealTimeout) {
+            // A loose ball (e.g. a pass) can normally be caught; the steal cooldown only restricts
+            // taking a ball away from a current owner. BUT after WE just passed/shot, _noRegrabUntil
+            // blocks US (only us) from instantly snatching our own loose pass back, which previously
+            // made bots "pass" and then immediately re-grab so the ball never actually left them.
+            const canGrab = Date.now() > this._noRegrabUntil &&
+              (!ballIsGrabbed || !this.ballStealTimeout || Date.now() > this.ballStealTimeout);
+            if (canGrab) {
               this.tryGrabBall(captureBall);
             }
             
@@ -7450,7 +7660,7 @@ function setGameplayHUD(isPlaying) {
         
         findBestTarget: function() {
           const botPos = new THREE.Vector3().copy(this.body.position);
-          const botId = this.data.team === 'red' ? 'bot-red' : 'bot-blue';
+          const botId = this.getMyOwnerId();
           let targets = [];
           
           // Add human player as potential target
@@ -7599,7 +7809,11 @@ function setGameplayHUD(isPlaying) {
             (Math.random() - 0.5) * 10,
             (Math.random() - 0.5) * 10
           );
-          
+
+          // Chest-slot: this is a direct launch (no grab/release), so mark it as a fresh
+          // free-flight throw or the slot logic would snap it straight back to the chest.
+          this.ball.components['zerog-ball'].markThrown();
+
           // Bot aiming calculation complete
 
         },
@@ -7700,7 +7914,7 @@ function setGameplayHUD(isPlaying) {
               
               // Check if ball was stolen by checking ownership
               const currentOwner = ballComponent.currentOwner;
-              const expectedOwner = this.data.team === 'red' ? 'bot-red' : (this.data.team === 'blue' ? 'bot-blue' : 'bot-green');
+              const expectedOwner = this.getMyOwnerId();
               
               if (currentOwner !== expectedOwner) {
                 // Ball was stolen - release it
@@ -7763,7 +7977,7 @@ function setGameplayHUD(isPlaying) {
             // In capture mode, only throw at opponents
             if (gameMode === 'capture') {
               const playerId = myPlayerId || 'player_0';
-              const botId = this.data.team === 'red' ? 'bot-red' : 'bot-blue';
+              const botId = this.getMyOwnerId();
               const isTeammate = areTeammates(botId, playerId);
               
               console.log(`Bot throw check: botId=${botId}, playerId=${playerId}, isTeammate=${isTeammate}, bot.data.team=${this.data.team}`);
@@ -7784,10 +7998,19 @@ function setGameplayHUD(isPlaying) {
           if (!ball || this.isGrabbingBall) return false;
           
           const ballComponent = ball.components['zerog-ball'];
+          // A despawning ball (shrinking to 0) can't be grabbed.
+          if (ballComponent && ballComponent.ballState === 'DESPAWNING') return false;
           if (!ballComponent) return false;
           
           // Check if ball is already grabbed by another player/bot
           if (ballComponent.isGrabbed) {
+            // Never steal from a teammate (or, defensively, from ourselves). Teammate-held balls are
+            // handled by support positioning, not stealing.
+            const owner = ballComponent.currentOwner;
+            const myId = this.getMyOwnerId();
+            if (owner && (owner === myId || areTeammates(myId, owner))) {
+              return false;
+            }
             // Anti-deadlock: Check if this bot recently stole a ball (prevent rapid back-and-forth)
             const timeSinceLastSteal = Date.now() - this.lastStealTime;
             if (timeSinceLastSteal < 3000) { // 3 second cooldown between steals
@@ -7859,7 +8082,10 @@ function setGameplayHUD(isPlaying) {
           // Grab the ball
           this.isGrabbingBall = true;
           ballComponent.isGrabbed = true;
-          ballComponent.currentOwner = this.data.team === 'red' ? 'bot-red' : (this.data.team === 'blue' ? 'bot-blue' : 'bot-green');
+          // Use the canonical per-bot id (NOT a team-based guess): bot-green is on the blue team, so the
+          // old `team === 'blue' ? 'bot-blue' : ...` mislabeled bot-green's ball as owned by bot-blue.
+          // That made bot-blue think it owned the ball, stop supporting, and try to "steal" from itself.
+          ballComponent.currentOwner = this.getMyOwnerId();
           ballComponent.lastOwnerChangeTime = Date.now();
           
           // Disable ball gravity when grabbed by bot (like human players)
@@ -7957,11 +8183,15 @@ function setGameplayHUD(isPlaying) {
           opponentGoal.object3D.getWorldPosition(goalPos);
           const botPos = new THREE.Vector3().copy(this.body.position);
 
-          // Stand a few meters in front of the goal (pulled back toward field center).
-          const toCenter = new THREE.Vector3(0, goalPos.y, 0).sub(goalPos);
-          if (toCenter.lengthSq() < 0.001) toCenter.set(0, 0, 1);
-          toCenter.normalize();
-          const supportPos = goalPos.clone().add(toCenter.multiplyScalar(this.supportStandoff));
+          // Pick an OPEN support spot: a few meters in front of the goal, offset sideways if needed so
+          // the carrier has a clear passing lane to us. Recomputed on a throttle since the LOS test is
+          // costly; cached in between.
+          const now = Date.now();
+          if (!this._supportPos || now - this._lastSupportEval > this.supportEvalInterval) {
+            this._lastSupportEval = now;
+            this._supportPos = this.chooseSupportPosition(goalPos);
+          }
+          const supportPos = this._supportPos || goalPos;
 
           const toSupport = new THREE.Vector3().subVectors(supportPos, botPos);
           const dist = toSupport.length();
@@ -7969,10 +8199,24 @@ function setGameplayHUD(isPlaying) {
           if (dist > 0.0001) this.targetDirection.copy(toSupport.normalize());
 
           if (dist < this.supportArrive) {
-            // In position: hold and let momentum bleed off so it's ready to react.
+            // In position: hold and let momentum bleed off, but TURN TO FACE THE BALL/CARRIER so a pass
+            // coming our way can be met instantly (otherwise, facing the goal, we'd have to spin ~180°
+            // first and the ball sails past before we get moving).
             this.thrusterActive.left = false;
             this.thrusterActive.right = false;
             this.navigationState = 'idle';
+            const cb = document.querySelector('#capture-ball');
+            if (cb) {
+              const bp = new THREE.Vector3();
+              cb.object3D.getWorldPosition(bp);
+              const faceDir = new THREE.Vector3().subVectors(bp, this.body.position);
+              faceDir.y = 0;
+              if (faceDir.lengthSq() > 0.001) {
+                faceDir.normalize();
+                this.targetDirection.copy(faceDir);
+                this.rotateTowards(faceDir, dt);
+              }
+            }
           } else {
             const rotationComplete = this.rotateTowards(this.targetDirection, dt);
             this.thrusterActive.left = rotationComplete;
@@ -7981,12 +8225,80 @@ function setGameplayHUD(isPlaying) {
           }
         },
 
+        // Choose a supporting spot in front of the opponent goal that the ball carrier can actually pass
+        // to (clear lane). Tries the central spot first, then steps out sideways. Falls back to central.
+        chooseSupportPosition: function(goalPos) {
+          const toCenter = new THREE.Vector3(0, goalPos.y, 0).sub(goalPos);
+          if (toCenter.lengthSq() < 0.001) toCenter.set(0, 0, 1);
+          toCenter.normalize();
+          const base = goalPos.clone().add(toCenter.clone().multiplyScalar(this.supportStandoff));
+
+          // Carrier (ball) position, to test the passing lane.
+          const cb = document.querySelector('#capture-ball');
+          let carrierPos = null;
+          if (cb) { carrierPos = new THREE.Vector3(); cb.object3D.getWorldPosition(carrierPos); }
+
+          // Sideways axis in the goal plane.
+          const right = new THREE.Vector3().crossVectors(toCenter, new THREE.Vector3(0, 1, 0));
+          if (right.lengthSq() < 0.001) right.set(1, 0, 0);
+          right.normalize();
+
+          // Candidates ordered from central outward; pick the first with a clear lane from the carrier.
+          const offsets = [0, 2, -2, 4, -4];
+          if (!carrierPos) return base;
+          for (const off of offsets) {
+            const cand = base.clone().add(right.clone().multiplyScalar(off));
+            if (this.hasLineOfSight(carrierPos, cand)) return cand;
+          }
+          return base;
+        },
+
+        // While carrying near the opponent goal with a clear shot, finish: fire the ball into the goal.
+        tryShoot: function(time) {
+          const opponentGoal = this.findOpponentGoal();
+          if (!opponentGoal) return false;
+          const goalPos = new THREE.Vector3();
+          opponentGoal.object3D.getWorldPosition(goalPos);
+          const botPos = new THREE.Vector3().copy(this.body.position);
+          if (botPos.distanceTo(goalPos) > this.shootRange) return false;
+          if (!this.hasLineOfSight(botPos, goalPos)) return false;
+
+          const captureBall = document.querySelector('#capture-ball');
+          if (!captureBall || !captureBall.components['zerog-ball']) return false;
+          const ballComponent = captureBall.components['zerog-ball'];
+
+          const dir = new THREE.Vector3().subVectors(goalPos, botPos);
+          if (dir.lengthSq() < 0.0001) return false;
+          dir.normalize();
+          const speed = Math.min(this.data.maxThrowForce + 4, Math.max(this.data.minThrowForce + 2, botPos.distanceTo(goalPos) * 1.5));
+
+          this.isGrabbingBall = false;
+          ballComponent.isGrabbed = false;
+          ballComponent.currentOwner = null;
+          ballComponent.lastOwnerChangeTime = Date.now();
+          ballComponent.body.gravity.set(0, 0, 0);
+          ballComponent.body.velocity.set(dir.x * speed, dir.y * speed, dir.z * speed);
+
+          this.ballStealTimeout = Date.now() + 1500;
+          this._noRegrabUntil = Date.now() + 1500; // don't immediately re-grab our own shot
+          this.navigationState = 'idle';
+          this.lastCloseTime = Date.now();
+          this._lastPassTime = time;
+          this.lastThrowTime = time;
+          console.log(`🤖 Bot ${this.el.id} shot at the goal`);
+          return true;
+        },
+
         // While carrying the ball, pass to a teammate who is meaningfully closer to the opponent's goal.
         maybePassBall: function(time) {
           if (!this.isGrabbingBall || gameMode !== 'capture') return;
           // Throttle the evaluation (it walks the pass line for a line-of-sight test).
           if (time - this._lastPassEval < this.passEvalInterval) return;
           this._lastPassEval = time;
+
+          // Finishing takes priority: if we have a clear shot on goal, take it.
+          if (this.tryShoot(time)) return;
+
           if (time - this._lastPassTime < this.passInterval) return;
 
           const opponentGoal = this.findOpponentGoal();
@@ -8049,6 +8361,7 @@ function setGameplayHUD(isPlaying) {
 
           // Don't immediately chase/re-grab our own pass; reset to normal navigation.
           this.ballStealTimeout = Date.now() + 1500;
+          this._noRegrabUntil = Date.now() + 1500; // don't re-grab/chase our own pass for a moment
           this.navigationState = 'idle';
           this.lastCloseTime = Date.now();
           this._lastPassTime = time;
@@ -8099,12 +8412,18 @@ function setGameplayHUD(isPlaying) {
           const ballRadius = 0.2; // capture ball radius
           const step = 0.5;       // sample spacing along the line
 
-          // Snapshot the surfaces once (geometry + world position).
+          // Snapshot the surfaces once (geometry + world position). Skip the arena's huge boundary
+          // shell (floor/ceiling/walls and the giant corner octahedrons): the play area sits INSIDE
+          // those volumes, so the solid-volume collision test reports every interior point as blocked
+          // and would veto basically every pass. Real interior obstacles are small (<= a few meters).
+          const MAX_OBSTACLE_SIZE = 12; // meters; shell pieces are >= 20m, interior obstacles <= ~8m
           const surfList = [];
           document.querySelectorAll('[grab-surface]').forEach((surface) => {
             if (surface.hasAttribute('data-visual-only') || surface.classList.contains('wireframe-visual-only')) return;
             const geometry = surface.getAttribute('geometry');
             if (!geometry) return;
+            const sizeM = Math.max(geometry.width || 0, geometry.height || 0, geometry.depth || 0, (geometry.radius || 0) * 2);
+            if (sizeM > MAX_OBSTACLE_SIZE) return; // enclosing shell, not an obstacle to pass around
             const sp = new THREE.Vector3();
             surface.object3D.getWorldPosition(sp);
             surfList.push({ surface, geometry, sp });
@@ -8950,6 +9269,9 @@ function setGameplayHUD(isPlaying) {
           
           // NEW: Activate tractor beam for 2 seconds at start
           this.activateStartTractorBeam();
+
+          // Spawn everyone next to their own goal for kickoff.
+          spawnAllPlayersAtStartPositions();
           
           // Dispatch game started event to trigger sound initialization
           this.el.sceneEl.emit('gameStarted');
@@ -9115,6 +9437,9 @@ function setGameplayHUD(isPlaying) {
           
           // Reset all player balls to their spawn positions
           this.respawnBalls();
+
+          // Send everyone back to their own-goal start positions on (re)start.
+          spawnAllPlayersAtStartPositions();
           
           // Hide HUD score display, show controls
           setGameplayHUD(false);
@@ -11275,6 +11600,29 @@ function setGameplayHUD(isPlaying) {
           this.autoReturnActive = false;
           this.autoReturnStartTime = 0;
           this.autoReturnDuration = 2000; // 2 seconds
+
+          // Chest-slot lifecycle (player balls only; capture ball is excluded).
+          // States: SLOTTED (docked on owner chest, no opponent effect, no collisions),
+          //         HELD (in a hand / carried by a bot), FREE (thrown/loose with a life timer),
+          //         DESPAWNING (shrinking to scale 0 before respawning at the chest).
+          this.ballState = this.isCaptureBall ? null : 'SLOTTED';
+          this._wasGrabbed = false;
+          this.freeLifeStart = 0;            // when the ball began floating freely
+          this.freeLifeDuration = 6000;      // ms a thrown ball lives before despawning
+          this.despawnStartTime = 0;         // when the shrink animation started
+          this.despawnShrinkDuration = 500;  // ms to scale 1 -> 0
+          this.respawnAt = 0;                // timestamp to re-slot the ball
+          this._slotMaskSaved = null;        // collision mask saved while slotted
+          this._slotLightIntensity = null;   // resting light intensity, captured during despawn
+          this._slotParented = false;        // is the ball object3D currently a child of a chest bone
+          this._slotBone = null;             // the chest bone the ball is parented to
+          this.dockStartTime = 0;            // when the glide-to-slot (DOCKING) began
+          this.dockDuration = 450;           // ms to ease from free position into the chest slot
+          this.dockTriggerDist = 0.6;        // start gliding home when a settled ball is this close
+          this._dockStartPos = new THREE.Vector3();
+          this._tmpDockPos = new THREE.Vector3();
+          this._tmpChestPos = new THREE.Vector3();
+          this._tmpChestQuat = new THREE.Quaternion();
           
           // NEW: Hit cooldown to prevent multiple hits during auto-return
           this.lastHitTime = 0;
@@ -11327,12 +11675,13 @@ function setGameplayHUD(isPlaying) {
           });
         },
         
-        resetPosition: function() {
+        resetPosition: function(targetPos) {
           // A held-ball bonk must not teleport the ball away from the hand.
           if (this._heldHitActive) return;
-          // Capture ball always resets to center
+          // Capture ball resets to center, or to a caller-supplied spot (e.g. 3m in front of the goal
+          // that was just scored in).
           if (this.isCaptureBall) {
-            const resetPos = { x: 0, y: 2, z: 0 };
+            const resetPos = targetPos || { x: 0, y: 2, z: 0 };
             
             console.log(`🔄 RESETTING CAPTURE BALL: Current pos: [${this.body.position.x.toFixed(2)}, ${this.body.position.y.toFixed(2)}, ${this.body.position.z.toFixed(2)}]`);
             
@@ -11454,6 +11803,9 @@ function setGameplayHUD(isPlaying) {
             return;
           }
           
+          // Chest-slot: ensure the ball is unparented from any chest bone before repositioning.
+          this.detachFromSlot();
+
           // Recalculate the correct reset position based on current game mode
           const ballPlayerIndex = parseInt(this.data.player.replace('player', ''));
           let resetPos;
@@ -11499,6 +11851,16 @@ function setGameplayHUD(isPlaying) {
           // Clear hit cooldown and auto-return when manually resetting
           this.lastHitTime = 0;
           this.autoReturnActive = false;
+
+          // Chest-slot: a reset returns the ball to its owner's chest (the SLOTTED handler
+          // will snap it onto the chest bone each frame).
+          this.ballState = 'SLOTTED';
+          this._wasGrabbed = false;
+          this.freeLifeStart = 0;
+          this.despawnStartTime = 0;
+          this.respawnAt = 0;
+          this.restoreSlotCollision();
+          this.restoreBallVisual();
           
           // Ball reset to position
         },
@@ -11566,7 +11928,7 @@ function setGameplayHUD(isPlaying) {
                   }
                   
                   this.lastHitTime = now;
-                  this.startAutoReturn();
+                  this.startDespawn('hit');
                   return;
                 }
               }
@@ -11597,7 +11959,7 @@ function setGameplayHUD(isPlaying) {
                   }
                   
                   this.lastHitTime = now;
-                  this.startAutoReturn();
+                  this.startDespawn('hit');
                   return;
                 }
               }
@@ -11629,7 +11991,7 @@ function setGameplayHUD(isPlaying) {
                   }
                   
                   this.lastHitTime = now;
-                  this.startAutoReturn();
+                  this.startDespawn('hit');
                   return;
                 }
               }
@@ -11772,7 +12134,7 @@ function setGameplayHUD(isPlaying) {
               }
               
               this.lastHitTime = now;
-              this.startAutoReturn();
+              this.startDespawn('hit');
               return;
             }
           }
@@ -11809,7 +12171,7 @@ function setGameplayHUD(isPlaying) {
               }
               
               this.lastHitTime = now;
-              this.startAutoReturn();
+              this.startDespawn('hit');
               return;
             }
           }
@@ -11840,7 +12202,7 @@ function setGameplayHUD(isPlaying) {
               }
               
               this.lastHitTime = now;
-              this.startAutoReturn();
+              this.startDespawn('hit');
               return;
             }
           }
@@ -11871,7 +12233,7 @@ function setGameplayHUD(isPlaying) {
               }
               
               this.lastHitTime = now;
-              this.startAutoReturn();
+              this.startDespawn('hit');
               return;
             }
           }
@@ -11973,6 +12335,15 @@ function setGameplayHUD(isPlaying) {
           if (hand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
             const haptics = hand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
             haptics.pulse(0.7, 100).catch(() => {});
+          }
+
+          // Chest-slot: grabbing pulls the ball out of its slot.
+          if (!this.isCaptureBall) {
+            this.ballState = 'HELD';
+            this._wasGrabbed = true;
+            this.detachFromSlot();
+            this.restoreSlotCollision();
+            this.restoreBallVisual();
           }
         },
         
@@ -12115,6 +12486,13 @@ function setGameplayHUD(isPlaying) {
           
           // NOTE: Ball state with velocity is already sent immediately above in onRelease
           // No need to send additional release state here since throw velocity sync handles it
+
+          // Chest-slot: released into free flight; start the 6s life timer.
+          if (!this.isCaptureBall) {
+            this.ballState = 'FREE';
+            this._wasGrabbed = false;
+            this.freeLifeStart = Date.now();
+          }
         },
         
         handleShieldCollision: function(otherBody, otherBallComponent, contact) {
@@ -12293,6 +12671,9 @@ function setGameplayHUD(isPlaying) {
         
         updateCollisionMask: function() {
           if (!this.body || this.isCaptureBall) return;
+          // While docked in the chest slot the ball intentionally collides with nothing;
+          // don't let the periodic sync restore a wall/ball mask.
+          if (this.ballState === 'SLOTTED') return;
           
           const shieldElement = this.el.querySelector('.ball-shield');
           const hasActiveShield = shieldElement && 
@@ -12417,6 +12798,12 @@ function setGameplayHUD(isPlaying) {
               this.updateCollisionMask();
               this.lastSyncCheck = Date.now();
             }
+
+            // Drive the chest-slot state machine off grab edges. Bots set isGrabbed directly
+            // (without a grabbingHand), so detecting transitions here covers them too.
+            if (!this.isCaptureBall) {
+              this.updateBallLifecycleTransitions();
+            }
  
              
             if (this.isGrabbed && this.grabbingHand) {
@@ -12472,7 +12859,27 @@ function setGameplayHUD(isPlaying) {
               // When not grabbed, update visual position from physics
               // BUT: Don't override if this is a remote ball that was manually updated
               const isRemoteBall = this.el.hasAttribute('data-remote-update');
-              
+
+              // === Chest-slot lifecycle (player balls we control; skip capture + network-driven) ===
+              if (!this.isCaptureBall && !isRemoteBall) {
+                if (this.ballState === 'DESPAWNING') {
+                  this.updateDespawn();
+                  this.body.gravity.set(0, 0, 0);
+                  return;
+                }
+                if (this.ballState === 'DOCKING') {
+                  this.updateDock();
+                  this.body.gravity.set(0, 0, 0);
+                  return;
+                }
+                if (this.ballState === 'SLOTTED') {
+                  this.updateSlot();
+                  this.body.gravity.set(0, 0, 0);
+                  return;
+                }
+                // FREE: fall through to the normal physics path below.
+              }
+
               // Always update visual position from physics body when not grabbed
               // This ensures the ball moves smoothly during auto-return and tractor beam
               if (!isRemoteBall && !this.isGrabbed) {
@@ -12592,6 +12999,11 @@ function setGameplayHUD(isPlaying) {
                   this.body.angularVelocity.y *= angularScale;
                   this.body.angularVelocity.z *= angularScale;
                 }
+              }
+
+              // FREE-state: thrown-ball life timer + chest re-dock (player balls only).
+              if (!this.isCaptureBall && !isRemoteBall && this.ballState === 'FREE') {
+                this.updateFreeLife();
               }
             }
           }
@@ -13162,7 +13574,287 @@ function setGameplayHUD(isPlaying) {
             // Auto-return activated
           }
         },
-        
+
+        // === Chest-slot lifecycle helpers (player balls only) ===
+
+        // Resolve this ball's owner chest transform into outPos/outQuat.
+        getChestTransform: function(outPos, outQuat) {
+          if (this.isCaptureBall) return false;
+          const ballIndex = parseInt(this.data.player.replace('player', ''));
+          const ownerId = getBallOwnerId(ballIndex);
+          return getOwnerChestTransform(ownerId, outPos, outQuat);
+        },
+
+        // Restore the collision mask/response saved when the ball entered the slot.
+        restoreSlotCollision: function() {
+          if (this._slotMaskSaved !== null && this.body) {
+            this.body.collisionFilterMask = this._slotMaskSaved;
+            this._slotMaskSaved = null;
+          }
+          if (this.body) this.body.collisionResponse = true;
+        },
+
+        // Move SLOTTED <-> HELD <-> FREE based on grab edges (covers bots and humans).
+        updateBallLifecycleTransitions: function() {
+          if (this.isCaptureBall) return;
+          const grabbed = !!this.isGrabbed;
+          if (grabbed && !this._wasGrabbed) {
+            // Grabbed (by a hand or by a bot): leave the slot.
+            this.ballState = 'HELD';
+            this.detachFromSlot();
+            this.restoreSlotCollision();
+            this.restoreBallVisual();
+          } else if (!grabbed && this._wasGrabbed) {
+            // Released/thrown: enter free flight and start the life timer (unless despawning).
+            if (this.ballState !== 'DESPAWNING') {
+              this.ballState = 'FREE';
+              this.freeLifeStart = Date.now();
+              this.restoreSlotCollision();
+            }
+          }
+          this._wasGrabbed = grabbed;
+        },
+
+        // SLOTTED: dock the ball on the owner's chest BONE (parented so it tracks the visible
+        // chest exactly, with zero lag). No opponent effect, no collisions.
+        updateSlot: function() {
+          if (this._slotMaskSaved === null) {
+            this._slotMaskSaved = this.body.collisionFilterMask;
+          }
+          this.body.collisionFilterMask = 0;
+          this.body.collisionResponse = false;
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+
+          const ballIndex = parseInt(this.data.player.replace('player', ''));
+          const ownerId = getBallOwnerId(ballIndex);
+          const bone = getOwnerChestBone(ownerId);
+
+          if (bone) {
+            if (!this._slotParented || this._slotBone !== bone) {
+              this.attachToSlot(bone);
+            }
+            // Keep the physics body where the bone-driven visual is (for grab detection etc.).
+            this.el.object3D.getWorldPosition(this._tmpChestPos);
+            this.body.position.copy(this._tmpChestPos);
+          } else {
+            // Avatar not loaded yet: fall back to unparented world tracking until it is.
+            if (this._slotParented) this.detachFromSlot();
+            if (this.getChestTransform(this._tmpChestPos, this._tmpChestQuat)) {
+              this.el.object3D.position.copy(this._tmpChestPos);
+              this.el.object3D.quaternion.copy(this._tmpChestQuat);
+              this.body.position.copy(this._tmpChestPos);
+            }
+            if (this.el.object3D) this.el.object3D.scale.set(1, 1, 1);
+          }
+        },
+
+        // Parent the ball under the chest bone at the slot offset. THREE.attach preserves the
+        // ball's world scale, which matters because the avatar's bones are heavily scaled.
+        attachToSlot: function(bone) {
+          this.detachFromSlot();
+          if (!this.getChestTransform(this._tmpChestPos, this._tmpChestQuat)) return;
+          const obj = this.el.object3D;
+          obj.position.copy(this._tmpChestPos); // parent is scene root (identity) -> local == world
+          obj.quaternion.identity();
+          obj.scale.set(1, 1, 1);
+          obj.updateMatrixWorld(true);
+          bone.attach(obj);
+          this._slotParented = true;
+          this._slotBone = bone;
+        },
+
+        // Reparent the ball back under the scene root, preserving its current world transform,
+        // so physics/throwing/grabbing continue from the correct place.
+        detachFromSlot: function() {
+          if (!this._slotParented) return;
+          const sceneObj = this.el.sceneEl && this.el.sceneEl.object3D;
+          if (sceneObj) sceneObj.attach(this.el.object3D);
+          this._slotParented = false;
+          this._slotBone = null;
+          if (this.body) {
+            this.el.object3D.getWorldPosition(this._tmpChestPos);
+            this.body.position.copy(this._tmpChestPos);
+          }
+        },
+
+        // Begin shrinking the ball away, then respawn at the chest after a delay.
+        // reason 'hit' -> 5s before respawn; 'death' (end of free-flight life) -> 2s.
+        startDespawn: function(reason) {
+          if (this.isCaptureBall) return;
+          if (this.ballState === 'DESPAWNING') return;
+          this.detachFromSlot();
+
+          // Detach from any human hand holding this ball (held bonk) so it leaves the hand.
+          if (this.grabbingHand) {
+            const player = document.querySelector('[zerog-player]');
+            if (player && player.components['zerog-player']) {
+              const pc = player.components['zerog-player'];
+              ['left', 'right'].forEach((handKey) => {
+                if (pc.grabInfo && pc.grabInfo[handKey] && pc.grabInfo[handKey].surface === this.el) {
+                  pc.grabInfo[handKey] = null;
+                  if (pc.isGrabbing) pc.isGrabbing[handKey] = false;
+                }
+              });
+            }
+          }
+
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this._wasGrabbed = false;
+          this.tractorBeamActive = false;
+          this.autoReturnActive = false;
+          this.restoreSlotCollision();
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          this.lastHitTime = Date.now(); // keep the existing per-ball hit cooldown alive
+          // Capture the resting light intensity so the despawn can fade it (and restore it).
+          if (this._slotLightIntensity == null) {
+            const lightEl = this.el.querySelector('[light]');
+            if (lightEl) {
+              const li = lightEl.getAttribute('light');
+              this._slotLightIntensity = (li && typeof li.intensity === 'number') ? li.intensity : 1.5;
+            }
+          }
+          this.ballState = 'DESPAWNING';
+          this.despawnStartTime = Date.now();
+          this.respawnAt = Date.now() + (reason === 'hit' ? 5000 : 2000);
+        },
+
+        // DESPAWNING: animate scale 1 -> ~0 and fade the ball light, then re-slot at respawnAt.
+        updateDespawn: function() {
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          const now = Date.now();
+          const t = Math.min(1, (now - this.despawnStartTime) / this.despawnShrinkDuration);
+          // Clamp to a tiny epsilon: a true 0 scale makes the ball's world matrix
+          // non-decomposable, which makes THREE's positional audio (the ball hum) ramp a NaN
+          // onto the panner and throw a "non-finite" AudioParam error.
+          const s = Math.max(0.0001, 1 - t);
+          if (this.el.object3D) this.el.object3D.scale.set(s, s, s);
+          this.setDespawnLight(s);
+          if (now >= this.respawnAt) {
+            this.respawnToChestSlot();
+          }
+        },
+
+        // Dim the ball's child point light to s * its resting intensity (captured in startDespawn).
+        setDespawnLight: function(s) {
+          if (this._slotLightIntensity == null) return;
+          const lightEl = this.el.querySelector('[light]');
+          if (lightEl) lightEl.setAttribute('light', 'intensity', this._slotLightIntensity * s);
+        },
+
+        // Restore the ball to full scale and full light intensity (leaving a despawn/shrink).
+        restoreBallVisual: function() {
+          if (this.el.object3D) this.el.object3D.scale.set(1, 1, 1);
+          if (this._slotLightIntensity != null) {
+            const lightEl = this.el.querySelector('[light]');
+            if (lightEl) lightEl.setAttribute('light', 'intensity', this._slotLightIntensity);
+            this._slotLightIntensity = null;
+          }
+        },
+
+        // Reset the ball to full scale, clear control flags, and dock it at the chest slot.
+        respawnToChestSlot: function() {
+          this.restoreBallVisual();
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          this.body.gravity.set(0, 0, 0);
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this._wasGrabbed = false;
+          this.tractorBeamActive = false;
+          this.autoReturnActive = false;
+          this.currentOwner = null;
+          this.lastHitTime = 0;
+          this.restoreSlotCollision();
+          // Snap onto the chest if the avatar is ready; otherwise the SLOTTED handler will
+          // snap it as soon as the bones load.
+          if (this.getChestTransform(this._tmpChestPos, this._tmpChestQuat)) {
+            this.body.position.copy(this._tmpChestPos);
+            this.el.object3D.position.copy(this._tmpChestPos);
+          }
+          this.ballState = 'SLOTTED';
+        },
+
+        // Launch the ball into free flight without going through onGrab/onRelease
+        // (used by a bot's direct throw).
+        markThrown: function() {
+          if (this.isCaptureBall) return;
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this._wasGrabbed = false;
+          this.detachFromSlot();
+          this.restoreSlotCollision();
+          this.restoreBallVisual();
+          this.ballState = 'FREE';
+          this.freeLifeStart = Date.now();
+        },
+
+        // FREE: glide a settled ball into its slot, else despawn at end of life.
+        updateFreeLife: function() {
+          const now = Date.now();
+          // Re-dock when a loose ball settles near its chest slot (covers tractor recall).
+          if (!this.isGrabbed && (now - this.freeLifeStart) > 400) {
+            const speed = this.body.velocity.length();
+            if (speed < 1.2 && this.getChestTransform(this._tmpChestPos, this._tmpChestQuat)) {
+              if (this._tmpChestPos.distanceTo(this.body.position) < this.dockTriggerDist) {
+                this.startDocking();
+                return;
+              }
+            }
+          }
+          // End-of-life despawn (only while genuinely floating free, not being recalled).
+          if (!this.tractorBeamActive && !this.autoReturnActive &&
+              (now - this.freeLifeStart) > this.freeLifeDuration) {
+            this.startDespawn('death');
+          }
+        },
+
+        // Begin a smooth glide from the ball's current free position into the chest slot
+        // (instead of teleport-snapping). Collisions are disabled during the glide.
+        startDocking: function() {
+          if (this.isCaptureBall) return;
+          if (this.ballState === 'DOCKING') return;
+          this.detachFromSlot();
+          this.isGrabbed = false;
+          this.grabbingHand = null;
+          this._wasGrabbed = false;
+          this.tractorBeamActive = false;
+          this.autoReturnActive = false;
+          if (this._slotMaskSaved === null) this._slotMaskSaved = this.body.collisionFilterMask;
+          this.body.collisionFilterMask = 0;
+          this.body.collisionResponse = false;
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          this.body.gravity.set(0, 0, 0);
+          this.restoreBallVisual();
+          this.el.object3D.getWorldPosition(this._dockStartPos);
+          this.ballState = 'DOCKING';
+          this.dockStartTime = Date.now();
+        },
+
+        // DOCKING: ease the ball from where it settled into the (moving) chest slot, then
+        // finalize by snapping + parenting it onto the chest bone (SLOTTED).
+        updateDock: function() {
+          this.body.velocity.set(0, 0, 0);
+          this.body.angularVelocity.set(0, 0, 0);
+          const now = Date.now();
+          const t = Math.min(1, (now - this.dockStartTime) / this.dockDuration);
+          // easeInOutQuad for a soft start and settle.
+          const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+          if (this.getChestTransform(this._tmpChestPos, this._tmpChestQuat)) {
+            this._tmpDockPos.copy(this._dockStartPos).lerp(this._tmpChestPos, e);
+            this.el.object3D.position.copy(this._tmpDockPos);
+            this.el.object3D.quaternion.copy(this._tmpChestQuat);
+            this.body.position.copy(this._tmpDockPos);
+          }
+          if (t >= 1) {
+            this.respawnToChestSlot();
+          }
+        },
+
         // NEW: Tractor beam effect - attracts ball to position in front of player
         applyTractorBeam: function() {
           if (!this.body) return;
@@ -16760,14 +17452,17 @@ function setGameplayHUD(isPlaying) {
         console.log('🔄 Resetting all entities for arena load...');
         
         try {
-          // 1. Reset player position (local player)
-          const rig = document.querySelector('#rig');
-          if (rig && myPlayerId) {
-            const playerIndex = parseInt(myPlayerId.split('_')[1]);
-            if (playerSlots[playerIndex]) {
-              rig.setAttribute('position', playerSlots[playerIndex].position);
-              rig.setAttribute('rotation', playerSlots[playerIndex].rotation);
-              console.log(`✅ Reset player position to ${playerSlots[playerIndex].position}`);
+          // 1. Reset player position (local player). In capture mode everyone goes next to their own
+          // goal via the team-based spawner (handled together with bots below); otherwise use slots.
+          if (gameMode !== 'capture') {
+            const rig = document.querySelector('#rig');
+            if (rig && myPlayerId) {
+              const playerIndex = parseInt(myPlayerId.split('_')[1]);
+              if (playerSlots[playerIndex]) {
+                rig.setAttribute('position', playerSlots[playerIndex].position);
+                rig.setAttribute('rotation', playerSlots[playerIndex].rotation);
+                console.log(`✅ Reset player position to ${playerSlots[playerIndex].position}`);
+              }
             }
           }
           
@@ -16830,32 +17525,28 @@ function setGameplayHUD(isPlaying) {
             }
           }
           
-          // 4. Reset bot positions
-          const botIds = ['bot-red', 'bot-blue'];
-          botIds.forEach(botId => {
-            const botElement = document.querySelector(`#zerog-${botId}`);
-            
-            if (botElement && botElement.components['zerog-bot']) {
-              const botComponent = botElement.components['zerog-bot'];
-              
-              // Get bot's initial position from component
-              let botSpawnPos;
-              if (botId === 'bot-red') {
-                botSpawnPos = { x: -8, y: 0, z: -8 };
-              } else {
-                botSpawnPos = { x: 8, y: 0, z: 8 };
+          // 4. Reset player + bot positions to their team start spots (next to their own goal).
+          if (gameMode === 'capture') {
+            spawnAllPlayersAtStartPositions();
+            console.log('✅ Players and bots spawned next to their own goals for arena load');
+          } else {
+            // Non-capture fallback: original corner positions for the two classic bots.
+            const botIds = ['bot-red', 'bot-blue'];
+            botIds.forEach(botId => {
+              const botElement = document.querySelector(`#zerog-${botId}`);
+              if (botElement && botElement.components['zerog-bot']) {
+                const botComponent = botElement.components['zerog-bot'];
+                const botSpawnPos = (botId === 'bot-red') ? { x: -8, y: 0, z: -8 } : { x: 8, y: 0, z: 8 };
+                if (botComponent.body && botComponent.body.world) {
+                  botComponent.body.position.set(botSpawnPos.x, botSpawnPos.y, botSpawnPos.z);
+                  botComponent.body.velocity.set(0, 0, 0);
+                  botComponent.body.angularVelocity.set(0, 0, 0);
+                  botElement.setAttribute('position', `${botSpawnPos.x} ${botSpawnPos.y} ${botSpawnPos.z}`);
+                  console.log(`✅ Reset bot ${botId} to ${botSpawnPos.x}, ${botSpawnPos.y}, ${botSpawnPos.z}`);
+                }
               }
-              
-              // Reset physics body
-              if (botComponent.body && botComponent.body.world) {
-                botComponent.body.position.set(botSpawnPos.x, botSpawnPos.y, botSpawnPos.z);
-                botComponent.body.velocity.set(0, 0, 0);
-                botComponent.body.angularVelocity.set(0, 0, 0);
-                botElement.setAttribute('position', `${botSpawnPos.x} ${botSpawnPos.y} ${botSpawnPos.z}`);
-                console.log(`✅ Reset bot ${botId} to ${botSpawnPos.x}, ${botSpawnPos.y}, ${botSpawnPos.z}`);
-              }
-            }
-          });
+            });
+          }
           
           console.log('✅ All entities reset for arena load');
         } catch (err) {
@@ -17868,12 +18559,12 @@ function setGameplayHUD(isPlaying) {
           const controllerForward = new THREE.Vector3().crossVectors(shoulderLine, new THREE.Vector3(0, 1, 0));
           controllerForward.normalize();
           
-          const currentBodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.torsoRotation);
-          currentBodyForward.y = 0;
-          currentBodyForward.normalize();
-          
-          const controllerDot = controllerForward.dot(currentBodyForward);
-          if (controllerDot < 0) {
+          // The hand line (shoulderLine) is direction-ambiguous: its perpendicular points two opposite
+          // ways and can't tell front from back on its own. Resolve that against the HEADSET (the real
+          // front reference), not the body's previous facing. Disambiguating against the stale previous
+          // forward is what let the torso lock onto the reversed direction and stay there ("looking at
+          // the back of your own body").
+          if (controllerForward.dot(headForwardFlat) < 0) {
             controllerForward.negate();
           }
           
@@ -17889,10 +18580,18 @@ function setGameplayHUD(isPlaying) {
             .addScaledVector(headForwardFlat, 1.0 - controllerWeight)
             .normalize();
           
-          const targetRotation = new THREE.Quaternion().setFromUnitVectors(
-            new THREE.Vector3(0, 0, -1),
-            blendedForward
-          );
+          // Pure-yaw target quaternions for the head and the hand-blended forward.
+          const headYaw = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), headForwardFlat);
+          const blendedYaw = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), blendedForward);
+          
+          // Clamp the torso to within ±90° of the headset. A person can't face backward relative to
+          // their own head, so this guarantees the body always faces roughly where you're looking while
+          // still allowing the hands to add a natural shoulder twist within that range.
+          const maxYaw = Math.PI / 2; // 90 degrees
+          const yawDiff = headYaw.angleTo(blendedYaw);
+          const targetRotation = (yawDiff > maxYaw)
+            ? headYaw.clone().slerp(blendedYaw, maxYaw / yawDiff) // limit to exactly 90° off the head
+            : blendedYaw;
           
           this.torsoRotation.slerp(targetRotation, this.smoothingFactor * 0.7);
         },
