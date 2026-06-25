@@ -9152,7 +9152,7 @@ function setGameplayHUD(isPlaying) {
         createPhysicsBody: function() {
           
           // Create physics body for goal detection (vertical cylinder to match visual)
-          const shape = new CANNON.Cylinder(1, 1, 0.1, 8); // radius, radius, height, segments
+          const shape = new CANNON.Cylinder(0.8, 0.8, 0.1, 8); // radius, radius, height, segments (0.2m smaller than the 1m ring)
           this.body = new CANNON.Body({
             mass: 0, // Static body
             shape: shape,
@@ -9177,9 +9177,23 @@ function setGameplayHUD(isPlaying) {
           
           // Listen for ball collisions
           this.body.addEventListener('collide', (evt) => {
+            this.playRingTouchSound();
             this.checkGoalScore(evt);
           });
           
+        },
+
+        // Play the sonar sound when a ball touches this goal ring. Once per hit, with a 1s timeout
+        // (the goal body only collides with balls, and rolling contact fires many collide events).
+        playRingTouchSound: function() {
+          const now = Date.now();
+          if (this._lastRingSound && now - this._lastRingSound < 1000) return;
+          this._lastRingSound = now;
+          const s = document.querySelector('#goal-ring-sound');
+          if (s && s.components && s.components.sound) {
+            s.components.sound.stopSound();
+            s.components.sound.playSound();
+          }
         },
         
         // NEW: Add wireframe visualization for collision shape
@@ -9191,7 +9205,7 @@ function setGameplayHUD(isPlaying) {
           
           // Create wireframe cylinder to match the collision shape (vertical)
           const wireframe = document.createElement('a-cylinder');
-          wireframe.setAttribute('radius', '1');
+          wireframe.setAttribute('radius', '0.8');
           wireframe.setAttribute('height', '0.1');
           wireframe.setAttribute('rotation', '0 0 0'); // FIXED: No rotation - vertical like the visual
           wireframe.setAttribute('material', 'wireframe: true; color: #ffff00; opacity: 0.3; transparent: true');
@@ -13531,24 +13545,35 @@ function setGameplayHUD(isPlaying) {
               this.lastPositionTime = currentTime;
 
               // Movement-based haptics (DodgeVR-style): while a hand holds the ball, rumble that
-              // controller with an intensity proportional to how fast the hand is moving. Stays
-              // silent when held roughly still. Applies to the game (capture) ball and player balls.
+              // controller with an intensity proportional to how fast the CONTROLLER is moving —
+              // measured RELATIVE TO THE PLAYER RIG, so flying/turning the whole rig around does
+              // not buzz; only physically moving the hand does. Applies to the game (capture) ball
+              // and player balls. Stays silent when the hand is held roughly still.
               if (this.grabbingHand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
-                // Average speed over the recent velocity history to avoid frame-to-frame jitter.
-                let speed = 0;
-                if (this.velocityHistory.length) {
-                  for (let i = 0; i < this.velocityHistory.length; i++) speed += this.velocityHistory[i].length();
-                  speed /= this.velocityHistory.length;
-                }
-                const HAPTIC_DEADZONE = 0.06; // m/s below which we stay silent (holding still)
-                const HAPTIC_GAIN = 0.4;      // maps m/s of hand movement -> pulse intensity
-                const HAPTIC_MAX = 0.6;       // cap so fast swings never feel harsh
-                const intensity = Math.max(0, Math.min(HAPTIC_MAX, (speed - HAPTIC_DEADZONE) * HAPTIC_GAIN));
-                const HAPTIC_INTERVAL = 50;   // ms between pulses; 60ms duration overlaps -> continuous feel
-                if (intensity > 0.01 && (currentTime - (this._lastMoveHaptic || 0)) >= HAPTIC_INTERVAL) {
-                  this._lastMoveHaptic = currentTime;
-                  const haptics = this.grabbingHand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
-                  haptics.pulse(intensity, 60).catch(() => {});
+                if (!this._rigObj3D) { const rigEl = document.querySelector('#rig'); this._rigObj3D = rigEl && rigEl.object3D; }
+                if (this._rigObj3D) {
+                  // Controller position in the rig's local frame (excludes rig translation/rotation).
+                  const handLocal = this._rigObj3D.worldToLocal(handPos.clone());
+                  const dtL = this._lastHandLocalTime ? (currentTime - this._lastHandLocalTime) / 1000 : 0;
+                  if (this._lastHandLocal && dtL > 0.001 && dtL < 0.2) {
+                    const rawSpeed = handLocal.distanceTo(this._lastHandLocal) / dtL;
+                    // Light smoothing to avoid frame-to-frame jitter.
+                    this._handLocalSpeed = (this._handLocalSpeed == null) ? rawSpeed : (this._handLocalSpeed * 0.6 + rawSpeed * 0.4);
+                    const HAPTIC_DEADZONE = 0.06; // m/s below which we stay silent (holding still)
+                    const HAPTIC_GAIN = 0.4;      // maps m/s of hand movement -> pulse intensity
+                    const HAPTIC_MAX = 0.6;       // cap so fast swings never feel harsh
+                    const intensity = Math.max(0, Math.min(HAPTIC_MAX, (this._handLocalSpeed - HAPTIC_DEADZONE) * HAPTIC_GAIN));
+                    const HAPTIC_INTERVAL = 50;   // ms between pulses; 60ms duration overlaps -> continuous feel
+                    if (intensity > 0.01 && (currentTime - (this._lastMoveHaptic || 0)) >= HAPTIC_INTERVAL) {
+                      this._lastMoveHaptic = currentTime;
+                      const haptics = this.grabbingHand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
+                      haptics.pulse(intensity, 60).catch(() => {});
+                    }
+                  } else {
+                    this._handLocalSpeed = 0; // re-grab / first frame: reset, no spurious pulse
+                  }
+                  this._lastHandLocal = handLocal;
+                  this._lastHandLocalTime = currentTime;
                 }
               }
 
@@ -21823,6 +21848,15 @@ function setGameplayHUD(isPlaying) {
       <a-entity id="goal-sound" sound="src: url(audio/sound-design-elements-impact-sfx-ps-084-353199.mp3); 
                                       autoplay: false; 
                                       loop: false; 
+                                      volume: 1.0;
+                                      positional: false;
+                                      poolSize: 2;">
+      </a-entity>
+
+      <!-- Goal-ring touch sound (plays when a ball contacts a goal ring) -->
+      <a-entity id="goal-ring-sound" sound="src: url(audio/submarine-sonar-38243-once.mp3);
+                                      autoplay: false;
+                                      loop: false;
                                       volume: 1.0;
                                       positional: false;
                                       poolSize: 2;">
