@@ -542,7 +542,316 @@
         outPos.add(fwd.multiplyScalar(0.18));
         return true;
       }
-      
+
+      // DEBUG: temporarily visualize every grabbable collider on the characters as a wireframe
+      // sphere (sized to its grab radius). These ride the bones via the existing grab markers.
+      //   toggleGrabColliders()       -> flip on/off
+      //   toggleGrabColliders(true)   -> force on
+      //   toggleGrabColliders(false)  -> force off
+      // Body-part (bone) colliders are cyan; the head/body target spheres are yellow.
+      // Add a wireframe sphere to a single grabbable marker (idempotent).
+      window.__addGrabViz = function(m) {
+        if (!m || m.querySelector(':scope > .grab-debug-viz')) return;
+        const r = parseFloat(m.getAttribute('radius')) || 0.2;
+        const isBonePart = m.getAttribute('data-body-collider') === 'true';
+        const baseColor = isBonePart ? '#00e5ff' : '#ffe000';
+        const viz = document.createElement('a-entity');
+        viz.classList.add('grab-debug-viz');
+        viz.dataset.baseColor = baseColor; // restored after a trigger-highlight clears
+        viz.setAttribute('geometry', `primitive: sphere; radius: ${r}; segmentsWidth: 12; segmentsHeight: 10`);
+        viz.setAttribute('material',
+          `color: ${baseColor}; wireframe: true; ` +
+          `shader: flat; transparent: true; opacity: 0.85; depthTest: false`);
+        viz.setAttribute('position', '0 0 0');
+        viz.setAttribute('raycaster-target', 'false');
+        m.appendChild(viz);
+      };
+
+      window.toggleGrabColliders = function(show) {
+        const existing = document.querySelectorAll('.grab-debug-viz');
+        const shouldShow = (typeof show === 'boolean') ? show : (existing.length === 0);
+        // Remember the desired state so colliders built lazily later are visualized too
+        // (see ensureGrabColliders, which calls window.__addGrabViz on new markers).
+        window.__grabVizOn = shouldShow;
+        if (!shouldShow) {
+          document.querySelectorAll('.grab-debug-viz, .hand-hit-viz').forEach((v) => {
+            if (v.parentNode) v.parentNode.removeChild(v);
+          });
+          if (window.__hitDebug) {
+            window.__hitDebug.highlighted = [];
+            window.__hitDebug.leftHandViz = null;
+            window.__hitDebug.rightHandViz = null;
+          }
+          console.log('🟦 Grab collider visualization OFF');
+          return false;
+        }
+        const markers = document.querySelectorAll('.grabbable-player');
+        markers.forEach((m) => window.__addGrabViz(m));
+        console.log(`🟦 Grab collider visualization ON (${markers.length} colliders shown). Run toggleGrabColliders() again to hide.`);
+        return true;
+      };
+
+      // DEBUG: show the player's two hand "hit" spheres (the 0.08m grab probes) and, every frame,
+      // light up the hand green when it would grab something and turn the specific collider it is
+      // triggering red. Driven by the same on/off flag as toggleGrabColliders().
+      //
+      // NOTE: #leftHand/#rightHand are visible="false" (the controller models are hidden in favour
+      // of the avatar arms), and a THREE parent with visible=false hides ALL children — so the hand
+      // spheres CANNOT live under the hand entities or they'd be invisible. Instead they are parented
+      // to the scene and driven to each hand's world position every frame.
+      window.__hitDebug = window.__hitDebug || { highlighted: [] };
+      (function () {
+        const HAND_BASE = '#88ccff', HAND_HIT = '#39ff14', TARGET_HIT = '#ff2a2a';
+        const tmp = new THREE.Vector3();
+        function makeHandViz() {
+          const v = document.createElement('a-entity');
+          v.classList.add('hand-hit-viz');
+          v.setAttribute('geometry', 'primitive: sphere; radius: 0.08; segmentsWidth: 12; segmentsHeight: 10');
+          v.setAttribute('material', `color: ${HAND_BASE}; wireframe: true; shader: flat; transparent: true; opacity: 0.9; depthTest: false`);
+          v.setAttribute('raycaster-target', 'false');
+          (document.querySelector('a-scene') || document.body).appendChild(v);
+          v.__boneAttached = null;
+          return v;
+        }
+        function setColor(viz, color) { if (viz) viz.setAttribute('material', 'color', color); }
+        function palmBoneFor(handEl) {
+          const avatar = getOwnerBodyAvatar((typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0');
+          if (avatar && avatar.bones) {
+            return (handEl && handEl.id === 'leftHand') ? avatar.bones.leftHandBone : avatar.bones.rightHandBone;
+          }
+          return null;
+        }
+        // Parent the sphere to the hand (wrist) bone but positioned at the PALM probe point, so it
+        // rides the visible hand exactly where the grab probe now lives. THREE.attach bakes the
+        // palm offset into the local transform and preserves world scale (bones are scaled ~0.01).
+        function attachToBone(viz, bone, worldPos) {
+          const scene = document.querySelector('a-scene');
+          if (viz.object3D.parent && scene && scene.object3D) scene.object3D.attach(viz.object3D);
+          viz.object3D.position.copy(worldPos);
+          viz.object3D.quaternion.identity();
+          viz.object3D.scale.set(1, 1, 1);
+          viz.object3D.updateMatrixWorld(true);
+          bone.attach(viz.object3D);
+          viz.__boneAttached = bone;
+        }
+        function detachToScene(viz) {
+          const scene = document.querySelector('a-scene');
+          if (viz.__boneAttached && scene && scene.object3D) scene.object3D.attach(viz.object3D);
+          viz.__boneAttached = null;
+        }
+        function frame() {
+          if (window.__grabVizOn) {
+            const pEl = document.querySelector('[zerog-player]');
+            const comp = pEl && pEl.components && pEl.components['zerog-player'];
+            if (comp) {
+              const left = comp.leftHand || document.querySelector('#leftHand');
+              const right = comp.rightHand || document.querySelector('#rightHand');
+              if (!window.__hitDebug.leftHandViz || !window.__hitDebug.leftHandViz.isConnected) {
+                window.__hitDebug.leftHandViz = makeHandViz();
+              }
+              if (!window.__hitDebug.rightHandViz || !window.__hitDebug.rightHandViz.isConnected) {
+                window.__hitDebug.rightHandViz = makeHandViz();
+              }
+              const lv = window.__hitDebug.leftHandViz, rv = window.__hitDebug.rightHandViz;
+              // Clear last frame's target highlights back to their base colors.
+              (window.__hitDebug.highlighted || []).forEach((v) => {
+                if (v && v.dataset) setColor(v, v.dataset.baseColor || '#00e5ff');
+              });
+              window.__hitDebug.highlighted = [];
+              [[left, lv], [right, rv]].forEach(([handEl, handViz]) => {
+                if (!handEl || !handViz || !handViz.object3D) return;
+                const bone = palmBoneFor(handEl);
+                if (bone) {
+                  // Parent to the wrist bone at the palm point (re-attach if the bone changed,
+                  // e.g. arena reload). Position comes from the same palm probe the grab uses.
+                  if (handViz.__boneAttached !== bone) {
+                    comp.getHandProbePos(handEl, tmp);
+                    attachToBone(handViz, bone, tmp);
+                  }
+                } else if (handEl.object3D) {
+                  // Avatar not ready: scene-anchor at the controller origin as a fallback.
+                  if (handViz.__boneAttached) detachToScene(handViz);
+                  handEl.object3D.getWorldPosition(tmp);
+                  handViz.object3D.position.copy(tmp);
+                }
+                let target = null;
+                try {
+                  target = comp.findNearestPlayer(handEl) ||
+                           comp.findNearestBall(handEl) ||
+                           comp.findNearestGrabbableSurface(handEl);
+                } catch (e) { /* ignore transient lookup errors */ }
+                setColor(handViz, target ? HAND_HIT : HAND_BASE);
+                if (target && target.querySelector) {
+                  const tv = target.querySelector(':scope > .grab-debug-viz');
+                  if (tv) { setColor(tv, TARGET_HIT); window.__hitDebug.highlighted.push(tv); }
+                }
+              });
+            }
+          }
+          requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+      })();
+
+      // DEBUG: temporarily freeze all bots in place (e.g. while inspecting grab colliders).
+      //   freezeBots()       -> flip on/off
+      //   freezeBots(true)   -> freeze   |   freezeBots(false) -> resume
+      window.freezeBots = function(on) {
+        window.__botsFrozen = (typeof on === 'boolean') ? on : !window.__botsFrozen;
+        console.log(window.__botsFrozen ? '🧊 Bots FROZEN' : '▶️ Bots RESUMED');
+        return window.__botsFrozen;
+      };
+
+      // DEBUG: visualize the per-bone GRASP CAPSULES (the limb-shaped surfaces the fingertips
+      // conform to). One wireframe capsule per arm/leg segment + torso, plus a sphere for the head,
+      // on every loaded character. They ride the bones each frame.
+      //   toggleGraspCapsules()      -> flip on/off
+      //   toggleGraspCapsules(true)  -> force on   |   toggleGraspCapsules(false) -> force off
+      window.__capsuleVizOn = false;
+      window.__capsuleViz = [];
+      window.toggleGraspCapsules = function (show) {
+        const shouldShow = (typeof show === 'boolean') ? show : !window.__capsuleVizOn;
+        window.__capsuleVizOn = shouldShow;
+        if (!shouldShow) {
+          (window.__capsuleViz || []).forEach((it) => { if (it.mesh.parent) it.mesh.parent.remove(it.mesh); });
+          window.__capsuleViz = [];
+          console.log('🟪 Grasp capsule visualization OFF');
+          return false;
+        }
+        if (window.__rebuildCapsuleViz) window.__rebuildCapsuleViz();
+        return true;
+      };
+
+      (function () {
+        const up = new THREE.Vector3(0, 1, 0);
+        const pa = new THREE.Vector3(), pb = new THREE.Vector3(), mid = new THREE.Vector3(), dir = new THREE.Vector3();
+        let retry = 0;
+
+        function avatarComps() {
+          const out = [];
+          document.querySelectorAll('[mixamo-body-avatar]').forEach((el) => {
+            const c = el.components && el.components['mixamo-body-avatar'];
+            if (c) out.push(c);
+          });
+          return out;
+        }
+
+        window.__rebuildCapsuleViz = function () {
+          (window.__capsuleViz || []).forEach((it) => { if (it.mesh.parent) it.mesh.parent.remove(it.mesh); });
+          window.__capsuleViz = [];
+          const sceneEl = document.querySelector('a-scene');
+          if (!sceneEl || !sceneEl.object3D) return;
+          const root = sceneEl.object3D;
+          avatarComps().forEach((av) => {
+            const caps = av.ensureGraspCapsules && av.ensureGraspCapsules();
+            if (!caps || !caps.length) return;
+            caps.forEach((cap) => {
+              if (!cap.a || !cap.b) return;
+              cap.a.getWorldPosition(pa); cap.b.getWorldPosition(pb);
+              const len = pa.distanceTo(pb); // bone segment length is ~constant, build geometry once
+              const geo = new THREE.CapsuleGeometry(cap.r, len, 6, 14);
+              const mat = new THREE.MeshBasicMaterial({ color: '#d000ff', wireframe: true, transparent: true, opacity: 0.85, depthTest: false });
+              const mesh = new THREE.Mesh(geo, mat);
+              mesh.renderOrder = 999;
+              root.add(mesh);
+              window.__capsuleViz.push({ mesh: mesh, cap: cap });
+            });
+          });
+          if (window.__capsuleViz.length) {
+            console.log(`🟪 Grasp capsule visualization ON (${window.__capsuleViz.length} capsules). Run toggleGraspCapsules() to hide.`);
+          }
+        };
+
+        function frame() {
+          if (window.__capsuleVizOn) {
+            // Lazily (re)build until characters' bones are ready, then stop retrying.
+            if (!window.__capsuleViz.length && (retry++ % 30 === 0)) window.__rebuildCapsuleViz();
+            for (let i = 0; i < window.__capsuleViz.length; i++) {
+              const it = window.__capsuleViz[i];
+              if (!it.cap.a || !it.cap.b) continue;
+              it.cap.a.getWorldPosition(pa); it.cap.b.getWorldPosition(pb);
+              mid.addVectors(pa, pb).multiplyScalar(0.5);
+              it.mesh.position.copy(mid);
+              dir.subVectors(pb, pa);
+              if (dir.lengthSq() > 1e-8) { dir.normalize(); it.mesh.quaternion.setFromUnitVectors(up, dir); }
+            }
+          }
+          requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+      })();
+
+      // DEBUG: show a 1cm sphere at each hand's PALM probe (where the grasp reference point is) and
+      // a line from that sphere to the surface it is grabbing (nearest capsule point on the grabbed
+      // character). Palm sphere = green; grab line = yellow. Toggle: togglePalmViz().
+      window.__palmVizOn = false;
+      window.togglePalmViz = function (show) {
+        window.__palmVizOn = (typeof show === 'boolean') ? show : !window.__palmVizOn;
+        if (!window.__palmVizOn && window.__palmVizRefs) {
+          Object.values(window.__palmVizRefs).forEach((o) => { if (o.parent) o.parent.remove(o); });
+          window.__palmVizRefs = null;
+        }
+        console.log(window.__palmVizOn ? '🟢 Palm viz ON' : '⚪ Palm viz OFF');
+        return window.__palmVizOn;
+      };
+      (function () {
+        const palm = new THREE.Vector3(), surf = new THREE.Vector3();
+        function localPC() { const el = document.querySelector('[zerog-player]'); return el && el.components ? el.components['zerog-player'] : null; }
+        function build(root) {
+          const mkSphere = () => {
+            const m = new THREE.Mesh(new THREE.SphereGeometry(0.01, 12, 10),
+              new THREE.MeshBasicMaterial({ color: '#00ff66', depthTest: false }));
+            m.renderOrder = 1001; root.add(m); return m;
+          };
+          const mkLine = () => {
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+            const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color: '#ffee00', depthTest: false }));
+            l.renderOrder = 1001; l.frustumCulled = false; root.add(l); return l;
+          };
+          return { lS: mkSphere(), rS: mkSphere(), lL: mkLine(), rL: mkLine() };
+        }
+        function updateOne(pc, handEl, sphereM, lineM) {
+          if (!pc || !handEl || !pc.getHandProbePos) { sphereM.visible = false; lineM.visible = false; return; }
+          pc.getHandProbePos(handEl, palm);
+          sphereM.position.copy(palm); sphereM.visible = true;
+          const handKey = handEl.id === 'leftHand' ? 'left' : 'right';
+          const snap = pc.grabSnap && pc.grabSnap[handKey];
+          if (snap && snap.avatar && pc.nearestCapsuleSurface) {
+            const sd = pc.nearestCapsuleSurface(snap.avatar, palm, surf);
+            if (sd !== false) {
+              const pos = lineM.geometry.attributes.position;
+              pos.setXYZ(0, palm.x, palm.y, palm.z);
+              pos.setXYZ(1, surf.x, surf.y, surf.z);
+              pos.needsUpdate = true;
+              lineM.visible = true;
+              return;
+            }
+          }
+          lineM.visible = false;
+        }
+        function frame() {
+          if (window.__palmVizOn) {
+            const sceneEl = document.querySelector('a-scene');
+            if (sceneEl && sceneEl.object3D) {
+              if (!window.__palmVizRefs) window.__palmVizRefs = build(sceneEl.object3D);
+              const pc = localPC();
+              const b = window.__palmVizRefs;
+              updateOne(pc, pc && (pc.leftHand || document.querySelector('#leftHand')), b.lS, b.lL);
+              updateOne(pc, pc && (pc.rightHand || document.querySelector('#rightHand')), b.rS, b.rL);
+            }
+          }
+          requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+      })();
+
+      // Startup: all grab/grasp debug overlays OFF and bots running normally. Re-enable any of them
+      // on demand from the console: toggleGrabColliders(), toggleGraspCapsules(), togglePalmViz(),
+      // freezeBots().
+      window.__grabVizOn = false;
+      window.__botsFrozen = false;
+
       // Update local player color and ensure proper visibility
       function updateLocalPlayerColor(color) {
         const playerTarget = document.querySelector('#player-target');
@@ -3597,6 +3906,10 @@ function setGameplayHUD(isPlaying) {
           // Store references for continuous hiding
           this.leftHand = leftHand;
           this.rightHand = rightHand;
+
+          // Distance (m) to push the grab probe from the wrist bone toward the fingers so it
+          // lands on the palm centre. Tunable at runtime via the zerog-player component.
+          this.palmProbeOffset = 0.08;
           
           // Function to continuously hide controller meshes
           const hideControllerMeshes = () => {
@@ -3641,6 +3954,17 @@ function setGameplayHUD(isPlaying) {
           this.grabbedSurface = { left: null, right: null };
           this.grabInfo = { left: null, right: null };
           this.thrusterActive = { left: false, right: false };
+
+          // Visual grab-snap: pin the rendered IK hand onto the grabbed surface so it doesn't
+          // visually hold air next to a character or sink inside the body. Detection radius is
+          // unchanged (still generous) — this only moves the *rendered* hand to the contact point,
+          // computed once at grab time via a raycast and then tracked cheaply each frame.
+          this.grabSnap = { left: null, right: null };
+          this.grabSnapBlendDur = 0.12;     // seconds to ease the hand onto the surface
+          this.grabSnapReleaseDist = 0.42;  // let go for real if the controller strays this far
+          this._snapTmpA = new THREE.Vector3();
+          this._snapTmpB = new THREE.Vector3();
+          this._snapRay = new THREE.Raycaster();
           
           // NEW: Anti-stuttering system
           this.velocityHistory = [];
@@ -3951,6 +4275,11 @@ function setGameplayHUD(isPlaying) {
             if (surface) {
               this.grabbedSurface[handKey] = surface;
               this.attachToSurface(hand, surface);
+
+              // Visual grab-snap: pin the rendered hand onto the actual surface it grabbed.
+              const sc = new THREE.Vector3();
+              surface.object3D.getWorldPosition(sc);
+              this.beginGrabSnap(handKey, hand, surface.object3D, surface.object3D, sc, 0.1, null);
               
               // Haptic feedback
               this.playHapticFeedback(hand, 0.5, 100);
@@ -3990,9 +4319,337 @@ function setGameplayHUD(isPlaying) {
           }
         },
         
+        // Resolve a hand's grab-probe world position at the PALM centre. The hand bone
+        // (leftHandBone/rightHandBone) sits at the WRIST, and the palm is rigidly attached to it,
+        // so we compute the palm ONCE as a fixed point in the wrist bone's LOCAL frame (offset
+        // toward the fingers, using the forearm->wrist direction) and re-project it to world each
+        // frame. This way it tracks correctly through any wrist rotation and matches the parented
+        // hand sphere exactly. Falls back to the controller origin if the avatar isn't ready.
+        getHandProbePos: function(hand, out) {
+          const avatar = getOwnerBodyAvatar((typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0');
+          if (avatar && avatar.bones) {
+            const isLeft = hand && hand.id === 'leftHand';
+            const bone = isLeft ? avatar.bones.leftHandBone : avatar.bones.rightHandBone;
+            if (bone) {
+              if (!this._palmLocal) { this._palmLocal = {}; this._palmCacheBone = {}; }
+              const key = isLeft ? 'left' : 'right';
+              if (!this._palmLocal[key] || this._palmCacheBone[key] !== bone) {
+                const wrist = new THREE.Vector3(); bone.getWorldPosition(wrist);
+                const worldPalm = wrist.clone();
+                const forearm = isLeft ? avatar.bones.leftForearm : avatar.bones.rightForearm;
+                if (forearm) {
+                  const fpos = new THREE.Vector3(); forearm.getWorldPosition(fpos);
+                  const dir = wrist.clone().sub(fpos); // elbow -> wrist, i.e. toward the fingers
+                  if (dir.lengthSq() > 1e-6) { dir.normalize(); worldPalm.addScaledVector(dir, this.palmProbeOffset); }
+                }
+                this._palmLocal[key] = bone.worldToLocal(worldPalm.clone());
+                this._palmCacheBone[key] = bone;
+              }
+              out.copy(this._palmLocal[key]);
+              bone.localToWorld(out);
+              return out;
+            }
+          }
+          hand.object3D.getWorldPosition(out);
+          return out;
+        },
+
+        // ---- Visual grab-snap helpers --------------------------------------------------------
+        // Cast a ray from just outside the target, through the hand, toward the target centre, and
+        // return the first surface hit (the visible contact point nearest the hand). Works whether
+        // the hand is outside or buried inside the mesh. Returns null if nothing is hit. This runs
+        // ONCE per grab, so the (relatively) costly skinned-mesh raycast has no per-frame impact.
+        computeGrabContact: function(handPos, raycastObj, centerPos) {
+          if (!raycastObj) return null;
+          const outward = this._snapTmpA.copy(handPos).sub(centerPos);
+          if (outward.lengthSq() < 1e-8) return null;
+          outward.normalize();
+          const origin = this._snapTmpB.copy(handPos).addScaledVector(outward, 0.6);
+          const dir = origin.clone().sub(centerPos).multiplyScalar(-1).normalize(); // origin -> centre
+          this._snapRay.set(origin, dir);
+          this._snapRay.far = 3.0;
+          let hits = null;
+          try { hits = this._snapRay.intersectObject(raycastObj, true); } catch (e) { hits = null; }
+          return (hits && hits.length) ? hits[0].point.clone() : null;
+        },
+
+        // Begin pinning the rendered hand onto a grabbed target.
+        //  - Characters (graspAvatar set): CONTINUOUS mode — every frame the palm is projected onto
+        //    the nearest capsule (limb) surface, so the palm stays glued to the body as it moves.
+        //  - Surfaces (no graspAvatar): FIXED mode — a one-shot contact point (skinned-mesh raycast)
+        //    stored in the target's local frame.
+        beginGrabSnap: function(handKey, hand, trackObj, raycastObj, centerPos, radius, graspAvatar) {
+          if (graspAvatar) {
+            // Character grab: compute the contact point ONCE (nearest capsule surface to the palm)
+            // and pin it to that capsule's bone in the bone-local frame. The contact then tracks the
+            // limb rigidly instead of re-projecting every frame, so the hand stays put (no drift).
+            const handPos = new THREE.Vector3();
+            this.getHandProbePos(hand, handPos);
+            const contact = new THREE.Vector3();
+            const sd = this.nearestCapsuleSurface(graspAvatar, handPos, contact);
+            const bone = (sd !== false && this._nearestCap) ? this._nearestCap.a : null;
+            if (bone) {
+              bone.updateWorldMatrix(true, false);
+              this.grabSnap[handKey] = {
+                avatar: graspAvatar,            // for finger grasp + auto-release distance
+                trackObj: bone,                 // rigid pin to the grabbed limb
+                localPoint: bone.worldToLocal(contact.clone()),
+                startTime: performance.now()
+              };
+            } else {
+              // Fallback: no capsule found — keep the old continuous projection.
+              this.grabSnap[handKey] = { avatar: graspAvatar, startTime: performance.now() };
+            }
+          } else if (trackObj) {
+            const handPos = new THREE.Vector3();
+            this.getHandProbePos(hand, handPos);
+            let contact = this.computeGrabContact(handPos, raycastObj, centerPos);
+            if (!contact) {
+              const dir = new THREE.Vector3().subVectors(handPos, centerPos);
+              const len = dir.length();
+              contact = (len < 1e-6)
+                ? centerPos.clone()
+                : centerPos.clone().addScaledVector(dir.multiplyScalar(1 / len), Math.max(0.05, radius || 0.12));
+            }
+            trackObj.updateWorldMatrix(true, false);
+            this.grabSnap[handKey] = {
+              trackObj: trackObj,
+              localPoint: trackObj.worldToLocal(contact.clone()),
+              startTime: performance.now()
+            };
+          } else {
+            this.grabSnap[handKey] = null;
+          }
+
+          // Drive procedural finger grasp against the grabbed character's capsules (cheap, every
+          // frame). Only for character grabs; surfaces keep the normal input-driven finger curls.
+          const localAv = getOwnerBodyAvatar((typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0');
+          if (localAv) {
+            if (graspAvatar && localAv.startGrasp) localAv.startGrasp(handKey, graspAvatar);
+            else if (localAv.stopGrasp) localAv.stopGrasp(handKey);
+          }
+
+          // Pre-converge the wrist correction NOW (synchronously) by iterating the arm IK a few times,
+          // so the visual hand eases straight onto the final pinned spot instead of landing ~10cm off
+          // (the IK bias) and then visibly snapping in over the next frames.
+          this.preconvergeGrabSnap(handKey, hand);
+        },
+
+        // Run solveArmIK a handful of times against the grab contact to solve for the wrist-command
+        // correction (and the frozen hand orientation) up front. Mutates bones transiently; the normal
+        // per-frame pipeline overwrites them immediately, so there's no lasting side effect.
+        preconvergeGrabSnap: function(handKey, hand) {
+          const snap = this.grabSnap[handKey];
+          if (!snap || !snap.trackObj || !hand) return;
+          const avatar = getOwnerBodyAvatar((typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0');
+          if (!avatar || !avatar.solveArmIK || !avatar.bones) return;
+          const wb = handKey === 'left' ? avatar.bones.leftHandBone : avatar.bones.rightHandBone;
+          if (!wb) return;
+
+          if (!avatar._grabSplayOff) avatar._grabSplayOff = { left: false, right: false };
+          const prevSplay = avatar._grabSplayOff[handKey];
+          avatar._grabSplayOff[handKey] = true; // match applyGrabSnap (no cosmetic arm splay)
+
+          const grabQuat = new THREE.Quaternion(); hand.object3D.getWorldQuaternion(grabQuat);
+          const boneQ = new THREE.Quaternion(); snap.trackObj.getWorldQuaternion(boneQ);
+          const boneQi = boneQ.clone().invert();
+          // Freeze hand orientation relative to the grabbed limb (consistent with applyGrabSnap).
+          snap.handQuatLocal = boneQi.clone().multiply(grabQuat);
+          const desiredQ = boneQ.clone().multiply(snap.handQuatLocal);
+
+          const corrLocal = new THREE.Vector3();
+          const contact = new THREE.Vector3(), palm = new THREE.Vector3();
+          const corrWorld = new THREE.Vector3(), target = new THREE.Vector3(), err = new THREE.Vector3();
+          for (let i = 0; i < 10; i++) {
+            snap.trackObj.updateWorldMatrix(true, false);
+            contact.copy(snap.localPoint); snap.trackObj.localToWorld(contact);
+            corrWorld.copy(corrLocal).applyQuaternion(boneQ);
+            target.copy(contact).add(corrWorld);
+            avatar.solveArmIK(handKey, target, desiredQ);
+            this.getHandProbePos(hand, palm);
+            err.copy(contact).sub(palm);
+            if (err.length() < 0.004) break;
+            corrLocal.addScaledVector(err.applyQuaternion(boneQi), 0.6);
+            if (corrLocal.length() > 0.6) corrLocal.setLength(0.6);
+          }
+          snap.corrLocal = corrLocal;
+          avatar._grabSplayOff[handKey] = prevSplay;
+        },
+
+        // Nearest point on a grabbed avatar's capsule SURFACE to world point p. Writes the surface
+        // point into out and returns the signed distance (p to surface), or false if no capsules.
+        nearestCapsuleSurface: function(avatar, p, out) {
+          const caps = avatar && avatar.ensureGraspCapsules ? avatar.ensureGraspCapsules() : null;
+          if (!caps || !caps.length) return false;
+          if (!this._capA) { this._capA = new THREE.Vector3(); this._capB = new THREE.Vector3(); }
+          const A = this._capA, B = this._capB;
+          let best = Infinity, found = false;
+          this._nearestCap = null; // winning capsule (so callers can pin to its bone)
+          for (let i = 0; i < caps.length; i++) {
+            const cap = caps[i];
+            if (!cap.a || !cap.b) continue;
+            cap.a.getWorldPosition(A); cap.b.getWorldPosition(B);
+            const abx = B.x - A.x, aby = B.y - A.y, abz = B.z - A.z;
+            const apx = p.x - A.x, apy = p.y - A.y, apz = p.z - A.z;
+            const ab2 = abx * abx + aby * aby + abz * abz;
+            let t = ab2 > 1e-9 ? (apx * abx + apy * aby + apz * abz) / ab2 : 0;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+            const cx = A.x + abx * t, cy = A.y + aby * t, cz = A.z + abz * t;
+            const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+            const distAxis = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            const surfDist = distAxis - cap.r;
+            if (surfDist < best) {
+              best = surfDist;
+              if (distAxis > 1e-6) {
+                out.set(cx + dx / distAxis * cap.r, cy + dy / distAxis * cap.r, cz + dz / distAxis * cap.r);
+              } else {
+                out.set(cx, cy, cz);
+              }
+              this._nearestCap = cap;
+              found = true;
+            }
+          }
+          return found ? best : false;
+        },
+
+        endGrabSnap: function(handKey) {
+          this.grabSnap[handKey] = null;
+          const localAv = getOwnerBodyAvatar((typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0');
+          if (localAv && localAv.stopGrasp) localAv.stopGrasp(handKey);
+        },
+
+        // Called by the body avatar each frame: blend the rendered hand world position toward the
+        // tracked contact point (smoothstep over grabSnapBlendDur). Mutates handWorldPos in place.
+        applyGrabSnap: function(handKey, handWorldPos, handWorldQuat) {
+          const snap = this.grabSnap[handKey];
+          const avatar = getOwnerBodyAvatar((typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0');
+          // Tell solveArmIK to drop its cosmetic ±0.1m "open arms" splay on a hand that's snapped to a
+          // grab, so the palm actually reaches the surface instead of being shoved ~10cm sideways.
+          if (avatar) { if (!avatar._grabSplayOff) avatar._grabSplayOff = { left: false, right: false }; avatar._grabSplayOff[handKey] = !!snap; }
+          if (!snap) return false;
+          const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+          const wb = (avatar && avatar.bones) ? (handKey === 'left' ? avatar.bones.leftHandBone : avatar.bones.rightHandBone) : null;
+
+          // Current palm world position (the reference point we want against the surface).
+          const palm = this._snapTmpB;
+          if (hand) this.getHandProbePos(hand, palm);
+
+          // Desired PALM world position (the contact point on the grabbed surface).
+          const contact = this._snapTmpA;
+          if (snap.trackObj) {
+            // Fixed point pinned to the grabbed limb/surface bone (no per-frame drift).
+            snap.trackObj.updateWorldMatrix(true, false);
+            contact.copy(snap.localPoint);
+            snap.trackObj.localToWorld(contact);
+          } else if (snap.avatar) {
+            // Fallback continuous mode: nearest capsule surface to the palm.
+            if (!hand) return false;
+            const sd = this.nearestCapsuleSurface(snap.avatar, palm, contact);
+            if (sd === false) return false;
+          } else {
+            return false;
+          }
+
+          // Closed-loop placement: solveArmIK is NOT accurate (it can leave the wrist ~0.15m from the
+          // commanded target), so a fixed "contact + rigid offset" lands the palm in the wrong spot.
+          // We drive the wrist command with the MEASURED palm error, integrated in the grabbed bone's
+          // local frame (see below) so the palm converges onto the surface regardless of IK error.
+          let t = (performance.now() - snap.startTime) / (this.grabSnapBlendDur * 1000);
+          if (t < 0) t = 0; else if (t > 1) t = 1;
+          const e = t * t * (3 - 2 * t); // smoothstep ease-in
+
+          // Freeze the hand ORIENTATION relative to the grabbed body part (a real grip locks the hand
+          // to what it holds). This also makes solveArmIK's inputs constant, so the wrist position is
+          // deterministic and won't drift as the player rotates the controller — the actual cause of
+          // the leftover "bouncing". Captured once at grab; then tracks the limb's rotation.
+          if (handWorldQuat) {
+            const refObj = snap.trackObj || (snap.avatar && snap.avatar.el && snap.avatar.el.object3D) || null;
+            if (refObj) {
+              const refQ = this._snapQRef || (this._snapQRef = new THREE.Quaternion());
+              refObj.getWorldQuaternion(refQ);
+              if (!snap.handQuatLocal) {
+                snap.handQuatLocal = new THREE.Quaternion().copy(refQ).invert().multiply(handWorldQuat);
+              }
+              const desiredQ = this._snapQDes || (this._snapQDes = new THREE.Quaternion());
+              desiredQ.copy(refQ).multiply(snap.handQuatLocal);
+              handWorldQuat.slerp(desiredQ, e);
+            }
+          }
+
+          const wrist = this._snapTmpC || (this._snapTmpC = new THREE.Vector3());
+          if (hand && wb) wb.getWorldPosition(wrist); else wrist.copy(handWorldPos);
+
+          // snap.corrLocal = wrist-command offset, expressed in the grabbed bone's LOCAL frame so the
+          // wrist target tracks the limb RIGIDLY (the contact bone can animate several cm/frame; any
+          // world-space lag/low-pass here shows up as the hand bouncing around the grab spot). The
+          // correction converges to beat solveArmIK's positioning error and then holds, so the hand
+          // behaves like a rigid child of the grabbed limb. Fingers still adjust separately.
+          const trackObj = snap.trackObj;
+          const boneQ = this._snapQBone || (this._snapQBone = new THREE.Quaternion());
+          const boneQi = this._snapQBoneI || (this._snapQBoneI = new THREE.Quaternion());
+          if (trackObj) { trackObj.getWorldQuaternion(boneQ); boneQi.copy(boneQ).invert(); }
+          else { boneQ.identity(); boneQi.identity(); }
+
+          if (!snap.corrLocal) {
+            // Fallback only (beginGrabSnap normally pre-converges this): seed with the rigid offset.
+            snap.corrLocal = new THREE.Vector3().copy(wrist).sub(palm).applyQuaternion(boneQi);
+          }
+          // corrLocal is FROZEN at its pre-converged value — NOT integrated per frame. It only feeds the
+          // arm IK so the forearm reaches toward the hand. The hand/palm itself is locked rigidly to the
+          // grabbed limb by applyHandPins (post-IK), so there is nothing here to drift or bounce.
+          if (snap.corrLocal.length() > 0.6) snap.corrLocal.setLength(0.6);
+
+          // Rebuild the world-space correction from the (frozen) bone-local offset so it rotates and
+          // translates rigidly with the grabbed limb.
+          const corrWorld = (this._snapTmpG || (this._snapTmpG = new THREE.Vector3())).copy(snap.corrLocal).applyQuaternion(boneQ);
+          const target = (this._snapTmpE || (this._snapTmpE = new THREE.Vector3())).copy(contact).add(corrWorld);
+          handWorldPos.lerp(target, e);
+          return true;
+        },
+
+        // Per-frame auto-release: if the physical controller is pulled far past the contact point,
+        // let go of the grab entirely (rather than stretching the arm into a rubbery pose).
+        updateGrabSnaps: function() {
+          const hands = ['left', 'right'];
+          for (let i = 0; i < hands.length; i++) {
+            const handKey = hands[i];
+            const snap = this.grabSnap[handKey];
+            if (!snap) continue;
+            const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+            if (!hand) continue;
+
+            let stray = false;
+            if (snap.avatar) {
+              // Continuous mode: compare the RAW controller position (not the snapped palm) to the
+              // body surface, so pulling the physical hand away still releases.
+              const raw = this._snapTmpB;
+              hand.object3D.getWorldPosition(raw);
+              const sd = this.nearestCapsuleSurface(snap.avatar, raw, this._snapTmpA);
+              stray = (sd !== false && sd > this.grabSnapReleaseDist);
+            } else if (snap.trackObj) {
+              snap.trackObj.updateWorldMatrix(true, false);
+              const target = this._snapTmpA.copy(snap.localPoint);
+              snap.trackObj.localToWorld(target);
+              const handPos = this._snapTmpB;
+              this.getHandProbePos(hand, handPos);
+              stray = handPos.distanceTo(target) > this.grabSnapReleaseDist;
+            }
+
+            if (stray) {
+              if (this.grabbingPlayer[handKey]) {
+                this.releasePlayerGrab(hand);
+              } else if (this.isGrabbing[handKey]) {
+                this.releaseFromSurface(hand);
+                this.grabbedSurface[handKey] = null;
+              }
+              this.endGrabSnap(handKey);
+            }
+          }
+        },
+
         findNearestGrabbableSurface: function(hand) {
           const handPos = new THREE.Vector3();
-          hand.object3D.getWorldPosition(handPos);
+          this.getHandProbePos(hand, handPos);
           const handRadius = 0.08; // Hand collision radius
           
           // CRITICAL FIX: Only look for grab-surface elements, NOT balls
@@ -4350,7 +5007,7 @@ function setGameplayHUD(isPlaying) {
           // Clear grab info
           this.grabInfo[handKey] = null;
           this.isGrabbing[handKey] = false;
-          
+          this.endGrabSnap(handKey);
 
         },
         
@@ -4473,6 +5130,9 @@ function setGameplayHUD(isPlaying) {
           
           const dt = Math.min(deltaTime / 1000, 0.033); // Cap at 30fps for stability
           this._tetherDt = dt; // shared with the player-grab rigid anchor
+
+          // Visual grab-snap auto-release (cheap no-op when nothing is grabbed).
+          this.updateGrabSnaps();
           
           // Check if stunned and disable controls
           if (this.isStunned) {
@@ -4570,7 +5230,7 @@ function setGameplayHUD(isPlaying) {
         
         findNearestPlayer: function(hand) {
           const handPos = new THREE.Vector3();
-          hand.object3D.getWorldPosition(handPos);
+          this.getHandProbePos(hand, handPos);
           const handRadius = 0.08; // Hand collision radius
           
           let nearestPlayer = null;
@@ -4736,7 +5396,15 @@ function setGameplayHUD(isPlaying) {
           
           // Visual feedback - make target glow green
           playerTarget.setAttribute('material', 'emissive: #00ff00; emissiveIntensity: 0.3');
-          
+
+          // Visual grab-snap: pin the rendered hand onto the body surface so it doesn't hold air
+          // beside the character (or sink inside it). Raycast the grabbed avatar's skinned mesh.
+          const avId = playerId.startsWith('bot_') ? ('bot-' + playerId.slice(4)) : playerId;
+          const ownerAvatar = getOwnerBodyAvatar(avId);
+          const raycastObj = ownerAvatar ? (ownerAvatar.model || ownerAvatar.skinnedMesh) : null;
+          const tr = parseFloat(playerTarget.getAttribute('radius')) || 0.2;
+          this.beginGrabSnap(handKey, hand, playerTarget.object3D, raycastObj, targetPos, tr, ownerAvatar);
+
           // Haptic feedback
           this.playHapticFeedback(hand, 0.7, 150);
           
@@ -4785,6 +5453,7 @@ function setGameplayHUD(isPlaying) {
           this.grabbedSurface[handKey] = null;
           this.grabInfo[handKey] = null;
           this.grabbingPlayer[handKey] = null;
+          this.endGrabSnap(handKey);
           
           // Send multiplayer message about player release
           if (isMultiplayer) {
@@ -5957,7 +6626,7 @@ function setGameplayHUD(isPlaying) {
         // NEW: Find nearest ball (not static surfaces)
         findNearestBall: function(hand) {
           const handPos = new THREE.Vector3();
-          hand.object3D.getWorldPosition(handPos);
+          this.getHandProbePos(hand, handPos);
           const handRadius = 0.08; // Hand collision radius
           
           // Look for balls only
@@ -7821,6 +8490,17 @@ function setGameplayHUD(isPlaying) {
         tick: function(time) {
           // CRITICAL: Check manual override from performance config
           if (this.manualOverride || !this.data.enabled) return;
+
+          // DEBUG: temporary global freeze (e.g. while inspecting grab colliders).
+          if (window.__botsFrozen) {
+            if (this.body) {
+              this.body.velocity.set(0, 0, 0);
+              this.body.angularVelocity.set(0, 0, 0);
+            }
+            if (this.velocity) this.velocity.set(0, 0, 0);
+            this.isMoving = false;
+            return;
+          }
           
           // Debug logging removed to reduce console spam
           
@@ -12850,6 +13530,28 @@ function setGameplayHUD(isPlaying) {
               this.lastRotation = handQuat.clone();
               this.lastPositionTime = currentTime;
 
+              // Movement-based haptics (DodgeVR-style): while a hand holds the ball, rumble that
+              // controller with an intensity proportional to how fast the hand is moving. Stays
+              // silent when held roughly still. Applies to the game (capture) ball and player balls.
+              if (this.grabbingHand?.components?.['tracked-controls']?.controller?.gamepad?.hapticActuators?.[0]) {
+                // Average speed over the recent velocity history to avoid frame-to-frame jitter.
+                let speed = 0;
+                if (this.velocityHistory.length) {
+                  for (let i = 0; i < this.velocityHistory.length; i++) speed += this.velocityHistory[i].length();
+                  speed /= this.velocityHistory.length;
+                }
+                const HAPTIC_DEADZONE = 0.06; // m/s below which we stay silent (holding still)
+                const HAPTIC_GAIN = 0.4;      // maps m/s of hand movement -> pulse intensity
+                const HAPTIC_MAX = 0.6;       // cap so fast swings never feel harsh
+                const intensity = Math.max(0, Math.min(HAPTIC_MAX, (speed - HAPTIC_DEADZONE) * HAPTIC_GAIN));
+                const HAPTIC_INTERVAL = 50;   // ms between pulses; 60ms duration overlaps -> continuous feel
+                if (intensity > 0.01 && (currentTime - (this._lastMoveHaptic || 0)) >= HAPTIC_INTERVAL) {
+                  this._lastMoveHaptic = currentTime;
+                  const haptics = this.grabbingHand.components['tracked-controls'].controller.gamepad.hapticActuators[0];
+                  haptics.pulse(intensity, 60).catch(() => {});
+                }
+              }
+
               // Held ball can hit an opponent's head on contact (a bonk), using the same
               // mode/team/score pipeline as a thrown hit but without losing the ball.
               this._heldHitActive = true;
@@ -17718,6 +18420,15 @@ function setGameplayHUD(isPlaying) {
             right: { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 }
           };
           this.fingerSmoothingFactor = 0.3;
+
+          // Procedural grasp: while the local player holds a character, each finger continuously
+          // closes only until its tip reaches the target's collision spheres (cheap analytic
+          // distance — no skinned-mesh raycast), so fingers conform naturally and keep adapting as
+          // the hand/character move. graspHand[hand] = { avatar } of the grabbed character, or null.
+          this.graspHand = { left: null, right: null };
+          this._graspTmpV = new THREE.Vector3();
+          this._graspAxisX = new THREE.Vector3(1, 0, 0);
+          this._graspAxisZ = new THREE.Vector3(0, 0, 1);
           
           // Breathing
           this.breathingPhase = 0;
@@ -17916,7 +18627,9 @@ function setGameplayHUD(isPlaying) {
             marker.setAttribute('radius', p[1]);
             marker.setAttribute('data-body-collider', 'true');
             this.el.appendChild(marker); // parentElement = this avatar -> visibility tracks active state
-            this.grabMarkers.push({ marker: marker, bone: bone });
+            this.grabMarkers.push({ marker: marker, bone: bone, radius: p[1] });
+            // If the debug overlay is on, visualize this collider as it's created.
+            if (window.__grabVizOn && window.__addGrabViz) window.__addGrabViz(marker);
           });
 
           this._colliderTmp = new THREE.Vector3();
@@ -17975,6 +18688,18 @@ function setGameplayHUD(isPlaying) {
           this.leftController.object3D.getWorldQuaternion(leftHandWorldQuat);
           this.rightController.object3D.getWorldPosition(rightHandWorldPos);
           this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
+
+          // Visual grab-snap: when the local player is grabbing something, pull the rendered hand
+          // onto the contact point so it visually grips the surface (no per-frame cost when idle).
+          if (this._localPlayerComp === undefined) this._localPlayerComp = null;
+          if (!this._localPlayerComp) {
+            const pcEl = document.querySelector('[zerog-player]');
+            this._localPlayerComp = (pcEl && pcEl.components) ? pcEl.components['zerog-player'] : null;
+          }
+          if (this._localPlayerComp && this._localPlayerComp.applyGrabSnap) {
+            this._localPlayerComp.applyGrabSnap('left', leftHandWorldPos, leftHandWorldQuat);
+            this._localPlayerComp.applyGrabSnap('right', rightHandWorldPos, rightHandWorldQuat);
+          }
           
           // Calculate velocity
           if (this.previousHeadPosInitialized) {
@@ -18858,9 +19583,14 @@ function setGameplayHUD(isPlaying) {
           shoulderBone.getWorldPosition(shoulderWorldPos);
           
           const adjustedHandPos = handWorldPos.clone();
-          const leftRightOffsetLocal = new THREE.Vector3(hand === 'left' ? 0.1 : -0.1, 0, 0);
-          const leftRightOffsetWorld = leftRightOffsetLocal.applyQuaternion(this.el.object3D.quaternion);
-          adjustedHandPos.add(leftRightOffsetWorld);
+          // Cosmetic "open arms" splay — disabled for a hand that's snapped to a grab so the palm can
+          // actually reach the grabbed surface (the splay otherwise pushes the wrist ~0.1m sideways).
+          const splayOff = this._grabSplayOff && this._grabSplayOff[hand];
+          if (!splayOff) {
+            const leftRightOffsetLocal = new THREE.Vector3(hand === 'left' ? 0.1 : -0.1, 0, 0);
+            const leftRightOffsetWorld = leftRightOffsetLocal.applyQuaternion(this.el.object3D.quaternion);
+            adjustedHandPos.add(leftRightOffsetWorld);
+          }
           
           const shoulderToHand = adjustedHandPos.clone().sub(shoulderWorldPos);
           const distance = shoulderToHand.length();
@@ -18947,7 +19677,44 @@ function setGameplayHUD(isPlaying) {
           );
           forearmBone.quaternion.copy(forearmQuat).multiply(forearmTwist);
           forearmBone.updateMatrixWorld(true);
-          
+
+          // EXACT REACH (CCD refinement). The analytic placement above derives the elbow/wrist from
+          // config arm lengths and a fixed (0,-1,0) bone axis; when those don't perfectly match the
+          // rig, the HAND BONE lands a few mm–cm off the commanded target, and that miss CHANGES with
+          // arm pose. For a grabbed hand the target is rigidly fixed to the grabbed limb, so that
+          // pose-dependent miss is exactly the "jitter"/"bounce" — the wrist keeps landing in slightly
+          // different spots as the shoulder/torso move. Here we rotate the (real, connected) upper-arm
+          // and forearm bones until the hand bone sits EXACTLY on the target. Result: the wrist is
+          // pinned to the grab point AND stays attached to the arm; only the elbow swings as you move.
+          // Scoped to grabbed hands (splayOff) to avoid changing free-hand feel / cost.
+          if (handBone && splayOff) {
+            if (!this._ccdH) { this._ccdH = new THREE.Vector3(); this._ccdP = new THREE.Vector3();
+              this._ccdCur = new THREE.Vector3(); this._ccdDes = new THREE.Vector3();
+              this._ccdWQ = new THREE.Quaternion(); this._ccdPWQ = new THREE.Quaternion();
+              this._ccdQ = new THREE.Quaternion(); }
+            const H = this._ccdH, P = this._ccdP, cur = this._ccdCur, des = this._ccdDes;
+            const wq = this._ccdWQ, pwq = this._ccdPWQ, q = this._ccdQ;
+            // getWorldPosition/getWorldQuaternion refresh only the parent chain (not the finger
+            // subtree), so each pass is cheap. Setting bone.quaternion is picked up on the next read.
+            const aim = (bone) => {
+              handBone.getWorldPosition(H);
+              bone.getWorldPosition(P);
+              cur.copy(H).sub(P); des.copy(targetHandPos).sub(P);
+              if (cur.lengthSq() < 1e-10 || des.lengthSq() < 1e-10) return;
+              q.setFromUnitVectors(cur.normalize(), des.normalize());
+              bone.getWorldQuaternion(wq);
+              wq.premultiply(q);                       // new desired world rotation
+              bone.parent.getWorldQuaternion(pwq);
+              bone.quaternion.copy(pwq.invert().multiply(wq));
+            };
+            for (let iter = 0; iter < 6; iter++) {
+              aim(forearmBone);                        // swing wrist about the elbow
+              aim(upperArmBone);                       // then about the shoulder
+              handBone.getWorldPosition(H);
+              if (H.distanceTo(targetHandPos) < 0.001) break;
+            }
+          }
+
           if (handBone) {
             forearmBone.updateMatrixWorld(true);
             const forearmWorldQuat2 = new THREE.Quaternion();
@@ -19000,6 +19767,12 @@ function setGameplayHUD(isPlaying) {
             
             this.updateTargetCurls('right', trigger, grip, anyThumbTouch);
           }
+
+          // Procedural grasp: while holding a character, override the input-driven target curls so
+          // each fingertip closes onto the target's collision spheres (evaluated every frame).
+          ['left', 'right'].forEach(handKey => {
+            if (this.graspHand[handKey]) this.evaluateGrasp(handKey);
+          });
           
           ['left', 'right'].forEach(hand => {
             ['thumb', 'index', 'middle', 'ring', 'pinky'].forEach(finger => {
@@ -19090,6 +19863,168 @@ function setGameplayHUD(isPlaying) {
               bone.quaternion.multiply(curlQuat);
             });
           });
+        },
+
+        // ---- Procedural grasp (sphere-based, per-frame) -----------------------------------------
+        // Start/stop driving a hand's fingers to wrap onto a grabbed character's collision spheres.
+        startGrasp: function(handKey, targetAvatar) {
+          this.graspHand[handKey] = targetAvatar ? { avatar: targetAvatar } : null;
+        },
+
+        stopGrasp: function(handKey) {
+          this.graspHand[handKey] = null;
+        },
+
+        fingerBoneGroup: function(handKey, finger) {
+          const L = handKey === 'left';
+          const b = this.bones;
+          switch (finger) {
+            case 'thumb':  return L ? [b.leftHandThumb1, b.leftHandThumb2, b.leftHandThumb3]    : [b.rightHandThumb1, b.rightHandThumb2, b.rightHandThumb3];
+            case 'index':  return L ? [b.leftHandIndex1, b.leftHandIndex2, b.leftHandIndex3]    : [b.rightHandIndex1, b.rightHandIndex2, b.rightHandIndex3];
+            case 'middle': return L ? [b.leftHandMiddle1, b.leftHandMiddle2, b.leftHandMiddle3] : [b.rightHandMiddle1, b.rightHandMiddle2, b.rightHandMiddle3];
+            case 'ring':   return L ? [b.leftHandRing1, b.leftHandRing2, b.leftHandRing3]       : [b.rightHandRing1, b.rightHandRing2, b.rightHandRing3];
+            case 'pinky':  return L ? [b.leftHandPinky1, b.leftHandPinky2, b.leftHandPinky3]    : [b.rightHandPinky1, b.rightHandPinky2, b.rightHandPinky3];
+          }
+          return null;
+        },
+
+        // Build (once) a limb-shaped capsule skeleton from the avatar's bones: each capsule is a
+        // segment between two joints plus a radius, closely matching the actual body-part shape
+        // (arms/legs are cylinders, torso a fat capsule, head a sphere). Distance from a point to a
+        // capsule is trivial analytic math, so fingers can conform to the real limb shape every
+        // frame with no skinned-mesh raycast. Radii are in world metres and tunable.
+        ensureGraspCapsules: function() {
+          if (this.graspCapsules) return this.graspCapsules;
+          if (!this.bones || !this.bones.head) return null;
+          const b = this.bones;
+          const defs = [
+            [b.leftUpperArm, b.leftForearm, 0.055],   // upper arm
+            [b.leftForearm, b.leftHandBone, 0.045],   // forearm
+            [b.rightUpperArm, b.rightForearm, 0.055],
+            [b.rightForearm, b.rightHandBone, 0.045],
+            [b.leftUpLeg, b.leftLeg, 0.085],          // thigh
+            [b.leftLeg, b.leftFoot, 0.06],            // shin
+            [b.rightUpLeg, b.rightLeg, 0.085],
+            [b.rightLeg, b.rightFoot, 0.06],
+            [b.hips, b.spine2, 0.13],                 // torso
+            [b.head, b.head, 0.10]                    // head (degenerate capsule = sphere)
+          ];
+          this.graspCapsules = defs
+            .filter(d => d[0] && d[1])
+            .map(d => ({ a: d[0], b: d[1], r: d[2] }));
+          return this.graspCapsules;
+        },
+
+        // Per-frame: nudge each finger's target curl so its tip rests on the grabbed character's
+        // nearest capsule SURFACE (limb shape), not a coarse sphere. Pure FK + point-to-segment
+        // distance, cheap enough to run every frame.
+        evaluateGrasp: function(handKey) {
+          const g = this.graspHand[handKey];
+          if (!g || !g.avatar) return false;
+          const av = g.avatar;
+          const caps = av.ensureGraspCapsules ? av.ensureGraspCapsules() : null;
+          if (!caps || !caps.length) return false;
+
+          // Gather capsule endpoints in world space.
+          if (!this._graspCapBuf) this._graspCapBuf = [];
+          if (!this._graspTmpB) this._graspTmpB = new THREE.Vector3();
+          const buf = this._graspCapBuf;
+          const pa = this._graspTmpV, pb = this._graspTmpB;
+          let n = 0;
+          for (let i = 0; i < caps.length; i++) {
+            const cap = caps[i];
+            if (!cap.a || !cap.b) continue;
+            cap.a.getWorldPosition(pa);
+            cap.b.getWorldPosition(pb);
+            let s = buf[n];
+            if (!s) { s = buf[n] = { ax: 0, ay: 0, az: 0, bx: 0, by: 0, bz: 0, r: 0 }; }
+            s.ax = pa.x; s.ay = pa.y; s.az = pa.z;
+            s.bx = pb.x; s.by = pb.y; s.bz = pb.z;
+            s.r = cap.r;
+            n++;
+          }
+          if (n === 0) return false;
+
+          const fingers = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+          const contactGap = 0.006, gain = 4.0, maxStep = 0.09, openMin = 0.05, closeMax = 1.15;
+          let drove = false;
+          for (let f = 0; f < fingers.length; f++) {
+            const finger = fingers[f];
+            const bones = this.fingerBoneGroup(handKey, finger);
+            if (!bones || !bones[0] || !bones[0].parent) continue;
+            bones[0].parent.updateWorldMatrix(true, false);
+            const isThumb = finger === 'thumb';
+            const axis = isThumb ? this._graspAxisZ : this._graspAxisX;
+            const sign = isThumb ? (handKey === 'left' ? -1 : 1) : 1;
+
+            const cur = this.currentCurls[handKey][finger];
+            const tip = this.fingerTipForCurl(bones, bones[0].parent.matrixWorld, axis, cur, sign);
+            if (!tip) continue;
+
+            // Signed distance from the fingertip to the nearest capsule surface.
+            let sd = Infinity;
+            for (let i = 0; i < n; i++) {
+              const s = buf[i];
+              const abx = s.bx - s.ax, aby = s.by - s.ay, abz = s.bz - s.az;
+              const apx = tip.x - s.ax, apy = tip.y - s.ay, apz = tip.z - s.az;
+              const abLen2 = abx * abx + aby * aby + abz * abz;
+              let t = abLen2 > 1e-9 ? (apx * abx + apy * aby + apz * abz) / abLen2 : 0;
+              if (t < 0) t = 0; else if (t > 1) t = 1;
+              const cx = s.ax + abx * t, cy = s.ay + aby * t, cz = s.az + abz * t;
+              const dx = tip.x - cx, dy = tip.y - cy, dz = tip.z - cz;
+              const d = Math.sqrt(dx * dx + dy * dy + dz * dz) - s.r;
+              if (d < sd) sd = d;
+            }
+
+            // Drive the curl toward "tip just touching" (sd ~ contactGap). >0 (in the air) => close
+            // more; <0 (penetrating) => open. Rate-limited so it eases shut over a few frames.
+            let delta = (sd - contactGap) * gain;
+            if (delta > maxStep) delta = maxStep; else if (delta < -maxStep) delta = -maxStep;
+            let next = cur + delta;
+            if (next < openMin) next = openMin; else if (next > closeMax) next = closeMax;
+            this.targetCurls[handKey][finger] = next;
+            drove = true;
+          }
+          return drove;
+        },
+
+        // Forward-kinematics for a single finger at a candidate curl, WITHOUT touching the live
+        // bones: returns the estimated fingertip world position (or null if bones are missing).
+        fingerTipForCurl: function(bones, parentWorld, axis, curl, sign) {
+          if (!this._graspMat) {
+            this._graspMat = new THREE.Matrix4();
+            this._graspLocal = new THREE.Matrix4();
+            this._graspQa = new THREE.Quaternion();
+            this._graspQb = new THREE.Quaternion();
+            this._graspP2 = new THREE.Vector3();
+            this._graspP3 = new THREE.Vector3();
+          }
+          const M = this._graspMat.copy(parentWorld);
+          let haveP2 = false, haveP3 = false;
+          for (let i = 0; i < bones.length; i++) {
+            const bone = bones[i];
+            if (!bone) return null;
+            const initial = this.initialBoneRotations[bone.name];
+            const curlAmount = curl * (0.5 + i * 0.25);
+            const curlAngle = curlAmount * Math.PI * 0.6 * sign;
+            this._graspQb.setFromAxisAngle(axis, curlAngle);
+            if (initial) this._graspQa.copy(initial).multiply(this._graspQb);
+            else this._graspQa.copy(this._graspQb);
+            this._graspLocal.compose(bone.position, this._graspQa, bone.scale);
+            M.multiply(this._graspLocal);
+            if (i === 1) { this._graspP2.setFromMatrixPosition(M); haveP2 = true; }
+            if (i === 2) { this._graspP3.setFromMatrixPosition(M); haveP3 = true; }
+          }
+          if (!haveP3) return null;
+          const tip = this._graspP3.clone();
+          if (haveP2) {
+            // Extend past the distal joint by ~90% of the (world-space) distal segment length to
+            // approximate the fingertip. Must use world distance, not the unscaled local bone length.
+            const seg = this._graspP3.clone().sub(this._graspP2);
+            const distalLen = seg.length() * 0.9;
+            if (seg.lengthSq() > 1e-12) tip.add(seg.normalize().multiplyScalar(distalLen));
+          }
+          return tip;
         },
 
         // Update remote pose data (called by network sync)
