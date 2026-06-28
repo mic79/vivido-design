@@ -34,6 +34,10 @@ const ORT_URL = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dis
 const ORT_WASM_DIR = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
 // Cache API bucket for the (large) model weights so we download them only once.
 const CACHE_NAME = 'supertonic3-v1';
+// Official fp32 weights — the known-good fallback. ORT-Web's WASM backend can't
+// run some quantized builds (e.g. int8 ConvInteger), so we recover to this.
+const OFFICIAL_REPO = 'Supertone/supertonic-3';
+const OFFICIAL_BASE = `https://huggingface.co/${OFFICIAL_REPO}/resolve/main`;
 
 // The 31 languages Supertonic 3 supports (plus 'na' = no/neutral language tag).
 export const SUPERTONIC3_LANGS = [
@@ -196,8 +200,37 @@ export class Supertonic3 {
     const ort = await importOrt(this.numThreads);
     this._ort = ort;
 
-    this.cfgs = await cachedJson(`${this.base}/onnx/tts.json`);
-    this.proc = new UnicodeProcessor(await cachedJson(`${this.base}/onnx/unicode_indexer.json`));
+    // Some quantized repos use ops the ORT-Web WASM backend can't run (most
+    // notably ConvInteger from int8/QOperator builds → "Could not find an
+    // implementation for ConvInteger"). If the requested repo fails to create a
+    // session, fall back to the official fp32 weights, which ORT-Web runs (it's
+    // what Supertone's reference web demo uses).
+    try {
+      await this._loadFrom(this.base, onProgress);
+    } catch (err) {
+      if (this.base !== OFFICIAL_BASE) {
+        console.warn(`[supertonic3] ${this.base} failed (${err && err.message}); ` +
+                     `falling back to fp32 ${OFFICIAL_REPO}`);
+        this.base = OFFICIAL_BASE;
+        this._styleCache.clear();
+        await this._loadFrom(this.base, onProgress);
+      } else {
+        throw err;
+      }
+    }
+
+    const threads = (typeof self !== 'undefined' && self.crossOriginIsolated)
+      ? `x${ort.env.wasm.numThreads}` : '1-thread';
+    const tag = (this.base === OFFICIAL_BASE) ? 'fp32' : 'quant';
+    this.backend = `supertonic3 wasm/${tag} ${threads}`;
+    this.ready = true;
+    return this;
+  }
+
+  async _loadFrom(base, onProgress) {
+    const ort = this._ort;
+    this.cfgs = await cachedJson(`${base}/onnx/tts.json`);
+    this.proc = new UnicodeProcessor(await cachedJson(`${base}/onnx/unicode_indexer.json`));
     this.sampleRate = this.cfgs.ae.sample_rate;
 
     const opts = { executionProviders: ['wasm'], graphOptimizationLevel: 'all' };
@@ -210,16 +243,10 @@ export class Supertonic3 {
     let i = 0;
     for (const [key, file] of graphs) {
       i++;
-      const bytes = await cachedBytes(`${this.base}/onnx/${file}`,
+      const bytes = await cachedBytes(`${base}/onnx/${file}`,
         onProgress ? (recv, total) => onProgress(file, i, graphs.length, recv, total) : null);
       this[key] = await ort.InferenceSession.create(bytes, opts);
     }
-
-    const threads = (typeof self !== 'undefined' && self.crossOriginIsolated)
-      ? `x${ort.env.wasm.numThreads}` : '1-thread';
-    this.backend = `supertonic3 wasm/fp32 ${threads}`;
-    this.ready = true;
-    return this;
   }
 
   async _voiceStyle(voice) {
